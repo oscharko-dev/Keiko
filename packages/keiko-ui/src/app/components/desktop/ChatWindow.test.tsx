@@ -73,6 +73,7 @@ import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  gatewayModelCatalogCheckRequested,
 } from "./widgets/shared/gatewaySetupBus";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -2922,6 +2923,9 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
       await openCombobox(user, "Models");
 
       expect(onCatalogRefresh).toHaveBeenCalledTimes(2);
+      for (const [event] of onCatalogRefresh.mock.calls as [Event][]) {
+        expect(gatewayModelCatalogCheckRequested(event)).toBe(true);
+      }
       expect(onConfigUpdated).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);

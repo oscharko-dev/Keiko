@@ -1,6 +1,7 @@
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import type { WorkspaceLifecycleEvidenceRecord } from "./evidence.js";
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -589,4 +590,226 @@ describe("Local selection lifecycle evidence", () => {
       expect(lifecycleEvidence.join("")).not.toContain(request.branch);
     },
   );
+});
+
+// #3907 (owner decision 2026-10-31): the checkout a run stands on can be moved onto a task branch
+// by Keiko's own governed `keiko_git_branch`, without touching the run's immutable envelope.
+describe("a governed task branch in a local checkout (#3907)", () => {
+  it("admits only a Local checkout standing on its own base branch", () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
+    expect(service.admitTaskBranch("local:unknown")).toBe("not-local-checkout");
+    expect(service.admitTaskBranch("managed-workspace")).toBe("not-local-checkout");
+  });
+
+  it("refuses a checkout with executable Git filters, as a branch switch always has", () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("config", "filter.keiko.clean", "cat");
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("executable-filters");
+  });
+
+  it("adopts the branch Keiko created: the task branch moves, the base branch stays", () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "-c", "task/x");
+    const adopted = service.adoptTaskBranch({
+      workspaceId: instance.workspaceId,
+      branch: "task/x",
+      baseBranch: "main",
+    });
+    expect(adopted.instance).toMatchObject({
+      workspaceId: instance.workspaceId,
+      taskId: instance.taskId,
+      taskBranch: "task/x",
+      baseBranch: "main",
+    });
+    expect(service.getActive()?.instance.taskBranch).toBe("task/x");
+    // A run that is already on its own task branch is not admitted for another.
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("not-on-base");
+  });
+
+  it("keeps the base branch when the task's branch is selected again", async () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "-c", "task/x");
+    service.adoptTaskBranch({
+      workspaceId: instance.workspaceId,
+      branch: "task/x",
+      baseBranch: "main",
+    });
+    // The ordinary re-selection (a restore from history, a new run) must not make the base the head.
+    const restored = await service.setActive({
+      workspaceId: instance.workspaceId,
+      requestedBy: "history",
+      acquireLock: false,
+    });
+    expect(restored.instance).toMatchObject({ taskBranch: "task/x", baseBranch: "main" });
+    const reselected = service.selectLocal({ root, branch: "task/x", requestedBy: "test" });
+    expect(reselected.instance).toMatchObject({ taskBranch: "task/x", baseBranch: "main" });
+    // Selecting another branch is a new task: base and head are that branch again.
+    const other = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    expect(other.instance).toMatchObject({ taskBranch: "main", baseBranch: "main" });
+  });
+
+  it.each([
+    ["a checkout that is not on the named branch", "task/x", "main", false],
+    ["a base branch the instance does not have", "task/x", "feature", true],
+    ["the base branch as the new branch", "main", "main", false],
+  ] as const)("fails closed for %s", (_label, branch, baseBranch, switched) => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    if (switched) git("switch", "-c", branch);
+    expect(() =>
+      service.adoptTaskBranch({ workspaceId: instance.workspaceId, branch, baseBranch }),
+    ).toThrow();
+    // Nothing was adopted: the record still says `main`, so a checkout that moved no longer binds.
+    expect(service.getActive()?.instance.taskBranch).toBe(switched ? undefined : "main");
+  });
+
+  // #4170 review: an adoption whose active view cannot be verified afterwards leaves the record on
+  // its base branch, so the rolled-back run can ask for its task branch again.
+  it("restores the instance when the adopted checkout cannot be verified as active", () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "-c", "task/x");
+    service.clearActive();
+    expect(() =>
+      service.adoptTaskBranch({
+        workspaceId: instance.workspaceId,
+        branch: "task/x",
+        baseBranch: "main",
+      }),
+    ).toThrow(expect.objectContaining({ code: "POINTER_DRIFT" }));
+    git("switch", "main");
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
+  });
+
+  it("restores the instance and rethrows when reading the adopted checkout fails", () => {
+    const uiStore = createInMemoryUiStore();
+    uiStore.createProject(root, "local-checkout-fixture");
+    const instances = buildWorkspaceInstanceStoreOverDatabase(db);
+    const pointer = buildActiveWorkspacePointerStoreOverDatabase(db);
+    const failure = new Error("active-read-failed");
+    const managed = {
+      list: (): readonly [] => [],
+      listAll: (): readonly [] => [],
+      getActive: (): never => {
+        throw failure;
+      },
+      clearActive: (): void => {
+        pointer.clear();
+      },
+    } as unknown as WorkspaceLifecycleService;
+    const service = withLocalCheckout(managed, pointer, uiStore, instances, {
+      evidenceStore: capturingEvidenceStore(),
+      redactString: (value): string => value,
+      now: Date.now,
+    });
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    git("switch", "-c", "task/x");
+    service.clearActive();
+    expect(() =>
+      service.adoptTaskBranch({
+        workspaceId: instance.workspaceId,
+        branch: "task/x",
+        baseBranch: "main",
+      }),
+    ).toThrow(failure);
+    git("switch", "main");
+    expect(service.admitTaskBranch(instance.workspaceId)).toBe("admitted");
+  });
+
+  it("refuses to adopt a branch in an unknown workspace", () => {
+    const service = fixture();
+    expect(() =>
+      service.adoptTaskBranch({
+        workspaceId: "local:unknown",
+        branch: "task/x",
+        baseBranch: "main",
+      }),
+    ).toThrow();
+  });
+
+  it("keeps the run's authority only through the record Keiko made for that run", () => {
+    const service = fixture();
+    const { instance } = service.selectLocal({ root, branch: "main", requestedBy: "test" });
+    const runtime = (
+      governedTaskBranch?: Parameters<typeof productionWorkspaceMatches>[0]["governedTaskBranch"],
+    ): Parameters<typeof productionWorkspaceMatches>[0] => ({
+      workspaceLifecycle: service,
+      managedTaskWorkspaceRoot: root,
+      deploymentCeiling: "autonomous-delivery",
+      readWorkspaceHead: readProductionWorkspaceHead,
+      ...(governedTaskBranch === undefined ? {} : { governedTaskBranch }),
+    });
+    const context = resolveProductionRuntimeContext(runtime(), {
+      runId: "run-branch",
+      requestId: "request-branch",
+      taskIntent: "Change the project",
+      requestedMode: "autonomous-delivery",
+      workspaceId: instance.workspaceId,
+      workspaceRoot: root,
+      serverPrincipal: "test",
+    });
+    expect(productionWorkspaceMatches(runtime(), context)).toBe(true);
+
+    git("switch", "-c", "task/x");
+    service.adoptTaskBranch({
+      workspaceId: instance.workspaceId,
+      branch: "task/x",
+      baseBranch: "main",
+    });
+    // The envelope names `main`; without Keiko's own record the run no longer matches its workspace.
+    expect(productionWorkspaceMatches(runtime(), context)).toBe(false);
+    const record = {
+      runId: "run-branch",
+      taskBranch: "task/x",
+      baseBranch: "main",
+      headSha: git("rev-parse", "HEAD"),
+      workspaceDigest: createHash("sha256").update(root, "utf8").digest("hex"),
+    };
+    expect(
+      productionWorkspaceMatches(
+        runtime(() => record),
+        context,
+      ),
+    ).toBe(true);
+    // The record belongs to one run, one workspace, one branch and the base the run started from.
+    expect(
+      productionWorkspaceMatches(
+        runtime(() => ({ ...record, runId: "another-run" })),
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      productionWorkspaceMatches(
+        runtime(() => ({ ...record, workspaceDigest: "0".repeat(64) })),
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      productionWorkspaceMatches(
+        runtime(() => ({ ...record, taskBranch: "task/y" })),
+        context,
+      ),
+    ).toBe(false);
+    expect(
+      productionWorkspaceMatches(
+        runtime(() => ({ ...record, baseBranch: "feature" })),
+        context,
+      ),
+    ).toBe(false);
+    // Once a record exists, the envelope's own branch never matches again: a checkout somebody
+    // switched back to `main` is not the branch Keiko moved the run to.
+    git("switch", "main");
+    expect(service.getActive()).toBeUndefined();
+    expect(
+      productionWorkspaceMatches(
+        runtime(() => record),
+        context,
+      ),
+    ).toBe(false);
+  });
 });

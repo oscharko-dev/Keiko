@@ -191,6 +191,71 @@ describe("native runtime process backend and gateway confinement", () => {
     });
     expect(JSON.stringify(activityLog.events)).not.toContain(paths.workspace);
   });
+  // F4 (customer 1.3.4): the native profile has no exec allowlist, so no backend asks for an
+  // attested Git there; a managed Mac without Command Line Tools refused every run at that step.
+  it("never resolves an attested Git for the native profile", () => {
+    const paths = fixture();
+    const privateStateRoot = join(realpathSync(paths.workspace), ".keiko", "native-run");
+    mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });
+    const policy = createRuntimeGatewayConfinement({
+      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      runId: "run-2951",
+      treeBindingId: "a".repeat(64),
+      envelopeDigest: "b".repeat(64),
+      runtimeArtifactDigest: "c".repeat(64),
+      modelProfileDigest: "d".repeat(64),
+      profile: "keiko-native",
+      filesystem: {
+        workspaceRoot: realpathSync(paths.workspace),
+        workspaceAccess: "read-write",
+        privateStateRoot,
+        runtimeReadRoot: realpathSync(join(paths.runtime, "..")),
+      },
+    });
+    const resolveGitExecutable = vi.fn(() => {
+      throw new Error("git-attestation-unavailable");
+    });
+    const activityLog = createBufferedServerLogSink();
+    const identity = {
+      platform: "darwin" as const,
+      arch: "arm64" as const,
+      backend: "macos-app-sandbox" as const,
+    };
+    const backend = createNativeRuntimeProcessBackend({
+      helperPath: paths.helper,
+      runtimeRoots: [join(paths.runtime, "..")],
+      workspaceRoot: paths.workspace,
+      identity,
+      gatewayConfinement: policy,
+      activityLog,
+      spawnHelper: () => new FakeHelper(),
+      resolveGitExecutable,
+      probeAvailability: () => ({
+        bubblewrap: false,
+        unshare: false,
+        seatbelt: true,
+        docker: false,
+        podman: false,
+      }),
+    });
+    const launch = {
+      ...request(paths.runtime, paths.workspace),
+      qualification: { ...request(paths.runtime, paths.workspace).qualification, ...identity },
+    };
+    const supervisor = createRuntimeProcessSupervisor({
+      backend,
+      qualifications: [launch.qualification],
+      planSandbox: (input) =>
+        planLongLivedRuntimeSandbox(
+          input,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
+    });
+    supervisor.spawnOwnedTree(launch);
+    expect(resolveGitExecutable).not.toHaveBeenCalled();
+    expect(JSON.stringify(activityLog.events)).not.toContain("git-attestation-unavailable");
+  });
   it("refuses unsupported gateway confinement even after supervisor preparation", () => {
     const paths = fixture();
     const spawn = vi.fn<NativeRuntimeHelperSpawn>(() => new FakeHelper());

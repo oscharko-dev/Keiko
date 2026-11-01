@@ -71,6 +71,7 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
   admitCodingRunModel,
+  awaitCodingRunModelReadiness,
   codingSidecarGatewayRequestDeadlineMs,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
@@ -1167,6 +1168,8 @@ describe("coding-sidecar gateway", () => {
       ["keiko_changeset_edit", "e22472d477c4bafd0e04282d09baee185286dad3d984394740c681c7f8477a4e"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
+      // #3907: the governed task branch, whose only argument is the new branch's name.
+      ["keiko_git_branch", "798fbc8729f917eeaa10ce6a7a84ddd73033d3521b66ce6e5209ae929114fd79"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
       ["keiko_git_diff", "0d3a0f35cca521a4883ce70ad847f2585425483ae0d9c58d8ff6cea14119c079"],
       // #3902 AC2: `unstage` joined the redeemable kinds and the proposal-id prefixes.
@@ -2110,8 +2113,8 @@ describe("coding-sidecar gateway", () => {
     );
   });
 
-  // #3907 AC3: a coding run pauses the chat model's background renewal, so without this an expired
-  // success left the Workbench reading "still checking this model" after every long run.
+  // #3907 AC3: nothing renews the chat model's readiness in the background, so without this an
+  // expired success left the Workbench reading "still checking this model" after every long run.
   it("renews the model's expired chat readiness from an accepted answer, and nothing else", async () => {
     const sink = captureServerLog("info");
     const answer = (deps: UiHandlerDeps): Promise<unknown> =>
@@ -3982,10 +3985,11 @@ describe("coding-sidecar gateway", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  // F-01: `status: "available"` describes the stored configuration. A deps assembly with no probe
-  // record must therefore publish `verification: "unverified"` — the Workbench renders this field,
-  // and a missing one would let it keep reading a configured source as a healthy one.
-  it("publishes the last probe outcome alongside the config-derived profile", async () => {
+  // F-01: `status: "available"` describes the stored configuration, so the profile also publishes
+  // the model's live verification. Customer 1.3.4: the field used to be the gateway-wide word of the
+  // LAST probe of ANY model, so a busy neighbour's failed probe read as "failed" for a model that had
+  // just answered, and the Workbench kept saying it was still checking the model source.
+  it("publishes the selected model's own readiness, not another model's last probe", async () => {
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
       res: mockResponse().res,
@@ -3995,32 +3999,76 @@ describe("coding-sidecar gateway", () => {
     } satisfies RouteContext;
     const config = configValue(provider(), capability());
     const holder = freshServingHolder(config);
-    const unprobed = await handleCodingSidecarGatewayProfile(context, {
+    holder.recordVerification("failed");
+
+    const profile = await handleCodingSidecarGatewayProfile(context, {
       ...depsValue(config),
       gatewayConfig: holder,
     });
 
-    expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
-
-    holder.recordVerification("verified");
-    const verified = await handleCodingSidecarGatewayProfile(context, {
-      ...depsValue(config),
-      gatewayConfig: holder,
+    expect(profile.body).toMatchObject({
+      status: "available",
+      modelAlias: "azure-coding-model",
+      verification: "verified",
     });
+  });
 
-    expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  // The owner's model picker (customer 1.3.4): the profile describes the model the person chose,
+  // not the default the server would elect; an id the gateway does not configure is ignored.
+  it("describes the model chosen in the picker through the modelId query", async () => {
+    const second = "second-coding-model";
+    const config: GatewayConfig = {
+      ...configValue(provider(), capability()),
+      providers: [provider(), provider({ modelId: second })],
+      capabilities: [capability(), capability({ id: second })],
+    };
+    const holder = freshServingHolder(config);
+    const read = async (query: string): Promise<unknown> =>
+      (
+        await handleCodingSidecarGatewayProfile(
+          {
+            req: mockRequest({ method: "GET", url: `/api/coding-sidecar/gateway/profile${query}` }),
+            res: mockResponse().res,
+            params: {},
+            url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile${query}`),
+            correlationId: undefined,
+          } satisfies RouteContext,
+          { ...depsValue(config), gatewayConfig: holder },
+        )
+      ).body;
+
+    expect(await read(`?modelId=${second}`)).toMatchObject({
+      status: "available",
+      modelAlias: second,
+      verification: "verified",
+    });
+    const elected = await read("");
+    expect(await read("?modelId=not-configured")).toEqual(elected);
+
+    holder.recordVerifiedCapability(
+      second,
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    expect(await read(`?modelId=${second}`)).toMatchObject({
+      status: "unavailable",
+      reason: "conversation-not-ready",
+    });
   });
 
   // #3907 AC3: an expired success read as `model-verification-pending` while nothing checked the
-  // model, so the Workbench polled a promise no probe kept until another surface asked for models.
-  it("starts the one on-demand check when a profile read finds the chat success expired", async () => {
-    const context = {
-      req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+  // model, so the Workbench polled a promise no probe kept. Customer 1.3.4 moved the check to the
+  // human's actions: a passive re-read never claims a check and never starts one, and a read for a
+  // model just chosen in the picker (`check=1`) starts the one on-demand check.
+  it("checks an expired model only when the picker asks, and never claims a check nobody runs", async () => {
+    const context = (query: string): RouteContext => ({
+      req: mockRequest({ method: "GET", url: `/api/coding-sidecar/gateway/profile${query}` }),
       res: mockResponse().res,
       params: {},
-      url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+      url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile${query}`),
       correlationId: "corr-profile-expired",
-    } satisfies RouteContext;
+    });
     const config = configValue(provider(), capability());
     const holder = probeVerifiedGatewayConfig(config);
     holder.recordVerifiedCapability(
@@ -4040,12 +4088,24 @@ describe("coding-sidecar gateway", () => {
       gatewayReadinessFetch: fetch,
     };
     try {
-      const result = await handleCodingSidecarGatewayProfile(context, deps);
-      expect(fetch).toHaveBeenCalledOnce();
-      expect(result.body).toMatchObject({ status: "available", modelAlias: "azure-coding-model" });
+      const passive = await handleCodingSidecarGatewayProfile(context(""), deps);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(passive.body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+        verification: "unverified",
+      });
 
-      // A fresh success adds nothing: a polling Workbench never probes on its own.
-      await handleCodingSidecarGatewayProfile(context, deps);
+      const chosen = await handleCodingSidecarGatewayProfile(context("?check=1"), deps);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(chosen.body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+        verification: "verified",
+      });
+
+      // A fresh success adds nothing, even when the picker asks again.
+      await handleCodingSidecarGatewayProfile(context("?check=1"), deps);
       expect(fetch).toHaveBeenCalledOnce();
     } finally {
       await stopConfiguredConversationReadiness(deps);
@@ -6349,10 +6409,10 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 19,
+        expectedToolCount: 20,
         receivedToolCount: 2,
         unexpectedToolCount: 0,
-        missingToolCount: 17,
+        missingToolCount: 18,
         completeness: "complete",
         loss: "none",
       },
@@ -6384,7 +6444,7 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 403 });
     expect(sink.events[0]?.extra).toMatchObject({
       unexpectedToolCount: 1,
-      missingToolCount: 19,
+      missingToolCount: 20,
       completeness: "complete",
       loss: "none",
     });
@@ -8624,6 +8684,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      toolCallTextMessageCount: 1,
       offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(
@@ -8631,7 +8692,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
         "coding-sidecar.gateway.request-validated.line",
         formatActivityLogProofLine(validated ?? {}),
       ),
-    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    ).toMatchObject({ droppedReasoningMessageCount: 2, toolCallTextMessageCount: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 
@@ -9828,7 +9889,7 @@ describe("inactive Code Mode readiness selection", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
   });
 
-  it("advertises two outer tools and retains the eighteen canonical inner bindings", async () => {
+  it("advertises two outer tools and retains the nineteen canonical inner bindings", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -9853,8 +9914,8 @@ describe("inactive Code Mode readiness selection", () => {
       "execute",
       "question",
     ]);
-    expect(catalog?.projection.tools).toHaveLength(18);
-    expect(catalog?.offered.toolRefs).toHaveLength(18);
+    expect(catalog?.projection.tools).toHaveLength(19);
+    expect(catalog?.offered.toolRefs).toHaveLength(19);
     expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,
@@ -10127,15 +10188,97 @@ describe("fresh chat serving for new coding tasks", () => {
     }
   });
 
-  it("keeps unobserved new-task admission and passive source pending", async () => {
+  // An unobserved model is never admitted and never claimed verified. Customer 1.3.4: the passive
+  // source no longer says "still checking" when no check runs (the Workbench then waited for a check
+  // nobody started); it names the model as usable but unverified, and the start checks it first.
+  it("keeps unobserved new-task admission strict and lets the start check the model", async () => {
     const deps = servingDeps();
     try {
       expect(() => liveAdmission(deps)).toThrow(
         expect.objectContaining({ reason: "model-verification-pending" }) as Error,
       );
       const profile = await handleCodingSidecarGatewayProfile(servingContext(), deps);
-      expect(profile.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+      expect(profile.body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+        verification: "unverified",
+      });
+
+      const fetch = vi.fn(() =>
+        Promise.resolve(
+          Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+        ),
+      );
+      const checking = { ...deps, gatewayReadinessFetch: fetch };
+      await awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-start-0001");
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+
+      // A ready model adds nothing to a later start.
+      await awaitCodingRunModelReadiness(checking, undefined, "serving-start-0002");
+      expect(fetch).toHaveBeenCalledOnce();
     } finally {
+      await stopConfiguredConversationReadiness(deps);
+      deps.store.close();
+    }
+  });
+
+  // Auditor blocker (customer 1.3.4): a start after five idle minutes was refused as "still
+  // checking" and started no check. The start now checks the expired model and is admitted.
+  it("admits a start after an idle while by checking the expired model first", async () => {
+    const deps = servingDeps();
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new Error("missing serving fixture");
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { toolCalling: true, conversationReady: true },
+      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      holder.generation(),
+    );
+    const fetch = vi.fn(() =>
+      Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      ),
+    );
+    const checking = { ...deps, gatewayReadinessFetch: fetch };
+    try {
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      await awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-idle-start");
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
+      deps.store.close();
+    }
+  });
+
+  // F3 (customer 1.3.4): a check that outlives the bounded profile wait is still running; the
+  // projection says "still checking" exactly then, so the Workbench re-reads until it settles.
+  it("reports a pending verification exactly while a check of that model runs", async () => {
+    const deps = servingDeps();
+    let answer: ((response: Response) => void) | undefined;
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const checking = { ...deps, gatewayReadinessFetch: fetch };
+    try {
+      const check = awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-f3");
+      await vi.waitFor(() => {
+        expect(fetch).toHaveBeenCalledOnce();
+      });
+      const running = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+      expect(running.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+      answer?.(Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }));
+      await check;
+      const settled = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+      expect(settled.body).toMatchObject({ status: "available", verification: "verified" });
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
       deps.store.close();
     }
   });
@@ -10275,7 +10418,10 @@ describe("pending readiness original cause evidence", () => {
       const probe = initializeLiteLlmCodingReadiness(deps, "corr-stored-shortfall");
       try {
         const read = handleCodingSidecarGatewayProfile(
-          { correlationId: "corr-shortfall-read" } as RouteContext,
+          {
+            correlationId: "corr-shortfall-read",
+            url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+          } as RouteContext,
           deps,
         );
         await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);

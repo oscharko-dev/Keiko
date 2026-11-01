@@ -611,6 +611,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.pull_request": "Pull request",
   "codingWorkbench.timeline.tool.git_execute": "Git operation",
   "codingWorkbench.timeline.tool.git_sync": "Git sync",
+  "codingWorkbench.timeline.tool.git_branch": "Create task branch",
   "codingWorkbench.timeline.tool.ci_status": "CI status",
   "codingWorkbench.changes.title": "Changes",
   "codingWorkbench.changes.idle": "Start a run to inspect its workspace changes.",
@@ -738,9 +739,9 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-verification-pending":
     "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
-    "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
+    "The latest chat check could not use this model. Open the Workbench or the model list again to check it once more, or choose another ready model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
+    "The gateway has not confirmed yet that this model can call tools. Open the Workbench or the model list again in a minute to check it once more, or choose another ready model.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
@@ -819,6 +820,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.actionKind.git-unstage": "Unstage changes",
   "codingWorkbench.approval.actionKind.git-fetch": "Fetch from the remote",
   "codingWorkbench.approval.actionKind.git-pull": "Fast-forward from the remote",
+  "codingWorkbench.approval.actionKind.git-branch": "Create a task branch and switch to it",
   "codingWorkbench.approval.actionKind.verification-command": "Verification command",
   "codingWorkbench.approval.actionKind.ci-observe": "CI status check",
   "codingWorkbench.approval.actionKind.connector-read": "Connector read",

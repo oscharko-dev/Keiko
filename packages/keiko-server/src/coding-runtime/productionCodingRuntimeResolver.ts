@@ -17,6 +17,9 @@ import type {
   DraftDeliveryService,
 } from "../gitDelivery/draftDeliveryTypes.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { RuntimeGitTaskBranchPort } from "../gitDelivery/runtimeGitBranch.js";
+import type { GovernedTaskBranches } from "./governedTaskBranches.js";
+import { createProductionTaskBranchPort } from "./productionTaskBranchPort.js";
 import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
@@ -228,6 +231,12 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly verifiedCommit?: VerifiedCommitRuntimeDependencies;
   readonly draftDelivery?: DraftDeliveryDependencies;
   readonly workspaceAuthority: ProductionWorkspaceAuthorityInput;
+  /**
+   * The task branches Keiko's own `keiko_git_branch` moved runs onto (governedTaskBranches.ts,
+   * #3907). The same instance backs `workspaceAuthority.governedTaskBranch` and
+   * `verifiedCommit.governedTaskBranch`; absent, a run cannot be given a task branch.
+   */
+  readonly governedTaskBranches?: GovernedTaskBranches | undefined;
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
@@ -660,6 +669,22 @@ function repositoryPreparationFor(
       });
 }
 
+// A managed start checks its model before the repository is prepared: a model that is not ready
+// now is checked first, as a Chat request does, so a start after an idle while is not refused.
+function launchPreparation(
+  input: ProductionCodingRuntimeResolverInput,
+  preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
+): QualifiedProductionCodingRuntime["mintLaunch"]["prepare"] {
+  const prepareModel = input.workspaceAuthority.prepareManagedModel;
+  if (prepareModel === undefined) return preparation?.prepare;
+  return async (request): Promise<void> => {
+    if (request.runtimePreference !== "codex-subscription") {
+      await prepareModel(request.modelId, request.correlationId);
+    }
+    await preparation?.prepare(request);
+  };
+}
+
 function launchContext(
   input: ProductionCodingRuntimeResolverInput,
   preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
@@ -680,8 +705,9 @@ function launchResolver(
   toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   const preparation = repositoryPreparationFor(input);
+  const prepare = launchPreparation(input, preparation);
   return {
-    ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
+    ...(prepare === undefined ? {} : { prepare }),
     resolve: (requested): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
       const context = launchContext(input, preparation, requested);
       // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
@@ -935,18 +961,16 @@ function repositoryRuntimeServices(
     onRuntimeEvent,
     notifyVerifiedHeadAdvanced,
   );
-  const runtimeGitService = createProductionRuntimeGitService(
-    input.verifiedCommit,
-    binding,
-    () => authority.effectiveMode(),
-    () => verifiedCommitService?.invalidate(),
-  );
   const draftDeliveryService = createProductionDraftDeliveryService(
     input.draftDelivery,
     input.verifiedCommit,
     binding,
     onRuntimeEvent,
   );
+  const runtimeGitService = runtimeGitServiceFor(input, binding, authority, {
+    verifiedCommitService,
+    draftDeliveryService,
+  });
   const codingToolApprovals = createCodingToolApprovalBridge(
     verifiedCommitService,
     runtimeGitService,
@@ -960,6 +984,48 @@ function repositoryRuntimeServices(
     ciObservationService,
     codingToolApprovals,
   };
+}
+
+// The runtime Git service of one run. What a branch change makes stale, open commit proposals and
+// their verification, and push and pull-request proposals, is invalidated through the two services
+// that hold them (#3907).
+function runtimeGitServiceFor(
+  input: ProductionCodingRuntimeResolverInput,
+  binding: VerifiedCommitRuntimeBinding,
+  authority: CodingRuntimeAuthorityService,
+  held: {
+    readonly verifiedCommitService: VerifiedCommitService | undefined;
+    readonly draftDeliveryService: DraftDeliveryService | undefined;
+  },
+): RuntimeGitService | undefined {
+  return createProductionRuntimeGitService(
+    input.verifiedCommit,
+    binding,
+    () => authority.effectiveMode(),
+    () => held.verifiedCommitService?.invalidate(),
+    {
+      port: taskBranchPortFor(input, binding.context, authority),
+      invalidateDelivery: () => held.draftDeliveryService?.invalidate(),
+    },
+  );
+}
+
+// The workspace side of a governed task branch for this run (productionTaskBranchPort.ts); absent
+// when the deployment composes no branch record or no lifecycle that can adopt one, in which case
+// `keiko_git_branch` refuses with `not-local-checkout`.
+function taskBranchPortFor(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  authority: CodingRuntimeAuthorityService,
+): RuntimeGitTaskBranchPort | undefined {
+  return input.governedTaskBranches === undefined
+    ? undefined
+    : createProductionTaskBranchPort({
+        workspaceId: context.workspaceId,
+        lifecycle: input.workspaceAuthority.workspaceLifecycle,
+        branches: input.governedTaskBranches,
+        authority,
+      });
 }
 
 function runtimeCiServices(

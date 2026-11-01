@@ -209,6 +209,7 @@ import {
   processServerLogSinkFor,
 } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
+import { stopChatCompactionWork } from "./chat-compaction-model-call.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
@@ -505,6 +506,10 @@ import {
   createGovernedSyncHeads,
   type GovernedSyncHeads,
 } from "./coding-runtime/governedSyncHeads.js";
+import {
+  createGovernedTaskBranches,
+  type GovernedTaskBranches,
+} from "./coding-runtime/governedTaskBranches.js";
 import { createProductionDraftDeliveryDependencies } from "./coding-runtime/productionDraftDeliveryDependencies.js";
 import {
   createProductionCodingRuntimeResolver,
@@ -525,6 +530,7 @@ import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindow
 import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
 import {
   admitCodingRunModel,
+  awaitCodingRunModelReadiness,
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
@@ -4484,6 +4490,12 @@ interface UiHandlerDepsAssemblyArgs {
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
   readonly codingJiraPods?: CodingJiraPods | undefined;
+  /** The model check a coding run's start awaits; bound once the deps graph that runs it exists. */
+  readonly codingModelReadiness?: CodingModelReadinessBinding | undefined;
+}
+
+interface CodingModelReadinessBinding {
+  check?: (modelId: string | undefined, correlationId: string | undefined) => Promise<void>;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4921,10 +4933,9 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices(
-    { ...args, mcpConnections, codingJiraPods },
-    dapRuntime,
-  );
+  const codingModelReadiness: CodingModelReadinessBinding = {};
+  const runtimeArgs = { ...args, mcpConnections, codingJiraPods, codingModelReadiness };
+  const services = assembleUiHandlerRuntimeServices(runtimeArgs, dapRuntime);
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -4981,7 +4992,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionGeneration,
     deps,
   );
-  attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
+  attachCodingRuntimeDeps(services.codingRuntimeControlPlane, codingModelReadiness, deps);
   installCodingJiraPods(deps, codingJiraPods);
   return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
 }
@@ -5053,6 +5064,7 @@ export function installConversationReadinessInitialization(deps: UiHandlerDeps):
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
+      await stopChatCompactionWork(deps);
       const conversationShutdown = stopConfiguredConversationReadiness(deps);
       await startup.stop();
       await conversationShutdown;
@@ -5246,6 +5258,18 @@ function createUiCodingRuntimeRepositoryInstructions(
 // derived from the assembled deps graph, which does not exist when the resolver is composed. A
 // composition without a knowledge store binds a lease that opens no provider, and the search stays
 // lexical and says so.
+// The coding runtime reaches two services of the finished graph: repository semantic search, and
+// the model check a run's start awaits (customer 1.3.4).
+function attachCodingRuntimeDeps(
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  readiness: CodingModelReadinessBinding,
+  deps: UiHandlerDeps,
+): void {
+  attachRepositorySemanticSearch(codingRuntimeControlPlane, deps);
+  readiness.check = (modelId, correlationId): Promise<void> =>
+    awaitCodingRunModelReadiness(deps, modelId, correlationId);
+}
+
 function attachRepositorySemanticSearch(
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   deps: UiHandlerDeps,
@@ -6359,6 +6383,8 @@ function runtimeWorkspaceAuthority(
         reasoningEffort,
         args.runtimeConfig,
       ),
+    prepareManagedModel: (modelId, correlationId): Promise<void> =>
+      args.codingModelReadiness?.check?.(modelId, correlationId) ?? Promise.resolve(),
   };
 }
 
@@ -6470,10 +6496,8 @@ function qualifiedRuntimeResolver(
   const { args } = input;
   const confirmationConsumer = runtimeStartConfirmationConsumer(args, input.activated);
   const resolveWorkspaceRootAccess = createWorkspaceRootAccessResolver(args.bundle);
-  // #3902 AC2: the heads a governed fast-forward writes, recorded by the runtime Git service and
-  // accepted by the workspace authority beside the verified commit's receipt.
-  const governedSyncHeads = createGovernedSyncHeads();
-  const verifiedCommit = runtimeVerifiedCommitDependencies(input, governedSyncHeads);
+  const records = createRuntimeGitRecords();
+  const verifiedCommit = runtimeVerifiedCommitDependencies(input, records);
   const draftDelivery = runtimeDraftDeliveryDependencies(input);
   return createProductionCodingRuntimeResolver({
     workspaceAuthority: {
@@ -6484,8 +6508,10 @@ function qualifiedRuntimeResolver(
         input.deploymentCeiling,
         input.envelopeBounds,
       ),
-      governedSyncHead: governedSyncHeads.latest,
+      governedSyncHead: records.governedSyncHeads.latest,
+      governedTaskBranch: records.governedTaskBranches.latest,
     },
+    governedTaskBranches: records.governedTaskBranches,
     ...input.ports,
     serverRuntimeChangeset: createRuntimeChangesetApplyPort({
       runtimeMutationLease: input.runtimeMutationLeaseBroker,
@@ -6522,9 +6548,25 @@ function qualifiedRuntimeResolver(
   });
 }
 
+// The server-owned per-run records the runtime Git service writes and the workspace authority and
+// the verified-commit context read: #3902 AC2, the heads a governed fast-forward writes, accepted
+// beside the verified commit's receipt; and #3907, the task branches Keiko's own `keiko_git_branch`
+// moves runs onto.
+interface RuntimeGitRecords {
+  readonly governedSyncHeads: GovernedSyncHeads;
+  readonly governedTaskBranches: GovernedTaskBranches;
+}
+
+function createRuntimeGitRecords(): RuntimeGitRecords {
+  return {
+    governedSyncHeads: createGovernedSyncHeads(),
+    governedTaskBranches: createGovernedTaskBranches(),
+  };
+}
+
 function runtimeVerifiedCommitDependencies(
   input: QualifiedRuntimeResolverInput,
-  governedSyncHeads: GovernedSyncHeads,
+  records: RuntimeGitRecords,
 ): ReturnType<typeof createProductionVerifiedCommitDependencies> {
   const { args } = input;
   const verified = createProductionVerifiedCommitDependencies(
@@ -6542,7 +6584,11 @@ function runtimeVerifiedCommitDependencies(
   );
   return verified === undefined
     ? undefined
-    : { ...verified, recordGovernedSyncHead: governedSyncHeads.record };
+    : {
+        ...verified,
+        recordGovernedSyncHead: records.governedSyncHeads.record,
+        governedTaskBranch: records.governedTaskBranches.latest,
+      };
 }
 
 function runtimeDraftDeliveryDependencies(

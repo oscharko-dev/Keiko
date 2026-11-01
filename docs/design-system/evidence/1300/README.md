@@ -207,20 +207,51 @@ bundle-size gate pass. No producer assertions, tolerances or budgets changed.
 These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
 qualified separately.
 
+## minimatch and glob advisory overrides — 2026-10-31
 
-## Dependency alignment with #4168 — 2026-10-31
+GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 moved the root overrides to minimatch 11.0.3 and glob
+14.0.3, which changes `package.json` and `package-lock.json`, two of the declared source inputs. The
+four original producers were rerun on that tree on Node 24.18.0 (macOS arm64), as for release 1.3.2,
+and all passed: component fidelity with zero gated differences and no missing selectors, editor
+token fidelity with zero gated differences and all 14 reference captures, the seven-mode
+accessibility proof with zero serious/critical violations and zero unresolved incomplete findings,
+and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.
 
-The four original producers were rerun on Windows x64 with Node 24.18.0 and npm
-11.16.0 after aligning minimatch 11.0.3 and glob 14.0.3 with #4168 while retaining
-the exact-flat runtime override. Each proof binds this branch's own source inputs;
-no proof hashes were copied from the other PR.
 
-Component fidelity passed 427 probes with zero gated differences. Editor fidelity
-passed 160 gated probes with zero gated differences and all 14 reference captures;
-the existing non-gated accent differences remain recorded. The seven-mode axe
-proof has zero serious/critical violations and zero unresolved incomplete findings.
-All 108 browser captures passed their page-error, API, selector, crash and trust
-controls. All 281 CSS/proof tests passed. No assertions, tolerances or budgets changed.
+## Release 1.3.4 input refresh — 2026-10-31
 
-These synthetic fixtures do not replace the tool-catalog performance pairing,
-D12 reference measurement or release-owner runtime approval.
+The canonical version cut changes the root/workspace manifests and lockfile, which
+are declared producer inputs. All four original producers were rerun against the
+1.3.4 source on macOS arm64, Node 24.22.0, npm 11.19.1 and Playwright 1.64.1.
+The normalized third-party dependency graph is unchanged by this version cut.
+Component and editor fidelity passed with zero gated differences and no missing
+selectors; all 14 editor references and 108 running-app captures completed without
+errors. The seven-mode accessibility proof has zero serious/critical violations
+and zero unresolved incomplete findings. The source-input regression passes all
+281 tests. No producer assertion, tolerance, budget or source stylesheet changed.
+These remain synthetic historical fixtures; they do not qualify model behavior.
+
+## Release 1.3.5 input refresh — 2026-11-01
+
+The canonical version cut changes the root/workspace manifests and lockfile, which are declared
+producer inputs. All four
+original producers were rerun against the 1.3.5 source on macOS arm64, Node 24.18.0. Component
+and editor fidelity passed with zero gated differences and no missing selectors; all 14 editor
+references and 108 running-app captures completed without errors. The seven-mode accessibility
+proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
+assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
+fixtures; they do not qualify model behavior.
+
+## Windows gateway merge with dev — 2026-11-01
+
+Merging `dev` (release 1.3.5) into the Windows gateway branch changes the root manifests and
+lockfile, which are declared producer inputs. All four original producers were rerun on that merged
+tree on Windows x64, Node 24.18.0, as for the earlier dependency alignment on this branch. Component
+fidelity passed 427 probes with zero gated differences and no missing selectors; editor fidelity had
+zero gated differences and all 14 reference captures, with the existing non-gated accent differences
+still recorded. The seven-mode accessibility proof has zero serious/critical violations and zero
+unresolved incomplete findings, and all 108 running-app captures completed with zero page errors,
+unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust states. No
+producer assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
+fixtures; they do not qualify model behavior.

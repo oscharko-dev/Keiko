@@ -28,6 +28,7 @@ const APPROVAL_WAITING_TOOL_IDS: ReadonlySet<string> = new Set([
   "keiko.git.push",
   "keiko.git.pullrequest",
   "keiko.git.sync",
+  "keiko.git.branch",
   "keiko.changeset.edit",
 ]);
 
@@ -40,6 +41,7 @@ const GIT_DELIVERY_CANONICAL_IDS = [
   "keiko.git.pullrequest",
   "keiko.git.execute",
   "keiko.git.sync",
+  "keiko.git.branch",
   "keiko.ci.status",
 ];
 const GIT_DELIVERY_ALIASES = [
@@ -51,6 +53,7 @@ const GIT_DELIVERY_ALIASES = [
   "keiko_pull_request",
   "keiko_git_execute",
   "keiko_git_sync",
+  "keiko_git_branch",
   "keiko_ci_status",
 ];
 
@@ -183,14 +186,14 @@ describe("opencode registration set", () => {
     });
   });
 
-  it("declares exactly eighteen governed tools with unique canonical identities and aliases", () => {
+  it("declares exactly nineteen governed tools with unique canonical identities and aliases", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.tools).toHaveLength(18);
+    expect(projection.tools).toHaveLength(19);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
     const aliases = projection.tools.map((tool) => tool.alias);
-    expect(new Set(canonicalIds).size).toBe(18);
-    expect(new Set(aliases).size).toBe(18);
+    expect(new Set(canonicalIds).size).toBe(19);
+    expect(new Set(aliases).size).toBe(19);
   });
 
   // #3417: the catalog owns only the discovery descriptor; it reads, takes no argument, carries the
@@ -262,6 +265,22 @@ describe("opencode registration set", () => {
     );
   });
 
+  // #3907: a task branch is a local ref write that prepares delivery; it never reaches a remote.
+  it("gives the governed task branch a local write and the delivery-substrate effect, no egress", () => {
+    const projection = compileToolProjection(
+      createKeikoToolCatalog([opencodeRegistrationSet()]),
+      OPENCODE_PROFILE,
+    );
+    const branch = projection.tools.find((entry) => entry.alias === "keiko_git_branch");
+    expect([...(branch?.effects ?? [])].sort()).toEqual(["delivery-substrate", "workspace-write"]);
+    expect(branch?.toolRef).toEqual({ canonicalId: "keiko.git.branch", contractVersion: 1 });
+    expect(branch?.description).toContain("protected");
+    if (branch === undefined) throw new Error("Missing tool: keiko_git_branch");
+    expect(matchesCatalogSchema(branch.inputSchema, { name: "feature/x" })).toBe(true);
+    for (const invalid of [{}, { name: "" }, { name: "a".repeat(256) }, { name: "x", extra: 1 }])
+      expect(matchesCatalogSchema(branch.inputSchema, invalid)).toBe(false);
+  });
+
   // #3414: #3386's H1 local repository-search handler is implemented and mounted server-side, so
   // this issue projects it as the model-visible tool `keiko_repository_search` under its reserved
   // canonical identity `keiko.repo.search@1`. Read-only, search-only: `keiko_workspace_discover`
@@ -298,8 +317,8 @@ describe("opencode registration set", () => {
   it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(18);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(18);
+    expect(definitions).toHaveLength(19);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(19);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 
@@ -431,7 +450,7 @@ describe("inactive Code Mode catalog", () => {
     const direct = opencodeRegistrationSet();
     const grouped = opencodeRegistrationSet("code-mode");
     expect(grouped.entries).toEqual(direct.entries);
-    expect(grouped.entries).toHaveLength(18);
+    expect(grouped.entries).toHaveLength(19);
     expect(grouped.profile).toEqual({ id: "opencode-code-mode", version: 1 });
     expect(grouped.nativeExtensions).toEqual([
       { alias: "question", contractVersion: 1 },

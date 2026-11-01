@@ -727,6 +727,33 @@ function gitSyncSpec(): OpenCodeToolSpec {
   };
 }
 
+// #3907 (owner decision 2026-10-31): the one governed way a run gets a task branch. Keiko's Git
+// kernel creates the branch at the current commit and switches the run to it. The shell keeps
+// refusing `git checkout -b`. It prepares delivery (a commit on a protected branch is blocked until
+// the run has a task branch of its own), so it carries the delivery-substrate effect beside the
+// local ref write.
+function gitBranchSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.branch",
+    alias: "keiko_git_branch",
+    description:
+      "Create a new local task branch at the current commit and switch this run to it; " +
+      "uncommitted changes carry over. Use it when keiko_git_commit is blocked because the run " +
+      "works on a protected branch such as main or dev. It refuses a protected name, an invalid " +
+      "name, an existing branch, a run that is not on its base branch and a run that is not in a " +
+      "Local checkout. It never deletes, renames or resets anything. This call waits for any " +
+      "required operator decision.",
+    inputSchema: managedObjectSchema({ name: { type: "string", minLength: 1, maxLength: 255 } }, [
+      "name",
+    ]),
+    effects: ["workspace-write", "delivery-substrate"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-branch-port",
+    // It waits in place for the operator's approval of the call below Full access.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  };
+}
+
 function ciStatusSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.ci.status",
@@ -774,6 +801,7 @@ export function opencodeRegistrationSet(
       gitPullRequestSpec(),
       gitExecuteSpec(),
       gitSyncSpec(),
+      gitBranchSpec(),
       ciStatusSpec(),
     ].map((spec) => entryFor(spec)),
   };

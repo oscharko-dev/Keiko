@@ -1135,11 +1135,14 @@ accounting. A chat probe that only times out or meets a transient overload statu
 a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
 diagnostic), so a busy single-slot model stays selectable (#4115). An accepted coding-sidecar answer
 that finished serving renews that same-generation success too (`readinessRenewal` on
-`coding-sidecar.gateway.outcome`), and a Workbench profile read that finds it expired starts the
-on-demand check (#3907). A verified model nobody asked for in
-15 minutes is neither renewed nor recovered in the background; `gateway.readiness.renewal.paused`
-records that pause (`paused`: `renewal`, `recovery`; optional `idleMs`), and the model's next
-conversation request verifies it on demand (#4103). See
+`coding-sidecar.gateway.outcome`; #3907). Each chat model is checked once per connection
+at startup; nothing renews or recovers a model on a timer. A conversation request, a
+coding run start, a Workbench model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not
+ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
+never start a check. The Workbench profile describes the model chosen in its picker (`modelId`):
+`model-verification-pending` only while a check of that model runs, an expired or unknown answer
+usable with `verification: "unverified"`, and its `verification` is that model's own observation,
+not the gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See
 [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
@@ -1276,9 +1279,12 @@ allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemp
 sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
 upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
 assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The gateway hands reasoning only to a
-call that asks for it with the explicit `reasoningDelivery: "forward"` (the coding sidecar route
-alone); the `coding-workbench` latency profile selects timeout floors only.
+records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
+calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
+text goes upstream as `content: null`, and the same line counts the others as
+`toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the
+explicit `reasoningDelivery: "forward"` (the coding sidecar route alone); the `coding-workbench`
+latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
 

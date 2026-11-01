@@ -962,7 +962,7 @@ export function CodingWorkbenchWindow({
   );
   // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
   const catalogSettled = useGatewayModelCatalogSettled();
-  useEffect(() => requestGatewayModelCatalogRefresh(), []);
+  useEffect(() => requestGatewayModelCatalogRefresh({ check: true }), []);
   const modelSelection = useCodingModelSelection(
     state,
     actions,
@@ -1085,7 +1085,7 @@ function selectedConversationReadiness(
 ): CodingWorkbenchRuntimeState {
   if (state.runtimePreference !== "managed-gateway" || state.selectedModelId === null) return state;
   const selected = catalog?.models.find((model) => model.id === state.selectedModelId);
-  if (isFreshSelectedCodingModel(selected)) return state;
+  if (isUsableSelectedCodingModel(selected)) return state;
   return {
     ...state,
     canStart: false,
@@ -1093,8 +1093,10 @@ function selectedConversationReadiness(
   };
 }
 
-function isFreshSelectedCodingModel(selected: ModelCapability | undefined): boolean {
-  return selected?.conversationReady === true && isCodingWorkbenchModel(selected);
+// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model whose
+// answer expired or that nobody checked yet is usable, because its run's start checks it first.
+function isUsableSelectedCodingModel(selected: ModelCapability | undefined): boolean {
+  return selected !== undefined && isCodingWorkbenchModel(selected);
 }
 
 function pendingSelectedSource(
@@ -1129,13 +1131,10 @@ function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly str
 }
 
 // The default a Workbench elects when no human choice remains is the one Chat elects: a gateway-
-// declared chat model first, a special-purpose engine only when nothing else is ready. Only freshly
-// ready models are candidates here, so wire order never decides it (#3905).
+// declared chat model first, a special-purpose engine only when nothing else is ready, and within a
+// tier a ready model before one whose answer is unknown, so wire order never decides it (#3905).
 function electedCodingDefault(models: readonly ModelCapability[]): ModelCapability | undefined {
-  return electConversationDefault(
-    models.filter((model) => model.conversationReady === true),
-    (model) => model.conversationReady,
-  );
+  return electConversationDefault(models, (model) => model.conversationReady);
 }
 
 function useCodingModelSelection(
@@ -1239,7 +1238,7 @@ function workbenchCatalogEvidenceSnapshot(
   human: boolean,
 ): WorkbenchCatalogEvidenceSnapshot {
   const selected = read.capabilities.find((model) => model.id === selectedId);
-  const fresh = isFreshSelectedCodingModel(selected);
+  const fresh = isUsableSelectedCodingModel(selected);
   const selectionDigest = selectedId === null ? undefined : sha256Hex(selectedId);
   const held = selected !== undefined && isOfferedOrRenewing(selected) && !fresh;
   const catalogDigest = sha256Hex(JSON.stringify(read.capabilities));
@@ -1256,7 +1255,7 @@ function workbenchCatalogEvidenceSnapshot(
       surface: "coding-workbench",
       source: read.source,
       configuredModelCount: read.capabilities.length,
-      usableModelCount: read.capabilities.filter(isFreshSelectedCodingModel).length,
+      usableModelCount: read.capabilities.filter(isUsableSelectedCodingModel).length,
     },
   };
 }
@@ -2835,6 +2834,7 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
   "git-unstage": "codingWorkbench.approval.actionKind.git-unstage",
   "git-fetch": "codingWorkbench.approval.actionKind.git-fetch",
   "git-pull": "codingWorkbench.approval.actionKind.git-pull",
+  "git-branch": "codingWorkbench.approval.actionKind.git-branch",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
   "ci-observe": "codingWorkbench.approval.actionKind.ci-observe",
   "connector-read": "codingWorkbench.approval.actionKind.connector-read",

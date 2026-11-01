@@ -1323,7 +1323,7 @@ describe("composer context status and manual maintenance", () => {
   it("reports a failed manual checkpoint as a correlated failure with stack evidence", () => {
     const { deps, chatId } = fixture();
     const records: ServerDiagnosticRecord[] = [];
-    vi.spyOn(deps.evidenceStore, "put").mockImplementation(() => {
+    vi.spyOn(deps.store, "writeChatContinuityCheckpoint").mockImplementation(() => {
       throw new Error("PRIVATE_WRITE_CANARY");
     });
     const sink = createBufferedServerLogSink();
@@ -1335,7 +1335,7 @@ describe("composer context status and manual maintenance", () => {
         "fixture",
         "corr-manual-failure",
       ),
-    ).toThrow("could not be saved");
+    ).toThrow("Context storage is unavailable");
     expect(records[0]?.correlationId).toBe("corr-manual-failure");
     expect(records[0]?.frames?.length).toBeGreaterThan(0);
     const event = sink.events.find((entry) => entry.op === "chat.context.failed");
@@ -1417,7 +1417,7 @@ describe("shared checkpoint capture", () => {
     const measured = { ...deps, evidenceStore: { ...deps.evidenceStore, listByPrefix } };
     const status = compactChatContext(measured, chatId, "fixture", "manual-read-once");
     expect(status.compaction?.tokensSaved).toBeGreaterThan(0);
-    expect(listByPrefix).toHaveBeenCalledTimes(2);
+    expect(listByPrefix).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry a failed checkpoint read while projecting the context meter", () => {
@@ -1473,7 +1473,10 @@ describe("shared checkpoint capture", () => {
         redactionSecrets: [],
         correlationId: "failed-capture",
       });
-      const event = sink.events.find((entry) => entry.correlationId === "failed-capture");
+      const event = sink.events.find(
+        (entry) =>
+          entry.correlationId === "failed-capture" && entry.op === "chat.continuity.capture",
+      );
       expect(event?.extra?.checkpointDisposition).toBe("read-failed");
       expect(event?.extra?.completeness).toBe("partial");
       expectActivityLogProof(
@@ -1520,7 +1523,9 @@ describe("shared checkpoint capture", () => {
     if (original === undefined) throw new TypeError("Missing original message");
     deps.store.createMessage({ ...original, content: "Earlier inserted context", timestamp: 0 });
     capture();
-    const events = sink.events.filter((entry) => entry.correlationId === "helper-capture");
+    const events = sink.events.filter(
+      (entry) => entry.correlationId === "helper-capture" && entry.op === "chat.continuity.capture",
+    );
     expect(events.map((entry) => entry.extra?.checkpointDisposition)).toEqual([
       "none",
       "restored",

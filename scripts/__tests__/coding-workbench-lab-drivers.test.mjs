@@ -342,21 +342,43 @@ describe("wb-ui.mjs: the gates of a run in the Workbench", () => {
 describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
   // A KeikoSelect option renders its label and its description in separate elements; the accessible
   // name joins them, so a prefix match on the name could choose a longer near-match.
-  function selectPage(labels) {
+  function selectPage(labels, { offeredFrom = 0, emptyReads = 0 } = {}) {
     const clicked = [];
+    const escapes = [];
+    let opened = 0;
+    let reads = 0;
     const option = (label) => ({
       locator: () => ({ allTextContents: async () => [label] }),
       click: async () => {
         clicked.push(label);
       },
     });
+    // The requested labels are offered only from the `offeredFrom`-th opening on (0 = at once), as
+    // a model returns to the select after its readiness re-probe.
+    // The first `emptyReads` counts after each opening see the list the picker empties while it
+    // re-reads the catalog.
+    const offered = () => (opened > offeredFrom ? labels : labels.slice(0, 1));
+    const counted = () => {
+      reads += 1;
+      return reads <= emptyReads ? 0 : offered().length;
+    };
     const page = {
       getByRole: (role) =>
         role === "combobox"
-          ? { click: async () => undefined }
-          : { count: async () => labels.length, nth: (index) => option(labels[index]) },
+          ? {
+              click: async () => {
+                opened += 1;
+                reads = 0;
+              },
+            }
+          : { count: async () => counted(), nth: (index) => option(offered()[index]) },
+      keyboard: {
+        press: async (key) => {
+          escapes.push(key);
+        },
+      },
     };
-    return { page, clicked };
+    return { page, clicked, escapes, opened: () => opened };
   }
 
   it("chooses the option whose label is exactly the requested one", async () => {
@@ -365,11 +387,51 @@ describe("wb-ui.mjs: choosing an option of a Workbench select", () => {
     expect(clicked).toEqual(["Jira: Lab Pod"]);
   });
 
-  it("refuses a Pod that is offered only as a longer near-match, and clicks nothing", async () => {
-    const { page, clicked } = selectPage(["Jira: none", "Jira: Lab Podcast"]);
+  it("refuses a Pod that is offered only as a longer near-match, at once and clicking nothing", async () => {
+    const { page, clicked, opened } = selectPage(["Jira: none", "Jira: Lab Podcast"]);
     await expect(chooseOption(page, "Jira Pod for this run", "Jira: Lab Pod")).rejects.toThrow(
       /no option is labelled "Jira: Lab Pod"/u,
     );
+    expect(clicked).toEqual([]);
+    // Only the model select waits for a readiness re-probe; this select was opened exactly once.
+    expect(opened()).toBe(1);
+  });
+
+  it("waits for a model that returns to the select after its readiness re-probe", async () => {
+    const { page, clicked, escapes } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      offeredFrom: 2,
+    });
+    await chooseOption(page, "Coding model", "gemma-4-31b-it", { waitMs: 60_000, retryMs: 0 });
+    expect(clicked).toEqual(["gemma-4-31b-it"]);
+    expect(escapes).toEqual(["Escape", "Escape"]);
+  });
+
+  it("reads the model select only once its re-read catalog has landed", async () => {
+    const { page, clicked, escapes, opened } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      emptyReads: 2,
+    });
+    await chooseOption(page, "Coding model", "gemma-4-31b-it", {
+      waitMs: 60_000,
+      retryMs: 0,
+      pollMs: 1,
+    });
+    expect(clicked).toEqual(["gemma-4-31b-it"]);
+    expect(escapes).toEqual([]);
+    expect(opened()).toBe(1);
+  });
+
+  it("refuses the model once the readiness wait has run out", async () => {
+    let clock = 0;
+    const { page, clicked } = selectPage(["Model: none", "gemma-4-31b-it"], {
+      offeredFrom: Number.POSITIVE_INFINITY,
+    });
+    const now = () => {
+      clock += 20_000;
+      return clock;
+    };
+    await expect(
+      chooseOption(page, "Coding model", "gemma-4-31b-it", { waitMs: 60_000, retryMs: 0, now }),
+    ).rejects.toThrow(/no option is labelled "gemma-4-31b-it"/u);
     expect(clicked).toEqual([]);
   });
 });

@@ -28,7 +28,11 @@ import {
   stampHistoryRevision,
   type LoadedHistoryCheckpoint,
 } from "./chat-history-snapshot.js";
-import { persistChatCompactionEvidence } from "./chat-compaction-evidence.js";
+import {
+  persistChatCompactionEvidence,
+  type ChatCompactionEvidenceInput,
+} from "./chat-compaction-evidence.js";
+import { persistRequiredChatContinuityCheckpoint } from "./chat-continuity-checkpoint.js";
 import { UiStoreError } from "./store/index.js";
 import { logChatContextFailure, logChatContextManagement } from "./chat-context-log.js";
 import {
@@ -530,15 +534,48 @@ export function compactChatContext(
     logChatContextManagement("unchanged", before, 0, correlationId);
     return { ...before, canCompact: false };
   }
-  persistChatCompactionEvidence(deps, {
-    compaction,
-    chatId,
-    modelId,
-    messageCount: deps.store.countMessages(chatId),
-    startedAt,
-    finishedAt: Date.now(),
-    correlationId,
-  });
+  return finishManualCompaction(
+    deps,
+    {
+      compaction,
+      chatId,
+      modelId,
+      messageCount: deps.store.countMessages(chatId),
+      startedAt,
+      finishedAt: Date.now(),
+      correlationId,
+    },
+    before,
+    loaded,
+  );
+}
+
+function finishManualCompaction(
+  deps: UiHandlerDeps,
+  input: ChatCompactionEvidenceInput & {
+    readonly compaction: ContextCompactionRecord;
+    readonly correlationId: string;
+  },
+  before: ChatContextStatusWire,
+  loaded: LoadedHistoryCheckpoint,
+): ChatContextStatusWire {
+  const { compaction, chatId, modelId, correlationId } = input;
+  try {
+    persistRequiredChatContinuityCheckpoint(
+      deps,
+      { compaction, chatId, modelId, correlationId },
+      loaded,
+    );
+  } catch (error) {
+    logChatContextManagement("failed", before, 0, correlationId);
+    const failure =
+      error instanceof Error
+        ? error
+        : new UiStoreError("INTERNAL", "Context storage is unavailable. Please retry.", 503);
+    logChatContextFailure(failure, correlationId);
+    throw failure;
+  }
+  persistChatCompactionEvidence(deps, input);
   const after = readChatContextStatus(deps, chatId, modelId, correlationId);
   if (after.compaction?.messagesCompacted !== compaction.itemsBefore) {
     logChatContextManagement("failed", before, 0, correlationId);
