@@ -33,7 +33,7 @@ import {
   WINDOWS_HOST,
   plantDirectoryRedirect,
   plantSymlinkOrSkip,
-} from "./test-support/symlink-fixture.js";
+} from "../../../tests/support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

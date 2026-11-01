@@ -1,11 +1,12 @@
-// Link fixtures for keiko-security suites that run on Windows hosts as well as POSIX ones (#4068).
+// Link fixtures for package suites that run on Windows hosts as well as POSIX ones (#4068).
 //
 // Creating a file or directory symlink on Windows needs SeCreateSymbolicLinkPrivilege (or Developer
-// Mode); an ordinary account gets EPERM. These helpers keep the original link wherever the host
-// allows it and turn only that missing Windows privilege into an explicit, reasoned skip of the
-// calling test — never a silent pass. Directory redirections have a junction form that needs no
-// privilege, so a Windows host still exercises the reparse boundary itself. This mirrors the
-// keiko-server fixture of the same name, which this package may not import (ADR-0019 layering).
+// Mode); an ordinary account gets EPERM. Planting the link in a shared fixture made every test using
+// that fixture fail on such a host, including tests that never touch the link. These helpers keep
+// the original link wherever the host allows it and turn only the missing Windows privilege into an
+// explicit, reasoned skip of the calling test — never a silent pass. Directory escapes have a
+// junction form that needs no privilege, so a Windows host still exercises the reparse boundary
+// itself. One owner for every package's suites, like the other modules in tests/support.
 
 import { symlinkSync } from "node:fs";
 
@@ -40,8 +41,21 @@ export function plantSymlinkOrSkip(
 
 /**
  * A directory redirection every host can create: a junction on Windows (absolute target, no
- * privilege) and a directory symlink elsewhere, where the link type argument is ignored.
+ * privilege) and a directory symlink elsewhere.
  */
 export function plantDirectoryRedirect(absoluteTarget: string, path: string): void {
   symlinkSync(absoluteTarget, path, WINDOWS_HOST ? "junction" : "dir");
+}
+
+/**
+ * The macOS seatbelt filesystem policy is defined over POSIX roots; a Windows host's temporary
+ * directories cannot express them, so the policy is refused before any launch. That refusal is the
+ * correct product behavior and is not a Windows qualification of the macOS path.
+ */
+export function skipSeatbeltRootsOnWindowsHost(context: TestContext): void {
+  if (WINDOWS_HOST) {
+    context.skip(
+      "macOS seatbelt filesystem roots are POSIX paths; not expressible on a Windows host",
+    );
+  }
 }

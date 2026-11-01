@@ -21,7 +21,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { WINDOWS_HOST } from "../test-support/symlink-fixture.js";
+import { WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 import {
   OPENCODE_RIPGREP_UNVERIFIED_REASONS,
   recordOpenCodeRipgrepResolution,

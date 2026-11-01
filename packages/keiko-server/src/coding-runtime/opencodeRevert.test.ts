@@ -13,7 +13,7 @@ import {
   plantDirectoryRedirect,
   plantSymlinkOrSkip,
   WINDOWS_HOST,
-} from "../test-support/symlink-fixture.js";
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   beginOpenCodeTurnImages,
   createOpenCodeRevertRunPort,

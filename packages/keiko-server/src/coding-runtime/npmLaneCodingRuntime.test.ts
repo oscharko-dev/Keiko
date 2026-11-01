@@ -21,7 +21,7 @@ import {
 import { resolveOpenCodeRipgrep } from "./opencodeRipgrepLaunch.js";
 import type { RipgrepRuntimeManifest } from "./ripgrepRuntime.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../test-support/symlink-fixture.js";
+import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../../../../tests/support/symlink-fixture.js";
 import {
   NPM_LANE_PREVIOUS_RUNTIME_APPROVALS,
   NPM_LANE_RUNTIME_APPROVALS,

@@ -16,7 +16,7 @@ import {
   recordRuntimeGatewayConfinementSpawned,
 } from "./runtimeGatewayProcessSandbox.js";
 import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
-import { WINDOWS_HOST } from "../test-support/symlink-fixture.js";
+import { WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 
 const roots: string[] = [];
 afterEach(() => {

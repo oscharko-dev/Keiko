@@ -12,7 +12,7 @@ import {
   createNodeGitPullRequestAdapter,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { resolveGitHubIssue } from "../coding-context/githubIssueResolution.js";
-import { plantDirectoryRedirect } from "../test-support/symlink-fixture.js";
+import { plantDirectoryRedirect } from "../../../../tests/support/symlink-fixture.js";
 import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import type {

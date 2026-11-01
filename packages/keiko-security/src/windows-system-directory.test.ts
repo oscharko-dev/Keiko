@@ -23,7 +23,7 @@ import {
   resolveWindowsSystemExecutable,
   sameWindowsSystemDirectoryIdentity,
 } from "./windows-system-directory.js";
-import { plantSymlinkOrSkip } from "./test-support/symlink-fixture.js";
+import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 
 const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
   ["empty string", ""],

@@ -12,7 +12,7 @@ import {
   resolveNativeExternalReadRoots,
   type NativeExternalRootsInput,
 } from "./opencodeNativeExternalRoots.js";
-import { plantDirectoryRedirect, WINDOWS_HOST } from "../test-support/symlink-fixture.js";
+import { plantDirectoryRedirect, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 
 const roots: string[] = [];
 

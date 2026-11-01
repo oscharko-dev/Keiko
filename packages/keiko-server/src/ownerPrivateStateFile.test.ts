@@ -8,7 +8,7 @@ import {
   ownerPrivateReaderFor,
   readOwnerPrivateFile,
 } from "./ownerPrivateStateFile.js";
-import { plantSymlinkOrSkip } from "./test-support/symlink-fixture.js";
+import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 
 const roots: string[] = [];
 

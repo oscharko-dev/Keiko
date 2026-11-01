@@ -31,7 +31,7 @@ import {
   readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
-import { plantDirectoryRedirect } from "./test-support/symlink-fixture.js";
+import { plantDirectoryRedirect } from "../../../tests/support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

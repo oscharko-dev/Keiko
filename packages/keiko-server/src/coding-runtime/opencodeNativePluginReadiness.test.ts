@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { plantDirectoryRedirect } from "../test-support/symlink-fixture.js";
+import { plantDirectoryRedirect } from "../../../../tests/support/symlink-fixture.js";
 import {
   OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
   OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,

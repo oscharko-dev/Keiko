@@ -12,7 +12,7 @@ import {
   grantOthersWrite,
   makeOwnerPrivateDirectory,
 } from "../test-support/owner-private-fixture.js";
-import { plantSymlinkOrSkip } from "../test-support/symlink-fixture.js";
+import { plantSymlinkOrSkip } from "../../../../tests/support/symlink-fixture.js";
 import { loadMcpServerRegistry, MCP_SERVER_REGISTRY_FILE } from "./mcpServerRegistry.js";
 
 const RUN_ID = "run-mcp-registry";
