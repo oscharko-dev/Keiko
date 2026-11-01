@@ -2296,7 +2296,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       loss: activityLogLossField(),
       activity: activityLogStringEnumField(true, [
         "initialized",
-        "draft-notifications-ready",
         "input-limit",
         "code-ready",
         "code-language-detected",
