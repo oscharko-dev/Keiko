@@ -3208,7 +3208,7 @@
       "anti-slop/no-known-value-widening": 1
     },
     "packages/keiko-evidence/src/compaction-evidence.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 46
+      "anti-slop/no-conditional-empty-object-spread": 29
     },
     "packages/keiko-evidence/src/connected-context-evidence.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1
@@ -5965,12 +5965,17 @@
       "anti-slop/no-chained-type-assertions": 7,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unsafe-dictionary-type": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 14
+    },
+    "packages/keiko-server/src/chat-compaction-model-call.ts": {
+      "anti-slop/no-object-parameters": 4
     },
     "packages/keiko-server/src/chat-compaction-model-summary.test.ts": {
       "anti-slop-effect/prefer-effect-match": 1,
       "anti-slop/no-chained-type-assertions": 2,
+      "anti-slop/no-conditional-empty-object-spread": 9,
       "anti-slop/no-runtime-typeof": 1,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 1,
@@ -6008,6 +6013,15 @@
       "anti-slop/no-conditional-empty-object-spread": 4,
       "anti-slop/no-known-value-widening": 4
     },
+    "packages/keiko-server/src/chat-continuity-checkpoint.ts": {
+      "anti-slop/no-unknown-parameters": 1
+    },
+    "packages/keiko-server/src/chat-continuity-persistence.test.ts": {
+      "anti-slop/no-chained-type-assertions": 1,
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/no-unknown-returns": 1,
+      "anti-slop/require-safety-comment-for-type-assertion": 2
+    },
     "packages/keiko-server/src/chat-draft-routes.test.ts": {
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-unknown-parameters": 1
@@ -6044,13 +6058,14 @@
       "anti-slop/require-safety-comment-for-type-assertion": 10
     },
     "packages/keiko-server/src/chat-history-rehydration.ts": {
+      "anti-slop/no-array-filter-map": 1,
       "anti-slop/no-known-value-widening": 2
     },
     "packages/keiko-server/src/chat-history-snapshot.test.ts": {
       "anti-slop/no-known-value-widening": 1
     },
     "packages/keiko-server/src/chat-history-snapshot.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 4
+      "anti-slop/no-conditional-empty-object-spread": 5
     },
     "packages/keiko-server/src/chat-prompt-budget-diagnostics.ts": {
       "anti-slop/no-conditional-empty-object-spread": 3
@@ -12464,6 +12479,11 @@
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-unknown-parameters": 1
     },
+    "packages/keiko-server/src/store/chatContinuity.ts": {
+      "anti-slop/no-runtime-typeof": 2,
+      "anti-slop/no-unsafe-dictionary-type": 3,
+      "anti-slop/require-safety-comment-for-type-assertion": 1
+    },
     "packages/keiko-server/src/store/chatCreationIntents.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1
     },
@@ -12477,6 +12497,14 @@
     },
     "packages/keiko-server/src/store/chatDrafts.ts": {
       "anti-slop/no-runtime-typeof": 2
+    },
+    "packages/keiko-server/src/store/chatHistorySearch.test.ts": {
+      "anti-slop/no-known-value-widening": 1
+    },
+    "packages/keiko-server/src/store/chatHistorySearch.ts": {
+      "anti-slop/no-array-filter-map": 1,
+      "anti-slop/no-chained-type-assertions": 1,
+      "anti-slop/require-safety-comment-for-type-assertion": 2
     },
     "packages/keiko-server/src/store/chatJiraBinding.test.ts": {
       "anti-slop/no-known-value-widening": 1,
@@ -12609,12 +12637,13 @@
       "anti-slop/require-safety-comment-for-type-assertion": 15
     },
     "packages/keiko-server/src/store/messages.ts": {
-      "anti-slop/no-chained-type-assertions": 16,
+      "anti-slop/no-chained-type-assertions": 19,
       "anti-slop/no-conditional-empty-object-spread": 4,
+      "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 7,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 42
+      "anti-slop/require-safety-comment-for-type-assertion": 48
     },
     "packages/keiko-server/src/store/migrations.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
@@ -18050,6 +18079,9 @@
     "sandbox/scripts/stop.mjs": {
       "anti-slop/no-runtime-typeof": 1
     },
+    "scripts/__tests__/chat-continuity-subject.test.mjs": {
+      "anti-slop-effect/prefer-effect-match": 1
+    },
     "scripts/__tests__/chat-skills-proxy-startup.test.mjs": {
       "anti-slop/no-module-mocking": 3
     },
@@ -18853,6 +18885,19 @@
     },
     "scripts/testing/coding-workbench-lab/chaos-proxy.mjs": {
       "anti-slop/no-runtime-typeof": 4
+    },
+    "scripts/testing/coding-workbench-lab/chat-continuity-replay.mjs": {
+      "anti-slop/no-runtime-typeof": 2
+    },
+    "scripts/testing/coding-workbench-lab/chat-continuity-report.mjs": {
+      "anti-slop/no-conditional-empty-object-spread": 2
+    },
+    "scripts/testing/coding-workbench-lab/chat-continuity-results.mjs": {
+      "anti-slop/no-runtime-typeof": 4
+    },
+    "scripts/testing/coding-workbench-lab/chat-continuity-runtime.mjs": {
+      "anti-slop/no-array-filter-map": 1,
+      "anti-slop/no-runtime-typeof": 1
     },
     "scripts/testing/coding-workbench-lab/connected-chat-cases.mjs": {
       "anti-slop/no-runtime-typeof": 1
