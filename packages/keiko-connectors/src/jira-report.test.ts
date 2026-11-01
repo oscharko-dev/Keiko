@@ -143,7 +143,8 @@ describe("jira.report over a project of any size", () => {
       section: "comment",
       use: "To post this report as a Jira comment, get this section with reportId and post its text verbatim; figures are not the comment.",
     });
-    const page = await h.run({ reportId: result.data.reportId, section: "comment" });
+    const reportId = String(result.data.reportId);
+    const page = await h.run({ reportId, section: "comment" });
     expect(page.data).not.toHaveProperty("comment");
   });
 

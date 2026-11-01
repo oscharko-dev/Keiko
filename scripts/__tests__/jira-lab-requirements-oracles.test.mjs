@@ -11,11 +11,32 @@ import {
   gradeChangeImpact,
   gradeCriterionTestCases,
   gradeQualityFindings,
+  sectionsPresent,
 } from "../testing/jira-chat-lab/requirements/oracles.mjs";
 
 const TRUTH = buildCorpus(1).truth;
 const VAGUE = TRUTH.filter((item) => item.vague).map((item) => item.id);
 const NO_CRITERIA = TRUTH.filter((item) => item.acceptanceCount === 0).map((item) => item.id);
+
+// Lab S05 (Qwen, 2026-11-01): epics whose sections read "__Ziel__" were judged to miss every section
+// although "**Ziel**", the same Markdown emphasis, counted; the product's section rule strips both.
+describe("description sections", () => {
+  const SECTIONS = ["Ziel", "Fachlicher Kontext"];
+  it.each([
+    ["h2. Ziel\nx\nh2. Fachlicher Kontext\ny"],
+    ["## Ziel\nx\n## Fachlicher Kontext\ny"],
+    ["**Ziel**\nx\n**Fachlicher Kontext**\ny"],
+    ["__Ziel__\nx\n__Fachlicher Kontext__\ny"],
+  ])("finds every section heading in %j", (description) => {
+    expect(sectionsPresent(description, SECTIONS)).toBe(true);
+  });
+  it.each([["__Ziel__\nx"], ["Das Ziel und der Fachlicher Kontext stehen im Text."], [undefined]])(
+    "misses a section that is not a heading line in %j",
+    (description) => {
+      expect(sectionsPresent(description, SECTIONS)).toBe(false);
+    },
+  );
+});
 
 describe("quality findings (S15)", () => {
   it("accepts exactly the seeded defects and rejects an omission or an extra id", () => {

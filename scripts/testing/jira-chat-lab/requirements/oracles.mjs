@@ -129,9 +129,13 @@ export function turnIssues({ before, issues, exchanges }) {
   };
 }
 
+/**
+ * Whether every section opens a line as a heading: Jira's `h2.`, a Markdown `#`, or Markdown emphasis
+ * (`**Ziel**` and `__Ziel__` alike, as the product's own section rule reads them).
+ */
 export function sectionsPresent(description, sections) {
   return sections.every((name) =>
-    new RegExp(String.raw`(^|\n)\s*(h\d\.|#+)?\s*\**${escapeRegExp(name)}`, "i").test(
+    new RegExp(String.raw`(^|\n)\s*(h\d\.|#+)?\s*[*_]*${escapeRegExp(name)}`, "i").test(
       description ?? "",
     ),
   );
