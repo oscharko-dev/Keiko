@@ -79,6 +79,17 @@ GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5. The command, token/line floors and 
 requirement are unchanged. Newly exposed inherited clones remain gate failures until resolved;
 the upgrade grants no baseline exemption or suppression authority.
 
+**Amendment, 2026-11-01 (owner decision, epic #3914).** The gate compares each pull request with its
+base commit (`fallow audit --only dupes --gate new-only --base <base>`). A clone group that already
+exists at the base is inherited. Any group that the change creates is introduced and fails the
+gate. String literals stay part of the comparison (`ignoreStringValues: false`), so two
+registrations that differ only in their op names, owners or proof ids are not clones. No source
+family is excluded: generated files, i18n catalogs and the failure-class tables are measured like
+any other source. The shrink-only `docs/qa/fallow/dupes-baseline.json` from 2026-10-24 and its
+helpers are removed; the base comparison replaces them. `.fallowrc.json` must equal the
+configuration the gate pins, or the gate fails. On failure the gate names each introduced group's
+`file:start-end` locations, or the closed check that refused the evidence.
+
 Gitleaks 8.30.1 runs from an official checksum-pinned release binary, never from the non-OSS hosted
 action. It redacts all finding output and scans the complete pull-request commit range. That range
 covers every candidate addition and also catches credentials that were committed and then deleted.
