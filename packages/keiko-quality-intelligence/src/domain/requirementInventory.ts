@@ -29,10 +29,15 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
+  continueProjectedRow,
+  openProjectedRow,
+  parseProjectedRow,
   tableCells,
   parseTableHeader,
   parseTableRow,
   type ColumnRoles,
+  type ProjectedRow,
+  type TableRow,
 } from "./requirementTable.js";
 import {
   ID_START,
@@ -208,6 +213,25 @@ function classifyText(
   return { kind: heading ? "heading" : "weak", id, title };
 }
 
+function rowCandidate(row: TableRow, line: number): Candidate {
+  return {
+    kind: "row",
+    id: row.id,
+    title: row.title,
+    line,
+    headingLine: true,
+    row: {
+      statement: row.statement,
+      criteria: row.criteria,
+      ...(row.priority === undefined ? {} : { priority: row.priority }),
+    },
+  };
+}
+
+function isDefinedRow(row: TableRow | undefined, vocabulary: CompiledVocabulary): row is TableRow {
+  return row !== undefined && !vocabulary.reservedPrefixes.has(idPrefix(row.id).toUpperCase());
+}
+
 function tableCandidates(context: Context): readonly Candidate[] {
   const found: Candidate[] = [];
   let roles: ColumnRoles | undefined;
@@ -217,24 +241,28 @@ function tableCandidates(context: Context): readonly Candidate[] {
     const header = parseTableHeader(cells, context.vocabulary);
     if (header !== undefined) roles = header;
     const row = header === undefined ? parseTableRow(cells, roles, context.vocabulary) : undefined;
-    if (
-      row === undefined ||
-      context.vocabulary.reservedPrefixes.has(idPrefix(row.id).toUpperCase())
-    )
-      return;
-    found.push({
-      kind: "row",
-      id: row.id,
-      title: row.title,
-      line: index,
-      headingLine: true,
-      row: {
-        statement: row.statement,
-        criteria: row.criteria,
-        ...(row.priority === undefined ? {} : { priority: row.priority }),
-      },
-    });
+    if (isDefinedRow(row, context.vocabulary)) found.push(rowCandidate(row, index));
   });
+  return found;
+}
+
+/** Rows of a workbook extraction (`Sheet!2: ID=FR-1 | Titel=Foo`), with their multi-line cells. */
+function projectedCandidates(context: Context): readonly Candidate[] {
+  const found: Candidate[] = [];
+  let open: { readonly row: ProjectedRow; readonly line: number } | undefined;
+  const close = (): void => {
+    const parsed = open === undefined ? undefined : parseProjectedRow(open.row, context.vocabulary);
+    if (open !== undefined && isDefinedRow(parsed, context.vocabulary))
+      found.push(rowCandidate(parsed, open.line));
+    open = undefined;
+  };
+  context.lines.forEach((line, index) => {
+    const started = openProjectedRow(line.text, context.vocabulary);
+    if (started !== undefined || collapse(line.text).length === 0) close();
+    if (started !== undefined) open = { row: started, line: index };
+    else if (open !== undefined) continueProjectedRow(open.row, line.text, context.vocabulary);
+  });
+  close();
   return found;
 }
 
@@ -283,7 +311,7 @@ function sectionCandidate(
 }
 
 function findCandidates(context: Context): readonly Candidate[] {
-  const rows = tableCandidates(context);
+  const rows = [...tableCandidates(context), ...projectedCandidates(context)];
   const tableLines = new Set(rows.map((row) => row.line));
   const fromLines = lineCandidates(context, tableLines);
   const fromSections = context.sections.flatMap(

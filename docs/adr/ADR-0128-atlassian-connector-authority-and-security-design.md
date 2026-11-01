@@ -880,7 +880,9 @@ keeps the completed answer instead of failing the turn.
   follows `[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*-?\d+` (`LH-001`, `R-12`, `REQ-FUNC-001`, `REQ_003`);
   technical tokens (`HTTP-2`, `AES-256`, `ISO-27001`, `UTF-8`, `SHA-256`, `TLS-1`, ...) are reserved
   data, not requirements. Candidates are headings, strong lines (bracketed, separated), table rows
-  with an id/statement/priority column, and, in HTML and slides, recorded section headings; a
+  with an id/statement/priority column, rows of a workbook extraction (`Sheet!2: ID=FR-1 | Titel=Foo`,
+  identifier in the first column, the lines of a multi-line cell read as separate criteria), and, in
+  HTML and slides, recorded section headings; a
   heading needs a body or a second identifier of its prefix. Priority, criteria, metadata keys and
   modal verbs are data in several languages (DE, EN, FR, ES, IT) and extensible through the
   vocabulary, never code branches. A definition with a body wins over a table-of-contents mention of
@@ -890,9 +892,10 @@ keeps the completed answer instead of failing the turn.
   modal verb and no identifier gets `DRV-<8 letters>`, the SHA-256 of the document identity and the
   normalized statement (plus an occurrence index for exact repeats), so it survives insertion and
   renumbering and is not shared between documents. The same specification yields the same
-  identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word and
-  PowerPoint extraction (`requirement-inventory-formats.integration`); PDF line wrapping is only as
-  stable as its extracted lines. Scanned documents (OCR) are not read. The result is a set of
+  identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word,
+  PowerPoint, PDF (one extracted line per statement line) and Excel extraction
+  (`requirement-inventory-formats.integration`); PDF line wrapping is only as stable as its
+  extracted lines. Scanned documents (OCR) are not read. The result is a set of
   _detected units_, never claimed to be complete: the detector can miss or over-read, and says so.
 - _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit? }`.
   Units are paged in document order under an item bound (25, at most 50) and a byte bound (24,000

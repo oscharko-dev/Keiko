@@ -1,8 +1,10 @@
 // The requirement inventory of one specification is the same for every supported document format
 // and independent of any model (#4179, Epic #4173): the real parsers extract the same logical
-// specification from Markdown, plain text, HTML, Word and PowerPoint, and the deterministic
+// specification from Markdown, plain text, HTML, Word, PowerPoint, PDF and Excel, and the deterministic
 // inventory derived from each extraction carries identical identifiers, titles, priorities,
 // acceptance criteria and digests. Only the location differs, as it must.
+
+import { Buffer } from "node:buffer";
 
 import { describe, expect, it } from "vitest";
 
@@ -26,9 +28,11 @@ import {
   shapeXml,
   slidePartXml,
 } from "../../packages/keiko-local-knowledge/src/parsers/pptx-test-fixtures.js";
+import { pdfParser } from "../../packages/keiko-local-knowledge/src/parsers/pdf-parser.js";
 import { pptxParser } from "../../packages/keiko-local-knowledge/src/parsers/pptx-parser.js";
 import { buildParserOptions } from "../../packages/keiko-local-knowledge/src/parsers/registry.js";
 import { textParser } from "../../packages/keiko-local-knowledge/src/parsers/text-parser.js";
+import { xlsxParser } from "../../packages/keiko-local-knowledge/src/parsers/xlsx-parser.js";
 
 interface Spec {
   readonly id: string;
@@ -137,6 +141,100 @@ function pptx(): Uint8Array {
   );
 }
 
+/** Literal-string escapes for a WinAnsi PDF: every non-ASCII byte becomes an octal escape. */
+function pdfString(text: string): string {
+  let out = "";
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0x3f;
+    if (char === "(" || char === ")" || char === "\\") out += `\\${char}`;
+    else if (code < 0x20 || code > 0x7e) out += `\\${code.toString(8).padStart(3, "0")}`;
+    else out += char;
+  }
+  return `(${out})`;
+}
+
+const PDF_LINE_HEIGHT = 14;
+
+/** A one-page PDF whose text layer holds `lines` top to bottom, one positioned line each. */
+function pdf(lines: readonly string[]): Uint8Array {
+  const height = (lines.length + 4) * PDF_LINE_HEIGHT;
+  const operators = lines.map(
+    (line, index) =>
+      `1 0 0 1 40 ${String(height - (index + 2) * PDF_LINE_HEIGHT)} Tm ${pdfString(line)} Tj`,
+  );
+  const stream = `BT\n/F1 10 Tf\n${operators.join("\n")}\nET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 ${String(height)}] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>`,
+    `<< /Length ${String(stream.length)} >>\nstream\n${stream}\nendstream`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>",
+  ];
+  let body = "%PDF-1.4\n";
+  const offsets = objects.map((object, index) => {
+    const offset = body.length;
+    body += `${String(index + 1)} 0 obj\n${object}\nendobj\n`;
+    return offset;
+  });
+  const rows = offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  body += `xref\n0 ${String(objects.length + 1)}\n0000000000 65535 f \n${rows}trailer\n<< /Size ${String(objects.length + 1)} /Root 1 0 R >>\nstartxref\n${String(body.length)}\n%%EOF\n`;
+  return Uint8Array.from(Buffer.from(body, "latin1"));
+}
+
+function xmlEscaped(text: string): string {
+  return text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+const SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+
+/** A one-sheet workbook with a header row and one row per requirement, as a requirement list. */
+function xlsx(): Uint8Array {
+  const header = ["ID", "Titel", "Anforderung", "Priorität", "Abnahmekriterien"];
+  const rows = [
+    header,
+    ...SPECS.map((spec) => [
+      spec.id,
+      spec.title,
+      spec.text,
+      spec.priority,
+      spec.criteria.join("\n"),
+    ]),
+  ];
+  const strings = rows.flat();
+  const sheet = rows
+    .map(
+      (cells, row) =>
+        `<row r="${String(row + 1)}">${cells
+          .map(
+            (value, column) =>
+              `<c r="${String.fromCharCode(65 + column)}${String(row + 1)}" t="s"><v>${String(strings.indexOf(value))}</v></c>`,
+          )
+          .join("")}</row>`,
+    )
+    .join("");
+  return zipTextEntries([
+    {
+      name: "xl/workbook.xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="${SPREADSHEET_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Anforderungen" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    },
+    {
+      name: "xl/_rels/workbook.xml.rels",
+      content:
+        '<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>',
+    },
+    {
+      name: "xl/sharedStrings.xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><sst xmlns="${SPREADSHEET_NS}" count="${String(strings.length)}" uniqueCount="${String(strings.length)}">${strings
+        .map((value) => `<si><t xml:space="preserve">${xmlEscaped(value)}</t></si>`)
+        .join("")}</sst>`,
+    },
+    {
+      name: "xl/worksheets/sheet1.xml",
+      content: `<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="${SPREADSHEET_NS}"><sheetData>${sheet}</sheetData></worksheet>`,
+    },
+  ]);
+}
+
 interface Extraction {
   readonly text: string;
   readonly sections: readonly ScopeDocumentSection[];
@@ -207,6 +305,26 @@ async function extract(format: string): Promise<Extraction> {
           OPTIONS,
         ),
       );
+    case "pdf":
+      return extraction(
+        await pdfParser.parseAsync(
+          selectionFromBytes(pdf(plainText().split("\n")), {
+            extension: "pdf",
+            mediaType: "application/pdf",
+          }),
+          OPTIONS,
+        ),
+      );
+    case "xlsx":
+      return extraction(
+        await xlsxParser.parseAsync(
+          selectionFromBytes(xlsx(), {
+            extension: "xlsx",
+            mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          }),
+          OPTIONS,
+        ),
+      );
     default:
       return extraction(
         await pptxParser.parseAsync(
@@ -220,7 +338,7 @@ async function extract(format: string): Promise<Extraction> {
   }
 }
 
-const FORMATS = ["markdown", "text", "html", "docx", "pptx"] as const;
+const FORMATS = ["markdown", "text", "html", "docx", "pptx", "pdf", "xlsx"] as const;
 
 function content(extracted: Extraction): readonly unknown[] {
   return deriveRequirementInventory({ ...extracted, documentKey: DOCUMENT_KEY }).entries.map(

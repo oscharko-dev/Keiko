@@ -1,5 +1,6 @@
 // #4179: the `knowledge.requirements` read tool pages the detected requirement units under byte and
 // item bounds, states what it could not read, and never claims completeness.
+import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -284,6 +285,76 @@ describe("what the tool says it could not read (#4179 review, defect 12)", () =>
     const page = await call(f, {});
 
     expect(page).toMatchObject({ outcome: "failed", reason });
+  });
+
+  describe("the sealed-local floor (#4179, #4180)", () => {
+    const sealedText = specification(4, { prefix: "GEHEIM" }).text;
+
+    function seal(f: PodFixture, capsuleId: string, policyJson: string | null): void {
+      f.withStore((store) => {
+        store._internal.db
+          .prepare("UPDATE capsules SET model_use_policy_json = ? WHERE id = ?")
+          .run(policyJson, capsuleId);
+      });
+    }
+
+    it.each([
+      ["an explicitly sealed-local Pod", JSON.stringify(sealedLocalPodModelUsePolicy())],
+      ["a Pod without a recorded policy (legacy default)", null],
+    ])("refuses %s with policy-denied and releases no document content", async (_name, policy) => {
+      const f = await fixture([{ capsuleId: "cap-sealed", text: sealedText }]);
+      seal(f, "cap-sealed", policy);
+
+      const page = await call(f, {});
+
+      expect(page).toMatchObject({ outcome: "failed", reason: "policy-denied" });
+      expect(page.items).toBeUndefined();
+      expect(JSON.stringify(page)).not.toContain("GEHEIM");
+      expect(JSON.stringify(page)).not.toContain("Thema");
+    });
+
+    it("serves the open Pod of a Chat and nothing of its sealed-local sibling", async () => {
+      const f = await fixture([
+        { capsuleId: "cap-open", text: specification(3).text },
+        { capsuleId: "cap-sealed", text: sealedText },
+      ]);
+      seal(f, "cap-sealed", JSON.stringify(sealedLocalPodModelUsePolicy()));
+
+      const pages = await readAll(f);
+
+      expect(idsOf(pages)).toEqual(["LH-001", "LH-002", "LH-003"]);
+      expect(JSON.stringify(pages)).not.toContain("GEHEIM");
+      expect(pages[0]?.totals).toMatchObject({
+        documentsScanned: 1,
+        refusals: ["policy-denied"],
+        cutReasons: ["scope-refused"],
+      });
+    });
+
+    it("records the refusal on the Activity Log without any document text", async () => {
+      const f = await fixture([{ capsuleId: "cap-sealed", text: sealedText }]);
+      seal(f, "cap-sealed", JSON.stringify(sealedLocalPodModelUsePolicy()));
+
+      await call(f, {});
+
+      const lines = sink.events
+        .filter((event) => event.op === "knowledge.requirements.read")
+        .map((event) =>
+          expectActivityLogProof(
+            "knowledge.requirements.read.line",
+            formatActivityLogProofLine(event),
+          ),
+        );
+      expect(lines).toHaveLength(1);
+      // The sealed Pod was never opened: nothing was scanned, detected or returned.
+      expect(lines[0]).toMatchObject({
+        disposition: "refused",
+        documentsScanned: 0,
+        detectedCount: 0,
+        returnedCount: 0,
+      });
+      expect(JSON.stringify(lines)).not.toContain("GEHEIM");
+    });
   });
 
   it("answers a Chat without a Knowledge Pod with a closed reason, not an empty list", async () => {
