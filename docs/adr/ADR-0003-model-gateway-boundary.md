@@ -720,6 +720,13 @@ following error types are never retried: `AuthenticationError`, `ModelRefusalErr
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
+**Position of a correction (#4138).** Every correction the gateway sends, the steered repairs and the
+tool-schema repair alike, joins the request's leading system message after its own text
+(`withSystemCorrection`, `gateway.ts`); a request without one gets a leading system message. A
+correction never trails the conversation: strict chat templates, Qwen's among them, refuse a system
+message after another message ("System message must be at the beginning."), and that refusal failed
+the very repair the correction carried on every review turn that used up its output budget.
+
 **Steered repair of an exhausted or empty answer (#3873, F17, F23).** A `ProviderOutputExhaustedError` — an HTTP
 200 answer whose `finish_reason` is `length` with neither a tool call nor content, the model having
 spent its whole output budget on reasoning, or whose tool call the budget cut off mid-arguments
@@ -730,7 +737,7 @@ never serialized) is set by the coding sidecar route alone, so every other call 
 and interactive chat included — still surfaces such an answer at once and never makes a hidden second
 generation (#3873 review). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
 grants exactly one further attempt per call, at once, which the gateway sends as the ORIGINAL request
-plus one fixed system message (`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told
+plus one fixed system correction (`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told
 that its previous answer used the whole budget without a tool call or a final answer and asked to
 reply with that directly, keeping any reasoning to a few sentences. The repair follows the tool-schema
 repair's pattern — one correction at a time, never the exhausted answer quoted back — but is its own
@@ -766,7 +773,7 @@ that empty answer is repaired; an empty answer that carried no reasoning is the 
 surfaces at once, and is never retried, exactly as before. `steeredAnswerRepair` (`resilience.ts`) is
 the single classification the buffered attempt, the streamed startup and the stream resumed after
 forwarded reasoning all consult, and the repair is granted once per call whichever of the two failures
-comes first. The gateway sends the original request plus its own fixed system message
+comes first. The gateway sends the original request plus its own fixed system correction
 (`EMPTY_ANSWER_REPAIR_MESSAGE`): the previous answer ended after reasoning without a tool call or a
 final answer, so call the next tool now or give the final answer, keeping any reasoning to a few
 sentences. Its scheduled line carries `reason: "empty-answer-repair"`. The marks name how the repaired

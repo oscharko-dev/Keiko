@@ -77,6 +77,7 @@ import {
 } from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
+  ChatMessage,
   Clock,
   CircuitBreakerStatus,
   GatewayConfig,
@@ -985,6 +986,29 @@ const REPAIR_MESSAGES: Readonly<Record<RetryRepairReason, string>> = {
   "empty-answer-repair": EMPTY_ANSWER_REPAIR_MESSAGE,
 };
 
+/**
+ * The messages of a corrected request: the ORIGINAL messages with one correction joined to the
+ * leading system message, after its own text (#4138). Strict chat templates, Qwen's among them,
+ * refuse a system message that follows another message, so a trailing correction failed the very
+ * repair it carried. A request without a leading system message gets one. Nothing is dropped, and
+ * the failed answer is never quoted back.
+ */
+export function withSystemCorrection(
+  messages: readonly ChatMessage[],
+  correction: string,
+): readonly ChatMessage[] {
+  const [first, ...rest] = messages;
+  if (first?.role !== "system") return [{ role: "system", content: correction }, ...messages];
+  const joined: ChatMessage = {
+    ...first,
+    content: `${first.content}\n\n${correction}`,
+    ...(first.contentParts === undefined
+      ? {}
+      : { contentParts: [...first.contentParts, { type: "text", text: `\n\n${correction}` }] }),
+  };
+  return [joined, ...rest];
+}
+
 // The steered request: the ORIGINAL request plus one system correction, like the schema repair —
 // one correction at a time, and never the failed answer's reasoning quoted back.
 function steeredRepairRequest(
@@ -993,7 +1017,7 @@ function steeredRepairRequest(
 ): GatewayCallRequest {
   return {
     ...original,
-    messages: [...original.messages, { role: "system", content: REPAIR_MESSAGES[reason] }],
+    messages: withSystemCorrection(original.messages, REPAIR_MESSAGES[reason]),
   };
 }
 
@@ -1217,10 +1241,7 @@ function repairedRequest(
   if (!(error instanceof GatewayToolCatalogError)) return undefined;
   const correction = toolSchemaRepairMessage(error);
   if (correction === undefined) return undefined;
-  return {
-    ...original,
-    messages: [...original.messages, { role: "system", content: correction }],
-  };
+  return { ...original, messages: withSystemCorrection(original.messages, correction) };
 }
 
 // Bare hostname only — never `scheme://host:port` (that's `logEndpointHost`, used on the per-call

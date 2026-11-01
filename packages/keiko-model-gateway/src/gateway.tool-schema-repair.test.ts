@@ -588,9 +588,10 @@ describe("Gateway streamed tool-schema repair (#3873 review)", () => {
 
     expect(bodies).toHaveLength(2);
     const [first, second] = bodies.map((body) => body.messages as unknown[]);
+    // The correction leads the request: strict chat templates refuse a later system message (#4138).
     expect(second).toEqual([
-      ...(first ?? []),
       { role: "system", content: expect.stringContaining("changeset.files") as unknown },
+      ...(first ?? []),
     ]);
     expect(JSON.stringify(second)).not.toContain(INVALID_ARGUMENT_SECRET);
     expect(

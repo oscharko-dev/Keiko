@@ -19,6 +19,7 @@ import {
   Gateway,
   OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
   type GatewayCallRequest,
+  withSystemCorrection,
 } from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { providerRequestBudgetMs } from "./resilience.js";
@@ -187,7 +188,7 @@ async function drain(stream: AsyncIterable<GatewayStreamChunk>): Promise<Gateway
 }
 
 describe("Gateway output-exhausted repair (#3873 F17)", () => {
-  it("steers exactly one repaired buffered attempt with the fixed correction appended", async () => {
+  it("steers exactly one repaired buffered attempt with the fixed correction leading", async () => {
     const events: ModelGatewayLogEvent[] = [];
     const scripted = bufferedAdapter([new ProviderOutputExhaustedError(MODEL), toolCallAnswer()]);
 
@@ -196,11 +197,12 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
     expect(result.toolCalls).toHaveLength(1);
     expect(result.outputRepair).toBe("recovered");
     expect(scripted.requests).toHaveLength(2);
-    // The repaired request is the original plus ONE system correction: nothing is dropped and the
+    // The repaired request is the original plus ONE system correction, leading the request because
+    // strict chat templates refuse a later system message (#4138): nothing is dropped and the
     // model's exhausted reasoning is never quoted back.
     expect(scripted.requests[1]?.messages).toEqual([
-      ...REQUEST.messages,
       { role: "system", content: OUTPUT_EXHAUSTED_REPAIR_MESSAGE },
+      ...REQUEST.messages,
     ]);
     expect(scripted.requests[1]?.maxOutputTokens).toBe(REQUEST.maxOutputTokens);
     const scheduled = scheduledLines(events);
@@ -320,8 +322,8 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
     expect(done?.type === "done" ? done.response.outputRepair : undefined).toBe("recovered");
     expect(scripted.requests).toHaveLength(2);
     expect(scripted.requests[1]?.messages).toEqual([
-      ...REQUEST.messages,
       { role: "system", content: OUTPUT_EXHAUSTED_REPAIR_MESSAGE },
+      ...REQUEST.messages,
     ]);
     expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
       "output-exhausted-repair",
@@ -475,8 +477,8 @@ describe("Gateway output-exhausted repair after forwarded reasoning (#3873 F17, 
     });
     expect(scripted.requests).toHaveLength(2);
     expect(scripted.requests[1]?.messages).toEqual([
-      ...REQUEST.messages,
       { role: "system", content: OUTPUT_EXHAUSTED_REPAIR_MESSAGE },
+      ...REQUEST.messages,
     ]);
     expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
       "output-exhausted-repair",
@@ -559,8 +561,8 @@ describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
     // The original request plus ONE system correction: nothing is dropped and the model's
     // reasoning is never quoted back.
     expect(scripted.requests[1]?.messages).toEqual([
-      ...REQUEST.messages,
       { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+      ...REQUEST.messages,
     ]);
     expect(scripted.requests[1]?.maxOutputTokens).toBe(REQUEST.maxOutputTokens);
     const scheduled = scheduledLines(events);
@@ -642,11 +644,9 @@ describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
     expect(afterEmpty).toMatchObject({ outputRepair: "exhausted-again" });
     expect(exhaustedFirst.requests).toHaveLength(2);
     expect(emptyFirst.requests).toHaveLength(2);
-    // Each repair carries the correction of the failure it answers.
-    expect(exhaustedFirst.requests[1]?.messages.at(-1)?.content).toBe(
-      OUTPUT_EXHAUSTED_REPAIR_MESSAGE,
-    );
-    expect(emptyFirst.requests[1]?.messages.at(-1)?.content).toBe(EMPTY_ANSWER_REPAIR_MESSAGE);
+    // Each repair carries the correction of the failure it answers, leading the request.
+    expect(exhaustedFirst.requests[1]?.messages[0]?.content).toBe(OUTPUT_EXHAUSTED_REPAIR_MESSAGE);
+    expect(emptyFirst.requests[1]?.messages[0]?.content).toBe(EMPTY_ANSWER_REPAIR_MESSAGE);
   });
 
   it("marks a repaired attempt that fails for another reason as failed", async () => {
@@ -706,8 +706,8 @@ describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
     expect(done?.type === "done" ? done.response.outputRepair : undefined).toBe("recovered");
     expect(scripted.requests).toHaveLength(2);
     expect(scripted.requests[1]?.messages).toEqual([
-      ...REQUEST.messages,
       { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+      ...REQUEST.messages,
     ]);
     expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
       "empty-answer-repair",
@@ -768,8 +768,8 @@ describe("Gateway empty-answer repair after reasoning (#3873 F23)", () => {
       });
       expect(scripted.requests).toHaveLength(2);
       expect(scripted.requests[1]?.messages).toEqual([
-        ...REQUEST.messages,
         { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+        ...REQUEST.messages,
       ]);
       expect(scheduledLines(events).map((event) => event.extra?.reason)).toEqual([
         "empty-answer-repair",
@@ -860,7 +860,7 @@ describe("Gateway steered repair across a provider retry (#3873 F17, F23)", () =
       const result = await gatewayFor(scripted, events).chat(REQUEST);
 
       expect(result.outputRepair).toBe("recovered");
-      const steered = [...REQUEST.messages, { role: "system", content: correction }];
+      const steered = [{ role: "system", content: correction }, ...REQUEST.messages];
       expect(scripted.requests.map((request) => request.messages)).toEqual([
         REQUEST.messages,
         steered,
@@ -889,7 +889,7 @@ describe("Gateway steered repair across a provider retry (#3873 F17, F23)", () =
 
       const done = chunks.at(-1);
       expect(done?.type === "done" ? done.response.outputRepair : undefined).toBe("recovered");
-      const steered = [...REQUEST.messages, { role: "system", content: correction }];
+      const steered = [{ role: "system", content: correction }, ...REQUEST.messages];
       expect(scripted.requests.map((request) => request.messages)).toEqual([
         REQUEST.messages,
         steered,
@@ -984,7 +984,8 @@ describe("Gateway schema correction after a steered repair (#3873 review)", () =
     // maxRetries 2: three provider attempts plus the one steered repair, then the rejection surfaces.
     expect(failure).toBeInstanceOf(GatewayToolCatalogError);
     expect(scripted.requests).toHaveLength(4);
-    const corrections = scripted.requests.map((request) => request.messages.at(-1)?.content ?? "");
+    // Each correction joins the leading system message (#4138).
+    const corrections = scripted.requests.map((request) => request.messages[0]?.content ?? "");
     expect(corrections[1]).toBe(OUTPUT_EXHAUSTED_REPAIR_MESSAGE);
     expect(corrections[2]).toContain("path.first");
     expect(corrections[3]).toContain("path.second");
@@ -1050,5 +1051,60 @@ describe("Gateway discarded attempt usage (#3873 review)", () => {
     const result = await gatewayFor(scripted, []).chat(REQUEST);
 
     expect(result.discardedAttemptUsage).toBeUndefined();
+  });
+});
+
+describe("withSystemCorrection (#4138)", () => {
+  // A Qwen chat template refused the steered repair of a review turn with "System message must be
+  // at the beginning.": the correction trailed the conversation. A corrected request never carries
+  // a system message after a message of another role that the original did not already carry.
+  function laterSystemMessages(messages: readonly { readonly role: string }[]): number {
+    const first = messages.findIndex((message) => message.role !== "system");
+    return first < 0
+      ? 0
+      : messages.slice(first).filter((message) => message.role === "system").length;
+  }
+
+  it("joins the correction to the leading system message, after its own text", () => {
+    const original = [
+      { role: "system" as const, content: "You are the Reviewer." },
+      { role: "user" as const, content: "Review the change." },
+      { role: "assistant" as const, content: "Reading." },
+    ];
+    const corrected = withSystemCorrection(original, OUTPUT_EXHAUSTED_REPAIR_MESSAGE);
+    expect(corrected).toEqual([
+      { role: "system", content: `You are the Reviewer.\n\n${OUTPUT_EXHAUSTED_REPAIR_MESSAGE}` },
+      original[1],
+      original[2],
+    ]);
+    expect(laterSystemMessages(corrected)).toBe(0);
+  });
+
+  it("adds a leading system message when the request has none", () => {
+    const original = [{ role: "user" as const, content: "Review the change." }];
+    expect(withSystemCorrection(original, EMPTY_ANSWER_REPAIR_MESSAGE)).toEqual([
+      { role: "system", content: EMPTY_ANSWER_REPAIR_MESSAGE },
+      original[0],
+    ]);
+  });
+
+  it("appends the correction to a leading system message's content parts too", () => {
+    const original = [
+      {
+        role: "system" as const,
+        content: "Rules.",
+        contentParts: [{ type: "text" as const, text: "Rules." }],
+      },
+    ];
+    expect(withSystemCorrection(original, "Fix it.")).toEqual([
+      {
+        role: "system",
+        content: "Rules.\n\nFix it.",
+        contentParts: [
+          { type: "text", text: "Rules." },
+          { type: "text", text: "\n\nFix it." },
+        ],
+      },
+    ]);
   });
 });
