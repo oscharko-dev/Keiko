@@ -393,20 +393,15 @@ async function writeEvidence(session: EvidenceSession, region: Locator): Promise
     "JIRA_E2E_COMMENT: add the synthetic approval fixture comment.",
   );
   const approval = region.getByRole("region", { name: copy.approval, exact: true });
-  const preview = approval.getByRole("textbox", { name: copy.preview, exact: true });
+  const preview = approval.getByRole("group", { name: copy.preview, exact: true });
   await expect(preview).toBeVisible();
-  expect(JSON.parse(await preview.inputValue()) as unknown).toEqual({
-    issueKey: "KEIKO-1",
-    body: "Synthetic browser approval fixture",
-  });
-  await expect(preview).toHaveAttribute("readonly", "");
+  await expect(preview).toContainText("KEIKO-1");
+  await expect(preview).toContainText("Synthetic browser approval fixture");
+  await expect(preview).not.toContainText(/[{}]/u);
   await expect(approval.locator('output[aria-live="polite"]')).toHaveText(copy.pending);
   await captureMatrix(session, approval, "pending-exact-write-approval");
   expect(counts().writes).toBe(before.writes);
-  await preview.focus();
-  await session.page.keyboard.press("Tab");
   const allow = approval.getByRole("button", { name: copy.approve, exact: true });
-  await expect(allow).toBeFocused();
   await keyboardDecision(
     session.page,
     allow,

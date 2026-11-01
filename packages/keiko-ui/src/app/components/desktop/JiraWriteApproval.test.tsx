@@ -54,15 +54,16 @@ describe("Jira Chat write approvals", () => {
     );
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
     await ready();
-    expect(screen.getByLabelText("Proposed action details")).toHaveValue(
-      JSON.stringify(call.arguments, null, 2),
-    );
+    const details = screen.getByRole("group", { name: "Proposed action details" });
+    expect(details).toHaveTextContent("Issue");
+    expect(details).toHaveTextContent("LAB-1");
+    expect(details).toHaveTextContent("summary");
+    expect(details).toHaveTextContent("Reviewed change");
     expect(observe).toHaveBeenCalledExactlyOnceWith(view.approvalId);
     expect(decide).not.toHaveBeenCalled();
     const user = userEvent.setup();
     await user.tab();
-    expect(screen.getByLabelText("Proposed action details")).toHaveFocus();
-    await user.tab();
+    expect(screen.getByRole("button", { name: "Approve this action" })).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(await screen.findByText("Approved for this action")).toBeVisible();
     expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve");
@@ -329,9 +330,10 @@ it("reviews a configured MCP action and its arguments through the existing appro
   await ready();
   expect(screen.getByRole("region", { name: "Approve MCP action" })).toBeVisible();
   expect(screen.getByText("mcp_fixture_create_note")).toBeVisible();
-  expect(screen.getByLabelText("Proposed action details")).toHaveValue(
-    JSON.stringify({ text: "Synthetic note" }, null, 2),
-  );
+  const details = screen.getByRole("group", { name: "Proposed action details" });
+  expect(details).toHaveTextContent("text");
+  expect(details).toHaveTextContent("Synthetic note");
+  expect(details.textContent).not.toMatch(/[{}"]/u);
   await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
   expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve");
   expect(await screen.findByText("Approved for this action")).toBeVisible();
@@ -515,7 +517,9 @@ describe("Jira backlog draft approval (#4178)", () => {
       expect(screen.getByText("beta")).toBeVisible();
       expect(screen.getByText("jdoe")).toBeVisible();
       expect(screen.getByText("High")).toBeVisible();
-      expect(screen.getByText('{"a":1,"b":2}')).toBeVisible();
+      expect(screen.getByText("custom")).toBeVisible();
+      expect(screen.getByText("a")).toBeVisible();
+      expect(screen.getByText("2")).toBeVisible();
       expect(
         within(screen.getByRole("group", { name: /Issues to create/u })).queryByText(
           /End of text/u,

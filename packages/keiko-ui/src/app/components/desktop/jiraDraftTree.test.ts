@@ -72,7 +72,7 @@ describe("field values of a draft item (#4178)", () => {
     jiraDraftTree({ items: [item("a", { fields: { summary: "S", ...fields } })] })?.roots[0]
       ?.fields;
 
-  it("keeps every field but the summary, in request order, reading values compactly", () => {
+  it("keeps every field but the summary, in request order, reading values without JSON", () => {
     expect(
       fieldsOf({
         description: "Synthetic",
@@ -101,19 +101,55 @@ describe("field values of a draft item (#4178)", () => {
       },
       { id: "storyPoints", value: { kind: "text", text: "5" } },
       { id: "flagged", value: { kind: "text", text: "false" } },
-      { id: "due", value: { kind: "text", text: "null" } },
-      { id: "empty", value: { kind: "text", text: "[]" } },
+      { id: "due", value: { kind: "cleared" } },
+      { id: "empty", value: { kind: "empty" } },
       { id: "blank", value: { kind: "text", text: "" } },
     ]);
   });
 
-  it("never hides a member: an object with more than one is shown as exact compact JSON", () => {
+  it("never hides a member: an object with more than one is shown as a named group, not JSON", () => {
     expect(fieldsOf({ assignee: { name: "jdoe", id: "7" }, nested: { custom: { a: 1 } } })).toEqual(
       [
-        { id: "assignee", value: { kind: "text", text: '{"name":"jdoe","id":"7"}' } },
-        { id: "nested", value: { kind: "text", text: '{"custom":{"a":1}}' } },
+        {
+          id: "assignee",
+          value: {
+            kind: "group",
+            members: [
+              { name: "name", value: { kind: "text", text: "jdoe" } },
+              { name: "id", value: { kind: "text", text: "7" } },
+            ],
+          },
+        },
+        {
+          id: "nested",
+          value: {
+            kind: "group",
+            members: [
+              {
+                name: "custom",
+                value: {
+                  kind: "group",
+                  members: [{ name: "a", value: { kind: "text", text: "1" } }],
+                },
+              },
+            ],
+          },
+        },
       ],
     );
+  });
+
+  it("names a value nested past the bound as not shown instead of dumping it", () => {
+    let deep: unknown = { leaf: { deeper: 1 } };
+    for (let level = 0; level < 8; level += 1) deep = { [`level${level}`]: deep, other: "x" };
+    expect(JSON.stringify(fieldsOf({ deep }))).toContain('"kind":"hidden"');
+  });
+
+  it("carries the requirement references an item names", () => {
+    expect(
+      jiraDraftTree({ items: [item("a", { requirementIds: ["REQ-1", "REQ-2"] })] })?.roots[0]
+        ?.requirementIds,
+    ).toEqual(["REQ-1", "REQ-2"]);
   });
 });
 

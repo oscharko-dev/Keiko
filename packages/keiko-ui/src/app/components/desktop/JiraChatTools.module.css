@@ -119,6 +119,11 @@
   min-width: 0;
   color: var(--text-primary);
 }
+.cmpDraftFields .cmpDraftFields {
+  margin: 0;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--border-subtle, var(--border-strong));
+}
 .cmpDraftValue {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
