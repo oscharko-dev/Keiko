@@ -23,6 +23,7 @@ import { type GateArguments, parseGateArguments } from "./cli.js";
 import {
   gateConfiguration,
   type GateConfiguration,
+  renderGateCost,
   settlementCounts,
   summarizeGateCost,
 } from "./evidence.js";
@@ -212,7 +213,10 @@ function writeEvidence(
   writeFileSync(join(dir, "evidence.json"), `${JSON.stringify(evidence, null, 2)}\n`);
   writeFileSync(
     join(dir, "summary.md"),
-    typeof result.markdown === "string" ? result.markdown : "",
+    [
+      typeof result.markdown === "string" ? result.markdown : "",
+      renderGateCost(evidence.cost, evidence.settlements),
+    ].join("\n"),
   );
   return dir;
 }

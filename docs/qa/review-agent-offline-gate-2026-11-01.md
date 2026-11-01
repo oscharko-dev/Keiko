@@ -42,8 +42,29 @@ thread (a hit or a false alarm), because only decided threads can move the actio
 Each row is one recorded development-set run. No run before the final holdout run read a holdout
 pull request; the replay refuses that, and every row's `split` is `development`.
 
-| Iteration | Variant | Change | Configuration digest | Decided | Actionable | Findings per PR (max) | Settlements | Median wall time |
-| --------- | ------- | ------ | -------------------- | ------- | ---------- | --------------------- | ----------- | ---------------- |
+| Iteration                            | Variant | Change                                                                                                                                                                    | Configuration digest | Decided | Actionable                                  | Findings per PR (max) | Settlements                                                                               | Median wall time |
+| ------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ------- | ------------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------- | ---------------- |
+| smoke                                | product | First composition run on two pull requests (`59c8f660d`).                                                                                                                 | `92566e836fef`       | 0       | n/a                                         | 0                     | 2 model-failed                                                                            | 137 s            |
+| dev-1                                | product | First full development run (`4f225dd8d`): Qwen corrections join the leading system message.                                                                               | `92566e836fef`       | 0       | n/a                                         | 0                     | 29 skipped/policy-invalid, 1 model-failed                                                 | 1 s              |
+| repro, probe-sampling, probe-nothink | product | Three-PR probes on #2978, #2979 and #2981 (`bb1affec1`): the authority refusal is now logged; Reviewer sampling at the model's recommended values, then without thinking. | `61ad9712f5b4`       | 0       | n/a                                         | 0                     | complete 2, model-failed 5, files-unprocessed 1, deadline-exceeded 1                      | 211 to 527 s     |
+| dev-2 (first attempt)                | product | `17342d886`: a macOS Reviewer failure settles on its own cause; counter-check wall time 300 s. Stopped after the role models' readiness lapsed.                           | `b752b79cb560`       | 0       | n/a                                         | 0                     | 29 skipped/policy-invalid, 1 deadline-exceeded                                            | 1 s              |
+| dev-2                                | product | `648cb03f8`: a role model whose readiness lapsed is checked again before the run.                                                                                         | `4c4d15ed983a`       | 0       | n/a (5 presented: 2 undecided, 3 unmatched) | 3                     | 14 budget-exhausted, 5 model-failed, 5 deadline-exceeded, 3 files-unprocessed, 3 complete | 183 s            |
+
+Reading of the runs so far:
+
+- dev-1 and the first dev-2 attempt measured no review. The role models' readiness lasts five
+  minutes, and nothing renewed it between reviews, so every later run was refused before it
+  started (`skipped/policy-invalid`). `cc23c7856` checks a lapsed model again before the run.
+- In dev-2 the Reviewer used up its 600,000-token prompt allowance in 14 of 30 reviews, with a mean
+  of 324,067 prompt tokens and 5,154 completion tokens per review. Each tool call resends the whole
+  conversation, so about 25 calls of 20,000 to 25,000 tokens exhaust it. Most of those runs ended
+  before the Reviewer reported anything.
+- The Counter-checker reached its 300-second wall time on 13 of 23 candidates, which then count as
+  undecided and are not presented. About 80% of Gemma's completion tokens are reasoning, at about
+  13 tokens per second. Its chat template suppresses thinking only at the start of a turn, not
+  after a tool result, so a template switch cannot turn it off.
+- Four Reviewer runs ended on `invalid-tool-call`: a second invalid `keiko_review_report` or
+  search call after the one schema repair.
 
 ## Final holdout run
 

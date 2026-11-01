@@ -136,3 +136,45 @@ export function settlementCounts(
   }
   return counts;
 }
+
+function costRow(role: string, summary: RoleCostSummary): string {
+  const mean = summary.meanPerReview;
+  const cells =
+    mean === null
+      ? ["—", "—", "—"]
+      : [mean.promptTokens, mean.completionTokens, mean.durationMs / 1000].map((value) =>
+          value.toFixed(0),
+        );
+  return `| ${role} | ${cells.join(" | ")} | ${String(summary.total.promptTokens)} |`;
+}
+
+/**
+ * The gate's own cost and settlement section of `summary.md`. The evaluation family meters only
+ * its injected model port, which the composed pipeline never calls, so its cost line reads zero;
+ * this section reports what each review's record accounted.
+ */
+export function renderGateCost(
+  cost: GateCostSummary,
+  settlements: Readonly<Record<string, number>>,
+): string {
+  const median = cost.wallTimeMs.median;
+  return [
+    "## Gate cost and settlements",
+    "",
+    "The cost line above is the evaluation family's metered port, which this composition does not call.",
+    "",
+    "| Role | Mean prompt tokens | Mean completion tokens | Mean duration (s) | Total prompt tokens |",
+    "| --- | --- | --- | --- | --- |",
+    costRow("Reviewer", cost.reviewer),
+    costRow("Counter-checker", cost.counterChecker),
+    "",
+    `Median wall time per review: ${median === null ? "—" : `${(median / 1000).toFixed(0)} s`}.`,
+    "",
+    "| Settlement | Reviews |",
+    "| --- | --- |",
+    ...Object.entries(settlements)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, count]) => `| ${key} | ${String(count)} |`),
+    "",
+  ].join("\n");
+}

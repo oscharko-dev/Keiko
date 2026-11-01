@@ -8,6 +8,7 @@ import { parseGateArguments } from "./cli.js";
 import {
   CONFIGURATION_PATHS,
   gateConfiguration,
+  renderGateCost,
   settlementCounts,
   summarizeGateCost,
 } from "./evidence.js";
@@ -119,5 +120,27 @@ describe("summarizeGateCost and settlementCounts", () => {
       summarizeGateCost([record(2_000, { kind: "complete" }), record(4_000, { kind: "complete" })])
         .wallTimeMs.median,
     ).toBe(3_000);
+  });
+});
+
+describe("renderGateCost", () => {
+  it("renders the mean cost per role, the median wall time and the sorted settlements", () => {
+    const records = [
+      record(4_000, { kind: "complete" }),
+      record(8_000, { kind: "incomplete", reason: "deadline-exceeded" }),
+    ];
+    const text = renderGateCost(summarizeGateCost(records), settlementCounts(records));
+    expect(text).toContain("| Reviewer | 1000 | 100 | 3 | 2000 |");
+    expect(text).toContain("| Counter-checker | 500 | 50 | 2 | 1000 |");
+    expect(text).toContain("Median wall time per review: 6 s.");
+    expect(text.indexOf("| complete | 1 |")).toBeLessThan(
+      text.indexOf("| incomplete/deadline-exceeded | 1 |"),
+    );
+  });
+
+  it("renders a dash for a run without reviews", () => {
+    const text = renderGateCost(summarizeGateCost([]), {});
+    expect(text).toContain("| Reviewer | — | — | — | 0 |");
+    expect(text).toContain("Median wall time per review: —.");
   });
 });

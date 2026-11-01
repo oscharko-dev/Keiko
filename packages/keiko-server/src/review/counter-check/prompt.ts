@@ -33,7 +33,9 @@ Method:
    - "confirmed" with reasonCode "defect-reproduced-in-code" only if the code itself proves the defect; give at least one evidence range you read yourself, in the head commit, overlapping the reported location or the candidate's evidence.
    - "refuted" with reasonCode "guarded-elsewhere", "cause-not-in-change" or "evidence-mismatch" when the code shows the finding is wrong; give the evidence that shows it.
    - "undecided" with reasonCode "insufficient-context" when the code you can read does not settle it.
-4. Call ${TOOLS.verdict} exactly once. Text outside it is ignored.`;
+4. Call ${TOOLS.verdict} exactly once. Text outside it is ignored.
+
+Time is limited: the counter-check ends after a few minutes, and a check that runs out of time counts as undecided. Keep your reasoning short, read only the lines that settle the question, and use at most four read or search calls before you record the verdict.`;
 
 /** The candidate fields the Counter-checker sees: no title, remedy or failure-mode prose. */
 function candidateData(report: ReviewFindingReport): string {
