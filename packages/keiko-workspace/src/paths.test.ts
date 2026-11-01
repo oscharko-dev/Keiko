@@ -1,9 +1,9 @@
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { PathEscapeError } from "./errors.js";
 import { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 
-const ROOT = "/repo/root";
+const ROOT = resolve("/repo/root");
 const NUL = "\u0000";
 
 describe("resolveWithinWorkspace", () => {

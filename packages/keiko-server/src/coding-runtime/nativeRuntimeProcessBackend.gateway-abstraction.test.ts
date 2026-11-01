@@ -9,6 +9,8 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { skipSeatbeltRootsOnWindowsHost } from "../../../../tests/support/symlink-fixture.js";
 import {
   createRuntimeGatewayConfinement,
   buildRuntimeGatewaySeatbeltCommand,
@@ -117,7 +119,8 @@ function request(runtime: string, workspace: string): RuntimeSupervisorLaunchReq
 }
 
 describe("native runtime process backend and gateway confinement", () => {
-  it("passes the exact gateway wrapper through the macOS sealed helper after supervisor preparation", () => {
+  it("passes the exact gateway wrapper through the macOS sealed helper after supervisor preparation", (context) => {
+    skipSeatbeltRootsOnWindowsHost(context);
     const paths = fixture();
     const helper = new FakeHelper();
     const packets: Buffer[] = [];
@@ -193,7 +196,8 @@ describe("native runtime process backend and gateway confinement", () => {
   });
   // F4 (customer 1.3.4): the native profile has no exec allowlist, so no backend asks for an
   // attested Git there; a managed Mac without Command Line Tools refused every run at that step.
-  it("never resolves an attested Git for the native profile", () => {
+  it("never resolves an attested Git for the native profile", (context) => {
+    skipSeatbeltRootsOnWindowsHost(context);
     const paths = fixture();
     const privateStateRoot = join(realpathSync(paths.workspace), ".keiko", "native-run");
     mkdirSync(privateStateRoot, { recursive: true, mode: 0o700 });

@@ -10294,6 +10294,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "windows-owner-private",
+    requiredProductSurfaces: ["keiko-security"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: [],
+      failure: ["security.windows-owner-private.refused"],
+      loss: [],
+    },
+    requiredCausalOperations: [],
+    requiredLossOperations: [],
+    requiredProofOperations: ["security.windows-owner-private.refused"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "windows-shortcut-system-binary",
     requiredProductSurfaces: ["keiko-security"],
     requiredLifecycleOperations: {

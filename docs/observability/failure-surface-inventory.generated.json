@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0cc9554096a922587c600cd7cf818ce6688df56291530e9e2f6880b7aca59a02"
+    "catalogDigest": "2923fba6b025549ca601cab78edfde45a658e653bc9eb2fa695d3f88669b7776"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 618,
-    "proofCount": 641,
-    "resolvedProofCount": 641,
-    "failureClassCount": 386,
+    "operationCount": 619,
+    "proofCount": 642,
+    "resolvedProofCount": 642,
+    "failureClassCount": 387,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -767,6 +767,7 @@
         "security.windows-lifecycle-opener.system-binary-missing",
         "security.windows-lifecycle-opener.system-root-refused",
         "security.windows-local-volume.refused",
+        "security.windows-owner-private.refused",
         "security.windows-portable-alert.system-binary-missing",
         "security.windows-portable-alert.system-root-refused",
         "security.windows-portable-legacy-launcher.system-binary-missing",
@@ -1179,6 +1180,7 @@
     "windows-alert-spawn": ["lifecycle-crash.dependency-failure"],
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
+    "windows-owner-private": ["runtime-packages.rejection"],
     "windows-shortcut-system-binary": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-root": ["runtime-packages.rejection"],
     "windows-system-binary-unavailable": ["runtime-packages.dependency-failure"],
@@ -1800,7 +1802,8 @@
     ],
     "coding-runtime.session-continuity.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingSessionContinuity.test.ts",
-      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts",
+      "packages/keiko-server/src/coding-runtime/opencodeSessionRetention.test.ts"
     ],
     "coding-runtime.sidecar-session.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
@@ -2802,6 +2805,9 @@
     ],
     "security.windows-local-volume.refused.phase": [
       "packages/keiko-security/src/windows-local-volume.test.ts"
+    ],
+    "security.windows-owner-private.refused.phase": [
+      "packages/keiko-security/src/windows-owner-private.test.ts"
     ],
     "security.windows-portable-alert.system-binary-missing.emitted-line": [
       "packages/keiko-cli/src/security-log.activity-log-proof.test.ts"

@@ -1,9 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { plantDirectoryRedirect } from "../../../../tests/support/symlink-fixture.js";
 import {
   OPENCODE_NATIVE_DELIVERY_PLUGIN_FILE,
   OPENCODE_NATIVE_DELIVERY_PLUGIN_ID,
@@ -144,7 +145,8 @@ describe("awaiting the native plugins", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-native-plugins-"));
     roots.push(root);
     mkdirSync(join(root, "real", "plugins"), { recursive: true });
-    symlinkSync(join(root, "real"), join(root, "link"));
+    // A junction on Windows (no privilege needed), a directory symlink elsewhere (#4068).
+    plantDirectoryRedirect(join(root, "real"), join(root, "link"));
     return {
       linked: join(root, "link", "plugins"),
       resolved: realpathSync(join(root, "real", "plugins")),

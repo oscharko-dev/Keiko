@@ -220,8 +220,13 @@ wrapper. POSIX still sends `SIGTERM` in addition to the sentinel.
 executes on that loop. One Windows run can pay the 5 000 ms bound twice (SIGTERM and SIGKILL), so
 `WindowsTerminationCapacity` deliberately admits at most THREE live Windows commands process-wide.
 Each admitted command reserves two units from the same 30-second/60-second rolling budget used by
-direct LSP tree kills. A fourth concurrent command, or any command for which two units are not
-available, is denied with `CommandDeniedError` before ephemeral HOME creation or spawn. Held units
+direct LSP tree kills. A fourth concurrent command, already validated, waits for a released slot
+first come first served — unspawned, with no ephemeral HOME, bounded by its abort signal and
+`windowsSlotWaitMs` (30 s by default) — and `reserve` never overtakes a waiter (#4068). A command
+whose wait expires, or for which two budget units are not available when a slot frees, is denied
+with `CommandDeniedError` before ephemeral HOME creation or spawn; the stall budget itself never
+waits. A free slot still admits synchronously, and an injected capacity without `acquire` keeps the
+immediate denial. Held units
 remain charged across a window rollover; completed calls refund only their unused wait, and release
 returns only units the command never consumed. Releasing a concurrency slot therefore cannot reset
 the stall budget, and `runCommand` plus LSP termination together cannot stack past the process-wide
@@ -482,10 +487,12 @@ Tool consumers (`WorkspaceToolHost` callers) depend only on the `ToolPort` inter
   `git status` exposes any partial write, and the repository's VCS history is the recovery path.
 - **Windows termination safety deliberately caps concurrency.** At most three Windows
   `runCommand` children may be live process-wide because each reserves both bounded tree-kill
-  escalations from the shared rolling stall budget. A fourth concurrent command is denied before
-  spawn with `CommandDeniedError`; it is not started with weaker descendant containment. This is
-  an intentional availability trade-off, and callers must surface the ordinary correlated denied
-  outcome rather than retrying in an unbounded loop.
+  escalations from the shared rolling stall budget. A fourth concurrent command waits, bounded and
+  unspawned, for a released slot and is denied before spawn with `CommandDeniedError` only when
+  that wait expires; it is never started with weaker descendant containment. The bounded wait
+  replaced the immediate denial because ordinary fan-out (a four-read Git snapshot, concurrent
+  server requests) otherwise failed every time on Windows (#4068). Callers must still surface the
+  ordinary correlated denied outcome rather than retrying in an unbounded loop.
 - **Windows grandchild orphaning is bounded, not architecturally eliminated.** `child.kill()`
   terminates the immediate child only; `killGroup` additionally runs
   `taskkill.exe /PID <pid> /T /F` to bound the whole descendant tree (e.g. a test runner that

@@ -5,12 +5,19 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../test-support/owner-private-fixture.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../../tests/support/symlink-fixture.js";
 import { readPluginPackage, writePluginPackage } from "./opencodeOperatorPluginPackage.js";
 
 const roots: string[] = [];
@@ -25,6 +32,7 @@ const TREE_SHA256 = "a449f5c0ad257fd10b4933780e74c9845732041b1f7476784df40e6add6
 function packageTree(): string {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plugin-package-")));
   roots.push(root);
+  makeOwnerPrivateDirectory(root);
   mkdirSync(join(root, "node_modules", "dep"), { recursive: true });
   mkdirSync(join(root, "sub"));
   writeFileSync(join(root, "node_modules", "dep", "index.js"), "export const x = 1;\n");
@@ -33,21 +41,29 @@ function packageTree(): string {
     'import { x } from "dep";\nexport default { id: "acme.pkg", async setup() { void x; } };\n',
   );
   writeFileSync(join(root, "package.json"), "{}");
-  symlinkSync("../sub/entry.js", join(root, "node_modules", "link.js"));
   return root;
 }
 
+const TREE_FILES = ["node_modules/dep/index.js", "package.json", "sub/entry.js"];
+
 describe("an npm plugin package the operator installed (#3903 AC2)", () => {
-  it("hashes the regular files exactly as the documented shasum listing does", () => {
-    const read = readPluginPackage(packageTree(), "sub/entry.js");
+  it("hashes the regular files exactly as the documented shasum listing does", (context) => {
+    const root = packageTree();
+    plantSymlinkOrSkip(context, "../sub/entry.js", join(root, "node_modules", "link.js"));
+    const read = readPluginPackage(root, "sub/entry.js");
     expect(read).toMatchObject({ ok: true, sha256: TREE_SHA256 });
     if (!read.ok) throw new Error("unreadable fixture");
     // The link is neither hashed nor copied, as `find -type f` skips it.
-    expect(read.files.map((file) => file.path).sort()).toEqual([
-      "node_modules/dep/index.js",
-      "package.json",
-      "sub/entry.js",
-    ]);
+    expect(read.files.map((file) => file.path).sort()).toEqual(TREE_FILES);
+  });
+
+  it("neither hashes nor walks through a directory link (a junction on Windows)", () => {
+    const root = packageTree();
+    plantDirectoryRedirect(join(root, "sub"), join(root, "node_modules", "linked-sub"));
+    const read = readPluginPackage(root, "sub/entry.js");
+    expect(read).toMatchObject({ ok: true, sha256: TREE_SHA256 });
+    if (!read.ok) throw new Error("unreadable fixture");
+    expect(read.files.map((file) => file.path).sort()).toEqual(TREE_FILES);
   });
 
   it("changes its digest when any file of the tree changes", () => {
@@ -63,7 +79,8 @@ describe("an npm plugin package the operator installed (#3903 AC2)", () => {
       ok: false,
       reason: "entry-missing",
     });
-    chmodSync(join(root, "package.json"), 0o666);
+    if (process.platform === "win32") grantOthersWrite(join(root, "package.json"));
+    else chmodSync(join(root, "package.json"), 0o666);
     expect(readPluginPackage(root, "sub/entry.js")).toEqual({ ok: false, reason: "unreadable" });
   });
 

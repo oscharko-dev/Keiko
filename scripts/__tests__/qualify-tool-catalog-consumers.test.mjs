@@ -220,6 +220,12 @@ describe("tool catalog consumer qualification", () => {
     expect(evidence.get("cli-server-sdk")?.map((entry) => entry.name)).toEqual(
       TOOL_CATALOG_QUALIFICATION_PACKAGES["cli-server-sdk"],
     );
+    const extra = join(packaged.root, "packages", "keiko-server", "dist", "unexpected.js");
+    writeFileSync(extra, "export const unexpected = true;\n");
+    expect(() => inspectToolCatalogQualificationPackage(packaged.root, packaged.artifact)).toThrow(
+      "packaged dist inventory is stale",
+    );
+    rmSync(extra);
     writeFileSync(
       join(packaged.root, "packages", "keiko-server", "dist", "index.js"),
       "export const stale = true;\n",

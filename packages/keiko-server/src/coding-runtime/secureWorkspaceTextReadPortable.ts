@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { isAbsolute, resolve, win32 } from "node:path";
+import { posix, win32 } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -484,13 +484,19 @@ function verificationCheckKeys(target: TargetContract): readonly string[] {
     : ["publisherChainVerified", "timestampVerified"];
 }
 
+// The path grammar is the artifact target's, not the host's: a macOS or Linux binding inspected on
+// a Windows host must not be resolved against a Windows drive (#4068).
+function targetPath(target: TargetContract): typeof posix {
+  return target.artifactTarget === "win32-x64" ? win32 : posix;
+}
+
 function absoluteResourceRoot(root: string, target: TargetContract): string | undefined {
-  const path = target.artifactTarget === "win32-x64" ? win32 : { isAbsolute, resolve };
+  const path = targetPath(target);
   return path.isAbsolute(root) && path.resolve(root) === root ? root : undefined;
 }
 
 function containedExecutable(root: string, target: TargetContract): string | undefined {
-  const path = target.artifactTarget === "win32-x64" ? win32 : { resolve };
+  const path = targetPath(target);
   const executable = path.resolve(root, ...target.executablePath.split("/"));
   const separator = target.artifactTarget === "win32-x64" ? "\\" : "/";
   const prefix = root.endsWith(separator) ? root : `${root}${separator}`;

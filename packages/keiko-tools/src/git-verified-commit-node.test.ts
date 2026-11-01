@@ -15,6 +15,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { plantSymlinkOrSkip } from "../../../tests/support/symlink-fixture.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import {
   createNodeGitMutationAdapter,
@@ -56,6 +57,10 @@ beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-verified-commit-")));
   signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-verified-signing-")));
   git(["init", "-q", "-b", "dev"]);
+  // The adapter's Git reads the host's SYSTEM scope, and Git for Windows sets `core.autocrlf=true`
+  // there. Exact staging is refused while a conversion is in effect, so the fixture repository
+  // declares its own line-ending policy instead of inheriting the host's.
+  git(["config", "core.autocrlf", "false"]);
   git(["config", "user.name", "Keiko Test"]);
   git(["config", "user.email", "keiko@example.test"]);
   configureSshCommitSigning("keiko@example.test");
@@ -154,22 +159,45 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(git(["ls-files", "--", "other.txt"])).toBe("");
     expect(existsSync(join(root, ".git/index.lock"))).toBe(false);
   });
-  it("stages binary bytes, executable mode, and a contained symlink without executing helpers", async () => {
+  // Windows has no executable bit (and this host class cannot create the symlink), so the full
+  // mode-preserving case runs unchanged on POSIX only; the binary-bytes half also runs below on
+  // every host.
+  it.skipIf(process.platform === "win32")(
+    "stages binary bytes, executable mode, and a contained symlink without executing helpers",
+    async () => {
+      const approved = await candidate();
+      writeFileSync(join(root, "binary.dat"), Buffer.from([0, 255, 128, 1]));
+      writeFileSync(join(root, "script.sh"), "safe text\n");
+      chmodSync(join(root, "script.sh"), 0o755);
+      symlinkSync("code.txt", join(root, "link"));
+      expect(
+        (
+          await adapter().stage({
+            pathspecs: ["binary.dat", "script.sh", "link"],
+            verified: approved.verified,
+          })
+        ).outcome,
+      ).toBe("succeeded");
+      expect(git(["ls-files", "--stage", "--", "script.sh"])).toMatch(/^100755 /u);
+      expect(git(["ls-files", "--stage", "--", "link"])).toMatch(/^120000 /u);
+      expect(execFileSync("git", ["show", ":binary.dat"], { cwd: root })).toEqual(
+        Buffer.from([0, 255, 128, 1]),
+      );
+    },
+  );
+  it("stages binary bytes and a regular-mode file without executing helpers", async () => {
     const approved = await candidate();
     writeFileSync(join(root, "binary.dat"), Buffer.from([0, 255, 128, 1]));
     writeFileSync(join(root, "script.sh"), "safe text\n");
-    chmodSync(join(root, "script.sh"), 0o755);
-    symlinkSync("code.txt", join(root, "link"));
     expect(
       (
         await adapter().stage({
-          pathspecs: ["binary.dat", "script.sh", "link"],
+          pathspecs: ["binary.dat", "script.sh"],
           verified: approved.verified,
         })
       ).outcome,
     ).toBe("succeeded");
-    expect(git(["ls-files", "--stage", "--", "script.sh"])).toMatch(/^100755 /u);
-    expect(git(["ls-files", "--stage", "--", "link"])).toMatch(/^120000 /u);
+    expect(git(["ls-files", "--stage", "--", "script.sh"])).toMatch(/^100644 /u);
     expect(execFileSync("git", ["show", ":binary.dat"], { cwd: root })).toEqual(
       Buffer.from([0, 255, 128, 1]),
     );
@@ -190,10 +218,20 @@ describe("verified commit at the sole mutation adapter", () => {
     ).toBe("failed");
     expect(readFileSync(join(root, ".git/index.lock"), "utf8")).toBe("another owner");
   });
-  it("refuses changed approved index and escaped symlink operands before any index write", async () => {
+  it("refuses a changed approved index before any index write", async () => {
+    const approved = await candidate();
+    writeFileSync(join(root, "code.txt"), "different index\n");
+    git(["add", "code.txt"]);
+    const index = git(["write-tree"]);
+    expect(
+      (await adapter().stage({ pathspecs: ["code.txt"], verified: approved.verified })).outcome,
+    ).toBe("failed");
+    expect(git(["write-tree"])).toBe(index);
+  });
+  it("refuses changed approved index and escaped symlink operands before any index write", async (context) => {
     const approved = await candidate();
     const index = git(["write-tree"]);
-    symlinkSync("/etc/passwd", join(root, "escape"));
+    plantSymlinkOrSkip(context, "/etc/passwd", join(root, "escape"));
     expect(
       (await adapter().stage({ pathspecs: ["escape"], verified: approved.verified })).outcome,
     ).toBe("failed");

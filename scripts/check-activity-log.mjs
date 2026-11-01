@@ -13,7 +13,7 @@
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
 // The checks below load built package output (the registry vocabularies, the BFF the failure-path
@@ -85,9 +85,11 @@ export const ACTIVITY_LOG_GATE_STEPS = Object.freeze([
 export function npmScriptRunner(
   spawn = spawnSync,
   npmExecutable = () => resolveHostExecutable("npm"),
+  invocationOptions = {},
 ) {
   return (script) => {
-    const result = spawn(npmExecutable(), ["run", script], { shell: false, stdio: "inherit" });
+    const { command, args } = hostNpmInvocation(npmExecutable(), invocationOptions);
+    const result = spawn(command, [...args, "run", script], { shell: false, stdio: "inherit" });
     return result.error === undefined && result.signal === null && result.status === 0;
   };
 }

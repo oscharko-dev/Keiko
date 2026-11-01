@@ -333,11 +333,21 @@ function buildSeatbeltCommand(plan: IsolatedRunPlan): WrappedCommand {
   return { command: "sandbox-exec", args: seatbeltArgs(plan) };
 }
 
+// The container's path for the execution root. A POSIX host path is mirrored, so the wrapped
+// toolchain sees the same paths it would natively. A Windows host path (drive-letter, `\\?\` or UNC)
+// cannot name a path in the Linux engine a Windows host runs (Docker Desktop, podman machine), and
+// mirroring it yields a volume spec the engine refuses before the step starts; it is mounted at the
+// sandbox's own execution-root path instead (#4068).
+function containerExecutionRoot(hostCwd: string): string {
+  return hostCwd.startsWith("/") ? hostCwd : EXECUTION_ROOT_MOUNT;
+}
+
 function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] {
   // --network=none removes all networking. The execution root is bind-mounted read-write and used as
-  // the working directory so the wrapped toolchain sees the same paths it would natively. Unlike the
-  // native backends (which share the host filesystem and so take an absolute executable path), the
-  // container resolves the command from the IMAGE's PATH, so only the bare name is used.
+  // the working directory. Unlike the native backends (which share the host filesystem and so take
+  // an absolute executable path), the container resolves the command from the IMAGE's PATH, so only
+  // the bare name is used.
+  const containerCwd = containerExecutionRoot(plan.cwd);
   return [
     "run",
     "--rm",
@@ -346,9 +356,9 @@ function containerArgs(plan: IsolatedRunPlan, image: string): readonly string[] 
       ? ["--read-only", "--tmpfs", "/tmp:rw,nosuid,nodev,size=256m"]
       : []),
     "--volume",
-    `${plan.cwd}:${plan.cwd}:rw`,
+    `${plan.cwd}:${containerCwd}:rw`,
     "--workdir",
-    plan.cwd,
+    containerCwd,
     image,
     basename(plan.command),
     ...plan.args,

@@ -1,3 +1,4 @@
+import { join, resolve } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { WORKSPACE_PATH_DISCOVERY_TRUNCATION_REASONS } from "@oscharko-dev/keiko-contracts/runtime/workspace";
@@ -11,7 +12,9 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 
-const ROOT = "/workbench-discovery-fixture";
+// Host-native root: the producer resolves the workspace root, which adds a drive on Windows; on
+// POSIX this is exactly "/workbench-discovery-fixture" (#4068).
+const ROOT = resolve("/workbench-discovery-fixture");
 const SOURCE_COUNT = 96;
 const REQUEST = {
   action: "discover",
@@ -43,13 +46,13 @@ function discoveryFixture(
     ...base,
     readDir: (path, limit) => {
       if (path === ROOT) rootReads += 1;
-      if (path === (failedDirectory === "root" ? ROOT : `${ROOT}/nested`)) {
+      if (path === (failedDirectory === "root" ? ROOT : join(ROOT, "nested"))) {
         throw new Error("private-directory-read-failure");
       }
       return base.readDir(path, limit);
     },
     stat: (path) => {
-      if (/\/source-\d+\.tsx$/u.test(path)) sourceStats += 1;
+      if (/[\\/]source-\d+\.tsx$/u.test(path)) sourceStats += 1;
       return base.stat(path);
     },
   };

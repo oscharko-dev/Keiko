@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import type { SecurityLogEvent, SecurityLogSink } from "./log-port.js";
 import {
   KEYCHAIN_SPAWN_TIMEOUT_MS,
@@ -32,6 +32,18 @@ afterAll(() => {
   for (const dir of fakeDirs) rmSync(dir, { recursive: true, force: true });
 });
 
+// The stand-ins are `#!/bin/sh` scripts spawned exactly as `/usr/bin/security` would be. A Windows
+// host cannot spawn a shebang script (execFileSync reports ENOENT), so there every darwin-platform
+// spawn degrades to `unavailable` / `false` for that reason alone — an outcome that proves nothing
+// about the keychain tier, whether the assertion happens to match it or not. Tests whose claim
+// depends on the stand-in actually running are skipped there with this reason; the off-darwin and
+// sink-degrade tests below still run on every host.
+function requirePosixShellStandIn(context: TestContext): void {
+  if (process.platform === "win32") {
+    context.skip("POSIX shell stand-in for /usr/bin/security cannot be spawned on a Windows host");
+  }
+}
+
 // `sleep` stands for a real `security` blocked on a macOS unlock dialog: it returns nothing until a
 // human acts. The bounded spawn kills it, so no child outlives the test.
 // `exec` REPLACES the shell with sleep, so the spawn timeout's kill reaches the hanging process
@@ -45,7 +57,8 @@ const REFUSES = fakeSecurity("exit 44");
 const DENIES = fakeSecurity("exit 1");
 
 describe("readMacosKeychainSecret", () => {
-  it("gives up on a keychain that never answers instead of waiting for it", () => {
+  it("gives up on a keychain that never answers instead of waiting for it", (context) => {
+    requirePosixShellStandIn(context);
     const started = process.hrtime.bigint();
     const read = readMacosKeychainSecret("svc", "acct", {
       executable: HANGS,
@@ -60,7 +73,8 @@ describe("readMacosKeychainSecret", () => {
     expect(read).toEqual({ kind: "unavailable" });
   }, 15_000);
 
-  it("distinguishes a keychain that answers 'no such item' from one that does not answer", () => {
+  it("distinguishes a keychain that answers 'no such item' from one that does not answer", (context) => {
+    requirePosixShellStandIn(context);
     // `absent` invites the caller to store a key; `unavailable` must not, or the caller spends a
     // second timeout on the boot path.
     expect(
@@ -74,7 +88,8 @@ describe("readMacosKeychainSecret", () => {
     });
   });
 
-  it("treats an immediate refusal that is not 'no such item' as unavailable, not absent", () => {
+  it("treats an immediate refusal that is not 'no such item' as unavailable, not absent", (context) => {
+    requirePosixShellStandIn(context);
     // A locked, denied or policy-withheld keychain can fail FAST rather than time out. Classifying
     // that as `absent` sends the caller into a write it cannot complete, which is the second
     // bounded wait on the boot path that `unavailable` exists to prevent — so only the measured
@@ -88,7 +103,8 @@ describe("readMacosKeychainSecret", () => {
     ).toEqual({ kind: "unavailable" });
   });
 
-  it("returns the stored secret without surrounding whitespace", () => {
+  it("returns the stored secret without surrounding whitespace", (context) => {
+    requirePosixShellStandIn(context);
     const read = readMacosKeychainSecret("svc", "acct", {
       executable: ANSWERS,
       platform: "darwin",
@@ -113,7 +129,8 @@ describe("readMacosKeychainSecret", () => {
     expect(Number.isFinite(KEYCHAIN_SPAWN_TIMEOUT_MS)).toBe(true);
   });
 
-  it("refuses a caller-supplied timeout that would disable the bound", () => {
+  it("refuses a caller-supplied timeout that would disable the bound", (context) => {
+    requirePosixShellStandIn(context);
     // execFileSync reads `timeout: 0` as "no timeout". Honouring a caller's 0 would restore the
     // unbounded spawn this module exists to remove — so the production bound applies instead, and
     // the call still returns rather than waiting for the 30s fixture.
@@ -150,7 +167,8 @@ describe("readMacosKeychainSecret", () => {
     expect(read).toEqual({ kind: "unavailable" });
   });
 
-  it("applies the production spawn bound when timeoutMs is omitted", () => {
+  it("applies the production spawn bound when timeoutMs is omitted", (context) => {
+    requirePosixShellStandIn(context);
     // The one call that really omits timeoutMs runs against the HANGING fixture on purpose: a
     // fast fixture would flake on a saturated runner (the incident this file hardens against),
     // while the hang deterministically proves the production bound fires — the call returns
@@ -165,7 +183,8 @@ describe("readMacosKeychainSecret", () => {
 });
 
 describe("writeMacosKeychainSecret", () => {
-  it("gives up on a keychain that never answers instead of waiting for it", () => {
+  it("gives up on a keychain that never answers instead of waiting for it", (context) => {
+    requirePosixShellStandIn(context);
     const started = process.hrtime.bigint();
     const stored = writeMacosKeychainSecret("svc", "acct", "secret", {
       executable: HANGS,
@@ -176,7 +195,8 @@ describe("writeMacosKeychainSecret", () => {
     expect(stored).toBe(false);
   }, 15_000);
 
-  it("reports a refused store as not stored rather than throwing", () => {
+  it("reports a refused store as not stored rather than throwing", (context) => {
+    requirePosixShellStandIn(context);
     expect(
       writeMacosKeychainSecret("svc", "acct", "secret", {
         executable: REFUSES,
@@ -186,7 +206,8 @@ describe("writeMacosKeychainSecret", () => {
     ).toBe(false);
   });
 
-  it("reports a successful store", () => {
+  it("reports a successful store", (context) => {
+    requirePosixShellStandIn(context);
     expect(
       writeMacosKeychainSecret("svc", "acct", "secret", {
         executable: STORES,
@@ -196,7 +217,8 @@ describe("writeMacosKeychainSecret", () => {
     ).toBe(true);
   });
 
-  it("never puts the secret in the argument vector", () => {
+  it("never puts the secret in the argument vector", (context) => {
+    requirePosixShellStandIn(context);
     // `ps` exposes a process's arguments to every process of the same user, which is the audience
     // this tier exists to keep the key away from. The secret must arrive over stdin instead.
     const dir = mkdtempSync(join(tmpdir(), "keiko-keychain-argv-"));
@@ -221,7 +243,8 @@ describe("writeMacosKeychainSecret", () => {
     expect(readFileSync(join(dir, "stdin"), "utf8")).toContain(secret);
   });
 
-  it("updates an existing item rather than being refused as a duplicate", () => {
+  it("updates an existing item rather than being refused as a duplicate", (context) => {
+    requirePosixShellStandIn(context);
     // Without `-U`, `security` rejects an add whose item already exists (status 45, measured), so
     // the documented "replace an undecodable stored key" path would silently never replace.
     const dir = mkdtempSync(join(tmpdir(), "keiko-keychain-update-"));
@@ -260,7 +283,8 @@ describe("writeMacosKeychainSecret", () => {
     expect(stored).toBe(process.platform === "darwin");
   });
 
-  it("applies the production spawn bound to writes when timeoutMs is omitted", () => {
+  it("applies the production spawn bound to writes when timeoutMs is omitted", (context) => {
+    requirePosixShellStandIn(context);
     // Same rationale as the read-side omitted-timeout pin: the hanging fixture makes the
     // production default deterministic — the write gives up after ~KEYCHAIN_SPAWN_TIMEOUT_MS.
     const started = process.hrtime.bigint();
@@ -295,7 +319,8 @@ describe("readMacosKeychainSecret sink wiring", () => {
     vi.restoreAllMocks();
   });
 
-  it("emits one security.keychain.fallback event, with only the documented fields, when the keychain refuses immediately", () => {
+  it("emits one security.keychain.fallback event, with only the documented fields, when the keychain refuses immediately", (context) => {
+    requirePosixShellStandIn(context);
     const { sink, events } = recordingSink();
 
     const read = readMacosKeychainSecret("svc", "acct", {
@@ -335,7 +360,8 @@ describe("readMacosKeychainSecret sink wiring", () => {
     expect(persisted).toMatchObject({ reasonKind: "Error", boundedExitKind: "exit-status" });
   });
 
-  it("classifies a timed-out spawn distinctly from an immediate refusal", () => {
+  it("classifies a timed-out spawn distinctly from an immediate refusal", (context) => {
+    requirePosixShellStandIn(context);
     const { sink, events } = recordingSink();
 
     readMacosKeychainSecret("svc", "acct", {
@@ -353,7 +379,8 @@ describe("readMacosKeychainSecret sink wiring", () => {
     });
   }, 15_000);
 
-  it("does not emit for the ordinary first-run case (item not found)", () => {
+  it("does not emit for the ordinary first-run case (item not found)", (context) => {
+    requirePosixShellStandIn(context);
     const { sink, events } = recordingSink();
 
     const read = readMacosKeychainSecret("svc", "acct", {
@@ -367,7 +394,8 @@ describe("readMacosKeychainSecret sink wiring", () => {
     expect(events).toHaveLength(0);
   });
 
-  it("does not emit when the call succeeds", () => {
+  it("does not emit when the call succeeds", (context) => {
+    requirePosixShellStandIn(context);
     const { sink, events } = recordingSink();
 
     readMacosKeychainSecret("svc", "acct", {

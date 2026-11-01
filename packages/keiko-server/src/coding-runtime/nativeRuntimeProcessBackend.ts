@@ -24,6 +24,7 @@ import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   encodeLaunchPacket,
+  encodeWindowsGatewayOpen,
   validateLaunchPacketRequest,
   type ValidatedLaunchPacketPaths,
 } from "./nativeRuntimeProcessProtocol.js";
@@ -67,6 +68,7 @@ export type NativeRuntimeHelperSpawn = (
 ) => NativeRuntimeHelperProcess;
 
 export interface NativeRuntimeProcessBackendOptions {
+  readonly useInstalledWindowsGateway?: boolean;
   readonly helperPath: string;
   readonly expectedHelperSha256?: string | undefined;
   readonly runtimeRoots: readonly string[];
@@ -75,9 +77,7 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly spawnHelper?: NativeRuntimeHelperSpawn | undefined;
   /**
    * macOS derives the exact Seatbelt wrapper from this server-owned policy for both prepared and
-   * direct launches. Windows still refuses: its native helper has no qualifying WFP path binding
-   * the child to exactly one gateway destination. A generic prepared wrapper never substitutes
-   * for the requested gateway policy.
+   * direct launches. Windows requires the pinned SCM helper and the mapped gateway policy.
    */
   readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
   /** Activity-log port for the closed gateway-confinement refusal below; defaults to the process sink. */
@@ -87,6 +87,7 @@ export interface NativeRuntimeProcessBackendOptions {
 }
 
 interface ValidatedBackendOptions {
+  readonly useInstalledWindowsGateway: boolean;
   readonly helperPath: string;
   readonly expectedHelperSha256?: string | undefined;
   readonly runtimeRoots: readonly string[];
@@ -117,11 +118,7 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     sandbox?: PreparedRuntimeSandboxLaunch,
   ): RuntimeProcessTree {
     try {
-      assertNativeGatewaySupported(
-        this.options.gatewayConfinement,
-        request,
-        this.identity.platform,
-      );
+      assertNativeGatewaySupported(this.options.gatewayConfinement, request, this.options);
     } catch (error) {
       recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
       throw error;
@@ -136,6 +133,14 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       pathIsContained,
       invalidRequest,
     });
+    if (this.identity.platform === "win32" && this.options.gatewayConfinement)
+      return spawnWindowsGateway(
+        this.options,
+        this.options.gatewayConfinement,
+        request,
+        paths,
+        sandbox,
+      );
     const gateway = prepareNativeGatewayLaunch(this.options, request, paths);
     const effectiveSandbox = gateway?.decision ?? sandbox;
     const recoveryHandle = request.recoveryHandle;
@@ -175,6 +180,34 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
   }
 }
 
+function spawnWindowsGateway(
+  options: ValidatedBackendOptions,
+  policy: RuntimeGatewayConfinement,
+  request: RuntimeSupervisorLaunchRequest,
+  paths: ValidatedLaunchPacketPaths,
+  sandbox?: PreparedRuntimeSandboxLaunch,
+): NativeRuntimeTree {
+  if (
+    sandbox?.attestation.backend !== "windows-wfp" ||
+    sandbox.command !== request.executable ||
+    sandbox.args.length !== request.args.length ||
+    sandbox.args.some((arg, index) => arg !== request.args[index])
+  )
+    invalidRequest();
+  const pin = options.expectedHelperSha256 ?? invalidRequest();
+  const packet = Buffer.concat([
+    encodeLaunchPacket(request, paths),
+    encodeWindowsGatewayOpen(policy, request.recoveryHandle),
+  ]);
+  const child = spawnVerifiedHelper(options.helperPath, pin, options.spawnHelper, [
+    "--gateway-installed",
+    pin,
+  ]);
+  const tree = new NativeRuntimeTree(request.recoveryHandle, child);
+  child.controlInput.write(packet);
+  return tree;
+}
+
 function effectiveLaunchPacket(
   request: RuntimeSupervisorLaunchRequest,
   paths: ValidatedLaunchPacketPaths,
@@ -201,6 +234,7 @@ function validateBackendOptions(
   const gatewayConfinement = validGatewayConfinement(options.gatewayConfinement);
   return {
     helperPath,
+    useInstalledWindowsGateway: options.useInstalledWindowsGateway === true,
     ...(expectedHelperSha256 === undefined ? {} : { expectedHelperSha256 }),
     workspaceRoot,
     runtimeRoots,
@@ -280,13 +314,31 @@ function validGatewayConfinement(
 function assertNativeGatewaySupported(
   policy: RuntimeGatewayConfinement | undefined,
   request: RuntimeSupervisorLaunchRequest,
-  platform: string,
+  options: ValidatedBackendOptions,
 ): void {
   if (policy === undefined) return;
   if (policy.runId !== request.runId || policy.treeBindingId !== request.treeBindingId) {
     throw new Error("runtime-gateway-confinement-drift");
   }
-  if (platform !== "darwin") throw new Error(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
+  if (options.identity.platform === "darwin") return;
+  if (
+    !supportsInstalledWindowsGateway(options) ||
+    policy.profile !== "keiko-gateway" ||
+    policy.filesystem ||
+    request.egressPolicy.kind !== "loopback-only" ||
+    policy.envelopeDigest !== request.authorityEnvelopeDigest
+  )
+    throw new Error(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
+}
+
+function supportsInstalledWindowsGateway(options: ValidatedBackendOptions): boolean {
+  return (
+    options.useInstalledWindowsGateway &&
+    options.identity.platform === "win32" &&
+    options.identity.backend === "windows-job-object" &&
+    options.identity.arch === "x64" &&
+    options.expectedHelperSha256 !== undefined
+  );
 }
 
 function prepareNativeGatewayLaunch(
@@ -300,7 +352,8 @@ function prepareNativeGatewayLaunch(
       readonly git: AttestedDarwinGitExecutable | undefined;
     }
   | undefined {
-  if (options.gatewayConfinement === undefined) return undefined;
+  if (options.gatewayConfinement === undefined || options.identity.platform !== "darwin")
+    return undefined;
   try {
     const git = runtimeProfileAttestsGit(options.gatewayConfinement.profile)
       ? options.resolveGitExecutable()

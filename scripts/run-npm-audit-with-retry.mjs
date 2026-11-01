@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 import { redact } from "@oscharko-dev/keiko-security";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_ATTEMPTS = 3;
@@ -66,11 +66,13 @@ function auditProcessResult(result) {
 export function runNpmAudit(arguments_, dependencies = {}) {
   const spawn = dependencies.spawn ?? spawnSync;
   const executable = dependencies.resolveNpm?.() ?? resolveHostExecutable("npm");
-  const result = spawn(executable, ["audit", ...arguments_], {
+  const npm = hostNpmInvocation(executable, { platform: dependencies.platform });
+  const result = spawn(npm.command, [...npm.args, "audit", ...arguments_], {
     cwd: dependencies.cwd ?? repoRoot,
     encoding: "utf8",
     env: auditEnvironment(dependencies.environment),
     maxBuffer: 64 * 1024 * 1024,
+    shell: false,
   });
   return auditProcessResult(result);
 }

@@ -15,7 +15,11 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type TestContext } from "vitest";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../tests/support/symlink-fixture.js";
 import { applyPatch, validatePatch } from "./patch.js";
 import { runCommand } from "./exec.js";
 import { nodeSpawnFn } from "./exec.js";
@@ -64,11 +68,31 @@ function liveSignal(): AbortSignal {
   return new AbortController().signal;
 }
 
+// Every directory escape runs twice: once through a real directory symlink (skipped with a reason
+// on a Windows host without symlink privilege) and once through a directory redirect, which is a
+// junction on Windows and a directory symlink elsewhere, so a Windows host still exercises the
+// reparse boundary. Junction targets must be absolute; every target below is.
+const DIRECTORY_LINKS = [{ link: "directory symlink" }, { link: "directory redirect" }] as const;
+type DirectoryLink = (typeof DIRECTORY_LINKS)[number]["link"];
+
+function plantDirectoryLink(
+  context: TestContext,
+  link: DirectoryLink,
+  absoluteTarget: string,
+  path: string,
+): void {
+  if (link === "directory symlink") {
+    plantSymlinkOrSkip(context, absoluteTarget, path, "dir");
+    return;
+  }
+  plantDirectoryRedirect(absoluteTarget, path);
+}
+
 describe("S-H1 — patch write through an escaping symlink", () => {
-  it("rejects a modify whose target file is a symlink escaping the root; writes nothing", () => {
+  it("rejects a modify whose target file is a symlink escaping the root; writes nothing", (context) => {
     const victim = join(outside, "victim.txt");
     writeFileSync(victim, "one\ntwo\n", "utf8");
-    symlinkSync(victim, join(root, "link.txt"));
+    plantSymlinkOrSkip(context, victim, join(root, "link.txt"), "file");
     const diff = "--- a/link.txt\n+++ b/link.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+HACKED\n";
     // validatePatch surfaces it as a path-unsafe rejection (graceful for propose_patch)...
     const v = validatePatch(info, diff);
@@ -83,32 +107,40 @@ describe("S-H1 — patch write through an escaping symlink", () => {
     expect(readFileSync(victim, "utf8")).toBe("one\ntwo\n");
   });
 
-  it("rejects creating a file through a symlinked directory into an outside location", () => {
-    symlinkSync(outside, join(root, "linkdir"));
-    const diff = "--- /dev/null\n+++ b/linkdir/evil.txt\n@@ -0,0 +1,1 @@\n+pwned\n";
-    const v = validatePatch(info, diff);
-    expect(v.reasons.map((r) => r.code)).toContain("path-unsafe");
-    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
-      PatchValidationError,
-    );
-    expect(readdirSync(outside)).not.toContain("evil.txt");
-  });
+  it.for(DIRECTORY_LINKS)(
+    "rejects creating a file through a symlinked directory into an outside location ($link)",
+    ({ link }, context) => {
+      plantDirectoryLink(context, link, outside, join(root, "linkdir"));
+      const diff = "--- /dev/null\n+++ b/linkdir/evil.txt\n@@ -0,0 +1,1 @@\n+pwned\n";
+      const v = validatePatch(info, diff);
+      expect(v.reasons.map((r) => r.code)).toContain("path-unsafe");
+      expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+        PatchValidationError,
+      );
+      expect(readdirSync(outside)).not.toContain("evil.txt");
+    },
+  );
 
-  it("rejects creating .git/hooks/pre-commit through a symlinked .git directory (RCE escalation)", () => {
-    const realGit = mkdtempSync(join(tmpdir(), "keiko-symlink-git-"));
-    mkdirSync(join(realGit, "hooks"), { recursive: true });
-    symlinkSync(realGit, join(root, "gitlink"));
-    const diff = "--- /dev/null\n+++ b/gitlink/hooks/pre-commit\n@@ -0,0 +1,1 @@\n+#!/bin/sh\n";
-    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
-      PatchValidationError,
-    );
-    expect(readdirSync(join(realGit, "hooks"))).not.toContain("pre-commit");
-    rmSync(realGit, { recursive: true, force: true });
-  });
+  it.for(DIRECTORY_LINKS)(
+    "rejects creating .git/hooks/pre-commit through a symlinked .git directory (RCE escalation) ($link)",
+    ({ link }, context) => {
+      const realGit = mkdtempSync(join(tmpdir(), "keiko-symlink-git-"));
+      context.onTestFinished(() => {
+        rmSync(realGit, { recursive: true, force: true });
+      });
+      mkdirSync(join(realGit, "hooks"), { recursive: true });
+      plantDirectoryLink(context, link, realGit, join(root, "gitlink"));
+      const diff = "--- /dev/null\n+++ b/gitlink/hooks/pre-commit\n@@ -0,0 +1,1 @@\n+#!/bin/sh\n";
+      expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+        PatchValidationError,
+      );
+      expect(readdirSync(join(realGit, "hooks"))).not.toContain("pre-commit");
+    },
+  );
 
-  it("rejects a symlink alias whose real target is a denied in-workspace file", () => {
+  it("rejects a symlink alias whose real target is a denied in-workspace file", (context) => {
     writeFileSync(join(root, ".env"), "SECRET=1\n", "utf8");
-    symlinkSync(join(root, ".env"), join(root, "alias.env"));
+    plantSymlinkOrSkip(context, join(root, ".env"), join(root, "alias.env"), "file");
     const diff = "--- a/alias.env\n+++ b/alias.env\n@@ -1,1 +1,1 @@\n-SECRET=1\n+SECRET=2\n";
     const v = validatePatch(info, diff);
     expect(v.ok).toBe(false);
@@ -119,11 +151,14 @@ describe("S-H1 — patch write through an escaping symlink", () => {
     expect(readFileSync(join(root, ".env"), "utf8")).toBe("SECRET=1\n");
   });
 
-  it("rejects a final symlink swap at the patch write edge", () => {
+  it("rejects a final symlink swap at the patch write edge", (context) => {
     mkdirSync(join(root, "src"), { recursive: true });
     writeFileSync(join(root, "src/x.txt"), "one\ntwo\n", "utf8");
     const victim = join(outside, "victim.txt");
     writeFileSync(victim, "outside\n", "utf8");
+    // The swap below plants a file symlink mid-write. Probe that privilege first so a host without
+    // it skips with a reason instead of passing on the rollback of an EPERM thrown by the swap.
+    plantSymlinkOrSkip(context, victim, join(outside, "swap-probe.txt"), "file");
     const base = createContainedNodeWorkspaceWriter(root);
     const writer = {
       ...base,
@@ -147,7 +182,8 @@ describe("S-H1 — patch write through an escaping symlink", () => {
       ...base,
       mkdirp(absoluteDir: string): void {
         rmSync(absoluteDir, { recursive: true, force: true });
-        symlinkSync(outside, absoluteDir);
+        // A junction on Windows, so the parent swap is exercised without symlink privilege.
+        plantDirectoryRedirect(outside, absoluteDir);
         base.mkdirp(absoluteDir);
       },
     };
@@ -179,38 +215,44 @@ describe("S-H1 — run_command cwd through an escaping symlink", () => {
     };
   }
 
-  it("rejects a cwd that is a symlink escaping the root, without spawning", async () => {
-    symlinkSync(outside, join(root, "cwdlink"));
-    await expect(
-      runCommand(
-        {
-          command: "node",
-          args: ["-e", "1"],
-          cwd: "cwdlink",
-          timeoutMs: undefined,
-          signal: liveSignal(),
-        },
-        realDeps(),
-      ),
-    ).rejects.toBeInstanceOf(PathEscapeError);
-  });
+  it.for(DIRECTORY_LINKS)(
+    "rejects a cwd that is a symlink escaping the root, without spawning ($link)",
+    async ({ link }, context) => {
+      plantDirectoryLink(context, link, outside, join(root, "cwdlink"));
+      await expect(
+        runCommand(
+          {
+            command: "node",
+            args: ["-e", "1"],
+            cwd: "cwdlink",
+            timeoutMs: undefined,
+            signal: liveSignal(),
+          },
+          realDeps(),
+        ),
+      ).rejects.toBeInstanceOf(PathEscapeError);
+    },
+  );
 
-  it("rejects a cwd that resolves to a denied in-workspace .git path", async () => {
-    mkdirSync(join(root, ".git"), { recursive: true });
-    symlinkSync(join(root, ".git"), join(root, "cwdgit"));
-    await expect(
-      runCommand(
-        {
-          command: "node",
-          args: ["-e", "1"],
-          cwd: "cwdgit",
-          timeoutMs: undefined,
-          signal: liveSignal(),
-        },
-        realDeps(),
-      ),
-    ).rejects.toBeInstanceOf(PathDeniedError);
-  });
+  it.for(DIRECTORY_LINKS)(
+    "rejects a cwd that resolves to a denied in-workspace .git path ($link)",
+    async ({ link }, context) => {
+      mkdirSync(join(root, ".git"), { recursive: true });
+      plantDirectoryLink(context, link, join(root, ".git"), join(root, "cwdgit"));
+      await expect(
+        runCommand(
+          {
+            command: "node",
+            args: ["-e", "1"],
+            cwd: "cwdgit",
+            timeoutMs: undefined,
+            signal: liveSignal(),
+          },
+          realDeps(),
+        ),
+      ).rejects.toBeInstanceOf(PathDeniedError);
+    },
+  );
 
   it("positive control: a normal in-root cwd runs", async () => {
     mkdirSync(join(root, "sub"), { recursive: true });
@@ -227,22 +269,25 @@ describe("S-H1 — run_command cwd through an escaping symlink", () => {
     expect(result.stdout).toContain("ok");
   });
 
-  it("passes the symlink-resolved real cwd to spawn for an in-root cwd alias", async () => {
-    mkdirSync(join(root, "real-cwd"), { recursive: true });
-    symlinkSync(join(root, "real-cwd"), join(root, "cwd-alias"));
-    const rec = recordingSpawn();
-    const pending = runCommand(
-      {
-        command: "node",
-        args: ["-e", "1"],
-        cwd: "cwd-alias",
-        timeoutMs: undefined,
-        signal: liveSignal(),
-      },
-      { ...realDeps(), spawn: rec.fn },
-    );
-    queueMicrotask(() => rec.child.emit("close", 0, null));
-    await pending;
-    expect(rec.calls()[0]?.options.cwd).toBe(realpathSync(join(root, "real-cwd")));
-  });
+  it.for(DIRECTORY_LINKS)(
+    "passes the symlink-resolved real cwd to spawn for an in-root cwd alias ($link)",
+    async ({ link }, context) => {
+      mkdirSync(join(root, "real-cwd"), { recursive: true });
+      plantDirectoryLink(context, link, join(root, "real-cwd"), join(root, "cwd-alias"));
+      const rec = recordingSpawn();
+      const pending = runCommand(
+        {
+          command: "node",
+          args: ["-e", "1"],
+          cwd: "cwd-alias",
+          timeoutMs: undefined,
+          signal: liveSignal(),
+        },
+        { ...realDeps(), spawn: rec.fn },
+      );
+      queueMicrotask(() => rec.child.emit("close", 0, null));
+      await pending;
+      expect(rec.calls()[0]?.options.cwd).toBe(realpathSync(join(root, "real-cwd")));
+    },
+  );
 });

@@ -12,6 +12,8 @@
 // `KEIKO_MCP_SECRET_*` variable of Keiko's own environment that holds it (#3903 AC3), which Keiko
 // adds to the requests it relays and never hands to a runtime.
 
+import { isLocalAbsolutePath } from "./text-safety.js";
+
 export const MCP_SERVER_REGISTRY_SCHEMA_VERSION = 1;
 export const MCP_SERVER_MAX = 16;
 export const MCP_SERVER_TOOL_MAX = 64;
@@ -156,11 +158,7 @@ function literal(value: string): boolean {
 
 /** Portable local paths; UNC shares and Windows device namespaces remain denied. */
 export function isMcpLocalAbsolutePath(value: unknown): value is string {
-  return (
-    boundedText(value) &&
-    literal(value) &&
-    ((value.startsWith("/") && !value.startsWith("//")) || /^[A-Za-z]:[\\/]/u.test(value))
-  );
+  return boundedText(value) && literal(value) && isLocalAbsolutePath(value);
 }
 
 function localTransport(value: Json): McpLocalTransport | undefined {

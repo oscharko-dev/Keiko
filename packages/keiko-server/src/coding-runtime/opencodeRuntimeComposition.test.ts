@@ -18,7 +18,6 @@ import {
   realpathSync,
   rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +28,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi, type Mock } f
 import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   createCodingSessionContinuity,
   type CodingSessionContinuity,
@@ -9532,14 +9536,12 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
   });
 
   it("refuses a hostile reference before anything is sent and logs the closed reason, not the path", async () => {
-    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    const { fixture, port, promptBodies, activityLog } = await inputsFixture();
     try {
-      symlinkSync("/etc/hosts", join(workspace, "hosts-link"));
       for (const [path, reason] of [
         ["../outside.txt", "reference-invalid"],
         ["/etc/hosts", "reference-invalid"],
         [".env", "reference-sensitive"],
-        ["hosts-link", "reference-outside-workspace"],
         ["missing.md", "reference-unreadable"],
       ] as const) {
         expect(port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path }] })).toEqual({
@@ -9548,9 +9550,55 @@ describe("prompt inputs on the run port (ADR-0137 D10)", () => {
         });
       }
       expect(promptBodies).toEqual([]);
-      expect(inputLines(activityLog)).toHaveLength(5);
+      expect(inputLines(activityLog)).toHaveLength(4);
       expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
         /\/etc\/hosts|hosts-link|\.env|outside\.txt|missing\.md|SENSITIVE/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // The link case needs a file symlink, which a Windows host without the privilege cannot plant;
+  // the junction case below proves the same containment there. A Windows host that may link files
+  // has no `/etc/hosts`, so it points the link at a real file outside the workspace instead.
+  it("refuses a file symlink that leaves the workspace and logs the closed reason, not the path", async (testContext) => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      const outside = WINDOWS_HOST
+        ? join(tempDir("keiko-prompt-inputs-outside-"), "hosts")
+        : "/etc/hosts";
+      if (WINDOWS_HOST) writeFileSync(outside, "OUTSIDE-CANARY\n");
+      plantSymlinkOrSkip(testContext, outside, join(workspace, "hosts-link"));
+      expect(
+        port.admitPromptInputs?.(FIXTURE_RUN_ID, { references: [{ path: "hosts-link" }] }),
+      ).toEqual({ ok: false, reason: "reference-outside-workspace" });
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(1);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /\/etc\/hosts|hosts-link|OUTSIDE-CANARY/u,
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a reference through a directory redirection that leaves the workspace", async () => {
+    const { fixture, port, promptBodies, activityLog, workspace } = await inputsFixture();
+    try {
+      const outside = tempDir("keiko-prompt-inputs-outside-");
+      writeFileSync(join(outside, "secret.txt"), "OUTSIDE-CANARY\n");
+      // A junction on Windows (no symlink privilege), a directory symlink elsewhere.
+      plantDirectoryRedirect(outside, join(workspace, "outside-dir"));
+      expect(
+        port.admitPromptInputs?.(FIXTURE_RUN_ID, {
+          references: [{ path: "outside-dir/secret.txt" }],
+        }),
+      ).toEqual({ ok: false, reason: "reference-outside-workspace" });
+      expect(promptBodies).toEqual([]);
+      expect(inputLines(activityLog)).toHaveLength(1);
+      expect(JSON.stringify(inputLines(activityLog))).not.toMatch(
+        /outside-dir|secret\.txt|OUTSIDE-CANARY/u,
       );
     } finally {
       await fixture.stop();

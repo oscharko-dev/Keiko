@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
+import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -313,6 +314,7 @@ describe("production OpenCode activation", () => {
     const staged = devLaneFixture();
     const stateDir = join(staged.root, "runtime-state");
     mkdirSync(stateDir, { recursive: true });
+    makeOwnerPrivateDirectory(stateDir);
     const create = vi.spyOn(backendModule, "createProductionOpenCodeBackend");
     resolveProductionOpenCodeActivation(
       activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { stateDir }),

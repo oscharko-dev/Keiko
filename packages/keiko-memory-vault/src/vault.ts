@@ -1209,8 +1209,9 @@ function buildStore(db: DatabaseSync, opts: ResolvedOptions): MemoryVaultStore {
     ...buildMemoryMutators(db, opts),
     ...buildEdgeAndEmbeddingOps(db, opts),
     ...buildTombstoneAndAccessOps(db, opts),
+    // Idempotent: a composition closes the vault on every dispose, and a process may dispose twice.
     close: (): void => {
-      db.close();
+      if (db.isOpen) db.close();
     },
   };
 }
@@ -1251,8 +1252,17 @@ export function createMemoryVault(options?: CreateMemoryVaultOptions): MemoryVau
   // without the activity log ever reporting the open as having succeeded. Emitting right after
   // `openMemoryDatabase` (as this line used to) reported a successful open even when either
   // operation below then threw and the vault never actually became usable.
-  const bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
-  hardenVaultSidecars(dbPath);
+  let bodySuppressionKey: Buffer;
+  try {
+    bodySuppressionKey = resolveBodySuppressionKey(db, cipher);
+    hardenVaultSidecars(dbPath);
+  } catch (error) {
+    // #4068: the failed vault is never returned, so nothing else can close its handle. Left open,
+    // the database and its WAL siblings stay locked, which on Windows blocks removing or
+    // quarantining them. The initialization error is rethrown unchanged.
+    db.close();
+    throw error;
+  }
   emitVaultOpened(options?.logSink, keySource, elapsedMs());
   return buildStore(db, resolveOptions(options, cipher, dbPath, bodySuppressionKey));
 }

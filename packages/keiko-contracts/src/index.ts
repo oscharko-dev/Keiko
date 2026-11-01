@@ -2700,6 +2700,7 @@ export type {
   containsAbsolutePath,
   containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
+  isLocalAbsolutePath,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";

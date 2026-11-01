@@ -157,6 +157,24 @@ serious/critical violations and zero unresolved incomplete findings, and all 108
 captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
 unavailable workspace-trust states. No gate, fixture or rule was changed.
 
+## Windows tooling qualification — 2026-10-28
+
+The Windows npm launcher repair for #4068 changes the shared `host-executable.mjs` producer
+input. The UI coverage job on `53fdbc5be` correctly rejected the stale source bindings; the exact
+`globals.css.test.ts` source-input test reproduced locally before regeneration. All four original
+producers were then rerun on Windows x64 with Node 24.18.0, npm 11.16.0 and the repository-pinned
+Playwright Chromium. Component fidelity retains 427 probes with zero gated or recorded differences;
+editor token fidelity retains zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof retains zero serious/critical violations and zero unresolved incomplete findings.
+The fresh static export and all 108 running-app captures pass with zero page errors, unexpected API
+requests, missing selectors, visible error notices, crashed windows or unavailable trust states.
+
+The complete `globals.css.test.ts` suite passes after regeneration (281 tests). The four producer
+programs, source-input inventory, fixtures and assertions are unchanged. Captures now reflect this
+Windows host's rendering and German UI locale; the emitted CSS bundle digest is measured from its
+fresh build. This refresh proves the seeded UI fixtures and source bindings, not an installed
+Windows Coding Workbench, a model task or a new human designer acceptance.
+
 ## MCP and Jira Chat integration — 2026-10-28
 
 The original four producers were regenerated in the isolated Linux arm64 environment with Node 24.18.0
@@ -206,6 +224,39 @@ bundle-size gate pass. No producer assertions, tolerances or budgets changed.
 
 These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
 qualified separately.
+
+## Windows branch integration — 2026-10-31
+
+After integrating `dev` at `55e4b02b2` into #4088, the retained Windows npm launcher change
+still differs in a declared producer input. All four original producers were rerun on Windows
+x64 with Node 24.18.0, npm 11.16.0 and Playwright 1.64.1. Component fidelity passes all 427
+probes with zero gated or recorded differences; editor fidelity retains zero gated differences
+and all 14 reference captures. All seven accessibility modes have zero serious/critical
+violations and zero unresolved incomplete findings. All 108 browser captures pass the existing
+page-error, selector, notice, crash, trust-state and unexpected-request checks.
+
+The 281 stylesheet/evidence tests pass. The independent static dependency inventory test first
+failed on Windows path separators; normalizing the resolved relative path to manifest slash
+notation preserves the complete dependency check and both source-binding tests now pass.
+Representative desktop dark and editor light captures were visually inspected. Historical
+fixture layout limits and the separation from real Workbench acceptance remain unchanged.
+
+## Dependency alignment with #4168 — 2026-10-31
+
+The four original producers were rerun on Windows x64 with Node 24.18.0 and npm
+11.16.0 after aligning minimatch 11.0.3 and glob 14.0.3 with #4168 while retaining
+the exact-flat runtime override. Each proof binds this branch's own source inputs;
+no proof hashes were copied from the other PR.
+
+Component fidelity passed 427 probes with zero gated differences. Editor fidelity
+passed 160 gated probes with zero gated differences and all 14 reference captures;
+the existing non-gated accent differences remain recorded. The seven-mode axe
+proof has zero serious/critical violations and zero unresolved incomplete findings.
+All 108 browser captures passed their page-error, API, selector, crash and trust
+controls. All 281 CSS/proof tests passed. No assertions, tolerances or budgets changed.
+
+These synthetic fixtures do not replace the tool-catalog performance pairing,
+D12 reference measurement or release-owner runtime approval.
 
 ## minimatch and glob advisory overrides — 2026-10-31
 

@@ -5899,6 +5899,13 @@ async function disposeRuntimeServices(
     (): void => {
       codingAppSessionDenialWindows.reset();
     },
+    // #4068 (W9): the graph opens the memory vault's node:sqlite handle in `buildPeripherals`, so it
+    // closes it too. Left open, `keiko-memory.db` and its WAL siblings stayed locked after dispose,
+    // which on Windows keeps the state directory from being removed, and the WAL was never
+    // checkpointed on a graceful shutdown.
+    (): void => {
+      services.peripherals.memoryVault.close();
+    },
     (): void => {
       args.bundle.dispose?.();
     },

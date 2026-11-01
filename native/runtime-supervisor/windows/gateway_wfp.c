@@ -352,3 +352,60 @@ DWORD keiko_gateway_filters_recover_guard(PSID package_sid, HANDLE job, const GU
   }
   return result;
 }
+
+static int is_guard_filter(const FWPM_FILTER0 *filter) {
+  const FWPM_FILTER_CONDITION0 *condition = filter->filterCondition;
+  return (filter->flags & FWPM_FILTER_FLAG_PERSISTENT) != 0 &&
+         filter->action.type == FWP_ACTION_BLOCK && filter->displayData.name != NULL &&
+         wcscmp(filter->displayData.name, L"Keiko runtime tree deny outbound") == 0 &&
+         filter->numFilterConditions == 1 && condition != NULL &&
+         condition->matchType == FWP_MATCH_EQUAL &&
+         IsEqualGUID(&condition->fieldKey, &FWPM_CONDITION_ALE_PACKAGE_ID) &&
+         condition->conditionValue.type == FWP_SID &&
+         package_sid_valid(condition->conditionValue.sid);
+}
+
+static DWORD keep_guard_sid(PSID sid, PSID *packages, DWORD *count, DWORD capacity) {
+  DWORD index, size = GetLengthSid(sid);
+  for (index = 0; index < *count; index++) {
+    if (EqualSid(packages[index], sid)) return ERROR_SUCCESS;
+  }
+  if (*count >= capacity) return ERROR_INSUFFICIENT_BUFFER;
+  packages[*count] = HeapAlloc(GetProcessHeap(), 0, size);
+  if (packages[*count] == NULL) return ERROR_OUTOFMEMORY;
+  if (!CopySid(size, packages[*count], sid)) {
+    HeapFree(GetProcessHeap(), 0, packages[*count]);
+    return GetLastError();
+  }
+  *count += 1;
+  return ERROR_SUCCESS;
+}
+
+/* Each guard installs one IPv4 and one IPv6 deny with the same package SID; collecting the IPv4
+ * layer names every tree once. Reading persistent filters needs no recovery record. */
+DWORD keiko_gateway_filters_guarded_packages(PSID *packages, DWORD capacity, DWORD *count) {
+  FWPM_FILTER_ENUM_TEMPLATE0 query = {0};
+  HANDLE engine = NULL, enumeration = NULL;
+  DWORD result;
+  if (packages == NULL || count == NULL) return ERROR_INVALID_PARAMETER;
+  *count = 0;
+  query.layerKey = FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+  query.actionMask = 0xFFFFFFFF;
+  result = FwpmEngineOpen0(NULL, RPC_C_AUTHN_WINNT, NULL, NULL, &engine);
+  if (result == ERROR_SUCCESS) result = FwpmFilterCreateEnumHandle0(engine, &query, &enumeration);
+  while (result == ERROR_SUCCESS) {
+    FWPM_FILTER0 **entries = NULL;
+    UINT32 found = 0, index;
+    result = FwpmFilterEnum0(engine, enumeration, 64, &entries, &found);
+    for (index = 0; result == ERROR_SUCCESS && index < found; index++) {
+      if (is_guard_filter(entries[index]))
+        result = keep_guard_sid(entries[index]->filterCondition[0].conditionValue.sid, packages,
+                                count, capacity);
+    }
+    if (entries != NULL) FwpmFreeMemory0((void **)&entries);
+    if (found < 64) break;
+  }
+  if (enumeration != NULL) (void)FwpmFilterDestroyEnumHandle0(engine, enumeration);
+  if (engine != NULL) (void)FwpmEngineClose0(engine);
+  return result;
+}

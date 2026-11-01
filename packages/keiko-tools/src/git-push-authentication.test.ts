@@ -7,12 +7,15 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../tests/support/symlink-fixture.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { defaultResolveExecutable } from "./exec.js";
@@ -69,6 +72,24 @@ function fixture(): Fixture {
       GIT_TERMINAL_PROMPT: "0",
     },
   };
+}
+// Every directory alias runs twice: through a real directory symlink (skipped with a reason on a
+// Windows host without symlink privilege) and through a directory redirect, which is a junction on
+// Windows and a directory symlink elsewhere, so a Windows host still exercises the alias boundary.
+// Junction targets must be absolute; every target below is.
+const DIRECTORY_LINKS = [{ link: "directory symlink" }, { link: "directory redirect" }] as const;
+type DirectoryLink = (typeof DIRECTORY_LINKS)[number]["link"];
+function plantDirectoryLink(
+  context: TestContext,
+  link: DirectoryLink,
+  absoluteTarget: string,
+  path: string,
+): void {
+  if (link === "directory symlink") {
+    plantSymlinkOrSkip(context, absoluteTarget, path, "dir");
+    return;
+  }
+  plantDirectoryRedirect(absoluteTarget, path);
 }
 function prepare(f: Fixture): ReturnType<typeof prepareGitHubPushAuthentication> {
   return prepareGitHubPushAuthentication("https://github.com/owner/repo.git", {
@@ -179,13 +200,13 @@ describe("trusted GitHub push authentication", () => {
     f.env.PATH = `${f.root}${delimiter}${f.external}`;
     expect(() => prepare(f)).toThrow("executable resolves inside workspace");
   });
-  it("refuses an external PATH alias whose executable points back into the repository", () => {
+  it("refuses an external PATH alias whose executable points back into the repository", (context) => {
     const f = fixture();
     const planted = join(f.root, "planted");
     writeFileSync(planted, "#!/bin/sh\nexit 0\n");
     chmodSync(planted, 0o700);
     rmSync(f.executable);
-    symlinkSync(planted, f.executable);
+    plantSymlinkOrSkip(context, planted, f.executable, "file");
     expect(() => prepare(f)).toThrow("executable resolves inside workspace");
   });
   it("refuses a trusted resolver seam that accidentally returns an in-workspace path", () => {
@@ -211,32 +232,38 @@ describe("trusted GitHub push authentication", () => {
       expect(() => prepare(f)).toThrow("git-push-auth-config-untrusted");
     },
   );
-  it("rejects config aliases, including missing descendants inside a repository alias", () => {
-    const f = fixture();
-    const alias = join(f.external, "config-alias");
-    symlinkSync(f.root, alias, "dir");
-    f.env.GH_CONFIG_DIR = join(alias, "missing", "gh");
-    expect(() => prepare(f)).toThrow("git-push-auth-config-untrusted");
-  });
-  it.each(["hosts.yml", "config.yml"])(
+  it.for(DIRECTORY_LINKS)(
+    "rejects config aliases, including missing descendants inside a repository alias ($link)",
+    ({ link }, context) => {
+      const f = fixture();
+      const alias = join(f.external, "config-alias");
+      plantDirectoryLink(context, link, f.root, alias);
+      f.env.GH_CONFIG_DIR = join(alias, "missing", "gh");
+      expect(() => prepare(f)).toThrow("git-push-auth-config-untrusted");
+    },
+  );
+  it.for(["hosts.yml", "config.yml"])(
     "rejects %s symlinks into workspace without reading config contents",
-    (name) => {
+    (name, context) => {
       const f = fixture();
       const file = join(f.root, name);
       writeFileSync(file, "private credential configuration");
-      symlinkSync(file, join(f.external, name));
+      plantSymlinkOrSkip(context, file, join(f.external, name), "file");
       f.env.GH_CONFIG_DIR = f.external;
       expect(() => prepare(f)).toThrow("git-push-auth-config-untrusted");
     },
   );
-  it("accepts missing external account configuration and refuses broken existing aliases", () => {
-    const f = fixture();
-    f.env.GH_CONFIG_DIR = join(f.external, "not-created", "gh");
-    expect(prepare(f).configArgs).toHaveLength(8);
-    f.env.GH_CONFIG_DIR = join(f.external, "broken");
-    symlinkSync(join(f.root, "missing"), f.env.GH_CONFIG_DIR);
-    expect(() => prepare(f)).toThrow("git-push-auth-config-untrusted");
-  });
+  it.for(DIRECTORY_LINKS)(
+    "accepts missing external account configuration and refuses broken existing aliases ($link)",
+    ({ link }, context) => {
+      const f = fixture();
+      f.env.GH_CONFIG_DIR = join(f.external, "not-created", "gh");
+      expect(prepare(f).configArgs).toHaveLength(8);
+      f.env.GH_CONFIG_DIR = join(f.external, "broken");
+      plantDirectoryLink(context, link, join(f.root, "missing"), f.env.GH_CONFIG_DIR);
+      expect(() => prepare(f)).toThrow("git-push-auth-config-untrusted");
+    },
+  );
   it("uses only filesystem metadata when validating authentication paths", () => {
     const f = fixture();
     const fs = {

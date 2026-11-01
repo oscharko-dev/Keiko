@@ -39,6 +39,8 @@ if (
     `/Fo:${scratch}\\`,
     join(root, "native/runtime-supervisor/windows/gateway_wfp.c"),
     join(root, "native/runtime-supervisor/windows/gateway_wfp.test.c"),
+    join(root, "native/runtime-supervisor/windows/gateway_peer.c"),
+    join(root, "native/runtime-supervisor/windows/gateway_peer.test.c"),
     join(root, "native/runtime-supervisor/windows/gateway_socket.test.c"),
     "/link",
     "/DEPENDENTLOADFLAG:0x800",

@@ -2,11 +2,11 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +20,11 @@ import {
 import { activityLogEventWillBeRejected } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../../../../tests/support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -164,14 +169,22 @@ describe("prompt references resolved against the run's workspace", () => {
     });
   });
 
+  function expectCarriedUnderOwnName(name: string): void {
+    writeFileSync(join(workspace, name), "ünïcode x\n");
+    const resolved = resolveOne(name);
+    expect(resolved.ok, name).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.files[0]).toEqual({ uri: inline("ünïcode x\n"), name });
+  }
+
   it("carries the file's exact bytes and its own name whatever the name contains", () => {
-    for (const name of ["my notes.md", "a#b.md", "q?.md", "100%.md", "ünïcode-名前.md"]) {
-      writeFileSync(join(workspace, name), "ünïcode x\n");
-      const resolved = resolveOne(name);
-      expect(resolved.ok, name).toBe(true);
-      if (!resolved.ok) continue;
-      expect(resolved.files[0]).toEqual({ uri: inline("ünïcode x\n"), name });
-    }
+    for (const name of ["my notes.md", "a#b.md", "100%.md", "ünïcode-名前.md"])
+      expectCarriedUnderOwnName(name);
+  });
+
+  // Windows forbids `?` in a file name, so the host cannot create this fixture (#4068).
+  it.skipIf(WINDOWS_HOST)("carries a name that contains a question mark", () => {
+    expectCarriedUnderOwnName("q?.md");
   });
 
   // #3897 review: the runtime must not reopen the path the resolver admitted. A hard link to an
@@ -192,7 +205,8 @@ describe("prompt references resolved against the run's workspace", () => {
 
   it("canonicalizes a workspace root that is itself reached through a link", () => {
     const alias = join(root, "alias");
-    symlinkSync(workspace, alias);
+    // A junction on Windows (no privilege needed), a directory symlink elsewhere (#4068).
+    plantDirectoryRedirect(workspace, alias);
     const resolved = resolvePromptReferences({
       workspaceRoot: alias,
       references: [{ path: "README.md" }],
@@ -241,21 +255,51 @@ describe("prompt references resolved against the run's workspace", () => {
     expect(resolveOne(".env.example").ok).toBe(true);
   });
 
-  it("refuses a symlink that leaves the workspace, for a file and for a directory", () => {
-    symlinkSync(join(outside, "secret.txt"), join(workspace, "link.txt"));
-    symlinkSync(outside, join(workspace, "linked-dir"));
+  // A file link needs a privilege an ordinary Windows account lacks; each directory form runs on
+  // every host, as a junction there and a directory symlink elsewhere (#4068).
+  it("refuses a symlink that leaves the workspace, for a file", (testContext) => {
+    plantSymlinkOrSkip(testContext, join(outside, "secret.txt"), join(workspace, "link.txt"));
     expect(refusal("link.txt")).toBe("reference-outside-workspace");
+  });
+
+  it("refuses a symlink that leaves the workspace, for a directory", () => {
+    plantDirectoryRedirect(outside, join(workspace, "linked-dir"));
     expect(refusal("linked-dir/secret.txt")).toBe("reference-outside-workspace");
   });
 
-  it("judges the sensitive names of the real path a link resolves to", () => {
+  it("judges the sensitive names of the real path a link resolves to", (testContext) => {
     writeFileSync(join(workspace, ".env"), "TOKEN=SENSITIVE-CANARY\n");
-    symlinkSync(join(workspace, ".env"), join(workspace, "innocent.txt"));
+    plantSymlinkOrSkip(testContext, join(workspace, ".env"), join(workspace, "innocent.txt"));
     expect(refusal("innocent.txt")).toBe("reference-sensitive");
   });
 
-  it("attaches a link to an ordinary file once, under its real path", () => {
-    symlinkSync(join(workspace, "README.md"), join(workspace, "readme-link.md"));
+  it("judges the sensitive names of the real path a directory link resolves to", () => {
+    mkdirSync(join(workspace, ".ssh"));
+    writeFileSync(join(workspace, ".ssh", "config"), "TOKEN=SENSITIVE-CANARY\n");
+    plantDirectoryRedirect(join(workspace, ".ssh"), join(workspace, "innocent-dir"));
+    expect(refusal("innocent-dir/config")).toBe("reference-sensitive");
+  });
+
+  it("attaches a file reached through a directory link once, under its real path", () => {
+    plantDirectoryRedirect(join(workspace, "src"), join(workspace, "src-link"));
+    const resolved = resolvePromptReferences({
+      workspaceRoot: workspace,
+      references: [{ path: "src/app.ts" }, { path: "src-link/app.ts" }],
+      remainingRunBytes: 1_000_000,
+    });
+    expect(resolved).toEqual({
+      ok: true,
+      files: [{ uri: inline("export const app = 1;\n"), name: "app.ts" }],
+      bytes: "export const app = 1;\n".length,
+    });
+  });
+
+  it("attaches a link to an ordinary file once, under its real path", (testContext) => {
+    plantSymlinkOrSkip(
+      testContext,
+      join(workspace, "README.md"),
+      join(workspace, "readme-link.md"),
+    );
     const resolved = resolvePromptReferences({
       workspaceRoot: workspace,
       references: [{ path: "README.md" }, { path: "readme-link.md" }],
@@ -273,12 +317,20 @@ describe("prompt references resolved against the run's workspace", () => {
     expect(refusal("hard.txt")).toBe("reference-not-file");
   });
 
-  it("refuses a directory, a missing file and a FIFO", () => {
+  it("refuses a directory and a missing file", () => {
     expect(refusal("src")).toBe("reference-not-file");
     expect(refusal("src/missing.ts")).toBe("reference-unreadable");
+  });
+
+  // A `mkfifo` on the PATH proves nothing by its exit status alone: the MSYS one on a Windows host
+  // succeeds and leaves no FIFO the Node runtime can see, so the node itself is checked (#4068).
+  it("refuses a FIFO", (testContext) => {
     const fifo = join(workspace, "pipe");
-    if (spawnSync("mkfifo", [fifo]).status === 0)
-      expect(refusal("pipe")).toBe("reference-not-file");
+    const created =
+      spawnSync("mkfifo", [fifo]).status === 0 &&
+      lstatSync(fifo, { throwIfNoEntry: false })?.isFIFO() === true;
+    if (!created) testContext.skip("this host cannot create a POSIX FIFO the runtime can see");
+    expect(refusal("pipe")).toBe("reference-not-file");
   });
 
   it("refuses a file that is not valid UTF-8 text", () => {
@@ -354,7 +406,8 @@ describe("prompt references resolved against the run's workspace", () => {
     rmSync(join(workspace, "src"), { recursive: true });
     mkdirSync(join(outside, "src"));
     writeFileSync(join(outside, "src", "app.ts"), "OUTSIDE-CANARY\n");
-    symlinkSync(join(outside, "src"), join(workspace, "src"));
+    // A junction on Windows (no privilege needed), a directory symlink elsewhere (#4068).
+    plantDirectoryRedirect(join(outside, "src"), join(workspace, "src"));
     expect(refusal("src/app.ts")).toBe("reference-outside-workspace");
   });
 });
@@ -445,15 +498,28 @@ describe("image and PDF references", () => {
     });
   });
 
-  it("keeps the sensitive-path and workspace boundaries for media", () => {
+  it("keeps the sensitive-path boundary for media", () => {
+    expect(resolveMedia([".env.png"])).toMatchObject({ ok: false });
+  });
+
+  it("keeps the workspace boundary for a media file link", (testContext) => {
     writeFileSync(join(outside, "leak.png"), PNG);
-    symlinkSync(join(outside, "leak.png"), join(workspace, "linked.png"));
+    plantSymlinkOrSkip(testContext, join(outside, "leak.png"), join(workspace, "linked.png"));
 
     expect(resolveMedia(["linked.png"])).toEqual({
       ok: false,
       reason: "reference-outside-workspace",
     });
-    expect(resolveMedia([".env.png"])).toMatchObject({ ok: false });
+  });
+
+  it("keeps the workspace boundary for media reached through a directory link", () => {
+    writeFileSync(join(outside, "leak.png"), PNG);
+    plantDirectoryRedirect(outside, join(workspace, "linked-media"));
+
+    expect(resolveMedia(["linked-media/leak.png"])).toEqual({
+      ok: false,
+      reason: "reference-outside-workspace",
+    });
   });
 });
 

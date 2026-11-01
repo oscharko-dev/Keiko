@@ -30,6 +30,7 @@ import {
   nativeOpenSslNodeOptions,
   nativeOpenSslReadRoots,
   nativeToolchainReadRoots,
+  planWindowsGatewayRuntimeSandbox,
   type LongLivedRuntimeSandboxAttestation,
   type RuntimeGatewayEgress,
   type RuntimeGatewayFilesystem,
@@ -1294,12 +1295,17 @@ function runtimeSupervisor(
   if (input.portable.target === "linux-x64") {
     return linuxNamespaceGatewaySupervisor(input.portable, input, run, toolProfile);
   }
+  const installedPin = releasedWindowsHelperPin(input.portable);
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable, input, run, toolProfile);
   }
   return createRuntimeProcessSupervisor({
+    ...(installedPin ? { planSandbox: planWindowsGatewayRuntimeSandbox } : {}),
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
+      ...(installedPin
+        ? { useInstalledWindowsGateway: true, expectedHelperSha256: installedPin }
+        : {}),
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
@@ -1307,6 +1313,14 @@ function runtimeSupervisor(
     }),
     qualifications: [input.portable.qualification],
   });
+}
+
+function releasedWindowsHelperPin(portable: ResolvedPortableOpenCodeRuntime): string | undefined {
+  return portable.target === "windows-x64" &&
+    "platformAssurance" in portable &&
+    portable.platformAssurance === "release-qualified"
+    ? portable.nativeHelperSha256
+    : undefined;
 }
 
 function linuxNamespaceGatewaySupervisor(

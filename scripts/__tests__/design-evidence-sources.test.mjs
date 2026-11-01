@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import ts from "typescript";
 import { expect, it } from "vitest";
 import paths from "../../docs/design-system/evidence/1300/source-inputs.json" with { type: "json" };
@@ -15,7 +15,11 @@ it("pins every local static dependency of the shared evidence producers", () => 
       if (!(ts.isImportDeclaration(node) || ts.isExportDeclaration(node))) continue;
       const module = node.moduleSpecifier?.text;
       if (module?.startsWith("."))
-        expect(paths, file).toContain(relative(process.cwd(), resolve(dirname(file), module)));
+        expect(paths, file).toContain(
+          relative(process.cwd(), resolve(dirname(file), module))
+            .split(sep)
+            .join("/"),
+        );
     }
   }
 });

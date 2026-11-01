@@ -7,7 +7,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  symlinkSync,
   truncateSync,
   unlinkSync,
   writeFileSync,
@@ -24,6 +23,8 @@ import {
 
 import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+
+import { plantSymlinkOrSkip, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
@@ -114,18 +115,18 @@ describe("production portable OpenCode discovery", () => {
     },
   );
 
-  it.each([
+  it.for([
     ["setup", "symbolic"],
     ["setup", "hard"],
     ["launcher", "symbolic"],
     ["launcher", "hard"],
-  ] as const)("refuses a Windows generation with a %s %s link", (identity, linkKind) => {
+  ] as const)("refuses a Windows generation with a %s %s link", ([identity, linkKind], context) => {
     const fixture = windowsGenerationInstall();
     const path = identity === "setup" ? fixture.setupPath : join(fixture.installRoot, "Keiko.exe");
     const replacement = `${path}.linked`;
     renameSync(path, replacement);
     if (linkKind === "symbolic") {
-      symlinkSync(replacement, path);
+      plantSymlinkOrSkip(context, replacement, path);
     } else {
       linkSync(replacement, path);
     }
@@ -212,46 +213,51 @@ describe("production portable OpenCode discovery", () => {
     },
   );
 
-  it("binds the native Linux helper without replacing namespace gateway confinement", () => {
-    const fixture = linuxPortableInstall();
-    const native = join(fixture.root, "runtime", "native", "keiko-runtime-supervisor");
-    writeFileSync(native, SUPERVISOR);
-    const path = join(fixture.root, ".portable", "runtime-activation.json");
-    const activation = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
-    const helpers = activation.nativeHelpers as Record<string, unknown>[];
-    const supervisor = helpers.find((helper) => helper.name === "keiko-runtime-supervisor");
-    if (supervisor === undefined) throw new TypeError("fixture supervisor is missing");
-    supervisor.executablePath = "runtime/native/keiko-runtime-supervisor";
-    writeFileSync(path, JSON.stringify(activation));
-    const bound = {
-      ...fixture,
-      receipt: { ...fixture.receipt, activationManifestSha256: sha256(readFileSync(path)) },
-    };
-    const activityLog = createBufferedServerLogSink();
-    expect(
-      discoverQualifiedPortableOpenCode({
-        env: {},
-        installRoot: bound.root,
-        platform: "linux",
-        arch: "x64",
-        attestation: { readReceipt: () => bound.receipt },
-        activityLog,
-      }),
-    ).toMatchObject({
-      nativeHelperPath: realpathSync(native),
-      qualification: { backend: "linux-namespace-gateway" },
-    });
-    const event = activityLog.events[0];
-    if (event === undefined) throw new TypeError("native helper binding log is missing");
-    expect(
-      expectActivityLogProof(
-        "portable.runtime.native-helper-bound.emitted-line",
-        formatActivityLogProofLine(event),
-      ),
-    ).toMatchObject({ target: "linux-x64", helperSha256: sha256(SUPERVISOR) });
-    writeFileSync(native, "changed native owner");
-    expect(discoverLinux(bound)).toBeUndefined();
-  });
+  // The Linux target is only reachable on a Linux host in production; the helper-binding record keys
+  // on the POSIX `/runtime/native/` suffix of the host realpath, which a Windows host never produces.
+  it.skipIf(WINDOWS_HOST)(
+    "binds the native Linux helper without replacing namespace gateway confinement",
+    () => {
+      const fixture = linuxPortableInstall();
+      const native = join(fixture.root, "runtime", "native", "keiko-runtime-supervisor");
+      writeFileSync(native, SUPERVISOR);
+      const path = join(fixture.root, ".portable", "runtime-activation.json");
+      const activation = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+      const helpers = activation.nativeHelpers as Record<string, unknown>[];
+      const supervisor = helpers.find((helper) => helper.name === "keiko-runtime-supervisor");
+      if (supervisor === undefined) throw new TypeError("fixture supervisor is missing");
+      supervisor.executablePath = "runtime/native/keiko-runtime-supervisor";
+      writeFileSync(path, JSON.stringify(activation));
+      const bound = {
+        ...fixture,
+        receipt: { ...fixture.receipt, activationManifestSha256: sha256(readFileSync(path)) },
+      };
+      const activityLog = createBufferedServerLogSink();
+      expect(
+        discoverQualifiedPortableOpenCode({
+          env: {},
+          installRoot: bound.root,
+          platform: "linux",
+          arch: "x64",
+          attestation: { readReceipt: () => bound.receipt },
+          activityLog,
+        }),
+      ).toMatchObject({
+        nativeHelperPath: realpathSync(native),
+        qualification: { backend: "linux-namespace-gateway" },
+      });
+      const event = activityLog.events[0];
+      if (event === undefined) throw new TypeError("native helper binding log is missing");
+      expect(
+        expectActivityLogProof(
+          "portable.runtime.native-helper-bound.emitted-line",
+          formatActivityLogProofLine(event),
+        ),
+      ).toMatchObject({ target: "linux-x64", helperSha256: sha256(SUPERVISOR) });
+      writeFileSync(native, "changed native owner");
+      expect(discoverLinux(bound)).toBeUndefined();
+    },
+  );
 
   it("emits body-free diagnostics for a rejected Linux component binding", () => {
     const fixture = linuxPortableInstall();
