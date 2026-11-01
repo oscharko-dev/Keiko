@@ -794,14 +794,22 @@ function paragraphsOf(context: Context, covered: ReadonlySet<number>): readonly 
   return found;
 }
 
+/** A sentence that states an obligation of a named subject (ISO/IEC/IEEE 29148 form). */
+function obligationStatement(vocabulary: CompiledVocabulary, statement: string): boolean {
+  return (
+    statement.length >= STATEMENT_MIN_CHARS &&
+    vocabulary.modal.test(statement) &&
+    !vocabulary.subjectlessModal.test(statement)
+  );
+}
+
 function statementUnits(context: Context, covered: ReadonlySet<number>): readonly RawUnit[] {
   const occurrences = new Map<string, number>();
   const units: RawUnit[] = [];
   for (const paragraph of paragraphsOf(context, covered)) {
     for (const sentence of paragraph.text.split(SENTENCE_BREAK)) {
       const statement = collapse(sentence);
-      if (statement.length < STATEMENT_MIN_CHARS || !context.vocabulary.modal.test(statement))
-        continue;
+      if (!obligationStatement(context.vocabulary, statement)) continue;
       const wording = normalizedWording(statement);
       const occurrence = occurrences.get(wording) ?? 0;
       occurrences.set(wording, occurrence + 1);

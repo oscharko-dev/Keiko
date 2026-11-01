@@ -1184,7 +1184,12 @@ keeps the completed answer instead of failing the turn.
   merged, and an extractor-flattened HTML block is read from its inline keys. A statement with a
   modal verb and no identifier gets `DRV-<8 letters>`, the SHA-256 of the document identity and the
   normalized statement (plus an occurrence index for exact repeats), so it survives insertion and
-  renumbering and is not shared between documents. The same specification yields the same
+  renumbering and is not shared between documents. Such a statement names its subject (ISO/IEC/IEEE
+  29148): one that opens with a personal obligation phrase is a checklist fragment, not a
+  requirement (lab S14, 2026-11-01: the Jira structure guide's "- Muss dem Epic der Anforderung
+  zugeordnet sein" was reported twice as an untraced requirement). Impersonal phrases that carry
+  their own subject (`il faut`, `è necessario`) may open one; that list is vocabulary data too.
+  The same specification yields the same
   identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word,
   PowerPoint, PDF (one extracted line per statement line) and Excel extraction
   (`requirement-inventory-formats.integration`); PDF line wrapping is only as stable as its

@@ -326,6 +326,26 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
     expect(entry?.statement).toBe(sentence);
   });
 
+  // Lab S14 (2026-11-01): the Jira structure guide's checklist line "- Muss dem Epic der Anforderung
+  // zugeordnet sein" was counted twice as an untraced requirement of the specification.
+  it.each([
+    "- Muss dem Epic der Anforderung zugeordnet sein",
+    "* Must be linked to the epic of the requirement.",
+    "Soll vor dem Absenden geprüft werden.",
+    "- Darf nicht leer sein",
+  ])("does not take an obligation without a subject for a requirement: %s", (line) => {
+    expect(detect([line]).entries).toEqual([]);
+  });
+
+  it.each([
+    "Il faut chiffrer les données au repos.",
+    "È necessario cifrare i dati a riposo.",
+    "- Das Portal muss die Kundennummer prüfen.",
+    "Muss-Anforderung: Das System muss Daten verschlüsseln.",
+  ])("keeps an obligation that names its subject: %s", (line) => {
+    expect(detect([line]).entries.map((entry) => entry.idOrigin)).toEqual(["derived"]);
+  });
+
   it.each([
     "## HTTP-2 Support",
     "## AES-256",

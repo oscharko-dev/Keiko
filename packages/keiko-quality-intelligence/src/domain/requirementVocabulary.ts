@@ -21,6 +21,12 @@ export interface RequirementVocabulary {
   readonly statementKeys: readonly string[];
   /** Obligation phrases; a sentence containing one is a requirement statement. */
   readonly modalVerbs: readonly string[];
+  /**
+   * Obligation phrases that carry their own impersonal subject and may open a statement (`Il faut
+   * chiffrer…`). Any other phrase that opens a sentence leaves it without a subject: a checklist
+   * fragment (`Muss dem Epic zugeordnet sein`), not a requirement statement.
+   */
+  readonly impersonalModalVerbs: readonly string[];
   /** Identifier prefixes that name a standard or a technology, never a requirement. */
   readonly reservedPrefixes: readonly string[];
   /** Table header names per column role. */
@@ -172,6 +178,7 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "è necessario",
     "è richiesto",
   ],
+  impersonalModalVerbs: ["il faut", "è necessario", "è richiesto"],
   reservedPrefixes: [
     "AC",
     "TC",
@@ -258,6 +265,8 @@ export interface CompiledVocabulary {
   readonly inlineKey: RegExp;
   /** A sentence with an obligation phrase. */
   readonly modal: RegExp;
+  /** A sentence that opens with a personal obligation phrase, so it names no subject. */
+  readonly subjectlessModal: RegExp;
   /** A bracketed or parenthesized priority tag, e.g. `(MUSS)` or `[Must]`. */
   readonly priorityTag: RegExp;
   readonly priorityValues: ReadonlySet<string>;
@@ -309,6 +318,7 @@ export function mergeRequirementVocabulary(
     metaKeys: merge(base.metaKeys, extra.metaKeys),
     statementKeys: merge(base.statementKeys, extra.statementKeys),
     modalVerbs: merge(base.modalVerbs, extra.modalVerbs),
+    impersonalModalVerbs: merge(base.impersonalModalVerbs, extra.impersonalModalVerbs),
     reservedPrefixes: merge(base.reservedPrefixes, extra.reservedPrefixes),
     tableColumns: {
       id: columns("id"),
@@ -328,6 +338,12 @@ function tableRoleMap(vocabulary: RequirementVocabulary): ReadonlyMap<string, Ta
   ][])
     for (const name of names) roles.set(foldTerm(name), role);
   return roles;
+}
+
+/** Obligation phrases that need a subject before them: every one that is not impersonal. */
+function personalModals(vocabulary: RequirementVocabulary): string {
+  const impersonal = new Set(vocabulary.impersonalModalVerbs.map((term) => foldTerm(term)));
+  return alternation(vocabulary.modalVerbs.filter((term) => !impersonal.has(foldTerm(term))));
 }
 
 export function compileRequirementVocabulary(
@@ -350,6 +366,7 @@ export function compileRequirementVocabulary(
       `${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}`,
       "iu",
     ),
+    subjectlessModal: new RegExp(String.raw`^(?:${personalModals(vocabulary)})(?=\s)`, "iu"),
     priorityTag: new RegExp(String.raw`[(\[]\s*(${values})\s*[)\]]`, "iu"),
     priorityValues: new Set(vocabulary.priorityValues.map((value) => foldTerm(value))),
     reservedPrefixes: new Set(vocabulary.reservedPrefixes.map((prefix) => prefix.toUpperCase())),
