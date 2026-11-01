@@ -85,6 +85,12 @@ nine-case producer ran again on 2026-10-31 (UTC) on macOS arm64 with Node 24.22.
 renderer; the three records again bind every declared source and harness digest. No updater
 behavior, baseline or numerical ceiling changed. This remains updater fixture evidence.
 
+The partly refused draft guidance (#4178, PR #4182) changed the optional German message catalog
+again. The complete original nine-case producer ran on 2026-11-01 (UTC) on macOS arm64 with Node
+24.22.0 and passed in 1.4 minutes, including real BFF stop/restart; this host's renderer rewrote two
+captures and the three records rebind every declared digest. No updater behavior, baseline or
+numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
