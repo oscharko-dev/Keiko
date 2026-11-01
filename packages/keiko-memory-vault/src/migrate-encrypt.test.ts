@@ -12,7 +12,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { insertMemoryRow } from "./memories.js";
 import { encryptExistingContent } from "./migrate-encrypt.js";
 import { makeRecord, memId, openTestDb, TEST_CIPHER } from "./_support.js";
-import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import type {
+  MemoryVaultLogEvent,
+  MemoryVaultLogTransport,
+  MemoryVaultLogSink,
+} from "./vault-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -22,8 +26,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogEvent[] } {
-  const events: MemoryVaultLogEvent[] = [];
+function recordingSink(): { sink: MemoryVaultLogSink; events: MemoryVaultLogTransport[] } {
+  const events: MemoryVaultLogTransport[] = [];
   return {
     sink: {
       write: (event): void => {
@@ -75,7 +79,7 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
     const rowsMigrated = (event?.extra as { rowsMigrated?: unknown } | undefined)?.rowsMigrated;
     expect(typeof rowsMigrated).toBe("number");
     expect(rowsMigrated as number).toBeGreaterThanOrEqual(1);
-    expect(typeof event?.durationMs).toBe("number");
+    expect(typeof normalFixtureEvent(event)?.durationMs).toBe("number");
     const persisted = expectActivityLogProof(
       "memory-vault.store.encryption-migrated.rows",
       formatActivityLogProofLine(event ?? {}),
@@ -156,3 +160,16 @@ describe("encryptExistingContent — memory-vault.store.encryption-migrated even
     db.close();
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: MemoryVaultLogTransport): MemoryVaultLogEvent;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined {
+  if (event?.op === "server-log.write-failed")
+    throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

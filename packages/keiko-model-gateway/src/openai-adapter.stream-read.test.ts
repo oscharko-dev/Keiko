@@ -17,6 +17,7 @@ import { OpenAiAdapter } from "./openai-adapter.js";
 import {
   activityLogErrorKind,
   logModelId,
+  type ModelGatewayLogTransport,
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -93,14 +94,14 @@ function sse(lines: readonly string[]): Response {
 }
 
 function recorder(): {
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
   readonly sink: ModelGatewayLogSink;
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     sink: {
-      write(event: ModelGatewayLogEvent): void {
+      write(event: ModelGatewayLogTransport): void {
         events.push(event);
       },
     },
@@ -127,7 +128,9 @@ async function answerOf(stream: AsyncIterable<GatewayStreamChunk>): Promise<Norm
   return answer;
 }
 
-function streamedLine(events: readonly ModelGatewayLogEvent[]): ModelGatewayLogEvent | undefined {
+function streamedLine(
+  events: readonly ModelGatewayLogTransport[],
+): ModelGatewayLogTransport | undefined {
   return events.find((event) => event.op === "chat.response.streamed");
 }
 
@@ -344,10 +347,11 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     ).resolves.toMatchObject({ content: "ok" });
 
     const loggedModelId = logModelId(modelId);
-    expect(log.events.find((event) => event.op === "chat.request.dispatch")?.extra?.modelId).toBe(
-      loggedModelId,
-    );
-    expect(streamedLine(log.events)?.extra?.modelId).toBe(loggedModelId);
+    expect(
+      normalFixtureEvent(log.events.find((event) => event.op === "chat.request.dispatch"))?.extra
+        ?.modelId,
+    ).toBe(loggedModelId);
+    expect(normalFixtureEvent(streamedLine(log.events))?.extra?.modelId).toBe(loggedModelId);
     expect(JSON.stringify(log.events)).not.toContain(modelId);
 
     // Activity Log proof (#3532): the settled stream-outcome line as the production file sink
@@ -639,3 +643,15 @@ describe("OpenAiAdapter.callStream through a LiteLLM proxy", () => {
     await expect(reading).rejects.toThrow(/mid-stream/u);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

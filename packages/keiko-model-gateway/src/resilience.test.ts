@@ -28,7 +28,7 @@ import {
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import type { Clock } from "./types.js";
 import {
   expectActivityLogProof,
@@ -200,7 +200,7 @@ describe("executeWithRetry", () => {
     "names a $reason stop on the exhausted line",
     async ({ reason, error, calls: expectedCalls }) => {
       const { clock } = stubClock();
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       let calls = 0;
       await expect(
         executeWithRetry(
@@ -407,7 +407,7 @@ describe("executeWithRetry", () => {
   // once with the last error, named for the budget, instead of sleeping the rest of it away first.
   it("ends the call at once when the next delay does not fit the remaining budget", async () => {
     const { clock, sleeps, advance } = stubClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     await expect(
       executeWithRetry(
@@ -465,7 +465,7 @@ describe("executeWithRetry", () => {
 
   it("ends a call whose rejection is not an Error at once, as terminal", async () => {
     const { clock, sleeps } = stubClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     await expect(
       executeWithRetry(
@@ -491,7 +491,7 @@ describe("executeWithRetry", () => {
 
   it("ends the call at once when the next delay exactly equals the remaining budget", async () => {
     const { clock, sleeps, advance } = stubClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     await expect(
       executeWithRetry(
@@ -1037,10 +1037,10 @@ describe("executeWithRetry — steered repair (#3873 F17)", () => {
     "repairable" in error ? "output-exhausted-repair" : undefined;
 
   function recorder(): {
-    events: ModelGatewayLogEvent[];
-    sink: { write(e: ModelGatewayLogEvent): void };
+    events: ModelGatewayLogTransport[];
+    sink: { write(e: ModelGatewayLogTransport): void };
   } {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     return { events, sink: { write: (event): void => void events.push(event) } };
   }
 
@@ -1197,7 +1197,7 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
 
   it("names the empty-answer repair on its scheduled line, once, and never retries it as a provider error", async () => {
     const { clock, sleeps } = stubClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let calls = 0;
     await expect(
       executeWithRetry(
@@ -1229,7 +1229,7 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
 
   it("resumes after an attempt that already ran, granting the empty-answer repair at once", async () => {
     const { clock, sleeps } = stubClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const seen: (Error | undefined)[] = [];
     const failedAttempt = new ProviderEmptyAnswerError("m", [], true);
     const value = await executeWithRetry(
@@ -1255,7 +1255,7 @@ describe("steeredAnswerRepair (#3873 F17, F23)", () => {
   // one repair. Starting from attempt 1 with no repair would grant a second steered repair below.
   it("continues the call's attempt count and its one repair when it resumes", async () => {
     const { clock } = stubClock();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const exhausted = new ProviderOutputExhaustedError("m");
     let calls = 0;
     const failure = await executeWithRetry(
@@ -1720,7 +1720,7 @@ describe("retry announcer — an observer that throws (#3873 review)", () => {
   const THROWN_TEXT = "observer exploded with key sk-ABCDEFGHIJKLMNOPQRSTUV";
 
   interface ThrowingCall {
-    readonly events: ModelGatewayLogEvent[];
+    readonly events: ModelGatewayLogTransport[];
     readonly context: RetryLogContext;
     readonly labels: RetryLogLabels;
   }
@@ -1728,7 +1728,7 @@ describe("retry announcer — an observer that throws (#3873 review)", () => {
   // An observer that throws on the given notices and hears the rest; its message is the kind of
   // text a log line must never carry.
   function throwingCall(throwsOn: ReadonlySet<GatewayRetryNotice["kind"]>): ThrowingCall {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const labels: RetryLogLabels = {
       sink: { write: (event): void => void events.push(event) },
       modelId: "observer-model",
@@ -1740,8 +1740,10 @@ describe("retry announcer — an observer that throws (#3873 review)", () => {
     return { events, labels, context: { ...labels, announcer: retryAnnouncer(observer, labels) } };
   }
 
-  const failedNotices = (events: readonly ModelGatewayLogEvent[]): unknown[] =>
-    events.filter((event) => event.op === FAILED).map((event) => event.extra?.notice);
+  const failedNotices = (events: readonly ModelGatewayLogTransport[]): unknown[] =>
+    events
+      .filter((event) => event.op === FAILED)
+      .map((event) => normalFixtureEvent(event).extra?.notice);
 
   // The provider fails `failures` times with a retryable transport error, then answers.
   function recovering(failures: number): {
@@ -1890,7 +1892,10 @@ describe("retry announcer — an observer that throws (#3873 review)", () => {
     admission.settle("success");
 
     const waits = events.filter((event) => event.op === "gateway.circuit.wait");
-    expect(waits.map((line) => line.extra?.outcome)).toEqual(["started", "timer"]);
+    expect(waits.map((line) => normalFixtureEvent(line).extra?.outcome)).toEqual([
+      "started",
+      "timer",
+    ]);
     expect(failedNotices(events)).toEqual(["admission-wait"]);
   });
 
@@ -1927,7 +1932,7 @@ describe("retry announcer — an observer that throws (#3873 review)", () => {
   });
 
   it("labels the throw of an announcer built without a correlation id with the unknown one", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const announcer = retryAnnouncer(
       (): void => {
         throw new Error(THROWN_TEXT);
@@ -1945,3 +1950,15 @@ describe("retry announcer — an observer that throws (#3873 review)", () => {
     expect(events[0]?.extra).not.toHaveProperty("modelId");
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

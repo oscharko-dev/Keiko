@@ -1,0 +1,189 @@
+{
+  "version": 1,
+  "increases": [
+    {
+      "path": "packages/keiko-contracts/src/activity-log-field-contracts.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-field-contracts.test.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 0,
+      "to": 12,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 10,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 0,
+      "to": 5,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-reflect-apply",
+      "from": 0,
+      "to": 8,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 3,
+      "to": 12,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 14,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 12,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.ts",
+      "rule": "anti-slop/no-object-parameters",
+      "from": 9,
+      "to": 19,
+      "reason": "qualified-boundary",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 24,
+      "to": 35,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/observability.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 9,
+      "to": 20,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/__fixtures__/speech-routing-contract.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/gateway.output-repair.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 14,
+      "to": 15,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts",
+      "rule": "anti-slop/no-conditional-empty-object-spread",
+      "from": 0,
+      "to": 1,
+      "reason": "proof-fixture",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-security/src/log-port.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "scripts/__tests__/semantic-duplication.test.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "scripts/check-semantic-duplication.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/log-classifier-observations.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/log-classifier-observations.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 0,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "tests/support/recording-log-sink.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 0,
+      "to": 2,
+      "reason": "proof-fixture",
+      "issue": 3918
+    }
+  ]
+}

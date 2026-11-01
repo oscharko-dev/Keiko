@@ -10,7 +10,7 @@ import {
   ProviderOutputExhaustedError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogSink } from "./observability.js";
 import type {
   GatewayRequest,
   GatewayStreamChunk,
@@ -59,10 +59,10 @@ function json(payload: unknown): Response {
 }
 
 function recorder(): {
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
   readonly sink: ModelGatewayLogSink;
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return { events, sink: { write: (event): void => void events.push(event) } };
 }
 

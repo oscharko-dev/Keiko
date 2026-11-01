@@ -7,6 +7,7 @@ import {
   type ActivityLogEventEnvelope,
   type ActivityLogFields,
   type RegisteredActivityLogEvent,
+  type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
@@ -62,8 +63,11 @@ export type InstallLayoutNormalizedActivityLogEvent = RegisteredActivityLogEvent
     readonly extra: ActivityLogFields<typeof INSTALL_LAYOUT_NORMALIZED_OPERATION>;
   };
 
+export type InstallLayoutActivityLogTransport =
+  InstallLayoutNormalizedActivityLogEvent | RejectedActivityLogEvent;
+
 interface InstallLayoutEvidenceSink {
-  readonly write: (event: InstallLayoutNormalizedActivityLogEvent) => void;
+  readonly write: (event: InstallLayoutActivityLogTransport) => void;
 }
 
 type InstallLayoutEvidenceSinkFactory = (stateDir: string) => InstallLayoutEvidenceSink;
@@ -104,7 +108,7 @@ export function installLayoutOverrideEvidence(
 
 export function installLayoutOverrideActivityLogEvent(
   evidence: InstallLayoutOverrideEvidence,
-): InstallLayoutNormalizedActivityLogEvent {
+): InstallLayoutActivityLogTransport {
   return activityLogEvent(
     INSTALL_LAYOUT_NORMALIZED_OPERATION,
     { level: "info", correlationId: evidence.correlationId },

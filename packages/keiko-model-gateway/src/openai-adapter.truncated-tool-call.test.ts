@@ -10,7 +10,7 @@ import {
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import { steeredAnswerRepair } from "./resilience.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
 
 const NOW = Date.parse("2026-10-28T00:00:00Z");
@@ -28,7 +28,10 @@ const REQUEST: GatewayRequest = {
 };
 const CUT_ARGUMENTS = '{"filePath":"a.ts","content":"const x = ';
 
-function adapterFor(response: () => Response, events: ModelGatewayLogEvent[] = []): OpenAiAdapter {
+function adapterFor(
+  response: () => Response,
+  events: ModelGatewayLogTransport[] = [],
+): OpenAiAdapter {
   return new OpenAiAdapter({
     log: { write: (event): void => void events.push(event) },
     fetchImpl: (): Promise<Response> => Promise.resolve(response()),
@@ -147,7 +150,7 @@ describe("streamed tool-call fragments without a numeric index", () => {
   }
 
   it("places an unindexed fragment by its array position instead of dropping it", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const adapter = adapterFor(
       () =>
         sse([
@@ -249,7 +252,7 @@ describe("streamed tool-call fragments without a numeric index", () => {
   });
 
   it("counts a fragment that is not an object as dropped instead of losing it silently", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const adapter = adapterFor(
       () =>
         sse([

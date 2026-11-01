@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { requestLiteLLMRerank, type LiteLLMRerankRequest } from "./rerank-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogSink } from "./observability.js";
 
 const SECRET_API_KEY = "sk-rerank-secret-1234567890";
 const QUERY = "Which policy mentions alpha?";
@@ -224,9 +224,9 @@ describe("requestLiteLLMRerank", () => {
   // The rerank transport used to call `gatewayFetch` without a sink, so a failing reranker wrote
   // its `http.gateway.fetch.failed` line into the null sink and only bumped `portUnwired`.
   it("writes the transport failure line to the supplied sink under the caller correlation id", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const log: ModelGatewayLogSink = {
-      write(event: ModelGatewayLogEvent): void {
+      write(event: ModelGatewayLogTransport): void {
         events.push(event);
       },
     };

@@ -7,7 +7,11 @@ import {
   runMigrations,
 } from "./schema.js";
 import { TEST_CIPHER } from "./_support.js";
-import type { MemoryVaultLogEvent, MemoryVaultLogSink } from "./vault-log.js";
+import type {
+  MemoryVaultLogEvent,
+  MemoryVaultLogTransport,
+  MemoryVaultLogSink,
+} from "./vault-log.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -258,12 +262,12 @@ describe("flushPlaintextResidueWithRetry", () => {
 
   function collectingSink(): {
     readonly sink: MemoryVaultLogSink;
-    readonly events: MemoryVaultLogEvent[];
+    readonly events: MemoryVaultLogTransport[];
   } {
-    const events: MemoryVaultLogEvent[] = [];
+    const events: MemoryVaultLogTransport[] = [];
     return {
       sink: {
-        write(event: MemoryVaultLogEvent): void {
+        write(event: MemoryVaultLogTransport): void {
           events.push(event);
         },
       },
@@ -292,14 +296,7 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(() => {
       flushPlaintextResidueWithRetry(fake.db, sink);
     }).not.toThrow();
-    const degraded = events.find(
-      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
-    );
-    expect(degraded).toBeDefined();
-    expect(degraded?.errorKind).toBe("durability-failed");
-    expect(degraded?.extra?.attempts).toBe(3);
-    expect(degraded?.extra?.busy).toBe(false);
-    expect(degraded?.extra?.failureKind).toBe("Error");
+    expectDegradedCheckpoint(events, false, "Error");
     expect(fake.calls.count).toBe(3);
   });
 
@@ -308,14 +305,7 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(3);
-    const degraded = events.find(
-      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
-    );
-    expect(degraded).toBeDefined();
-    expect(degraded?.errorKind).toBe("durability-failed");
-    expect(degraded?.extra?.attempts).toBe(3);
-    expect(degraded?.extra?.busy).toBe(true);
-    expect(degraded?.extra?.failureKind).toBe("checkpoint-busy-retries-exhausted");
+    const degraded = expectDegradedCheckpoint(events, true, "checkpoint-busy-retries-exhausted");
     const persisted = expectActivityLogProof(
       "memory-vault.store.encryption-checkpoint-degraded.state",
       formatActivityLogProofLine(degraded ?? {}),
@@ -353,16 +343,9 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(3);
-    const degraded = events.find(
-      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
-    );
-    expect(degraded).toBeDefined();
-    expect(degraded?.errorKind).toBe("durability-failed");
-    expect(degraded?.extra?.attempts).toBe(3);
     // busy===0 on every attempt, so the degraded report's own "busy" summary must reflect that
     // (not misreport a partial checkpoint as a busy-contention one).
-    expect(degraded?.extra?.busy).toBe(false);
-    expect(degraded?.extra?.failureKind).toBe("checkpoint-incomplete-retries-exhausted");
+    expectDegradedCheckpoint(events, false, "checkpoint-incomplete-retries-exhausted");
   });
 
   // A malformed/short PRAGMA result row (missing or non-integer columns) must fail closed into
@@ -374,13 +357,34 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(3);
-    const degraded = events.find(
-      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
-    );
-    expect(degraded).toBeDefined();
-    expect(degraded?.errorKind).toBe("durability-failed");
-    expect(degraded?.extra?.attempts).toBe(3);
-    expect(degraded?.extra?.busy).toBe(false);
-    expect(degraded?.extra?.failureKind).toBe("checkpoint-result-malformed");
+    expectDegradedCheckpoint(events, false, "checkpoint-result-malformed");
   });
 });
+
+/** The one degraded-checkpoint report after three attempts, with its busy summary and kind. */
+function expectDegradedCheckpoint(
+  events: readonly MemoryVaultLogTransport[],
+  busy: boolean,
+  failureKind: string,
+): MemoryVaultLogTransport | undefined {
+  const degraded = events.find((e) => e.op === "memory-vault.store.encryption-checkpoint-degraded");
+  expect(degraded).toBeDefined();
+  expect(normalFixtureEvent(degraded)?.errorKind).toBe("durability-failed");
+  expect(normalFixtureEvent(degraded)?.extra?.attempts).toBe(3);
+  expect(normalFixtureEvent(degraded)?.extra?.busy).toBe(busy);
+  expect(normalFixtureEvent(degraded)?.extra?.failureKind).toBe(failureKind);
+  return degraded;
+}
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: MemoryVaultLogTransport): MemoryVaultLogEvent;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined;
+function normalFixtureEvent(
+  event: MemoryVaultLogTransport | undefined,
+): MemoryVaultLogEvent | undefined {
+  if (event?.op === "server-log.write-failed")
+    throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

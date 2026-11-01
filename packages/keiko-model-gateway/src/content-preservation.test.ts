@@ -14,7 +14,7 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 
 const CONTENT = [
   "Contact: +49 30 12345678",
@@ -42,7 +42,7 @@ const PRESERVE: GatewayCallRequest = { ...REQUEST, contentRedaction: "preserve" 
 
 afterEach(() => vi.unstubAllEnvs());
 
-function adapter(response: Response, events: ModelGatewayLogEvent[] = []): OpenAiAdapter {
+function adapter(response: Response, events: ModelGatewayLogTransport[] = []): OpenAiAdapter {
   return new OpenAiAdapter({
     requestId: "fixture-request",
     costClass: "low",
@@ -66,14 +66,14 @@ function streamedResponse(parts: readonly string[]): Response {
   });
 }
 
-function dispatchPolicy(events: readonly ModelGatewayLogEvent[]): unknown {
-  return events.find((event) => event.op === "chat.request.dispatch")?.extra
-    ?.contentRedactionEnabled;
+function dispatchPolicy(events: readonly ModelGatewayLogTransport[]): unknown {
+  const event = events.find((candidate) => candidate.op === "chat.request.dispatch");
+  return event?.category === "diagnostic" ? undefined : event?.extra?.contentRedactionEnabled;
 }
 
 describe("provider content preservation", () => {
   it("preserves a Chat answer that asks for it and records only the selected policy", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const result = await adapter(
       bufferedResponse(CONTENT + CONFIG.apiKey + " " + ISSUER_TOKEN),
       events,
@@ -103,7 +103,7 @@ describe("provider content preservation", () => {
 
   it("keeps the default projection for every call that does not ask, whatever the environment", async () => {
     vi.stubEnv("KEIKO_CONTENT_REDACTION", "off");
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const result = await adapter(bufferedResponse(CONTENT), events).call(REQUEST, CONFIG);
     expect(result.content).not.toContain("+49 30 12345678");
     expect(result.content).not.toContain("customer-owned-example");

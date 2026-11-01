@@ -15,7 +15,7 @@ import {
   type RetryAnnouncer,
 } from "./resilience.js";
 import type { Clock } from "./types.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -27,9 +27,9 @@ function fixture(
   clock: Clock = systemClock,
 ): {
   breaker: CircuitBreaker;
-  events: ModelGatewayLogEvent[];
+  events: ModelGatewayLogTransport[];
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     breaker: new CircuitBreaker(
@@ -45,11 +45,11 @@ function fixture(
   };
 }
 
-function retryEvents(events: ModelGatewayLogEvent[]): ModelGatewayLogEvent[] {
+function retryEvents(events: ModelGatewayLogTransport[]): ModelGatewayLogTransport[] {
   return events.filter((event) => event.op.startsWith("gateway.retry."));
 }
 
-function waitEvents(events: ModelGatewayLogEvent[]): ModelGatewayLogEvent[] {
+function waitEvents(events: ModelGatewayLogTransport[]): ModelGatewayLogTransport[] {
   return events.filter((event) => event.op === "gateway.circuit.wait");
 }
 
@@ -246,7 +246,9 @@ describe("provider admission decisions", () => {
     successful.settle("success");
     cancelled.settle("non-provider-fault");
     await vi.advanceTimersByTimeAsync(0);
-    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["started"]);
+    expect(waitEvents(events).map((event) => normalFixtureEvent(event).extra?.outcome)).toEqual([
+      "started",
+    ]);
     controller.abort();
     expect(await result).toBeInstanceOf(CancelledError);
     expect(vi.getTimerCount()).toBe(0);
@@ -264,7 +266,7 @@ describe("provider admission decisions", () => {
       .catch((error: unknown) => error);
     await vi.advanceTimersByTimeAsync(50);
     expect(await result).toBeInstanceOf(CircuitOpenError);
-    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual([
+    expect(waitEvents(events).map((event) => normalFixtureEvent(event).extra?.outcome)).toEqual([
       "started",
       "timer",
       "budget-refused",
@@ -336,7 +338,10 @@ describe("provider admission decisions", () => {
       await vi.advanceTimersByTimeAsync(1);
       await pending;
       expect(settled).toHaveBeenCalledTimes(1);
-      expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["started", "timer"]);
+      expect(waitEvents(events).map((event) => normalFixtureEvent(event).extra?.outcome)).toEqual([
+        "started",
+        "timer",
+      ]);
       for (const event of waitEvents(events))
         expect(
           expectActivityLogProof(
@@ -365,7 +370,10 @@ describe("provider admission decisions", () => {
     await expect(
       breaker.waitForAdmission({ remainingMs: 200, jitterMs: 1, signal: controller.signal }),
     ).rejects.toBe(failure);
-    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["started", "failed"]);
+    expect(waitEvents(events).map((event) => normalFixtureEvent(event).extra?.outcome)).toEqual([
+      "started",
+      "failed",
+    ]);
     for (const event of waitEvents(events))
       expectActivityLogProof(
         "gateway.circuit.wait.emitted-line",
@@ -422,7 +430,7 @@ describe("provider admission decisions", () => {
     await vi.advanceTimersByTimeAsync(0);
     parallel.settle("failure", new ProviderError("Synthetic longer outage", 503, [], 500));
     await vi.advanceTimersByTimeAsync(0);
-    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual([
+    expect(waitEvents(events).map((event) => normalFixtureEvent(event).extra?.outcome)).toEqual([
       "started",
       "changed",
       "started",
@@ -532,9 +540,9 @@ describe("admission wait announcements", () => {
     await vi.advanceTimersByTimeAsync(0);
     controller.abort();
     expect(await result).toBeInstanceOf(CancelledError);
-    expect(waitEvents(events).filter((event) => event.extra?.outcome === "started")).toHaveLength(
-      2,
-    );
+    expect(
+      waitEvents(events).filter((event) => normalFixtureEvent(event).extra?.outcome === "started"),
+    ).toHaveLength(2);
     expect(notices.map((notice) => notice.kind)).toEqual(["admission-wait", "admission-wait"]);
   });
 
@@ -555,7 +563,9 @@ describe("admission wait announcements", () => {
       breaker.waitForAdmission({ remainingMs: 50, jitterMs: 1, announcer }),
     ).rejects.toBeInstanceOf(CircuitOpenError);
     expect(notices).toEqual([]);
-    expect(waitEvents(events).map((event) => event.extra?.outcome)).toEqual(["budget-refused"]);
+    expect(waitEvents(events).map((event) => normalFixtureEvent(event).extra?.outcome)).toEqual([
+      "budget-refused",
+    ]);
   });
 
   it("waits the same, line for line, whether or not it is announced", async () => {
@@ -578,3 +588,15 @@ describe("admission wait announcements", () => {
     expect(await lines(true)).toEqual(await lines(false));
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

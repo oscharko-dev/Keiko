@@ -62,6 +62,19 @@ describe("transitionJob - legal transitions", () => {
     expect(next.result?.state).toBe("completed");
   });
 
+  it.each<[string, Partial<Pick<ConsolidationJob, "result" | "completedAt" | "error">>]>([
+    ["an empty patch", {}],
+    ["completedAt alone", { completedAt: FIXED_NOW_MS + 5 }],
+    ["completedAt and error", { completedAt: FIXED_NOW_MS + 5, error: "engine-failed" }],
+    ["error alone", { error: "engine-failed" }],
+    ["result and error", { result: emptyCompletedResult(), error: "engine-failed" }],
+  ])("sets exactly the fields of %s", (_label, patch) => {
+    const job: ConsolidationJob = { id: "j", state: "running", startedAt: FIXED_NOW_MS };
+    const next = transitionJob(job, "failed", patch);
+    expect(next).toStrictEqual({ id: "j", state: "failed", startedAt: FIXED_NOW_MS, ...patch });
+    expect(next).not.toBe(job);
+  });
+
   it("does not mutate the input job", () => {
     const job: ConsolidationJob = Object.freeze({ id: "j", state: "queued" });
     expect(() => transitionJob(job, "running")).not.toThrow();

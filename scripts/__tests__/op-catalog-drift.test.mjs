@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { format } from "prettier";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -869,11 +870,8 @@ describe("op catalog drift", () => {
         const registry = generateTypedActivityLogRegistry(root, []);
         expect(registry.operations).toHaveLength(1);
         expect(registry.operations[0].diagnosticWhen).toEqual(conditions);
-        const module = runtimeOperationsModule(registry);
-        const operations = JSON.parse(
-          module.slice(module.indexOf("=") + 1, module.lastIndexOf("as const")),
-        );
-        expect(operations[0].diagnosticWhen).toEqual(conditions);
+        // The emitted-module diagnosticWhen assertion is preserved and strengthened in
+        // activity-log-runtime-module.test.mjs with real helper loading and omission controls.
       },
     );
   });
@@ -1149,6 +1147,23 @@ describe("op catalog drift", () => {
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
+  it(
+    "pins the complete operation source to the canonical producer",
+    async () => {
+      const regenerated = await format(runtimeOperationsModule(generateCurrentTypedRegistry()), {
+        parser: "typescript",
+        printWidth: 100,
+        tabWidth: 2,
+      });
+      const checkedIn = readFileSync(
+        join(repoRoot, "packages/keiko-contracts/src/activity-log-operations.generated.ts"),
+        "utf8",
+      );
+      expect(checkedIn).toBe(regenerated);
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
+
   it("matches the checked-in file in generated order", async () => {
     const regenerated = await formatGeneratedJson(generateCurrentOpCatalog());
     const checkedIn = await canonicalGeneratedJsonBytes(readFileSync(CATALOG_PATH, "utf8"));
@@ -1777,4 +1792,963 @@ describe("diagnostic operation projection rules", () => {
     delete diagnostic.sourceKind;
     expect(provenance).not.toEqual(generated);
   });
+});
+
+function fieldConstructorRegistration(expression, prelude = "", imports = "") {
+  return (
+    diagnosticRegistrationSource(undefined)
+      .replace("defineActivityLogOperation({", `${prelude}\ndefineActivityLogOperation({`)
+      .replace(
+        '"errorCount":{"type":"integer","dataClass":"count","required":true}',
+        `"errorCount":${expression}`,
+      ) + `\n${imports}\n`
+  );
+}
+
+function inspectFieldConstructor(expression, check, prelude = "", extraFiles = {}) {
+  const source = fieldConstructorRegistration(
+    expression,
+    prelude,
+    'import { activityLogCountField as count, activityLogStringEnumField as enumeration } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+  );
+  withTypedRegistryFixture(
+    "zzz-fixture-diagnostic",
+    source,
+    (root) => {
+      check(generateTypedActivityLogRegistry(root, []));
+    },
+    extraFiles,
+  );
+}
+
+describe("canonical field constructor declaration admission", () => {
+  it("admits actual imported aliases and true reexports", () => {
+    inspectFieldConstructor("count(true)", (registry) => {
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].fields.errorCount).toEqual({
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      });
+    });
+    inspectFieldConstructor(
+      "forwarded(true)",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+      },
+      'import { forwarded } from "./reexport.js";',
+      {
+        "packages/zzz-fixture-diagnostic/src/reexport.ts":
+          'export { activityLogCountField as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each([
+    [
+      "substitute(true)",
+      'const substitute: typeof count = (_required) => ({ type: "integer", dataClass: "count", required: _required });',
+    ],
+    ["local(true)", "function local(required: boolean) { return count(required); }"],
+    [
+      "activityLogCountField(true)",
+      'function activityLogCountField(required: boolean) { return { type: "integer", dataClass: "count", required }; }',
+    ],
+    ["holder.count(true)", "const holder = { count };"],
+    ["getter.count(true)", "const getter = { get count() { return count; } };"],
+    ["count(dynamic)", "let dynamic = true;"],
+    ["count(callback())", "const callback = () => true;"],
+    ["count(...args)", "const args = [true] as const;"],
+    ["count(cycle)", "const cycle = cycle;"],
+    ["count(true, false)", ""],
+    ["count(enumeration(true, ['ready']))", ""],
+  ])("refuses noncanonical or nonliteral constructor expansion: %s", (expression, prelude) => {
+    inspectFieldConstructor(
+      expression,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      prelude,
+    );
+  });
+
+  it("refuses alias laundering of a typeof-canonical local substitute", () => {
+    inspectFieldConstructor(
+      "laundered(true)",
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      'import { laundered } from "./substitute.js";',
+      {
+        "packages/zzz-fixture-diagnostic/src/substitute.ts":
+          'import { activityLogCountField } from "../../keiko-contracts/src/activity-log-field-contracts.js"; const local: typeof activityLogCountField = (required) => ({ type: "integer", dataClass: "count", required }); export { local as laundered };',
+      },
+    );
+  });
+
+  it.each([64, 65])("retains the existing closed vocabulary cardinality at %i", (count) => {
+    const values = Array.from({ length: count }, (_, index) => `value-${index}`);
+    inspectFieldConstructor(`enumeration(true, ${JSON.stringify(values)})`, (registry) => {
+      expect(registry.operations).toHaveLength(count === 64 ? 1 : 0);
+    });
+  });
+
+  it.each([254, 255])(
+    "bounds only helper argument work at the exact boundary (%i aliases)",
+    (length) => {
+      const declarations = [
+        "const flag0 = true;",
+        ...Array.from({ length }, (_, index) => `const flag${index + 1} = flag${index};`),
+      ];
+      inspectFieldConstructor(
+        `count(flag${length})`,
+        (registry) => {
+          expect(registry.operations).toHaveLength(length === 254 ? 1 : 0);
+        },
+        declarations.join("\n"),
+      );
+    },
+  );
+
+  it("includes compiler errors in the canonical helper module", () => {
+    const helperPath = "packages/keiko-contracts/src/activity-log-field-contracts.ts";
+    const helper = readFileSync(join(repoRoot, helperPath), "utf8");
+    inspectFieldConstructor(
+      "count(true)",
+      (registry) => {
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({
+            code: "typescript-diagnostic",
+            site: expect.stringContaining("activity-log-field-contracts.ts"),
+          }),
+        );
+      },
+      "",
+      { [helperPath]: helper + '\nconst invalidHelperValue: boolean = "wrong";\n' },
+    );
+  });
+});
+
+it("refuses unknown functions exported beside canonical field constructors", () => {
+  const helperPath = "packages/keiko-contracts/src/activity-log-field-contracts.ts";
+  const helper = readFileSync(join(repoRoot, helperPath), "utf8");
+  inspectFieldConstructor(
+    "unknownField(true)",
+    (registry) => {
+      expect(registry.operations).toEqual([]);
+      expect(registry.violations).toContainEqual(
+        expect.objectContaining({ code: "registration-not-literal" }),
+      );
+    },
+    'import { unknownField } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    {
+      [helperPath]:
+        helper +
+        "\nexport function unknownField(required: boolean) { return activityLogCountField(required); }\n",
+    },
+  );
+});
+
+it.each([[], ["not a closed token"], [true]].map((values) => [values]))(
+  "refuses malformed constructor vocabularies: %j",
+  (values) => {
+    inspectFieldConstructor(`enumeration(true, ${JSON.stringify(values)})`, (registry) => {
+      expect(registry.operations).toEqual([]);
+      expect(registry.violations).toContainEqual(
+        expect.objectContaining({ code: "registration-not-literal" }),
+      );
+    });
+  },
+);
+
+it("retains ordinary registration validation after canonical helper expansion", () => {
+  inspectFieldConstructor("{ ...count(true), maxLength: 9000 }", (registry) => {
+    expect(registry.operations).toEqual([]);
+    expect(registry.violations).toContainEqual(
+      expect.objectContaining({ code: "registration-invalid" }),
+    );
+  });
+});
+
+// ACTIVITY-REGISTRY-ENUM-VOCABULARY-001: field values use their existing grammar,
+// which admits digit-leading and punctuation-bearing values beyond operation identifiers.
+it.each([{ values: ["404"] }, { values: ["provider:model"] }])(
+  "preserves literal-versus-constructor admission for $values",
+  ({ values }) => {
+    const descriptor = { type: "string", dataClass: "closed-enum", required: true, values };
+    let literal;
+    inspectFieldConstructor(JSON.stringify(descriptor), (registry) => {
+      expect(registry.operations).toHaveLength(1);
+      literal = registry.operations[0].fields.errorCount;
+      expect(literal).toEqual(descriptor);
+    });
+    inspectFieldConstructor(`enumeration(true, ${JSON.stringify(values)})`, (registry) => {
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].fields.errorCount).toEqual(literal);
+    });
+  },
+);
+
+// ACTIVITY-REGISTRY-CALLEE-ROOT-001: a canonical-looking suffix under another package
+// is an unrelated local declaration, including when reached through a genuine reexport.
+const NESTED_FIELD_LOOKALIKE =
+  "packages/zzz-fixture-diagnostic/src/fixtures/packages/keiko-contracts/src/activity-log-field-contracts.ts";
+const NESTED_FIELD_SOURCE =
+  'export function activityLogCountField(required: boolean): { readonly type: "integer"; readonly dataClass: "duration"; readonly required: boolean } { return { type: "integer", dataClass: "duration", required }; }';
+
+describe("canonical Activity Log declaration repository root", () => {
+  it.each([
+    {
+      call: "nestedCount(true)",
+      prelude:
+        'import { activityLogCountField as nestedCount } from "./fixtures/packages/keiko-contracts/src/activity-log-field-contracts.js";',
+    },
+    {
+      call: "reexportedCount(true)",
+      prelude: 'import { reexportedCount } from "./nested-fields.js";',
+    },
+  ])("refuses an error-free nested field lookalike: $call", ({ call, prelude }) => {
+    inspectFieldConstructor(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+        expect(
+          registry.violations.some((violation) => violation.code === "typescript-diagnostic"),
+        ).toBe(false);
+      },
+      prelude,
+      {
+        [NESTED_FIELD_LOOKALIKE]: NESTED_FIELD_SOURCE,
+        "packages/zzz-fixture-diagnostic/src/nested-fields.ts":
+          'export { activityLogCountField as reexportedCount } from "./fixtures/packages/keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each([
+    { call: "count(true)", prelude: "" },
+    { call: "rootCount(true)", prelude: 'import { rootCount } from "./root-fields.js";' },
+  ])("retains true-root direct and reexported field calls: $call", ({ call, prelude }) => {
+    inspectFieldConstructor(
+      call,
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].fields.errorCount).toEqual({
+          type: "integer",
+          dataClass: "count",
+          required: true,
+        });
+        expect(
+          registry.violations.some((violation) => violation.code === "typescript-diagnostic"),
+        ).toBe(false);
+      },
+      prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/root-fields.ts":
+          'export { activityLogCountField as rootCount } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each(["direct", "reexport"])(
+    "ignores an error-free nested observability lookalike via %s",
+    (route) => {
+      const nested =
+        "packages/zzz-fixture-diagnostic/src/fixtures/packages/keiko-contracts/src/observability.ts";
+      // The existing fixture owns the real canonical two-API stub. Read its exact staged body
+      // inside the fixture below, then copy it only as the adversarial nested-module control.
+      const source =
+        diagnosticRegistrationSource(undefined)
+          .replace(
+            "import { defineActivityLogOperation }",
+            "import { activityLogEvent, defineActivityLogOperation }",
+          )
+          .replace(
+            "../../keiko-contracts/src/observability.js",
+            route === "direct"
+              ? "./fixtures/packages/keiko-contracts/src/observability.js"
+              : "./nested-observability.js",
+          )
+          .replace(
+            "defineActivityLogOperation({",
+            "const operation = defineActivityLogOperation({",
+          ) + "\nactivityLogEvent(operation, {}, {});\n";
+      withTypedRegistryFixture(
+        "zzz-fixture-diagnostic",
+        source,
+        (root) => {
+          const actualCanonical = readFileSync(
+            join(root, "packages/keiko-contracts/src/observability.ts"),
+            "utf8",
+          );
+          writeFileSync(join(root, nested), actualCanonical);
+          const registry = generateTypedActivityLogRegistry(root, []);
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toEqual([]);
+        },
+        {
+          [nested]: "export {};",
+          "packages/zzz-fixture-diagnostic/src/nested-observability.ts":
+            'export { defineActivityLogOperation, activityLogEvent } from "./fixtures/packages/keiko-contracts/src/observability.js";',
+        },
+      );
+    },
+  );
+});
+
+it.each([
+  {
+    label: "direct",
+    imports:
+      'import { defineActivityLogOperation, activityLogEvent } from "../../keiko-contracts/src/observability.js";',
+    prefix: "",
+  },
+  {
+    label: "reexport",
+    imports:
+      'import { defineActivityLogOperation, activityLogEvent } from "./root-observability.js";',
+    prefix: "",
+  },
+  {
+    label: "namespace",
+    imports: 'import * as observed from "../../keiko-contracts/src/observability.js";',
+    prefix: "observed.",
+  },
+])("retains existing canonical-root observability $label calls", ({ imports, prefix }) => {
+  const source =
+    diagnosticRegistrationSource(undefined)
+      .replace(
+        'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        imports,
+      )
+      .replace(
+        "defineActivityLogOperation({",
+        `const operation = ${prefix}defineActivityLogOperation({`,
+      ) + `\n${prefix}activityLogEvent(operation, {}, {});\n`;
+  withTypedRegistryFixture(
+    "zzz-fixture-diagnostic",
+    source,
+    (root) => {
+      const registry = generateTypedActivityLogRegistry(root, []);
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].emitterSites).toHaveLength(1);
+      expect(
+        registry.violations.some((violation) => violation.code === "typescript-diagnostic"),
+      ).toBe(false);
+    },
+    {
+      "packages/zzz-fixture-diagnostic/src/root-observability.ts":
+        'export { defineActivityLogOperation, activityLogEvent } from "../../keiko-contracts/src/observability.js";',
+    },
+  );
+});
+
+it.each(["direct", "reexport"])(
+  "does not let a nested %s event API satisfy canonical emitter linkage",
+  (route) => {
+    const nested =
+      "packages/zzz-fixture-diagnostic/src/fixtures/packages/keiko-contracts/src/observability.ts";
+    const imported =
+      route === "direct"
+        ? "./fixtures/packages/keiko-contracts/src/observability.js"
+        : "./nested-events.js";
+    const source =
+      diagnosticRegistrationSource(undefined).replace(
+        "defineActivityLogOperation({",
+        "const operation = defineActivityLogOperation({",
+      ) +
+      `\nimport { activityLogEvent } from "${imported}";\nactivityLogEvent(operation, {}, {});\n`;
+    withTypedRegistryFixture(
+      "zzz-fixture-diagnostic",
+      source,
+      (root) => {
+        const actualCanonical = readFileSync(
+          join(root, "packages/keiko-contracts/src/observability.ts"),
+          "utf8",
+        );
+        writeFileSync(join(root, nested), actualCanonical);
+        const registry = generateTypedActivityLogRegistry(root, []);
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].emitterSites).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-emitted" }),
+        );
+        expect(
+          registry.violations.some((violation) => violation.code === "typescript-diagnostic"),
+        ).toBe(false);
+      },
+      {
+        [nested]: "export {};",
+        "packages/zzz-fixture-diagnostic/src/nested-events.ts":
+          'export { activityLogEvent } from "./fixtures/packages/keiko-contracts/src/observability.js";',
+      },
+    );
+  },
+);
+
+function inspectAutomaticCatalogFields(expression, check, prelude = "", extraFiles = {}) {
+  const source = diagnosticRegistrationSource(undefined).replace(
+    /"fields":\{.*?\},"causal"/u,
+    `"fields":${expression},"causal"`,
+  );
+  withTypedRegistryFixture(
+    "zzz-fixture-diagnostic",
+    [
+      'import { activityLogAutomaticCatalogFields as automatic } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      prelude,
+      source,
+    ].join("\n"),
+    (root) => {
+      check(generateTypedActivityLogRegistry(root, []));
+    },
+    extraFiles,
+  );
+}
+
+describe("canonical automatic catalog field policy admission", () => {
+  it.each(["automatic()", "{ ...automatic() }"])(
+    "expands the canonical closed policy: %s",
+    (expression) => {
+      inspectAutomaticCatalogFields(expression, (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        const pilot = readCheckedInCatalog().typedRegistry.operations.find(
+          (operation) => operation.op === "gateway.catalog.automatic.completed",
+        );
+        expect(registry.operations[0].fields).toEqual(pilot.fields);
+        expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(pilot.fields));
+      });
+    },
+  );
+
+  it.each([
+    [
+      "activityLogAutomaticCatalogFields()",
+      "function activityLogAutomaticCatalogFields() { return {}; }",
+    ],
+    [
+      "lookalike()",
+      'import { activityLogAutomaticCatalogFields as lookalike } from "./lookalike.js";',
+    ],
+    ["automatic(true)", ""],
+    ["automatic(...args)", "const args = [] as const;"],
+    ["chosen()", "let chosen = automatic;"],
+    ["cycle", "const cycle = cycle;"],
+  ])("refuses noncanonical or nonliteral policy expansion: %s", (expression, prelude) => {
+    inspectAutomaticCatalogFields(
+      expression,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/lookalike.ts":
+          "export function activityLogAutomaticCatalogFields() { return {}; }",
+      },
+    );
+  });
+});
+
+it("admits a true reexport of the canonical automatic catalog policy", () => {
+  inspectAutomaticCatalogFields(
+    "forwarded()",
+    (registry) => {
+      expect(registry.operations).toHaveLength(1);
+    },
+    'import { forwarded } from "./forwarded-fields.js";',
+    {
+      "packages/zzz-fixture-diagnostic/src/forwarded-fields.ts":
+        'export { activityLogAutomaticCatalogFields as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    },
+  );
+});
+
+describe("canonical universal field constructor admission", () => {
+  it("admits both actual zero-argument descriptor aliases without changing global values", () => {
+    inspectAutomaticCatalogFields(
+      "{ completeness: complete(), loss: lost() }",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].fields).toEqual({
+          completeness: { type: "string", dataClass: "completeness-state", required: true },
+          loss: { type: "string", dataClass: "loss-state", required: true },
+        });
+      },
+      'import { activityLogCompletenessField as complete, activityLogLossField as lost } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    );
+  });
+
+  it.each(["activityLogCompletenessField", "activityLogLossField"])(
+    "refuses noncanonical, dynamic or argument-bearing universal construction for %s",
+    (name) => {
+      for (const [call, prelude] of [
+        [name + "()", "function " + name + "() { return {}; }"],
+        ["foreign()", "import { " + name + ' as foreign } from "./universal-lookalike.js";'],
+        ["canonical(true)", ""],
+        ["canonical(...args)", "const args = [] as const;"],
+        ["selected()", "let selected = canonical;"],
+        ["holder.canonical()", "const holder = { canonical };"],
+      ]) {
+        inspectAutomaticCatalogFields(
+          "{ extra: " + call + " }",
+          (registry) => {
+            expect(registry.operations).toEqual([]);
+            expect(registry.violations).toContainEqual(
+              expect.objectContaining({ code: "registration-not-literal" }),
+            );
+          },
+          "import { " +
+            name +
+            ' as canonical } from "../../keiko-contracts/src/activity-log-field-contracts.js";\n' +
+            prelude,
+          {
+            "packages/zzz-fixture-diagnostic/src/universal-lookalike.ts":
+              "export function " + name + "() { return {}; }",
+          },
+        );
+      }
+    },
+  );
+});
+
+describe("canonical embedding batch retry field expansion", () => {
+  it("admits the actual canonical zero-argument policy alias", () => {
+    inspectAutomaticCatalogFields(
+      "retryFields()",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        const prior = readCheckedInCatalog().typedRegistry.operations.find(
+          (operation) => operation.op === "embedding.batch.retry",
+        );
+        expect(registry.operations[0].fields).toEqual(prior.fields);
+        expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(prior.fields));
+      },
+      'import { activityLogEmbeddingBatchRetryFields as retryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+    );
+  });
+
+  it.each([
+    [
+      "activityLogEmbeddingBatchRetryFields()",
+      "function activityLogEmbeddingBatchRetryFields() { return {}; }",
+    ],
+    [
+      "foreign()",
+      'import { activityLogEmbeddingBatchRetryFields as foreign } from "./retry-lookalike.js";',
+    ],
+    ["retryFields(true)", ""],
+    ["retryFields(...args)", "const args = [] as const;"],
+    ["selected()", "let selected = retryFields;"],
+    ["holder.retryFields()", "const holder = { retryFields };"],
+  ])("refuses noncanonical or nonzero-argument retry policy: %s", (call, prelude) => {
+    inspectAutomaticCatalogFields(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      'import { activityLogEmbeddingBatchRetryFields as retryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\n' +
+        prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/retry-lookalike.ts":
+          "export function activityLogEmbeddingBatchRetryFields() { return {}; }",
+      },
+    );
+  });
+});
+
+function inspectCommitDraftModelFields(expression, check, prelude = "", extraFiles = {}) {
+  inspectAutomaticCatalogFields(
+    expression,
+    check,
+    'import { activityLogCommitDraftModelFields as modelFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\n' +
+      prelude,
+    extraFiles,
+  );
+}
+
+describe("canonical Git draft model field admission", () => {
+  it.each(["modelFields()", "{ ...modelFields() }"])(
+    "admits the canonical closed model policy: %s",
+    (expression) => {
+      inspectCommitDraftModelFields(expression, (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        const prior = readCheckedInCatalog().typedRegistry.operations.find(
+          (operation) => operation.op === "git.commit.draft.completed",
+        );
+        const expected = Object.fromEntries([
+          ...Object.entries(prior.fields).slice(0, 2),
+          ...Object.entries(prior.fields).slice(5),
+        ]);
+        expect(registry.operations[0].fields).toEqual(expected);
+        expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(expected));
+      });
+    },
+  );
+
+  it("admits a true reexport of the canonical model policy", () => {
+    inspectCommitDraftModelFields(
+      "forwarded()",
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.violations).not.toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      'import { forwarded } from "./git-model-forwarder.js";',
+      {
+        "packages/zzz-fixture-diagnostic/src/git-model-forwarder.ts":
+          'export { activityLogCommitDraftModelFields as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each([
+    [
+      "activityLogCommitDraftModelFields()",
+      "function activityLogCommitDraftModelFields() { return {}; }",
+    ],
+    [
+      "foreign()",
+      'import { activityLogCommitDraftModelFields as foreign } from "./git-model-lookalike.js";',
+    ],
+    ["modelFields(true)", ""],
+    ["modelFields(...args)", "const args = [] as const;"],
+    ["selected()", "let selected = modelFields;"],
+    ["holder.modelFields()", "const holder = { modelFields };"],
+    ["unresolved()", ""],
+  ])("refuses noncanonical or argument-bearing model policy: %s", (call, prelude) => {
+    inspectCommitDraftModelFields(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/git-model-lookalike.ts":
+          "export function activityLogCommitDraftModelFields() { return {}; }",
+      },
+    );
+  });
+});
+
+const BOUNDED_FIELD_IMPORTS =
+  'import { activityLogBoundedStringField as boundedString, activityLogBoundedStringArrayField as boundedArray } from "../../keiko-contracts/src/activity-log-field-contracts.js";';
+
+function inspectBoundedField(expression, check, prelude = "", extraFiles = {}) {
+  inspectFieldConstructor(expression, check, BOUNDED_FIELD_IMPORTS + "\n" + prelude, extraFiles);
+}
+
+describe("canonical bounded field constructor admission", () => {
+  it.each([
+    [
+      'boundedString(true, "opaque-id", 128)',
+      { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    ],
+    [
+      'boundedArray(false, "error-kind", 128, 5)',
+      {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
+      },
+    ],
+    [
+      'boundedString(false, "safe-version", 8192)',
+      { type: "string", dataClass: "safe-version", required: false, maxLength: 8192 },
+    ],
+    [
+      'boundedArray(false, "digest", 8192, 64)',
+      { type: "string-array", dataClass: "digest", required: false, maxLength: 8192, maxItems: 64 },
+    ],
+  ])("expands the exact canonical descriptor %s", (expression, expected) => {
+    inspectBoundedField(expression, (registry) => {
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].fields.errorCount).toEqual(expected);
+      expect(Reflect.ownKeys(registry.operations[0].fields.errorCount)).toEqual(
+        Reflect.ownKeys(expected),
+      );
+    });
+  });
+
+  it("admits canonical reexports and finite const arguments", () => {
+    inspectBoundedField(
+      'forwarded(required, "digest", bound)',
+      (registry) => {
+        expect(registry.operations).toHaveLength(1);
+        expect(registry.operations[0].fields.errorCount.maxLength).toBe(64);
+      },
+      'import { forwarded } from "./bounded-reexport.js"; const required = false; const bound = 64;',
+      {
+        "packages/zzz-fixture-diagnostic/src/bounded-reexport.ts":
+          'export { activityLogBoundedStringField as forwarded } from "../../keiko-contracts/src/activity-log-field-contracts.js";',
+      },
+    );
+  });
+
+  it.each([
+    ['boundedString(true, "count", 64)', ""],
+    ['boundedString(true, "not-a-class", 64)', ""],
+    ['boundedString(true, "closed-enum", 64)', ""],
+    ['boundedString(true, "completeness-state", 64)', ""],
+    ['boundedString(true, "loss-state", 64)', ""],
+    ['boundedArray(false, "safe-version", 64, 5)', ""],
+    ['boundedArray(false, "closed-enum", 64, 5)', ""],
+    ['boundedString(true, "digest", 0)', ""],
+    ['boundedString(true, "digest", -1)', ""],
+    ['boundedString(true, "digest", 1.5)', ""],
+    ['boundedString(true, "digest", 8193)', ""],
+    ['boundedArray(false, "digest", 64, 0)', ""],
+    ['boundedArray(false, "digest", 64, 65)', ""],
+    ['boundedArray(false, "digest", 64)', ""],
+    ['boundedString(true, "digest", 64, 5)', ""],
+    ["boundedString(...args)", 'const args = [true, "digest", 64] as const;'],
+    ['boundedString(true, "digest", dynamic)', "let dynamic = 64;"],
+    ['boundedString(true, "digest", cycle)', "const cycle = cycle;"],
+    ['holder.boundedString(true, "digest", 64)', "const holder = { boundedString };"],
+    [
+      'activityLogBoundedStringField(true, "digest", 64)',
+      'function activityLogBoundedStringField(required: true, dataClass: "digest", maxLength: 64): { readonly type: "string"; readonly dataClass: "digest"; readonly required: true; readonly maxLength: 64 } { return { type: "string", dataClass, required, maxLength }; }',
+    ],
+    [
+      'foreign(true, "digest", 64)',
+      'import { activityLogBoundedStringField as foreign } from "./bounded-lookalike.js";',
+    ],
+  ])(
+    "refuses unsupported bounded constructor provenance or arguments: %s",
+    (expression, prelude) => {
+      inspectBoundedField(
+        expression,
+        (registry) => {
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toContainEqual(
+            expect.objectContaining({ code: "registration-not-literal" }),
+          );
+        },
+        prelude,
+        {
+          "packages/zzz-fixture-diagnostic/src/bounded-lookalike.ts":
+            'export function activityLogBoundedStringField(required: true, dataClass: "digest", maxLength: 64): { readonly type: "string"; readonly dataClass: "digest"; readonly required: true; readonly maxLength: 64 } { return { type: "string", dataClass, required, maxLength }; }',
+        },
+      );
+    },
+  );
+});
+
+it("retains the existing argument-work bound for bounded descriptors", () => {
+  const declarations = ["const bound0 = 64;"];
+  for (let index = 1; index <= 260; index += 1) {
+    declarations.push(`const bound${String(index)} = bound${String(index - 1)};`);
+  }
+  inspectBoundedField(
+    'boundedString(false, "digest", bound260)',
+    (registry) => {
+      expect(registry.operations).toEqual([]);
+      expect(registry.violations).toContainEqual(
+        expect.objectContaining({ code: "registration-not-literal" }),
+      );
+    },
+    declarations.join("\n"),
+  );
+});
+
+const LOSS_SUMMARY_FIELD_IMPORT =
+  'import { activityLogLossSummaryFields as lossFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";';
+
+describe("canonical loss-summary field policy admission", () => {
+  it.each(["lossFields()", "{ ...lossFields() }"])(
+    "admits the complete canonical loss policy: %s",
+    (call) => {
+      inspectAutomaticCatalogFields(
+        call,
+        (registry) => {
+          expect(registry.operations).toHaveLength(1);
+          const loss = readCheckedInCatalog().typedRegistry.operations.find(
+            (entry) => entry.op === "activity-log.loss",
+          );
+          expect(registry.operations[0].fields).toEqual(loss.fields);
+          expect(Object.keys(registry.operations[0].fields)).toEqual(Object.keys(loss.fields));
+        },
+        LOSS_SUMMARY_FIELD_IMPORT,
+      );
+    },
+  );
+
+  it.each([
+    ["lossFields(true)", ""],
+    ["lossFields(...args)", "const args = [] as const;"],
+    ["selected()", "let selected = lossFields;"],
+    ["holder.lossFields()", "const holder = { lossFields };"],
+    [
+      "activityLogLossSummaryFields()",
+      'import type { ActivityLogLossSummaryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\nfunction activityLogLossSummaryFields(): Readonly<ActivityLogLossSummaryFields> { return {\n    trigger: {\n      type: "string",\n      dataClass: "closed-enum",\n      required: true,\n      values: ["heartbeat", "exit"],\n    },\n    totalLost: { type: "integer", dataClass: "count", required: true },\n    loggerWriteFailed: { type: "integer", dataClass: "count", required: false },\n    loggerUnavailable: { type: "integer", dataClass: "count", required: false },\n    schemaRejected: { type: "integer", dataClass: "count", required: false },\n    persistenceFailed: { type: "integer", dataClass: "count", required: false },\n    diagnosticSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portUnwired: { type: "integer", dataClass: "count", required: false },\n    clientRejected: { type: "integer", dataClass: "count", required: false },\n    clientRateSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },\n    clientPostThrottled: { type: "integer", dataClass: "count", required: false },\n    clientPostFailed: { type: "integer", dataClass: "count", required: false },\n    clientRejectionSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientErrorSuppressed: { type: "integer", dataClass: "count", required: false },\n    collectorDropped: { type: "integer", dataClass: "count", required: false },\n    summaryWriteFailed: { type: "integer", dataClass: "count", required: false },\n  }; }',
+    ],
+    ["foreign()", 'import { activityLogLossSummaryFields as foreign } from "./loss-lookalike.js";'],
+  ])("refuses noncanonical or nonzero-argument loss policy: %s", (call, prelude) => {
+    inspectAutomaticCatalogFields(
+      call,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      LOSS_SUMMARY_FIELD_IMPORT + "\n" + prelude,
+      {
+        "packages/zzz-fixture-diagnostic/src/loss-lookalike.ts":
+          'import type { ActivityLogLossSummaryFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\nexport function activityLogLossSummaryFields(): Readonly<ActivityLogLossSummaryFields> { return {\n    trigger: {\n      type: "string",\n      dataClass: "closed-enum",\n      required: true,\n      values: ["heartbeat", "exit"],\n    },\n    totalLost: { type: "integer", dataClass: "count", required: true },\n    loggerWriteFailed: { type: "integer", dataClass: "count", required: false },\n    loggerUnavailable: { type: "integer", dataClass: "count", required: false },\n    schemaRejected: { type: "integer", dataClass: "count", required: false },\n    persistenceFailed: { type: "integer", dataClass: "count", required: false },\n    diagnosticSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portSinkFailed: { type: "integer", dataClass: "count", required: false },\n    portUnwired: { type: "integer", dataClass: "count", required: false },\n    clientRejected: { type: "integer", dataClass: "count", required: false },\n    clientRateSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientBufferEvicted: { type: "integer", dataClass: "count", required: false },\n    clientPostThrottled: { type: "integer", dataClass: "count", required: false },\n    clientPostFailed: { type: "integer", dataClass: "count", required: false },\n    clientRejectionSuppressed: { type: "integer", dataClass: "count", required: false },\n    clientErrorSuppressed: { type: "integer", dataClass: "count", required: false },\n    collectorDropped: { type: "integer", dataClass: "count", required: false },\n    summaryWriteFailed: { type: "integer", dataClass: "count", required: false },\n  }; }',
+      },
+    );
+  });
+});
+
+const WORKSPACE_IO_FIELD_IMPORT =
+  'import { activityLogWorkspaceIoFields as workspaceFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";';
+const WORKSPACE_IO_LOOKALIKE =
+  'import type { ActivityLogWorkspaceIoFields } from "../../keiko-contracts/src/activity-log-field-contracts.js";\nfunction activityLogWorkspaceIoFields<const R extends boolean>(required: R): Readonly<ActivityLogWorkspaceIoFields<R>> { return {\n  workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoReadDirEntries: { type: "integer", dataClass: "count", required },\n  workspaceIoStatCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoRealPathCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoExistsCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required },\n  workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required },\n}; }';
+
+describe("canonical workspace-I/O seven-field policy admission", () => {
+  it.each(["workspaceFields(true)", "{ ...workspaceFields(false) }", "workspaceFields(required)"])(
+    "admits the canonical closed boolean policy: %s",
+    (expression) => {
+      inspectAutomaticCatalogFields(
+        expression,
+        (registry) => {
+          expect(registry.operations).toHaveLength(1);
+          const fields = registry.operations[0].fields;
+          const names = [
+            "workspaceIoReadDirCalls",
+            "workspaceIoReadDirEntries",
+            "workspaceIoStatCalls",
+            "workspaceIoRealPathCalls",
+            "workspaceIoExistsCalls",
+            "workspaceIoContentReadCalls",
+            "workspaceIoContentReadBytes",
+          ];
+          expect(Object.keys(fields).slice(-7)).toEqual(names);
+          const required = expression === "workspaceFields(true)";
+          for (const name of names) {
+            expect(fields[name]).toEqual({ type: "integer", dataClass: "count", required });
+          }
+        },
+        WORKSPACE_IO_FIELD_IMPORT + "\nconst required = false;",
+      );
+    },
+  );
+
+  it.each([
+    ["workspaceFields()", ""],
+    ["workspaceFields(true, false)", ""],
+    ['workspaceFields("true")', ""],
+    ["workspaceFields(...args)", "const args = [true] as const;"],
+    ["workspaceFields(dynamic())", "function dynamic(): boolean { return true; }"],
+    ["workspaceFields(cycle)", "const cycle = cycle;"],
+    ["selected(true)", "let selected = workspaceFields;"],
+    ["holder.workspaceFields(true)", "const holder = { workspaceFields };"],
+  ])("refuses unsupported boolean policy syntax: %s", (expression, prelude) => {
+    inspectAutomaticCatalogFields(
+      expression,
+      (registry) => {
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toContainEqual(
+          expect.objectContaining({ code: "registration-not-literal" }),
+        );
+      },
+      WORKSPACE_IO_FIELD_IMPORT + "\n" + prelude,
+    );
+  });
+
+  it.each(["local", "foreign"])(
+    "refuses a compile-shaped %s declaration instead of the canonical symbol",
+    (kind) => {
+      const prelude =
+        kind === "local"
+          ? WORKSPACE_IO_LOOKALIKE
+          : 'import { activityLogWorkspaceIoFields } from "./workspace-lookalike.js";';
+      inspectAutomaticCatalogFields(
+        "activityLogWorkspaceIoFields(true)",
+        (registry) => {
+          expect(registry.operations).toEqual([]);
+          expect(registry.violations).toContainEqual(
+            expect.objectContaining({ code: "registration-not-literal" }),
+          );
+          expect(
+            registry.violations.some((violation) => violation.code === "typescript-diagnostic"),
+          ).toBe(false);
+        },
+        prelude,
+        {
+          "packages/zzz-fixture-diagnostic/src/workspace-lookalike.ts":
+            WORKSPACE_IO_LOOKALIKE.replace(
+              "function activityLogWorkspaceIoFields",
+              "export function activityLogWorkspaceIoFields",
+            ),
+        },
+      );
+    },
+  );
+});
+
+it("retains the existing finite argument-work refusal for the workspace-I/O boolean", () => {
+  const declarations = ["const required0 = true;"];
+  for (let index = 1; index <= 260; index += 1) {
+    declarations.push(`const required${String(index)} = required${String(index - 1)};`);
+  }
+  inspectAutomaticCatalogFields(
+    "workspaceFields(required260)",
+    (registry) => {
+      expect(registry.operations).toEqual([]);
+      expect(registry.violations).toContainEqual(
+        expect.objectContaining({ code: "registration-not-literal" }),
+      );
+    },
+    WORKSPACE_IO_FIELD_IMPORT + "\n" + declarations.join("\n"),
+  );
+});
+
+it("retains the canonical symbol through the existing observability reexport", () => {
+  const source = diagnosticRegistrationSource(undefined).replace(
+    /"fields":\{.*?\},"causal"/u,
+    '"fields":workspaceFields(true),"causal"',
+  );
+  withTypedRegistryFixture(
+    "zzz-fixture-diagnostic",
+    [
+      'import { activityLogWorkspaceIoFields as workspaceFields } from "../../keiko-contracts/src/observability.js";',
+      source,
+    ].join("\n"),
+    (root) => {
+      const facade = join(root, "packages/keiko-contracts/src/observability.ts");
+      writeFileSync(
+        facade,
+        readFileSync(facade, "utf8") +
+          '\nexport { activityLogWorkspaceIoFields } from "./activity-log-field-contracts.js";\n',
+      );
+      const registry = generateTypedActivityLogRegistry(root, []);
+      expect(registry.operations).toHaveLength(1);
+      expect(registry.operations[0].fields.workspaceIoContentReadBytes).toEqual({
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      });
+    },
+  );
 });

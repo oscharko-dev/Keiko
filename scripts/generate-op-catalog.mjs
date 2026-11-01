@@ -57,7 +57,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { format } from "prettier";
 import ts from "typescript";
@@ -80,8 +80,34 @@ import {
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
   ACTIVITY_LOG_RELEASE_IMPACTS,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  activityLogFieldTypeClassPair,
   isActivityLogDiagnosticWhen,
 } from "../packages/keiko-contracts/dist/observability.js";
+import {
+  activityLogWorkspaceIoFields,
+  activityLogLossSummaryFields,
+  activityLogCommitDraftModelFields,
+  activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
+  activityLogCompletenessField,
+  activityLogLossField,
+  activityLogBooleanField,
+  activityLogCountField,
+  activityLogDurationField,
+  activityLogStringEnumField,
+  activityLogBoundedStringField,
+  activityLogBoundedStringArrayField,
+} from "../packages/keiko-contracts/dist/activity-log-field-contracts.js";
+
+// Consecutive fields built by one of these constructors with the same argument render as one
+// spread of the plural constructor, so the generated registry carries no repeated field runs.
+const FIELD_RUN_CONSTRUCTORS = {
+  activityLogCountField: "activityLogCountFields",
+  activityLogDurationField: "activityLogDurationFields",
+  activityLogBooleanField: "activityLogBooleanFields",
+};
+const FIELD_RUN_MIN = 3;
+const FIELD_RUN_CALL = /^(activityLog(?:Count|Duration|Boolean)Field)\((true|false)\)$/u;
 import { ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS } from "../packages/keiko-contracts/dist/activity-log-failure-class-contracts.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { generateFailureSurfaceInventory } from "./lib/activity-log-failure-surface-inventory.mjs";
@@ -456,22 +482,27 @@ function stringLiteralType(checker, node, propertyName) {
   return type.isStringLiteral() ? type.value : undefined;
 }
 
-const CANONICAL_ACTIVITY_LOG_API =
-  /\/packages\/keiko-contracts\/(?:src|dist)\/observability(?:\.d)?\.ts$/u;
+function canonicalContractModule(repoRoot, sourceFile, moduleName) {
+  const sourcePath = resolve(sourceFile.fileName);
+  return (
+    sourcePath === resolve(repoRoot, "packages", "keiko-contracts", "src", `${moduleName}.ts`) ||
+    sourcePath === resolve(repoRoot, "packages", "keiko-contracts", "dist", `${moduleName}.d.ts`)
+  );
+}
 
-function canonicalActivityLogApiName(checker, node) {
+function canonicalActivityLogApiName(checker, node, repoRoot) {
   const declaration = checker.getResolvedSignature(node)?.declaration;
   if (declaration === undefined) return undefined;
-  const sourcePath = declaration.getSourceFile().fileName.replaceAll("\\", "/");
-  if (!CANONICAL_ACTIVITY_LOG_API.test(sourcePath)) return undefined;
+  if (!canonicalContractModule(repoRoot, declaration.getSourceFile(), "observability"))
+    return undefined;
   return declaration.name !== undefined && ts.isIdentifier(declaration.name)
     ? declaration.name.text
     : undefined;
 }
 
-function typedCallKind(checker, node) {
+function typedCallKind(checker, node, repoRoot) {
   if (!ts.isCallExpression(node)) return undefined;
-  const apiName = canonicalActivityLogApiName(checker, node);
+  const apiName = canonicalActivityLogApiName(checker, node, repoRoot);
   if (apiName === "activityLogEvent") return "activity-log-event";
   const expectedKind =
     apiName === "defineActivityLogOperation" ? "activity-log-operation" : undefined;
@@ -514,11 +545,11 @@ function constInitializer(checker, identifier) {
   return declaration.initializer;
 }
 
-function literalRegistryObject(value, checker, seen) {
+function literalRegistryObject(value, checker, repoRoot, seen) {
   const result = Object.create(null);
   for (const property of value.properties) {
     if (ts.isSpreadAssignment(property)) {
-      const spread = literalRegistryValue(property.expression, checker, seen);
+      const spread = literalRegistryValue(property.expression, checker, repoRoot, seen);
       if (spread === undefined || typeof spread !== "object" || Array.isArray(spread)) {
         return undefined;
       }
@@ -527,43 +558,191 @@ function literalRegistryObject(value, checker, seen) {
     }
     if (!ts.isPropertyAssignment(property)) return undefined;
     const name = propertyNameText(property.name);
-    const propertyValue = literalRegistryValue(property.initializer, checker, seen);
+    const propertyValue = literalRegistryValue(property.initializer, checker, repoRoot, seen);
     if (name === undefined || propertyValue === undefined) return undefined;
     result[name] = propertyValue;
   }
   return result;
 }
 
-function literalRegistryIdentifier(identifier, checker, seen) {
+function literalRegistryIdentifier(identifier, checker, repoRoot, seen) {
   const initializer = constInitializer(checker, identifier);
   if (initializer === undefined || seen.has(initializer)) return undefined;
-  return literalRegistryValue(initializer, checker, new Set([...seen, initializer]));
+  return literalRegistryValue(initializer, checker, repoRoot, new Set([...seen, initializer]));
 }
 
-function literalRegistryArray(value, checker, seen) {
+function literalRegistryArray(value, checker, repoRoot, seen) {
   const items = [];
   for (const item of value.elements) {
     if (ts.isSpreadElement(item)) {
-      const spread = literalRegistryValue(item.expression, checker, seen);
+      const spread = literalRegistryValue(item.expression, checker, repoRoot, seen);
       if (!Array.isArray(spread)) return undefined;
       items.push(...spread);
       continue;
     }
-    const itemValue = literalRegistryValue(item, checker, seen);
+    const itemValue = literalRegistryValue(item, checker, repoRoot, seen);
     if (itemValue === undefined) return undefined;
     items.push(itemValue);
   }
   return items;
 }
 
-function literalRegistryValue(expression, checker, seen = new Set()) {
+const BOUNDED_FIELD_CONSTRUCTORS = {
+  activityLogBoundedStringField,
+  activityLogBoundedStringArrayField,
+};
+const FIELD_CONSTRUCTORS = {
+  activityLogCountField,
+  activityLogDurationField,
+  activityLogBooleanField,
+  activityLogStringEnumField,
+  ...BOUNDED_FIELD_CONSTRUCTORS,
+};
+const PARAMETERIZED_FIELD_BUNDLES = { activityLogWorkspaceIoFields };
+const GLOBAL_FIELD_CONSTRUCTORS = {
+  activityLogCompletenessField,
+  activityLogLossField,
+};
+const ZERO_ARGUMENT_FIELD_CONSTRUCTORS = {
+  activityLogLossSummaryFields,
+  activityLogCommitDraftModelFields,
+  activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
+  ...GLOBAL_FIELD_CONSTRUCTORS,
+};
+// This is local to newly admitted helper arguments, not a limit on existing literal declarations.
+const FIELD_ARGUMENT_WORK_LIMIT = 256;
+
+function fieldConstructorDeclaration(checker, call) {
+  if (checker === undefined || !ts.isIdentifier(call.expression)) return undefined;
+  let symbol = checker.getSymbolAtLocation(call.expression);
+  if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declarations = symbol?.declarations ?? [];
+  return declarations.length === 1 ? declarations[0] : undefined;
+}
+
+function canonicalFieldConstructor(checker, call, repoRoot) {
+  const declaration = fieldConstructorDeclaration(checker, call);
+  if (declaration === undefined) return undefined;
+  if (!ts.isFunctionDeclaration(declaration) || declaration.name === undefined) return undefined;
+  if (
+    !canonicalContractModule(repoRoot, declaration.getSourceFile(), "activity-log-field-contracts")
+  )
+    return undefined;
+  const name = declaration.name.text;
+  return Object.hasOwn(ZERO_ARGUMENT_FIELD_CONSTRUCTORS, name) ||
+    Object.hasOwn(FIELD_CONSTRUCTORS, name) ||
+    Object.hasOwn(PARAMETERIZED_FIELD_BUNDLES, name)
+    ? name
+    : undefined;
+}
+
+function fieldArgumentArray(value, checker, seen, budget) {
+  const items = [];
+  for (const item of value.elements) {
+    const spread = ts.isSpreadElement(item);
+    const resolved = fieldArgumentValue(spread ? item.expression : item, checker, seen, budget);
+    if (resolved === undefined || (spread && !Array.isArray(resolved))) return undefined;
+    if (spread) items.push(...resolved);
+    else items.push(resolved);
+    if (items.length > 64) return undefined;
+  }
+  return items;
+}
+
+function fieldArgumentExpression(expression, budget) {
+  let value = expression;
+  while (
+    ts.isAsExpression(value) ||
+    ts.isSatisfiesExpression(value) ||
+    ts.isParenthesizedExpression(value)
+  ) {
+    budget.remaining -= 1;
+    if (budget.remaining < 0) return undefined;
+    value = value.expression;
+  }
+  return value;
+}
+
+function fieldArgumentValue(expression, checker, seen, budget) {
+  budget.remaining -= 1;
+  if (budget.remaining < 0) return undefined;
+  const value = fieldArgumentExpression(expression, budget);
+  if (value === undefined) return undefined;
+  const primitive = literalPrimitive(value);
+  if (primitive !== undefined) return primitive.value;
+  if (ts.isIdentifier(value)) {
+    const initializer = constInitializer(checker, value);
+    if (initializer === undefined || seen.has(initializer)) return undefined;
+    return fieldArgumentValue(initializer, checker, new Set([...seen, initializer]), budget);
+  }
+  return ts.isArrayLiteralExpression(value)
+    ? fieldArgumentArray(value, checker, seen, budget)
+    : undefined;
+}
+
+function fieldConstructorArity(name) {
+  if (name === "activityLogBoundedStringField") return 3;
+  if (name === "activityLogBoundedStringArrayField") return 4;
+  return name === "activityLogStringEnumField" ? 2 : 1;
+}
+
+function boundedFieldDataClass(type, dataClass) {
+  return (
+    REGISTRATION_DATA_CLASSES.has(dataClass) &&
+    activityLogFieldTypeClassPair(type, dataClass) &&
+    dataClass !== "closed-enum" &&
+    dataClass !== "completeness-state" &&
+    dataClass !== "loss-state"
+  );
+}
+
+function validBoundedFieldArguments(name, args) {
+  const type = name === "activityLogBoundedStringField" ? "string" : "string-array";
+  if (!boundedFieldDataClass(type, args[1])) return false;
+  if (!Number.isInteger(args[2]) || invalidOptionalBound(args[2], 8192)) return false;
+  return type === "string" || (Number.isInteger(args[3]) && !invalidOptionalBound(args[3], 64));
+}
+
+function validFieldConstructorArguments(name, args) {
+  if (!isBooleanValue(args[0])) return false;
+  if (Object.hasOwn(BOUNDED_FIELD_CONSTRUCTORS, name))
+    return validBoundedFieldArguments(name, args);
+  return (
+    name !== "activityLogStringEnumField" ||
+    !invalidClosedStringArray(args[1], REGISTRATION_CLOSED_VALUE)
+  );
+}
+
+function literalFieldConstructor(call, checker, repoRoot, seen) {
+  const name = canonicalFieldConstructor(checker, call, repoRoot);
+  if (name === undefined || call.arguments.some(ts.isSpreadElement)) return undefined;
+  if (Object.hasOwn(ZERO_ARGUMENT_FIELD_CONSTRUCTORS, name)) {
+    return call.arguments.length === 0 ? ZERO_ARGUMENT_FIELD_CONSTRUCTORS[name]() : undefined;
+  }
+  const expectedArity = fieldConstructorArity(name);
+  if (call.arguments.length !== expectedArity) return undefined;
+  const budget = { remaining: FIELD_ARGUMENT_WORK_LIMIT };
+  const args = call.arguments.map((argument) =>
+    fieldArgumentValue(argument, checker, seen, budget),
+  );
+  if (!validFieldConstructorArguments(name, args)) return undefined;
+  const construct = PARAMETERIZED_FIELD_BUNDLES[name] ?? FIELD_CONSTRUCTORS[name];
+  return construct(...args);
+}
+
+function literalRegistryValue(expression, checker, repoRoot, seen = new Set()) {
   const value = unwrapExpression(expression);
   const primitive = literalPrimitive(value);
   if (primitive !== undefined) return primitive.value;
-  if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, checker, seen);
-  if (ts.isArrayLiteralExpression(value)) return literalRegistryArray(value, checker, seen);
+  if (ts.isCallExpression(value)) return literalFieldConstructor(value, checker, repoRoot, seen);
+  if (ts.isIdentifier(value)) return literalRegistryIdentifier(value, checker, repoRoot, seen);
+  if (ts.isArrayLiteralExpression(value))
+    return literalRegistryArray(value, checker, repoRoot, seen);
   return ts.isObjectLiteralExpression(value)
-    ? literalRegistryObject(value, checker, seen)
+    ? literalRegistryObject(value, checker, repoRoot, seen)
     : undefined;
 }
 
@@ -800,8 +979,9 @@ export function isTypedRegistrySourceFile(repoRoot, sourceFile) {
   return sourceFile.fileName.replaceAll("\\", "/").startsWith(packagesRoot);
 }
 
-function relevantRegistrySource(sourceFile) {
+function relevantRegistrySource(sourceFile, repoRoot) {
   return (
+    canonicalContractModule(repoRoot, sourceFile, "activity-log-field-contracts") ||
     sourceFile.text.includes("defineActivityLogOperation") ||
     sourceFile.text.includes("activityLogEvent")
   );
@@ -818,7 +998,8 @@ function typedRegistryDiagnostics(program, repoRoot) {
   const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
   return diagnostics
     .filter(
-      (diagnostic) => diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file),
+      (diagnostic) =>
+        diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file, repoRoot),
     )
     .map((diagnostic) => ({
       ...registryViolation(
@@ -837,6 +1018,10 @@ function invalidClosedStringArray(value, pattern = REGISTRATION_TOKEN) {
     value.length > 64 ||
     value.some((item) => typeof item !== "string" || !pattern.test(item))
   );
+}
+
+function isBooleanValue(value) {
+  return value === true || value === false;
 }
 
 function invalidOptionalBound(value, maximum) {
@@ -973,7 +1158,9 @@ function rejectInvalidRegistrationField(context, site, value) {
 function registrationLiteral(context, node, site) {
   const argument = node.arguments[0];
   const value =
-    argument === undefined ? undefined : literalRegistryValue(argument, context.checker);
+    argument === undefined
+      ? undefined
+      : literalRegistryValue(argument, context.checker, context.repoRoot);
   if (value !== undefined && typeof value.op === "string") return value;
   context.violations.push(
     registryViolation(
@@ -1025,7 +1212,7 @@ function rejectReservedEnvelopeField(context, site, fields) {
 }
 
 function collectTypedRegistration(context, sourceFile, node) {
-  if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
+  if (typedCallKind(context.checker, node, context.repoRoot) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const value = registrationLiteral(context, node, site);
   if (value === undefined) return;
@@ -1054,7 +1241,7 @@ function collectTypedRegistration(context, sourceFile, node) {
 }
 
 function collectTypedEmission(context, sourceFile, node) {
-  if (typedCallKind(context.checker, node) !== "activity-log-event") return;
+  if (typedCallKind(context.checker, node, context.repoRoot) !== "activity-log-event") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const argument = node.arguments[0];
   const symbol =
@@ -1665,11 +1852,233 @@ export function activityLogOperationSurfaces(inventory) {
   );
 }
 
+function equalDescriptor(left, right) {
+  const leftKeys = Reflect.ownKeys(left);
+  const rightKeys = Reflect.ownKeys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key, index) => key === rightKeys[index]) &&
+    leftKeys.every((key) => JSON.stringify(left[key]) === JSON.stringify(right[key]))
+  );
+}
+
+function fieldDescriptorArguments(name, descriptor) {
+  if (name === "activityLogBoundedStringField")
+    return [descriptor.required, descriptor.dataClass, descriptor.maxLength];
+  if (name === "activityLogBoundedStringArrayField")
+    return [descriptor.required, descriptor.dataClass, descriptor.maxLength, descriptor.maxItems];
+  return name === "activityLogStringEnumField"
+    ? [descriptor.required, descriptor.values]
+    : [descriptor.required];
+}
+
+function renderedFieldDescriptor(descriptor) {
+  for (const [name, construct] of Object.entries(GLOBAL_FIELD_CONSTRUCTORS)) {
+    if (equalDescriptor(descriptor, construct())) return `${name}()`;
+  }
+  if (!isBooleanValue(descriptor.required)) return JSON.stringify(descriptor);
+  for (const [name, construct] of Object.entries(FIELD_CONSTRUCTORS)) {
+    const args = fieldDescriptorArguments(name, descriptor);
+    if (!validFieldConstructorArguments(name, args)) continue;
+    if (equalDescriptor(descriptor, construct(...args))) {
+      const callee = Object.hasOwn(BOUNDED_FIELD_CONSTRUCTORS, name)
+        ? `fieldContracts.${name}`
+        : name;
+      return `${callee}(${args.map((argument) => JSON.stringify(argument)).join(", ")})`;
+    }
+  }
+  return JSON.stringify(descriptor);
+}
+
+function renderedFieldRun(run) {
+  const [[, call]] = run;
+  const match = FIELD_RUN_CALL.exec(call);
+  if (match === null || run.length < FIELD_RUN_MIN)
+    return run.map(([name, value]) => `${JSON.stringify(name)}: ${value}`);
+  const names = run.map(([name]) => JSON.stringify(name)).join(", ");
+  return [`...${FIELD_RUN_CONSTRUCTORS[match[1]]}(${match[2]}, [${names}])`];
+}
+
+function renderedFieldEntries(entries) {
+  const rendered = entries.map(([name, descriptor]) => [name, renderedFieldDescriptor(descriptor)]);
+  const output = [];
+  let start = 0;
+  while (start < rendered.length) {
+    let end = start + 1;
+    while (end < rendered.length && rendered[end][1] === rendered[start][1]) end += 1;
+    output.push(...renderedFieldRun(rendered.slice(start, end)));
+    start = end;
+  }
+  return output;
+}
+
+function matchesOrderedFieldContracts(fields, expected) {
+  const keys = Reflect.ownKeys(expected);
+  const actualKeys = Reflect.ownKeys(fields);
+  return (
+    actualKeys.length === keys.length &&
+    keys.every(
+      (key, index) => key === actualKeys[index] && equalDescriptor(fields[key], expected[key]),
+    )
+  );
+}
+
+function commitDraftRuntimeFieldLayout(operation) {
+  if (operation.op === "git.commit.draft.completed") {
+    return {
+      leading: {
+        ...ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+        stagedFileCount: activityLogCountField(false),
+        areaCount: activityLogCountField(false),
+        touchesTests: activityLogBooleanField(false),
+      },
+      trailing: {},
+    };
+  }
+  if (operation.op === "git.commit.draft.attempt.completed") {
+    return {
+      leading: ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+      trailing: { attempt: activityLogCountField(true) },
+    };
+  }
+  return undefined;
+}
+
+function renderedCommitDraftRuntimeFields(operation, fields) {
+  const layout = commitDraftRuntimeFieldLayout(operation);
+  if (layout === undefined) return undefined;
+  const expected = {
+    ...layout.leading,
+    ...activityLogCommitDraftModelFields(),
+    ...layout.trailing,
+  };
+  if (!matchesOrderedFieldContracts(fields, expected)) return undefined;
+  const leading = renderedFieldEntries(Object.entries(layout.leading));
+  const trailing = renderedFieldEntries(Object.entries(layout.trailing));
+  return `{${[...leading, "...activityLogCommitDraftModelFields()", ...trailing].join(",")}}`;
+}
+
+function runtimeFieldBundle(operation, fields, prefix) {
+  if (
+    operation.op === "activity-log.loss" &&
+    matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogLossSummaryFields() })
+  )
+    return "activityLogLossSummaryFields";
+  if (
+    operation.op === "gateway.catalog.automatic.completed" &&
+    matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogAutomaticCatalogFields() })
+  )
+    return "activityLogAutomaticCatalogFields";
+  if (
+    (operation.op === "embedding.batch.partial-progress" ||
+      operation.op === "embedding.batch.retry") &&
+    matchesOrderedFieldContracts(fields, { ...prefix, ...activityLogEmbeddingBatchRetryFields() })
+  )
+    return "activityLogEmbeddingBatchRetryFields";
+  return undefined;
+}
+
+function workspaceIoRuntimeRequired(operation) {
+  if (operation.op === "search.connected-context.completion-details") return false;
+  if (operation.op === "search.connected-context.failed") return true;
+  return undefined;
+}
+
+function renderedWorkspaceIoRuntimeFields(operation, fields) {
+  const required = workspaceIoRuntimeRequired(operation);
+  if (required === undefined) return undefined;
+  const expected = activityLogWorkspaceIoFields(required);
+  const segment = Reflect.ownKeys(expected);
+  const keys = Reflect.ownKeys(fields);
+  const entries = Object.entries(fields);
+  if (entries.length !== keys.length) return undefined;
+  const start = keys.indexOf(segment[0]);
+  if (
+    start < 0 ||
+    !segment.every(
+      (key, index) => keys[start + index] === key && equalDescriptor(fields[key], expected[key]),
+    )
+  )
+    return undefined;
+  const leading = renderedFieldEntries(entries.slice(0, start));
+  const trailing = renderedFieldEntries(entries.slice(start + segment.length));
+  const renderedFields = [
+    ...leading,
+    `...activityLogWorkspaceIoFields(${String(required)})`,
+    ...trailing,
+  ];
+  return `{${renderedFields.join(",")}}`;
+}
+
+function renderedRuntimeFields(operation, fields) {
+  const workspaceIoFields = renderedWorkspaceIoRuntimeFields(operation, fields);
+  if (workspaceIoFields !== undefined) return workspaceIoFields;
+  const draftFields = renderedCommitDraftRuntimeFields(operation, fields);
+  if (draftFields !== undefined) return draftFields;
+  const prefix = ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
+  const bundle = runtimeFieldBundle(operation, fields, prefix);
+  if (bundle !== undefined) {
+    return `{${renderedFieldEntries(Object.entries(prefix)).join(",")}, ...${bundle}()}`;
+  }
+  return `{${renderedFieldEntries(Object.entries(fields)).join(",")}}`;
+}
+
+function renderedRuntimeOperation(operation, sharedFields) {
+  return `{${Object.entries(runtimeOperationContract(operation))
+    .map(([key, value]) => {
+      let rendered = JSON.stringify(value);
+      if (key === "fields") {
+        const fields = renderedRuntimeFields(operation, value);
+        rendered = sharedFields.has(fields) ? `${sharedFields.get(fields)}()` : fields;
+      }
+      return `${JSON.stringify(key)}: ${rendered}`;
+    })
+    .join(",")}}`;
+}
+
+// A larger field set several operations declare identically is rendered once, as a factory, so
+// every operation still receives its own fresh field contracts and the module repeats no such set.
+const SHARED_FIELDS_MIN = 6;
+
+function sharedRuntimeFields(typedRegistry) {
+  const counts = new Map();
+  for (const operation of typedRegistry.operations) {
+    const contract = runtimeOperationContract(operation).fields;
+    if (Object.keys(contract).length < SHARED_FIELDS_MIN) continue;
+    const fields = renderedRuntimeFields(operation, contract);
+    counts.set(fields, (counts.get(fields) ?? 0) + 1);
+  }
+  const shared = new Map();
+  for (const [fields, count] of counts) {
+    if (count > 1) shared.set(fields, `sharedOperationFields${String(shared.size)}`);
+  }
+  return shared;
+}
+
 export function runtimeOperationsModule(typedRegistry) {
-  const operationRegistry = typedRegistry.operations.map(runtimeOperationContract);
+  const sharedFields = sharedRuntimeFields(typedRegistry);
+  const operations = typedRegistry.operations
+    .map((operation) => renderedRuntimeOperation(operation, sharedFields))
+    .join(",\n");
+  const factories = [...sharedFields].map(
+    ([fields, name]) => `const ${name} = () => (${fields}) as const;`,
+  );
+  const runConstructors = Object.values(FIELD_RUN_CONSTRUCTORS).filter((name) =>
+    `${operations}${factories.join("")}`.includes(`...${name}(`),
+  );
   return [
     "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
-    `export const ACTIVITY_LOG_OPERATION_REGISTRY = ${JSON.stringify(operationRegistry, null, 2)} as const;`,
+    'import * as fieldContracts from "./activity-log-field-contracts.js";',
+    `import { ${[
+      ...Object.keys(ZERO_ARGUMENT_FIELD_CONSTRUCTORS),
+      ...Object.keys(PARAMETERIZED_FIELD_BUNDLES),
+      ...Object.keys(FIELD_CONSTRUCTORS).filter(
+        (name) => !Object.hasOwn(BOUNDED_FIELD_CONSTRUCTORS, name),
+      ),
+      ...runConstructors,
+    ].join(", ")} } from "./activity-log-field-contracts.js";`,
+    ...factories,
+    `export const ACTIVITY_LOG_OPERATION_REGISTRY = [${operations}] as const;`,
     "",
   ].join("\n");
 }
@@ -1701,8 +2110,11 @@ export function runtimeMetadataModule() {
     'import operationSurfaceData from "./activity-log-operation-surfaces.generated.json" with { type: "json" };',
     'import type { ActivityLogFailureClassCoverageMetadata, ReadonlyRegistryData } from "./activity-log-registry-metadata.js";',
     "const failureMetadata: ReadonlyRegistryData<typeof failureCoverageData> = failureCoverageData;",
-    "// The producer validates these data against the canonical operation and failure-class contracts.",
+    "// SAFETY: Qualified canonical registry/inventory and metadata synchronization proofs bind this JSON",
+    "// to the closed coverage schema; the assertion restores literals widened by JSON module typing.",
     "export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = failureMetadata as ActivityLogFailureClassCoverageMetadata;",
+    "// SAFETY: Qualified canonical inventory and metadata synchronization proofs bind these JSON values",
+    "// to the closed failure-surface vocabulary; the assertion restores JSON-widened literals.",
     "export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLogFailureSurface>> = operationSurfaceData as Readonly<Record<string, ActivityLogFailureSurface>>;",
     "",
   ].join("\n");
