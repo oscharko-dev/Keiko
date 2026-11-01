@@ -45,7 +45,7 @@ const PAGE_KEYS = ["section", "startAt", "maxResults"] as const;
 const NEW_KEYS: ReadonlySet<string> = new Set([...SCOPE_KEYS, ...PAGE_KEYS]);
 const CONTINUE_KEYS: ReadonlySet<string> = new Set(["reportId", ...PAGE_KEYS]);
 /** Argument names echoed to the model; anything else is named by this placeholder. */
-const ARGUMENT_NAME = /^[A-Za-z][A-Za-z0-9_]{0,31}$/u;
+const ARGUMENT_NAME = /^[A-Za-z]\w{0,31}$/u;
 const UNNAMED_ARGUMENT = "(unnamed)";
 const INVALID_ARGUMENTS_MAX = 16;
 
