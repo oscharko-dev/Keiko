@@ -133,6 +133,20 @@ describe("jira.report over a project of any size", () => {
     expect(Math.max(...h.fixture.searches.map((s) => s.maxResults))).toBeGreaterThan(100);
   });
 
+  // S13 of epic #4173: asked to post "the comment text the report computed", Gemma posted
+  // report.figures verbatim; the comment section, which names the report digest, was never read.
+  it("points a complete summary at the comment section, never at its figures, for a Jira comment", async () => {
+    const h = harness({ issues: syntheticProject(3) });
+    const result = await h.run({ projectKey: "REP", section: "summary" });
+    expect(result.data.status).toBe("complete");
+    expect(result.data.comment).toEqual({
+      section: "comment",
+      use: "To post this report as a Jira comment, get this section with reportId and post its text verbatim; figures are not the comment.",
+    });
+    const page = await h.run({ reportId: result.data.reportId, section: "comment" });
+    expect(page.data).not.toHaveProperty("comment");
+  });
+
   it("reports the count per issue type and status name that a JQL aggregation gives", async () => {
     const h = harness({ issues });
     const result = await h.run({ projectKey: "REP" });

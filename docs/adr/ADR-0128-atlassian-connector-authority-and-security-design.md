@@ -1123,6 +1123,10 @@ two counts, the Markdown export and the Jira comment text carry this, and the di
 summary list cut at 15 entries (or 60 statuses) now names its `section` and `nextStartAt`, the
 offset `jiraReportSectionPage` continues from, instead of leaving a weaker model to guess (lab S11:
 an answer after 40 of 46 deviating issues). Lists shown whole carry neither; caps are unchanged.
+A complete summary also carries `comment: { section: "comment", use }`, the one sentence that says
+the text to post as a Jira comment is that section's, verbatim, and not the figures (lab S13: asked
+for the comment text the report computed, Gemma posted `report.figures`, which names no digest). The
+pointer sits in the result the model reads; the tool description does not grow.
 
 **Complete, traceable requirement derivation (#4179, 2026-10-31).** Grounded Q&A keeps its ranked
 excerpts for ordinary questions, so a request for _all_ requirements of a specification would

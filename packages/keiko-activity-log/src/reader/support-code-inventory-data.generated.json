@@ -1166,6 +1166,7 @@
     "keiko-server/chat-tool-approvals",
     "keiko-server/chat-tool-continuation-fit",
     "keiko-server/chat-tool-receipts",
+    "keiko-server/chat-tool-report-coverage",
     "keiko-server/chat-tool-runtime",
     "keiko-server/chat-tool-sources",
     "keiko-server/chat-tool-sources-turn",

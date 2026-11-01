@@ -180,6 +180,16 @@ function refuse<Context extends ManagedMcpInvocationContext>(
   };
 }
 
+/**
+ * Where the text for a Jira comment is (S13 of epic #4173): asked to post the comment the report
+ * computed, a model posted the summary's figures, which name no report digest. The pointer sits in
+ * the result the model reads, not only in the tool description.
+ */
+const COMMENT_POINTER = Object.freeze({
+  section: "comment",
+  use: "To post this report as a Jira comment, get this section with reportId and post its text verbatim; figures are not the comment.",
+});
+
 function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpToolResult {
   const status = jiraReportState(session);
   const data: Record<string, CatalogJsonObject[keyof CatalogJsonObject]> = {
@@ -190,6 +200,7 @@ function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpTool
     exports: [...JIRA_REPORT_EXPORTS_VIEW],
   };
   if (session.report !== undefined) data.report = jiraReportSummary(session.report);
+  if (status === "complete") data.comment = { ...COMMENT_POINTER };
   if (status === "reading") {
     data.nextStartAt = session.startAt;
     if (session.failure !== undefined) data.lastFailure = session.failure;

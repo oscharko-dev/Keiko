@@ -63,6 +63,7 @@ export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze(
         report: OPEN_OBJECT,
         section: OPEN_OBJECT,
         exports: { type: "array", maxItems: 4, items: text(16) },
+        comment: object({ section: text(16), use: text(256) }, ["section", "use"]),
         lastFailure: text(64),
         invalidArguments: { type: "array", maxItems: 16, items: text(64) },
         message: text(256),
