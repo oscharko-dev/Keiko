@@ -254,7 +254,7 @@
       "rule": "anti-slop/no-runtime-typeof",
       "from": 0,
       "to": 1,
-      "reason": "proof-fixture",
+      "reason": "test-witness",
       "issue": 3918
     },
     {
