@@ -484,7 +484,16 @@ describe("S13 report export and Jira comment", () => {
     },
     hierarchy: { discovery: "complete", fieldCount: 1 },
     progress: { project: progress, byType: [], byStatus: [], unassigned: 3, overdue: 0 },
-    epics: [],
+    epics: keys.includes("RPT-1")
+      ? [
+          {
+            key: "RPT-1",
+            summary: "Epic",
+            members: { ...progress, total: 0, new: 0 },
+            linked: { total: 0 },
+          },
+        ]
+      : [],
     compliance: {
       requiredFieldRules: "applied",
       checker: "none",
@@ -567,6 +576,23 @@ describe("S13 report export and Jira comment", () => {
     const check = await JOURNEYS.S13(ctxOf({ files: refused }), CHAT);
     expect(check.status).toBe("red");
     expect(check.detail).toContain("export request failed");
+  });
+
+  it("is red when the Markdown export keeps the digest but not the report", async () => {
+    const markdown = exportJiraReport(report(KEYS), "markdown");
+    const replaced = (content) => (format) =>
+      format === "markdown"
+        ? { ...markdown, content, byteCount: Buffer.byteLength(content, "utf8") }
+        : exportJiraReport(report(KEYS), format);
+    const digestOnly = `Report digest: ${DIGEST}`;
+    const figure = markdown.content.replace("| Project | 3 | 3 |", "| Project | 3 | 2 |");
+    const noEpic = markdown.content.replace("| RPT-1 |", "| RPT-8 |");
+    for (const content of [digestOnly, figure, noEpic]) {
+      expect(content).toContain(`Report digest: ${DIGEST}`);
+      const check = await JOURNEYS.S13(ctxOf({ files: replaced(content) }), CHAT);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("differs:");
+    }
   });
 
   it("is red when the report read fewer issues than Jira holds", async () => {

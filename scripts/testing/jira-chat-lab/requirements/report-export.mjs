@@ -115,9 +115,63 @@ export function gradeCsvExport(file, digest, jiraKeys) {
   };
 }
 
-/** The Markdown export must carry the digest of the report the tool returned. */
-export function gradeMarkdownExport(file, digest) {
+const REPORT_SECTIONS = ["## Progress", "## Epics and containers", "## Compliance", "## Coverage"];
+const CATEGORIES = ["new", "indeterminate", "done"];
+
+/**
+ * What the laboratory reads from Jira itself about the reported issues: their keys, the epic keys
+ * and the issue count per status category (`noCategory` for a status without one).
+ */
+export function jiraReportFacts(issues) {
+  const category = (issue) => issue.fields?.status?.statusCategory?.key;
+  const count = (key) => issues.filter((issue) => category(issue) === key).length;
+  return {
+    keys: issues.map((issue) => issue.key),
+    epicKeys: issues
+      .filter((issue) => issue.fields?.issuetype?.name === "Epic")
+      .map((issue) => issue.key),
+    byCategory: [
+      ...CATEGORIES.map(count),
+      issues.filter((issue) => !CATEGORIES.includes(category(issue))).length,
+    ],
+  };
+}
+
+/** The lines under `heading` up to the next heading of the same level. */
+function sectionOf(content, heading) {
+  const lines = content.split("\n");
+  const start = lines.indexOf(heading);
+  if (start < 0) return "";
+  const end = lines.findIndex((line, index) => index > start && line.startsWith("## "));
+  return lines.slice(start + 1, end < 0 ? undefined : end).join("\n");
+}
+
+/**
+ * The Markdown export must be the report the tool returned (same digest) and say what Jira holds:
+ * every report section, all issues read, the project's issue count per status category and every
+ * epic. A digest alone does not prove the download carries the report.
+ */
+export function gradeMarkdownExport(file, digest, facts) {
   if (!fileFacts(file, "markdown")) return { ok: false, reason: "not a Markdown export file" };
-  const ok = file.reportDigest === digest && file.content.includes(`Report digest: ${digest}`);
-  return { ok, reason: `digest ${ok ? "matches" : "differs"}` };
+  const content = file.content.replaceAll(/\\(.)/gu, "$1");
+  const total = facts.keys.length;
+  const checks = {
+    digest: file.reportDigest === digest && content.includes(`Report digest: ${digest}`),
+    sections: REPORT_SECTIONS.every((heading) => content.split("\n").includes(heading)),
+    issuesRead: content.includes(`${String(total)} of ${String(total)} issues read`),
+    progress: content.includes(`| Project | ${[total, ...facts.byCategory].join(" | ")} |`),
+    epics: facts.epicKeys.every((key) =>
+      new RegExp(String.raw`^\| ${key} \|`, "mu").test(
+        sectionOf(content, "## Epics and containers"),
+      ),
+    ),
+  };
+  const failed = Object.keys(checks).filter((name) => !checks[name]);
+  return {
+    ok: failed.length === 0,
+    reason:
+      failed.length === 0
+        ? "report sections and figures match Jira"
+        : `differs: ${failed.join(", ")}`,
+  };
 }

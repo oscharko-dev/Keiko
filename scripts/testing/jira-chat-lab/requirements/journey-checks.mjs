@@ -53,6 +53,7 @@ import {
   gradeCsvExport,
   gradeMarkdownExport,
   gradeReportComment,
+  jiraReportFacts,
 } from "./report-export.mjs";
 import { countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
 import {
@@ -317,8 +318,9 @@ async function reportExportAndComment(ctx, chat) {
   }
   const [comments, issues] = await Promise.all([
     ctx.comments(target),
-    ctx.search("project = RPT", "summary"),
+    ctx.search("project = RPT", "summary,status,issuetype"),
   ]);
+  const facts = jiraReportFacts(issues);
   const comment = gradeReportComment(
     comments.filter((entry) => !known.has(entry.id)),
     computedCommentTexts(turn.toolExchanges),
@@ -329,12 +331,8 @@ async function reportExportAndComment(ctx, chat) {
     ["csv", "markdown"].map((format) => ctx.exportReport(chat, report.reportId, format)),
   ).then(
     ([csv, markdown]) => [
-      gradeCsvExport(
-        csv,
-        report.digest,
-        issues.map((issue) => issue.key),
-      ),
-      gradeMarkdownExport(markdown, report.digest),
+      gradeCsvExport(csv, report.digest, facts.keys),
+      gradeMarkdownExport(markdown, report.digest, facts),
     ],
     (error) => [{ ok: false, reason: `export request failed: ${String(error.message)}` }],
   );
