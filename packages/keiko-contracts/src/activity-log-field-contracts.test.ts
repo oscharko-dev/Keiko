@@ -98,6 +98,62 @@ function expectIndependentVocabularies(
   }
 }
 
+// The descriptors the registry carried before these factories existed (dev f9f71d89d). Pinning the
+// literal values, not the regenerated registry, lets a factory change fail here.
+const HISTORICAL_AUTOMATIC_CATALOG_FIELDS = {
+  outcome: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: true,
+    values: ["applied", "unchanged", "stale", "cancelled", "failed", "retry-decision"],
+  },
+  phase: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: ["catalog", "retry-decision"],
+  },
+  backgroundAttempt: { type: "integer", dataClass: "count", required: false },
+  configurationGeneration: { type: "integer", dataClass: "count", required: false },
+  retryDisposition: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "scheduled",
+      "exhausted",
+      "coalesced",
+      "in-flight",
+      "backoff",
+      "conclusive",
+      "complete",
+    ],
+  },
+  retryDelayMs: { type: "integer", dataClass: "duration", required: false },
+  retryDeadlineMs: { type: "integer", dataClass: "count", required: false },
+  configuredModelCount: { type: "integer", dataClass: "count", required: true },
+  updatedModelCount: { type: "integer", dataClass: "count", required: true },
+  addedModelCount: { type: "integer", dataClass: "count", required: true },
+  removedModelCount: { type: "integer", dataClass: "count", required: true },
+  deploymentChangedModelCount: { type: "integer", dataClass: "count", required: true },
+  elapsedMs: { type: "integer", dataClass: "duration", required: true },
+  retryable: { type: "boolean", dataClass: "closed-enum", required: true },
+};
+
+const HISTORICAL_EMBEDDING_BATCH_RETRY_FIELDS = {
+  capsuleIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  documentIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  attempt: { type: "integer", dataClass: "count", required: true },
+  zeroProgressRetries: { type: "integer", dataClass: "count", required: true },
+  maxRetries: { type: "integer", dataClass: "count", required: true },
+  delayMs: { type: "number", dataClass: "duration", required: true },
+  remainingCount: { type: "integer", dataClass: "count", required: true },
+  completedCount: { type: "integer", dataClass: "count", required: true },
+  transport: { type: "string", dataClass: "closed-enum", required: true, values: ["array-batch"] },
+  endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
+  failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+};
+
 describe("automatic catalog field policy", () => {
   it("preserves the producer's exact ordered fourteen non-global descriptors", () => {
     const fields = activityLogAutomaticCatalogFields();
@@ -105,8 +161,8 @@ describe("automatic catalog field policy", () => {
       (entry) => entry.op === "gateway.catalog.automatic.completed",
     );
     expect(operation).toBeDefined();
-    const expected = Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2));
-    expect(fields).toEqual(expected);
+    expect(fields).toEqual(HISTORICAL_AUTOMATIC_CATALOG_FIELDS);
+    expect(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2))).toEqual(fields);
     expectOrdinaryDescriptor(fields, [
       "outcome",
       "phase",
@@ -313,7 +369,8 @@ describe("embedding batch retry field policy", () => {
       (entry) => entry.op === "embedding.batch.retry",
     );
     expect(operation).toBeDefined();
-    expect(fields).toEqual(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2)));
+    expect(fields).toEqual(HISTORICAL_EMBEDDING_BATCH_RETRY_FIELDS);
+    expect(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2))).toEqual(fields);
     expectOrdinaryDescriptor(fields, [
       "capsuleIdDigest",
       "documentIdDigest",
