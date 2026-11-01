@@ -55,7 +55,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.draft.showLess": "Show less",
   "chat.jira.draft.empty": "(empty)",
   "chat.jira.draft.cleared": "Cleared",
-  "chat.jira.draft.valueNotShown": "Value not shown",
   "chat.jira.draft.requirements": "Requirements: {ids}",
   "chat.jira.draft.unreadable":
     "This draft cannot be laid out as a list of issues, so its details are shown field by field.",
