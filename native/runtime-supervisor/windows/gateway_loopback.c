@@ -95,3 +95,25 @@ static DWORD change(PSID package_sid, int add) {
 DWORD keiko_gateway_loopback_exempt(PSID package_sid) { return change(package_sid, 1); }
 
 DWORD keiko_gateway_loopback_revoke(PSID package_sid) { return change(package_sid, 0); }
+
+DWORD keiko_gateway_loopback_prune_with(keiko_gateway_loopback_get_fn get,
+                                        keiko_gateway_loopback_set_fn set, PSID *packages,
+                                        DWORD count) {
+  DWORD index, first_error = ERROR_SUCCESS;
+  for (index = 0; index < count; index++) {
+    DWORD result = keiko_gateway_loopback_apply(get, set, packages[index], 0);
+    if (result != ERROR_SUCCESS && first_error == ERROR_SUCCESS) first_error = result;
+  }
+  return first_error;
+}
+
+DWORD keiko_gateway_loopback_prune(PSID *packages, DWORD count) {
+  struct loopback_api api = {0};
+  DWORD result;
+  if (count == 0) return ERROR_SUCCESS;
+  result = load_api(&api);
+  if (result != ERROR_SUCCESS) return result;
+  result = keiko_gateway_loopback_prune_with(api.get, api.set, packages, count);
+  if (api.module != NULL) FreeLibrary(api.module);
+  return result;
+}

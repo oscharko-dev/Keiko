@@ -129,6 +129,28 @@ int main(void) {
              writes == 0,
          "missing functions or SID are refused before any change");
 
+  {
+    PSID stale[2];
+    stale[0] = another;
+    stale[1] = ours;
+    reset(other, another);
+    (void)keiko_gateway_loopback_apply(fake_get, fake_set, ours, 1);
+    expect(keiko_gateway_loopback_prune_with(fake_get, fake_set, stale, 2) == ERROR_SUCCESS &&
+               stored_count == 1 && holds(other) == 1 && holds(another) == 0 && holds(ours) == 0,
+           "pruning guarded SIDs removes exactly those entries and keeps the rest");
+    writes = 0;
+    expect(keiko_gateway_loopback_prune_with(fake_get, fake_set, stale, 2) == ERROR_SUCCESS &&
+               writes == 0 && stored_count == 1,
+           "pruning absent SIDs does not rewrite the list");
+    expect(keiko_gateway_loopback_prune_with(fake_get, fake_set, stale, 0) == ERROR_SUCCESS &&
+               writes == 0,
+           "pruning nothing does nothing");
+    fail_set = ERROR_ACCESS_DENIED;
+    (void)keiko_gateway_loopback_apply(fake_get, fake_set, ours, 1);
+    expect(writes == 1 && holds(ours) == 0, "a refused write leaves the list unchanged");
+    fail_set = ERROR_SUCCESS;
+  }
+
   reset(NULL, NULL);
   FreeSid(other);
   FreeSid(another);

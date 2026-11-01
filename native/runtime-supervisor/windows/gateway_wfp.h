@@ -39,4 +39,9 @@ DWORD keiko_gateway_filters_open_guarded(PSID package_sid, UINT16 family, UINT16
 DWORD keiko_gateway_filters_recover_guard(PSID package_sid, HANDLE job, const GUID *sublayer,
                                          const GUID keys[2], struct keiko_gateway_filters *filters);
 
+/* Lists the distinct AppContainer package SIDs that still have a persistent Keiko durable deny
+ * guard (left by a broker that could not verify termination or did not survive). Writes at most
+ * capacity SIDs; the caller HeapFree()s the first *count entries whatever the result. */
+DWORD keiko_gateway_filters_guarded_packages(PSID *packages, DWORD capacity, DWORD *count);
+
 #endif

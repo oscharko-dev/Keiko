@@ -811,8 +811,9 @@ list through the documented `NetworkIsolationSetAppContainerConfig` API
   race with that write; the broker never removes entries it did not add.
 - **Crash.** A broker crash can leave an entry for a per-tree SID. That SID is derived from a
   per-run nonce no later process can obtain, and the durable deny guard keeps blocking it, so a
-  stale entry grants nothing. Pruning stale entries at broker start, together with recovery of
-  durable guards, remains open work.
+  stale entry grants nothing. At broker start, before serving,
+  the broker revokes the exemption of every SID that still carries a persistent durable deny
+  guard; the guards themselves stay, and their recovery remains open work.
 
 D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
 reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)

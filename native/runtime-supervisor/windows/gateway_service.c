@@ -250,6 +250,20 @@ static DWORD WINAPI control(DWORD code, DWORD type, LPVOID data, LPVOID context)
   return ERROR_SUCCESS;
 }
 
+#define STALE_GUARD_CAPACITY 64
+
+/* ADR-0043 D18: a broker that did not survive a run cannot have revoked that tree's loopback
+ * exemption, but its durable deny guard outlives it. Before serving, revoke the exemption of every
+ * SID that still carries such a guard. Revoking only narrows access, so a failure is not fatal:
+ * the guard keeps blocking the SID and the next start retries. Guards stay as they are. */
+static void prune_stale_exemptions(void) {
+  PSID packages[STALE_GUARD_CAPACITY];
+  DWORD count = 0, index;
+  (void)keiko_gateway_filters_guarded_packages(packages, STALE_GUARD_CAPACITY, &count);
+  (void)keiko_gateway_loopback_prune(packages, count);
+  for (index = 0; index < count; index++) HeapFree(GetProcessHeap(), 0, packages[index]);
+}
+
 static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
   wchar_t *path;
   HANDLE image = INVALID_HANDLE_VALUE, pipe = INVALID_HANDLE_VALUE;
@@ -268,6 +282,7 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
   if (image == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
   pipe = keiko_gateway_service_pipe(PIPE_NAME);
   if (pipe == INVALID_HANDLE_VALUE) { error = GetLastError(); goto done; }
+  prune_stale_exemptions();
   report(SERVICE_RUNNING, ERROR_SUCCESS);
   while (WaitForSingleObject(stopping, 0) == WAIT_TIMEOUT && accept_client(pipe)) {
     error = serve(pipe, image);

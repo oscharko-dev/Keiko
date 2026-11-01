@@ -32,4 +32,12 @@ typedef DWORD(WINAPI *keiko_gateway_loopback_set_fn)(DWORD, PSID_AND_ATTRIBUTES)
 DWORD keiko_gateway_loopback_apply(keiko_gateway_loopback_get_fn get,
                                    keiko_gateway_loopback_set_fn set, PSID package_sid, int add);
 
+/* Removes every listed SID from the exemption list, keeping all other entries. Used at broker
+ * start for the SIDs that still carry a durable deny guard, so an exemption a crashed broker could
+ * not revoke does not outlive it. Every SID is attempted; the first failure is returned. */
+DWORD keiko_gateway_loopback_prune(PSID *packages, DWORD count);
+DWORD keiko_gateway_loopback_prune_with(keiko_gateway_loopback_get_fn get,
+                                        keiko_gateway_loopback_set_fn set, PSID *packages,
+                                        DWORD count);
+
 #endif
