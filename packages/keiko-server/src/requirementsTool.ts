@@ -449,6 +449,26 @@ function unavailable(
   return { data: { outcome: "failed", reason: "unavailable" }, isError: true };
 }
 
+interface ServeEnvironment {
+  readonly context: RequirementsToolContext;
+  readonly reports: JiraReportStore | undefined;
+  readonly redact: (value: string) => string;
+}
+
+function serveView(
+  store: KnowledgeStore,
+  collection: RequirementCollection,
+  parsed: ParsedArguments,
+  environment: ServeEnvironment,
+): Served {
+  if (collection.units.length === 0 && collection.refusals.length > 0)
+    return failure(collection.refusals[0] ?? "scope-unavailable", collection);
+  const { context, reports, redact } = environment;
+  return parsed.view === "changes"
+    ? serveChanges(collection, parsed, context, reports, redact)
+    : serve(store, collection, parsed, redact);
+}
+
 function execute(
   deps: UiHandlerDeps,
   args: CatalogJsonObject,
@@ -470,12 +490,7 @@ function execute(
     const store = session.store;
     const collection = collectForTurn(store, scopes, context.chatId, context.userMessageId);
     const redact = contentRedact(deps);
-    const served =
-      collection.units.length === 0 && collection.refusals.length > 0
-        ? failure(collection.refusals[0] ?? "scope-unavailable", collection)
-        : parsed.view === "changes"
-          ? serveChanges(collection, parsed, context, reports, redact)
-          : serve(store, collection, parsed, redact);
+    const served = serveView(store, collection, parsed, { context, reports, redact });
     log(context, parsed, served);
     return { data: served.data, ...(served.data.outcome === "failed" ? { isError: true } : {}) };
   } catch (error) {
