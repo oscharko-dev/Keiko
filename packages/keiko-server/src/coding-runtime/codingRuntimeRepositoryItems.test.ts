@@ -242,8 +242,12 @@ describe("repository item admission", () => {
     );
     expect(files["commands/ship.md"]).toContain("agent: reviewer\n");
     expect(files["skills/other/SKILL.md"]).toContain("name: other\n");
-    for (const path of ["agents/reviewer.md", "commands/ship.md", "skills/demo/SKILL.md"]) {
-      expect(statSync(join(root, path)).mode & 0o777).toBe(0o600);
+    // Windows reports synthesized permission bits (0o666) whatever was requested, so the
+    // owner-private modes are asserted where POSIX modes exist (#4068).
+    if (process.platform !== "win32") {
+      for (const path of ["agents/reviewer.md", "commands/ship.md", "skills/demo/SKILL.md"]) {
+        expect(statSync(join(root, path)).mode & 0o777).toBe(0o600);
+      }
     }
 
     const { event, persisted } = expectAdmissionLine(records);
