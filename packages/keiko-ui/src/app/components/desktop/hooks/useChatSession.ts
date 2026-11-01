@@ -77,6 +77,7 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+  gatewayModelCatalogCheckRequested,
   notifyGatewayModelCatalogUpdated,
 } from "../widgets/shared/gatewaySetupBus";
 import { sortProjects } from "@/lib/sidebar-sort";
@@ -1952,7 +1953,10 @@ function publishGatewayModelRefresh(result: GatewayModelRefreshResult): void {
   for (const subscriber of gatewayModelRefreshSubscribers) subscriber(result);
 }
 
-function refreshGatewayModels(): void {
+// A person's own step (the Workbench or a model picker opened) also checks again the models that
+// are not ready; every other refresh only rereads the catalog (customer 1.3.4).
+function refreshGatewayModels(event?: Event): void {
+  const check = event !== undefined && gatewayModelCatalogCheckRequested(event);
   const generation = gatewayModelRefreshGeneration + 1;
   gatewayModelRefreshGeneration = generation;
   invalidateSharedBootstrap();
@@ -1963,7 +1967,7 @@ function refreshGatewayModels(): void {
   publishGatewayModelRefresh({ kind: "pending" });
   const correlationId = newClientCorrelationId();
   const startedAt = performance.now();
-  void fetchModels(correlationId).then(
+  void fetchModels(correlationId, check).then(
     ({ models }): void => {
       if (generation === gatewayModelRefreshGeneration) {
         recordCatalogAdoption(

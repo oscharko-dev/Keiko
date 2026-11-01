@@ -294,7 +294,7 @@
       "rule": "anti-slop/no-unknown-parameters",
       "from": 0,
       "to": 1,
-      "reason": "proof-fixture",
+      "reason": "test-witness",
       "issue": 3918
     },
     {
@@ -302,7 +302,7 @@
       "rule": "anti-slop/no-unknown-returns",
       "from": 0,
       "to": 2,
-      "reason": "proof-fixture",
+      "reason": "test-witness",
       "issue": 3918
     },
     {

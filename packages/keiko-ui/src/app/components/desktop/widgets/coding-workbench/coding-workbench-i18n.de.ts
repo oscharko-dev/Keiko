@@ -768,9 +768,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-verification-pending":
     "Keiko prüft dieses Modell noch beim Gateway. Die Workbench aktualisiert sich von selbst, sobald die Prüfung abgeschlossen ist.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
-    "Die letzte automatische Chat-Prüfung konnte dieses Modell nicht nutzen. Keiko prüft im Hintergrund weiter; wähle ein anderes bereites Modell oder warte auf die Wiederherstellung.",
+    "Die letzte Chat-Prüfung konnte dieses Modell nicht nutzen. Öffne die Workbench oder die Modellauswahl erneut, um es noch einmal zu prüfen, oder wähle ein anderes bereites Modell.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "Die automatische Tool-Calling-Prüfung des Coding-Modells wurde nicht erfolgreich abgeschlossen. Prüfe das letzte Readiness-Ergebnis unter Einstellungen → Modelle.",
+    "Das Gateway hat noch nicht bestätigt, dass dieses Modell Tools aufrufen kann. Öffne die Workbench oder die Modellauswahl in einer Minute erneut, um es noch einmal zu prüfen, oder wähle ein anderes bereites Modell.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex-Abonnement",

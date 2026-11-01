@@ -14,6 +14,7 @@ import { connect as netConnect, type AddressInfo, type Socket } from "node:net";
 import { rootCertificates } from "node:tls";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  _resetRememberedCaBundleOriginsForTests,
   _resetWarnedCaBundlePaths,
   connectResponseHeaderExceedsLimit,
   gatewayTrustedCaCertificates,
@@ -690,6 +691,139 @@ describe("gatewayFetch", () => {
       for (const socket of originSockets) socket.destroy();
       await close(origin);
     }
+  });
+});
+
+// The default trust store rejects the origin, Keiko's CA set accepts it: the outcome is stable per
+// origin, so the first call pays the failed handshake and the fallback warning and later calls
+// go straight to the CA-bundle transport.
+describe("gatewayFetch remembers origins that need the CA bundle", () => {
+  interface TrustedOrigin {
+    readonly port: number;
+    // TCP connections the origin accepted: one per TLS handshake attempt, rejected or not.
+    readonly handshakeAttempts: () => number;
+  }
+  const originSockets = new Set<Socket>();
+  let caDir = "";
+  let caBundlePath = "";
+
+  beforeEach(() => {
+    _resetRememberedCaBundleOriginsForTests();
+    _resetWarnedCaBundlePaths();
+    caDir = mkdtempSync(join(tmpdir(), "keiko-ca-memo-"));
+    caBundlePath = join(caDir, "ca.pem");
+    writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
+  });
+
+  afterEach(() => {
+    for (const socket of originSockets) socket.destroy();
+    originSockets.clear();
+    rmSync(caDir, { recursive: true, force: true });
+    _resetRememberedCaBundleOriginsForTests();
+    _resetWarnedCaBundlePaths();
+  });
+
+  async function startOrigin(): Promise<TrustedOrigin> {
+    let attempts = 0;
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", connection: "close" });
+      res.end(JSON.stringify({ secure: true }));
+    });
+    origin.on("connection", (socket) => {
+      attempts += 1;
+      originSockets.add(socket);
+      socket.once("close", () => originSockets.delete(socket));
+    });
+    return { port: await listen(origin), handshakeAttempts: (): number => attempts };
+  }
+
+  function recordingLog(events: ModelGatewayLogTransport[]): GatewayFetchOptions["log"] {
+    return {
+      write: (event): void => {
+        events.push(event);
+      },
+    };
+  }
+
+  const fallbackLines = (events: readonly ModelGatewayLogTransport[]): number =>
+    events.filter((event) => event.op === "http.gateway.tls.ca-bundle-fallback").length;
+
+  async function callOnce(
+    port: number,
+    events: ModelGatewayLogTransport[],
+    caBundle: string | null = caBundlePath,
+  ): Promise<unknown> {
+    const response = await gatewayFetch(`https://127.0.0.1:${String(port)}/secure`, {
+      timeoutMs: 2_000,
+      log: recordingLog(events),
+      ...(caBundle === null ? {} : { egress: { caBundlePath: caBundle } }),
+    });
+    return response.json();
+  }
+
+  it("skips the rejected default handshake and the warning on later calls to the same origin", async () => {
+    const origin = await startOrigin();
+    const events: ModelGatewayLogTransport[] = [];
+    expect(await callOnce(origin.port, events)).toEqual({ secure: true });
+    expect(origin.handshakeAttempts()).toBe(2);
+    expect(fallbackLines(events)).toBe(1);
+
+    expect(await callOnce(origin.port, events)).toEqual({ secure: true });
+    expect(await callOnce(origin.port, events)).toEqual({ secure: true });
+    expect(origin.handshakeAttempts()).toBe(4);
+    expect(fallbackLines(events)).toBe(1);
+  });
+
+  it("falls back on its own for a different origin", async () => {
+    const first = await startOrigin();
+    const second = await startOrigin();
+    const events: ModelGatewayLogTransport[] = [];
+    await callOnce(first.port, events);
+    await callOnce(second.port, events);
+    expect(first.handshakeAttempts()).toBe(2);
+    expect(second.handshakeAttempts()).toBe(2);
+    expect(fallbackLines(events)).toBe(2);
+    await callOnce(first.port, events);
+    await callOnce(second.port, events);
+    expect(first.handshakeAttempts()).toBe(3);
+    expect(second.handshakeAttempts()).toBe(3);
+    expect(fallbackLines(events)).toBe(2);
+  });
+
+  it("forgets the origin when the CA-bundle path later fails on TLS trust", async () => {
+    const origin = await startOrigin();
+    const events: ModelGatewayLogTransport[] = [];
+    await callOnce(origin.port, events);
+    expect(fallbackLines(events)).toBe(1);
+
+    // The CA set no longer covers the origin: the remembered direct CA-bundle call fails, reports
+    // the post-fallback trust failure, and does not loop back through the default store.
+    await expect(callOnce(origin.port, events, null)).rejects.toMatchObject({
+      code: "TLS_CA_FAILURE",
+    });
+    expect(origin.handshakeAttempts()).toBe(3);
+    const failures = events.filter((event) => event.op === "http.gateway.tls.trust-failed");
+    expect(failures).toHaveLength(1);
+    expect(fallbackLines(events)).toBe(1);
+
+    // The memo is gone: the next call walks default store, then fallback, with a fresh warning.
+    expect(await callOnce(origin.port, events)).toEqual({ secure: true });
+    expect(origin.handshakeAttempts()).toBe(5);
+    expect(fallbackLines(events)).toBe(2);
+  });
+
+  it("does not remember an origin the CA bundle cannot verify either", async () => {
+    const origin = await startOrigin();
+    const events: ModelGatewayLogTransport[] = [];
+    await expect(callOnce(origin.port, events, null)).rejects.toMatchObject({
+      code: "TLS_CA_FAILURE",
+    });
+    await expect(callOnce(origin.port, events, null)).rejects.toMatchObject({
+      code: "TLS_CA_FAILURE",
+    });
+    // Each call still walks default store (rejected) and CA bundle (rejected): two per call.
+    expect(origin.handshakeAttempts()).toBe(4);
+    expect(fallbackLines(events)).toBe(2);
   });
 });
 

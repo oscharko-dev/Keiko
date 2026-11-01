@@ -18,6 +18,10 @@ import {
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
+import {
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  gatewayModelCatalogCheckRequested,
+} from "../shared/gatewaySetupBus";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -361,6 +365,23 @@ describe("Coding Workbench composer", () => {
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  // Customer 1.3.4: opening the picker is a person asking again, so a model that failed at startup
+  // is checked once more without a page reload.
+  it("asks for a model check when the coding model picker opens", async () => {
+    const user = userEvent.setup();
+    const listener = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    try {
+      renderComposerWithOverrides({ models: [CODING_MODEL, ALTERNATE_MODEL] });
+      await user.click(screen.getByRole("combobox", { name: "Coding model: gpt-5.4" }));
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(gatewayModelCatalogCheckRequested(listener.mock.calls[0]?.[0] as Event)).toBe(true);
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    }
   });
 
   // Owner decision 2026-10-30: one compact choice, "Jira: none" by default; picking a Pod is the

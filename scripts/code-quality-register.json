@@ -4777,9 +4777,11 @@
     },
     "packages/keiko-model-gateway/src/http.test.ts": {
       "anti-slop/no-chained-type-assertions": 7,
+      "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-module-mocking": 14,
       "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 18
     },
     "packages/keiko-model-gateway/src/http.ts": {
@@ -5047,7 +5049,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-model-gateway/src/rerank-adapter.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 2,
+      "anti-slop/no-conditional-empty-object-spread": 4,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 8,
       "anti-slop/no-unknown-parameters": 4,
@@ -6977,9 +6979,9 @@
     },
     "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 3,
-      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-known-value-widening": 2,
       "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts": {
       "anti-slop/no-conditional-empty-object-spread": 6,
@@ -8238,12 +8240,12 @@
       "anti-slop/no-reflect-get": 1,
       "anti-slop/no-runtime-typeof": 21,
       "anti-slop/no-unknown-parameters": 10,
-      "anti-slop/no-unknown-returns": 14,
+      "anti-slop/no-unknown-returns": 15,
       "anti-slop/no-unsafe-dictionary-type": 24,
-      "anti-slop/require-safety-comment-for-type-assertion": 173
+      "anti-slop/require-safety-comment-for-type-assertion": 174
     },
     "packages/keiko-server/src/coding-sidecar-gateway.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 53,
+      "anti-slop/no-conditional-empty-object-spread": 54,
       "anti-slop/no-known-value-widening": 27,
       "anti-slop/no-runtime-typeof": 27,
       "anti-slop/no-unknown-parameters": 35,
@@ -9671,7 +9673,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-server/src/gateway-readiness.initialization.test.ts": {
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-server/src/gateway-readiness.native-cancellation.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
@@ -9700,7 +9702,7 @@
     },
     "packages/keiko-server/src/gateway-readiness.ts": {
       "anti-slop/no-array-filter-map": 1,
-      "anti-slop/no-conditional-empty-object-spread": 22,
+      "anti-slop/no-conditional-empty-object-spread": 20,
       "anti-slop/no-known-value-widening": 4,
       "anti-slop/no-runtime-typeof": 8,
       "anti-slop/no-unknown-parameters": 19,
@@ -10887,7 +10889,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 6
     },
     "packages/keiko-server/src/grounded-rerank-facade.ts": {
-      "anti-slop/no-conditional-empty-object-spread": 12
+      "anti-slop/no-conditional-empty-object-spread": 13
     },
     "packages/keiko-server/src/grounded-rerank.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1
@@ -11499,7 +11501,7 @@
     "packages/keiko-server/src/memory-embedding.test.ts": {
       "anti-slop/no-runtime-typeof": 2,
       "anti-slop/no-widen-then-assert": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/require-safety-comment-for-type-assertion": 6
     },
     "packages/keiko-server/src/memory-embedding.ts": {
       "anti-slop/no-conditional-empty-object-spread": 7,
@@ -14303,7 +14305,7 @@
       "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-conditional-empty-object-spread": 6,
       "anti-slop/no-module-mocking": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 13
+      "anti-slop/require-safety-comment-for-type-assertion": 14
     },
     "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": {
       "anti-slop/no-conditional-empty-object-spread": 3,
@@ -15847,6 +15849,9 @@
       "anti-slop/no-module-mocking": 3,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchComposer.test.tsx": {
+      "anti-slop/require-safety-comment-for-type-assertion": 1
+    },
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.repository.test.tsx": {
       "anti-slop/no-conditional-empty-object-spread": 1
     },
@@ -15960,7 +15965,7 @@
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 4,
       "anti-slop/no-unsafe-dictionary-type": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 17
+      "anti-slop/require-safety-comment-for-type-assertion": 18
     },
     "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": {
       "anti-slop/no-conditional-empty-object-spread": 3,
@@ -16441,8 +16446,11 @@
     "packages/keiko-ui/src/app/components/desktop/widgets/shared/activityBus.test.tsx": {
       "anti-slop/no-conditional-empty-object-spread": 1
     },
+    "packages/keiko-ui/src/app/components/desktop/widgets/shared/gatewaySetupBus.test.ts": {
+      "anti-slop/require-safety-comment-for-type-assertion": 2
+    },
     "packages/keiko-ui/src/app/components/desktop/widgets/shared/gatewaySetupBus.ts": {
-      "anti-slop/no-runtime-typeof": 1
+      "anti-slop/no-runtime-typeof": 2
     },
     "packages/keiko-ui/src/app/components/desktop/windowRecovery.ts": {
       "anti-slop/no-known-value-widening": 2
