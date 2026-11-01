@@ -238,9 +238,12 @@ function content(extracted: Extraction): readonly unknown[] {
 
 describe("requirement inventory across document formats", () => {
   it("derives the specification's requirements from every supported format", async () => {
-    for (const format of FORMATS) {
+    const extracted = await Promise.all(
+      FORMATS.map(async (format) => ({ format, result: await extract(format) })),
+    );
+    for (const { format, result } of extracted) {
       const inventory = deriveRequirementInventory({
-        ...(await extract(format)),
+        ...result,
         documentKey: DOCUMENT_KEY,
       });
       expect(
@@ -255,8 +258,11 @@ describe("requirement inventory across document formats", () => {
     const reference = content(await extract("markdown"));
 
     expect(reference).toHaveLength(SPECS.length);
-    for (const format of FORMATS) {
-      expect(content(await extract(format)), format).toEqual(reference);
+    const extracted = await Promise.all(
+      FORMATS.map(async (format) => ({ format, result: await extract(format) })),
+    );
+    for (const { format, result } of extracted) {
+      expect(content(result), format).toEqual(reference);
     }
   });
 
