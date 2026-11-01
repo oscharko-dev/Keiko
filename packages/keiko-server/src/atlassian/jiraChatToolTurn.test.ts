@@ -37,6 +37,7 @@ import type {
   AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
+import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import { handleDecideChatReadConsent } from "./chatReadConsentRoutes.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
 import {
@@ -152,11 +153,20 @@ function offeredTool(mutation: Mutation, draft: boolean): string {
   if (typeof mutation === "object") return "keiko.jira.attach";
   return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
 }
-function toolArguments(mutation: Mutation, draft: boolean): Record<string, unknown> {
+/** A model that corrects its comment between rounds, and the answer Jira gives the first write. */
+interface CorrectionScript {
+  readonly bodies: readonly string[];
+  readonly refusal: { readonly status: number; readonly bodyText: string };
+}
+function toolArguments(
+  mutation: Mutation,
+  draft: boolean,
+  body = "Synthetic approved comment",
+): Record<string, unknown> {
   if (draft) return DRAFT_ARGUMENTS;
   if (typeof mutation === "object")
     return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
-  return mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {};
+  return mutation ? { issueKey: "KEIKO-1", body } : {};
 }
 /** `true` keeps requesting a tool; a number requests that many rounds, then answers. */
 function endsTurn(repeatTools: boolean | number, round: number): boolean {
@@ -168,6 +178,7 @@ function syntheticModel(
   mutation: Mutation,
   repeatTools: boolean | number,
   draft: boolean,
+  bodies?: readonly string[],
 ): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
@@ -203,7 +214,7 @@ function syntheticModel(
         bridge.bind({
           id: `call-${String(calls.length)}`,
           name: tool.alias,
-          arguments: toolArguments(mutation, draft),
+          arguments: toolArguments(mutation, draft, bodies?.[calls.length - 1]),
         }),
       ],
     };
@@ -225,6 +236,7 @@ function fixture(
   acknowledgeWrite = true,
   repeatTools: boolean | number = false,
   draft = false,
+  script?: CorrectionScript,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -238,7 +250,7 @@ function fixture(
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
-  const model = syntheticModel(calls, mutation, repeatTools, draft);
+  const model = syntheticModel(calls, mutation, repeatTools, draft, script?.bodies);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
@@ -290,7 +302,7 @@ function fixture(
         if (write && !acknowledgeWrite) return { kind: "network-error" };
         if (write && request.upload !== undefined)
           uploads.push(multipartFileSize(request.upload.bytes));
-        const { status, bodyText } = syntheticReply(mutation, request, uploads);
+        const { status, bodyText } = replyFor(mutation, request, uploads, script, writes);
         lifecycle.onResponse?.(request, status);
         return Promise.resolve({
           kind: "response",
@@ -367,6 +379,29 @@ it.each([false, true])(
   },
 );
 
+function replyFor(
+  mutation: Mutation,
+  request: Parameters<AtlassianHttpBodyPort>[0],
+  uploads: readonly number[],
+  script: CorrectionScript | undefined,
+  writes: number,
+): { readonly status: number; readonly bodyText: string } {
+  return script === undefined
+    ? syntheticReply(mutation, request, uploads)
+    : scriptedReply(script, request.method !== "GET", writes);
+}
+/** The first write is refused as scripted; a later one is acknowledged with the corrected comment. */
+function scriptedReply(
+  script: CorrectionScript,
+  write: boolean,
+  writes: number,
+): { readonly status: number; readonly bodyText: string } {
+  if (write && writes === 1) return script.refusal;
+  return {
+    status: write ? 201 : 200,
+    bodyText: JSON.stringify({ id: "10001", body: script.bodies.at(-1) }),
+  };
+}
 function syntheticReply(
   mutation: Mutation,
   request: Parameters<AtlassianHttpBodyPort>[0],
@@ -808,6 +843,82 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
     const [, assistant] = f.deps.store.listMessages(f.chatId);
     expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
   });
+});
+
+// #4176 AC4: Jira validates a whole request before applying it, so a client error with Jira's own
+// error document is a definitive rejection and the model's corrected retry runs in the same turn.
+// Anything that may have been applied (a 4xx without an error document, a 5xx) blocks the turn.
+const BAD_COMMENT = ["Bad comment", "Corrected comment"] as const;
+describe.each([false, true])("a refused write inside one Chat turn (stream=%s)", (stream) => {
+  async function runCorrection(refusal: CorrectionScript["refusal"]): Promise<{
+    f: ReturnType<typeof fixture>;
+    body: string;
+  }> {
+    const f = fixture(true, undefined, true, BAD_COMMENT.length, false, {
+      bodies: BAD_COMMENT,
+      refusal,
+    });
+    f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `correction-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    return { f, body: response.body() };
+  }
+  const outcomes = (f: ReturnType<typeof fixture>): (string | undefined)[] =>
+    f.deps.store
+      .listMessages(f.chatId)[0]
+      ?.toolTranscript?.exchanges.map((exchange) => exchange.mutationOutcome) ?? [];
+
+  it("lets the model correct and retry after Jira's error document", async () => {
+    const { f, body } = await runCorrection({
+      status: 400,
+      bodyText: JSON.stringify({ errorMessages: ["Comment is invalid."], errors: {} }),
+    });
+
+    expect(outcomes(f)).toEqual(["rejected", "succeeded"]);
+    expect(f.writes()).toBe(2);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(JSON.stringify(user?.toolTranscript?.exchanges[0]?.result)).toContain(
+      "Comment is invalid.",
+    );
+    expect(assistant?.content).toBe("No Jira projects are visible.");
+    if (stream) expect(body).toContain("event: done");
+    // What the model saw before it corrected: Jira's message and an instruction it can act on.
+    const refusal = JSON.stringify(
+      f.calls[1]?.messages.filter((message) => message.role === "tool"),
+    );
+    expect(refusal).toContain("Comment is invalid.");
+    expect(refusal).toContain(JIRA_REJECTED_GUIDANCE);
+  });
+
+  it.each([
+    ["a 400 that is no Jira error document", 400, "<html>Bad Request</html>"],
+    ["a 503", 503, JSON.stringify({ errorMessages: ["Unavailable"], errors: {} })],
+    ["a 409", 409, JSON.stringify({ errorMessages: ["Conflict"], errors: {} })],
+  ])(
+    "keeps the turn blocked after %s and still ends with an answer",
+    async (_name, status, bodyText) => {
+      const { f, body } = await runCorrection({ status, bodyText });
+
+      expect(outcomes(f)[0]).toBe("unknown");
+      const retry = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[1]?.result;
+      expect(retry?.data).toMatchObject({ outcome: "not-dispatched", reason: "conflict" });
+      expect(f.writes()).toBe(1);
+      // Fail closed, but never a stall: the model is told, in fixed words, to stop and tell the user
+      // in plain language what happened, and the turn settles with that final answer.
+      const sentToModel = f.calls.at(-1)?.messages.filter((message) => message.role === "tool");
+      expect(JSON.stringify(sentToModel)).toContain(JIRA_UNCERTAIN_GUIDANCE);
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      if (stream) expect(body).toContain("event: done");
+    },
+  );
 });
 
 it.each([false, true])(

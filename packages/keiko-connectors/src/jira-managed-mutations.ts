@@ -168,9 +168,10 @@ async function statusMutation(
   path: string,
   method: "POST" | "PUT",
   body: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[] = [],
 ): Promise<MutationValidation> {
   const response = await request(path, method, body, "none");
-  if (!response.ok) return dispatchFailure(response);
+  if (!response.ok) return dispatchFailure(response, metadata);
   return response.status === 204 ? { ok: true } : MALFORMED;
 }
 function isCreateRoutingField(id: string): boolean {
@@ -261,7 +262,7 @@ async function createWithMetadata(
     fields: validated.fields,
     update: linkedUpdate(validated, plan),
   });
-  if (!response.ok) return dispatchFailure(response);
+  if (!response.ok) return dispatchFailure(response, metadata);
   return confirmCreatedIssue(request, response, metadata, withLinks(validated, create.links), plan);
 }
 function confirmCreatedIssue(
@@ -382,11 +383,13 @@ async function fieldMutation(
   if (!prior.ok) return prior;
   // Jira does not de-duplicate links: one already on the issue is not written again.
   const plan = planJiraIssueLinks(linked.links, prior.fields.issuelinks);
-  const acknowledged = await statusMutation(request, target.path, target.method, {
-    fields: validated.fields,
-    update: linkedUpdate(validated, plan),
-    ...target.body,
-  });
+  const acknowledged = await statusMutation(
+    request,
+    target.path,
+    target.method,
+    { fields: validated.fields, update: linkedUpdate(validated, plan), ...target.body },
+    metadata.fields,
+  );
   if (!acknowledged.ok) return acknowledged;
   return completeJiraLinkedMutation(
     request,

@@ -69,6 +69,14 @@ export interface ChatToolMutationLinkCounts {
   readonly created: number;
   readonly failed: number;
 }
+/**
+ * What a caller proves when it settles a dispatched write as `rejected` (#4176): Jira answered with
+ * a client error and its own parsable error document. Without it a response never proves that no
+ * effect occurred.
+ */
+export interface ChatToolMutationSettleEvidence {
+  readonly jiraErrorDocument: true;
+}
 /** Persistence only. The composing consumer still owns authority, approvals and HTTP dispatch. */
 export interface ChatToolMutationStore {
   readonly find: (invocationId: string) => ChatToolMutationRecord | undefined;
@@ -80,6 +88,7 @@ export interface ChatToolMutationStore {
     invocationId: string,
     outcome: JiraMutationOutcome,
     links?: ChatToolMutationLinkCounts,
+    evidence?: ChatToolMutationSettleEvidence,
   ) => ChatToolMutationRecord;
   /** Finds one admitted call; an ambiguous dispatch is refused, never guessed. */
   readonly preparedNative?: (input: {

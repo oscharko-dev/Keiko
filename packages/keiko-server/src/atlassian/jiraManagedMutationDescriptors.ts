@@ -137,10 +137,14 @@ const DRAFT_ITEM = object(
 const FIELD_ERRORS = {
   type: "array",
   maxItems: JIRA_MUTATION_DETAIL_LIMITS.fieldErrors,
-  items: object({ fieldId: text(64), message: text(JIRA_MUTATION_DETAIL_LIMITS.messageChars) }, [
-    "fieldId",
-    "message",
-  ]),
+  items: object(
+    {
+      fieldId: text(64),
+      fieldName: text(JIRA_MUTATION_DETAIL_LIMITS.messageChars),
+      message: text(JIRA_MUTATION_DETAIL_LIMITS.messageChars),
+    },
+    ["fieldId", "message"],
+  ),
 };
 const MESSAGES = {
   type: "array",
@@ -190,6 +194,7 @@ const DRAFT_RESULT_SCHEMA = object(
   {
     outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
     reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
+    guidance: text(512),
     items: {
       type: "array",
       maxItems: JIRA_DRAFT_ITEMS_MAX,
@@ -226,6 +231,7 @@ const RESULT_FIELDS = {
   outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
   reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
   replayed: { type: "boolean" },
+  guidance: text(512),
   browseUrl: text(4096),
   issueKey: text(128),
   issueId: text(128),

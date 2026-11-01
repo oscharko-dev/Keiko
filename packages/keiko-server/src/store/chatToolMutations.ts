@@ -18,6 +18,7 @@ import type {
   ChatToolMutationLinkCounts,
   ChatToolMutationRecord,
   ChatToolMutationPreparation,
+  ChatToolMutationSettleEvidence,
   ChatToolMutationStore,
 } from "./chatToolMutationTypes.js";
 const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_id AS userMessageId,
@@ -429,10 +430,11 @@ class MutationStore implements ChatToolMutationStore {
     invocationId: string,
     outcome: JiraMutationOutcome,
     links?: ChatToolMutationLinkCounts,
+    evidence?: ChatToolMutationSettleEvidence,
   ): ChatToolMutationRecord {
     const change = durableWrite(this.db, (): MutationChange => {
       const current = this.requireRecord(invocationId);
-      validateMutationSettlement(current, outcome);
+      validateMutationSettlement(current, outcome, evidence?.jiraErrorDocument === true);
       if (current.phase === "settled") return { record: current, event: "replayed" };
       this.db
         .prepare(

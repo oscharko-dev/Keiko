@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "02c162c4c5138555e69ae462ec4ec2b768655df4187fb6a564b419624da33a74",
+    "catalogDigest": "a684501ae08b3b9a0eb114f63a44ea4c0d4942cb5e845ee7351977e9340ec3d0",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3078,6 +3078,12 @@
               "unknown"
             ]
           },
+          "rejection": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["jira-error-document"]
+          },
           "linkRequestedCount": {
             "type": "integer",
             "dataClass": "count",
@@ -3107,7 +3113,7 @@
         "proofIds": ["chat.tool-mutation.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:12",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:71"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:88"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -58708,6 +58714,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "rejection",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -106266,28 +106278,28 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:117",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:118",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:133",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:162",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:159",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:188",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:165",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:194",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109401,14 +109413,14 @@
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:240",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:241",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:50",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:51",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

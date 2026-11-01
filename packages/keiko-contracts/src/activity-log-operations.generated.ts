@@ -2964,6 +2964,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "unknown",
         ],
       },
+      rejection: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["jira-error-document"],
+      },
       linkRequestedCount: {
         type: "integer",
         dataClass: "count",

@@ -45,6 +45,14 @@ const MUTATION_STATE = defineActivityLogOperation({
         "unknown",
       ],
     },
+    // Set on a settled line only: Jira answered the write with a client error and its own error
+    // document, so nothing was applied (#4176). Absent for a refusal before dispatch.
+    rejection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["jira-error-document"],
+    },
     // Issue links one write asked for, on its `settled` line only (#4176): counts, never keys.
     linkRequestedCount: { type: "integer", dataClass: "count", required: false },
     linkCreatedCount: { type: "integer", dataClass: "count", required: false },
@@ -60,6 +68,15 @@ const MUTATION_STATE = defineActivityLogOperation({
   proofIds: ["chat.tool-mutation.emitted-line"],
   releaseImpact: "patch",
 });
+/** A settled rejection that followed a response is Jira's own refusal; a local one has no status. */
+function remoteRejection(
+  event: string,
+  record: ChatToolMutationRecord,
+): { readonly rejection?: "jira-error-document" } {
+  return event === "settled" && record.outcome === "rejected" && record.httpStatus !== null
+    ? { rejection: "jira-error-document" }
+    : {};
+}
 export function recordChatToolMutation(
   log: ServerLogSink,
   record: ChatToolMutationRecord,
@@ -81,6 +98,7 @@ export function recordChatToolMutation(
           event,
           phase: record.phase,
           outcome: record.outcome ?? "none",
+          ...remoteRejection(event, record),
           ...(links === undefined
             ? {}
             : {

@@ -13,6 +13,7 @@ import { createNodeUiStore, buildUiStoreOverDatabase, type UiStore } from "./ind
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 import { runMigrations } from "./schema.js";
 import { createChatToolMutationStore } from "./chatToolMutations.js";
+import { observedChatToolMutationOutcome } from "./chatToolMutationState.js";
 import type {
   JiraChatToolMutationIntent as ChatToolMutationIntent,
   ChatToolMutationStore,
@@ -378,6 +379,81 @@ describe("remote observation and terminal outcomes", () => {
       expect(f.journal.settle(f.intent.invocationId, "unknown").outcome).toBe("unknown");
     },
   );
+  // #4176: Data Center validates a whole request before it applies anything, so a client error that
+  // carries Jira's parsable error document is a definitive rejection. The proof comes from the
+  // caller; the status alone (pinned above) never is one.
+  describe("a rejection Jira proved with its own error document", () => {
+    const EVIDENCE = { jiraErrorDocument: true } as const;
+
+    it.each([400, 401, 403, 404, 405, 412, 413, 415, 422])(
+      "settles HTTP %i as rejected, keeps the turn open and records a closed rejection",
+      (status) => {
+        const f = fixture();
+        dispatch(f);
+        f.journal.acknowledge(f.intent.invocationId, status);
+
+        const settled = f.journal.settle(f.intent.invocationId, "rejected", undefined, EVIDENCE);
+
+        expect(settled).toMatchObject({
+          phase: "settled",
+          outcome: "rejected",
+          httpStatus: status,
+        });
+        expect(observedChatToolMutationOutcome(settled)).toBe("rejected");
+        const next = { ...f.intent, invocationId: "corrected", actionDigest: "c".repeat(64) };
+        expect(f.journal.prepare(next).kind).toBe("prepared");
+        expect(f.journal.beginDispatch(next.invocationId, () => true)).toBe(true);
+        const line = expectActivityLogProof(
+          "chat.tool-mutation.emitted-line",
+          formatActivityLogProofLine(
+            f.logs.events.find((event) => event.extra?.event === "settled") ?? {},
+          ),
+        );
+        expect(line).toMatchObject({ outcome: "rejected", rejection: "jira-error-document" });
+        expect(JSON.stringify(f.logs.events)).not.toContain("synthetic-private-body");
+      },
+    );
+
+    it.each([302, 408, 409, 429, 500, 502, 503])(
+      "refuses the proof for the uncertain HTTP %i and keeps the turn blocked",
+      (status) => {
+        const f = fixture();
+        dispatch(f);
+        f.journal.acknowledge(f.intent.invocationId, status);
+
+        expect(() =>
+          f.journal.settle(f.intent.invocationId, "rejected", undefined, EVIDENCE),
+        ).toThrow("conflicts");
+        f.journal.settle(f.intent.invocationId, "unknown");
+        expect(
+          f.journal.prepare({ ...f.intent, invocationId: "next", actionDigest: "c".repeat(64) }),
+        ).toEqual({ kind: "blocked", reason: "unknown-effect" });
+      },
+    );
+
+    it("refuses the proof when no response was observed or the write was acknowledged", () => {
+      const lost = fixture();
+      dispatch(lost);
+      expect(() =>
+        lost.journal.settle(lost.intent.invocationId, "rejected", undefined, EVIDENCE),
+      ).toThrow("conflicts");
+      const applied = fixture();
+      dispatch(applied);
+      applied.journal.acknowledge(applied.intent.invocationId, 201);
+      expect(() =>
+        applied.journal.settle(applied.intent.invocationId, "rejected", undefined, EVIDENCE),
+      ).toThrow("conflicts");
+    });
+
+    it("leaves a dispatched 4xx without a settlement unknown across a crash", () => {
+      const f = fixture();
+      dispatch(f);
+
+      const record = f.journal.acknowledge(f.intent.invocationId, 400);
+
+      expect(observedChatToolMutationOutcome(record)).toBe("unknown");
+    });
+  });
   it.each(["unknown", "succeeded-unconfirmed"] as const)(
     "blocks new and previously prepared mutations after %s in the same turn",
     (outcome) => {

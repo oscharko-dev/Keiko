@@ -324,9 +324,19 @@ a committed mutation may lose its response, and a repeated PUT may overwrite an
 intervening actor's change. The invocation owner retains the original intent and
 reconciles observed remote state; uncertain effects never trigger an automatic resend
 (#4081/#4083). A transport failure reason does not prove absence of a mutation. The durable Chat
-journal treats every post-dispatch non-2xx response, including 400/401/403/429, as an unknown effect;
-a known local rejection is recorded only before dispatch. A proxy may replace a response after
-an upstream commit, so status-only classification cannot remove the turn's uncertainty barrier.
+journal treats a post-dispatch non-2xx response as an unknown effect, and a status alone never
+proves otherwise: a proxy may replace a response after an upstream commit. The one exception
+(amended 2026-11-01, #4176 AC4) is a definitive rejection. Data Center validates a whole request
+before it applies anything, so a 4xx other than 408, 409 and 429 that carries Jira's own parsable
+error document (`errors` and/or `errorMessages`, kept as the failure detail) applied nothing. The
+composing caller then settles the write as `rejected` and passes the document as proof
+(`settle(..., { jiraErrorDocument: true })`); without that proof, or for any other status, the
+journal refuses `rejected` after a response. A rejected write is not a held write and does not
+block the turn, so the model corrects the refused fields and retries in the same turn. The line on
+the Activity Log carries the closed `rejection: jira-error-document`, never the document. A 4xx
+without a parsable Jira error document, 408/409/429, every 5xx, a lost answer and a 2xx without a
+parsable body stay `unknown` and fail closed (#2953: no automatic replay), as does a crash between
+the response and the settlement. A known local rejection before dispatch is unchanged.
 The shared HTTP transport and existing action Activity Log remain the
 owners of per-request and terminal evidence. The managed catalog envelope retains its own
 cancellation/denial and settlement status; a matching journal outcome is projected separately as
@@ -383,7 +393,16 @@ metadata projects Jira's declared `schemaType` so a caller can shape an opaque v
 write returns, to the model only, the refused field with Keiko's closed validation reason, or
 Jira's own bounded field errors and messages (at most 8 and 3, each cut on code-point boundaries
 to 200 UTF-8 bytes of its JSON encoding, control characters removed, so quotes and non-ASCII text
-cannot push the detail past the 4 KiB result bound); none of it is logged. A choice list above 500 entries makes only that field
+cannot push the detail past the 4 KiB result bound); none of it is logged. A field error also
+carries the field's display name (`fieldName`) when the request's current metadata knows it, so the
+model and the person see "Risk class", not only `customfield_10000`. Every result also carries a
+fixed `guidance` sentence, never derived from remote text: after a definitive rejection it tells the
+model to correct the named fields and send the corrected change once, and to explain in plain
+language which field is the problem if Jira refuses again; after an uncertain outcome
+(`unknown`, `succeeded-unconfirmed`, or a write blocked behind one) it tells the model not to
+repeat the change, to make no further change in the turn, and to tell the user in plain language
+that the change may or may not have been applied and what to check in Jira. Keiko's users are
+knowledge workers: a refused or uncertain write ends the turn with a usable answer, never a stall. A choice list above 500 entries makes only that field
 unsupported; other fields remain usable, and a required field without a server default still
 blocks creation. Plugin choice structures are not interpreted. Known-field structural errors
 remain malformed metadata. Offered verbs are intersected with the implemented field/verb matrix;
@@ -700,7 +719,8 @@ draft call is an error only when an item did not settle (`failed`, `uncertain`, 
 every item is created, already existing or deselected it succeeds, and a draft that wrote nothing
 reports the truthful `not-dispatched` outcome. An item whose parent or linked item has no key is
 skipped; an item whose outcome is uncertain stops the draft, because the journal admits no further
-write in that turn. Coding runs do not offer `jira.draft`.
+write in that turn, while an item Jira refused with its own error document is `failed` with the
+field errors and the independent items go on. Coding runs do not offer `jira.draft`.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically

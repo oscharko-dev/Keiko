@@ -130,6 +130,8 @@ export const JIRA_MUTATION_DETAIL_LIMITS = Object.freeze({
 });
 export interface JiraMutationFieldError {
   readonly fieldId: string;
+  /** The field's display name when the request's current metadata knows it (#4176). */
+  readonly fieldName?: string;
   readonly message: string;
 }
 /**
@@ -217,7 +219,9 @@ function detailFieldErrors(value: unknown): readonly JiraMutationFieldError[] {
     const record = typeof entry === "object" && entry !== null ? entry : {};
     const fieldId: unknown = Reflect.get(record, "fieldId");
     const message = detailText(Reflect.get(record, "message"));
-    if (detailFieldId(fieldId) && message !== undefined) errors.push({ fieldId, message });
+    const fieldName = detailText(Reflect.get(record, "fieldName"));
+    if (detailFieldId(fieldId) && message !== undefined)
+      errors.push({ fieldId, ...(fieldName === undefined ? {} : { fieldName }), message });
   }
   return errors;
 }

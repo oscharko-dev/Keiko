@@ -16,6 +16,7 @@ import type {
   ChatToolMutationRecord,
   ChatToolMutationStore,
 } from "../store/chatToolMutationTypes.js";
+import { definitiveRejectionStatus } from "../store/chatToolMutationState.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { recordJiraTemplateAttempt } from "./jiraTemplateLog.js";
@@ -118,17 +119,45 @@ async function attempt(
     return FAILED;
   }
 }
+/**
+ * Jira refused the whole request with its own error document: nothing was applied, so the turn may
+ * go on and the model gets the field errors to correct. Anything less stays an uncertain write.
+ */
+function jiraRejectedWithoutEffect(
+  record: ChatToolMutationRecord,
+  attempt: JiraMutationAttempt,
+): boolean {
+  if (attempt.ok || !definitiveRejectionStatus(record.httpStatus)) return false;
+  const detail = attempt.detail;
+  return (detail?.fieldErrors?.length ?? 0) > 0 || (detail?.messages?.length ?? 0) > 0;
+}
+/** The outcome to settle, and whether it rests on Jira's own error document. */
+function settlement(
+  current: ChatToolMutationRecord | undefined,
+  attempt: JiraMutationAttempt,
+): { readonly outcome: JiraMutationOutcome; readonly errorDocument: boolean } {
+  if (current?.phase === "prepared" && !attempt.ok)
+    return { outcome: "rejected", errorDocument: false };
+  if (current?.phase === "dispatched" && jiraRejectedWithoutEffect(current, attempt))
+    return { outcome: "rejected", errorDocument: true };
+  if (current?.phase === "acknowledged" && attempt.ok)
+    return { outcome: "succeeded", errorDocument: false };
+  return { outcome: observedOutcome(current), errorDocument: false };
+}
 function finish(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
   attempt: JiraMutationAttempt,
 ): ManagedMcpToolResult {
   const current = journal.find(input.intent.invocationId);
-  let outcome = observedOutcome(current);
-  if (current?.phase === "prepared" && !attempt.ok) outcome = "rejected";
-  if (current?.phase === "acknowledged" && attempt.ok) outcome = "succeeded";
+  const { outcome, errorDocument } = settlement(current, attempt);
   try {
-    journal.settle(input.intent.invocationId, outcome, jiraLinkCounts(attempt));
+    journal.settle(
+      input.intent.invocationId,
+      outcome,
+      jiraLinkCounts(attempt),
+      errorDocument ? { jiraErrorDocument: true } : undefined,
+    );
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
     return result(observedOutcome(current), "unavailable");
