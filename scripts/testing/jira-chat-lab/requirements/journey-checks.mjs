@@ -49,7 +49,9 @@ import {
   listTemplates,
   proposeTemplates,
   validateTemplate,
+  complianceTemplates,
   withTemplate,
+  withTemplates,
 } from "./templates.mjs";
 
 const result = (status, turn, detail, covers) => ({
@@ -353,6 +355,30 @@ async function reportExportAndComment(ctx, chat) {
   );
 }
 
+async function complianceReport(ctx, chat) {
+  const turn = await ctx.turn(
+    chat,
+    "Prüfe als Projektleiter jeden Vorgang des Jira-Projekts RPT gegen die Strukturvorgabe und liste die Schlüssel ALLER abweichenden Vorgänge mit ihren Abweichungen auf.",
+  );
+  // The tool result is the evidence of what Jira holds; the answer only has to say it, not deny it.
+  const structured = structuredDeviations(turn.toolExchanges);
+  if (structured === undefined) {
+    return result(
+      "unverified",
+      turn,
+      "no completed jira.report result with deviations in the turn; nothing is credited",
+      [],
+    );
+  }
+  const grade = gradeDeviationReport(turn.answer, ctx.truth.issues, structured, ctx.truth.fieldIds);
+  return result(
+    grade.keysOk && grade.detailOk ? "green" : "red",
+    turn,
+    `${grade.found}/${grade.expected} deviating issues found, ${grade.falseFindings.length} false findings, ${grade.undescribed.length} of ${grade.deviationCount} seeded deviations not described in the answer, ${grade.unreported.length} not reported by the tool`,
+    ["deviating-issues", "deviation-detail"],
+  );
+}
+
 export const JOURNEYS = {
   S01: (ctx, chat) => templateDefinedAndApplied(ctx, chat),
   S02: (ctx, chat) => proposalReviewedBeforeActivation(ctx, chat),
@@ -435,34 +461,11 @@ export const JOURNEYS = {
     );
   },
   S10: (ctx, chat) => projectProgress(ctx, chat),
-  async S11(ctx, chat) {
-    const turn = await ctx.turn(
-      chat,
-      "Prüfe als Projektleiter jeden Vorgang des Jira-Projekts RPT gegen die Strukturvorgabe und liste die Schlüssel ALLER abweichenden Vorgänge mit ihren Abweichungen auf.",
-    );
-    // The tool result is the evidence of what Jira holds; the answer only has to say it, not deny it.
-    const structured = structuredDeviations(turn.toolExchanges);
-    if (structured === undefined) {
-      return result(
-        "unverified",
-        turn,
-        "no completed jira.report result with deviations in the turn; nothing is credited",
-        [],
-      );
-    }
-    const grade = gradeDeviationReport(
-      turn.answer,
-      ctx.truth.issues,
-      structured,
-      ctx.truth.fieldIds,
-    );
-    return result(
-      grade.keysOk && grade.detailOk ? "green" : "red",
-      turn,
-      `${grade.found}/${grade.expected} deviating issues found, ${grade.falseFindings.length} false findings, ${grade.undescribed.length} of ${grade.deviationCount} seeded deviations not described in the answer, ${grade.unreported.length} not reported by the tool`,
-      ["deviating-issues", "deviation-detail"],
-    );
-  },
+  S11: (ctx, chat) =>
+    // AC1 before AC3: the lead's templates for RPT are the structure the compliance check applies.
+    withTemplates(ctx.http, complianceTemplates("RPT", ctx.truth.fieldIds), () =>
+      complianceReport(ctx, chat),
+    ),
   S12: (ctx, chat) => coverageMatrix(ctx, chat),
   S13: (ctx, chat) => reportExportAndComment(ctx, chat),
   async S14(ctx, chat) {

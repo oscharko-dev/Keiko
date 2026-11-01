@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
 import { scenarioVerdict } from "../testing/jira-chat-lab/requirements/coverage.mjs";
@@ -52,9 +53,30 @@ function fakeJira() {
 }
 
 /** Context whose turn runs `act` (the product's effects) and answers with what `act` returns. */
-function context(jira, act, truth = { fieldIds: { epicLink: EPIC_LINK }, issues: [] }) {
+/** The product's skill-library routes, recording each template import and delete. */
+function fakeSkills() {
+  const calls = [];
+  let next = 0;
+  const http = async (name, path, body) => {
+    calls.push({ name, path, body });
+    if (name === "template-import") {
+      next += 1;
+      return { skill: { id: `skill-${String(next)}`, revision: 1 } };
+    }
+    return null;
+  };
+  return { calls, http };
+}
+
+function context(
+  jira,
+  act,
+  truth = { fieldIds: { epicLink: EPIC_LINK }, issues: [] },
+  skills = fakeSkills(),
+) {
   return {
     truth,
+    http: skills.http,
     search: (query) => jira.search(query),
     refusals: () => 0,
     turn: async () => {
@@ -482,6 +504,27 @@ describe("S11 compliance report", () => {
       context(fakeJira(), () => ({ answer, toolExchanges }), world),
     );
   const verdict = (check) => scenarioVerdict(scenario("S11"), [{ layer: "journey", ...check }]);
+
+  it("judges RPT under the lead's epic and task templates and removes them afterwards", async () => {
+    const skills = fakeSkills();
+    let activeDuringTurn = [];
+    const act = () => {
+      activeDuringTurn = skills.calls.map((call) => call.name);
+      return { answer: "", toolExchanges: [] };
+    };
+    await run("S11", context(fakeJira(), act, truth, skills));
+    expect(activeDuringTurn).toEqual(["template-import", "template-import"]);
+    const imported = skills.calls
+      .filter((call) => call.name === "template-import")
+      .map((call) => Buffer.from(call.body.contentBase64, "base64").toString("utf8"));
+    expect(imported[0]).toMatch(/project: RPT\nissueType: "Epic"/u);
+    expect(imported[1]).toContain(`parentField: "${FIELDS.epicLink}"`);
+    expect(imported[1]).toContain(`requiredFields: ["${FIELDS.storyPoints}"]`);
+    expect(skills.calls.slice(2).map((call) => [call.name, call.path])).toEqual([
+      ["template-delete", "/api/skills/skill-2"],
+      ["template-delete", "/api/skills/skill-1"],
+    ]);
+  });
 
   it("is green when every deviating issue is reported by the tool and each deviation described", async () => {
     const answer = [

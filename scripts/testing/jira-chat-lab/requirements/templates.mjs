@@ -20,7 +20,14 @@ export const EPIC_SUMMARY_PATTERN = String.raw`^\[LH-\d{3}\] \S`;
  * rule's description sections become the body headings, its labels the required labels, and the
  * epic summary format a summary pattern.
  */
-export function templateMarkdown({ project, issueType, rule, summaryPattern }) {
+export function templateMarkdown({
+  project,
+  issueType,
+  rule,
+  summaryPattern,
+  parentField,
+  requiredFields = [],
+}) {
   const quoted = (value) => JSON.stringify(value);
   const front = [
     "---",
@@ -32,6 +39,10 @@ export function templateMarkdown({ project, issueType, rule, summaryPattern }) {
     ...(summaryPattern === undefined ? [] : [`summaryPattern: ${quoted(summaryPattern)}`]),
     ...(rule.labels?.length > 0
       ? [`requiredLabels: [${rule.labels.map((label) => quoted(label)).join(", ")}]`]
+      : []),
+    ...(parentField === undefined ? [] : [`parentField: ${quoted(parentField)}`]),
+    ...(requiredFields.length > 0
+      ? [`requiredFields: [${requiredFields.map((field) => quoted(field)).join(", ")}]`]
       : []),
     "---",
   ];
@@ -47,6 +58,27 @@ export const epicTemplateMarkdown = (project) =>
     rule: STRUCTURE_RULES.Epic,
     summaryPattern: EPIC_SUMMARY_PATTERN,
   });
+
+/**
+ * The templates a lead defines for the report project before judging its compliance (S11): the
+ * epic template of the work project, and a task template that requires the epic link and, where
+ * the instance offers one, the estimate field.
+ */
+export function complianceTemplates(project, fieldIds) {
+  return [
+    { name: `${project}-Epic`, markdown: epicTemplateMarkdown(project) },
+    {
+      name: `${project}-Task`,
+      markdown: templateMarkdown({
+        project,
+        issueType: "Task",
+        rule: STRUCTURE_RULES.Task,
+        parentField: fieldIds.epicLink,
+        requiredFields: fieldIds.storyPoints === undefined ? [] : [fieldIds.storyPoints],
+      }),
+    },
+  ];
+}
 
 const EPIC_SUMMARY = /^\[(LH-\d{3})\] \S/;
 
@@ -77,6 +109,13 @@ async function removeTemplate(http, skill) {
     { expectedRevision: skill.revision },
     "DELETE",
   );
+}
+
+/** Defines every template for the duration of `body`, removing each one afterwards. */
+export function withTemplates(http, templates, body) {
+  const [first, ...rest] = templates;
+  if (first === undefined) return body();
+  return withTemplate(http, first.markdown, first.name, () => withTemplates(http, rest, body));
 }
 
 export const listTemplates = async (http) =>
