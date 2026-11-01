@@ -44,8 +44,21 @@ function tryAcquire(lock, id) {
   return true;
 }
 
-/** Runs `run` alone among the lanes sharing `directory` unless the journey reads only RPT. */
-export async function withWorkProjectLock(directory, id, run, { pollMs = 5_000, log } = {}) {
+/**
+ * Runs `run` alone among the lanes sharing `directory` unless the journey reads only RPT.
+ *
+ * `onWait` runs after every poll while the lock is held elsewhere. A lane waits as long as the other
+ * lane's journey takes, and its paired app session expires after 30 idle minutes: on 2026-11-01 the
+ * Qwen lane waited 30.4 minutes, then every journey failed its first request with 404. The journey
+ * runner passes an authenticated read that keeps the session alive; a failed keep-alive is logged
+ * and the wait goes on, so the journey itself reports any session it then finds gone.
+ */
+export async function withWorkProjectLock(
+  directory,
+  id,
+  run,
+  { pollMs = 5_000, log, onWait } = {},
+) {
   if (REPORT_PROJECT_JOURNEYS.has(id)) return run();
   const lock = join(directory, LOCK);
   let waitedMs = 0;
@@ -53,6 +66,14 @@ export async function withWorkProjectLock(directory, id, run, { pollMs = 5_000, 
     if (waitedMs === 0) log?.({ operation: "requirements-work-lock", id, state: "waiting" });
     await delay(pollMs); // NOSONAR typescript:S9382 -- polling another process's lock is sequential by nature
     waitedMs += pollMs;
+    await Promise.resolve(onWait?.()).catch((error) => {
+      log?.({
+        operation: "requirements-work-lock",
+        id,
+        state: "keepalive-failed",
+        error: String(error?.message),
+      });
+    });
   }
   if (waitedMs > 0) log?.({ operation: "requirements-work-lock", id, state: "acquired", waitedMs });
   try {

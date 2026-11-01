@@ -48,6 +48,27 @@ describe("withWorkProjectLock", () => {
     expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
   });
 
+  it("keeps the waiting lane's session alive on every poll and survives a failed keep-alive", async () => {
+    const dir = directory();
+    const lock = join(dir, "work-project.lock");
+    mkdirSync(lock);
+    writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, id: "S05" }));
+    const lines = [];
+    let polls = 0;
+    const waiting = withWorkProjectLock(dir, "S06", () => Promise.resolve("ran"), {
+      pollMs: 5,
+      log: (line) => lines.push(line),
+      onWait: () => {
+        polls += 1;
+        if (polls === 2) rmSync(lock, { recursive: true, force: true });
+        return polls === 1 ? Promise.reject(new Error("session gone")) : Promise.resolve();
+      },
+    });
+    await expect(waiting).resolves.toBe("ran");
+    expect(polls).toBe(2);
+    expect(lines.map((line) => line.state)).toEqual(["waiting", "keepalive-failed", "acquired"]);
+  });
+
   it("releases the lock when the journey throws", async () => {
     const dir = directory();
     await expect(

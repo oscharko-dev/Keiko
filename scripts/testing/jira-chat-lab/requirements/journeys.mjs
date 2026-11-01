@@ -392,7 +392,10 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
         const bound = await freshBoundChat(ctx, session, modelId, capsuleId, mode);
         return JOURNEYS[id](ctx, bound.chat);
       },
-      { log: (line) => console.log(JSON.stringify(line)) },
+      {
+        log: (line) => console.log(JSON.stringify(line)),
+        onWait: () => api(ctx, "session-keepalive", "/api/skills", undefined, "GET"),
+      },
     );
   } catch (error) {
     check = { status: "red", detail: `lab error: ${error.message}` };
