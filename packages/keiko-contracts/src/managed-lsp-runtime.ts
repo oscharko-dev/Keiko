@@ -1,3 +1,8 @@
+import {
+  hasOnlyKeys,
+  isOneOf as isStringMember,
+  isRecord,
+} from "./contract-validation-primitives.js";
 // Bounded managed-LSP workspace runtime configuration (Issue #2271, Epic #2094, ADR-0132).
 // Executables and arguments are deliberately absent: persisted settings can reference only an
 // opaque operator-approved runtime and contained workspace-relative configuration files.
@@ -242,14 +247,6 @@ export type ManagedLspRuntimeParseResult =
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
 function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -286,13 +283,13 @@ const PERSISTED_SOURCES: ReadonlySet<ManagedLspPersistedSettingSource> = new Set
 ]);
 
 function isSource(value: unknown): value is ManagedLspSettingSource {
-  return typeof value === "string" && SOURCES.includes(value as ManagedLspSettingSource);
+  const sourcesValues: readonly string[] = SOURCES;
+  return typeof value === "string" && sourcesValues.includes(value);
 }
 
 function isPersistedSource(value: unknown): value is ManagedLspPersistedSettingSource {
-  return (
-    typeof value === "string" && PERSISTED_SOURCES.has(value as ManagedLspPersistedSettingSource)
-  );
+  const persisted_sourcesValues: ReadonlySet<string> = PERSISTED_SOURCES;
+  return typeof value === "string" && persisted_sourcesValues.has(value);
 }
 
 function isProvenance(value: unknown): value is ManagedLspConfigurationProvenance {
@@ -305,14 +302,44 @@ function isProvenance(value: unknown): value is ManagedLspConfigurationProvenanc
   );
 }
 
+function isRestartField(value: unknown): value is ManagedLspRestartField {
+  return value === "runtime" || value === "settings";
+}
+
 function isRestartFields(
   value: unknown,
   required: unknown,
 ): value is readonly ManagedLspRestartField[] {
-  if (!Array.isArray(value) || value.length > 2) return false;
-  if (!value.every((field) => field === "runtime" || field === "settings")) return false;
-  if (new Set(value).size !== value.length) return false;
+  if (!isBoundedPhysicalArray(value, 2, isRestartField, (entry) => entry)) return false;
   return typeof required === "boolean" && required === value.length > 0;
+}
+
+function isInitialExtentAllowed(extent: number, maximum: number, inclusive: boolean): boolean {
+  if (inclusive) return extent <= maximum;
+  const exceedsMaximum = extent > maximum;
+  return !exceedsMaximum;
+}
+
+function isBoundedPhysicalArray<T>(
+  value: unknown,
+  maximum: number,
+  guard: (member: unknown) => member is T,
+  identity: (member: T) => string,
+  initialInclusive = false,
+): value is readonly T[] {
+  if (!Array.isArray(value) || !isInitialExtentAllowed(value.length, maximum, initialInclusive))
+    return false;
+  const extent = value.length;
+  if (!isIntegerWithin(extent, 0, maximum)) return false;
+  const identities = new Set<string>();
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const member: unknown = value[index];
+    if (!guard(member)) return false;
+    identities.add(identity(member));
+  }
+  const finalExtent = value.length;
+  return finalExtent === extent && identities.size === finalExtent;
 }
 
 function isBoundedUniqueStrings(
@@ -320,22 +347,15 @@ function isBoundedUniqueStrings(
   maxCount: number,
   predicate: (item: string) => boolean,
 ): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= maxCount &&
-    value.every((item) => typeof item === "string" && predicate(item)) &&
-    new Set(value).size === value.length
-  );
+  const guard = (item: unknown): item is string => typeof item === "string" && predicate(item);
+  return isBoundedPhysicalArray(value, maxCount, guard, (item) => item, true);
 }
 
 function isBoundedContainedPaths(
   value: unknown,
   maxCount: number,
 ): value is readonly ManagedLspWorkspaceRelativePath[] {
-  if (!Array.isArray(value) || value.length > maxCount || !value.every(isWorkspaceRelativePath)) {
-    return false;
-  }
-  return new Set(value.map((entry) => entry.path)).size === value.length;
+  return isBoundedPhysicalArray(value, maxCount, isWorkspaceRelativePath, (entry) => entry.path);
 }
 
 function hasPythonConfigurationPrecedence(value: unknown): boolean {
@@ -361,7 +381,7 @@ function isPythonSettings(value: unknown): value is ManagedLspPythonSettings {
     ]) &&
     isRuntimeReference(value.interpreter) &&
     (value.venv === null || isRuntimeReference(value.venv)) &&
-    ["basic", "standard", "strict"].includes(value.typeCheckingMode as string) &&
+    isStringMember(value.typeCheckingMode, ["basic", "standard", "strict"]) &&
     isBoundedContainedPaths(value.extraPaths, MANAGED_LSP_PYTHON_EXTRA_PATH_MAX_COUNT) &&
     (value.configurationFile === undefined || isWorkspaceRelativePath(value.configurationFile)) &&
     hasPythonConfigurationPrecedence(value.configurationPrecedence)
@@ -390,12 +410,22 @@ const GO_ARCHITECTURES: ReadonlySet<ManagedLspGoArchitecture> = new Set([
   "arm",
 ]);
 
+function isGoOperatingSystem(value: unknown): value is ManagedLspGoOperatingSystem {
+  const allowed: ReadonlySet<string> = GO_OPERATING_SYSTEMS;
+  return typeof value === "string" && allowed.has(value);
+}
+
+function isGoArchitecture(value: unknown): value is ManagedLspGoArchitecture {
+  const allowed: ReadonlySet<string> = GO_ARCHITECTURES;
+  return typeof value === "string" && allowed.has(value);
+}
+
 function isGoTarget(value: unknown): value is ManagedLspGoTarget {
   return (
     isRecord(value) &&
     hasOnlyKeys(value, ["goos", "goarch", "minimumGoVersion"]) &&
-    GO_OPERATING_SYSTEMS.has(value.goos as ManagedLspGoOperatingSystem) &&
-    GO_ARCHITECTURES.has(value.goarch as ManagedLspGoArchitecture) &&
+    isGoOperatingSystem(value.goos) &&
+    isGoArchitecture(value.goarch) &&
     typeof value.minimumGoVersion === "string" &&
     /^1\.(?:2[2-9]|[3-9]\d)$/u.test(value.minimumGoVersion)
   );
@@ -411,11 +441,12 @@ function isGoDirectoryFilter(value: unknown): value is ManagedLspGoDirectoryFilt
 }
 
 function isGoDirectoryFilters(value: unknown): value is readonly ManagedLspGoDirectoryFilter[] {
-  if (!Array.isArray(value) || value.length > MANAGED_LSP_GO_DIRECTORY_FILTER_MAX_COUNT)
-    return false;
-  if (!value.every(isGoDirectoryFilter)) return false;
-  const identities = value.map((entry) => `${entry.kind}:${entry.path.path}`);
-  return new Set(identities).size === identities.length;
+  return isBoundedPhysicalArray(
+    value,
+    MANAGED_LSP_GO_DIRECTORY_FILTER_MAX_COUNT,
+    isGoDirectoryFilter,
+    (entry) => `${entry.kind}:${entry.path.path}`,
+  );
 }
 
 function isGoSettings(value: unknown): value is ManagedLspGoSettings {
@@ -486,7 +517,8 @@ const JAVA_LEVELS: ReadonlySet<ManagedLspJavaLanguageLevel> = new Set([
 ]);
 
 function isJavaLanguageLevel(value: unknown): value is ManagedLspJavaLanguageLevel {
-  return typeof value === "string" && JAVA_LEVELS.has(value as ManagedLspJavaLanguageLevel);
+  const java_levelsValues: ReadonlySet<string> = JAVA_LEVELS;
+  return typeof value === "string" && java_levelsValues.has(value);
 }
 
 function hasValidJavaLevels(value: UnknownRecord): boolean {
@@ -536,10 +568,12 @@ function isRustCfg(value: unknown): value is ManagedLspRustCfg {
 }
 
 function isRustCfgs(value: unknown): value is readonly ManagedLspRustCfg[] {
-  if (!Array.isArray(value) || value.length > MANAGED_LSP_RUST_CFG_MAX_COUNT) return false;
-  if (!value.every(isRustCfg)) return false;
-  const identities = value.map((entry) => `${entry.key}=${entry.value ?? ""}`);
-  return new Set(identities).size === identities.length;
+  return isBoundedPhysicalArray(
+    value,
+    MANAGED_LSP_RUST_CFG_MAX_COUNT,
+    isRustCfg,
+    (entry) => `${entry.key}=${entry.value ?? ""}`,
+  );
 }
 
 function isIntegerWithin(value: unknown, minimum: number, maximum: number): value is number {
@@ -591,16 +625,27 @@ function isRustSettings(value: unknown): value is ManagedLspRustSettings {
     isRustCfgs(value.cfgs),
     typeof value.noDefaultFeatures === "boolean",
     isBoundedContainedPaths(value.linkedProjects, MANAGED_LSP_RUST_LINKED_PROJECT_MAX_COUNT),
-    ["disabled", "approvedToolchain"].includes(value.sysrootPolicy as string),
+    isStringMember(value.sysrootPolicy, ["disabled", "approvedToolchain"]),
     isRustResourceBudget(value.resourceBudget),
-    ["disabled", "offline"].includes(value.cargoMetadata as string),
+    isStringMember(value.cargoMetadata, ["disabled", "offline"]),
     value.dependencyDownloads === false,
     value.procMacros === false,
     value.buildScripts === false,
   ].every(Boolean);
 }
 
-function isLanguageSettings(language: unknown, settings: unknown): boolean {
+function isLanguageSettings(
+  value: UnknownRecord,
+): value is UnknownRecord &
+  (
+    | Pick<ManagedLspPythonConfiguration, "language" | "settings">
+    | Pick<ManagedLspGoConfiguration, "language" | "settings">
+    | Pick<ManagedLspShellConfiguration, "language" | "settings">
+    | Pick<ManagedLspJavaConfiguration, "language" | "settings">
+    | Pick<ManagedLspRustConfiguration, "language" | "settings">
+  ) {
+  const language = value.language;
+  const settings = value.settings;
   if (language === "python") return isPythonSettings(settings);
   if (language === "go") return isGoSettings(settings);
   if (language === "shell") return isShellSettings(settings);
@@ -615,9 +660,10 @@ function isRevisionBoundEtag(value: unknown, revision: unknown): value is string
   return match !== null && isRevision(revision) && Number(match[1]) === revision;
 }
 
-function parseRuntimeConfigurationUnsafe(value: unknown): ManagedLspRuntimeParseResult {
-  if (!isRecord(value)) return { ok: false, errors: ["runtime configuration must be an object"] };
-  const valid = [
+function validRuntimeConfiguration(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspRuntimeConfiguration {
+  return [
     hasOnlyKeys(value, [
       "schemaVersion",
       "language",
@@ -632,14 +678,19 @@ function parseRuntimeConfigurationUnsafe(value: unknown): ManagedLspRuntimeParse
     ]),
     value.schemaVersion === MANAGED_LSP_RUNTIME_SCHEMA_VERSION,
     isRevisionBoundEtag(value.etag, value.revision),
-    ["enabled", "disabled"].includes(value.activation as string),
+    isStringMember(value.activation, ["enabled", "disabled"]),
     isRuntimeReference(value.runtime),
     isProvenance(value.provenance),
     isRestartFields(value.restartFields, value.restartRequired),
-    isLanguageSettings(value.language, value.settings),
+    isLanguageSettings(value),
   ].every(Boolean);
+}
+
+function parseRuntimeConfigurationUnsafe(value: unknown): ManagedLspRuntimeParseResult {
+  if (!isRecord(value)) return { ok: false, errors: ["runtime configuration must be an object"] };
+  const valid = validRuntimeConfiguration(value);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspRuntimeConfiguration }
+    ? { ok: true, value }
     : { ok: false, errors: ["runtime configuration is invalid or contains unknown fields"] };
 }
 

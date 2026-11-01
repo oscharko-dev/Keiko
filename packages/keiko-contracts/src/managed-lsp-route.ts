@@ -159,11 +159,49 @@ function isNonNegativeFinite(value: unknown): value is number {
 }
 
 function memberOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && values.includes(value as T);
+  const vocabulary: readonly string[] = values;
+  return typeof value === "string" && vocabulary.includes(value);
+}
+
+function everyPhysical<T>(
+  value: readonly T[],
+  predicate: (entry: T) => boolean,
+  maximum?: number,
+): boolean {
+  const extent = value.length;
+  if (maximum !== undefined && (!Number.isSafeInteger(extent) || extent < 0 || extent > maximum))
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const entry = value[index];
+    if (entry === undefined || !predicate(entry)) return false;
+  }
+  return true;
+}
+
+function hasPhysicalLanguage(
+  value: readonly { readonly language: ManagedLspLanguage }[],
+  language: ManagedLspLanguage,
+): boolean {
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    const entry = value[index];
+    if (entry?.language === language) return true;
+  }
+  return false;
 }
 
 function uniqueLanguages(values: readonly { readonly language: ManagedLspLanguage }[]): boolean {
-  return new Set(values.map(({ language }) => language)).size === values.length;
+  const languages = new Set<ManagedLspLanguage>();
+  const extent = values.length;
+  for (let index = 0; index < extent; index += 1) {
+    const entry = values[index];
+    if (entry === undefined) return false;
+    const language: unknown = entry.language;
+    if (!memberOf(language, MANAGED_LSP_LANGUAGES)) return false;
+    languages.add(language);
+  }
+  return languages.size === extent;
 }
 
 function hasExactLanguageCoverage(
@@ -172,7 +210,7 @@ function hasExactLanguageCoverage(
   return (
     values.length === MANAGED_LSP_LANGUAGES.length &&
     uniqueLanguages(values) &&
-    MANAGED_LSP_LANGUAGES.every((language) => values.some((entry) => entry.language === language))
+    MANAGED_LSP_LANGUAGES.every((language) => hasPhysicalLanguage(values, language))
   );
 }
 
@@ -204,22 +242,27 @@ function parseControlRequestUnsafe(
   const keys = ["root", "language", "action", "expectedRevision", "configuration"];
   if (!hasOnlyKeys(value, keys)) return invalid("managed LSP control request has unknown fields");
   if (!validRequestScalars(value)) return invalid("managed LSP control request is invalid");
-  const action = value.action as ManagedLspControlAction;
+  const action = value.action;
   const configuration = parseRequestConfiguration(value, action);
   if (configuration === null) return invalid("managed LSP control configuration is invalid");
-  return {
-    ok: true,
-    value: {
-      root: value.root as string,
-      language: value.language as ManagedLspLanguage,
-      action,
-      expectedRevision: value.expectedRevision as number,
-      ...(configuration === undefined ? {} : { configuration }),
-    },
+  const request = {
+    root: value.root,
+    language: value.language,
+    action,
+    expectedRevision: value.expectedRevision,
+    ...(configuration === undefined ? {} : { configuration }),
   };
+  if (!validRequestScalars(request)) return invalid("managed LSP control request is invalid");
+  if (!hasConsistentRequestConfiguration(request, configuration)) {
+    return invalid("managed LSP control configuration is invalid");
+  }
+  return { ok: true, value: request };
 }
 
-function validRequestScalars(value: UnknownRecord): boolean {
+function validRequestScalars(
+  value: UnknownRecord,
+): value is UnknownRecord &
+  Pick<ManagedLspControlRequest, "root" | "language" | "action" | "expectedRevision"> {
   return (
     typeof value.root === "string" &&
     value.root.length > 0 &&
@@ -227,6 +270,17 @@ function validRequestScalars(value: UnknownRecord): boolean {
     memberOf(value.language, MANAGED_LSP_LANGUAGES) &&
     memberOf(value.action, MANAGED_LSP_CONTROL_ACTIONS) &&
     isRevision(value.expectedRevision)
+  );
+}
+
+function hasConsistentRequestConfiguration(
+  request: Pick<ManagedLspControlRequest, "action" | "language" | "expectedRevision">,
+  configuration: ManagedLspRuntimeConfiguration | undefined,
+): boolean {
+  if (request.action !== "configure") return configuration === undefined;
+  return (
+    configuration?.language === request.language &&
+    configuration.revision === request.expectedRevision
   );
 }
 
@@ -270,7 +324,7 @@ function isRestartFields(
   return (
     Array.isArray(value) &&
     value.length <= 2 &&
-    value.every((field) => field === "runtime" || field === "settings") &&
+    everyPhysical(value, (field) => field === "runtime" || field === "settings", 2) &&
     new Set(value).size === value.length &&
     typeof required === "boolean" &&
     required === value.length > 0
@@ -313,8 +367,14 @@ function isActivationResolution(value: unknown): value is ManagedLspActivationRe
 }
 
 function isActivationArray(value: unknown): value is readonly ManagedLspActivationResolution[] {
-  if (!Array.isArray(value) || !value.every(isActivationResolution)) return false;
-  const resolved = value.flatMap((entry) => (entry.ok ? [entry] : []));
+  if (!Array.isArray(value) || !everyPhysical(value, isActivationResolution)) return false;
+  const resolved: ManagedLspActivationStatus[] = [];
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    const entry: unknown = value[index];
+    if (entry === undefined || !isActivationResolution(entry)) return false;
+    if (entry.ok) resolved.push(entry);
+  }
   return resolved.length === value.length && hasExactLanguageCoverage(resolved);
 }
 
@@ -390,7 +450,7 @@ function isHealthSnapshot(value: unknown): value is ManagedLspProcessHealthSnaps
 function isOperations(value: unknown): value is readonly LanguageServiceOperation[] {
   return (
     Array.isArray(value) &&
-    value.every((operation) => memberOf(operation, LANGUAGE_SERVICE_OPERATIONS)) &&
+    everyPhysical(value, (operation) => memberOf(operation, LANGUAGE_SERVICE_OPERATIONS)) &&
     new Set(value).size === value.length
   );
 }
@@ -410,14 +470,14 @@ function isUniqueLanguageArray<T extends { readonly language: ManagedLspLanguage
   value: unknown,
   predicate: (entry: unknown) => entry is T,
 ): value is readonly T[] {
-  return Array.isArray(value) && value.every(predicate) && uniqueLanguages(value);
+  return Array.isArray(value) && everyPhysical(value, predicate) && uniqueLanguages(value);
 }
 
 function isCompleteLanguageArray<T extends { readonly language: ManagedLspLanguage }>(
   value: unknown,
   predicate: (entry: unknown) => entry is T,
 ): value is readonly T[] {
-  return Array.isArray(value) && value.every(predicate) && hasExactLanguageCoverage(value);
+  return Array.isArray(value) && everyPhysical(value, predicate) && hasExactLanguageCoverage(value);
 }
 
 function isSnapshotConfigurationArray(
@@ -433,7 +493,7 @@ function isSnapshotConfigurationArray(
   ) {
     return false;
   }
-  return value.every((configuration) => {
+  return everyPhysical(value, (configuration) => {
     const configurationEtag = parseRevisionEtagParts(configuration.etag);
     return (
       configuration.revision <= revision &&
@@ -467,7 +527,7 @@ function isConfigurationDefaultArray(
 ): value is readonly ManagedLspRuntimeConfiguration[] {
   if (!isRevision(revision) || typeof etag !== "string" || !Array.isArray(value)) return false;
   return (
-    value.every((entry) => isConfigurationDefault(entry, revision, etag)) &&
+    everyPhysical(value, (entry) => isConfigurationDefault(entry, revision, etag)) &&
     hasExactLanguageCoverage(value)
   );
 }
@@ -508,13 +568,17 @@ function hasConsistentSnapshotPayload(value: UnknownRecord): boolean {
   const configurations = value.configurations;
   const revision = value.revision;
   return (
-    value.languages.every(
+    everyPhysical(
+      value.languages,
       (activation) => activation.ok && activation.configurationRevision === revision,
-    ) && value.settings.every((summary) => summaryMatchesConfiguration(summary, configurations))
+    ) &&
+    everyPhysical(value.settings, (summary) => summaryMatchesConfiguration(summary, configurations))
   );
 }
 
-function validControlResponse(value: UnknownRecord): boolean {
+function validControlResponse(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspControlResponse {
   return (
     hasOnlyKeys(value, CONTROL_RESPONSE_KEYS) &&
     memberOf(value.storeState, ["absent", "ready", "unavailable"]) &&
@@ -532,12 +596,12 @@ function isRuntimeConfiguration(value: unknown): value is ManagedLspRuntimeConfi
   return parseManagedLspRuntimeConfiguration(value).ok;
 }
 
-function isProviderMetadataArray(value: unknown): value is readonly ManagedLspProviderMetadata[] {
+function isProviderMetadataArray(
+  value: unknown,
+): value is readonly ManagedLspProviderMetadata[] | undefined {
   return (
     value === undefined ||
-    (Array.isArray(value) &&
-      value.every(isProviderMetadata) &&
-      new Set(value.map((entry) => entry.language)).size === value.length)
+    (Array.isArray(value) && everyPhysical(value, isProviderMetadata) && uniqueLanguages(value))
   );
 }
 
@@ -547,7 +611,7 @@ function parseControlResponseUnsafe(
   if (!isRecord(value) || !validControlResponse(value)) {
     return invalid("managed LSP control response is invalid or contains unknown fields");
   }
-  return { ok: true, value: value as unknown as ManagedLspControlResponse };
+  return { ok: true, value };
 }
 
 export function parseManagedLspControlResponse(
@@ -556,12 +620,11 @@ export function parseManagedLspControlResponse(
   return parseSafely(() => parseControlResponseUnsafe(value));
 }
 
-function parseMutationResponseUnsafe(
-  value: unknown,
-): ManagedLspRouteParseResult<ManagedLspControlSuccessResult> {
-  if (!isRecord(value)) return invalid("managed LSP mutation response must be an object");
+function validMutationResponse(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspControlSuccessResult {
   const status = parseManagedLspActivationStatus(value.status);
-  const valid = [
+  return [
     hasOnlyKeys(value, ["kind", "changed", "revision", "etag", "status"]),
     value.kind === "ok",
     typeof value.changed === "boolean",
@@ -569,8 +632,15 @@ function parseMutationResponseUnsafe(
     parseManagedLspRevisionEtag(value.etag, value.revision) !== undefined,
     status.ok && status.value.configurationRevision === value.revision,
   ].every(Boolean);
+}
+
+function parseMutationResponseUnsafe(
+  value: unknown,
+): ManagedLspRouteParseResult<ManagedLspControlSuccessResult> {
+  if (!isRecord(value)) return invalid("managed LSP mutation response must be an object");
+  const valid = validMutationResponse(value);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspControlSuccessResult }
+    ? { ok: true, value }
     : invalid("managed LSP mutation response is invalid or contains unknown fields");
 }
 

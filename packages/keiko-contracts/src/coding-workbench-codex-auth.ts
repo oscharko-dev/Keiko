@@ -1,3 +1,11 @@
+import { validateWithAdmission } from "./coding-workbench-runtime-api-validation.js";
+import {
+  appendValidationIssues,
+  isRecord,
+  isOneOf,
+  validateAllowedKeys,
+  validatePhysicalArrayEntries,
+} from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   type CodingWorkbenchModelSource,
@@ -123,34 +131,20 @@ export interface CodingWorkbenchRuntimeProfileSelection {
   readonly runtimeBinarySources: readonly CodingWorkbenchCodexRuntimeBinarySource[];
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-function validateAllowedKeys(
-  record: Record<string, unknown>,
-  allowed: readonly string[],
-  path: string,
-  errors: string[],
-): void {
-  Object.keys(record)
-    .filter((key) => !allowed.includes(key))
-    .forEach((key) => errors.push(`${path}.${key} is not allowed`));
-}
-
 function validateBooleanField(
   record: Record<string, unknown>,
   key: string,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (typeof record[key] !== "boolean") {
-    errors.push(`${path}.${key} must be a boolean`);
+    valid = [appendValidationIssues(errors, `${path}.${key} must be a boolean`), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
 function validateFalseField(
@@ -158,10 +152,13 @@ function validateFalseField(
   key: string,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (record[key] !== false) {
-    errors.push(`${path}.${key} must be false`);
+    valid = [appendValidationIssues(errors, `${path}.${key} must be false`), valid].every(Boolean);
   }
+
+  return valid;
 }
 
 function validateStringArray(
@@ -170,66 +167,88 @@ function validateStringArray(
   path: string,
   errors: string[],
   requireNonEmpty: boolean,
-): void {
-  if (!Array.isArray(value)) {
-    errors.push(`${path} must be an array`);
-    return;
-  }
-  if (requireNonEmpty && value.length === 0) {
-    errors.push(`${path} must not be empty`);
-  }
-  value.forEach((entry, index) => {
-    if (typeof entry !== "string" || !allowed.includes(entry)) {
-      errors.push(`${path}[${String(index)}] is invalid`);
-    }
-  });
+): boolean {
+  return validatePhysicalArrayEntries(
+    value,
+    path,
+    errors,
+    requireNonEmpty,
+    "is invalid",
+    (entry, memberPath, memberErrors): boolean => {
+      if (typeof entry !== "string" || !allowed.includes(entry)) {
+        return appendValidationIssues(memberErrors, `${memberPath} is invalid`);
+      }
+      return true;
+    },
+  );
 }
 
-function validateProfileEnums(record: Record<string, unknown>, errors: string[]): void {
+function validateProfileEnums(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (record.schemaVersion !== CODING_WORKBENCH_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
   }
   if (record.modelSource !== "chatgpt-codex-subscription-profile") {
-    errors.push("profile.modelSource is invalid");
+    valid = [appendValidationIssues(errors, "profile.modelSource is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (record.runtimeSource !== "codex-cli-adapter") {
-    errors.push("profile.runtimeSource is invalid");
+    valid = [appendValidationIssues(errors, "profile.runtimeSource is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (!isOneOf(record.status, CODING_WORKBENCH_CODEX_AUTH_STATUSES)) {
-    errors.push("profile.status is invalid");
+    valid = [appendValidationIssues(errors, "profile.status is invalid"), valid].every(Boolean);
   }
+
+  return valid;
 }
 
-function validateProfileSafeFields(record: Record<string, unknown>, errors: string[]): void {
+function validateProfileSafeFields(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isCodingWorkbenchEvidenceSafeText(record.profileId)) {
-    errors.push("profile.profileId must be content-free evidence-safe text");
+    valid = [
+      appendValidationIssues(errors, "profile.profileId must be content-free evidence-safe text"),
+      valid,
+    ].every(Boolean);
   }
   if (
     record.authMethod !== undefined &&
     !isOneOf(record.authMethod, CODING_WORKBENCH_CODEX_AUTH_METHODS)
   ) {
-    errors.push("profile.authMethod is invalid");
+    valid = [appendValidationIssues(errors, "profile.authMethod is invalid"), valid].every(Boolean);
   }
   if (!isOneOf(record.credentialStore, CODING_WORKBENCH_CODEX_CREDENTIAL_STORES)) {
-    errors.push("profile.credentialStore is invalid");
+    valid = [appendValidationIssues(errors, "profile.credentialStore is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (!isOneOf(record.stateScope, CODING_WORKBENCH_CODEX_AUTH_STATE_SCOPES)) {
-    errors.push("profile.stateScope is invalid");
+    valid = [appendValidationIssues(errors, "profile.stateScope is invalid"), valid].every(Boolean);
   }
   if (!isOneOf(record.stateRoot, CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS)) {
-    errors.push("profile.stateRoot is invalid");
+    valid = [appendValidationIssues(errors, "profile.stateRoot is invalid"), valid].every(Boolean);
   }
-  validateStringArray(
-    record.runtimeBinarySources,
-    CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
-    "profile.runtimeBinarySources",
-    errors,
-    false,
-  );
+  valid = [
+    validateStringArray(
+      record.runtimeBinarySources,
+      CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+      "profile.runtimeBinarySources",
+      errors,
+      false,
+    ),
+    valid,
+  ].every(Boolean);
+
+  return valid;
 }
 
-function validateProfileBooleans(record: Record<string, unknown>, errors: string[]): void {
-  validateFalseField(record, "usesGlobalCodexHome", "profile", errors);
+function validateProfileBooleans(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  valid = [validateFalseField(record, "usesGlobalCodexHome", "profile", errors), valid].every(
+    Boolean,
+  );
   [
     "supportsBrowserLogin",
     "supportsDeviceCode",
@@ -237,20 +256,34 @@ function validateProfileBooleans(record: Record<string, unknown>, errors: string
     "deploymentPolicyDisabled",
     "headless",
   ].forEach((key) => {
-    validateBooleanField(record, key, "profile", errors);
+    valid = [validateBooleanField(record, key, "profile", errors), valid].every(Boolean);
   });
+
+  return valid;
 }
 
-function validateUnapprovedProfile(record: Record<string, unknown>, errors: string[]): void {
-  if (record.status !== "redistribution-unapproved") return;
+function validateUnapprovedProfile(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (record.status !== "redistribution-unapproved") return valid;
   if (Array.isArray(record.runtimeBinarySources) && record.runtimeBinarySources.length > 0) {
-    errors.push("profile.runtimeBinarySources must be empty when redistribution is unapproved");
+    valid = [
+      appendValidationIssues(
+        errors,
+        "profile.runtimeBinarySources must be empty when redistribution is unapproved",
+      ),
+      valid,
+    ].every(Boolean);
   }
   ["supportsBrowserLogin", "supportsDeviceCode", "supportsAccessToken"].forEach((key) => {
     if (record[key] !== false) {
-      errors.push(`${key} must be false when redistribution is unapproved`);
+      valid = [
+        appendValidationIssues(errors, `${key} must be false when redistribution is unapproved`),
+        valid,
+      ].every(Boolean);
     }
   });
+
+  return valid;
 }
 
 const CODEX_PROFILE_KEYS: readonly string[] = Object.freeze([
@@ -272,37 +305,52 @@ const CODEX_PROFILE_KEYS: readonly string[] = Object.freeze([
   "headless",
 ] as const);
 
+function admitCodingWorkbenchCodexSubscriptionProfile(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchCodexSubscriptionProfile {
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "profile must be an object");
+    return false;
+  }
+  return [
+    validateAllowedKeys(value, CODEX_PROFILE_KEYS, "profile", errors),
+    validateProfileEnums(value, errors),
+    validateProfileSafeFields(value, errors),
+    validateProfileBooleans(value, errors),
+    validateUnapprovedProfile(value, errors),
+  ].every(Boolean);
+}
+
 export function validateCodingWorkbenchCodexSubscriptionProfile(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCodexSubscriptionProfile> {
+  return validateWithAdmission(value, admitCodingWorkbenchCodexSubscriptionProfile);
+}
+
+function admitCodingWorkbenchCodexAuthSetupRequest(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchCodexAuthSetupRequest {
+  let valid = true;
   if (!isRecord(value)) {
-    return { ok: false, errors: ["profile must be an object"] };
+    appendValidationIssues(errors, "setup request must be an object");
+    return false;
   }
-  const errors: string[] = [];
-  validateAllowedKeys(value, CODEX_PROFILE_KEYS, "profile", errors);
-  validateProfileEnums(value, errors);
-  validateProfileSafeFields(value, errors);
-  validateProfileBooleans(value, errors);
-  validateUnapprovedProfile(value, errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchCodexSubscriptionProfile };
+  valid = [validateAllowedKeys(value, ["method"], "setup", errors), valid].every(Boolean);
+  if (!isOneOf(value.method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) {
+    valid = [appendValidationIssues(errors, "setup.method is invalid"), valid].every(Boolean);
+  }
+  return valid;
 }
 
 export function validateCodingWorkbenchCodexAuthSetupRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCodexAuthSetupRequest> {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["setup request must be an object"] };
-  }
   const errors: string[] = [];
-  validateAllowedKeys(value, ["method"], "setup", errors);
-  if (!isOneOf(value.method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) {
-    errors.push("setup.method is invalid");
-  }
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchCodexAuthSetupRequest };
+  return admitCodingWorkbenchCodexAuthSetupRequest(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
 const SETUP_PLAN_KEYS: readonly string[] = Object.freeze([
@@ -320,41 +368,59 @@ const SETUP_PLAN_KEYS: readonly string[] = Object.freeze([
   "credentialTransport",
 ] as const);
 
-function validateSetupPlanEnums(record: Record<string, unknown>, errors: string[]): void {
+function validateSetupPlanEnums(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (record.schemaVersion !== CODING_WORKBENCH_SCHEMA_VERSION) {
-    errors.push("schemaVersion is invalid");
+    valid = [appendValidationIssues(errors, "schemaVersion is invalid"), valid].every(Boolean);
   }
   if (!isCodingWorkbenchEvidenceSafeText(record.profileId)) {
-    errors.push("setup.profileId must be content-free evidence-safe text");
+    valid = [
+      appendValidationIssues(errors, "setup.profileId must be content-free evidence-safe text"),
+      valid,
+    ].every(Boolean);
   }
   if (!isOneOf(record.method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) {
-    errors.push("setup.method is invalid");
+    valid = [appendValidationIssues(errors, "setup.method is invalid"), valid].every(Boolean);
   }
   if (record.modelSource !== "chatgpt-codex-subscription-profile") {
-    errors.push("setup.modelSource is invalid");
+    valid = [appendValidationIssues(errors, "setup.modelSource is invalid"), valid].every(Boolean);
   }
   if (record.runtimeSource !== "codex-cli-adapter") {
-    errors.push("setup.runtimeSource is invalid");
+    valid = [appendValidationIssues(errors, "setup.runtimeSource is invalid"), valid].every(
+      Boolean,
+    );
   }
+
+  return valid;
 }
 
-function validateSetupPlanPolicy(record: Record<string, unknown>, errors: string[]): void {
+function validateSetupPlanPolicy(record: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isOneOf(record.credentialStore, CODING_WORKBENCH_CODEX_CREDENTIAL_STORES)) {
-    errors.push("setup.credentialStore is invalid");
+    valid = [appendValidationIssues(errors, "setup.credentialStore is invalid"), valid].every(
+      Boolean,
+    );
   }
   if (!isOneOf(record.stateScope, CODING_WORKBENCH_CODEX_AUTH_STATE_SCOPES)) {
-    errors.push("setup.stateScope is invalid");
+    valid = [appendValidationIssues(errors, "setup.stateScope is invalid"), valid].every(Boolean);
   }
   if (!isOneOf(record.stateRoot, CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS)) {
-    errors.push("setup.stateRoot is invalid");
+    valid = [appendValidationIssues(errors, "setup.stateRoot is invalid"), valid].every(Boolean);
   }
-  validateFalseField(record, "usesGlobalCodexHome", "setup", errors);
+  valid = [validateFalseField(record, "usesGlobalCodexHome", "setup", errors), valid].every(
+    Boolean,
+  );
   if (!isOneOf(record.commandLabel, CODING_WORKBENCH_CODEX_AUTH_COMMAND_LABELS)) {
-    errors.push("setup.commandLabel is invalid");
+    valid = [appendValidationIssues(errors, "setup.commandLabel is invalid"), valid].every(Boolean);
   }
   if (typeof record.requiresSecretInput !== "boolean") {
-    errors.push("setup.requiresSecretInput must be a boolean");
+    valid = [
+      appendValidationIssues(errors, "setup.requiresSecretInput must be a boolean"),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
 }
 
 // A setup plan's method DETERMINES its command label, whether a secret is typed, and how that
@@ -406,38 +472,61 @@ export function codingWorkbenchCodexAuthMethodRowFor(
 function validateSetupPlanMethodConsistency(
   record: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   const method = record.method;
-  if (!isOneOf(method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) return;
+  if (!isOneOf(method, CODING_WORKBENCH_CODEX_AUTH_METHODS)) return valid;
   const row = codingWorkbenchCodexAuthMethodRowFor(method);
   if (record.commandLabel !== row.commandLabel) {
-    errors.push("setup.commandLabel does not match setup.method");
+    valid = [
+      appendValidationIssues(errors, "setup.commandLabel does not match setup.method"),
+      valid,
+    ].every(Boolean);
   }
   if (record.requiresSecretInput !== row.requiresSecretInput) {
-    errors.push("setup.requiresSecretInput does not match setup.method");
+    valid = [
+      appendValidationIssues(errors, "setup.requiresSecretInput does not match setup.method"),
+      valid,
+    ].every(Boolean);
   }
   if (record.credentialTransport !== row.credentialTransport) {
-    errors.push("setup.credentialTransport does not match setup.method");
+    valid = [
+      appendValidationIssues(errors, "setup.credentialTransport does not match setup.method"),
+      valid,
+    ].every(Boolean);
   }
+
+  return valid;
+}
+
+function admitCodingWorkbenchCodexAuthSetupPlan(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchCodexAuthSetupPlan {
+  let valid = true;
+  if (!isRecord(value)) {
+    appendValidationIssues(errors, "setup plan must be an object");
+    return false;
+  }
+  valid = [validateAllowedKeys(value, SETUP_PLAN_KEYS, "setup", errors), valid].every(Boolean);
+  valid = [validateSetupPlanEnums(value, errors), valid].every(Boolean);
+  valid = [validateSetupPlanPolicy(value, errors), valid].every(Boolean);
+  if (value.credentialTransport !== undefined && value.credentialTransport !== "stdin") {
+    valid = [appendValidationIssues(errors, "setup.credentialTransport is invalid"), valid].every(
+      Boolean,
+    );
+  }
+  valid = [validateSetupPlanMethodConsistency(value, errors), valid].every(Boolean);
+  return valid;
 }
 
 export function validateCodingWorkbenchCodexAuthSetupPlan(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchCodexAuthSetupPlan> {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["setup plan must be an object"] };
-  }
   const errors: string[] = [];
-  validateAllowedKeys(value, SETUP_PLAN_KEYS, "setup", errors);
-  validateSetupPlanEnums(value, errors);
-  validateSetupPlanPolicy(value, errors);
-  if (value.credentialTransport !== undefined && value.credentialTransport !== "stdin") {
-    errors.push("setup.credentialTransport is invalid");
-  }
-  validateSetupPlanMethodConsistency(value, errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: value as unknown as CodingWorkbenchCodexAuthSetupPlan };
+  return admitCodingWorkbenchCodexAuthSetupPlan(value, errors)
+    ? { ok: true, value }
+    : { ok: false, errors };
 }
 
 // KEIKO-0708 / #3321: redistribution of the Codex CLI adapter has not been approved yet, so

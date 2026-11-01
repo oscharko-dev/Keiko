@@ -88,7 +88,9 @@ const RECEIPT_ID = /^[A-Za-z0-9_.-]{1,128}$/u;
 function requireReceipt(condition: boolean): asserts condition {
   if (!condition) throw new TypeError("Invalid tool invocation receipt");
 }
-function receiptFields(value: unknown): Record<string, unknown> {
+function receiptFields(
+  value: unknown,
+): Readonly<Partial<Record<keyof ToolInvocationReceipt, unknown>>> {
   requireReceipt(typeof value === "object" && value !== null);
   const prototype: unknown = Object.getPrototypeOf(value);
   requireReceipt(prototype === Object.prototype || prototype === null);
@@ -97,13 +99,23 @@ function receiptFields(value: unknown): Record<string, unknown> {
     RECEIPT_KEYS.map((key) => {
       const field = Object.getOwnPropertyDescriptor(value, key);
       requireReceipt(field !== undefined && "value" in field && field.enumerable === true);
-      return [key, field.value as unknown];
+      const fieldValue: unknown = field.value;
+      return [key, fieldValue];
     }),
   );
 }
+const TOOL_BUDGET_DISPOSITION_VALUES: readonly string[] = TOOL_BUDGET_DISPOSITIONS;
+function isBudgetDisposition(value: unknown): value is ToolBudgetDisposition {
+  return typeof value === "string" && TOOL_BUDGET_DISPOSITION_VALUES.includes(value);
+}
+function isReceiptStatus(value: unknown): value is ToolResultStatus {
+  return typeof value === "string" && Object.hasOwn(TOOL_RESULT_REASONS, value);
+}
 const COMMIT_DISPOSITIONS = new Set(["committed", "commit-uncertain"]);
 const UNCERTAIN_DISPOSITIONS = new Set(["commit-uncertain", "release-uncertain"]);
-function validateReceiptAccounting(receipt: Record<string, unknown>): void {
+function validateReceiptAccounting(
+  receipt: Readonly<Partial<Record<keyof ToolInvocationReceipt, unknown>>>,
+): void {
   if (receipt.budgetDisposition === "not-reserved")
     requireReceipt(receipt.reservationId === null && !receipt.effectStarted);
   else
@@ -111,7 +123,7 @@ function validateReceiptAccounting(receipt: Record<string, unknown>): void {
       typeof receipt.reservationId === "string" &&
         RECEIPT_ID.test(receipt.reservationId) &&
         typeof receipt.budgetDisposition === "string" &&
-        (TOOL_BUDGET_DISPOSITIONS as readonly string[]).includes(receipt.budgetDisposition) &&
+        TOOL_BUDGET_DISPOSITION_VALUES.includes(receipt.budgetDisposition) &&
         receipt.effectStarted === COMMIT_DISPOSITIONS.has(receipt.budgetDisposition),
     );
   if (
@@ -123,14 +135,23 @@ function validateReceiptAccounting(receipt: Record<string, unknown>): void {
 /** Copy only bounded scalar receipt evidence; never accept cached result or argument payloads. */
 export function captureToolInvocationReceipt(value: unknown): ToolInvocationReceipt {
   const receipt = receiptFields(value);
-  requireReceipt(typeof receipt.invocationId === "string" && RECEIPT_ID.test(receipt.invocationId));
-  requireReceipt(typeof receipt.settlementId === "string" && RECEIPT_ID.test(receipt.settlementId));
-  requireReceipt(
-    typeof receipt.status === "string" && Object.hasOwn(TOOL_RESULT_REASONS, receipt.status),
-  );
-  requireReceipt(typeof receipt.effectStarted === "boolean");
+  const { invocationId, settlementId, status, effectStarted, reservationId, budgetDisposition } =
+    receipt;
+  requireReceipt(typeof invocationId === "string" && RECEIPT_ID.test(invocationId));
+  requireReceipt(typeof settlementId === "string" && RECEIPT_ID.test(settlementId));
+  requireReceipt(isReceiptStatus(status));
+  requireReceipt(typeof effectStarted === "boolean");
   validateReceiptAccounting(receipt);
-  return deepFreeze(receipt) as unknown as ToolInvocationReceipt;
+  requireReceipt(reservationId === null || typeof reservationId === "string");
+  requireReceipt(isBudgetDisposition(budgetDisposition));
+  return deepFreeze({
+    invocationId,
+    reservationId,
+    settlementId,
+    budgetDisposition,
+    effectStarted,
+    status,
+  });
 }
 
 export interface ToolLifecycleIdentity {
@@ -207,8 +228,12 @@ export type ToolLifecycleEvent =
   | ToolLifecycleTerminal
   | ToolLifecycleDiscarded;
 
+function isToolLifecyclePhase(value: string): value is ToolLifecyclePhase {
+  return Object.hasOwn(TOOL_LIFECYCLE_OPERATIONS, value);
+}
+
 export function toolLifecyclePhaseFor(operation: string): ToolLifecyclePhase | undefined {
-  return (Object.keys(TOOL_LIFECYCLE_OPERATIONS) as ToolLifecyclePhase[]).find(
-    (phase) => TOOL_LIFECYCLE_OPERATIONS[phase] === operation,
-  );
+  return Object.keys(TOOL_LIFECYCLE_OPERATIONS)
+    .filter(isToolLifecyclePhase)
+    .find((phase) => TOOL_LIFECYCLE_OPERATIONS[phase] === operation);
 }

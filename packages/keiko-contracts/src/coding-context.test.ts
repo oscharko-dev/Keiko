@@ -491,3 +491,37 @@ describe("shared completion-contract primitives (KEIKO-0159)", () => {
     expect(conflicting).toContain("context must not set both capsuleId and capsuleSetId");
   });
 });
+
+// PRIVATE C1B source/public hypothesis controls: UNEXECUTED, no regression claimed.
+describe("C1B physical context string admission", () => {
+  it.each(["source", "public"])("refuses a skipped string member through %s", async (seam) => {
+    const guard =
+      seam === "source"
+        ? isStringArray
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-context")).isStringArray;
+    const entries = [7];
+    Object.defineProperty(entries, "every", { value: (): boolean => true });
+    expect(guard(entries)).toBe(false);
+  });
+  it.each(["source", "public"])("refuses a missing string member through %s", async (seam) => {
+    const guard =
+      seam === "source"
+        ? isStringArray
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-context")).isStringArray;
+    expect(guard(Array<unknown>(1))).toBe(false);
+  });
+  it.each(["source", "public"])(
+    "retains healthy context selector references through %s",
+    async (seam) => {
+      const owner =
+        seam === "source"
+          ? { isStringArray, buildContextSelectors }
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-context");
+      const entries = ["src/entry.ts"];
+      expect(owner.isStringArray(entries)).toBe(true);
+      expect(owner.buildContextSelectors({ changedFiles: entries }).changedFiles).toBe(entries);
+      expect(owner.buildContextSelectors({ changedFiles: undefined })).toEqual({});
+      expect(owner.buildContextSelectors({})).toEqual({});
+    },
+  );
+});

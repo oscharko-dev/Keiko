@@ -2,8 +2,7 @@ import { JIRA_MUTATION_OPERATIONS, type JiraMutationOperation } from "./jira-too
 import { isChatJiraPodId } from "./bff-wire.js";
 import { exactKeys, isRecord } from "./contract-validation-primitives.js";
 import {
-  invalid,
-  result,
+  validateWithAdmission,
   validateSafeId,
   validateStrictUtcInstant,
 } from "./coding-workbench-runtime-api-validation.js";
@@ -102,21 +101,30 @@ function positiveCount(value: unknown): value is number {
 export function validateChatToolAuthoritySubject(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolAuthoritySubject> {
-  if (!isRecord(value)) return invalid("chatAuthority.subject must be an object");
-  const errors: string[] = [];
+  return validateWithAdmission(value, admitChatToolAuthoritySubject);
+}
+
+function admitChatToolAuthoritySubject(
+  value: unknown,
+  errors: string[],
+): value is ChatToolAuthoritySubject {
+  if (!isRecord(value)) {
+    errors.push("chatAuthority.subject must be an object");
+    return false;
+  }
   validateKeys(value, value.kind === "configured-mcp" ? MCP_SUBJECT_KEYS : SUBJECT_KEYS, errors);
   validateDigest(value.actorDigest, "chatAuthority.subject.actorDigest", errors);
   validateSafeId(value.chatId, "chatAuthority.subject.chatId", errors, 128);
   if (value.kind === "configured-mcp") {
     validateDigest(value.configurationDigest, "chatAuthority.subject.configurationDigest", errors);
-    return result(value, errors);
+    return errors.length === 0;
   }
   if (!isChatJiraPodId(value.podId)) errors.push("chatAuthority.subject.podId is invalid");
   for (const key of ["bindingGeneration", "authenticationGeneration"]) {
     if (!positiveCount(value[key]))
       errors.push(`chatAuthority.subject.${key} must be a positive safe integer`);
   }
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 function validateModes(value: Record<string, unknown>, errors: string[]): void {
@@ -174,8 +182,17 @@ function validateBudget(value: unknown, errors: string[]): void {
 export function validateChatToolAuthorityEnvelope(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolAuthorityEnvelope> {
-  if (!isRecord(value)) return invalid("chatAuthority must be an object");
-  const errors: string[] = [];
+  return validateWithAdmission(value, admitChatToolAuthorityEnvelope);
+}
+
+function admitChatToolAuthorityEnvelope(
+  value: unknown,
+  errors: string[],
+): value is ChatToolAuthorityEnvelope {
+  if (!isRecord(value)) {
+    errors.push("chatAuthority must be an object");
+    return false;
+  }
   validateKeys(value, ENVELOPE_KEYS, errors);
   if (value.schemaVersion !== "1" || value.kind !== "chat-tool-authority") {
     errors.push("chatAuthority kind or schemaVersion is invalid");
@@ -188,7 +205,7 @@ export function validateChatToolAuthorityEnvelope(
   validateBudget(value.budget, errors);
   validateStrictUtcInstant(value.expiresAt, "chatAuthority.expiresAt", errors);
   validateDigest(value.approvalProofDigest, "chatAuthority.approvalProofDigest", errors);
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export const CHAT_TOOL_READ_GRANT_STATES = [
@@ -261,8 +278,17 @@ export interface ChatToolReadConsentDecision {
 export function validateChatToolReadConsentDecision(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolReadConsentDecision> {
-  if (!isRecord(value)) return invalid("chatReadConsent must be an object");
-  const errors: string[] = [];
+  return validateWithAdmission(value, admitChatToolReadConsentDecision);
+}
+
+function admitChatToolReadConsentDecision(
+  value: unknown,
+  errors: string[],
+): value is ChatToolReadConsentDecision {
+  if (!isRecord(value)) {
+    errors.push("chatReadConsent must be an object");
+    return false;
+  }
   validateKeys(value, ["decision", "disclosureVersion"], errors, "chatReadConsent");
   if (value.decision !== "approve" && value.decision !== "reject")
     errors.push("chatReadConsent.decision is invalid");
@@ -271,7 +297,7 @@ export function validateChatToolReadConsentDecision(
     value.disclosureVersion !== MCP_CHAT_READ_DISCLOSURE_VERSION
   )
     errors.push("chatReadConsent.disclosureVersion is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 const READ_GRANT_KEYS = [
@@ -307,8 +333,14 @@ function readGrantFamily(subject: unknown): { kind: string; disclosure: ReadDisc
 export function validateChatToolReadGrant(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolReadGrant> {
-  if (!isRecord(value)) return invalid("chatReadGrant must be an object");
-  const errors: string[] = [];
+  return validateWithAdmission(value, admitChatToolReadGrant);
+}
+
+function admitChatToolReadGrant(value: unknown, errors: string[]): value is ChatToolReadGrant {
+  if (!isRecord(value)) {
+    errors.push("chatReadGrant must be an object");
+    return false;
+  }
   validateKeys(value, READ_GRANT_KEYS, errors, "chatReadGrant");
   const family = readGrantFamily(value.subject);
   if (value.schemaVersion !== "1" || value.kind !== family.kind)
@@ -325,7 +357,7 @@ export function validateChatToolReadGrant(
   )
     errors.push("chatReadGrant lifetime is invalid");
   validateReadGrantState(value, errors);
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export const CHAT_TOOL_WRITE_APPROVAL_STATES = [
@@ -430,8 +462,17 @@ function validateWriteApprovalSubject(value: Record<string, unknown>, errors: st
 export function validateChatToolWriteApprovalView(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolWriteApprovalView> {
-  if (!isRecord(value)) return invalid("chatWriteApproval must be an object");
-  const errors: string[] = [];
+  return validateWithAdmission(value, admitChatToolWriteApprovalView);
+}
+
+function admitChatToolWriteApprovalView(
+  value: unknown,
+  errors: string[],
+): value is ChatToolWriteApprovalView {
+  if (!isRecord(value)) {
+    errors.push("chatWriteApproval must be an object");
+    return false;
+  }
   const mcp = value.kind === "mcp-chat-write";
   validateKeys(
     value,
@@ -446,16 +487,25 @@ export function validateChatToolWriteApprovalView(
   validateWriteApprovalLifetime(value, errors);
   if (!WRITE_APPROVAL_STATES.has(value.state)) errors.push("chatWriteApproval.state is invalid");
   validateDigest(value.actionDigest, "chatWriteApproval.actionDigest", errors);
-  return result(value, errors);
+  return errors.length === 0;
 }
 export function validateChatToolWriteApprovalDecision(
   value: unknown,
 ): CodingWorkbenchValidationResult<ChatToolWriteApprovalDecision> {
-  if (!isRecord(value)) return invalid("chatWriteDecision must be an object");
-  const errors: string[] = [];
+  return validateWithAdmission(value, admitChatToolWriteApprovalDecision);
+}
+
+function admitChatToolWriteApprovalDecision(
+  value: unknown,
+  errors: string[],
+): value is ChatToolWriteApprovalDecision {
+  if (!isRecord(value)) {
+    errors.push("chatWriteDecision must be an object");
+    return false;
+  }
   validateKeys(value, ["decision", "actionDigest"], errors, "chatWriteDecision");
   if (value.decision !== "approve" && value.decision !== "reject")
     errors.push("chatWriteDecision.decision is invalid");
   validateDigest(value.actionDigest, "chatWriteDecision.actionDigest", errors);
-  return result(value, errors);
+  return errors.length === 0;
 }

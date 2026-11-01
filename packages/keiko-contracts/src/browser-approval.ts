@@ -1,5 +1,10 @@
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
-import { exactKeys, invalid, isRecord, result } from "./coding-workbench-runtime-api-validation.js";
+import {
+  exactKeys,
+  isRecord,
+  validateWithAdmission,
+} from "./coding-workbench-runtime-api-validation.js";
+import { isOneOf, isPhysicalArrayOf } from "./contract-validation-primitives.js";
 
 export const BROWSER_APPROVAL_VERSION = 1 as const;
 export const BROWSER_APPROVAL_REQUEST_TTL_MS = 5 * 60 * 1_000;
@@ -93,7 +98,7 @@ export type BrowserApprovalChallengeResult =
   | { readonly state: "pending" | "unavailable" };
 
 export type BrowserApprovalProofResult =
-  | { readonly state: "active"; readonly approval?: BrowserApprovalDescriptor }
+  | { readonly state: "active"; readonly approval?: BrowserApprovalDescriptor | undefined }
   | { readonly state: "unavailable" };
 
 function isTime(value: unknown): value is number {
@@ -159,85 +164,160 @@ export function isBrowserApprovalDescriptor(value: unknown): value is BrowserApp
   );
 }
 
-function isStateOnly(value: unknown, states: ReadonlySet<string>): boolean {
+function isStateOnly<State extends "accepted" | "pending" | "unavailable">(
+  value: unknown,
+  states: readonly State[],
+): value is { readonly state: State } {
   return (
     isRecord(value) &&
     exactKeys(value, ["state"], "browserApprovalResult").length === 0 &&
     typeof value.state === "string" &&
-    states.has(value.state)
+    isOneOf(value.state, states)
   );
 }
 
 export function validateBrowserApprovalRequestResult(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalRequestResult> {
-  if (isStateOnly(value, new Set(["unavailable"]))) return result(value, []);
-  if (!isRecord(value)) return invalid("browser request result must be an object");
-  const errors = exactKeys(value, ["state", "request"], "browserRequestResult");
+  return validateWithAdmission(value, checkBrowserApprovalRequestResult);
+}
+
+function checkBrowserApprovalRequestResult(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalRequestResult {
+  if (isStateOnly(value, ["unavailable"])) return true;
+  if (!isRecord(value)) {
+    errors.push("browser request result must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["state", "request"], "browserRequestResult"));
   if (value.state !== "pending" || !isBrowserApprovalRequestDescriptor(value.request))
     errors.push("browser request result is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function validateBrowserApprovalChallengeResult(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalChallengeResult> {
-  if (isStateOnly(value, new Set(["pending", "unavailable"]))) return result(value, []);
-  if (!isRecord(value)) return invalid("browser challenge result must be an object");
-  const errors = exactKeys(value, ["state", "challenge"], "browserChallengeResult");
+  return validateWithAdmission(value, checkBrowserApprovalChallengeResult);
+}
+
+function checkBrowserApprovalChallengeResult(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalChallengeResult {
+  if (isStateOnly(value, ["pending", "unavailable"])) return true;
+  if (!isRecord(value)) {
+    errors.push("browser challenge result must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["state", "challenge"], "browserChallengeResult"));
   if (value.state !== "challenge" || !validateBrowserApprovalChallenge(value.challenge).ok)
     errors.push("browser challenge result is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function validateBrowserApprovalProofResult(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalProofResult> {
-  if (isStateOnly(value, new Set(["unavailable"]))) return result(value, []);
-  if (!isRecord(value)) return invalid("browser proof result must be an object");
-  const errors = exactKeys(value, ["state", "approval"], "browserProofResult");
+  return validateWithAdmission(value, checkBrowserApprovalProofResult);
+}
+
+function checkBrowserApprovalProofResult(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalProofResult {
+  if (isStateOnly(value, ["unavailable"])) return true;
+  if (!isRecord(value)) {
+    errors.push("browser proof result must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["state", "approval"], "browserProofResult"));
   if (value.state !== "active") errors.push("browser proof result is invalid");
   if (value.approval !== undefined && !isBrowserApprovalDescriptor(value.approval))
     errors.push("browser proof approval is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function validateBrowserApprovalDecisionResult(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalDecisionResult> {
-  return isStateOnly(value, new Set(["accepted", "unavailable"]))
-    ? result(value, [])
-    : invalid("browser decision result is invalid");
+  return validateWithAdmission(value, checkBrowserApprovalDecisionResult);
+}
+
+function checkBrowserApprovalDecisionResult(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalDecisionResult {
+  const admitted = isStateOnly(value, ["accepted", "unavailable"]);
+  if (!admitted) errors.push("browser decision result is invalid");
+  return admitted;
+}
+
+// A bounded physical collection of records, each with a valid identity and no identity repeated.
+function hasUniqueRecords<T>(
+  value: unknown,
+  limit: number,
+  isRecord: (entry: unknown) => entry is T,
+  key: keyof T,
+  isIdentity: (identity: unknown) => identity is string,
+): value is T[] {
+  if (!Array.isArray(value) || value.length > limit) return false;
+  if (!isPhysicalArrayOf(value, isRecord)) return false;
+  const entries: readonly T[] = value;
+  const count = entries.length;
+  const identities = new Set<string>();
+  for (let index = 0; index < count; index += 1) {
+    const entry = entries[index];
+    if (!isRecord(entry)) return false;
+    const identity: unknown = entry[key];
+    if (!isIdentity(identity)) return false;
+    identities.add(identity);
+  }
+  return identities.size === value.length;
 }
 
 function hasValidRequests(value: unknown): value is BrowserApprovalRequestDescriptor[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= BROWSER_APPROVAL_MAX_RECORDS &&
-    value.every(isBrowserApprovalRequestDescriptor) &&
-    new Set(value.map((request) => request.requestId)).size === value.length
+  return hasUniqueRecords(
+    value,
+    BROWSER_APPROVAL_MAX_RECORDS,
+    isBrowserApprovalRequestDescriptor,
+    "requestId",
+    isBrowserApprovalRequestId,
   );
 }
 
 function hasValidApprovals(value: unknown): value is BrowserApprovalDescriptor[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= BROWSER_APPROVAL_MAX_RECORDS * 2 &&
-    value.every(isBrowserApprovalDescriptor) &&
-    new Set(value.map((approval) => approval.approvalId)).size === value.length
+  return hasUniqueRecords(
+    value,
+    BROWSER_APPROVAL_MAX_RECORDS * 2,
+    isBrowserApprovalDescriptor,
+    "approvalId",
+    isBrowserApprovalId,
   );
 }
 
 export function validateBrowserApprovalManagementResult(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalManagementResult> {
-  if (isStateOnly(value, new Set(["unavailable"]))) return result(value, []);
-  if (!isRecord(value)) return invalid("browser management result must be an object");
-  const errors = exactKeys(value, ["state", "requests", "approvals"], "browserManagementResult");
+  return validateWithAdmission(value, checkBrowserApprovalManagementResult);
+}
+
+function checkBrowserApprovalManagementResult(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalManagementResult {
+  if (isStateOnly(value, ["unavailable"])) return true;
+  if (!isRecord(value)) {
+    errors.push("browser management result must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["state", "requests", "approvals"], "browserManagementResult"));
   if (value.state !== "active") errors.push("browser management state is invalid");
   if (!hasValidRequests(value.requests)) errors.push("browser management requests are invalid");
   if (!hasValidApprovals(value.approvals)) errors.push("browser management approvals are invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 function matches(value: unknown, pattern: RegExp): value is string {
@@ -264,45 +344,85 @@ export function isBrowserApprovalRequestId(value: unknown): value is string {
 export function validateBrowserApprovalRequestInput(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalRequestInput> {
-  if (!isRecord(value)) return invalid("browser approval request must be an object");
-  const errors = exactKeys(value, ["publicKey", "remember"], "browserApprovalRequest");
+  return validateWithAdmission(value, checkBrowserApprovalRequestInput);
+}
+
+function checkBrowserApprovalRequestInput(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalRequestInput {
+  if (!isRecord(value)) {
+    errors.push("browser approval request must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["publicKey", "remember"], "browserApprovalRequest"));
   if (!isBrowserApprovalPublicKey(value.publicKey)) errors.push("publicKey is invalid");
   if (typeof value.remember !== "boolean") errors.push("remember is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function validateBrowserApprovalDecisionInput(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalDecisionInput> {
-  if (!isRecord(value)) return invalid("browser approval decision must be an object");
-  const errors = exactKeys(value, ["requestId", "comparisonCode", "remember"], "browserDecision");
+  return validateWithAdmission(value, checkBrowserApprovalDecisionInput);
+}
+
+function checkBrowserApprovalDecisionInput(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalDecisionInput {
+  if (!isRecord(value)) {
+    errors.push("browser approval decision must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["requestId", "comparisonCode", "remember"], "browserDecision"));
   if (!isBrowserApprovalRequestId(value.requestId)) errors.push("requestId is invalid");
   if (!matches(value.comparisonCode, /^\d{8}$/u)) errors.push("comparisonCode is invalid");
   if (typeof value.remember !== "boolean") errors.push("remember is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function validateBrowserApprovalChallengeInput(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalChallengeInput> {
-  if (!isRecord(value)) return invalid("browser challenge request must be an object");
-  const errors = exactKeys(value, ["purpose", "subjectId"], "browserChallengeRequest");
+  return validateWithAdmission(value, checkBrowserApprovalChallengeInput);
+}
+
+function checkBrowserApprovalChallengeInput(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalChallengeInput {
+  if (!isRecord(value)) {
+    errors.push("browser challenge request must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["purpose", "subjectId"], "browserChallengeRequest"));
   const validSubject =
     value.purpose === "complete"
       ? isBrowserApprovalRequestId(value.subjectId)
       : value.purpose === "renew" && isBrowserApprovalId(value.subjectId);
   if (!validSubject) errors.push("challenge purpose or subject is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function validateBrowserApprovalProofInput(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalProofInput> {
-  if (!isRecord(value)) return invalid("browser proof must be an object");
-  const errors = exactKeys(value, ["challengeId", "signature"], "browserProof");
+  return validateWithAdmission(value, checkBrowserApprovalProofInput);
+}
+
+function checkBrowserApprovalProofInput(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalProofInput {
+  if (!isRecord(value)) {
+    errors.push("browser proof must be an object");
+    return false;
+  }
+  errors.push(...exactKeys(value, ["challengeId", "signature"], "browserProof"));
   if (!matches(value.challengeId, CHALLENGE_ID)) errors.push("challengeId is invalid");
   if (!matches(value.signature, SIGNATURE)) errors.push("signature is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 export function isBrowserApprovalOrigin(value: unknown): value is string {
@@ -330,7 +450,17 @@ function validChallengeTime(value: Record<string, unknown>): boolean {
 export function validateBrowserApprovalChallenge(
   value: unknown,
 ): CodingWorkbenchValidationResult<BrowserApprovalChallenge> {
-  if (!isRecord(value)) return invalid("browser challenge must be an object");
+  return validateWithAdmission(value, checkBrowserApprovalChallenge);
+}
+
+function checkBrowserApprovalChallenge(
+  value: unknown,
+  errors: string[],
+): value is BrowserApprovalChallenge {
+  if (!isRecord(value)) {
+    errors.push("browser challenge must be an object");
+    return false;
+  }
   const keys = [
     "schemaVersion",
     "challengeId",
@@ -343,7 +473,7 @@ export function validateBrowserApprovalChallenge(
     "issuedAtMs",
     "expiresAtMs",
   ];
-  const errors = exactKeys(value, keys, "browserChallenge");
+  errors.push(...exactKeys(value, keys, "browserChallenge"));
   if (value.schemaVersion !== BROWSER_APPROVAL_VERSION) errors.push("schemaVersion is invalid");
   if (!matches(value.challengeId, CHALLENGE_ID)) errors.push("challengeId is invalid");
   if (!matches(value.installationId, /^[a-f0-9]{32}$/u)) errors.push("installationId is invalid");
@@ -357,7 +487,7 @@ export function validateBrowserApprovalChallenge(
       .ok
   )
     errors.push("challenge purpose or subject is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 /** The browser and server sign exactly these domain-separated UTF-8 bytes. */

@@ -1,3 +1,8 @@
+import {
+  hasOnlyKeys,
+  isOneOf as isStringMember,
+  isRecord,
+} from "./contract-validation-primitives.js";
 // Managed-LSP candidate, negotiation, and semantic-token contracts (Issue #2271, Epic #2094,
 // ADR-0132). Static candidates never imply reachability: only a versioned negotiated snapshot may
 // advertise an operation, and dynamic unregistration removes it fail closed.
@@ -166,14 +171,6 @@ export type ManagedLspCapabilityParseResult<T> =
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -183,22 +180,65 @@ function isPositiveInteger(value: unknown): value is number {
 }
 
 function isManagedLanguage(value: unknown): value is ManagedLspLanguage {
-  return typeof value === "string" && MANAGED_LSP_LANGUAGES.includes(value as ManagedLspLanguage);
+  const managedLspLanguagesValues: readonly string[] = MANAGED_LSP_LANGUAGES;
+  return typeof value === "string" && managedLspLanguagesValues.includes(value);
 }
 
 function isLanguageOperation(value: unknown): value is LanguageServiceOperation {
-  return (
-    typeof value === "string" &&
-    LANGUAGE_SERVICE_OPERATIONS.includes(value as LanguageServiceOperation)
-  );
+  const languageServiceOperationsValues: readonly string[] = LANGUAGE_SERVICE_OPERATIONS;
+  return typeof value === "string" && languageServiceOperationsValues.includes(value);
+}
+
+function uniquePhysicalArrayFinalExtent(
+  value: readonly unknown[],
+  extent: number,
+  members: ReadonlySet<unknown>,
+): number | undefined {
+  const finalExtent = value.length;
+  return finalExtent === extent && members.size === finalExtent ? finalExtent : undefined;
+}
+
+function uniquePhysicalArrayExtent(
+  value: unknown,
+  maximum: number,
+  guard: (entry: unknown) => boolean,
+): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const initiallyWithinLimit = value.length <= maximum;
+  if (!initiallyWithinLimit) return undefined;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maximum) return undefined;
+  const members = new Set<unknown>();
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return undefined;
+    const member: unknown = value[index];
+    if (!guard(member)) return undefined;
+    members.add(member);
+  }
+  return uniquePhysicalArrayFinalExtent(value, extent, members);
+}
+
+function isUniquePhysicalArray<T>(
+  value: unknown,
+  maximum: number,
+  guard: (entry: unknown) => entry is T,
+): value is readonly T[] {
+  return uniquePhysicalArrayExtent(value, maximum, guard) !== undefined;
 }
 
 function isOperationArray(value: unknown): value is readonly LanguageServiceOperation[] {
+  return isUniquePhysicalArray(value, LANGUAGE_SERVICE_OPERATIONS.length, isLanguageOperation);
+}
+
+function validCandidateUnsafe(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspCandidateCapabilities {
   return (
-    Array.isArray(value) &&
-    value.length <= LANGUAGE_SERVICE_OPERATIONS.length &&
-    value.every(isLanguageOperation) &&
-    new Set(value).size === value.length
+    hasOnlyKeys(value, ["schemaVersion", "language", "operations", "semanticTokensCandidate"]) &&
+    value.schemaVersion === MANAGED_LSP_CAPABILITY_SCHEMA_VERSION &&
+    isManagedLanguage(value.language) &&
+    isOperationArray(value.operations) &&
+    typeof value.semanticTokensCandidate === "boolean"
   );
 }
 
@@ -206,14 +246,9 @@ function parseCandidateUnsafe(
   value: unknown,
 ): ManagedLspCapabilityParseResult<ManagedLspCandidateCapabilities> {
   if (!isRecord(value)) return { ok: false, errors: ["candidate capabilities must be an object"] };
-  const valid =
-    hasOnlyKeys(value, ["schemaVersion", "language", "operations", "semanticTokensCandidate"]) &&
-    value.schemaVersion === MANAGED_LSP_CAPABILITY_SCHEMA_VERSION &&
-    isManagedLanguage(value.language) &&
-    isOperationArray(value.operations) &&
-    typeof value.semanticTokensCandidate === "boolean";
+  const valid = validCandidateUnsafe(value);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspCandidateCapabilities }
+    ? { ok: true, value }
     : { ok: false, errors: ["candidate capabilities are invalid or contain unknown fields"] };
 }
 
@@ -229,18 +264,39 @@ function isNegotiatedSemanticTokens(value: unknown): value is ManagedLspNegotiat
   return value.supported === true && isPositiveInteger(value.legendVersion);
 }
 
+function hasPhysicalOperation(
+  values: readonly LanguageServiceOperation[],
+  operation: LanguageServiceOperation,
+): boolean {
+  const extent = values.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (values[index] === operation) return true;
+  }
+  return false;
+}
+
 function isSubset(
   subset: readonly LanguageServiceOperation[],
   superset: readonly LanguageServiceOperation[],
 ): boolean {
-  return subset.every((operation) => superset.includes(operation));
+  const extent = subset.length;
+  for (let index = 0; index < extent; index += 1) {
+    const operation = subset[index];
+    if (!isLanguageOperation(operation) || !hasPhysicalOperation(superset, operation)) return false;
+  }
+  return true;
 }
 
 function hasNoOverlap(
   left: readonly LanguageServiceOperation[],
   right: readonly LanguageServiceOperation[],
 ): boolean {
-  return left.every((operation) => !right.includes(operation));
+  const extent = left.length;
+  for (let index = 0; index < extent; index += 1) {
+    const operation = left[index];
+    if (!isLanguageOperation(operation) || hasPhysicalOperation(right, operation)) return false;
+  }
+  return true;
 }
 
 function validNegotiationSets(value: UnknownRecord): boolean {
@@ -258,11 +314,10 @@ function validNegotiationSets(value: UnknownRecord): boolean {
   );
 }
 
-function parseSnapshotUnsafe(
-  value: unknown,
-): ManagedLspCapabilityParseResult<ManagedLspNegotiatedCapabilitySnapshot> {
-  if (!isRecord(value)) return { ok: false, errors: ["capability snapshot must be an object"] };
-  const valid = [
+function validSnapshotUnsafe(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspNegotiatedCapabilitySnapshot {
+  return [
     hasOnlyKeys(value, [
       "schemaVersion",
       "snapshotVersion",
@@ -280,14 +335,21 @@ function parseSnapshotUnsafe(
     isPositiveInteger(value.snapshotVersion),
     isNonNegativeInteger(value.configurationRevision),
     isManagedLanguage(value.language),
-    ["3.17", "3.18"].includes(value.protocolVersion as string),
-    ["utf-16", "utf-8"].includes(value.positionEncoding as string),
-    ["none", "full", "incremental"].includes(value.textSync as string),
+    isStringMember(value.protocolVersion, ["3.17", "3.18"]),
+    isStringMember(value.positionEncoding, ["utf-16", "utf-8"]),
+    isStringMember(value.textSync, ["none", "full", "incremental"]),
     validNegotiationSets(value),
     isNegotiatedSemanticTokens(value.semanticTokens),
   ].every(Boolean);
+}
+
+function parseSnapshotUnsafe(
+  value: unknown,
+): ManagedLspCapabilityParseResult<ManagedLspNegotiatedCapabilitySnapshot> {
+  if (!isRecord(value)) return { ok: false, errors: ["capability snapshot must be an object"] };
+  const valid = validSnapshotUnsafe(value);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspNegotiatedCapabilitySnapshot }
+    ? { ok: true, value }
     : { ok: false, errors: ["capability snapshot is invalid or contains unknown fields"] };
 }
 
@@ -303,63 +365,69 @@ export function isManagedLspOperationNegotiated(
 ): operation is LanguageServiceOperation {
   return (
     isLanguageOperation(operation) &&
-    snapshot.negotiatedOperations.includes(operation) &&
-    !snapshot.dynamicallyUnregisteredOperations.includes(operation)
+    hasPhysicalOperation(snapshot.negotiatedOperations, operation) &&
+    !hasPhysicalOperation(snapshot.dynamicallyUnregisteredOperations, operation)
   );
 }
 
 function isTokenType(value: unknown): value is ManagedLspSemanticTokenType {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_SEMANTIC_TOKEN_TYPES.includes(value as ManagedLspSemanticTokenType)
-  );
+  const managedLspSemanticTokenTypesValues: readonly string[] = MANAGED_LSP_SEMANTIC_TOKEN_TYPES;
+  return typeof value === "string" && managedLspSemanticTokenTypesValues.includes(value);
 }
 
 function isTokenModifier(value: unknown): value is ManagedLspSemanticTokenModifier {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS.includes(value as ManagedLspSemanticTokenModifier)
-  );
+  const managedLspSemanticTokenModifiersValues: readonly string[] =
+    MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS;
+  return typeof value === "string" && managedLspSemanticTokenModifiersValues.includes(value);
 }
 
-function isUniqueCappedArray<T>(
-  value: unknown,
-  maximum: number,
-  guard: (item: unknown) => item is T,
-): value is readonly T[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= maximum &&
-    value.every(guard) &&
-    new Set(value).size === value.length
-  );
-}
-
-function honestLegendCounts(value: UnknownRecord): boolean {
-  if (!Array.isArray(value.tokenTypes)) return false;
-  if (!Array.isArray(value.tokenModifiers)) return false;
-  if (!isNonNegativeInteger(value.returnedTypeCount)) return false;
-  if (!isNonNegativeInteger(value.totalTypeCount)) return false;
-  if (!isNonNegativeInteger(value.returnedModifierCount)) return false;
-  if (!isNonNegativeInteger(value.totalModifierCount)) return false;
-  const truncated = [
-    value.totalTypeCount > value.returnedTypeCount,
-    value.totalModifierCount > value.returnedModifierCount,
-  ].some(Boolean);
+function honestLegendCounts(
+  value: UnknownRecord,
+  typeCount: number,
+  modifierCount: number,
+  truncated: boolean,
+): boolean {
+  const returnedTypeCount = value.returnedTypeCount;
+  if (!isNonNegativeInteger(returnedTypeCount)) return false;
+  const totalTypeCount = value.totalTypeCount;
+  if (!isNonNegativeInteger(totalTypeCount)) return false;
+  const returnedModifierCount = value.returnedModifierCount;
+  if (!isNonNegativeInteger(returnedModifierCount)) return false;
+  const totalModifierCount = value.totalModifierCount;
+  if (!isNonNegativeInteger(totalModifierCount)) return false;
   return [
-    value.returnedTypeCount === value.tokenTypes.length,
-    value.returnedModifierCount === value.tokenModifiers.length,
-    value.totalTypeCount >= value.returnedTypeCount,
-    value.totalModifierCount >= value.returnedModifierCount,
-    value.truncated === truncated,
+    returnedTypeCount === typeCount,
+    returnedModifierCount === modifierCount,
+    totalTypeCount >= returnedTypeCount,
+    totalModifierCount >= returnedModifierCount,
+    truncated ===
+      (totalTypeCount > returnedTypeCount || totalModifierCount > returnedModifierCount),
   ].every(Boolean);
 }
 
-function parseLegendUnsafe(
-  value: unknown,
-): ManagedLspCapabilityParseResult<ManagedLspSemanticTokenLegend> {
-  if (!isRecord(value)) return { ok: false, errors: ["semantic-token legend must be an object"] };
-  const valid =
+function validLegendArrays(value: UnknownRecord): boolean {
+  const typeCount = uniquePhysicalArrayExtent(
+    value.tokenTypes,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
+    isTokenType,
+  );
+  if (typeCount === undefined) return false;
+  const modifierCount = uniquePhysicalArrayExtent(
+    value.tokenModifiers,
+    MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
+    isTokenModifier,
+  );
+  if (modifierCount === undefined) return false;
+  const truncated = value.truncated;
+  return (
+    typeof truncated === "boolean" && honestLegendCounts(value, typeCount, modifierCount, truncated)
+  );
+}
+
+function validLegendUnsafe(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspSemanticTokenLegend {
+  return (
     hasOnlyKeys(value, [
       "schemaVersion",
       "legendVersion",
@@ -373,16 +441,17 @@ function parseLegendUnsafe(
     ]) &&
     value.schemaVersion === MANAGED_LSP_CAPABILITY_SCHEMA_VERSION &&
     isPositiveInteger(value.legendVersion) &&
-    isUniqueCappedArray(value.tokenTypes, MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES, isTokenType) &&
-    isUniqueCappedArray(
-      value.tokenModifiers,
-      MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
-      isTokenModifier,
-    ) &&
-    typeof value.truncated === "boolean" &&
-    honestLegendCounts(value);
+    validLegendArrays(value)
+  );
+}
+
+function parseLegendUnsafe(
+  value: unknown,
+): ManagedLspCapabilityParseResult<ManagedLspSemanticTokenLegend> {
+  if (!isRecord(value)) return { ok: false, errors: ["semantic-token legend must be an object"] };
+  const valid = validLegendUnsafe(value);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspSemanticTokenLegend }
+    ? { ok: true, value }
     : { ok: false, errors: ["semantic-token legend is invalid or contains unknown fields"] };
 }
 
@@ -393,60 +462,96 @@ export function parseManagedLspSemanticTokenLegend(
 }
 
 function validTokenTuple(
-  data: readonly number[],
+  data: readonly unknown[],
   offset: number,
-  legend: ManagedLspSemanticTokenLegend,
+  typeCount: number,
+  maximumModifierMask: number,
 ): boolean {
   const deltaLine = data[offset];
   const deltaStart = data[offset + 1];
   const length = data[offset + 2];
   const tokenType = data[offset + 3];
   const modifiers = data[offset + 4];
-  const maximumModifierMask = 2 ** legend.tokenModifiers.length - 1;
   return (
     isNonNegativeInteger(deltaLine) &&
     isNonNegativeInteger(deltaStart) &&
     isPositiveInteger(length) &&
     isNonNegativeInteger(tokenType) &&
-    tokenType < legend.tokenTypes.length &&
+    tokenType < typeCount &&
     isNonNegativeInteger(modifiers) &&
     modifiers <= maximumModifierMask
   );
 }
 
+function tokenDataExtent(data: readonly unknown[]): number | undefined {
+  const initial = data.length;
+  if (!isNonNegativeInteger(initial) || initial % 5 !== 0) return undefined;
+  const extent = data.length;
+  return isNonNegativeInteger(extent) &&
+    extent % 5 === 0 &&
+    extent / 5 <= MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS
+    ? extent
+    : undefined;
+}
+
+function tokenLegendBounds(
+  legend: ManagedLspSemanticTokenLegend,
+): { readonly typeCount: number; readonly maximumModifierMask: number } | undefined {
+  const types = legend.tokenTypes;
+  const modifiers = legend.tokenModifiers;
+  if (!Array.isArray(types) || !Array.isArray(modifiers)) return undefined;
+  const typeCount = types.length;
+  const modifierCount = modifiers.length;
+  if (
+    !isNonNegativeInteger(typeCount) ||
+    typeCount > MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES ||
+    !isNonNegativeInteger(modifierCount) ||
+    modifierCount > MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS
+  )
+    return undefined;
+  return { typeCount, maximumModifierMask: 2 ** modifierCount - 1 };
+}
+
 function validTokenDataArray(
   value: unknown,
   legend: ManagedLspSemanticTokenLegend,
-): value is readonly number[] {
-  if (!Array.isArray(value) || value.length % 5 !== 0) return false;
-  if (value.length / 5 > MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS) return false;
-  for (let offset = 0; offset < value.length; offset += 5) {
-    if (!validTokenTuple(value, offset, legend)) return false;
+): number | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const extent = tokenDataExtent(value);
+  if (extent === undefined) return undefined;
+  const bounds = tokenLegendBounds(legend);
+  if (bounds === undefined) return undefined;
+  for (let offset = 0; offset < extent; offset += 5) {
+    if (!validTokenTuple(value, offset, bounds.typeCount, bounds.maximumModifierMask))
+      return undefined;
   }
-  return true;
+  return value.length === extent ? extent / 5 : undefined;
 }
 
-function honestTokenCounts(value: UnknownRecord): boolean {
-  if (!Array.isArray(value.data)) return false;
-  if (
-    !isNonNegativeInteger(value.returnedTokenCount) ||
-    !isNonNegativeInteger(value.totalTokenCount)
-  ) {
-    return false;
-  }
+function honestTokenCounts(value: UnknownRecord, count: number, truncated: boolean): boolean {
+  const returnedTokenCount = value.returnedTokenCount;
+  if (!isNonNegativeInteger(returnedTokenCount)) return false;
+  const totalTokenCount = value.totalTokenCount;
+  if (!isNonNegativeInteger(totalTokenCount)) return false;
   return (
-    value.returnedTokenCount === value.data.length / 5 &&
-    value.totalTokenCount >= value.returnedTokenCount &&
-    value.truncated === value.totalTokenCount > value.returnedTokenCount
+    returnedTokenCount === count &&
+    totalTokenCount >= returnedTokenCount &&
+    truncated === totalTokenCount > returnedTokenCount
   );
 }
 
-function parseTokenDataUnsafe(
-  value: unknown,
+function validTokenPayload(value: UnknownRecord, legend: ManagedLspSemanticTokenLegend): boolean {
+  const count = validTokenDataArray(value.data, legend);
+  if (count === undefined) return false;
+  const truncated = value.truncated;
+  return typeof truncated === "boolean" && honestTokenCounts(value, count, truncated);
+}
+
+function validTokenDataUnsafe(
+  value: UnknownRecord,
   legend: ManagedLspSemanticTokenLegend,
-): ManagedLspCapabilityParseResult<ManagedLspSemanticTokenData> {
-  if (!isRecord(value)) return { ok: false, errors: ["semantic-token data must be an object"] };
-  const valid =
+): value is UnknownRecord & ManagedLspSemanticTokenData {
+  return (
     hasOnlyKeys(value, [
       "schemaVersion",
       "legendVersion",
@@ -461,11 +566,18 @@ function parseTokenDataUnsafe(
     value.legendVersion === legend.legendVersion &&
     isNonNegativeInteger(value.documentVersion) &&
     isPositiveInteger(value.dataVersion) &&
-    validTokenDataArray(value.data, legend) &&
-    typeof value.truncated === "boolean" &&
-    honestTokenCounts(value);
+    validTokenPayload(value, legend)
+  );
+}
+
+function parseTokenDataUnsafe(
+  value: unknown,
+  legend: ManagedLspSemanticTokenLegend,
+): ManagedLspCapabilityParseResult<ManagedLspSemanticTokenData> {
+  if (!isRecord(value)) return { ok: false, errors: ["semantic-token data must be an object"] };
+  const valid = validTokenDataUnsafe(value, legend);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspSemanticTokenData }
+    ? { ok: true, value }
     : { ok: false, errors: ["semantic-token data is invalid or contains unknown fields"] };
 }
 
@@ -476,14 +588,15 @@ export function parseManagedLspSemanticTokenData(
   return parseSafely(() => parseTokenDataUnsafe(value, legend));
 }
 
-export function managedLspSemanticTokensFitDocument(
+function checkedTokenPositionsFitDocument(
   data: readonly number[],
   lineLengths: readonly number[],
+  extent: number,
 ): boolean {
   let line = 0;
   let start = 0;
   let previousEnd = 0;
-  for (let offset = 0; offset < data.length; offset += 5) {
+  for (let offset = 0; offset < extent; offset += 5) {
     const deltaLine = data[offset] ?? 0;
     const deltaStart = data[offset + 1] ?? 0;
     const length = data[offset + 2] ?? 0;
@@ -506,7 +619,17 @@ export function managedLspSemanticTokensFitDocument(
     }
     previousEnd = end;
   }
-  return true;
+  return data.length === extent;
+}
+
+export function managedLspSemanticTokensFitDocument(
+  data: readonly number[],
+  lineLengths: readonly number[],
+): boolean {
+  const tokens: readonly number[] = data;
+  if (!Array.isArray(data)) return false;
+  const extent = tokenDataExtent(tokens);
+  return extent !== undefined && checkedTokenPositionsFitDocument(tokens, lineLengths, extent);
 }
 
 function safeRouteString(value: unknown, maximum: number): value is string {
@@ -549,13 +672,17 @@ function parseSemanticRequestUnsafe(
   if (!isRecord(value) || !isRecord(value.document)) {
     return { ok: false, errors: ["semantic-token request must be an object"] };
   }
-  const valid = validSemanticRequestRecord(value, value.document);
+  const valid = validSemanticRequestRecord(value);
   return valid
-    ? { ok: true, value: value as unknown as ManagedLspSemanticTokenRequest }
+    ? { ok: true, value }
     : { ok: false, errors: ["semantic-token request is invalid or contains unknown fields"] };
 }
 
-function validSemanticRequestRecord(value: UnknownRecord, document: UnknownRecord): boolean {
+function validSemanticRequestRecord(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspSemanticTokenRequest {
+  const document = value.document;
+  if (!isRecord(document)) return false;
   return (
     hasOnlyKeys(value, ["schemaVersion", "root", "document"]) &&
     hasOnlyKeys(document, ["path", "languageId", "text", "version"]) &&

@@ -1,3 +1,7 @@
+import {
+  expectAcceptedReference,
+  expectIndependentFailures,
+} from "./__tests__/support/checked-envelope.js";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -618,3 +622,743 @@ describe("coding workbench runtime module structure (KEIKO-0532)", () => {
     expect(forbiddenLocalDeclaration.test(source)).toBe(false);
   });
 });
+
+// PRIVATE C1B source/public hypothesis controls: UNEXECUTED, no regression claimed.
+function c1bAuthorityFacts(): Record<string, unknown> {
+  return {
+    binding: runtimeAuthority().binding,
+    actionClasses: authority().actionClasses,
+    connectorScopes: [],
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    budgetDigest: DIGEST,
+    commandPolicyDigest: DIGEST,
+    networkPolicyDigest: DIGEST,
+    gatesDigest: DIGEST,
+    branchConstraintsDigest: DIGEST,
+    modelProfileDigest: DIGEST,
+  };
+}
+describe("C1B runtime physical scope admission", () => {
+  it.each(["source", "public"])(
+    "retains actual healthy facts and binding identity through %s",
+    async (seam) => {
+      const validate =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeAuthorityFacts
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeAuthorityFacts;
+      const input = c1bAuthorityFacts();
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.binding).toBe(input.binding);
+      expect(result.value.actionClasses).toBe(input.actionClasses);
+    },
+  );
+  it.each([
+    { field: "actionClasses", seam: "source" },
+    { field: "actionClasses", seam: "public" },
+    { field: "connectorScopes", seam: "source" },
+    { field: "connectorScopes", seam: "public" },
+  ])("refuses skipped $field through $seam", async ({ field, seam }) => {
+    const validate =
+      seam === "source"
+        ? validateCodingWorkbenchRuntimeAuthorityFacts
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+            .validateCodingWorkbenchRuntimeAuthorityFacts;
+    const entries = ["invalid-member"];
+    Object.defineProperty(entries, "every", { value: (): boolean => true });
+    expect(validate({ ...c1bAuthorityFacts(), [field]: entries }).ok).toBe(false);
+  });
+  it.each([
+    { field: "actionClasses", seam: "source" },
+    { field: "actionClasses", seam: "public" },
+    { field: "connectorScopes", seam: "source" },
+    { field: "connectorScopes", seam: "public" },
+  ])("refuses missing $field through $seam", async ({ field, seam }) => {
+    const validate =
+      seam === "source"
+        ? validateCodingWorkbenchRuntimeAuthorityFacts
+        : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+            .validateCodingWorkbenchRuntimeAuthorityFacts;
+    expect(validate({ ...c1bAuthorityFacts(), [field]: Array<unknown>(1) }).ok).toBe(false);
+  });
+});
+
+function c1bPreview(): Record<string, unknown> {
+  return {
+    untrusted: true,
+    title: "fixture",
+    bodyExcerpt: "fixture",
+    bodyExcerptTruncated: false,
+    commentCount: 0,
+    comments: [],
+    commentsTruncated: false,
+    state: "open",
+    provenance: {
+      ownerAndRepo: "owner/repo",
+      issueNumber: 1,
+      url: "https://github.com/owner/repo/issues/1",
+    },
+  };
+}
+describe("C1B additional original runtime observations", () => {
+  it.each(["source", "public"] as const)(
+    "preserves healthy preview reference through %s",
+    async (seam) => {
+      const input = c1bPreview();
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy preview refusal");
+      expect(result.value).toBe(input);
+      expect(result.value.provenance).toBe(input.provenance);
+      expect(result.value.comments).toBe(input.comments);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects hidden malformed preview comment through %s",
+    async (seam) => {
+      const entries: unknown[] = [7];
+      Object.defineProperty(entries, "some", { value: () => false });
+      const input = { ...c1bPreview(), comments: entries };
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects sparse preview comment through %s",
+    async (seam) => {
+      const input = { ...c1bPreview(), comments: new Array<unknown>(1) };
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects numeric second revision observation through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" };
+      Object.defineProperty(input, "revision", {
+        enumerable: true,
+        get: () => (++reads === 1 ? 0 : "0"),
+      });
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeState
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeState;
+      expect(validator(input).ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves healthy numeric revision reads through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" };
+      Object.defineProperty(input, "revision", {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return 0;
+        },
+      });
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeState
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeState;
+      const result = validator(input);
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(2);
+      if (!result.ok) throw new Error("healthy state refusal");
+      expect(result.value).toBe(input);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects a later invalid intent discriminator through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = {
+        schemaVersion: "1",
+        requestId: "req-1",
+        taskIntent: "fixture",
+        requestedMode: "supervised-coding",
+        modelSource: "keiko-model-gateway",
+      };
+      Object.defineProperty(input, "command", {
+        enumerable: true,
+        get: () => (++reads <= 2 ? "start" : "invalid"),
+      });
+      const validator =
+        seam === "source"
+          ? validateCodingWorkbenchRuntimeIntent
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchRuntimeIntent;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "rejects a later non-string preview title through %s",
+    async (seam) => {
+      let reads = 0;
+      const input = c1bPreview();
+      Object.defineProperty(input, "title", {
+        enumerable: true,
+        get: () => (++reads === 1 ? "fixture" : { length: 0 }),
+      });
+      const validator =
+        seam === "source"
+          ? (await import("./coding-workbench-runtime.js")).validateCodingWorkbenchIssuePreview
+          : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+              .validateCodingWorkbenchIssuePreview;
+      expect(validator(input).ok).toBe(false);
+    },
+  );
+});
+
+function c1bInvalidCapturedNumber(invalidKind: string, field: string): number {
+  return invalidKind === "NaN"
+    ? Number.NaN
+    : invalidKind === "fraction"
+      ? field === "issueNumber"
+        ? 1.5
+        : 0.5
+      : invalidKind === "infinity"
+        ? Number.POSITIVE_INFINITY
+        : Number.MAX_SAFE_INTEGER + 1;
+}
+
+describe("C1B numeric captured observation wave", () => {
+  const fields = ["revision", "commentCount", "issueNumber"] as const;
+  const invalid = ["NaN", "fraction", "infinity", "unsafe"] as const;
+  const invalidCases = fields.flatMap((field) =>
+    invalid.flatMap((invalidKind) =>
+      ["source", "public"].map((seam) => ({ field, invalidKind, seam })),
+    ),
+  );
+  it.each(invalidCases)(
+    "rejects second $invalidKind $field through $seam",
+    async ({ field, invalidKind, seam }) => {
+      let reads = 0;
+      const input: Record<string, unknown> =
+        field === "revision"
+          ? { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" }
+          : c1bPreview();
+      const target: unknown = field === "issueNumber" ? input.provenance : input;
+      if (typeof target !== "object" || target === null)
+        throw new Error("invalid numeric fixture target");
+      const bad = c1bInvalidCapturedNumber(invalidKind, field);
+      Object.defineProperty(target, field, {
+        enumerable: true,
+        get: () => (++reads === 1 ? (field === "issueNumber" ? 1 : 0) : bad),
+      });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      const result =
+        field === "revision"
+          ? module.validateCodingWorkbenchRuntimeState(input)
+          : module.validateCodingWorkbenchIssuePreview(input);
+      expect(result.ok).toBe(false);
+      expect(reads).toBe(2);
+    },
+  );
+  const healthyCases = fields.flatMap((field) =>
+    ["same", "changed"].flatMap((schedule) =>
+      ["source", "public"].map((seam) => ({ field, schedule, seam })),
+    ),
+  );
+  it.each(healthyCases)(
+    "preserves $schedule integer $field through $seam",
+    async ({ field, schedule, seam }) => {
+      let reads = 0;
+      const input: Record<string, unknown> =
+        field === "revision"
+          ? { schemaVersion: "1", state: "idle", updatedAt: "2026-07-08T12:00:00Z" }
+          : c1bPreview();
+      const target: unknown = field === "issueNumber" ? input.provenance : input;
+      if (typeof target !== "object" || target === null)
+        throw new Error("invalid numeric fixture target");
+      const first = field === "issueNumber" ? 1 : 0;
+      Object.defineProperty(target, field, {
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          return schedule === "same" || reads === 1 ? first : first + 1;
+        },
+      });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      const result =
+        field === "revision"
+          ? module.validateCodingWorkbenchRuntimeState(input)
+          : module.validateCodingWorkbenchIssuePreview(input);
+      expect(result.ok).toBe(true);
+      expect(reads).toBe(2);
+      if (!result.ok) throw new Error("healthy numeric refusal");
+      expect(result.value).toBe(input);
+    },
+  );
+});
+
+describe("C1B fourth command observation wave", () => {
+  it.each(["source", "public"] as const)(
+    "rejects invalid fourth command through %s",
+    async (seam) => {
+      let reads = 0;
+      const commands = ["start", "start", "stop", "invalid"];
+      const input = {
+        schemaVersion: "1",
+        requestId: "req-1",
+        taskIntent: "fixture",
+        requestedMode: "supervised-coding",
+        modelSource: "keiko-model-gateway",
+      };
+      Object.defineProperty(input, "command", { enumerable: true, get: () => commands[reads++] });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      expect(module.validateCodingWorkbenchRuntimeIntent(input)).toEqual({
+        ok: false,
+        errors: ["command is invalid"],
+      });
+      expect(reads).toBe(4);
+    },
+  );
+  it.each(["source", "public"] as const)(
+    "preserves finite healthy command schedules through %s",
+    async (seam) => {
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      for (const commands of [
+        ["start", "start", "start"],
+        ["stop", "stop", "stop", "stop"],
+        ["stop", "stop", "stop", "recover"],
+      ]) {
+        let reads = 0;
+        const input =
+          commands[0] === "start"
+            ? {
+                schemaVersion: "1",
+                requestId: "req-1",
+                taskIntent: "fixture",
+                requestedMode: "supervised-coding",
+                modelSource: "keiko-model-gateway",
+              }
+            : { schemaVersion: "1", requestId: "req-1", runId: "run-1" };
+        Object.defineProperty(input, "command", { enumerable: true, get: () => commands[reads++] });
+        const result = module.validateCodingWorkbenchRuntimeIntent(input);
+        expect(result.ok).toBe(true);
+        expect(reads).toBe(commands.length);
+        if (!result.ok) throw new Error("healthy command refused");
+        expect(result.value).toBe(input);
+      }
+    },
+  );
+});
+
+describe("C1B command diagnostic preservation wave", () => {
+  it.each(["source", "public"] as const)(
+    "retains one command diagnostic through %s",
+    async (seam) => {
+      let reads = 0;
+      const commands = ["stop", "invalid", "invalid", "stop"];
+      const input = { schemaVersion: "1", requestId: "req-1", runId: "run-1" };
+      Object.defineProperty(input, "command", { enumerable: true, get: () => commands[reads++] });
+      const module =
+        seam === "source"
+          ? await import("./coding-workbench-runtime.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+      expect(module.validateCodingWorkbenchRuntimeIntent(input)).toEqual({
+        ok: false,
+        errors: ["command is invalid"],
+      });
+      expect(reads).toBe(4);
+    },
+  );
+});
+
+describe("C1B runtime closed ingress branches", () => {
+  it.each([
+    "validateCodingWorkbenchRuntimeIntent",
+    "validateCodingWorkbenchRuntimeAuthorityEnvelope",
+    "validateCodingWorkbenchRuntimeState",
+    "validateCodingWorkbenchRuntimeMintConfirmation",
+    "validateCodingWorkbenchRuntimeAuthorityFacts",
+    "validateCodingWorkbenchRuntimeAdapterStartRequest",
+    "validateCodingWorkbenchIssuePreview",
+  ] as const)("refuses non-object through source and public %s", async (name) => {
+    const source = await import("./coding-workbench-runtime.js");
+    const publicModule =
+      await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+    expect(source[name](null).ok).toBe(false);
+    expect(publicModule[name](null).ok).toBe(false);
+  });
+  it("preserves missing request and run identity diagnostics before success", () => {
+    expect(
+      validateCodingWorkbenchRuntimeIntent({ schemaVersion: "1", requestId: "", command: "stop" }),
+    ).toEqual({
+      ok: false,
+      errors: ["requestId must be a non-empty string", "runId must be a non-empty string"],
+    });
+    const input = { ...runtimeAuthority(), authority: null };
+    expect(validateCodingWorkbenchRuntimeAuthorityEnvelope(input).ok).toBe(false);
+  });
+});
+
+it("preserves full authority-validator digest observation order (#3918)", async () => {
+  const publicModule =
+    await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+  const observations = [];
+  for (const validate of [
+    validateCodingWorkbenchRuntimeAuthorityEnvelope,
+    publicModule.validateCodingWorkbenchRuntimeAuthorityEnvelope,
+  ]) {
+    for (const variant of ["equal", "mismatch", "non-record", "digest-throws"] as const) {
+      const input = runtimeAuthority();
+      const binding = input.binding;
+      const trace: string[] = [];
+      const failure = new TypeError("fixture observation failure");
+      Object.defineProperty(input.authority.workspace, "rootDigest", {
+        enumerable: true,
+        get: (): string => {
+          trace.push("expected");
+          return DIGEST;
+        },
+      });
+      Object.defineProperty(input, "binding", {
+        enumerable: true,
+        get: (): unknown => {
+          trace.push("binding");
+          return variant === "non-record" ? null : binding;
+        },
+      });
+      Object.defineProperty(binding, "workspaceRootDigest", {
+        enumerable: true,
+        get: (): string => {
+          trace.push("digest");
+          if (variant === "digest-throws") throw failure;
+          return variant === "mismatch" ? "b".repeat(64) : DIGEST;
+        },
+      });
+      let outcome: boolean | "threw";
+      try {
+        outcome = validate(input).ok;
+      } catch (error) {
+        expect(error).toBe(failure);
+        outcome = "threw";
+      }
+      observations.push(`${variant}:${String(outcome)}:${trace.join(">")}`);
+    }
+  }
+  expect(observations.join("\n")).toMatchInlineSnapshot(`
+    "equal:true:expected>binding>digest>expected>binding>digest>binding>binding
+    mismatch:false:expected>binding>digest>expected>binding>digest>binding>binding
+    non-record:false:expected>binding>expected>binding>binding
+    digest-throws:threw:expected>binding>digest
+    equal:true:expected>binding>digest>expected>binding>digest>binding>binding
+    mismatch:false:expected>binding>digest>expected>binding>digest>binding>binding
+    non-record:false:expected>binding>expected>binding>binding
+    digest-throws:threw:expected>binding>digest"
+  `);
+});
+
+function requiredSourcePairInput(kind: "facts" | "adapter"): Record<string, unknown> {
+  const facts = c1bAuthorityFacts();
+  if (kind === "facts") return facts;
+  return {
+    authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+    delegationId: "d-1",
+    idempotencyKey: "i-1",
+    binding: facts.binding,
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+  };
+}
+
+function observeRequiredSources(
+  input: Record<string, unknown>,
+  trace: string[],
+  healthy: boolean,
+  missing: boolean,
+): void {
+  const binding = input.binding;
+  Object.defineProperty(input, "binding", {
+    enumerable: true,
+    get: (): unknown => {
+      trace.push("binding");
+      return binding;
+    },
+  });
+  Object.defineProperty(input, "runtimeSource", {
+    enumerable: true,
+    get: (): unknown => {
+      trace.push("runtimeSource");
+      if (missing) return undefined;
+      return healthy ? "keiko-sidecar" : "invalid";
+    },
+  });
+  Object.defineProperty(input, "modelSource", {
+    enumerable: true,
+    get: (): unknown => {
+      trace.push("modelSource");
+      if (missing) return undefined;
+      return healthy ? "keiko-model-gateway" : "invalid";
+    },
+  });
+}
+
+describe("required runtime and model source admission", () => {
+  it.each([
+    ["source", "facts"],
+    ["public", "facts"],
+    ["source", "adapter"],
+    ["public", "adapter"],
+  ] as const)("preserves eager reads and diagnostic order through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+    const validate =
+      kind === "facts"
+        ? module.validateCodingWorkbenchRuntimeAuthorityFacts
+        : module.validateCodingWorkbenchRuntimeAdapterStartRequest;
+    for (const variant of ["healthy", "invalid-both", "missing-both", "prior-invalid"] as const) {
+      const input = requiredSourcePairInput(kind);
+      const trace: string[] = [];
+      if (variant === "prior-invalid") input.binding = null;
+      observeRequiredSources(input, trace, variant === "healthy", variant === "missing-both");
+      const result = validate(input);
+      expect(trace).toEqual(["binding", "runtimeSource", "modelSource"]);
+      if (variant === "healthy") {
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value).toBe(input);
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          errors: [
+            ...(variant === "prior-invalid" ? ["binding must be an object"] : []),
+            "runtimeSource is invalid",
+            "modelSource is invalid",
+          ],
+        });
+      }
+    }
+  });
+
+  it.each([
+    ["source", "facts"],
+    ["public", "facts"],
+    ["source", "adapter"],
+    ["public", "adapter"],
+  ] as const)("preserves source getter exceptions through %s %s", async (surface, kind) => {
+    const module =
+      surface === "source"
+        ? await import("./coding-workbench-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime");
+    const validate =
+      kind === "facts"
+        ? module.validateCodingWorkbenchRuntimeAuthorityFacts
+        : module.validateCodingWorkbenchRuntimeAdapterStartRequest;
+    for (const throwingField of ["runtimeSource", "modelSource"] as const) {
+      const input = requiredSourcePairInput(kind);
+      const trace: string[] = [];
+      const failure = new TypeError("fixture source read refused");
+      for (const field of ["runtimeSource", "modelSource"] as const) {
+        Object.defineProperty(input, field, {
+          enumerable: true,
+          get: (): string => {
+            trace.push(field);
+            if (field === throwingField) throw failure;
+            return "invalid";
+          },
+        });
+      }
+      expect(() => validate(input)).toThrow(failure);
+      expect(trace).toEqual(
+        throwingField === "runtimeSource" ? ["runtimeSource"] : ["runtimeSource", "modelSource"],
+      );
+    }
+  });
+});
+
+async function envelopeStateValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCodingWorkbenchRuntimeState> {
+  return surface === "source"
+    ? validateCodingWorkbenchRuntimeState
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime"))
+        .validateCodingWorkbenchRuntimeState;
+}
+
+async function envelopeAuthorityValidator(
+  surface: "source" | "public",
+): Promise<
+  typeof import("./coding-workbench-validation.js").validateCodingWorkbenchAuthorityEnvelope
+> {
+  return surface === "source"
+    ? (await import("./coding-workbench-validation.js")).validateCodingWorkbenchAuthorityEnvelope
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation"))
+        .validateCodingWorkbenchAuthorityEnvelope;
+}
+
+function envelopeIdleState(): Record<string, unknown> {
+  return { schemaVersion: "1", state: "idle", revision: 0, updatedAt: "2026-07-08T12:00:00Z" };
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves the idle-state envelope's accepted reference`, async () => {
+    expectAcceptedReference(await envelopeStateValidator(surface), envelopeIdleState());
+  });
+
+  it(`${surface}: returns independent state failure envelopes and readonly arrays`, async () => {
+    expectIndependentFailures(
+      await envelopeStateValidator(surface),
+      "runtime state must be an object",
+    );
+  });
+
+  it(`${surface}: keeps the state's complete ordered admission errors`, async () => {
+    const validate = await envelopeStateValidator(surface);
+    expect(
+      validate({
+        ...envelopeIdleState(),
+        unexpected: true,
+        schemaVersion: "invalid",
+        state: "invalid",
+        revision: -1,
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "runtimeState.unexpected is not allowed",
+        "schemaVersion is invalid",
+        "state is invalid",
+        "revision must be non-negative",
+      ],
+    });
+  });
+
+  it(`${surface}: preserves late state inspection after an earlier admission error`, async () => {
+    const validate = await envelopeStateValidator(surface);
+    const value = { ...envelopeIdleState(), schemaVersion: "invalid" };
+    const failure = new TypeError("Late state envelope inspection");
+    const trace: string[] = [];
+    Object.defineProperties(value, {
+      revision: {
+        get: (): number => {
+          trace.push("revision");
+          return 0;
+        },
+      },
+      updatedAt: {
+        get: (): never => {
+          trace.push("updatedAt");
+          throw failure;
+        },
+      },
+    });
+    let caught: unknown;
+    try {
+      validate(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(trace).toEqual(["revision", "revision", "updatedAt"]);
+  });
+
+  it(`${surface}: preserves authority identity and all three gate observations`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const value = authority();
+    const gates = value.gates;
+    const trace: string[] = [];
+    Object.defineProperty(value, "gates", {
+      get: (): readonly string[] => {
+        trace.push("gates");
+        return gates;
+      },
+    });
+    const result = validate(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(trace).toEqual(["gates", "gates", "gates"]);
+  });
+
+  it(`${surface}: returns independent authority failure envelopes and readonly arrays`, async () => {
+    expectIndependentFailures(
+      await envelopeAuthorityValidator(surface),
+      "authority envelope must be an object",
+    );
+  });
+
+  it(`${surface}: eagerly retains every authority consistency-tail refusal in order`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const value = {
+      ...authority(),
+      actionClasses: ["workspace-write", "command-execution"],
+      connectorScopes: ["source-control.read"],
+      gates: ["verification-green"],
+      networkPolicy: {
+        mode: "deny-all",
+        allowLoopback: false,
+        connectorScopes: ["issue-tracker.read"],
+      },
+    };
+    expect(validate(value)).toEqual({
+      ok: false,
+      errors: [
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when mode is deny-all",
+        "authorityEnvelope.networkPolicy.connectorScopes[0] must be listed in authorityEnvelope.connectorScopes",
+        "authorityEnvelope.networkPolicy.connectorScopes must be empty when authorityEnvelope.actionClasses omits network-egress",
+        "authorityEnvelope.connectorScopes must be empty when authorityEnvelope.actionClasses omits connector-access",
+        "authorityEnvelope.gates must include human-approval when authorityEnvelope.actionClasses or connector scopes grant elevated authority",
+      ],
+    });
+  });
+
+  it(`${surface}: reaches final authority gate inspection after earlier policy refusal`, async () => {
+    const validate = await envelopeAuthorityValidator(surface);
+    const value = { ...authority(), approvalProofDigest: "invalid" };
+    const gates = value.gates;
+    const trace: string[] = [];
+    const failure = new TypeError("Late authority tail inspection");
+    Object.defineProperty(value, "gates", {
+      get: (): readonly string[] => {
+        trace.push("gates");
+        if (trace.length === 2) throw failure;
+        return gates;
+      },
+    });
+    let caught: unknown;
+    try {
+      validate(value);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBe(failure);
+    expect(trace).toEqual(["gates", "gates"]);
+  });
+}

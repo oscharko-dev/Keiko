@@ -1,4 +1,8 @@
 import { describe, expect, it } from "vitest";
+import {
+  installIgnoredProtocolMetadata,
+  protocolEnumerationInput,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 
 import {
   MANAGED_LSP_ACTIVATION_REASON_CODES,
@@ -238,3 +242,156 @@ describe("parseManagedLspActivationStatus", () => {
     });
   });
 });
+
+import { parseManagedLspActivationInput } from "./managed-lsp-activation.js";
+import * as activationPublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+
+function observedActivationField(
+  value: object,
+  field: string,
+  values: readonly unknown[],
+): () => number {
+  let reads = 0;
+  Object.defineProperty(value, field, {
+    enumerable: true,
+    get: (): unknown => values[Math.min(reads++, values.length - 1)],
+  });
+  return (): number => reads;
+}
+
+describe("3918 managed activation concrete construction observations", () => {
+  for (const [surface, parseInput, parseStatus] of [
+    ["source", parseManagedLspActivationInput, parseManagedLspActivationStatus],
+    [
+      "public",
+      activationPublic.parseManagedLspActivationInput,
+      activationPublic.parseManagedLspActivationStatus,
+    ],
+  ] as const) {
+    it.each([
+      ["language", "python", "unsupported"],
+      ["configurationRevision", 7, Number.NaN],
+      ["productSupport", "supported", "unsupported-value"],
+      ["deploymentPolicy", "allowed", "unsupported-value"],
+      ["provisioning", "provisioned", "unsupported-value"],
+      ["workspaceActivation", "enabled", "unsupported-value"],
+      ["legacyEnvironment", "unset", "unsupported-value"],
+      ["negotiation", "negotiated", "unsupported-value"],
+      ["runtimeHealth", "healthy", "unsupported-value"],
+      ["restartRequired", false, "false"],
+    ] as const)(`${surface} refuses invalid copied %s`, (field, initial, final) => {
+      const value = activeInput();
+      const reads = observedActivationField(value, field, [initial, final]);
+      expect(parseInput(value)).toEqual({
+        ok: false,
+        errors: ["activation input is invalid or contains unknown fields"],
+      });
+      expect(reads()).toBe(2);
+    });
+    it.each([
+      ["workspaceTrust", "trusted", "unsupported-value"],
+      ["canonicalState", "available", "unsupported-value"],
+      ["canonicalState", "available", undefined],
+    ] as const)(`${surface} admits the actual optional %s copy`, (field, initial, final) => {
+      const value = activeInput();
+      const reads = observedActivationField(value, field, [initial, initial, initial, final]);
+      expect(parseInput(value)).toEqual({
+        ok: false,
+        errors: ["activation input is invalid or contains unknown fields"],
+      });
+      expect(reads()).toBe(4);
+    });
+    it(`${surface} preserves valid copied observations and optional omission`, () => {
+      const value = activeInput();
+      const reads = observedActivationField(value, "configurationRevision", [7, 8]);
+      const result = parseInput(value);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy copied activation was refused");
+      expect(result.value.configurationRevision).toBe(8);
+      expect(reads()).toBe(2);
+      const omitted = parseInput({ ...activeInput(), canonicalState: undefined });
+      expect(omitted.ok).toBe(true);
+      if (!omitted.ok) throw new Error("healthy optional omission was refused");
+      expect(Object.hasOwn(omitted.value, "canonicalState")).toBe(false);
+    });
+    it(`${surface} refuses a wrong primitive at the consistency policy observation`, () => {
+      const value = resolveManagedLspActivation(activeInput());
+      const reads = observedActivationField(value, "policyResult", ["allowed", {}]);
+      expect(parseStatus(value)).toEqual({
+        ok: false,
+        errors: ["activation status is invalid or contains unknown fields"],
+      });
+      expect(reads()).toBe(2);
+    });
+    it(`${surface} preserves independent closed policy observations`, () => {
+      const value = resolveManagedLspActivation(activeInput());
+      const reads = observedActivationField(value, "policyResult", ["denied", "allowed"]);
+      expect(parseStatus(value).ok).toBe(true);
+      expect(reads()).toBe(2);
+    });
+    it(`${surface} preserves the inspection error class for an invalid second state`, () => {
+      const value = resolveManagedLspActivation(activeInput());
+      const reads = observedActivationField(value, "state", ["active", "unsupported"]);
+      expect(parseStatus(value)).toEqual({
+        ok: false,
+        errors: ["payload could not be inspected: TypeError"],
+      });
+      expect(reads()).toBe(2);
+    });
+  }
+});
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves protocol key enumeration before closed-field refusal`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-activation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation");
+    const trace: string[] = [];
+    const value = protocolEnumerationInput(trace);
+    expect(module.parseManagedLspActivationInput(value)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+    expect(trace).toEqual([
+      "ownKeys",
+      "descriptor:unexpected",
+      "descriptor:schemaVersion",
+      "get:schemaVersion",
+    ]);
+  });
+
+  it(`${surface}: retains ignored symbol and non-enumerable protocol metadata`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-activation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation");
+    const value = activeInput();
+    let reads = 0;
+    installIgnoredProtocolMetadata(value, (): void => {
+      reads += 1;
+    });
+    expect(module.parseManagedLspActivationInput(value).ok).toBe(true);
+    expect(reads).toBe(0);
+  });
+
+  it(`${surface}: rejects a non-string protocol vocabulary member without coercion`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-activation.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation");
+    let coercions = 0;
+    const foreign = {
+      toString: (): never => {
+        coercions += 1;
+        throw new TypeError("Protocol enum coercion");
+      },
+    };
+    const value = { ...activeInput(), language: foreign };
+    expect(module.parseManagedLspActivationInput(value)).toEqual({
+      ok: false,
+      errors: ["activation input is invalid or contains unknown fields"],
+    });
+    expect(coercions).toBe(0);
+  });
+}

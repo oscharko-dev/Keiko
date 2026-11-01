@@ -1,3 +1,4 @@
+import { isRecord } from "./contract-validation-primitives.js";
 import { isReadinessSnapshot, type ReadinessSnapshot } from "./git-ci-readiness.js";
 import {
   isGitCiFailureContextResult,
@@ -42,8 +43,8 @@ function closedResult(data: Record<string, unknown>): boolean {
   return Object.keys(data).length === keys.length && keys.every((key) => Object.hasOwn(data, key));
 }
 export function isCodingRuntimeCiResult(value: unknown): value is CodingRuntimeCiResult {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const data = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const data = value;
   if (!validBackoff(data.retryAfterMs) || !closedResult(data)) return false;
   return data.status === "observed"
     ? isReadinessSnapshot(data.snapshot) &&
