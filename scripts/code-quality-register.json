@@ -1350,7 +1350,7 @@
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-contracts/src/coding-skill-discovery.ts": {
-      "anti-slop/no-runtime-typeof": 6,
+      "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 2,
       "anti-slop/no-unsafe-dictionary-type": 6
     },

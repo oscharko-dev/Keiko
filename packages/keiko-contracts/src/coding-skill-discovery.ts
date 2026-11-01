@@ -12,6 +12,7 @@ import {
   type CodeTaskSha256Digest,
 } from "./code-task-acceptance.js";
 import { isCodeTaskSkillId, type CodeTaskSkillId } from "./code-task-auxiliary.js";
+import { isOneOf } from "./contract-validation-primitives.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 
 export const SKILL_DISCOVERY_SCHEMA_VERSION = 1;
@@ -109,11 +110,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
     !Array.isArray(value) &&
     Object.getPrototypeOf(value) === Object.prototype
   );
-}
-
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  const strings: readonly string[] = allowed;
-  return typeof value === "string" && strings.includes(value);
 }
 
 function unknownKeys(

@@ -319,6 +319,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
     "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
       "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass":
+      "Pure leaf error classification performs no I/O and returns a fixed unknown fallback without inspecting the caught inspection failure. The parser propagates its existing closed rejection to the consumer diagnostic boundary; no separate logged fact is emitted.",
     "packages/keiko-contracts/src/observability.ts:completeRegistrationShape":
       "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
     "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind":
@@ -328,6 +330,7 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
 
 // A reviewed catch listed here may only return exactly this fixed fallback.
 const REVIEWED_FIXED_FAILURE_FALLBACKS = new Map([
+  ["packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass", "unknown"],
   ["packages/keiko-contracts/src/observability.ts:completeRegistrationShape", false],
   [
     "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind",

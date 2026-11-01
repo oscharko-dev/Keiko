@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2e4c5ac394afb17475f573e43041ea4dcd780b003052f9d0edc1e6777e34ede8",
+    "catalogDigest": "e5c110df04136b18cf8e2f68855fb8661f4114736ea16b9b148e76a26ed23998",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4685,6 +4685,7 @@
             "required": true,
             "values": [
               "initialized",
+              "draft-notifications-ready",
               "input-limit",
               "code-ready",
               "code-language-detected",

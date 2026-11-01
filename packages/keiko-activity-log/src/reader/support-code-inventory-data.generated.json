@@ -219,6 +219,7 @@
     "keiko-contracts/editor-test-generation",
     "keiko-contracts/editor-verification",
     "keiko-contracts/editor-workspace-path",
+    "keiko-contracts/error-classification",
     "keiko-contracts/eval-metrics",
     "keiko-contracts/evaluation-gates",
     "keiko-contracts/evaluations",

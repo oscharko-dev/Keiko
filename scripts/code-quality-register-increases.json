@@ -211,14 +211,6 @@
     },
     {
       "path": "packages/keiko-contracts/src/coding-skill-discovery.ts",
-      "rule": "anti-slop/no-runtime-typeof",
-      "from": 5,
-      "to": 6,
-      "reason": "pending-boundary-migration",
-      "issue": 3918
-    },
-    {
-      "path": "packages/keiko-contracts/src/coding-skill-discovery.ts",
       "rule": "anti-slop/no-unsafe-dictionary-type",
       "from": 2,
       "to": 6,
