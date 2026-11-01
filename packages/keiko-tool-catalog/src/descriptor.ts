@@ -162,10 +162,19 @@ export function createToolDescriptor(value: unknown, previous?: ToolDescriptor):
     if (declaration.toolRef.contractVersion === prior.toolRef.contractVersion)
       requireCatalog(descriptorDigest === prior.descriptorDigest, "incompatible-version");
   }
-  return deepFreeze({ ...declaration, descriptorDigest });
+  const descriptor = deepFreeze({ ...declaration, descriptorDigest });
+  issuedDescriptors.add(descriptor);
+  return descriptor;
 }
 
+// Descriptors this module issued: deeply frozen at issue, so they cannot have changed since they
+// were verified, and membership cannot be forged. Re-verifying them on every catalog offer, gateway
+// bridge and stored-transcript read made each tool round copy and hash every descriptor again.
+const issuedDescriptors = new WeakSet();
+
 export function verifyToolDescriptor(value: unknown): ToolDescriptor {
+  if (typeof value === "object" && value !== null && issuedDescriptors.has(value))
+    return value as ToolDescriptor;
   const object = catalogObject(copyCatalogJson(value));
   exactCatalogKeys(object, [...DECLARATION_KEYS, "descriptorDigest"]);
   const { descriptorDigest, ...declaration } = object;

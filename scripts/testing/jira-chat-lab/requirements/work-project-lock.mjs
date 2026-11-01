@@ -8,7 +8,7 @@ import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 /** Journeys that only read the seeded report project (S13 comments there, never in REQ). */
-export const REPORT_PROJECT_JOURNEYS = new Set(["S10", "S11", "S12", "S13"]);
+const REPORT_PROJECT_JOURNEYS = new Set(["S10", "S11", "S12", "S13"]);
 
 const LOCK = "work-project.lock";
 const OWNER = "owner.json";

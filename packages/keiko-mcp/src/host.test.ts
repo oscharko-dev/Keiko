@@ -11,6 +11,7 @@ import type {
   ManagedMcpLogPort,
   ManagedMcpTool,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createManagedMcpHost, ManagedMcpError } from "./index.js";
 import {
@@ -231,6 +232,57 @@ it("admits two distinct providers through SDK discovery without executing either
   await host.admit("multiple-providers");
   expect(host.catalog().map((tool) => tool.name)).toEqual(["fixture.second", "fixture.first"]);
   expect(host.protocolEra()).toBe("modern");
+  expect(execute).not.toHaveBeenCalled();
+});
+
+function sourceHost(source: { descriptor: ToolDescriptor }): {
+  host: ManagedMcpHost<Context>;
+  execute: ManagedMcpTool<Context>["execute"];
+} {
+  const execute = vi.fn<ManagedMcpTool<Context>["execute"]>((args, ctx) =>
+    Promise.resolve({ data: { text: args.text ?? "", binding: ctx.binding } }),
+  );
+  const host = createManagedMcpHost<Context>({
+    providers: [
+      {
+        id: "fixture",
+        tools: (): readonly ManagedMcpTool<Context>[] => [
+          { name: "fixture.echo", risk: "read", descriptor: source.descriptor, execute },
+        ],
+      },
+    ],
+    log: { write: () => undefined },
+  });
+  hosts.push(host);
+  return { host, execute };
+}
+
+it("serves an unchanged frozen descriptor and still refuses a replaced one", async () => {
+  const source = { descriptor: deepFreeze(structuredClone(descriptor)) };
+  const { host, execute } = sourceHost(source);
+  await host.admit("frozen-admission");
+  await expect(
+    host.call("fixture.echo", { text: "one" }, context("frozen")),
+  ).resolves.toBeDefined();
+  expect(host.catalog().map((tool) => tool.name)).toEqual(["fixture.echo"]);
+  source.descriptor = deepFreeze({ ...structuredClone(descriptor), description: "Replaced" });
+  await expect(
+    host.call("fixture.echo", { text: "two" }, context("frozen-drift")),
+  ).rejects.toMatchObject({ reason: "descriptor-drift" });
+  expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("refuses an in-place change of a descriptor that was not deeply frozen", async () => {
+  // Only the top level is frozen: the nested bounds object stays writable, so identity alone
+  // proves nothing and the canonical comparison must still see the change.
+  const shallow = structuredClone(descriptor);
+  const source = { descriptor: Object.freeze(shallow) };
+  const { host, execute } = sourceHost(source);
+  await host.admit("shallow-admission");
+  (shallow.bounds as { maxDurationMs: number }).maxDurationMs += 1;
+  await expect(
+    host.call("fixture.echo", { text: "one" }, context("shallow-drift")),
+  ).rejects.toMatchObject({ reason: "descriptor-drift" });
   expect(execute).not.toHaveBeenCalled();
 });
 

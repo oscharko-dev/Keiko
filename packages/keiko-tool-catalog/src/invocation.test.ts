@@ -208,3 +208,46 @@ describe("catalog invocation bridge", () => {
     expect(() => createToolInvocationNormalizer({ ...input, projection })).toThrow();
   });
 });
+
+describe("repeated bindings over one frozen catalog (#4173)", () => {
+  it("captures each offer anew while reusing the verified catalog", () => {
+    const input = binding(true);
+    expect(Object.isFrozen(input.catalog) && Object.isFrozen(input.projection)).toBe(true);
+    const first = createToolInvocationNormalizer(input);
+    const tool = input.projection.tools.find((entry) => entry.alias === "read_file");
+    if (tool === undefined) throw new TypeError("Missing read descriptor");
+    const narrowed = createToolInvocationNormalizer({
+      ...input,
+      offered: {
+        ...input.offered,
+        offerId: "offer-2",
+        binding: { ...input.offered.binding, readiness: "unavailable" },
+        toolRefs: [tool.toolRef],
+      },
+    });
+    expect(narrowed.binding.catalog).toBe(first.binding.catalog);
+    expect(narrowed.binding.offered.offerId).toBe("offer-2");
+    expect(narrowed.tools(NOW).map((entry) => entry.alias)).toEqual(["read_file"]);
+    expect(() => narrowed.bindAlias("run_command", { command: "npm" }, NOW)).toThrow();
+    expect(() =>
+      createToolInvocationNormalizer({
+        ...input,
+        offered: {
+          ...input.offered,
+          binding: {
+            ...input.offered.binding,
+            projectionDigest: binding(false).projection.projectionDigest,
+          },
+        },
+      }),
+    ).toThrow();
+  });
+
+  it("never remembers a frozen projection that does not belong to its catalog", () => {
+    const legacy = binding(true);
+    const other = binding(false);
+    const mismatched = { ...legacy, projection: other.projection };
+    for (let attempt = 0; attempt < 2; attempt++)
+      expect(() => createToolInvocationNormalizer(mismatched)).toThrow();
+  });
+});

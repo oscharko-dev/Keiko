@@ -409,6 +409,24 @@ describe("durable Chat mutation projections", () => {
       .run(JSON.stringify({ schemaVersion: 1, exchanges: [row] }), f.id);
     expect(() => f.store.findMessageById(f.id)).toThrow("Stored Chat tool transcript is invalid");
   });
+  it("fails closed on a tampered row after the same message was read and verified", () => {
+    const f = fixture();
+    const view = startWrite(f);
+    const valid = f.db
+      .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id = ?")
+      .get(f.id) as { json: string };
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeDefined();
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeDefined();
+    const row = { call: mutationCall, approval: { ...view, chatId: "another-chat" } };
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(JSON.stringify({ schemaVersion: 1, exchanges: [row] }), f.id);
+    expect(() => f.store.findMessageById(f.id)).toThrow("Stored Chat tool transcript is invalid");
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(valid.json, f.id);
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeDefined();
+  });
 
   it("keeps a cancelled envelope and observed mutation outcome independently readable", () => {
     const f = fixture();

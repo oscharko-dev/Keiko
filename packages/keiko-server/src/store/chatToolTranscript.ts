@@ -288,6 +288,23 @@ export function decodeChatToolTranscript(
         })),
       };
 }
+// Fingerprints of stored transcripts this process already verified under the same identity. The
+// verdict is a pure function of the stored text and its identity, and every read of a message
+// decodes its whole transcript: re-verifying each exchange's descriptor and result envelope on every
+// read made a turn quadratic in its tool calls (35 reads took 15 s under coverage in CI). A hit
+// still parses the text afresh, so no caller shares a decoded object; any byte change misses.
+const VERIFIED_TRANSCRIPTS_MAX = 1024;
+const verifiedTranscripts = new Set<string>();
+function verifiedFingerprint(json: string, identity: TranscriptIdentity | undefined): string {
+  return sha256Hex(`${identity?.chatId ?? ""}\u0000${identity?.messageId ?? ""}\u0000${json}`);
+}
+function rememberVerified(fingerprint: string): void {
+  if (verifiedTranscripts.size >= VERIFIED_TRANSCRIPTS_MAX) {
+    const oldest = verifiedTranscripts.values().next();
+    if (oldest.done !== true) verifiedTranscripts.delete(oldest.value);
+  }
+  verifiedTranscripts.add(fingerprint);
+}
 function decodeStoredTranscript(
   json: string | null,
   identity: TranscriptIdentity | undefined,
@@ -296,8 +313,13 @@ function decodeStoredTranscript(
   try {
     if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES)
       throw new TypeError("Chat tool transcript exceeds its byte limit");
+    const fingerprint = verifiedFingerprint(json, identity);
+    if (verifiedTranscripts.has(fingerprint)) return JSON.parse(json) as StoredTranscript;
     const parsed: unknown = JSON.parse(json);
-    if (validTranscript(parsed, identity)) return parsed;
+    if (validTranscript(parsed, identity)) {
+      rememberVerified(fingerprint);
+      return parsed;
+    }
   } catch {
     // Preserve the body-free failure for the existing store/route error boundary.
     throw invalidTranscript();

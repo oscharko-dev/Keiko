@@ -11,7 +11,7 @@ import { DEFAULT_GROUNDING_LIMITS, GROUNDING_LIMIT_CEILINGS } from "./bff-wire.j
 import { DEFAULT_BUG_WORKFLOW_LIMITS } from "./bug-investigation-events.js";
 import { CODING_WORKBENCH_MODE_POLICIES } from "./coding-workbench.js";
 import { COMMAND_TASK_RULES } from "./command-runner.js";
-import { deepFreeze } from "./deep-freeze.js";
+import { deepFreeze, isDeepFrozen } from "./deep-freeze.js";
 import { isLegalCodingWorkbenchRuntimeTransition } from "./coding-workbench-runtime.js";
 
 describe("deepFreeze", () => {
@@ -98,5 +98,20 @@ describe("security-relevant constant tables are deeply immutable", () => {
     expect(() => {
       (DEFAULT_GROUNDING_LIMITS as { referenceBudget: number }).referenceBudget = 10_000;
     }).toThrow(TypeError);
+  });
+});
+
+describe("isDeepFrozen", () => {
+  it("accepts only a value whose every reachable object is frozen data", () => {
+    const cyclic: { self?: unknown; list: number[] } = { list: [1] };
+    cyclic.self = cyclic;
+    expect(isDeepFrozen(deepFreeze(cyclic))).toBe(true);
+    expect(isDeepFrozen("text")).toBe(true);
+    expect(isDeepFrozen(null)).toBe(true);
+    expect(isDeepFrozen({ value: 1 })).toBe(false);
+    expect(isDeepFrozen(Object.freeze({ inner: { value: 1 } }))).toBe(false);
+    expect(isDeepFrozen(deepFreeze({ run: (): number => 1 }))).toBe(false);
+    const accessor = Object.freeze(Object.defineProperty({}, "value", { get: (): number => 1 }));
+    expect(isDeepFrozen(accessor)).toBe(false);
   });
 });

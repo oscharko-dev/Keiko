@@ -320,7 +320,7 @@ describe("XML-decoded values are scanned in every OOXML part", () => {
   it.each([
     [
       "an escaped configured literal in the core properties",
-      `<cp:coreProperties><dc:description>${AMP_SECRET.replace("&", "&amp;")}</dc:description></cp:coreProperties>`,
+      `<cp:coreProperties><dc:description>${AMP_SECRET.replaceAll("&", "&amp;")}</dc:description></cp:coreProperties>`,
     ],
     [
       "a numeric character reference in an attribute",

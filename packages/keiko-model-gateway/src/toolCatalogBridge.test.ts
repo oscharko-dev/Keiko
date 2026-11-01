@@ -614,6 +614,37 @@ describe("representable gateway schemas", () => {
   });
 });
 
+describe("frozen bound advertisements (#4173)", () => {
+  it("binds every round against that round's own offer over one frozen catalog", () => {
+    const full = advertisement();
+    expect(Object.isFrozen(full.catalog) && Object.isFrozen(full.projection)).toBe(true);
+    const narrow = gatewayCatalogAdvertisement(NOW, ["list_files"]);
+    const first = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: full },
+      (): number => NOW,
+    );
+    const second = createGatewayToolCatalogBridge(
+      { ...request(), toolCatalog: { ...full, offered: narrow.offered } },
+      (): number => NOW,
+    );
+    const read: NormalizedToolCall = {
+      id: "call-1",
+      name: "read_file",
+      arguments: { path: "src/example.ts" },
+    };
+    expect(first.bind(read)).toMatchObject({ invocation: { kind: "bound" } });
+    expect(second.tools.map((tool) => tool.name)).toEqual(["list_files"]);
+    expect(() => second.bind(read)).toThrow(GatewayToolCatalogError);
+  });
+
+  it("still refuses a frozen advertisement with an extra field", () => {
+    const input = Object.freeze({ ...advertisement(), extra: "field" });
+    expect(() =>
+      createGatewayToolCatalogBridge({ ...request(), toolCatalog: input }, (): number => NOW),
+    ).toThrow(GatewayToolCatalogError);
+  });
+});
+
 describe("exact-content tool resolution (#4009)", () => {
   it("names only the offered changeset edit, resolved by catalog identity", () => {
     const bridge = createGatewayToolCatalogBridge(

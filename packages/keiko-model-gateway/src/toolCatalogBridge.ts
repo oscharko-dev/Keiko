@@ -32,6 +32,7 @@ import {
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { toolSchemaCorrectionMessage, type GatewayToolCallRepair } from "./toolSchemaCorrection.js";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
+import { isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import type {
   GatewayRequest,
   NormalizedResponse,
@@ -291,7 +292,39 @@ function dataField(source: object, key: string): unknown {
   requireBridge("value" in descriptor && descriptor.enumerable === true, "projection-mismatch");
   return descriptor.value as unknown;
 }
+const BOUND_ADVERTISEMENT_KEYS = ["kind", "catalog", "projection", "offered"];
+function frozenObject(value: unknown): object | undefined {
+  return typeof value === "object" && value !== null && isDeepFrozen(value) ? value : undefined;
+}
+/**
+ * A bound advertisement whose catalog and projection are deeply frozen cannot change while the
+ * provider works, so only its small offer is captured anew; the catalog keeps its identity and the
+ * invocation binding reuses its earlier verification. Copying the whole catalog on every round made
+ * a long Chat tool turn copy and re-verify every descriptor dozens of times (#4173).
+ */
+function frozenBoundAdvertisement(input: unknown): GatewayToolCatalogAdvertisement | undefined {
+  if (typeof input !== "object" || input === null || dataField(input, "kind") !== "bound")
+    return undefined;
+  if (
+    Reflect.ownKeys(input).length !== BOUND_ADVERTISEMENT_KEYS.length ||
+    !BOUND_ADVERTISEMENT_KEYS.every((key) => Object.hasOwn(input, key))
+  )
+    return undefined;
+  const catalog = frozenObject(dataField(input, "catalog"));
+  const projection = frozenObject(dataField(input, "projection"));
+  if (catalog === undefined || projection === undefined) return undefined;
+  const offered = captureCatalogEnvelope(dataField(input, "offered"));
+  return Object.freeze({
+    kind: "bound",
+    catalog,
+    projection,
+    offered,
+  }) as unknown as GatewayToolCatalogAdvertisement;
+}
+
 function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
+  const frozen = frozenBoundAdvertisement(input);
+  if (frozen !== undefined) return frozen;
   // A native advertisement carries the runtime's whole tool set under its own byte contract; a
   // bound catalog keeps the per-call budget (#3897 review).
   const native =
@@ -308,11 +341,10 @@ function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
     requireBridge(isGatewayNativeToolAdvertisement(object), "projection-mismatch");
     return object;
   }
-  const keys = ["kind", "catalog", "projection", "offered"];
   requireBridge(
     object.kind === "bound" &&
-      Object.keys(object).length === keys.length &&
-      keys.every((key) => Object.hasOwn(object, key)),
+      Object.keys(object).length === BOUND_ADVERTISEMENT_KEYS.length &&
+      BOUND_ADVERTISEMENT_KEYS.every((key) => Object.hasOwn(object, key)),
     "projection-mismatch",
   );
   return object as unknown as GatewayToolCatalogAdvertisement;

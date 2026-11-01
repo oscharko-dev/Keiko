@@ -204,6 +204,15 @@ bound the offer: `min(consumer.deadlineAt, authorityExpiresAt)`. This adds no gr
 consumer. Its former fixed 30-second offer also refused valid normal-Chat Jira responses when model
 generation outlasted that lease (2026-10-29). The regression admits a response at49 seconds inside
 a90-second turn and refuses arrivals at either admitted bound; no new deadline is created.
+Capturing a bound advertisement or invocation binding copies and re-verifies only what can still
+change. A catalog and projection that are deeply frozen (every reachable object frozen, data
+properties only) cannot change once captured, so the gateway bridge keeps their identity and copies
+only the offer, and the invocation binding reuses the verification and projection compiled for that
+exact frozen pair; descriptors the catalog itself issued, deeply frozen at issue, skip
+re-verification. The offer, its expiry and its tool subset are still captured anew on every request,
+a frozen pair that failed verification is never remembered, and anything not deeply frozen takes the
+full copy, bounds and verification path as before. Re-capturing the unchanged catalog on every Chat
+tool round had made a long Jira turn copy and hash every descriptor dozens of times (#4173).
 An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
 it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
 revision and its handler's readiness, so an effect that starts after a long step or a human decision
@@ -750,6 +759,7 @@ request, as its description states.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.10 | 2026-11-01 | D4: capture reuses deeply frozen catalogs, projections and catalog-issued descriptors by identity and captures only the offer anew; non-frozen input keeps the full copy and verification (#4173). |
 | 1.9 | 2026-10-29 | D4: the legacy patch tools `propose_patch` and `apply_patch` follow the shared patch ceiling of ADR-0125 D3 (`GOVERNED_PATCH_MAX_BYTES`, #4110); their descriptors move (argument bound), so the `legacy-native@1` catalog revision, projection digest and the manifest were regenerated. |
 | 1.8 | 2026-10-23 | The native OpenCode profile registers Keiko's Git, CI and verification tools through a generated plugin so a native run delivers through the existing facade, approval channel and verified-commit path (ADR-0137 D10, #3897); D2 holds unchanged, since the tools are the `managed-opencode@1` entries' own source, no descriptor, alias or digest moves, and an advertisement still binds no handler, effect or authority. |
 | 1.7 | 2026-10-23 | The native OpenCode profile (ADR-0137 D10, #3897) advertises the runtime's own tools to the provider as a bounded `native` advertisement forwarded verbatim and bound by name only; D2 holds unchanged, since no runtime-supplied definition registers a handler, effect or authority, and the governed catalog keeps serving the mapped profiles and every other product surface. |
