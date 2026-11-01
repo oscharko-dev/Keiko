@@ -4,39 +4,37 @@
 // identity of the product is what makes the second write reconcile instead of create.
 import { claimedRequirement, turnIssues } from "./oracles.mjs";
 import { countsOf, result, snapshotBefore, sumTurns } from "./journey-support.mjs";
-import { toolExchangeOf } from "./tool-exchanges.mjs";
 
 const EPIC_QUERY = "project = REQ AND issuetype = Epic";
 
 /** "Kann" requirements: S17 creates the "Muss" ones, and no other journey uses these two. */
 export const RERUN_REQUIREMENTS = Object.freeze(["LH-019", "LH-024"]);
 
-/** Write tools a creation request may use; any settled call proves the write path was exercised. */
-const WRITE_OPERATIONS = ["jira.draft", "jira.create"];
-const wroteInTurn = (exchanges) =>
-  (Array.isArray(exchanges) ? exchanges : []).some((exchange) =>
-    WRITE_OPERATIONS.some((operation) => toolExchangeOf(exchange, operation)),
-  );
-
 /**
  * Grades the second run against the epics Jira holds after each run.
  *  - red: a requirement has more than one epic after the second run, or the second run created a
  *    new epic or a second issue under an existing draft identity;
- *  - unverified: the first run created no epic for a requirement, or the second run made no write
- *    attempt, so the product's reconciliation was never asked to refuse a duplicate;
- *  - green: exactly one epic per requirement after both runs and no new issue from the second.
+ *  - unverified: the first run created no epic for a requirement, or the second run's own draft did
+ *    not report the existing epic of every requested requirement as reconciled (no write, a refused
+ *    or failed write, or a write about something else), so the product's reconciliation was never
+ *    shown to recognise the duplicate;
+ *  - green: exactly one epic per requirement after both runs, no new issue from the second, and the
+ *    second run reconciled onto each requirement's existing epic.
  */
-export function gradeRerun({ requested, afterFirst, afterSecond, second, secondWrote }) {
+export function gradeRerun({ requested, afterFirst, afterSecond, second }) {
   const countOf = (issues, id) => issues.filter((issue) => claimedRequirement(issue) === id).length;
   const repeated = requested.filter((id) => countOf(afterSecond, id) > 1);
   const absentFirst = requested.filter((id) => countOf(afterFirst, id) === 0);
   const absentSecond = requested.filter((id) => countOf(afterSecond, id) === 0);
+  const unreconciled = requested.filter(
+    (id) => !second.reconciled.some((issue) => claimedRequirement(issue) === id),
+  );
   const newInSecond = second.created.length;
-  const base = { repeated, absentFirst, absentSecond, newInSecond, wrote: secondWrote };
+  const base = { repeated, absentFirst, absentSecond, unreconciled, newInSecond };
   if (repeated.length > 0 || newInSecond > 0 || second.duplicates.length > 0) {
     return { ...base, status: "red" };
   }
-  if (absentFirst.length > 0 || absentSecond.length > 0 || !secondWrote) {
+  if (absentFirst.length > 0 || absentSecond.length > 0 || unreconciled.length > 0) {
     return { ...base, status: "unverified" };
   }
   return { ...base, status: "green" };
@@ -46,7 +44,7 @@ const RERUN_PROMPT = `Lege im Jira-Projekt REQ für die Anforderungen ${RERUN_RE
 
 function rerunDetail(grade, second) {
   const ids = (list) => (list.length === 0 ? "none" : list.join(", "));
-  return `${countsOf(second, "epics")} in the second run; requirements with several epics: ${ids(grade.repeated)}; without an epic after the first run: ${ids(grade.absentFirst)}; second run wrote ${grade.wrote}`;
+  return `${countsOf(second, "epics")} in the second run; requirements with several epics: ${ids(grade.repeated)}; without an epic after the first run: ${ids(grade.absentFirst)}; not reconciled by the second run: ${ids(grade.unreconciled)}`;
 }
 
 export async function rerunCreatesNoDuplicates(ctx, chat) {
@@ -63,7 +61,6 @@ export async function rerunCreatesNoDuplicates(ctx, chat) {
     afterFirst,
     afterSecond,
     second,
-    secondWrote: wroteInTurn(turn.toolExchanges),
   });
   return result(
     grade.status,

@@ -611,6 +611,14 @@ describe("S18 modes and readable approval", () => {
       expect(gradeModeRun({ ...full, writes: 1 }).status).toBe("red");
       expect(gradeModeRun({ ...full, created: 0, credited: 0 }).status).toBe("unverified");
     });
+
+    it("does not take epics reconciled from an earlier run for a Full access write", () => {
+      const reconciled = { approval: false, writes: 0, created: 0, credited: 2 };
+      expect(gradeModeRun(reconciled)).toMatchObject({
+        status: "unverified",
+        detail: expect.stringContaining("only reconciled"),
+      });
+    });
   });
 
   describe("gradeApprovalReadable", () => {
@@ -730,7 +738,21 @@ describe("S19 no duplicates on re-run", () => {
     );
     expect(check.status).toBe("unverified");
     expect(check.covers).toEqual([]);
-    expect(check.detail).toContain("second run wrote false");
+    expect(check.detail).toContain(`not reconciled by the second run: ${one}, ${two}`);
+  });
+
+  it("credits nothing when the second run's write was refused or reconciled only one epic", async () => {
+    const failed = draftExchange([]);
+    const rejection = { outcome: "rejected", reason: "field-validation" };
+    const refused = () => ({
+      toolExchanges: [{ ...failed, result: { ...failed.result, data: rejection } }],
+    });
+    const partly = () => ({ toolExchanges: [draftExchange(["REQ-1"], "existing")] });
+    for (const second of [refused, partly]) {
+      const check = await JOURNEYS.S19(setup(second), CHAT);
+      expect(check.status).toBe("unverified");
+      expect(check.covers).toEqual([]);
+    }
   });
 
   it("credits nothing when the first run created no epic to repeat", async () => {
@@ -748,9 +770,11 @@ describe("S19 no duplicates on re-run", () => {
       afterFirst: epics,
       afterSecond: epics,
       second,
-      secondWrote: true,
     };
     expect(gradeRerun(input).status).toBe("green");
+    expect(gradeRerun({ ...input, second: { ...second, reconciled: [] } }).status).toBe(
+      "unverified",
+    );
     expect(gradeRerun({ ...input, second: { ...second, duplicates: ["REQ-9"] } }).status).toBe(
       "red",
     );

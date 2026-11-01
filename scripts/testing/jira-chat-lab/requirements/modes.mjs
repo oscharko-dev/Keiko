@@ -45,16 +45,22 @@ export const MODE_RUNS = Object.freeze([
  * approval that did not exist before the turn (`undefined`: the supervisor could not observe Jira).
  *  - an approval mode is green when a write approval was pending while Jira was still unchanged;
  *    a write without any approval is red, and so are issues that already existed at the approval;
- *  - Full access is green when issues were written without a single write approval;
+ *  - Full access is green when Jira holds new issues of the turn and no write approval was asked;
+ *    epics that only reconciled onto issues of an earlier run show no write effect (`unverified`);
  *  - a run that wrote nothing and was asked for nothing proves nothing (`unverified`).
  */
 export function gradeModeRun({ approval, writes, created, credited, newAtApproval }) {
   if (!approval) {
     if (writes > 0)
       return { status: "red", detail: `${writes} write approvals asked in Full access` };
+    if (created > 0)
+      return { status: "green", detail: `${created} issues written without a write approval` };
     return credited === 0
       ? { status: "unverified", detail: "no issue written, the mode was not exercised" }
-      : { status: "green", detail: `${credited} issues written without a write approval` };
+      : {
+          status: "unverified",
+          detail: `${credited} epics only reconciled onto existing issues; no new write was observed`,
+        };
   }
   if (writes === 0) {
     return created > 0
