@@ -7,12 +7,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import {
-  Gateway,
-  schemaMismatchGuidance,
-  type GatewayCallRequest,
-  type GatewaySpendReservation,
-} from "./gateway.js";
+import { schemaMismatchGuidance } from "./toolSchemaCorrection.js";
+import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";

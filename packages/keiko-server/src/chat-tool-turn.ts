@@ -33,12 +33,14 @@ import {
   chatToolTurnEndReason,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
+  recordChatToolTurnCorrected,
   recordChatToolTurnEnded,
 } from "./chat-tool-turn-ending.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   findConfiguredCapability,
+  GatewayToolCatalogError,
   toolCallingConfigurationFingerprint,
   type GatewayCallRequest,
   type NormalizedResponse,
@@ -129,6 +131,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private elidedResults = 0;
   private reservedTranscriptBytes = CHAT_TOOL_TRANSCRIPT_BASE_BYTES;
   private readonly instruction: GatewayMessage;
+  /** The correction the next round carries after the gateway's own correction was rejected too. */
+  private correction: GatewayMessage | undefined;
+  /** The turn corrected a rejected call and no round has dispatched a tool call since. */
+  private correctedSinceProgress = false;
+  /** The first admission of a correction round follows an attempt the turn could not use. */
+  private correctionAdmissionPending = false;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
     this.instruction =
       options.guidance === undefined
@@ -281,7 +289,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       ...request,
       answerRepair: "steered",
       attemptAdmission: (input): ReturnType<ModelAttempt> => {
-        const existing = request.attemptAdmission?.(input);
+        const existing = request.attemptAdmission?.(this.claimCorrectionAdmission(input));
         if (request.attemptAdmission !== undefined && existing === undefined) return undefined;
         const current = this.admitAttempt(input);
         if (current === undefined) {
@@ -299,6 +307,13 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         };
       },
     };
+  }
+  private claimCorrectionAdmission(
+    input: Parameters<ModelAttempt>[0],
+  ): Parameters<ModelAttempt>[0] {
+    if (!this.correctionAdmissionPending) return input;
+    this.correctionAdmissionPending = false;
+    return { ...input, correctsUnusableAttempt: true };
   }
   private async *meteredStream(
     model: ModelPort,
@@ -553,7 +568,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     return {
       ...request,
       stream: false,
-      messages: [this.instruction, ...request.messages, ...this.fittedContinuation(request)],
+      messages: [
+        this.instruction,
+        ...request.messages,
+        ...this.fittedContinuation(request),
+        ...(this.correction === undefined ? [] : [this.correction]),
+      ],
       toolCatalog: {
         kind: "bound",
         catalog: managed.catalog,
@@ -596,7 +616,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.admitRound(request.modelId, signal);
       const offered = this.binder.offer();
       const round = this.roundRequest(request, offered);
-      const response = await model.call(round, this.context.signal); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
+      const response = await this.callRound(model, round); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
+      if (response === undefined) continue;
       observeRound?.(response);
       this.promptTokens +=
         response.usage.promptTokens + (response.discardedAttemptUsage?.promptTokens ?? 0);
@@ -617,8 +638,47 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         "budget-exhausted",
       );
       for (const call of response.toolCalls) await this.dispatch(call); // NOSONAR typescript:S9382 -- dispatches share authority/budgets; receipts, mutation journals and transcripts must settle before the next admission
+      this.correctedSinceProgress = false;
     }
     requireDispatch(false, "denied", "budget-exhausted");
+  }
+
+  /**
+   * A tool call the gateway rejected again after its own schema correction ends neither the turn nor
+   * the settled work behind it (S08 of epic #4173: Gemma's second `jira.create` without
+   * `links[].type` ended the turn as a model failure). The next round carries the same body-free
+   * correction, once per streak: a round that dispatches a tool call restores the allowance, and a
+   * second rejection without progress ends the turn as before. Every round stays inside the
+   * Authority Envelope's model-call and prompt budget; nothing was executed for the rejected call.
+   */
+  private async callRound(
+    model: ModelPort,
+    round: GatewayCallRequest,
+  ): Promise<NormalizedResponse | undefined> {
+    try {
+      const response = await model.call(round, this.context.signal);
+      this.correction = undefined;
+      this.correctionAdmissionPending = false;
+      return response;
+    } catch (error) {
+      const correction =
+        error instanceof GatewayToolCatalogError && !this.correctedSinceProgress
+          ? error.correction()
+          : undefined;
+      // The turn ends here: a later synthesis pass that reuses it never inherits the correction.
+      this.correction = undefined;
+      this.correctionAdmissionPending = false;
+      if (correction === undefined || this.context.signal.aborted) throw error;
+      this.correction = { role: "system", content: correction };
+      this.correctedSinceProgress = true;
+      this.correctionAdmissionPending = true;
+      recordChatToolTurnCorrected(processServerLogSink(), {
+        correlationId: this.options.correlationId,
+        messageId: this.options.message.id,
+        settledExchangeCount: this.settledExchanges.length,
+      });
+      return undefined;
+    }
   }
 }
 

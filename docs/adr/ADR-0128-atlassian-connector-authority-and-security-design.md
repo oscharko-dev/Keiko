@@ -873,6 +873,15 @@ is unchanged, and a further unusable answer fails closed. Schema corrections joi
 2026-11-01: the lab showed a Pod-sourced turn whose second schema correction was refused
 (`GATEWAY_ATTEMPT_ADMISSION_DENIED`) and logged as `invalid-shape`; a refused correction now logs
 its actual cause.
+A tool call the gateway rejects again after its own correction no longer ends the turn as a model
+failure (S08 of epic #4173: Gemma's second `jira.create` without `links[].type` left the human a
+dead end). The Chat tool turn sends one further round carrying the same body-free correction, and
+announces it to the caller admission as a correction. The allowance is once per streak: a round
+that dispatches a tool call restores it, and a second rejection without progress ends the turn with
+its transcript answer as before. Every round stays inside the Authority Envelope's model-call and
+prompt budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
+inherits the correction. `chat.tool-turn.corrected` records each such round with the turn's settled
+exchange count.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically

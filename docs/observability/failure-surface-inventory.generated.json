@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9a10e728c03505b95a32ee4da49a823f90d2842b7d06c14c51534ac9025e2785"
+    "catalogDigest": "a4b9689e42b3da619e27ad48df6bc38c5e954a03918c27537602192fdfc25223"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 626,
-    "proofCount": 649,
-    "resolvedProofCount": 649,
+    "operationCount": 627,
+    "proofCount": 650,
+    "resolvedProofCount": 650,
     "failureClassCount": 387,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -128,6 +128,7 @@
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
         "chat.tool-turn.context-fitted",
+        "chat.tool-turn.corrected",
         "chat.tool-turn.ended",
         "chat.turn.started",
         "git-change.chat.apply",
@@ -1371,6 +1372,7 @@
     "chat.tool-turn.context-fitted.line": [
       "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
     ],
+    "chat.tool-turn.corrected.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
     "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],

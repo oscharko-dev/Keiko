@@ -930,6 +930,7 @@
     "keiko-model-gateway/speech-to-text-adapter",
     "keiko-model-gateway/text-to-speech-adapter",
     "keiko-model-gateway/toolCatalogBridge",
+    "keiko-model-gateway/toolSchemaCorrection",
     "keiko-model-gateway/types",
     "keiko-model-gateway/version",
     "keiko-quality-intelligence/domain/assertions",

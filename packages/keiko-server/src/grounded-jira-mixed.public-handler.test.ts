@@ -1283,6 +1283,60 @@ it("admits every schema correction of a tool turn that carries connected sources
   expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
 });
 
+it("continues a tool turn whose call the gateway rejected again after its own correction", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider([
+    "tool",
+    "malformed",
+    "malformed",
+    "tool",
+    "malformed",
+    "malformed",
+    "tool",
+    "answer",
+  ]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests).toHaveLength(8);
+  // The gateway corrects each rejected call once; the turn's own round carries the correction
+  // again, and a dispatched call between the two streaks restores that allowance.
+  for (const index of [2, 3, 5, 6]) expect(requests[index]).toContain("rejected before execution");
+  expect(requests[4]).not.toContain("rejected before execution");
+  expect(f.jiraRequests).toEqual(["GET", "GET", "GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
+});
+
+it("ends a tool turn whose corrected round is rejected again without progress", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "malformed", "malformed", "malformed", "malformed", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  // Five tool-turn attempts: the gateway corrects each streak once and the turn carries one
+  // correction round; the sixth is the grounded answer's own later synthesis pass, which must not
+  // inherit the ended turn's correction.
+  expect(requests).toHaveLength(6);
+  expect(requests[3]).toContain("rejected before execution");
+  expect(requests[5]).not.toContain("rejected before execution");
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("the model request failed");
+});
+
 it("charges physical overflow before a tool response and denies a third synthesis attempt", async () => {
   const f = runtime();
   const requests = provider(["overflow", "tool", "uncited", "answer"]);

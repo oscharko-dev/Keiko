@@ -280,3 +280,54 @@ export function recordChatToolTurnContextFitted(
     recordActivityLogLoss("port-sink-failed");
   }
 }
+
+const CORRECTED = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.tool-turn.corrected",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "chat-tool-turn-ending.recordChatToolTurnCorrected",
+  fields: {
+    messageDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    settledExchangeCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-tool-transcript"],
+  proofIds: ["chat.tool-turn.corrected.line"],
+  releaseImpact: "minor",
+});
+
+/**
+ * Recorded when a tool call the gateway rejected again after its own schema correction gets one
+ * further turn round carrying that correction instead of ending the turn.
+ */
+export function recordChatToolTurnCorrected(
+  log: ServerLogSink,
+  input: {
+    readonly correlationId: string;
+    readonly messageId: string;
+    readonly settledExchangeCount: number;
+  },
+): void {
+  try {
+    log.write(
+      activityLogEvent(
+        CORRECTED,
+        { correlationId: input.correlationId, level: "warn" },
+        {
+          messageDigest: sha256Hex(input.messageId),
+          settledExchangeCount: input.settledExchangeCount,
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
+  } catch {
+    recordActivityLogLoss("port-sink-failed");
+  }
+}

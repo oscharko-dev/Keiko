@@ -15,6 +15,7 @@ import {
   chatToolTurnEndReason,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
+  recordChatToolTurnCorrected,
   recordChatToolTurnEnded,
 } from "./chat-tool-turn-ending.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -237,6 +238,22 @@ describe("recordChatToolTurnContextFitted", () => {
     expect(event?.extra).toMatchObject({ elidedResultCount: 3, continuationMessageCount: 40 });
     const line = formatActivityLogProofLine(event ?? {});
     expectActivityLogProof("chat.tool-turn.context-fitted.line", line);
+    expect(line).not.toContain("message-private-id");
+  });
+});
+
+describe("recordChatToolTurnCorrected", () => {
+  it("records only the settled exchange count under the turn correlation", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-corrected-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 2,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({ level: "warn", extra: { settledExchangeCount: 2 } });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.corrected.line", line);
     expect(line).not.toContain("message-private-id");
   });
 });

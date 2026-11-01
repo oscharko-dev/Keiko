@@ -3504,6 +3504,7 @@
           "chat.tool-mutation.projected",
           "chat.tool-transcript.updated",
           "chat.tool-turn.context-fitted",
+          "chat.tool-turn.corrected",
           "chat.tool-turn.ended"
         ],
         "end": [],
@@ -3524,6 +3525,10 @@
           "mode": "correlation"
         },
         {
+          "op": "chat.tool-turn.corrected",
+          "mode": "correlation"
+        },
+        {
           "op": "chat.tool-turn.ended",
           "mode": "correlation"
         }
@@ -3533,6 +3538,7 @@
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
         "chat.tool-turn.context-fitted",
+        "chat.tool-turn.corrected",
         "chat.tool-turn.ended"
       ],
       "replayReferences": [],
@@ -3636,6 +3642,36 @@
             "causeChain": false
           },
           "proofIds": ["chat.tool-turn.context-fitted.line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "chat.tool-turn.corrected",
+          "owner": "keiko-server",
+          "category": "process",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "messageDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
+              "name": "settledExchangeCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["chat.tool-turn.corrected.line"],
           "replayReferences": [],
           "missingObligations": []
         },

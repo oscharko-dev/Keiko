@@ -30,6 +30,7 @@ import {
   type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { toolSchemaCorrectionMessage, type GatewayToolCallRepair } from "./toolSchemaCorrection.js";
 import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import type {
   GatewayRequest,
@@ -238,18 +239,13 @@ export class GatewayToolCatalogError extends MalformedToolCallError {
     this.retryable = retryable;
     if (cause !== undefined) this.cause = cause;
   }
+  /** The body-free correction the model receives for this rejection; undefined when none applies. */
+  correction(): string | undefined {
+    return toolSchemaCorrectionMessage(this.repair);
+  }
 }
-/**
- * Body-free provider-call identity retained only for a bounded schema-correction retry, plus the
- * schema's own account of the mismatch (declared property names and counts, never the arguments) so
- * the correction can name what to fix.
- */
-export interface GatewayToolCallRepair {
-  readonly toolCallId: string;
-  readonly offeredAlias: string;
-  readonly shape?: CatalogSchemaMismatch | undefined;
-  readonly transport?: "assistant-text" | undefined;
-}
+
+export type { GatewayToolCallRepair } from "./toolSchemaCorrection.js";
 export interface GatewayToolCatalogBridge {
   readonly assertNativeTransport: (response: NormalizedResponse) => void;
   readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
