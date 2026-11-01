@@ -324,8 +324,8 @@ it("re-probes a conclusively failed model on the first conversation request afte
   await awaitInitializedConversationReadiness(deps, "chat-model");
   expect(chatModelReady(deps)).toBe(false);
 
-  // An answered rejection retains slow background recovery; a request inside the cooldown never
-  // adds a readiness request.
+  // An answered rejection is checked again only by a request after the cooldown; a request inside
+  // the cooldown never adds a readiness request.
   await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-early");
   await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS - 1_000);
   await awaitInitializedConversationReadiness(deps, "chat-model", "corr-chat-early");
@@ -353,7 +353,7 @@ it("re-probes a conclusively failed model on the first conversation request afte
   expect(completed.at(-1)?.correlationId).toBe("corr-chat-send");
   expect(completed.at(-1)?.extra?.overallStatus).toBe("ready");
 
-  // Fresh readiness avoids one probe per interactive request; background renewal remains bounded.
+  // Fresh readiness avoids one probe per interactive request; nothing renews it in the background.
   for (let request = 0; request < 5; request += 1) {
     await awaitInitializedConversationReadiness(
       deps,

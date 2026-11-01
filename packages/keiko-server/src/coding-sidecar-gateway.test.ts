@@ -2113,8 +2113,8 @@ describe("coding-sidecar gateway", () => {
     );
   });
 
-  // #3907 AC3: a coding run pauses the chat model's background renewal, so without this an expired
-  // success left the Workbench reading "still checking this model" after every long run.
+  // #3907 AC3: nothing renews the chat model's readiness in the background, so without this an
+  // expired success left the Workbench reading "still checking this model" after every long run.
   it("renews the model's expired chat readiness from an accepted answer, and nothing else", async () => {
     const sink = captureServerLog("info");
     const answer = (deps: UiHandlerDeps): Promise<unknown> =>

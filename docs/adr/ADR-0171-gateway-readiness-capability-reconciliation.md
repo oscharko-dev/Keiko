@@ -65,7 +65,8 @@ it remains shared by callers; expiry never grants unverified admission. Interact
 the same five-minute aggregate wait across all candidate models, including the selected model;
 it must not abandon a healthy pending check after 45 seconds. Expiry stops that caller's wait,
 leaves the single shared probe owned by configuration, and does not authorize an unverified model.
-A page load (the models read with `refresh=1`) is the person asking again: it checks every
+A page load, or opening the Workbench or a model list (the models read with `refresh=1`), is the
+person asking again: it checks every
 configured chat model that is not ready now, outside its 30-second not-ready cooldown, in the
 background and independently of held catalog discovery; selected requests join that same work.
 Failed initialization remains visible. A failed startup check is not retried on a timer; the 30-second
@@ -113,7 +114,8 @@ probe competes with the run's turns.
 `coding-sidecar.gateway.outcome` records `readinessRenewal` (`renewed`, `not-renewable`) on accepted
 answers. The Workbench profile describes the model chosen in its picker (`modelId` query; an id
 the gateway does not configure falls back to the elected default). Choosing a model reads it with
-`check=1`, sent only by the picker's selection: when that model holds no fresh success, the read
+`check=1`, sent when the Workbench opens and on every selection change, a person's or the automatic
+election's: when that model holds no fresh success, the read
 joins the running check or starts the one on-demand check, as a Chat request does. Every other read
 (after a catalog update or a configuration change, or while a check runs) only describes what is
 known and never starts a check, so an open Workbench probes nothing in the background (auditor

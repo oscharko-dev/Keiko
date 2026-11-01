@@ -104,7 +104,7 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 
 - **The Coding Workbench is ready when your model is.** The Workbench judges the model you picked, so a ready model no longer waits behind "Keiko is still checking the model source" because another model is busy or down.
 - **Coding runs use your installed Git.** On a managed Mac without administrator rights, runs use the Git your IT provides instead of failing with "Model source unavailable"; Keiko installs nothing.
-- **No probing in the background.** Each model is checked once when Keiko starts. Opening the Workbench, choosing a model or reloading the page checks it again; nothing keeps a busy single-slot model occupied on a timer.
+- **No probing in the background.** Each model is checked once when Keiko starts. Opening the Workbench or a model list, choosing a model or reloading the page checks it again; nothing keeps a busy single-slot model occupied on a timer.
 - **Clearer model state.** A model that has not answered its tool-calling check yet is reported as unverified, not as unable to call tools.
 - **Corporate TLS.** Keiko remembers which gateway needs your configured CA bundle, so later calls skip a failing handshake. Rerank, discovery and embedding calls now appear in the Activity Log.
 

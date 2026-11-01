@@ -1137,7 +1137,7 @@ diagnostic), so a busy single-slot model stays selectable (#4115). An accepted c
 that finished serving renews that same-generation success too (`readinessRenewal` on
 `coding-sidecar.gateway.outcome`; #3907). Each chat model is checked once per connection
 at startup; nothing renews or recovers a model on a timer. A conversation request, a
-coding run start, a Workbench model choice (`check=1`) or a page load checks a model that is not
+coding run start, a Workbench model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not
 ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
 never start a check. The Workbench profile describes the model chosen in its picker (`modelId`):
 `model-verification-pending` only while a check of that model runs, an expired or unknown answer

@@ -4200,7 +4200,7 @@
       "releaseNoteBullets": [
         "The Coding Workbench judges the readiness of the model you picked, so a ready model no longer waits behind \"Keiko is still checking the model source\" while another model is busy or down.",
         "Native coding runs use the Git the host provides; a managed Mac without administrator rights no longer fails runs with \"Model source unavailable\", and Keiko installs nothing.",
-        "Each chat model is checked once per connection when Keiko starts; opening the Workbench, choosing a model, a page load or a run start checks it again, and no timer keeps busy single-slot models occupied.",
+        "Each chat model is checked once per connection when Keiko starts; opening the Workbench or a model list, choosing a model, a page load or a run start checks it again, and no timer keeps busy single-slot models occupied.",
         "A model whose tool-calling check was never answered is reported as unverified instead of unable to call tools, and is checked again when someone asks.",
         "The gateway transport remembers per origin when the configured CA bundle is needed, and rerank, discovery and embedding calls write their transport lines to the Activity Log."
       ]

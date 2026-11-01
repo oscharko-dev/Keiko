@@ -24,12 +24,14 @@ import {
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
-import type { ServerLogEvent } from "./observability/index.js";
+import { createServerLogger, setServerLogger, type ServerLogEvent } from "./observability/index.js";
 import type { RouteContext } from "./routes.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
 const CHAT = "plain-chat";
 const EMBEDDING = "plain-embedding";
@@ -42,6 +44,7 @@ afterEach(async (): Promise<void> => {
   for (const dir of directories.splice(0)) rmSync(dir, { recursive: true, force: true });
   vi.unstubAllGlobals();
   resetCodingWorkbenchContextWindowProbesForTests();
+  resetServerLogger();
 });
 
 function provider(modelId: string): Record<string, unknown> {
@@ -272,6 +275,8 @@ describe("a never-proven chat model behind a plain gateway", () => {
   it("is not probed again by a passive read after a probe the gateway never answered", async () => {
     const gateway = stubGateway("calls");
     const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
     gateway.busy = true;
 
     const first = await handleCodingSidecarGatewayProfile(profileContext(), deps);
@@ -290,6 +295,19 @@ describe("a never-proven chat model behind a plain gateway", () => {
     expect(first.body).toEqual({ status: "unavailable", reason: "tool-calling-unverified" });
     expect(second.body).toEqual({ status: "unavailable", reason: "tool-calling-unverified" });
     expect(storedChat(deps).toolCallingVerification).toBeUndefined();
+    // The log keeps the stored verdict the projection softened, so the rewrite stays explainable.
+    const shortfalls = sink.events.filter(
+      (event) =>
+        event.op === "coding-sidecar.gateway.readiness-insufficient" &&
+        event.correlationId === "profile-read-again",
+    );
+    expect(shortfalls.map((event) => event.extra)).toEqual([
+      expect.objectContaining({
+        reason: "tool-calling-unverified",
+        storedReason: "no-tool-calling",
+        probeMode: "passive",
+      }),
+    ]);
   });
 
   it("checks an unanswered model again when the Workbench opens or a model is chosen", async () => {

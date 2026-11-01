@@ -29,7 +29,8 @@ export interface LiteLLMRerankRequest extends RerankRequest {
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
   // Activity-log port (ADR-0019). Unset means the transport's failure and TLS-trust lines are
-  // lost and counted as `port-unwired`, so every production caller supplies it.
+  // lost and counted as `port-unwired`, so the production rerank caller (the grounded rerank
+  // facade) supplies it.
   readonly log?: ModelGatewayLogSink | undefined;
   // The enclosing operation's correlation id; every line this call writes carries it.
   readonly logContext?: ModelGatewayLogContext | undefined;

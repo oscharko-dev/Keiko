@@ -962,7 +962,7 @@ export function CodingWorkbenchWindow({
   );
   // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
   const catalogSettled = useGatewayModelCatalogSettled();
-  useEffect(() => requestGatewayModelCatalogRefresh(), []);
+  useEffect(() => requestGatewayModelCatalogRefresh({ check: true }), []);
   const modelSelection = useCodingModelSelection(
     state,
     actions,

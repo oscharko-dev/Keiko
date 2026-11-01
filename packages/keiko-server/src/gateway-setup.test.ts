@@ -11620,7 +11620,7 @@ describe("gateway setup writes the process activity log", () => {
     const uiDir = await tempDir("keiko-gw-figma-log-ui-");
     const evidenceDir = await tempDir("keiko-gw-figma-log-ev-");
     vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
-      if (fetchInputUrl(url).includes("api.figma.com")) {
+      if (new URL(fetchInputUrl(url)).hostname === "api.figma.com") {
         return Promise.reject(new TypeError("fetch failed"));
       }
       return answerSetupCall(url);

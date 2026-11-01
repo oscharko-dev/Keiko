@@ -4828,7 +4828,7 @@ function logReadinessShortfall(
       },
       {
         reason,
-        ...(pending && storedReason !== undefined ? { storedReason } : {}),
+        ...(storedReason !== undefined && storedReason !== reason ? { storedReason } : {}),
         probeMode: pending ? "pending" : "passive",
         ...(result.status === "available"
           ? {
