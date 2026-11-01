@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { compareIssueKeys } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { compareCodePoints } from "./jira-report-order.js";
 
@@ -31,20 +32,6 @@ export interface JiraReportInput {
   readonly now: Date;
 }
 
-/** Issue keys order by project, then numerically; the same order everywhere in a report. */
-export function compareJiraKeys(left: string, right: string): number {
-  const split = (key: string): readonly [string, number] => {
-    const at = key.lastIndexOf("-");
-    const number = Number(key.slice(at + 1));
-    return at < 0 || !Number.isFinite(number) ? [key, 0] : [key.slice(0, at), number];
-  };
-  const [leftProject, leftNumber] = split(left);
-  const [rightProject, rightNumber] = split(right);
-  return leftProject === rightProject
-    ? leftNumber - rightNumber
-    : compareCodePoints(leftProject, rightProject);
-}
-
 interface Graph {
   readonly index: ReadonlyMap<string, JiraReportIssue>;
   readonly children: ReadonlyMap<string, readonly JiraReportIssue[]>;
@@ -74,7 +61,7 @@ function rootKey(issue: JiraReportIssue, index: ReadonlyMap<string, JiraReportIs
     const parent = index.get(current.parentKey);
     if (parent === undefined) return current.parentKey;
     if (path.includes(parent.key))
-      return path.slice(path.indexOf(parent.key)).sort(compareJiraKeys)[0] ?? parent.key;
+      return path.slice(path.indexOf(parent.key)).sort(compareIssueKeys)[0] ?? parent.key;
     path.push(parent.key);
     current = parent;
   }
@@ -95,7 +82,7 @@ function linkedAttachments(
       const root = rootOf.get(key) ?? key;
       if (root !== issue.key && containers.has(root)) targets.add(root);
     }
-    if (targets.size > 0) result.set(issue.key, [...targets].sort(compareJiraKeys));
+    if (targets.size > 0) result.set(issue.key, [...targets].sort(compareIssueKeys));
   }
   return result;
 }
@@ -372,12 +359,12 @@ function withDigest(report: Omit<JiraReport, "digest">): JiraReport {
 
 /** The whole report as pure arithmetic over the records; the model never contributes a number. */
 export function buildJiraReport(input: JiraReportInput): JiraReport {
-  const issues = [...input.issues].sort((left, right) => compareJiraKeys(left.key, right.key));
+  const issues = [...input.issues].sort((left, right) => compareIssueKeys(left.key, right.key));
   const graph = buildGraph(issues);
   const today = input.scope.asOf;
   const rows = issues.map((issue) => rowOf(graph, issue, today));
   const open = issues.filter((issue) => issue.category !== "done");
-  const epics = [...graph.containers].sort(compareJiraKeys).map((key) => containerOf(graph, key));
+  const epics = [...graph.containers].sort(compareIssueKeys).map((key) => containerOf(graph, key));
   return withDigest({
     generatedAt: input.now.toISOString(),
     scope: input.scope,

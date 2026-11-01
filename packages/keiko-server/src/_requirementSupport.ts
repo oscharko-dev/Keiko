@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import type { ChatLocalKnowledgeScope } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { JiraReport, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import { openKnowledgeStore, resolveKnowledgeStorePath } from "@oscharko-dev/keiko-local-knowledge";
 import { seedCapsuleWithVectors } from "@oscharko-dev/keiko-local-knowledge/testing";
 
@@ -194,4 +195,108 @@ export async function podFixture(
       rmSync(runtimeDir, { recursive: true, force: true });
     },
   };
+}
+
+/** A Jira issue as a finished report keeps it: its key and the labels it carries. */
+export interface ReportedIssue {
+  readonly key: string;
+  readonly labels: readonly string[];
+}
+
+function rowsOf(issues: readonly ReportedIssue[]): JiraReport["rows"] {
+  return issues.map((issue) => ({
+    issue: {
+      key: issue.key,
+      typeName: "Epic",
+      subtask: false,
+      summary: "",
+      statusName: "Open",
+      category: "new",
+      parentKey: undefined,
+      linkedKeys: [],
+      assigned: false,
+      dueDate: undefined,
+      estimate: undefined,
+      epicMarker: true,
+      deviations: [],
+      requirementIds: [],
+      labels: issue.labels,
+    },
+    classification: "container",
+    containerKeys: [],
+    overdue: false,
+  }));
+}
+
+function progressOf(count: number): JiraReport["progress"] {
+  return {
+    project: {
+      total: count,
+      new: count,
+      indeterminate: 0,
+      done: 0,
+      noCategory: 0,
+      donePercent: 0,
+      estimate: { total: 0, done: 0, remaining: 0, unestimated: count },
+    },
+    byType: [],
+    byStatus: [],
+    unassigned: count,
+    overdue: 0,
+  };
+}
+
+function reportOf(issues: readonly ReportedIssue[], complete: boolean): JiraReport {
+  return {
+    digest: "d".repeat(64),
+    generatedAt: "2026-11-01T12:00:00.000Z",
+    scope: {
+      projectKey: "REQ",
+      jql: "",
+      estimateUnit: "seconds",
+      asOf: "2026-11-01",
+      timeZone: "UTC",
+    },
+    completeness: {
+      complete,
+      ...(complete ? {} : { reason: "read-failed" as const }),
+      issuesRead: issues.length,
+      issuesTotal: complete ? issues.length : issues.length + 5,
+      pageCount: 1,
+    },
+    hierarchy: { discovery: "complete", fieldCount: 1 },
+    progress: progressOf(issues.length),
+    epics: [],
+    compliance: {
+      requiredFieldRules: "not-requested",
+      checker: "none",
+      issuesChecked: 0,
+      issuesWithDeviations: 0,
+      deviationCount: 0,
+      byRule: [],
+      deviations: [],
+    },
+    coverage: { uncoveredEpics: [], orphans: [], requirements: undefined },
+    rows: rowsOf(issues),
+  };
+}
+
+/** Stores a report of the given issues as the tool leaves it once it has read the whole scope. */
+export function storeFinishedReport(
+  store: JiraReportStore,
+  owner: string,
+  issues: readonly ReportedIssue[],
+  complete = true,
+): string {
+  const session = store.start(owner, {
+    projectKey: "REQ",
+    jql: undefined,
+    estimateFieldId: undefined,
+    asOf: undefined,
+    parentFieldIds: [],
+    requirementIds: [],
+  });
+  session.report = reportOf(issues, complete);
+  session.phase = "finished";
+  return session.id;
 }

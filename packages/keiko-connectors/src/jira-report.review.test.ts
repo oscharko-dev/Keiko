@@ -154,6 +154,7 @@ describe("the memory budget is real (review 6)", () => {
         epicMarker: false,
         deviations: [],
         requirementIds: [],
+        labels: [],
       }),
     ).toBeGreaterThanOrEqual(600);
     expect(JIRA_REPORT_SESSION_MAX_BYTES).toBeLessThanOrEqual(256 * 1024 * 1024);

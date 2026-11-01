@@ -27,6 +27,8 @@ export interface JiraReportFieldPlan {
 const RULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*/gu;
 const SUMMARY_MAX = 255;
+export const JIRA_REPORT_LABELS_MAX = 64;
+const LABEL_CHARS_MAX = 255;
 const CATEGORIES: ReadonlySet<string> = new Set(JIRA_REPORT_STATUS_CATEGORIES);
 
 function reference(value: unknown): Record<string, unknown> | undefined {
@@ -130,13 +132,21 @@ function trimTrailingSeparators(token: string): string {
   while (end > 0 && ".-_".includes(token.charAt(end - 1))) end -= 1;
   return token.slice(0, end);
 }
+function labelsOf(fields: Record<string, unknown>): readonly string[] {
+  const labels = asArray(fields.labels)?.filter(
+    (item): item is string => typeof item === "string" && item.length > 0,
+  );
+  return (labels ?? [])
+    .slice(0, JIRA_REPORT_LABELS_MAX)
+    .map((label) => label.slice(0, LABEL_CHARS_MAX));
+}
 function referencedRequirements(
   summary: string,
+  labels: readonly string[],
   fields: Record<string, unknown>,
   plan: JiraReportFieldPlan,
 ): readonly string[] {
   if (plan.requirementIds.size === 0) return [];
-  const labels = asArray(fields.labels)?.filter((item) => typeof item === "string") ?? [];
   const description = typeof fields.description === "string" ? fields.description : "";
   const found = new Set<string>();
   for (const text of [summary, ...labels, description]) {
@@ -212,6 +222,7 @@ export function parseJiraReportIssue(
   const statusCategory = category(status);
   const summary = stringOf(fields.summary, SUMMARY_MAX) ?? "";
   const facts = checkerFacts(key, fields, plan, { typeName, typeId, category: statusCategory });
+  const labels = labelsOf(fields);
   return {
     key,
     typeName,
@@ -229,6 +240,7 @@ export function parseJiraReportIssue(
       ...requiredDeviations(fields, typeId, plan),
       ...checkerDeviations(facts, plan),
     ]),
-    requirementIds: referencedRequirements(summary, fields, plan),
+    requirementIds: referencedRequirements(summary, labels, fields, plan),
+    labels,
   };
 }

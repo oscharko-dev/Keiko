@@ -14,7 +14,7 @@ import {
 import { correlationIdOrUnknown } from "./correlation.js";
 import { getServerLogger } from "./observability/index.js";
 
-export type RequirementReadView = "units" | "documents" | "change-queries";
+export type RequirementReadView = "units" | "documents" | "change-queries" | "changes";
 export type RequirementReadDisposition = "served" | "refused" | "cursor-stale" | "unavailable";
 
 export interface RequirementReadActivity {
@@ -30,6 +30,19 @@ export interface RequirementReadActivity {
   readonly unitsOmitted: number;
   readonly resultBytes: number;
   readonly hasNextPage: boolean;
+  /** The `changes` view only: the counts of the comparison, or why it was refused. */
+  readonly changes?: RequirementChangesActivity;
+}
+
+export interface RequirementChangesActivity {
+  readonly refusal?: "report-required" | "report-not-found";
+  readonly changedCount?: number;
+  readonly removedCount?: number;
+  readonly untracedCount?: number;
+  readonly unchangedCount?: number;
+  readonly affectedIssueCount?: number;
+  readonly baselineIssueCount?: number;
+  readonly baselineComplete?: boolean;
 }
 
 const COUNT = { type: "integer", dataClass: "count", required: true } as const;
@@ -46,7 +59,7 @@ const REQUIREMENTS_READ_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["units", "documents", "change-queries"],
+      values: ["units", "documents", "change-queries", "changes"],
     },
     disposition: {
       type: "string",
@@ -64,11 +77,26 @@ const REQUIREMENTS_READ_OPERATION = defineActivityLogOperation({
     unitsOmitted: COUNT,
     resultBytes: COUNT,
     hasNextPage: { type: "boolean", dataClass: "closed-enum", required: true },
+    refusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["report-required", "report-not-found"],
+    },
+    changedCount: { ...COUNT, required: false },
+    removedCount: { ...COUNT, required: false },
+    untracedCount: { ...COUNT, required: false },
+    unchangedCount: { ...COUNT, required: false },
+    affectedIssueCount: { ...COUNT, required: false },
+    baselineIssueCount: { ...COUNT, required: false },
+    baselineComplete: { type: "boolean", dataClass: "closed-enum", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   diagnosticWhen: [
     { field: "disposition", values: ["unavailable", "cursor-stale"] },
+    { field: "refusal", values: ["report-required", "report-not-found"] },
+    { field: "baselineComplete", values: [false] },
     { field: "unitsOmitted", positive: true },
     { field: "documentsOmitted", positive: true },
   ],
@@ -84,10 +112,11 @@ export function logRequirementRead(
   correlationId: string | undefined,
   activity: RequirementReadActivity,
 ): void {
+  const { changes, ...read } = activity;
   const event = activityLogEvent(
     REQUIREMENTS_READ_OPERATION,
     { correlationId: correlationIdOrUnknown(correlationId) },
-    { ...activity, completeness: "complete", loss: "none" },
+    { ...read, ...changes, completeness: "complete", loss: "none" },
   );
   const logger = getServerLogger();
   if (activity.disposition === "unavailable") logger.warn(event);

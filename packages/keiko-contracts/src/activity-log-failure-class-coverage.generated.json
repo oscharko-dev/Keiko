@@ -39799,6 +39799,30 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "affectedIssueCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "baselineComplete",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "baselineIssueCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "changedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "cursorUsed",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -39847,6 +39871,18 @@
               "required": true
             },
             {
+              "name": "refusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "removedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "resultBytes",
               "type": "integer",
               "dataClass": "count",
@@ -39859,10 +39895,22 @@
               "required": true
             },
             {
+              "name": "unchangedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "unitsOmitted",
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "untracedCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "view",

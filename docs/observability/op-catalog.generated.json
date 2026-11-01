@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "02c162c4c5138555e69ae462ec4ec2b768655df4187fb6a564b419624da33a74",
+    "catalogDigest": "bdb853e1addad74889c4d0dc1f2a6024e6dec9cbaa59647e420d540dd0fb36cf",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31380,8 +31380,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.requirement-trace.applied.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:113",
-        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:154"]
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:142",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:183"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31405,7 +31405,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["units", "documents", "change-queries"]
+            "values": ["units", "documents", "change-queries", "changes"]
           },
           "disposition": {
             "type": "string",
@@ -31462,12 +31462,61 @@
             "type": "boolean",
             "dataClass": "closed-enum",
             "required": true
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["report-required", "report-not-found"]
+          },
+          "changedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "removedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "untracedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unchangedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "affectedIssueCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "baselineIssueCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "baselineComplete": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
           }
         },
         "diagnosticWhen": [
           {
             "field": "disposition",
             "values": ["unavailable", "cursor-stale"]
+          },
+          {
+            "field": "refusal",
+            "values": ["report-required", "report-not-found"]
+          },
+          {
+            "field": "baselineComplete",
+            "values": [false]
           },
           {
             "field": "unitsOmitted",
@@ -31484,8 +31533,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.requirements.read.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:37",
-        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:87"]
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:50",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:116"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -95510,6 +95559,30 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "affectedIssueCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "baselineComplete",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "baselineIssueCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "changedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "cursorUsed",
                   "type": "boolean",
                   "dataClass": "closed-enum",
@@ -95558,6 +95631,18 @@
                   "required": true
                 },
                 {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "removedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "resultBytes",
                   "type": "integer",
                   "dataClass": "count",
@@ -95570,10 +95655,22 @@
                   "required": true
                 },
                 {
+                  "name": "unchangedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "unitsOmitted",
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "untracedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "view",
@@ -109442,20 +109539,20 @@
     {
       "op": "knowledge.requirement-trace.applied",
       "category": "search",
-      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:116",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:145",
       "package": "keiko-server"
     },
     {
       "op": "knowledge.requirements-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirementsTool.ts:395",
+      "site": "packages/keiko-server/src/requirementsTool.ts:443",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "knowledge.requirements.read",
       "category": "search",
-      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:40",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:53",
       "package": "keiko-server"
     },
     {

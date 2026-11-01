@@ -95,6 +95,15 @@ export type {
   ResolvedRequirementReference,
 } from "./domain/requirementTrace.js";
 
+export { compareRequirementsWithTrace } from "./domain/requirementChanges.js";
+export type {
+  ComparableRequirement,
+  RequirementChange,
+  RequirementChangeStatus,
+  RequirementChanges,
+  RequirementTracedIssue,
+} from "./domain/requirementChanges.js";
+
 export { analyzeRequirementQuality } from "./domain/requirementQuality.js";
 export type {
   AnalyzeRequirementQualityInput,

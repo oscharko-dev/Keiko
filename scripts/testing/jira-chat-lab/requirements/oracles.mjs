@@ -224,17 +224,28 @@ export function gradeCriterionTestCases(answer, item) {
 }
 
 /**
- * S14: the answer names exactly the changed, removed and added requirements of the new version
- * (`GEÄNDERT:`, `ENTFERNT:`, `NEU:`) and exactly the issues that trace the changed or removed ones
- * (`BETROFFENE VORGÄNGE:`).
+ * S14: the answer names exactly the changed (`GEÄNDERT:`), removed (`ENTFERNT:`) and untraced
+ * (`NEU:`) requirements and exactly the issues that trace a changed or removed one
+ * (`BETROFFENE VORGÄNGE:`). `truth` is `changeImpactTruth(...)` (what Jira holds), `structured`
+ * the change set of the turn's `knowledge.requirements` result: a line is right only when the
+ * answer and the tool both say what Jira holds. The corpus's added requirements are untraced by
+ * construction and must be among the `NEU` ones.
  */
-export function gradeChangeImpact(answer, change, affectedKeys) {
-  const keys = new Set(
-    lineLabelled(answer, "BETROFFENE VORG[ÄA]NGE")?.match(/[A-Z][A-Z0-9]+-\d+/g),
-  );
-  const changed = sameSet(new Set(change.changed), listedAfter(answer, "GE[ÄA]NDERT"));
-  const removed = sameSet(new Set(change.removed), listedAfter(answer, "ENTFERNT"));
-  const added = sameSet(new Set(change.added), listedAfter(answer, "NEU"));
-  const affected = sameSet(new Set(affectedKeys), keys);
-  return { changed, removed, added, affected, ok: changed && removed && added && affected };
+export function gradeChangeImpact(answer, truth, structured) {
+  const said = {
+    changed: listedAfter(answer, "GE[ÄA]NDERT"),
+    removed: listedAfter(answer, "ENTFERNT"),
+    untraced: listedAfter(answer, "NEU"),
+    affected: new Set(lineLabelled(answer, "BETROFFENE VORG[ÄA]NGE")?.match(/[A-Z][A-Z0-9]+-\d+/g)),
+  };
+  const agrees = (name) =>
+    sameSet(truth[name], said[name]) && sameSet(truth[name], structured[name]);
+  const added = agrees("untraced") && [...truth.added].every((id) => truth.untraced.has(id));
+  const grade = {
+    changed: agrees("changed"),
+    removed: agrees("removed"),
+    added,
+    affected: agrees("affected"),
+  };
+  return { ...grade, ok: truth.traceable && Object.values(grade).every(Boolean) };
 }

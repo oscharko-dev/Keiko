@@ -32,6 +32,8 @@ export interface JiraReportIssue {
   readonly deviations: readonly JiraReportDeviation[];
   /** Declared requirement ids this issue names in its summary, labels or description. */
   readonly requirementIds: readonly string[];
+  /** The issue's labels, bounded; the trace a write left on the issue is read back from them. */
+  readonly labels: readonly string[];
 }
 
 /** What a template checker sees: derived facts plus the raw values of the fields it asked for. */

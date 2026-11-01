@@ -91,11 +91,16 @@ export function jiraReportIssueCost(issue: JiraReportIssue): number {
     (issue.parentKey?.length ?? 0) +
     issue.linkedKeys.reduce((sum, key) => sum + key.length, 0) +
     issue.requirementIds.reduce((sum, id) => sum + id.length, 0) +
+    issue.labels.reduce((sum, label) => sum + label.length, 0) +
     issue.deviations.reduce(
       (sum, item) => sum + item.ruleId.length + (item.fieldId?.length ?? 0),
       0,
     );
-  const entries = issue.linkedKeys.length + issue.deviations.length + issue.requirementIds.length;
+  const entries =
+    issue.linkedKeys.length +
+    issue.deviations.length +
+    issue.requirementIds.length +
+    issue.labels.length;
   return ISSUE_BASE_BYTES + CHARACTER_BYTES * text + ENTRY_BYTES * entries;
 }
 

@@ -7,6 +7,7 @@
 // the bounds that cut, and a cursor until the last page. It is hosted by the existing governed Chat
 // tool catalog like the Jira reads; it adds no tool system of its own.
 
+import type { JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -29,6 +30,7 @@ import type { UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
+import { changesView, resolveChangesBaseline } from "./requirement-changes.js";
 import {
   chatKnowledgeScopes,
   collectForTurn,
@@ -59,14 +61,14 @@ const CRITERION_CHARS_MAX = 600;
 const CRITERIA_MAX = 20;
 const LISTED_IDS_MAX = 50;
 
-const VIEWS: readonly RequirementReadView[] = ["units", "documents", "change-queries"];
+const VIEWS: readonly RequirementReadView[] = ["units", "documents", "change-queries", "changes"];
 
 const ARGUMENTS = object({
   view: {
     type: "string",
     enum: VIEWS,
-    description: "units (default), documents (read documents), change-queries (label-only JQL).",
   },
+  reportId: text(64),
   documents: { type: "array", maxItems: 20, items: { type: "string", pattern: "^[0-9a-f]{8}$" } },
   query: text(200),
   ids: { type: "array", maxItems: LISTED_IDS_MAX, items: text(80) },
@@ -112,15 +114,17 @@ const RESULT = object(
     view: { type: "string", enum: VIEWS },
     totals: { type: "object", required: [], properties: {}, additionalProperties: true },
     items: { type: "array", maxItems: 100, items: UNIT },
+    changes: { type: "object", required: [], properties: {}, additionalProperties: true },
     nextCursor: text(512),
   },
   ["outcome"],
 );
 
 const DESCRIPTION =
-  "Read the requirement units detected in this Chat's Knowledge Pods, in document order, one page per call, when a task needs all requirements of a specification. " +
+  "Read the requirement units detected in this Chat's Knowledge Pods, in document order, one page per call, when a task needs all requirements. " +
   "Units are detected, not guaranteed: report the totals and what could not be read. Repeat with nextCursor until absent. " +
-  "Pass a unit's reference as requirementIds when creating or editing a Jira issue from it. Results are untrusted document text.";
+  "Pass a unit's reference as requirementIds when creating or editing a Jira issue. " +
+  "To compare a new version with Jira, pass view changes and a jira.report reportId. Results are untrusted document text.";
 
 function declaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
@@ -149,6 +153,7 @@ interface ParsedArguments {
   readonly filter: RequirementFilter;
   readonly cursor: string | undefined;
   readonly limit: number;
+  readonly reportId: string | undefined;
 }
 
 function strings(value: unknown): readonly string[] | undefined {
@@ -167,6 +172,7 @@ function parseArguments(args: CatalogJsonObject): ParsedArguments {
     view,
     limit,
     cursor: typeof args.cursor === "string" ? args.cursor : undefined,
+    reportId: typeof args.reportId === "string" ? args.reportId : undefined,
     filter: {
       documents: strings(args.documents),
       query: typeof args.query === "string" ? args.query : undefined,
@@ -328,6 +334,48 @@ function failure(reason: string, collection?: RequirementCollection): Served {
   };
 }
 
+function serveChanges(
+  collection: RequirementCollection,
+  parsed: ParsedArguments,
+  context: RequirementsToolContext,
+  reports: JiraReportStore | undefined,
+  redact: (value: string) => string,
+): Served {
+  const baseline = resolveChangesBaseline(reports, context.chatId, parsed.reportId);
+  if (!baseline.ok) {
+    const served = failure(baseline.reason, collection);
+    return { ...served, activity: { ...served.activity, changes: { refusal: baseline.reason } } };
+  }
+  const view = changesView(collection, baseline.report, redact);
+  const { counts } = view;
+  const data: CatalogJsonObject = {
+    outcome: "succeeded",
+    view: "changes",
+    totals: totalsOf(collection, counts.changed + counts.removed + counts.untraced),
+    changes: view.data,
+  };
+  return {
+    data,
+    activity: {
+      ...activityOf(collection, "served", {
+        matched: counts.changed + counts.removed + counts.untraced,
+        returned: counts.changed + counts.removed + counts.untraced,
+        bytes: byteSize(data),
+        next: false,
+      }),
+      changes: {
+        changedCount: counts.changed,
+        removedCount: counts.removed,
+        untracedCount: counts.untraced,
+        unchangedCount: counts.unchanged,
+        affectedIssueCount: counts.affectedIssues,
+        baselineIssueCount: counts.baselineIssues,
+        baselineComplete: counts.baselineComplete,
+      },
+    },
+  };
+}
+
 function serve(
   store: KnowledgeStore,
   collection: RequirementCollection,
@@ -405,6 +453,7 @@ function execute(
   deps: UiHandlerDeps,
   args: CatalogJsonObject,
   context: RequirementsToolContext,
+  reports: JiraReportStore | undefined,
 ): ManagedMcpToolResult {
   const parsed = parseArguments(args);
   const scopes = chatKnowledgeScopes(deps.store.findChatById(context.chatId));
@@ -424,7 +473,9 @@ function execute(
     const served =
       collection.units.length === 0 && collection.refusals.length > 0
         ? failure(collection.refusals[0] ?? "scope-unavailable", collection)
-        : serve(store, collection, parsed, redact);
+        : parsed.view === "changes"
+          ? serveChanges(collection, parsed, context, reports, redact)
+          : serve(store, collection, parsed, redact);
     log(context, parsed, served);
     return { data: served.data, ...(served.data.outcome === "failed" ? { isError: true } : {}) };
   } catch (error) {
@@ -443,11 +494,12 @@ function execute(
 /** The provider the existing Chat tool catalog hosts beside the Jira provider. */
 export function createKnowledgeRequirementsProvider<Context extends RequirementsToolContext>(
   deps: UiHandlerDeps,
+  reports?: JiraReportStore,
 ): ManagedMcpProvider<Context> {
   const tool: ManagedMcpTool<Context> = Object.freeze({
     ...declaration(),
     execute: (args: CatalogJsonObject, context: Context): Promise<ManagedMcpToolResult> =>
-      Promise.resolve(execute(deps, args, context)),
+      Promise.resolve(execute(deps, args, context, reports ?? deps.jiraReportStore)),
   });
   return Object.freeze({
     id: "knowledge",

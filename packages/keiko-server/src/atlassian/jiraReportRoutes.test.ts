@@ -81,6 +81,7 @@ function seeded(): JiraReportStore {
           epicMarker: false,
           deviations: [],
           requirementIds: [],
+          labels: [],
         },
         classification: "orphan",
         containerKeys: [],

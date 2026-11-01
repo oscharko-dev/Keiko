@@ -30087,7 +30087,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["units", "documents", "change-queries"],
+        values: ["units", "documents", "change-queries", "changes"],
       },
       disposition: {
         type: "string",
@@ -30145,6 +30145,47 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      refusal: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["report-required", "report-not-found"],
+      },
+      changedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      removedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      untracedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      unchangedCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      affectedIssueCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      baselineIssueCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      baselineComplete: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -30156,6 +30197,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       {
         field: "disposition",
         values: ["unavailable", "cursor-stale"],
+      },
+      {
+        field: "refusal",
+        values: ["report-required", "report-not-found"],
+      },
+      {
+        field: "baselineComplete",
+        values: [false],
       },
       {
         field: "unitsOmitted",

@@ -17,6 +17,7 @@
 // pending, before it is decided; approvals.records lists { approval, call, observed } per approval.
 // A check names the catalog obligations it verifies in `covers`; the scorecard credits them only
 // when the check is green, so a check that covers part of a scenario never turns it green.
+import { changeImpactTruth, structuredChangeSet } from "./change-impact.mjs";
 import { STRUCTURE_RULES, buildCorpus, corpusChange } from "./corpus.mjs";
 import {
   gradeCoverageMatrix,
@@ -472,17 +473,28 @@ export const JOURNEYS = {
     await ctx.replaceSpecification(2);
     const turn = await ctx.turn(
       chat,
-      "Das Lastenheft liegt jetzt in einer neuen Version vor. Vergleiche es mit den bereits angelegten Epics im Jira-Projekt REQ. Antworte in genau vier Zeilen: `GEÄNDERT:` mit den IDs der geänderten Anforderungen, `ENTFERNT:` mit den IDs der entfernten, `NEU:` mit den IDs der neuen und `BETROFFENE VORGÄNGE:` mit den Schlüsseln der Epics, die geänderte oder entfernte Anforderungen nachverfolgen.",
+      "Das Lastenheft liegt jetzt in einer neuen Version vor. Vergleiche es mit den bereits angelegten Epics im Jira-Projekt REQ. Antworte in genau vier Zeilen: `GEÄNDERT:` mit den IDs der geänderten Anforderungen, `ENTFERNT:` mit den IDs der entfernten, `NEU:` mit den IDs der neuen, von keinem Epic nachverfolgten Anforderungen und `BETROFFENE VORGÄNGE:` mit den Schlüsseln der Epics, die geänderte oder entfernte Anforderungen nachverfolgen.",
     );
-    const grade = gradeChangeImpact(
-      turn.answer,
+    // Jira, not the first turn, is the truth: any journey's epic that traces a requirement counts.
+    const truth = changeImpactTruth(
+      await ctx.search(query, "summary,labels"),
       change,
-      created.map((issue) => issue.key),
+      buildCorpus(2).truth.map((item) => item.id),
     );
+    const structured = structuredChangeSet(turn.toolExchanges);
+    if (structured === undefined) {
+      return result(
+        "unverified",
+        turn,
+        "no complete knowledge.requirements changes result in the turn; nothing is credited",
+        [],
+      );
+    }
+    const grade = gradeChangeImpact(turn.answer, truth, structured);
     return result(
       !first.failure && created.length === traced.length && grade.ok ? "green" : "red",
       turn,
-      `${created.length}/${traced.length} epics created beforehand; changed ${grade.changed}, removed ${grade.removed}, added ${grade.added}, affected issues ${grade.affected}`,
+      `${created.length}/${traced.length} epics created beforehand, baseline traceable ${truth.traceable}; changed ${grade.changed}, removed ${grade.removed}, untraced (NEU) ${grade.added}, affected issues ${grade.affected}`,
       ["changes-detected", "affected-issues"],
     );
   },

@@ -429,6 +429,18 @@ describe("requirement coverage", () => {
   });
 });
 
+describe("labels of a report row (#4179)", () => {
+  it("keeps the labels of each issue so the trace a write left on it can be read back", async () => {
+    const h = harness({ issues: syntheticProject(60) });
+    const result = await h.run({ projectKey: "REP" });
+    const rows = h.session(idOf(result))?.rows ?? [];
+    const labelsOf = (key: string): readonly string[] | undefined =>
+      rows.find((row) => row.issue.key === key)?.issue.labels;
+    expect(labelsOf("REP-45")).toEqual(["REQ-002"]);
+    expect(labelsOf("REP-2")).toEqual([]);
+  });
+});
+
 describe("arguments", () => {
   it.each([
     [{}],

@@ -315,7 +315,7 @@ function initializeCatalog(
         mutationExecutor(deps),
         reportTool(deps, store),
       ),
-      createKnowledgeRequirementsProvider(deps),
+      createKnowledgeRequirementsProvider(deps, store),
     ],
     routes: jiraChatCatalogRoutes(),
     profile: { id: "jira-chat", version: 1 },

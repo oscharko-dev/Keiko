@@ -3,6 +3,12 @@
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { createJiraReportStore, type JiraReportStore } from "@oscharko-dev/keiko-connectors";
+import {
+  REQUIREMENT_REVISION_LABEL_PREFIX,
+  documentLabel,
+  requirementLabel,
+} from "@oscharko-dev/keiko-quality-intelligence";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
@@ -14,7 +20,13 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
-import { podFixture, specification, type PodFixture } from "./_requirementSupport.js";
+import {
+  podFixture,
+  specification,
+  storeFinishedReport,
+  type PodFixture,
+  type ReportedIssue,
+} from "./_requirementSupport.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetRequirementTurnCache } from "./requirement-inventory.js";
@@ -26,9 +38,11 @@ import {
 } from "./requirementsTool.js";
 
 let sink: BufferedServerLogSink;
+let reports: JiraReportStore;
 const fixtures: PodFixture[] = [];
 
 beforeEach(() => {
+  reports = createJiraReportStore();
   sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));
   resetRequirementTurnCache();
@@ -54,10 +68,14 @@ interface Page {
   readonly totals?: Record<string, unknown>;
   readonly items?: readonly Record<string, unknown>[];
   readonly nextCursor?: string;
+  readonly changes?: Record<string, unknown>;
 }
 
 async function call(f: PodFixture, args: CatalogJsonObject, turn = "turn-1"): Promise<Page> {
-  const tool = createKnowledgeRequirementsProvider<RequirementsToolContext>(f.deps).tools()[0];
+  const tool = createKnowledgeRequirementsProvider<RequirementsToolContext>(
+    f.deps,
+    reports,
+  ).tools()[0];
   if (tool === undefined) throw new Error("expected the tool");
   const context: RequirementsToolContext = {
     invocationId: "inv-1",
@@ -395,5 +413,144 @@ describe("evidence on the Activity Log (#4179)", () => {
           ).disposition,
       );
     expect(dispositions).toEqual(["refused", "unavailable"]);
+  });
+});
+
+// ─── The change set of a new document version (#4179) ───────────────────────────────────────────
+
+/** The labels a trace of these units leaves on an item: what Jira holds about its source. */
+async function traceLabels(f: PodFixture, ids: readonly string[]): Promise<readonly string[]> {
+  const [page] = await readAll(f, { ids: [...ids] });
+  const units = page?.items ?? [];
+  return [
+    "keiko-requirement",
+    ...new Set(units.map((unit) => documentLabel(String(unit.documentScope)))),
+    ...units.map((unit) => requirementLabel(String(unit.id))),
+    ...units.map((unit) => `${REQUIREMENT_REVISION_LABEL_PREFIX}${String(unit.revisionDigest)}`),
+  ];
+}
+
+function withoutRequirement(text: string, id: string): string {
+  return text.replace(new RegExp(String.raw`### ${id} [\s\S]*?(?=### |$)`, "u"), "");
+}
+
+/** Version 1 has five requirements; version 2 revises LH-002, drops LH-004 and adds LH-006. */
+async function twoVersions(): Promise<{ v1: PodFixture; v2: PodFixture }> {
+  const v1 = await fixture([{ capsuleId: "cap-a", text: specification(5).text }]);
+  const next = withoutRequirement(specification(6, { revise: [2] }).text, "LH-004");
+  const v2 = await fixture([{ capsuleId: "cap-a", text: next }]);
+  return { v1, v2 };
+}
+async function backlogOfVersion1(v1: PodFixture): Promise<readonly ReportedIssue[]> {
+  const ids = ["LH-001", "LH-002", "LH-003", "LH-004"];
+  const issues = await Promise.all(
+    ids.map(async (id, index) => ({
+      key: `REQ-${String(index + 1)}`,
+      labels: await traceLabels(v1, [id]),
+    })),
+  );
+  return [...issues, { key: "REQ-9", labels: ["unrelated"] }];
+}
+
+describe("the change set against the backlog (#4179)", () => {
+  it("names the changed, removed and not yet traced requirements and the items they affect", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1));
+
+    const page = await call(v2, { view: "changes", reportId });
+
+    expect(page).toMatchObject({ outcome: "succeeded", view: "changes" });
+    expect(page.changes).toMatchObject({
+      baseline: { complete: true, tracedIssueCount: 4, unmatchedIssueCount: 0 },
+      counts: { changed: 1, removed: 1, untraced: 2, unchanged: 2 },
+      changed: [{ id: "LH-002", issues: ["REQ-2"] }],
+      removed: [{ id: "LH-004", issues: ["REQ-4"] }],
+      untraced: ["LH-005", "LH-006"],
+      affectedIssues: ["REQ-2", "REQ-4"],
+    });
+    expect(page.nextCursor).toBeUndefined();
+  });
+
+  it("states that a partly read backlog cannot prove a requirement is untraced", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1), false);
+
+    const page = await call(v2, { view: "changes", reportId });
+
+    expect(page.changes).toMatchObject({ baseline: { complete: false, issuesRead: 5 } });
+  });
+
+  it.each([
+    ["no report", undefined, "report-required"],
+    ["an unknown report", "00000000-0000-4000-8000-000000000000", "report-not-found"],
+  ])("refuses %s with a closed reason", async (_name, reportId, reason) => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(3).text }]);
+
+    const page = await call(f, {
+      view: "changes",
+      ...(reportId === undefined ? {} : { reportId }),
+    });
+
+    expect(page).toMatchObject({ outcome: "failed", reason });
+  });
+
+  it("does not hand one Chat the report of another", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(3).text }]);
+    const reportId = storeFinishedReport(reports, "another-chat", []);
+
+    expect(await call(f, { view: "changes", reportId })).toMatchObject({
+      outcome: "failed",
+      reason: "report-not-found",
+    });
+  });
+
+  it("bounds the lists, keeps every count exact and says what was cut", async () => {
+    const f = await fixture([{ capsuleId: "cap-big", text: specification(300).text }]);
+    const reportId = storeFinishedReport(reports, f.chatId, []);
+
+    const page = await call(f, { view: "changes", reportId });
+
+    expect(page.changes).toMatchObject({
+      counts: { changed: 0, removed: 0, untraced: 300, unchanged: 0 },
+      truncated: ["untraced"],
+    });
+    expect((page.changes?.untraced as string[]).length).toBeLessThan(300);
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+      REQUIREMENTS_PAGE_BYTES_MAX + 8192,
+    );
+  });
+
+  it("records the change set as counts and closed words, without identifiers or keys", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1));
+    await call(v2, { view: "changes", reportId });
+    await call(v2, { view: "changes" });
+
+    const lines = sink.events
+      .filter((event) => event.op === "knowledge.requirements.read")
+      .map((event) =>
+        expectActivityLogProof(
+          "knowledge.requirements.read.line",
+          formatActivityLogProofLine(event),
+        ),
+      )
+      .filter((line) => line.view === "changes");
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatchObject({
+      view: "changes",
+      disposition: "served",
+      changedCount: 1,
+      removedCount: 1,
+      untracedCount: 2,
+      unchangedCount: 2,
+      affectedIssueCount: 2,
+      baselineIssueCount: 4,
+      baselineComplete: true,
+    });
+    expect(lines[1]).toMatchObject({ view: "changes", disposition: "refused" });
+    expect(JSON.stringify(lines)).not.toMatch(/REQ-\d|LH-\d/u);
   });
 });

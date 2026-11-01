@@ -894,7 +894,7 @@ keeps the completed answer instead of failing the turn.
   PowerPoint extraction (`requirement-inventory-formats.integration`); PDF line wrapping is only as
   stable as its extracted lines. Scanned documents (OCR) are not read. The result is a set of
   _detected units_, never claimed to be complete: the detector can miss or over-read, and says so.
-- _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit? }`.
+- _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit?, reportId? }`.
   Units are paged in document order under an item bound (25, at most 50) and a byte bound (24,000
   bytes) that fit a 32k-token model; statements, criteria and findings are clipped, never silently
   dropped. Every page states honest totals: detected and matched units, documents scanned,
@@ -924,17 +924,45 @@ keeps the completed answer instead of failing the turn.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
   template that governs `description` or `labels` sees the final values, not the model's draft; the
   pre-approval dry run of a create or edit judges the values as the model wrote them.
-- _Change check._ A new document version is compared with the backlog through the labels alone.
-  `change-queries` returns, per document, label-only JQL batches under the JQL length bound for
-  items whose revision label is outdated (`stale`), the traced set per document (`traced`) and, only
-  where it fits the bound, items whose requirement is gone (`removed`). Edits are proposed as a
-  backlog draft.
+- _Change check._ A new document version is compared with the backlog through the labels alone;
+  no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
+  returns, per document, label-only JQL batches under the JQL length bound for items whose revision
+  label is outdated (`stale`), the traced set per document (`traced`) and, only where it fits the
+  bound, items whose requirement is gone (`removed`). Running those queries and merging them is
+  derivation a local model's output budget does not carry (lab S14: the comparison turn ran out of
+  budget after two inventory reads), so the `changes` view returns the result. The model first reads
+  the backlog with `jira.report` (scope of its choice, under the Chat's own Jira read grant); the
+  call then passes that `reportId` as `{ view: "changes", reportId }`. The tool reads no Jira itself
+  and accepts only a report of the same Chat, so it cannot widen the Chat's authority; a report
+  that is absent or belongs to another Chat is `report-not-found`, a call without one
+  `report-required`. The report row now keeps the issue's labels (bounded: 64 labels of 255
+  characters). `keiko-quality-intelligence` compares them with the current inventory, purely and
+  without a model: per requirement of the current document, `changed` when an item that traces it
+  (document label and requirement label) lacks the current `keiko-rev-*` label (an item naming the
+  requirement without any revision label counts as outdated), `unchanged` when every such item has
+  it, `untraced` when no item of the report traces it; per item requirement label whose document is
+  still among the Pods but whose id that document no longer states, `removed`. An item of a
+  document that is not in the Pods proves nothing and is only counted (`unmatchedIssueCount`). Each
+  requirement of an item that traces several is judged on its own revision label. The result
+  carries `baseline` (report complete, issues read and total, traced and unmatched item counts),
+  exact `counts`, the changed requirements (id, title, outdated item keys), the removed ones (id,
+  item keys), the untraced ids and the `affectedIssues` (every item that traces a changed or
+  removed requirement, Jira-key ordered), each list bounded (60, 60, 200 and 120) with the cut
+  lists named in `truncated`. The honest limits: `untraced` means no item of the compared report
+  traces the requirement, which is a new requirement or one not yet derived; the labels cannot tell
+  them apart, so the tool never calls it "new". A report that is incomplete (`baseline.complete`
+  false) cannot prove a requirement untraced, and the scope of the report is the scope of the
+  comparison. `jira.report` runs on Jira Data Center; on Cloud the `change-queries` view remains.
+  Edits are proposed as a backlog draft.
 - _Quality._ The existing requirement-quality checks run over every unit and add the closed code
   `missing-acceptance-criteria`; the codes reach the tool result and the footer.
 - _Evidence on the log._ `knowledge.requirements.read` records each call (view, closed disposition
   `served`/`refused`/`cursor-stale`/`unavailable`, whether a cursor was used, detected, matched and
   returned counts, documents scanned, not extracted and omitted, units omitted, result bytes, next
-  page); `knowledge.requirement-trace.applied` records, per create, edit or draft, the traced,
+  page; the `changes` view adds the changed, removed, untraced, unchanged and affected-item counts,
+  the traced baseline item count, whether the baseline report was complete, and the closed refusal
+  `report-required` or `report-not-found`, never an identifier or key);
+  `knowledge.requirement-trace.applied` records, per create, edit or draft, the traced,
   refused and problem counts and the labels, footers and dropped labels applied. Counts and closed
   words only.
 - _Limits stated openly._ The tool is available only in a Chat with a Jira binding. The `removed`
