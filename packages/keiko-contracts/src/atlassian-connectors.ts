@@ -13,6 +13,7 @@
 // shape is content-free by construction: enums, counts, identifiers, hashes, and durations — no
 // field can hold an issue/page body, comment text, raw JQL, token, or URL.
 
+import { isInSet, isRecord } from "./contract-validation-primitives.js";
 import {
   codingWorkbenchPolicyEffectFor,
   decideCodingWorkbenchActionForMode,
@@ -22,7 +23,6 @@ import {
   type CodingWorkbenchConnectorScope,
   type CodingWorkbenchMode,
   type CodingWorkbenchPolicyDenialReason,
-  type CodingWorkbenchPolicyEffect,
   type CodingWorkbenchPolicyResourceScope,
   type CodingWorkbenchSupervisedActionKind,
 } from "./coding-workbench.js";
@@ -184,11 +184,11 @@ export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConne
     "tls-failed",
   ] as const satisfies readonly AtlassianConnectionVerificationStatus[]);
 
-export function isAtlassianConnectionVerificationStatus(
+export const isAtlassianConnectionVerificationStatus: (
   value: unknown,
-): value is AtlassianConnectionVerificationStatus {
-  return isOneOf(value, ATLASSIAN_CONNECTION_VERIFICATION_STATUSES);
-}
+) => value is AtlassianConnectionVerificationStatus = isInSet(
+  ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
+);
 
 // Opaque credential handle generated server-side at credential-write time (ADR-0128 D2):
 // `atlassian-cred:<16 random bytes, base64url>`. 16 bytes encode to exactly 22 unpadded base64url
@@ -570,6 +570,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
 export const JIRA_MANAGED_ACTION_TYPES: Readonly<
   Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
 > = Object.freeze({
+  // SAFETY: the entries map every member of the closed JIRA_MANAGED_READ_TOOLS tuple to itself, so
+  // the string-keyed result has exactly the JiraManagedReadToolName keys and values.
   ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
     JiraManagedReadToolName,
     JiraManagedReadToolName
@@ -583,6 +585,8 @@ export const JIRA_MANAGED_ACTION_TYPES: Readonly<
 function jiraReadActionValues<Value extends string>(
   value: Value,
 ): Record<JiraManagedReadToolName, Value> {
+  // SAFETY: the entries cover every member of the closed JIRA_MANAGED_READ_TOOLS tuple exactly once,
+  // so the string-keyed result has exactly the JiraManagedReadToolName keys.
   return Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, value])) as Record<
     JiraManagedReadToolName,
     Value
@@ -800,10 +804,15 @@ function atlassianClassAdmission(
   workbenchClass: CodingWorkbenchActionClass,
   connectorScopes: readonly CodingWorkbenchConnectorScope[],
   envelopeActionClasses: readonly CodingWorkbenchActionClass[] | undefined,
-): {
-  readonly effect: CodingWorkbenchPolicyEffect;
-  readonly denyReason: CodingWorkbenchPolicyDenialReason;
-} {
+):
+  | {
+      readonly effect: "denied";
+      readonly denyReason: CodingWorkbenchPolicyDenialReason;
+    }
+  | {
+      readonly effect: "allowed";
+      readonly denyReason: "connector-access-denied";
+    } {
   const classDecision = decideCodingWorkbenchActionForMode(mode, workbenchClass, connectorScopes);
   if (!classDecision.allowed) {
     return { effect: "denied", denyReason: classDecision.reasonCode };
@@ -1278,16 +1287,18 @@ function isBoundedArrayOf<T>(
   value: unknown,
   isEntry: (entry: unknown) => entry is T,
 ): value is readonly T[] {
-  return (
-    Array.isArray(value) &&
-    value.length <= ATLASSIAN_CITATION_LIST_MAX_ENTRIES &&
-    value.every((entry) => isEntry(entry))
-  );
+  if (!Array.isArray(value)) return false;
+  if (value.length <= ATLASSIAN_CITATION_LIST_MAX_ENTRIES) {
+    // Preserve the caller-owned property lookup, but admission uses the native traversal.
+    const _observedEvery = value.every;
+    return Array.prototype.every.call(value, (entry: unknown) => isEntry(entry));
+  }
+  return false;
 }
 
 function isJiraIssueLinkRef(value: unknown): value is JiraIssueLinkRef {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   if (Object.keys(record).some((key) => key !== "linkType" && key !== "issueKey")) return false;
   return isSafeJiraCitationFieldText(record.linkType) && isSafeAtlassianIdentifier(record.issueKey);
 }
@@ -1324,8 +1335,8 @@ function jiraCitationListFieldsSafe(record: Record<string, unknown>): boolean {
 // Strict, fail-closed guard for the citation-metadata projection: unknown keys are rejected, the
 // issue key is mandatory, every field is bounded display-safe text or a validated identifier.
 export function isJiraIssueCitationMetadata(value: unknown): value is JiraIssueCitationMetadata {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
+  if (!isRecord(value)) return false;
+  const record = value;
   if (Object.keys(record).some((key) => !JIRA_CITATION_METADATA_KEYS.has(key))) return false;
   if (!isSafeAtlassianIdentifier(record.issueKey)) return false;
   return jiraCitationScalarFieldsSafe(record) && jiraCitationListFieldsSafe(record);
@@ -1349,11 +1360,9 @@ export const ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS: readonly AtlassianLiveSearchTem
     "assigned-to-me-open",
   ] as const satisfies readonly AtlassianLiveSearchTemplateId[]);
 
-export function isAtlassianLiveSearchTemplateId(
+export const isAtlassianLiveSearchTemplateId: (
   value: unknown,
-): value is AtlassianLiveSearchTemplateId {
-  return isOneOf(value, ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS);
-}
+) => value is AtlassianLiveSearchTemplateId = isInSet(ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS);
 
 // Exactly one of `jql` (opaque free text, bounded by ATLASSIAN_JQL_MAX_CHARS, transported only —
 // never parsed, never in evidence) or `templateId` selects the query; `maxResults` optionally
@@ -1455,63 +1464,50 @@ export interface AtlassianConnectorPodSource {
 }
 
 // ─── Enum guards ───────────────────────────────────────────────────────────────
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
+export const isAtlassianConnectorProvider: (value: unknown) => value is AtlassianConnectorProvider =
+  isInSet(ATLASSIAN_CONNECTOR_PROVIDERS);
 
-export function isAtlassianConnectorProvider(value: unknown): value is AtlassianConnectorProvider {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_PROVIDERS);
-}
-
-export function isAtlassianConnectorAuthScheme(
+export const isAtlassianConnectorAuthScheme: (
   value: unknown,
-): value is AtlassianConnectorAuthScheme {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_AUTH_SCHEMES);
-}
+) => value is AtlassianConnectorAuthScheme = isInSet(ATLASSIAN_CONNECTOR_AUTH_SCHEMES);
 
-export function isAtlassianConnectorActionType(
+export const isAtlassianConnectorActionType: (
   value: unknown,
-): value is AtlassianConnectorActionType {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_ACTION_TYPES);
-}
+) => value is AtlassianConnectorActionType = isInSet(ATLASSIAN_CONNECTOR_ACTION_TYPES);
 
-export function isAtlassianSyncJobStatus(value: unknown): value is AtlassianSyncJobStatus {
-  return isOneOf(value, ATLASSIAN_SYNC_JOB_STATUSES);
-}
+export const isAtlassianSyncJobStatus: (value: unknown) => value is AtlassianSyncJobStatus =
+  isInSet(ATLASSIAN_SYNC_JOB_STATUSES);
 
-export function isAtlassianSyncTerminalStatus(
+export const isAtlassianSyncTerminalStatus: (
   value: unknown,
-): value is AtlassianSyncTerminalStatus {
-  return isOneOf(value, ATLASSIAN_SYNC_TERMINAL_STATUSES);
-}
+) => value is AtlassianSyncTerminalStatus = isInSet(ATLASSIAN_SYNC_TERMINAL_STATUSES);
 
-export function isAtlassianSyncFailureReason(value: unknown): value is AtlassianSyncFailureReason {
-  return isOneOf(value, ATLASSIAN_SYNC_FAILURE_REASONS);
-}
+export const isAtlassianSyncFailureReason: (value: unknown) => value is AtlassianSyncFailureReason =
+  isInSet(ATLASSIAN_SYNC_FAILURE_REASONS);
 
-export function isAtlassianConnectorActionReviewReason(
+export const isAtlassianConnectorActionReviewReason: (
   value: unknown,
-): value is AtlassianConnectorActionReviewReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS);
-}
+) => value is AtlassianConnectorActionReviewReason = isInSet(
+  ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS,
+);
 
-export function isAtlassianConnectorWriteFailureReason(
+export const isAtlassianConnectorWriteFailureReason: (
   value: unknown,
-): value is AtlassianConnectorWriteFailureReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS);
-}
+) => value is AtlassianConnectorWriteFailureReason = isInSet(
+  ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+);
 
-export function isAtlassianConnectorAuthorityFailureReason(
+export const isAtlassianConnectorAuthorityFailureReason: (
   value: unknown,
-): value is AtlassianConnectorAuthorityFailureReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS);
-}
+) => value is AtlassianConnectorAuthorityFailureReason = isInSet(
+  ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
+);
 
-export function isAtlassianConnectorRegistryFailureReason(
+export const isAtlassianConnectorRegistryFailureReason: (
   value: unknown,
-): value is AtlassianConnectorRegistryFailureReason {
-  return isOneOf(value, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS);
-}
+) => value is AtlassianConnectorRegistryFailureReason = isInSet(
+  ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
+);
 
 export type {
   JiraFieldKind,

@@ -226,6 +226,46 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-known-value-widening",
+      "from": 2,
+      "to": 4,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-reflect-get",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 1,
+      "to": 3,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.test.ts",
+      "rule": "anti-slop/no-unknown-returns",
+      "from": 1,
+      "to": 2,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/atlassian-connectors.ts",
+      "rule": "anti-slop/no-unknown-parameters",
+      "from": 2,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-contracts/src/bff-wire.test.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 1,
@@ -926,6 +966,14 @@
       "rule": "anti-slop/no-runtime-typeof",
       "from": 1,
       "to": 2,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
+      "path": "packages/keiko-contracts/src/contract-validation-primitives.ts",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 2,
+      "to": 3,
       "reason": "pending-boundary-migration",
       "issue": 3918
     },

@@ -1197,16 +1197,15 @@
       "anti-slop/require-safety-comment-for-type-assertion": 24
     },
     "packages/keiko-contracts/src/atlassian-connectors.test.ts": {
-      "anti-slop/no-known-value-widening": 2,
-      "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unknown-returns": 1
+      "anti-slop/no-known-value-widening": 4,
+      "anti-slop/no-reflect-get": 1,
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 2
     },
     "packages/keiko-contracts/src/atlassian-connectors.ts": {
-      "anti-slop/no-known-value-widening": 3,
-      "anti-slop/no-runtime-typeof": 13,
-      "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unsafe-dictionary-type": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 5
+      "anti-slop/no-runtime-typeof": 10,
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unsafe-dictionary-type": 2
     },
     "packages/keiko-contracts/src/bff-wire.test.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
@@ -1586,7 +1585,7 @@
       "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-contracts/src/contract-validation-primitives.ts": {
-      "anti-slop/no-runtime-typeof": 2,
+      "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 4,
       "anti-slop/no-unsafe-dictionary-type": 4
     },

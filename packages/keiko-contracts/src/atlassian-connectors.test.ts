@@ -1321,6 +1321,280 @@ describe("validateAtlassianConnectorPendingApproval — contentPreview wiring (K
   });
 });
 
+describe("Jira citation metadata observes actual list members", () => {
+  const cases = [
+    { field: "labels", valid: "backend", invalid: 42 },
+    { field: "subtaskKeys", valid: "PLAT-3", invalid: "invalid key!" },
+    { field: "linkedIssues", valid: { linkType: "blocks", issueKey: "PLAT-9" }, invalid: {} },
+  ] as const;
+
+  for (const seam of ["source", "public"] as const) {
+    it.each(cases)(`${seam} refuses a forged every hiding malformed $field`, async (testCase) => {
+      const guard =
+        seam === "source"
+          ? isJiraIssueCitationMetadata
+          : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+              .isJiraIssueCitationMetadata;
+      const entries: unknown[] = [testCase.valid, testCase.invalid];
+      Object.defineProperty(entries, "every", { value: (): boolean => true });
+      const input: unknown = { issueKey: "PLAT-2", [testCase.field]: entries };
+      expect(guard(input)).toBe(false);
+    });
+
+    it.each(cases)(
+      `${seam} admits healthy $field despite a false custom every`,
+      async (testCase) => {
+        const guard =
+          seam === "source"
+            ? isJiraIssueCitationMetadata
+            : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+                .isJiraIssueCitationMetadata;
+        const entries: unknown[] = [testCase.valid];
+        Object.defineProperty(entries, "every", { value: (): boolean => false });
+        const input: unknown = { issueKey: "PLAT-2", [testCase.field]: entries };
+        const admitted = guard(input);
+        expect(admitted).toBe(true);
+        if (!admitted) throw new TypeError("healthy metadata admission failed");
+        expect(input[testCase.field]).toBe(entries);
+      },
+    );
+
+    it.each(cases)(
+      `${seam} retains ordinary $field admission and refusal controls`,
+      async (testCase) => {
+        const guard =
+          seam === "source"
+            ? isJiraIssueCitationMetadata
+            : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+                .isJiraIssueCitationMetadata;
+        expect(guard({ issueKey: "PLAT-2", [testCase.field]: [testCase.valid] })).toBe(true);
+        expect(guard({ issueKey: "PLAT-2", [testCase.field]: [testCase.invalid] })).toBe(false);
+      },
+    );
+  }
+});
+
+describe("Jira citation metadata native observation preservation", () => {
+  for (const seam of ["source", "public"] as const) {
+    it.each([Number.NaN, undefined, Number.POSITIVE_INFINITY])(
+      `${seam} retains refusal of unordered or excessive array extent %s`,
+      async (extent) => {
+        const guard =
+          seam === "source"
+            ? isJiraIssueCitationMetadata
+            : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+                .isJiraIssueCitationMetadata;
+        let lengthReads = 0;
+        let everyReads = 0;
+        const labels = new Proxy(["backend"], {
+          get(target, property): unknown {
+            if (property === "length") {
+              lengthReads += 1;
+              return extent;
+            }
+            if (property === "every") everyReads += 1;
+            return Reflect.get(target, property);
+          },
+        });
+        expect(guard({ issueKey: "PLAT-2", labels })).toBe(false);
+        expect(lengthReads).toBe(1);
+        expect(everyReads).toBe(0);
+      },
+    );
+    it(`${seam} retains sparse and inherited numeric member observations`, async () => {
+      const guard =
+        seam === "source"
+          ? isJiraIssueCitationMetadata
+          : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+              .isJiraIssueCitationMetadata;
+      expect(guard({ issueKey: "PLAT-2", labels: Array<unknown>(1) })).toBe(true);
+      const labels: unknown[] = Array<unknown>(1);
+      const prototype = { 0: "backend" };
+      Object.setPrototypeOf(prototype, Array.prototype);
+      Object.setPrototypeOf(labels, prototype);
+      expect(guard({ issueKey: "PLAT-2", labels })).toBe(true);
+    });
+    it(`${seam} preserves first-invalid short circuit`, async () => {
+      const guard =
+        seam === "source"
+          ? isJiraIssueCitationMetadata
+          : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+              .isJiraIssueCitationMetadata;
+      let laterReads = 0;
+      const labels: unknown[] = [42, "backend"];
+      Object.defineProperty(labels, "1", {
+        get: (): string => {
+          laterReads += 1;
+          return "backend";
+        },
+      });
+      expect(guard({ issueKey: "PLAT-2", labels })).toBe(false);
+      expect(laterReads).toBe(0);
+    });
+    it(`${seam} preserves every lookup and its exception`, async () => {
+      const guard =
+        seam === "source"
+          ? isJiraIssueCitationMetadata
+          : (await import("@oscharko-dev/keiko-contracts/runtime/atlassian-connectors"))
+              .isJiraIssueCitationMetadata;
+      let reads = 0;
+      const labels = ["backend"];
+      Object.defineProperty(labels, "every", {
+        get: () => {
+          reads += 1;
+          return Array.prototype.every;
+        },
+      });
+      expect(guard({ issueKey: "PLAT-2", labels })).toBe(true);
+      expect(reads).toBe(1);
+      const throwingLabels = ["backend"];
+      const failure = new TypeError("fixture every lookup refused");
+      Object.defineProperty(throwingLabels, "every", {
+        get: (): never => {
+          throw failure;
+        },
+      });
+      expect(() => guard({ issueKey: "PLAT-2", labels: throwingLabels })).toThrow(failure);
+    });
+  }
+});
+
+import * as atlasEnumSource from "./atlassian-connectors.js";
+import * as atlasEnumPublic from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+
+interface AtlasEnumBindingCase {
+  readonly name: string;
+  readonly catalog: readonly string[];
+  readonly source: (value: unknown) => boolean;
+  readonly public: (value: unknown) => boolean;
+}
+
+const atlasEnumBindingCases: readonly AtlasEnumBindingCase[] = [
+  {
+    name: "isAtlassianConnectionVerificationStatus",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
+    source: atlasEnumSource.isAtlassianConnectionVerificationStatus,
+    public: atlasEnumPublic.isAtlassianConnectionVerificationStatus,
+  },
+  {
+    name: "isAtlassianLiveSearchTemplateId",
+    catalog: atlasEnumSource.ATLASSIAN_LIVE_SEARCH_TEMPLATE_IDS,
+    source: atlasEnumSource.isAtlassianLiveSearchTemplateId,
+    public: atlasEnumPublic.isAtlassianLiveSearchTemplateId,
+  },
+  {
+    name: "isAtlassianConnectorProvider",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_PROVIDERS,
+    source: atlasEnumSource.isAtlassianConnectorProvider,
+    public: atlasEnumPublic.isAtlassianConnectorProvider,
+  },
+  {
+    name: "isAtlassianConnectorAuthScheme",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_AUTH_SCHEMES,
+    source: atlasEnumSource.isAtlassianConnectorAuthScheme,
+    public: atlasEnumPublic.isAtlassianConnectorAuthScheme,
+  },
+  {
+    name: "isAtlassianConnectorActionType",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_ACTION_TYPES,
+    source: atlasEnumSource.isAtlassianConnectorActionType,
+    public: atlasEnumPublic.isAtlassianConnectorActionType,
+  },
+  {
+    name: "isAtlassianSyncJobStatus",
+    catalog: atlasEnumSource.ATLASSIAN_SYNC_JOB_STATUSES,
+    source: atlasEnumSource.isAtlassianSyncJobStatus,
+    public: atlasEnumPublic.isAtlassianSyncJobStatus,
+  },
+  {
+    name: "isAtlassianSyncTerminalStatus",
+    catalog: atlasEnumSource.ATLASSIAN_SYNC_TERMINAL_STATUSES,
+    source: atlasEnumSource.isAtlassianSyncTerminalStatus,
+    public: atlasEnumPublic.isAtlassianSyncTerminalStatus,
+  },
+  {
+    name: "isAtlassianSyncFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_SYNC_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianSyncFailureReason,
+    public: atlasEnumPublic.isAtlassianSyncFailureReason,
+  },
+  {
+    name: "isAtlassianConnectorActionReviewReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_ACTION_REVIEW_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorActionReviewReason,
+    public: atlasEnumPublic.isAtlassianConnectorActionReviewReason,
+  },
+  {
+    name: "isAtlassianConnectorWriteFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorWriteFailureReason,
+    public: atlasEnumPublic.isAtlassianConnectorWriteFailureReason,
+  },
+  {
+    name: "isAtlassianConnectorAuthorityFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorAuthorityFailureReason,
+    public: atlasEnumPublic.isAtlassianConnectorAuthorityFailureReason,
+  },
+  {
+    name: "isAtlassianConnectorRegistryFailureReason",
+    catalog: atlasEnumSource.ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
+    source: atlasEnumSource.isAtlassianConnectorRegistryFailureReason,
+    public: atlasEnumPublic.isAtlassianConnectorRegistryFailureReason,
+  },
+];
+
+const atlasEnumBindingSurfaces: readonly ("source" | "public")[] = ["source", "public"];
+
+for (const surface of atlasEnumBindingSurfaces) {
+  for (const entry of atlasEnumBindingCases) {
+    it(`${surface} ${entry.name} retains its closed catalog without coercion (#3918)`, () => {
+      const guard = entry[surface];
+      for (const member of entry.catalog) expect(guard(member)).toBe(true);
+      expect(guard("foreign-atlassian-catalog-entry")).toBe(false);
+      expect(guard("")).toBe(false);
+      let coercions = 0;
+      const hostile = {
+        [Symbol.toPrimitive](): never {
+          coercions += 1;
+          throw new TypeError("fixture coercion must not run");
+        },
+        toString(): never {
+          coercions += 1;
+          throw new TypeError("fixture string conversion must not run");
+        },
+        valueOf(): never {
+          coercions += 1;
+          throw new TypeError("fixture value conversion must not run");
+        },
+      };
+      const boxedString: unknown = Object("jira");
+      const nonStrings: readonly unknown[] = [
+        undefined,
+        null,
+        false,
+        true,
+        0,
+        1,
+        Symbol("fixture"),
+        [],
+        {},
+        boxedString,
+        hostile,
+      ];
+      for (const value of nonStrings) expect(guard(value)).toBe(false);
+      expect(coercions).toBe(0);
+    });
+  }
+  it(`${surface} keeps running jobs outside the terminal-status domain (#3918)`, () => {
+    const api = surface === "source" ? atlasEnumSource : atlasEnumPublic;
+    expect(api.isAtlassianSyncJobStatus("running")).toBe(true);
+    expect(api.isAtlassianSyncTerminalStatus("running")).toBe(false);
+    expect(api.isAtlassianSyncJobStatus("succeeded")).toBe(true);
+    expect(api.isAtlassianSyncTerminalStatus("succeeded")).toBe(true);
+  });
+}
+
 it.each([
   "jira.projects",
   "jira.issue-types",

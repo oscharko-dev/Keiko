@@ -30,6 +30,11 @@ export function isPhysicalArrayOf(
   return true;
 }
 
+export function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
+  const values: readonly string[] = set;
+  return (v: unknown): v is T => typeof v === "string" && values.includes(v);
+}
+
 export function appendValidationIssues(errors: string[], ...issues: readonly string[]): boolean {
   errors.push(...issues);
   return issues.length === 0;
