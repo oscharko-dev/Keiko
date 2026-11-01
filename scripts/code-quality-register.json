@@ -1553,8 +1553,8 @@
       "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-contracts/src/contract-validation-primitives.ts": {
-      "anti-slop/no-runtime-typeof": 3,
-      "anti-slop/no-unknown-parameters": 5,
+      "anti-slop/no-runtime-typeof": 2,
+      "anti-slop/no-unknown-parameters": 4,
       "anti-slop/no-unsafe-dictionary-type": 4
     },
     "packages/keiko-contracts/src/dap-debug.test.ts": {
