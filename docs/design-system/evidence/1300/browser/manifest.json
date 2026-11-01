@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "e44892b181d33bbadda6741a7a4b9fc22eeb8d7a48eba24c5c5facc7ce355979"
+      "sha256": "650814a5092b600a4a202ae471fdef40dfc9b0b1e316e57f701e5054d8b2e87c"
     },
     {
       "path": "package.json",
-      "sha256": "5df7708f99c51d51cdb3fc061831860c0b4c5f8875017dc3d41ffb105474fff7"
+      "sha256": "e0a4c2a1953726e492a43cf68c776d5f31f2679045fa4d6851a72255e8d1dc3a"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "e4d732dd905a33efee3bc5982f37356a608e95ba86166529fd23657455b37547"
+      "sha256": "5710327be967503deaa40f8cebe149bc7f7772c63bca66e9a4f1b8bf39371aee"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
