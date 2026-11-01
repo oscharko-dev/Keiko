@@ -11640,15 +11640,21 @@ describe("gateway setup writes the process activity log", () => {
 
     try {
       await handleGatewaySetup(
-        ctx({
-          baseUrl: "https://llm-gateway.example.com",
-          apiKey: "example-secret-token",
-          figmaAccessToken: "figd_log-smoke-token",
-        }),
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com",
+            apiKey: "example-secret-token",
+            figmaAccessToken: "figd_log-smoke-token",
+          },
+          "corr-figma-log",
+        ),
         deps,
       );
 
-      expect(sink.events.some((event) => event.op === "http.gateway.fetch.failed")).toBe(true);
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-figma-log")).toBe(true);
+      expect(failures.every((event) => event.errorKind !== undefined)).toBe(true);
       expect(JSON.stringify(sink.events)).not.toContain("figd_log-smoke-token");
     } finally {
       deps.store.close();

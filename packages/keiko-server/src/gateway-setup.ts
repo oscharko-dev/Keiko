@@ -3685,6 +3685,7 @@ function figmaReason(body: unknown): string | undefined {
 async function defaultFigmaCredentialTester(
   accessToken: string,
   egress?: GatewayEgressConfig,
+  correlationId?: string,
 ): Promise<void> {
   try {
     const response = await gatewayFetch(FIGMA_ME_ENDPOINT, {
@@ -3699,6 +3700,7 @@ async function defaultFigmaCredentialTester(
       // A blocked proxy or untrusted certificate surfaces here first; without a sink the transport
       // lines are lost and counted as `port-unwired`.
       log: processServerLogSink(),
+      logContext: { correlationId },
     });
     let body: unknown;
     try {
@@ -7804,7 +7806,12 @@ async function verifySubmittedFigmaCredential(
   if (!request.verifyFigmaCredential || request.figmaAccessToken === undefined) {
     return undefined;
   }
-  const tester: FigmaCredentialTester = deps.figmaCredentialTester ?? defaultFigmaCredentialTester;
+  // The seam keeps its 2-arg shape; the real tester closes over the request correlation so its
+  // transport lines join the setup request (ADR-0173 D5).
+  const tester: FigmaCredentialTester =
+    deps.figmaCredentialTester ??
+    ((accessToken, egress): Promise<void> =>
+      defaultFigmaCredentialTester(accessToken, egress, request.correlationId));
   try {
     await tester(request.figmaAccessToken, currentGatewayEgressConfig(deps));
     return undefined;

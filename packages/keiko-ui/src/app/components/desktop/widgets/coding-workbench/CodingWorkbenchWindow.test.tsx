@@ -68,7 +68,10 @@ import {
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
-import { GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT } from "../shared/gatewaySetupBus";
+import {
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  gatewayModelCatalogCheckRequested,
+} from "../shared/gatewaySetupBus";
 import {
   ActiveWorkspaceProvider,
   type ActiveWorkspaceApi,
@@ -1059,6 +1062,7 @@ describe("CodingWorkbenchWindow", () => {
     try {
       renderWorkbench();
       expect(listener).toHaveBeenCalledOnce();
+      expect(gatewayModelCatalogCheckRequested(listener.mock.calls[0]?.[0] as Event)).toBe(true);
     } finally {
       window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
     }

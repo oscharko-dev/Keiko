@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
@@ -2963,12 +2962,12 @@ function initializeConversationModel(
 }
 
 // Everything a chat check depends on: the provider's connection, credential included. Measured
-// capability (a persisted proof) lives beside it and changes nothing here. A digest, in memory only.
+// capability (a persisted proof) lives beside it and changes nothing here. Compared for equality in
+// this process only and never logged, so the serialized entry is kept as is: a fast digest of a
+// credential would add no protection.
 function conversationConnectionKey(config: GatewayConfig, modelId: string): string {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-  return provider === undefined
-    ? modelId
-    : createHash("sha256").update(JSON.stringify(provider)).digest("hex");
+  return provider === undefined ? modelId : JSON.stringify(provider);
 }
 
 function answerThisGeneration(
