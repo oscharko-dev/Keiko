@@ -16,6 +16,7 @@ import {
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { isAllowedContainedPathParent } from "@oscharko-dev/keiko-workspace/internal/realpath-policy";
 import type { EditorDocumentVersion } from "@oscharko-dev/keiko-contracts";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
@@ -119,7 +120,7 @@ function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): s
     throw new PathDeniedError("path matches an always-on deny pattern", path);
   }
   const info = containedRealPathInfo(fs, workspace.root, resolved);
-  if (!realPathMatchesLexicalTarget(fs, resolved, rel, info.realRelative)) {
+  if (!realPathMatchesLexicalTarget(fs, workspace.root, resolved, rel, info)) {
     throw new PathDeniedError("path resolves through an in-workspace alias", path);
   }
   if (fs.exists(resolved) && (fs.stat(resolved).hardLinkCount ?? 1) > 1) {
@@ -131,16 +132,19 @@ function enforcePath(workspace: WorkspaceInfo, fs: WorkspaceFs, path: string): s
   return resolved;
 }
 
+// A missing target is judged by the workspace's own parent predicate, which compares host-separated
+// paths: a Windows create below a new directory was refused as an alias by a "/"-only comparison.
 function realPathMatchesLexicalTarget(
   fs: WorkspaceFs,
+  root: string,
   absolutePath: string,
   rel: string,
-  realRelative: string,
+  info: ReturnType<typeof containedRealPathInfo>,
 ): boolean {
   if (fs.exists(absolutePath)) {
-    return realRelative === rel;
+    return info.realRelative === rel;
   }
-  return realRelative === "" || rel === realRelative || rel.startsWith(`${realRelative}/`);
+  return isAllowedContainedPathParent(info, root, rel);
 }
 
 function safePath(
