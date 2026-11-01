@@ -8,10 +8,13 @@ import { compareCodePoints } from "./jira-report-order.js";
 import type { JiraReportHttp } from "./jira-report-http.js";
 import type { JiraReportFieldCatalogEntry } from "./jira-report-types.js";
 
-/** Custom field types that Jira Software and Portfolio define; ids are read from the instance. */
-const EPIC_LINK_TYPE = "com.pyxis.greenhopper.jira:gh-epic-link";
-const EPIC_NAME_TYPE = "com.pyxis.greenhopper.jira:gh-epic-label";
-const PARENT_LINK_TYPE = "com.atlassian.jpo:jpo-custom-field-parent";
+/**
+ * An app-defined field carries an opaque value shape: Jira reports its schema type as `any`. Both
+ * the field's id and the key of its field type are the instance's own and are never named here.
+ */
+const OPAQUE_SCHEMA_TYPE = "any";
+/** More candidates than this are not read blindly: the caller names the parent fields instead. */
+const PARENT_CANDIDATES_MAX = 24;
 const FIELD_ID = new RegExp(JIRA_FIELD_ID_PATTERN, "u");
 /** Always present and never an author's omission, so never a required-field deviation. */
 const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["project", "issuetype", "reporter"]);
@@ -26,14 +29,17 @@ export interface JiraReportHierarchyFields {
   /** Every field the instance lists, for template references by name; absent when unread. */
   readonly catalog: readonly JiraReportFieldCatalogEntry[] | undefined;
   readonly reason?: JiraReportFailure;
+  /** Fields that may name an issue's parent; each value is checked against the issue-key shape. */
   readonly parentFieldIds: readonly string[];
-  readonly epicNameFieldId: string | undefined;
 }
 
-function fieldType(item: unknown): { readonly id: string; readonly custom: unknown } | undefined {
+/** A field an app defines (a custom type, no Jira system role) whose value shape Jira cannot state. */
+function parentCandidateId(item: unknown): string | undefined {
   const record = asRecord(item);
+  const schema = asRecord(record?.schema);
   if (typeof record?.id !== "string" || !FIELD_ID.test(record.id)) return undefined;
-  return { id: record.id, custom: asRecord(record.schema)?.custom };
+  if (typeof schema?.custom !== "string" || schema.system !== undefined) return undefined;
+  return schema.type === OPAQUE_SCHEMA_TYPE ? record.id : undefined;
 }
 
 function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEntry[] | undefined {
@@ -46,7 +52,11 @@ function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEn
   });
 }
 
-/** Hierarchy fields by their Jira field type, so no instance-specific id is ever assumed. */
+/**
+ * Parent-field candidates from the field list by schema shape alone, so no instance-specific id
+ * and no app's field-type key is ever assumed; whether a candidate really holds a parent is
+ * decided on the issues read, by the issue-key shape of its value.
+ */
 export async function discoverHierarchyFields(
   http: JiraReportHttp,
 ): Promise<JiraReportHierarchyFields> {
@@ -57,18 +67,14 @@ export async function discoverHierarchyFields(
       reason: outcome.reason,
       catalog: undefined,
       parentFieldIds: [],
-      epicNameFieldId: undefined,
     };
-  const fields = outcome.items.flatMap((item) => fieldType(item) ?? []);
-  return {
-    discovery: "complete",
-    catalog: catalogOf(outcome.items),
-    parentFieldIds: fields
-      .filter((field) => field.custom === EPIC_LINK_TYPE || field.custom === PARENT_LINK_TYPE)
-      .map((field) => field.id)
-      .sort(compareCodePoints),
-    epicNameFieldId: fields.find((field) => field.custom === EPIC_NAME_TYPE)?.id,
-  };
+  const catalog = catalogOf(outcome.items);
+  const candidates = outcome.items
+    .flatMap((item) => parentCandidateId(item) ?? [])
+    .sort(compareCodePoints);
+  if (candidates.length > PARENT_CANDIDATES_MAX)
+    return { discovery: "unavailable", reason: "bounds-exceeded", catalog, parentFieldIds: [] };
+  return { discovery: "complete", catalog, parentFieldIds: candidates };
 }
 
 export interface JiraReportRequiredFields {

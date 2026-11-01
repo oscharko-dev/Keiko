@@ -26,7 +26,7 @@ import { advanceJiraReportSession } from "./jira-report-read.js";
 import type { JiraReportReadDeps, JiraReportSession } from "./jira-report-session.js";
 import { JIRA_REPORT_STORE_MAX_BYTES, type JiraReportStore } from "./jira-report-store.js";
 import { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
-import type { JiraReportCheckerPort } from "./jira-report-types.js";
+import type { JiraReport, JiraReportCheckerPort } from "./jira-report-types.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
@@ -54,6 +54,8 @@ export interface JiraReportActivity {
   readonly deviationCount: number;
   readonly ruleIds: readonly string[];
   readonly requirementCount: number;
+  /** How the parent relation was found; absent until the instance's metadata has been read. */
+  readonly hierarchy?: JiraReport["hierarchy"];
   /** How many arguments a refused call named wrongly; never their values. */
   readonly invalidArgumentCount?: number;
   readonly durationMs: number;
@@ -96,6 +98,19 @@ function optionalActivity(session: JiraReportSession): Partial<JiraReportActivit
     ...(total === undefined ? {} : { issuesTotal: total }),
   };
 }
+function hierarchyActivity(session: JiraReportSession): Pick<JiraReportActivity, "hierarchy"> {
+  if (session.report !== undefined) return { hierarchy: session.report.hierarchy };
+  const { hierarchy, plan } = session;
+  return hierarchy === undefined
+    ? {}
+    : {
+        hierarchy: {
+          discovery: hierarchy.discovery,
+          fieldCount: plan?.parentFieldIds.length ?? 0,
+          observedFieldCount: plan?.parentFieldsSeen.size ?? 0,
+        },
+      };
+}
 function sessionActivity(
   session: JiraReportSession,
   base: Pick<JiraReportActivity, "phase" | "continued" | "durationMs">,
@@ -112,6 +127,7 @@ function sessionActivity(
     deviationCount: compliance?.deviationCount ?? 0,
     ruleIds: compliance?.byRule.map((item) => item.ruleId) ?? [],
     requirementCount: session.request.requirementIds.length,
+    ...hierarchyActivity(session),
   };
 }
 function refuse<Context extends ManagedMcpInvocationContext>(

@@ -5,6 +5,9 @@ export const EPIC_LINK = "customfield_10014";
 export const EPIC_NAME = "customfield_10011";
 export const ACCEPTANCE = "customfield_10100";
 export const POINTS = "customfield_10200";
+/** Opaque app fields that never hold a parent: a rank string and an object without an issue key. */
+export const DECOY_RANK = "customfield_10300";
+export const DECOY_BLOB = "customfield_10301";
 
 export type FixtureCategory = "new" | "indeterminate" | "done";
 export interface FixtureIssue {
@@ -149,6 +152,8 @@ function typedFields(issue: FixtureIssue): Record<string, unknown> {
     [EPIC_NAME]: issue.type === "Epic" ? issue.summary : null,
     [ACCEPTANCE]: issue.type === "Story" ? issue.acceptance : "n/a",
     [POINTS]: issue.points ?? null,
+    [DECOY_RANK]: `0|i${issue.key.slice(4).padStart(5, "0")}:`,
+    [DECOY_BLOB]: { hasValue: true },
     fixVersions: [],
   };
 }
@@ -191,6 +196,13 @@ export interface FixtureOptions {
   readonly noRequiredMetadata?: boolean;
   /** Create metadata is readable but requires nothing beyond the always-present system fields. */
   readonly noRequiredFields?: boolean;
+  /**
+   * The app that defines the epic-link and epic-name field types is another one with other type
+   * keys; Jira still reports the same schema shape for them.
+   */
+  readonly foreignFieldTypeKeys?: boolean;
+  /** This many further opaque app fields on the instance, beyond the ones the report knows. */
+  readonly extraOpaqueFields?: number;
 }
 export interface FixtureJira {
   readonly http: AtlassianHttpBodyPort;
@@ -236,16 +248,38 @@ const NOT_FOUND = {
 function failure(status: number): AtlassianHttpBodyResult {
   return { ...NOT_FOUND, status };
 }
-function fieldList(): AtlassianHttpBodyResult {
-  const custom = (prefix: string, name: string): { schema: { custom: string } } => ({
-    schema: { custom: `${prefix}:${name}` },
+function fieldList(options: FixtureOptions): AtlassianHttpBodyResult {
+  const custom = (
+    type: string,
+    key: string,
+  ): { schema: { type: string; custom: string; customId: number } } => ({
+    schema: { type, custom: key, customId: 1 },
   });
+  const system = "com.atlassian.jira.plugin.system.customfieldtypes";
+  const foreign = options.foreignFieldTypeKeys === true;
+  const keys = foreign
+    ? {
+        link: "example.vendor.hierarchy:link-to-container",
+        label: "example.vendor.hierarchy:label",
+      }
+    : {
+        link: "com.pyxis.greenhopper.jira:gh-epic-link",
+        label: "com.pyxis.greenhopper.jira:gh-epic-label",
+      };
+  const app = foreign ? "example.vendor.hierarchy" : "com.example.apps";
+  const extra = Array.from({ length: options.extraOpaqueFields ?? 0 }, (_, index) => ({
+    id: `customfield_${String(20000 + index)}`,
+    ...custom("any", `${app}:opaque-${String(index)}`),
+  }));
   return response([
-    { id: EPIC_LINK, ...custom("com.pyxis.greenhopper.jira", "gh-epic-link") },
-    { id: EPIC_NAME, ...custom("com.pyxis.greenhopper.jira", "gh-epic-label") },
-    { id: ACCEPTANCE, ...custom("com.atlassian.jira.plugin.system.customfieldtypes", "textarea") },
-    { id: POINTS, ...custom("com.atlassian.jira.plugin.system.customfieldtypes", "float") },
-    { id: "summary", schema: { type: "string" } },
+    { id: EPIC_LINK, ...custom("any", keys.link) },
+    { id: EPIC_NAME, ...custom("string", keys.label) },
+    { id: DECOY_RANK, ...custom("any", `${app}:ordering`) },
+    { id: DECOY_BLOB, ...custom("any", `${app}:summary-blob`) },
+    { id: ACCEPTANCE, ...custom("string", `${system}:textarea`) },
+    { id: POINTS, ...custom("number", `${system}:float`) },
+    { id: "summary", schema: { type: "string", system: "summary" } },
+    ...extra,
   ]);
 }
 function createMeta(path: string, options: FixtureOptions): AtlassianHttpBodyResult {
@@ -297,7 +331,7 @@ export function fixtureJira(options: FixtureOptions): FixtureJira {
     if (path === "field") {
       const status = fieldStatuses.shift();
       if (status !== undefined && status !== 200) return Promise.resolve(failure(status));
-      return Promise.resolve(options.omitFieldList === true ? failure(500) : fieldList());
+      return Promise.resolve(options.omitFieldList === true ? failure(500) : fieldList(options));
     }
     if (path.startsWith("issue/createmeta/REP/issuetypes"))
       return Promise.resolve(createMeta(path, options));

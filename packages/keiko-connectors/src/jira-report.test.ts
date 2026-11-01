@@ -338,8 +338,13 @@ describe("incomplete reads are never reported as complete", () => {
       projectKey: "REP",
       parentFieldIds: ["customfield_10014"],
     });
-    expect(record(record(reportOf(named).coverage).uncoveredEpics).total).toBe(0);
-    expect(record(reportOf(named).hierarchy).fieldCount).toBe(1);
+    // The hierarchy the named field yields is all there is: epics are read from it, not from a list.
+    expect(record(record(reportOf(named).coverage).uncoveredEpics).items).toEqual(["REP-4"]);
+    expect(record(reportOf(named).hierarchy)).toMatchObject({
+      discovery: "unavailable",
+      fieldCount: 1,
+      observedFieldCount: 1,
+    });
   });
 });
 
@@ -527,8 +532,15 @@ describe("activity", () => {
       issuesRead: 100,
       requirementCount: 1,
       ruleIds: ["required-field-empty"],
+      hierarchy: { discovery: "complete", fieldCount: 3, observedFieldCount: 1 },
     });
-    expect(JSON.stringify(line)).not.toMatch(/REP-|jira\.example|Story/u);
+    expect(JSON.stringify(line)).not.toMatch(/REP-|jira\.example|Story|customfield/u);
+  });
+
+  it("records an unread hierarchy as unavailable, not as an empty one", async () => {
+    const h = harness({ issues: syntheticProject(60), omitFieldList: true });
+    await h.run({ projectKey: "REP" });
+    expect(h.activity.at(-1)).toMatchObject({ hierarchy: { discovery: "unavailable" } });
   });
 });
 

@@ -73,7 +73,7 @@ function fieldPlan(
 ): JiraReportFieldPlan {
   return {
     parentFieldIds: [...new Set([...hierarchy.parentFieldIds, ...session.request.parentFieldIds])],
-    epicNameFieldId: hierarchy.epicNameFieldId,
+    parentFieldsSeen: new Set(),
     estimateFieldId: session.request.estimateFieldId ?? "timeoriginalestimate",
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
@@ -85,7 +85,6 @@ function fieldListOf(plan: JiraReportFieldPlan): string {
   const ids = new Set<string>(BASE_FIELDS);
   ids.add(plan.estimateFieldId);
   for (const id of plan.parentFieldIds) ids.add(id);
-  if (plan.epicNameFieldId !== undefined) ids.add(plan.epicNameFieldId);
   for (const fields of plan.requiredByType.values()) for (const id of fields) ids.add(id);
   for (const id of plan.checker?.fieldIds ?? []) ids.add(id);
   if (plan.includeDescription) ids.add("description");
@@ -118,6 +117,7 @@ function reportInput(
     hierarchy: {
       discovery: session.hierarchy?.discovery ?? "unavailable",
       fieldCount: session.plan?.parentFieldIds.length ?? 0,
+      observedFieldCount: session.plan?.parentFieldsSeen.size ?? 0,
     },
     requiredFieldRules:
       request.projectKey === undefined

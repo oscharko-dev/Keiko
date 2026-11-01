@@ -38,6 +38,8 @@ interface Graph {
   /** Top ancestor of every issue that has a parent; a key outside the scope marks an external one. */
   readonly rootOf: ReadonlyMap<string, string>;
   readonly containers: ReadonlySet<string>;
+  /** Issue types that only ever hold work and are never held themselves (epics, initiatives). */
+  readonly containerTypes: ReadonlySet<string>;
   /** Parentless leaf issues attached to a container through an issue link. */
   readonly linkedTo: ReadonlyMap<string, readonly string[]>;
   readonly membersByRoot: ReadonlyMap<string, readonly JiraReportIssue[]>;
@@ -100,6 +102,23 @@ function groupBy(
   }
   return groups;
 }
+/**
+ * The instance names no epic: a type is a container type when one of its issues holds non-sub-task
+ * work and none of its issues is itself held by a parent, which the hierarchy alone proves.
+ */
+function containerTypesOf(
+  issues: readonly JiraReportIssue[],
+  containers: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const holding = new Set<string>();
+  const held = new Set<string>();
+  for (const issue of issues) {
+    if (issue.subtask) continue;
+    if (containers.has(issue.key)) holding.add(issue.typeName);
+    if (issue.parentKey !== undefined) held.add(issue.typeName);
+  }
+  return new Set([...holding].filter((typeName) => !held.has(typeName)));
+}
 function buildGraph(issues: readonly JiraReportIssue[]): Graph {
   const index = new Map(issues.map((issue) => [issue.key, issue]));
   const rootOf = new Map<string, string>();
@@ -108,10 +127,12 @@ function buildGraph(issues: readonly JiraReportIssue[]): Graph {
   // A root holding only sub-tasks is a task with its parts, not a container of work.
   const containers = new Set<string>();
   for (const issue of issues) {
-    if (issue.epicMarker) containers.add(issue.key);
     const root = rootOf.get(issue.key);
     if (root !== undefined && !issue.subtask) containers.add(root);
   }
+  // An issue of a type that holds work elsewhere in the scope is a container too, even when empty.
+  const containerTypes = containerTypesOf(issues, containers);
+  for (const issue of issues) if (containerTypes.has(issue.typeName)) containers.add(issue.key);
   const linkedTo = linkedAttachments(issues, index, rootOf, containers);
   // Issues arrive sorted by key, so every group keeps that order.
   const linkedEntries = [...linkedTo].flatMap(([key, roots]) =>
@@ -122,6 +143,7 @@ function buildGraph(issues: readonly JiraReportIssue[]): Graph {
     children: childrenOf(issues),
     rootOf,
     containers,
+    containerTypes,
     linkedTo,
     membersByRoot: groupBy(rootOf, index),
     linkedByRoot: groupBy(linkedEntries, index),
@@ -381,7 +403,7 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
     compliance: complianceOf(issues, input),
     coverage: {
       uncoveredEpics: issues
-        .filter((issue) => issue.epicMarker && graph.containers.has(issue.key))
+        .filter((issue) => !issue.subtask && graph.containerTypes.has(issue.typeName))
         .filter(
           (issue) => membersOf(graph, issue.key).length + linkedOf(graph, issue.key).length === 0,
         )

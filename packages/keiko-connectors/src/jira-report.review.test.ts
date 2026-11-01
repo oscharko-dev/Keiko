@@ -151,7 +151,6 @@ describe("the memory budget is real (review 6)", () => {
         assigned: true,
         dueDate: undefined,
         estimate: undefined,
-        epicMarker: false,
         deviations: [],
         requirementIds: [],
         labels: [],

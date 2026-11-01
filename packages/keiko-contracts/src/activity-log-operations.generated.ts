@@ -1239,6 +1239,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      hierarchyDiscovery: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["complete", "unavailable"],
+      },
+      hierarchyFieldCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      hierarchyObservedFieldCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       byteCount: {
         type: "integer",
         dataClass: "count",

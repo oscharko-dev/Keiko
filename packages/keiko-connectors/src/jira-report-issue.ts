@@ -14,9 +14,10 @@ import type {
 
 /** Everything the parser needs from the instance and the request; derived once per report. */
 export interface JiraReportFieldPlan {
-  /** Fields whose value names the issue's parent (Epic Link, Parent Link, caller-named). */
+  /** Custom fields that may name the issue's parent: discovered by schema shape or caller-named. */
   readonly parentFieldIds: readonly string[];
-  readonly epicNameFieldId: string | undefined;
+  /** Collects the parent fields that held a parent key on an issue; the report states the count. */
+  readonly parentFieldsSeen: Set<string>;
   readonly estimateFieldId: string;
   readonly requirementIds: ReadonlySet<string>;
   readonly requiredByType: ReadonlyMap<string, readonly string[]>;
@@ -24,6 +25,7 @@ export interface JiraReportFieldPlan {
   readonly includeDescription: boolean;
 }
 
+const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
 const RULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
 const TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*/gu;
 const SUMMARY_MAX = 255;
@@ -48,14 +50,22 @@ function issueKeyOf(value: unknown): string | undefined {
   const key = typeof value === "string" ? value : reference(value)?.key;
   return isSafeAtlassianIdentifier(key) ? key : undefined;
 }
+/** A parent field proves itself by value: an issue key (or an object carrying one), nothing else. */
+function parentFieldKeyOf(value: unknown): string | undefined {
+  const key = typeof value === "string" ? value : reference(value)?.key;
+  return typeof key === "string" && ISSUE_KEY.test(key) ? key : undefined;
+}
 function parentKeyOf(
   fields: Record<string, unknown>,
   plan: JiraReportFieldPlan,
 ): string | undefined {
-  const candidates = [fields.parent, ...plan.parentFieldIds.map((id) => fields[id])];
-  for (const candidate of candidates) {
-    const key = issueKeyOf(candidate);
-    if (key !== undefined) return key;
+  const system = issueKeyOf(fields.parent);
+  if (system !== undefined) return system;
+  for (const id of plan.parentFieldIds) {
+    const key = parentFieldKeyOf(fields[id]);
+    if (key === undefined) continue;
+    plan.parentFieldsSeen.add(id);
+    return key;
   }
   return undefined;
 }
@@ -205,10 +215,6 @@ function identityOf(value: unknown): IssueIdentity | undefined {
     return undefined;
   return { key, fields, typeName: type.name, typeId: type.id, subtask: type.subtask };
 }
-function hasEpicName(fields: Record<string, unknown>, plan: JiraReportFieldPlan): boolean {
-  const name = plan.epicNameFieldId === undefined ? undefined : fields[plan.epicNameFieldId];
-  return typeof name === "string" && name.trim().length > 0;
-}
 
 /** Project one Jira search hit onto the compact record. A hit without key and type is refused. */
 export function parseJiraReportIssue(
@@ -235,7 +241,6 @@ export function parseJiraReportIssue(
     assigned: fields.assignee !== null,
     dueDate: stringOf(fields.duedate, 32),
     estimate: estimateOf(fields, plan),
-    epicMarker: hasEpicName(fields, plan),
     deviations: dedupeDeviations([
       ...requiredDeviations(fields, typeId, plan),
       ...checkerDeviations(facts, plan),

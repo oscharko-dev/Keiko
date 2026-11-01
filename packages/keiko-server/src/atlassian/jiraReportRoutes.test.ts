@@ -37,7 +37,7 @@ function seeded(): JiraReportStore {
       timeZone: "UTC",
     },
     completeness: { complete: true, issuesRead: 1, issuesTotal: 1, pageCount: 1 },
-    hierarchy: { discovery: "complete", fieldCount: 1 },
+    hierarchy: { discovery: "complete", fieldCount: 1, observedFieldCount: 1 },
     progress: {
       project: {
         total: 1,
@@ -78,7 +78,6 @@ function seeded(): JiraReportStore {
           assigned: false,
           dueDate: undefined,
           estimate: undefined,
-          epicMarker: false,
           deviations: [],
           requirementIds: [],
           labels: [],
@@ -205,6 +204,29 @@ describe("Jira report activity", () => {
       ruleIds: ["required-field-empty", "template.bug.reproduction"],
     });
     expect(analyzeLogText(line).timelines).toHaveLength(1);
+  });
+
+  it("records how the parent relation was found as counts and one closed word", () => {
+    const logs = createBufferedServerLogSink();
+    recordJiraReportActivity(logs, "correlation-4", {
+      phase: "read",
+      status: "complete",
+      scopeKind: "project",
+      continued: false,
+      issuesRead: 10,
+      pageCount: 1,
+      issuesWithDeviations: 0,
+      deviationCount: 0,
+      ruleIds: [],
+      requirementCount: 0,
+      hierarchy: { discovery: "complete", fieldCount: 3, observedFieldCount: 1 },
+      durationMs: 2,
+    });
+    expect(expectActivityLogProof("atlassian.jira-report.line", onlyLine(logs))).toMatchObject({
+      hierarchyDiscovery: "complete",
+      hierarchyFieldCount: 3,
+      hierarchyObservedFieldCount: 1,
+    });
   });
 
   it("records how many arguments a refused call named wrongly, never the names (#4181)", () => {

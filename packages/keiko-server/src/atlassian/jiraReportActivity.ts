@@ -103,6 +103,14 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     issuesWithDeviations: { type: "integer", dataClass: "count", required: false },
     deviationCount: { type: "integer", dataClass: "count", required: false },
     requirementCount: { type: "integer", dataClass: "count", required: false },
+    hierarchyDiscovery: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["complete", "unavailable"],
+    },
+    hierarchyFieldCount: { type: "integer", dataClass: "count", required: false },
+    hierarchyObservedFieldCount: { type: "integer", dataClass: "count", required: false },
     byteCount: { type: "integer", dataClass: "count", required: false },
     invalidArgumentCount: { type: "integer", dataClass: "count", required: false },
     ruleIds: {
@@ -172,9 +180,29 @@ interface JiraReportLine {
   readonly issuesWithDeviations?: number;
   readonly deviationCount?: number;
   readonly requirementCount?: number;
+  readonly hierarchyDiscovery?: "complete" | "unavailable";
+  readonly hierarchyFieldCount?: number;
+  readonly hierarchyObservedFieldCount?: number;
   readonly byteCount?: number;
   readonly invalidArgumentCount?: number;
   readonly ruleIds?: readonly string[];
+}
+
+/** How the parent relation was found, once a report knows it: counts and one closed word. */
+function hierarchyOf(
+  input: JiraReportActivity,
+): Pick<
+  JiraReportLine,
+  "hierarchyDiscovery" | "hierarchyFieldCount" | "hierarchyObservedFieldCount"
+> {
+  const { hierarchy } = input;
+  return hierarchy === undefined
+    ? {}
+    : {
+        hierarchyDiscovery: hierarchy.discovery,
+        hierarchyFieldCount: hierarchy.fieldCount,
+        hierarchyObservedFieldCount: hierarchy.observedFieldCount,
+      };
 }
 
 function invalidArguments(input: JiraReportActivity): Pick<JiraReportLine, "invalidArgumentCount"> {
@@ -209,6 +237,7 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
     issuesWithDeviations: input.issuesWithDeviations,
     deviationCount: input.deviationCount,
     requirementCount: input.requirementCount,
+    ...hierarchyOf(input),
     ...invalidArguments(input),
     ruleIds: input.ruleIds,
   };

@@ -785,9 +785,14 @@ project (`projectKey`), a JQL scope (`jql`) or both, the connector pages Jira's 
 completion itself and computes, as plain arithmetic over what it read: issues per status category
 and per issue type and status name, own estimates (`timeoriginalestimate` seconds, or a numeric
 field the caller names) done/total/remaining, unassigned and overdue open issues, progress per
-container (an epic, or any root issue holding non-sub-task work; hierarchy comes from `parent`
-and from the parent-bearing custom fields the instance reports by field type — Epic Link and
-Parent Link — or from caller-named `parentFieldIds`), epics without members, issues without an
+container (an epic, or any root issue holding non-sub-task work; hierarchy comes from `parent`,
+from app-defined fields the instance lists with an opaque value shape — schema type `any`, a custom
+type, no Jira system role — whose values are issue keys on the issues read, or from caller-named
+`parentFieldIds`; no field id, app or plugin type key is ever named in code, so an instance whose
+hierarchy app uses other type keys reads identically, and more candidates than 24 fail closed as
+`bounds-exceeded` until the caller names the fields), epics without members (a container is an
+issue of a type that holds work for another issue and is never held itself, so an empty epic is
+found without reading an Epic Name field), issues without an
 epic or parent (orphans; an issue link rescues an issue only when it reaches a container), the
 fields the instance requires on create per issue type from current create metadata (rule
 `required-field-empty`; project scope only), the deviations of the shared template checker when
@@ -844,7 +849,9 @@ values, so the model can correct the call instead of abandoning the report (lab 
 `GET /api/atlassian-connectors/jira-reports/:reportId/export?chatId=…&format=markdown|csv`
 renders the stored report (the model's prose is never the source) for the browser's own download;
 CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase, status, closed
-reason, scope kind, counts including `invalidArgumentCount` on a refusal, and rule ids; never scope text, keys, summaries or report content) beside
+reason, scope kind, counts including `invalidArgumentCount` on a refusal, how the parent relation
+was found — `hierarchyDiscovery` `complete|unavailable`, `hierarchyFieldCount` candidates and
+`hierarchyObservedFieldCount` fields that held a parent — and rule ids; never scope text, keys, summaries or report content) beside
 the existing `atlassian.action.outcome` line for the call.
 
 **Complete, traceable requirement derivation (#4179, 2026-10-31).** Grounded Q&A keeps its ranked

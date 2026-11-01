@@ -20,15 +20,13 @@ export interface JiraReportIssue {
   readonly summary: string;
   readonly statusName: string;
   readonly category: JiraReportStatusCategory;
-  /** Hierarchical parent (parent, Epic Link or Parent Link), in or out of the scope. */
+  /** Hierarchical parent (the `parent` field or a discovered or named parent field), in or out of the scope. */
   readonly parentKey: string | undefined;
   /** Targets of every issue link of the issue, either direction. */
   readonly linkedKeys: readonly string[];
   readonly assigned: boolean;
   readonly dueDate: string | undefined;
   readonly estimate: number | undefined;
-  /** The instance marks it as an epic (a value in the Epic Name field). */
-  readonly epicMarker: boolean;
   readonly deviations: readonly JiraReportDeviation[];
   /** Declared requirement ids this issue names in its summary, labels or description. */
   readonly requirementIds: readonly string[];
@@ -171,7 +169,10 @@ export interface JiraReport {
   readonly completeness: JiraReportCompleteness;
   readonly hierarchy: {
     readonly discovery: "complete" | "unavailable";
+    /** Custom fields consulted for a parent: discovered by schema shape plus caller-named ones. */
     readonly fieldCount: number;
+    /** How many of them held a parent key on at least one issue read. */
+    readonly observedFieldCount: number;
   };
   readonly progress: {
     readonly project: JiraReportProgress;

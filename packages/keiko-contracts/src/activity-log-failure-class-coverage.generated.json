@@ -1667,6 +1667,24 @@
               "required": false
             },
             {
+              "name": "hierarchyDiscovery",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "hierarchyFieldCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "hierarchyObservedFieldCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "invalidArgumentCount",
               "type": "integer",
               "dataClass": "count",

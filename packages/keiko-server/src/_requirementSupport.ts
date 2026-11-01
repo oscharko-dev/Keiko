@@ -264,7 +264,7 @@ function reportOf(issues: readonly ReportedIssue[], complete: boolean): JiraRepo
       issuesTotal: complete ? issues.length : issues.length + 5,
       pageCount: 1,
     },
-    hierarchy: { discovery: "complete", fieldCount: 1 },
+    hierarchy: { discovery: "complete", fieldCount: 1, observedFieldCount: 1 },
     progress: progressOf(issues.length),
     epics: [],
     compliance: {
