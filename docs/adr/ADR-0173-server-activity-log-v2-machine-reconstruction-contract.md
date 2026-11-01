@@ -1612,10 +1612,15 @@ that answers while the run is still open logs `coding-sidecar.gateway.readiness-
 nobody proved yet) in `storedReason`. `reason: "no-tool-calling"` then follows a run whose probe
 refuted tool calling, or answered with a failure that proves nothing: that model stays unproven
 until its cooldown ends.
-The work is bounded: one attempt per deployment identity within a six-hour cooldown (one minute
-after a probe the gateway never answered), never for a model that is no chat model or whose proof
-the probe refuted, never while a subscription source is selected, and only the model the
-Workbench would elect is awaited. A profile read that finds nothing to prove writes no automatic
+The work is bounded: one attempt per deployment identity within a six-hour cooldown, never for a
+model that is no chat model or whose proof the probe refuted, never while a subscription source is
+selected, and only the model the Workbench would elect is awaited. A probe the gateway never
+answered (a timeout, a busy or unreachable gateway) is no verdict and no running check: a passive
+read never retries it and no timer does. Startup, a page load, and a profile read that asks
+(`check=1`, sent when the Workbench opens or a model is chosen) retry it after a one-minute quiet,
+and the projection then reports `tool-calling-unverified`, never `no-tool-calling`. A proof that
+succeeded while the configuration changed under it (`stale`) runs again at once and once
+(customer 1.3.4). A profile read that finds nothing to prove writes no automatic
 record, and its absence is then not a lost call.
 
 For received reports, first analyze the artifact without a correlation selector. New exports

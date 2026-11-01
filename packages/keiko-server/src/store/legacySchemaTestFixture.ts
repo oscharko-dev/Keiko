@@ -28,6 +28,20 @@ interface VersionRollback {
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
   {
+    version: 56,
+    sql: `DROP TRIGGER chat_history_search_insert;
+    DROP TRIGGER chat_history_search_delete;
+    DROP TRIGGER chat_history_search_update;
+    DROP TABLE chat_history_words;
+    DROP TABLE chat_history_fragments;`,
+  },
+  {
+    version: 55,
+    sql: `DROP TRIGGER chat_history_revision_late_completion;
+    DROP TRIGGER chat_continuity_revision_invalidated;
+    DROP TABLE chat_continuity_checkpoints;`,
+  },
+  {
     version: 54,
     sql: `ALTER TABLE chat_tool_mutations DROP COLUMN native_mcp_action_digest;
     DROP INDEX chat_tool_mutations_active;

@@ -573,6 +573,22 @@ never contains the literal Apple paths or `Xcode.app`/`CommandLineTools` substri
 `darwin-git.test.ts`'s coverage of the user-writable-directory rejection and (on a real Darwin
 host) `resolveDarwinGitExecutable`'s successful resolution through `xcrun`.
 
+**Scope (amended 2026-11-01, customer 1.3.4).** Attestation qualifies the Git member of a
+`process-exec` allowlist, so it applies where such an allowlist exists: the `keiko-gateway` profile.
+The `keiko-native` profile (#3897) has no `process-exec` allowlist; its shell already runs the
+host's toolchains from the launcher's allowlisted `PATH`
+(`childExecutablePolicy: "toolchain-inherited"`). Attesting a Git there protected nothing the native
+profile did not already permit, and it refused every native run on a managed Mac whose only Git is
+Xcode's under the admin-writable `/Applications` (root:admin 0775) and that has no Command Line
+Tools. One rule, `runtimeProfileAttestsGit` in `runtimeGatewayProcessSandbox.ts`, decides this for
+every confined launch: `devLaneRuntimeProcessBackend.ts` and the macOS native-helper fallthrough of
+`nativeRuntimeProcessBackend.ts` resolve and attest Git only for the gateway profile; a native run
+keeps the launcher's `PATH` unchanged and records no child-executable digest.
+The gateway profile still fails closed without an attested Git. The macOS native helper cannot carry
+the `keiko-native` profile today: its rendered launch packet exceeds the helper's 4 KiB argument
+bound, and the helper requires the Apple-signed monitor. The shared rule keeps that fallthrough
+consistent so a future helper launch inherits the same Git decision instead of a second copy.
+
 ## Addendum — dependency installation is host-executed network I/O with lifecycle scripts disabled (2026-09-10)
 
 ### D17 — The verification orchestrator installs a workspace's declared dependencies before its script steps

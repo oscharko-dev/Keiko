@@ -50,6 +50,32 @@ change if that latency ever becomes material.
 
 The fast path (no compaction record) returns immediately without touching the store.
 
+**Operational-state correction (#4155, 2026-10-30).** Audit manifests are optional evidence,
+not the owner of the working continuity checkpoint. Revision-bound captures now commit to the
+existing private Chat SQLite store before a buffered/streaming answer or grounded answer uses
+the compacted history; manual compaction also requires this write. An unavailable private store
+pauses that request with a retryable error. A subsequent audit failure cannot undo the private
+commit or fail the answer. Post-answer audit persistence remains best-effort.
+
+The private row is chat-scoped, generation-checked and bound to an existing message and current
+history revision. Its bounded, whitelisted payload carries an integrity digest; writes use the
+existing immediate transaction. History revisions invalidate the row and Chat deletion cascades
+to it. Completing an earlier pending turn behind a later eligible turn also advances the revision:
+that completion changes the prefix even though it does not edit an older message's text.
+
+Loads prefer private state; legacy audit checkpoints remain a compatibility input. A damaged or
+unreadable private checkpoint does not fall back to an older audit summary. A damaged payload's
+generation remains available for a compare-and-swap rebuild from canonical originals. Model
+enrichment rechecks the exact prefix/profile and current summary before atomically committing;
+late work cannot replace a newer valid summary. A newer capture of the same prefix can retain
+the completed enrichment. Valid existing summaries survive unsuccessful refreshes.
+
+Private persistence uses the store's existing Chat content projection, including the credential
+floor. Audit projection remains unconditional. This does not change the summary model call's
+content policy, grant cross-chat memory authority or turn historical observations into fresh
+source evidence. `chat.continuity.checkpoint` records only I/O outcome and optional generation;
+its complete observation is not a claim of complete semantic recall or summary source coverage.
+
 ### D2 — Resurfacing renders persisted context as bounded, sanitized text
 
 `buildChatCompactionResurfacingContext` emits a `# Persisted compaction context` block built from at
@@ -78,12 +104,51 @@ instead of only its final query-term match. Query-term coverage ranks candidates
 positions winning ties. An older overlapping claim is not reintroduced solely for incidental
 additional terms after a newer matching excerpt has been selected. Excerpts retain source order
 and message identity, and remain reference data. The existing eight-excerpt, 800-token,
-1,024-unit, and 1 MiB scan ceilings remain binding. Eligibility, excluded turns, redaction,
+1,024-unit, and 1,048,576 UTF-16-code-unit scan ceilings remain binding. Eligibility, excluded turns, redaction,
 Unicode-safe matching, and unsafe-path/role checks apply before excerpts reach prompt assembly;
 role checks precede whitespace folding. Existing body-free continuity evidence reports the
 resulting candidate/excerpt counts and budget disposition.
 
+Discovery first preselects same-chat candidates from the private store's complementary FTS5
+word/trigram indexes, then retains the bounded recent-history fallback. Word matching supports
+short identifiers; trigram matching preserves internal word-fragment discovery such as `kennu`
+inside `Vorgangskennung`. Each index selects at most 64 rows plus one discarded limit sentinel;
+at most 128 deduplicated candidates reach canonical resolution. Completed canonical and paired
+legacy turns are admitted before this limit and resolved again afterward. Pending, failed,
+orphan and cross-chat rows cannot consume the eligible candidate allocation. SQL expressions
+come from validated bounded terms and parameterized chat/input values.
 
+Indexed rank is discovery order, not conversation chronology. Excerpts use the canonical user
+anchor's timestamp and rowid, the message's position within the unit, and its source order;
+skewed assistant timestamps do not rewrite the sequence. Duplicate excerpt text retains its
+latest canonical occurrence. Indexed and fallback reads share the existing scan/render limits,
+skip already visited messages and apply the current content policy, credential floor, exclusions
+and unsafe-role/path checks. Historical tool calls are never executed by this read path.
+
+Compatible optional recall evidence identifies the discovery policy, deduplicated index candidate
+rows, eligible indexed units visited and index-limit state. Limit exhaustion reports partial
+observation; finding an old excerpt is not a claim of full source coverage or semantic fidelity.
+The indexes cover canonical message text, not the complete attachment/MCP/Skill evidence chain.
+
+The 800-token excerpt budget uses the shared local estimator on the complete rendered block,
+including the header, source labels and separators. Adding separately estimated line costs does
+not enforce this bound: the estimator applies a different density floor to multiline text.
+Body-free recall evidence names the local-estimate measurement source, budget and number of
+otherwise eligible excerpts dropped by that rendering budget. These are estimates rather than
+provider-reported token counts.
+
+Recall retains literal short identifiers, versions and abbreviations alongside the existing
+five-code-point word prefixes (#4155). Identifier punctuation is escaped and numeric/code identifiers
+are not shortened. Complete boundaries on both sides reject identifier suffixes after a dot or colon,
+as well as partial matches such as `Q7-420` for `Q7-42`. A bounded set of common
+technical abbreviations (including MCP, API, RAG and LLM) also works in lowercase within multiword
+questions; ordinary short function words are not admitted through that set. Policy v2 retains
+read compatibility for v1 evidence.
+Unicode dash variants may match an identifier without rewriting the returned source. Identifier
+terms receive priority within the existing 24-term ceiling. The current redaction policy,
+credential floor, message exclusions, source scope and all scan/token ceilings remain binding.
+The same Activity Log event includes optional query/identifier counts and a closed matching-policy
+version; it never records the query or excerpt body.
 A checkpoint stamped with a smaller context window must not stop a larger-window history scan,
 even when the complete conversation still exceeds the larger input budget. The visitor rebuilds
 that window's full bounded verbatim tail from canonical messages before folding older units.
@@ -174,6 +239,21 @@ recorded with request-correlated, body-free diagnostics. If no valid summary exi
 retains that summary and its earlier `coveredItems`; it must not claim coverage of the newly folded
 turns. Later enrichment can retry those uncovered turns. Successful enrichment recounts the complete
 checkpoint through the shared gateway token-accounting path before persistence.
+
+The detached buffered call's backstop follows the normal Gateway buffered budget and shared
+transport grace, with the platform timer ceiling; it must not cut a valid native attempt short at
+an independent 15-second limit (#4155). No Coding outage policy is added. Identical in-flight
+summaries are coalesced per exact handler graph and current configuration identity, keyed by chat,
+model, safe prompt hash, response mode, revision/boundary and source-reference hash. Failed work
+releases its key. This is transient work sharing, not a new persistent response cache or source
+freshness guarantee.
+
+The existing handler disposal cancels and drains these calls before closing its services. Queued
+work is refused once that graph stops, and a late result cannot persist after shutdown begins.
+`chat.compaction.summary.work` records the actual backstop, local monotonic elapsed time, planned
+UTF-16 prompt size, model-port invocation and closed outcome without source bodies. Its `accepted`
+outcome denotes output validation, not complete source coverage, answer accuracy or durable
+persistence. Coalesced work does not count as a second model-port call or provider KV-cache hit.
 
 A reader can normally distinguish an attempted enrichment from an absent attempt using the
 persisted failure state or the correlated diagnostic when a valid earlier summary was retained.

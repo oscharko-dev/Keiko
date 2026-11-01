@@ -669,6 +669,22 @@ function repositoryPreparationFor(
       });
 }
 
+// A managed start checks its model before the repository is prepared: a model that is not ready
+// now is checked first, as a Chat request does, so a start after an idle while is not refused.
+function launchPreparation(
+  input: ProductionCodingRuntimeResolverInput,
+  preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
+): QualifiedProductionCodingRuntime["mintLaunch"]["prepare"] {
+  const prepareModel = input.workspaceAuthority.prepareManagedModel;
+  if (prepareModel === undefined) return preparation?.prepare;
+  return async (request): Promise<void> => {
+    if (request.runtimePreference !== "codex-subscription") {
+      await prepareModel(request.modelId, request.correlationId);
+    }
+    await preparation?.prepare(request);
+  };
+}
+
 function launchContext(
   input: ProductionCodingRuntimeResolverInput,
   preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
@@ -689,8 +705,9 @@ function launchResolver(
   toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   const preparation = repositoryPreparationFor(input);
+  const prepare = launchPreparation(input, preparation);
   return {
-    ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
+    ...(prepare === undefined ? {} : { prepare }),
     resolve: (requested): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
       const context = launchContext(input, preparation, requested);
       // Before the one-use confirmation is consumed or authority minted: a refused agent leaves

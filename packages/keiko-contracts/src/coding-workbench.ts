@@ -542,10 +542,11 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
   | "tool-calling-unverified"
   // Appended (#3591, 1.1.7): the automatic verification of this model (basic chat, context window or tool
-  // calling) is still running against a slow gateway. Transient: the Workbench re-reads its profile
-  // until the probe settles, and no operator action is required.
+  // calling) is running against a slow gateway right now. Transient: the Workbench re-reads its
+  // profile until the probe settles, and no operator action is required.
   | "model-verification-pending"
-  // An actual current-generation basic-chat check failed; background recovery continues.
+  // An actual current-generation basic-chat check failed. Nothing retries it in the background;
+  // opening the Workbench or choosing the model checks it again (customer 1.3.4).
   | "conversation-not-ready";
 
 /**

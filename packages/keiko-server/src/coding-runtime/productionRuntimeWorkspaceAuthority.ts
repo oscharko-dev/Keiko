@@ -137,6 +137,10 @@ export interface ProductionWorkspaceAuthorityInput {
         reasoningEffort: ModelReasoningEffort | undefined,
       ) => { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort })
     | undefined;
+  // Checks the managed model a start launches with when it is not ready now, before the start is
+  // admitted; `resolveManagedModelProfile` then judges the answer (customer 1.3.4).
+  readonly prepareManagedModel?:
+    ((modelId: string | undefined, correlationId: string | undefined) => Promise<void>) | undefined;
 }
 
 // Exported so a caller that needs to project the SAME run-context connector-scope entitlement

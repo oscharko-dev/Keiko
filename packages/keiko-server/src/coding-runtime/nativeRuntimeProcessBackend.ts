@@ -42,6 +42,7 @@ import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRunt
 import {
   prepareRuntimeGatewayProcessSandbox,
   recordRuntimeGatewayConfinementSpawned,
+  runtimeProfileAttestsGit,
 } from "./runtimeGatewayProcessSandbox.js";
 import type {
   PreparedRuntimeSandboxLaunch,
@@ -348,13 +349,15 @@ function prepareNativeGatewayLaunch(
   | {
       readonly decision: ReturnType<typeof prepareRuntimeGatewayProcessSandbox>;
       readonly policy: RuntimeGatewayConfinement;
-      readonly git: AttestedDarwinGitExecutable;
+      readonly git: AttestedDarwinGitExecutable | undefined;
     }
   | undefined {
   if (options.gatewayConfinement === undefined || options.identity.platform !== "darwin")
     return undefined;
   try {
-    const git = options.resolveGitExecutable();
+    const git = runtimeProfileAttestsGit(options.gatewayConfinement.profile)
+      ? options.resolveGitExecutable()
+      : undefined;
     const decision = prepareRuntimeGatewayProcessSandbox({
       request,
       executable: paths.executable,
