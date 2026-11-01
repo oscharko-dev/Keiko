@@ -334,7 +334,7 @@ describe("executeJiraChatDraft (#4178)", () => {
     for (const summary of refused) jira.refuse.add(summary);
     const result = await executeJiraChatDraft(execution(jira));
     expect(result.data.guidance).toBe(JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE);
-    expect(itemsOf(result).some((item) => item.state === "created")).toBe(true);
+    expect(itemsOf(result)).toContainEqual(expect.objectContaining({ state: "created" }));
   });
 
   it("keeps the nothing-changed words when Jira refused every item it was sent", async () => {
@@ -342,7 +342,7 @@ describe("executeJiraChatDraft (#4178)", () => {
     for (const summary of ["Item epic", "Item loose"]) jira.refuse.add(summary);
     const result = await executeJiraChatDraft(execution(jira));
     expect(result.data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
-    expect(itemsOf(result).some((item) => item.state === "created")).toBe(false);
+    expect(itemsOf(result)).not.toContainEqual(expect.objectContaining({ state: "created" }));
   });
 
   it.each([
