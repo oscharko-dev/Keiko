@@ -82,7 +82,8 @@ function structurallyReported(code, entry, fieldIds, sectionCount) {
 const DEVIATION_WORDS = {
   summary: /zusammenfassung|summary|titel|präfix|\[LH-/i,
   parent: /parent|epic|übergeordnet|zuordn|verknüpf/i,
-  estimate: /sch[aä]tzung|estimate|story ?points?|aufwand/i,
+  // Jira's own estimate fields: Story Points, or Time Tracking with its Original Estimate.
+  estimate: /sch[aä]tzung|estimate|story ?points?|aufwand|time ?tracking|zeiterfassung/i,
   label: /label/i,
 };
 

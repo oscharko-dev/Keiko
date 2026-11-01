@@ -10,6 +10,7 @@ import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.m
 import {
   gradeChangeImpact,
   gradeCriterionTestCases,
+  gradeDeviationReport,
   gradeQualityFindings,
   sectionsPresent,
 } from "../testing/jira-chat-lab/requirements/oracles.mjs";
@@ -36,6 +37,32 @@ describe("description sections", () => {
       expect(sectionsPresent(description, SECTIONS)).toBe(false);
     },
   );
+});
+
+// Lab S11 (Qwen, 2026-11-01): the report flagged the estimate as "field-missing: Time Tracking", the
+// answer said so for all eight issues, and the grader knew only the Story Points words for it.
+describe("estimate deviations (S11)", () => {
+  const issues = [{ key: "RPT-50", deviations: ["estimate"] }];
+  const structured = new Map([
+    ["RPT-50", { ruleIds: new Set(["field-missing"]), fieldIds: new Set(["timetracking"]) }],
+  ]);
+  const grade = (answer) =>
+    gradeDeviationReport(answer, issues, structured, { storyPoints: "timetracking" });
+
+  it.each([
+    "| RPT-50 | Feld „Time Tracking“ fehlt |",
+    "RPT-50: Zeiterfassung ist nicht gesetzt",
+    "RPT-50: Original Estimate fehlt",
+    "RPT-50: keine ursprüngliche Schätzung",
+    "RPT-50: Story Points fehlen",
+  ])("credits Jira's estimate field named as such: %s", (answer) => {
+    expect(grade(answer).undescribed).toEqual([]);
+  });
+
+  it("still requires the estimate to be described, and not denied", () => {
+    expect(grade("RPT-50: Zusammenfassung weicht ab").undescribed).toEqual(["RPT-50 estimate"]);
+    expect(grade("RPT-50: Time Tracking ist korrekt").undescribed).toEqual(["RPT-50 estimate"]);
+  });
 });
 
 describe("quality findings (S15)", () => {
