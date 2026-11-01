@@ -25,6 +25,7 @@ import {
   CODING_WORKBENCH_OBSERVATION_BATCH_MS,
   useCodingWorkbenchRuntimeEventStream,
 } from "./coding-workbench-event-retention";
+import { GATEWAY_MODEL_CATALOG_UPDATED_EVENT } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import {
   useCodingWorkbenchRuntime,
   type UseCodingWorkbenchRuntimeInput,
@@ -508,6 +509,40 @@ describe("useCodingWorkbenchRuntime", () => {
     });
     expect(view.result.current.state.run.value).toMatchObject({ runId: "run-1", revision: 4 });
 
+    view.unmount();
+  });
+
+  // Customer 1.3.4: the Workbench judged the server's default model while the person had chosen
+  // another one. The profile read carries the chosen model, and choosing reads it again.
+  it("reads the gateway profile for the model chosen in the picker", async () => {
+    installBootstrap(snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }));
+    const activeWorkspace = workspace();
+    const view = renderHook(() => useCodingWorkbenchRuntime({ workspace: activeWorkspace }));
+    await waitFor(() => expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalled());
+    expect(vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mock.calls[0]?.[1]).toBeUndefined();
+
+    act(() => view.result.current.actions.setSelectedModel("model-chosen"));
+
+    await waitFor(() =>
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenLastCalledWith(
+        expect.any(String),
+        "model-chosen",
+        true,
+      ),
+    );
+
+    // Customer 1.3.4: a re-read after a catalog update describes the choice but asks for no check,
+    // so an open Workbench probes nothing in the background.
+    act(() => {
+      window.dispatchEvent(new Event(GATEWAY_MODEL_CATALOG_UPDATED_EVENT));
+    });
+    await waitFor(() =>
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenLastCalledWith(
+        expect.any(String),
+        "model-chosen",
+        false,
+      ),
+    );
     view.unmount();
   });
 

@@ -53,15 +53,19 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   readonly refreshSource: (
     catalogAlreadyCurrent?: boolean,
     parentCorrelationId?: string,
+    checkModel?: boolean,
   ) => Promise<void>;
   readonly refreshRun: () => Promise<void>;
 }): void {
   useEffect(() => {
     void refreshRuntime();
   }, [state.requestedMode, refreshRuntime]);
+  // A model chosen in the picker is the model the source describes: choosing one reads its profile
+  // and asks the server to check exactly that model when it holds no fresh answer for it. No other
+  // re-read asks for a check, so an open Workbench probes nothing in the background (customer 1.3.4).
   useEffect(() => {
-    void refreshSource();
-  }, [state.runtimePreference, refreshSource]);
+    void refreshSource(false, undefined, true);
+  }, [state.runtimePreference, state.selectedModelId, refreshSource]);
   // Settings replaces the gateway configuration (a saved setup, an applied verified capability)
   // and records readiness verdicts without this window knowing: the source stayed "unavailable"
   // after the operator had just verified tool calling, until a reload (workbench end-to-end run,

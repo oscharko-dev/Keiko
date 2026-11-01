@@ -4138,6 +4138,72 @@
         "Native commits work more reliably on macOS. Full access can commit an unchanged staged candidate after completed checks report failures or beside unrelated untracked files; failed evidence remains visible and protected integration still requires successful checks (#4150, #4162, #4166).",
         "Readiness refreshes after a run and stopped runs retain tool observations. Git plumbing writes remain reserved, protected-branch refusals explain the required task branch, and stopping closes stale revert-state reads (#4166, #4167)."
       ]
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      },
+      "packageVersion": "1.3.5",
+      "releaseTag": "v1.3.5",
+      "supportedFrom": ["0.2.0", "1.2.6", "1.2.7", "1.3.0", "1.3.1", "1.3.2", "1.3.3", "1.3.4"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-01",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6556712618",
+        "rationale": "The owner explicitly selected stable release 1.3.5 to close the customer's 1.3.4 Coding Workbench failures, conditional on complete verification. The referenced actual owner-account comment records this decision and the complete since-v1.3.4 scope. Publication still requires protected signed integration, exact-head checks, resolved reviews and the owner-authorized release workflow."
+      },
+      "id": "2026-11-01-keiko-1.3.5-coding-workbench-readiness",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench judges the selected model, uses the host Git and no longer probes models in the background.",
+      "affectedStateStores": ["coding-runtime-state"],
+      "stateImpact": [
+        {
+          "store": "coding-runtime-state",
+          "description": "Existing task and run records remain compatible. Model readiness is held in memory and checked once per connection; this release adds no schema migration.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "The Coding Workbench judges the readiness of the model you picked, so a ready model no longer waits behind \"Keiko is still checking the model source\" while another model is busy or down.",
+        "Native coding runs use the Git the host provides; a managed Mac without administrator rights no longer fails runs with \"Model source unavailable\", and Keiko installs nothing.",
+        "Each chat model is checked once per connection when Keiko starts; opening the Workbench or a model list, choosing a model, a page load or a run start checks it again, and no timer keeps busy single-slot models occupied.",
+        "A model whose tool-calling check was never answered is reported as unverified instead of unable to call tools, and is checked again when someone asks.",
+        "The gateway transport remembers per origin when the configured CA bundle is needed, and rerank, discovery and embedding calls write their transport lines to the Activity Log."
+      ]
     }
   ]
 }
