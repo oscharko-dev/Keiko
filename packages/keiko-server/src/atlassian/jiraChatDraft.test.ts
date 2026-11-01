@@ -28,6 +28,7 @@ import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
   JIRA_DRAFT_EXISTING_GUIDANCE,
+  JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
   JIRA_DRAFT_PENDING_GUIDANCE,
   jiraDraftOutcome,
   observedJiraDraftOutcome,
@@ -318,10 +319,30 @@ describe("executeJiraChatDraft (#4178)", () => {
         failedCount: 1,
         skippedCount: 2,
         createdCount: 1,
-        guidance: JIRA_REJECTED_GUIDANCE,
+        guidance: JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
       },
     });
     expect(jira.posts()).toHaveLength(2);
+  });
+
+  // A partly refused draft changed Jira: its words must not say that nothing was changed (#4178).
+  it.each([
+    ["the refused item first", ["Item epic"]],
+    ["the refused item last", ["Item loose"]],
+  ])("names created and refused items when Jira refused only some, %s", async (_name, refused) => {
+    const jira = syntheticJira();
+    for (const summary of refused) jira.refuse.add(summary);
+    const result = await executeJiraChatDraft(execution(jira));
+    expect(result.data.guidance).toBe(JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE);
+    expect(itemsOf(result).some((item) => item.state === "created")).toBe(true);
+  });
+
+  it("keeps the nothing-changed words when Jira refused every item it was sent", async () => {
+    const jira = syntheticJira();
+    for (const summary of ["Item epic", "Item loose"]) jira.refuse.add(summary);
+    const result = await executeJiraChatDraft(execution(jira));
+    expect(result.data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
+    expect(itemsOf(result).some((item) => item.state === "created")).toBe(false);
   });
 
   it.each([

@@ -810,7 +810,9 @@ read completely is refused as `bounds-exceeded` instead of creating a possible d
 whose items all exist (or were deselected, at least one existing) writes nothing and reports
 `not-dispatched`; its result then carries `JIRA_DRAFT_EXISTING_GUIDANCE`, which tells the model that
 nothing is missing and not to create the issues again with `jira.create` — the lab's S19 rerun showed
-a model reading the bare outcome as a failure and creating duplicates one by one. Absence
+a model reading the bare outcome as a failure and creating duplicates one by one. A draft that Jira
+refused only in part carries `JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE` instead of the single-write "nothing
+was changed": it names the items now in Jira and scopes the correction to the refused ones. Absence
 requires consistent evidence: every page must state the `startAt` that was requested and a page size
 and total that are counts, may not hold more issues than its page size or the total, may not be
 empty while the total is not reached, and every candidate must carry a safe key and a numeric id.

@@ -468,6 +468,15 @@ export const JIRA_DRAFT_PENDING_GUIDANCE =
 export const JIRA_DRAFT_EXISTING_GUIDANCE =
   "Every item already exists in Jira and was recognised, so nothing was created and nothing is missing. " +
   "Report the existing keys as the result. Do not create these issues again with jira.create. Do not show this message.";
+/**
+ * Jira refused some items while others are in Jira: "nothing was changed" would be false, so the
+ * words name both and scope the correction to the refused items (#4178).
+ */
+export const JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE =
+  "Jira refused the items marked failed; the items with an issueKey are in Jira. " +
+  "Correct the fields named in each failed item's fieldErrors or messages, then send the corrected draft once: " +
+  "issues already in Jira are recognised, so nothing is created twice. " +
+  "Tell the user in plain language which issues were created and which item Jira refused and why.";
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
 function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
   if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
@@ -476,7 +485,9 @@ function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
       (item) => item.state === "failed" && (item.detail?.fieldErrors ?? item.detail?.messages),
     )
   )
-    return JIRA_REJECTED_GUIDANCE;
+    return items.some((item) => item.issueKey !== undefined)
+      ? JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE
+      : JIRA_REJECTED_GUIDANCE;
   if (items.some((item) => item.state === "pending")) return JIRA_DRAFT_PENDING_GUIDANCE;
   const reconciledOnly =
     items.some((item) => item.state === "existing") &&
