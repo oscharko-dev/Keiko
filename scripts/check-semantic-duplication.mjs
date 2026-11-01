@@ -26,34 +26,12 @@ export const SEMANTIC_DUPLICATION_CONFIG = {
   },
 };
 
-// This artifact predates the strict string-preserving, full-source configuration. It is
-// historical reporting input, never a suppression source or a veto for the mandatory audit.
-export const DUPES_BASELINE = "docs/qa/fallow/dupes-baseline.json";
-export const FALLOW_DUPES_ARGS = Object.freeze([
-  "dupes",
-  "--mode",
-  "semantic",
-  "--min-tokens",
-  "100",
-  "--min-lines",
-  "10",
-  "--ignore-imports",
-  "--no-package-baselines",
-]);
-
-/** Select report groups for a diagnostic view without narrowing the mandatory audit. */
-export function ownedGroups(groups, changed) {
-  if (changed === undefined) return groups;
-  return groups.filter((group) => group.instances.some((instance) => changed.has(instance.file)));
-}
-
-/** Read a legacy diagnostic count; absence is not evidence that a baseline check passed. */
-export function staleEntries(staleness) {
-  return Number.isFinite(staleness?.stale_entries) ? staleness.stale_entries : 0;
-}
+// A refusal this gate raised itself. Its message is one of the closed reasons below, so it is safe to
+// print; any other error (malformed JSON, a child failure) is reported only as the generic refusal.
+class DuplicationEvidenceError extends Error {}
 
 function requireCondition(condition, message) {
-  if (!condition) throw new Error(message);
+  if (!condition) throw new DuplicationEvidenceError(message);
 }
 
 export function validateSemanticDuplicationConfig(value) {
@@ -119,6 +97,17 @@ function validateGroups(groups, total, introduced, inherited) {
       inherited > 0 === groups.length > actualIntroduced,
     "incomplete clone attribution",
   );
+}
+
+/** Where each introduced group sits: one `file:start-end` per instance, joined with ` | `. */
+export function introducedGroupLocations(report) {
+  return (report.duplication?.clone_groups ?? [])
+    .filter((group) => group.introduced)
+    .map((group) =>
+      group.instances
+        .map((instance) => `${instance.file}:${instance.start_line}-${instance.end_line}`)
+        .join(" | "),
+    );
 }
 
 export function validateSemanticDuplicationReport(report, base, head) {
@@ -215,12 +204,29 @@ function analyze(repoRoot, base, head, execute, env) {
     repoRoot,
     env,
   );
-  const introduced = validateSemanticDuplicationReport(JSON.parse(output), base, head);
+  const report = JSON.parse(output);
+  const introduced = validateSemanticDuplicationReport(report, base, head);
   requireCondition(
     readFileSync(configPath, "utf8") === config,
     "duplication configuration changed",
   );
-  return introduced;
+  return { introduced, locations: introducedGroupLocations(report) };
+}
+
+function reportOutcome(introduced, locations, log, error) {
+  if (introduced === 0) {
+    log("semantic-duplication: PASS — zero introduced clone groups");
+    return 0;
+  }
+  error(`semantic-duplication: FAIL — ${introduced} introduced clone groups`);
+  for (const location of locations) error(`  introduced clone group: ${location}`);
+  return 1;
+}
+
+function refusalLine(cause) {
+  return cause instanceof DuplicationEvidenceError
+    ? `semantic-duplication: FAIL — ${cause.message}`
+    : "semantic-duplication: FAIL — invalid range, configuration, or analysis evidence";
 }
 
 export function main(args = process.argv.slice(2), options = {}) {
@@ -235,16 +241,11 @@ export function main(args = process.argv.slice(2), options = {}) {
     const env = semanticDuplicationEnvironment(sourceEnv);
     const git = (gitArgs) => execute(resolveHostExecutable("git"), gitArgs, repoRoot, env);
     const { base, head } = immutableRange(args, git);
-    const introduced = analyze(repoRoot, base, head, execute, env);
+    const { introduced, locations } = analyze(repoRoot, base, head, execute, env);
     requireCondition(git(["rev-parse", "--verify", "HEAD"]) === head, "repository head changed");
-    if (introduced > 0) {
-      error(`semantic-duplication: FAIL — ${introduced} introduced clone groups`);
-      return 1;
-    }
-    log("semantic-duplication: PASS — zero introduced clone groups");
-    return 0;
-  } catch {
-    error("semantic-duplication: FAIL — invalid range, configuration, or analysis evidence");
+    return reportOutcome(introduced, locations, log, error);
+  } catch (cause) {
+    error(refusalLine(cause));
     return 1;
   }
 }

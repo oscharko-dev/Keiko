@@ -256,9 +256,12 @@ describe("code-quality reviewed increase ledger parsing (#4145)", () => {
     expect(() => parseIncreases(compact)).toThrow("noncanonical-code-quality-register-increases");
   });
 
-  it("commits the empty ledger on dev", () => {
+  // Slices add reviewed entries, and a later prune may lower a count below an entry's `to` while the
+  // entry stays as history. The committed ledger is therefore pinned to its canonical form only;
+  // the base review owns which entries a change may add.
+  it("commits a canonical ledger", () => {
     const committed = readFileSync("scripts/code-quality-register-increases.json", "utf8");
-    expect(parseIncreases(committed)).toEqual([]);
+    expect(serializeIncreases(parseIncreases(committed))).toBe(committed);
   });
 });
 

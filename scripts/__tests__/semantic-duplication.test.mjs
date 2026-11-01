@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -15,7 +15,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  FALLOW_DUPES_ARGS,
+  introducedGroupLocations,
   main,
   SEMANTIC_DUPLICATION_CONFIG,
   semanticDuplicationEnvironment,
@@ -300,6 +300,40 @@ describe("introduced semantic duplication gate", () => {
     expect(validateSemanticDuplicationReport(empty, BASE, HEAD)).toBe(0);
   });
 
+  it("names every introduced group by its instance locations and none of the inherited ones", () => {
+    temporary((root) => {
+      const value = report(1, 1);
+      value.duplication.clone_groups[0].instances = [
+        { file: "src/first.ts", start_line: 3, end_line: 14 },
+        { file: "src/second.ts", start_line: 20, end_line: 31 },
+      ];
+      value.duplication.clone_groups[1].instances = [
+        { file: "src/old.ts", start_line: 1, end_line: 12 },
+        { file: "src/older.ts", start_line: 1, end_line: 12 },
+      ];
+      expect(introducedGroupLocations(value)).toEqual(["src/first.ts:3-14 | src/second.ts:20-31"]);
+      const run = mockedRun(root, value);
+      expect(run.exit).toBe(1);
+      expect(run.error.mock.calls.flat()).toEqual([
+        "semantic-duplication: FAIL — 1 introduced clone groups",
+        "  introduced clone group: src/first.ts:3-14 | src/second.ts:20-31",
+      ]);
+    });
+  });
+
+  it("names the closed check that refused the evidence, and only that check", () => {
+    temporary((root) => {
+      const stale = report();
+      stale.version = "3.9.1";
+      expect(mockedRun(root, stale).error.mock.calls.flat()).toEqual([
+        "semantic-duplication: FAIL — unsupported audit protocol",
+      ]);
+      expect(mockedRun(root, report(), true).error.mock.calls.flat()).toEqual([
+        "semantic-duplication: FAIL — invalid range, configuration, or analysis evidence",
+      ]);
+    });
+  });
+
   it("rejects unknown options, malformed JSON, child failure, and configuration drift", () => {
     temporary((root) => {
       const error = vi.fn();
@@ -424,7 +458,7 @@ describe("actual native Fallow new-only attribution", () => {
       const missingBase = nativeGate(root, "f".repeat(40));
       expect(missingBase.exit).toBe(1);
       expect(missingBase.diagnostic).toContain(
-        "invalid range, configuration, or analysis evidence",
+        "semantic-duplication: FAIL — analysis command failed",
       );
     });
   }, 120_000);
@@ -550,90 +584,7 @@ function prepareNativeFixture(root) {
   );
 }
 
-function nativeBaselineCommand(root, args) {
-  return spawnSync(
-    process.execPath,
-    [
-      join(REPO_ROOT, "node_modules/fallow/bin/fallow"),
-      ...args,
-      "--config",
-      join(root, ".fallowrc.json"),
-      "--format",
-      "json",
-    ],
-    {
-      cwd: root,
-      env: semanticDuplicationEnvironment(),
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 4 * 1024 * 1024,
-    },
-  );
-}
-
-function saveFixtureBaseline(root) {
-  const saved = nativeBaselineCommand(root, [
-    ...FALLOW_DUPES_ARGS,
-    "--save-baseline",
-    "fixture-baseline.json",
-  ]);
-  expect(saved.error).toBeUndefined();
-  expect(saved.signal).toBeNull();
-  expect(saved.status).toBe(0);
-  return readFileSync(join(root, "fixture-baseline.json"), "utf8");
-}
-
-function expectNativeBaselineFailure(result, gate) {
-  expect(result.error).toBeUndefined();
-  expect(result.signal).toBeNull();
-  expect(result.status).toBe(1);
-  expect(JSON.parse(result.stdout).gate_outcomes[gate]).toMatchObject({
-    status: "fail",
-    enforced: true,
-  });
-}
-
-function readFixtureBaseline(root) {
-  return JSON.parse(readFileSync(join(root, "fixture-baseline.json"), "utf8"));
-}
-
-function prepareBaselinePair(root) {
-  prepareNativeFixture(root);
-  writeClone(root, "first.js", "first");
-  writeClone(root, "second.js", "second");
-  const original = saveFixtureBaseline(root);
-  expect(readFixtureBaseline(root).clone_groups.length).toBeGreaterThan(0);
-  return { original, base: commit(root) };
-}
-
-function writeSurvivingTable(root, path, name) {
-  const entries = Array.from(
-    { length: 30 },
-    (_, index) => `  ["survivor-key-${index}", "survivor-value-${index}"],`,
-  );
-  writeFileSync(join(root, path), `export const ${name} = new Map([\n${entries.join("\n")}\n]);\n`);
-}
-
-function prepareBaselineWithSurvivor(root) {
-  prepareNativeFixture(root);
-  writeClone(root, "first.js", "first");
-  writeClone(root, "second.js", "second");
-  writeSurvivingTable(root, "survivor-one.js", "firstTable");
-  writeSurvivingTable(root, "survivor-two.js", "secondTable");
-  const held = JSON.parse(saveFixtureBaseline(root));
-  const fixedKeys = held.clone_groups.filter(
-    (key) => key.includes("first.js:") && key.includes("second.js:"),
-  );
-  const survivorKeys = held.clone_groups.filter(
-    (key) => key.includes("survivor-one.js:") && key.includes("survivor-two.js:"),
-  );
-  expect(fixedKeys.length).toBeGreaterThan(0);
-  expect(survivorKeys.length).toBeGreaterThan(0);
-  commit(root);
-  return { held, fixedKeys, survivorKeys };
-}
-
-describe("strict coverage and compatible native baseline maintenance", () => {
+describe("strict coverage of generated and catalog sources", () => {
   it.each([
     ["entry.ts", "copy.generated.ts"],
     ["entry.js", "copy.generated.js"],
@@ -658,64 +609,4 @@ describe("strict coverage and compatible native baseline maintenance", () => {
     },
     60_000,
   );
-
-  it("does not let a fixture baseline rescue a new third instance or replace held keys", () => {
-    temporary((root) => {
-      const { base } = prepareBaselinePair(root);
-      writeClone(root, "third.js", "third");
-      commit(root);
-      saveFixtureBaseline(root);
-      const matched = nativeBaselineCommand(root, [
-        ...FALLOW_DUPES_ARGS,
-        "--baseline",
-        "fixture-baseline.json",
-      ]);
-      expect(matched.error).toBeUndefined();
-      expect(matched.status).toBe(0);
-      expect(JSON.parse(matched.stdout).clone_groups).toEqual([]);
-      const growth = nativeBaselineCommand(root, [
-        ...FALLOW_DUPES_ARGS,
-        "--baseline",
-        "fixture-baseline.json",
-        "--fail-on-baseline-growth",
-        "--baseline-base",
-        base,
-      ]);
-      expectNativeBaselineFailure(growth, "baseline-growth");
-      const refusal = nativeGate(root, base);
-      expect(refusal.exit).toBe(1);
-      expect(refusal.diagnostic).toMatch(/FAIL — [1-9]\d* introduced clone groups/u);
-    });
-  }, 120_000);
-
-  it("prunes only truly fixed entries from a same-configuration fixture baseline", () => {
-    temporary((root) => {
-      const { held, fixedKeys, survivorKeys } = prepareBaselineWithSurvivor(root);
-      rmSync(join(root, "second.js"));
-      commit(root);
-      const stale = nativeBaselineCommand(root, [
-        ...FALLOW_DUPES_ARGS,
-        "--baseline",
-        "fixture-baseline.json",
-        "--fail-on-stale-baseline",
-      ]);
-      expectNativeBaselineFailure(stale, "stale-baseline");
-      const pruned = nativeBaselineCommand(root, [
-        "baselines",
-        "prune",
-        "--dupes-baseline",
-        "fixture-baseline.json",
-      ]);
-      expect(pruned.error).toBeUndefined();
-      expect(pruned.signal).toBeNull();
-      expect(pruned.status).toBe(0);
-      const current = readFixtureBaseline(root);
-      expect(current.clone_groups.length).toBeLessThan(held.clone_groups.length);
-      expect(current.clone_groups).toEqual(expect.arrayContaining(survivorKeys));
-      expect(current.clone_groups.filter((key) => fixedKeys.includes(key))).toEqual([]);
-      for (const key of ["clone_groups", "clone_fingerprints", "normalized_clone_fingerprints"]) {
-        expect(current[key].every((entry) => held[key].includes(entry))).toBe(true);
-      }
-    });
-  }, 120_000);
 });

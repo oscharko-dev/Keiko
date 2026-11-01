@@ -98,6 +98,87 @@ function expectIndependentVocabularies(
   }
 }
 
+// The descriptors the registry carried before these factories existed (dev f9f71d89d), one row per
+// field: name, type, data class, required, then any bounds or values. Pinning these literal values,
+// not the regenerated registry, lets a factory change fail here.
+interface HistoricalBounds {
+  readonly maxLength?: number;
+  readonly maxItems?: number;
+  readonly values?: readonly string[];
+}
+
+interface HistoricalDescriptor extends HistoricalBounds {
+  readonly type: string;
+  readonly dataClass: string;
+  readonly required: boolean;
+}
+
+type HistoricalDescriptorRow = readonly [string, string, string, boolean, HistoricalBounds?];
+
+function historicalDescriptors(
+  rows: readonly HistoricalDescriptorRow[],
+): ReadonlyMap<string, HistoricalDescriptor> {
+  return new Map(
+    rows.map(([name, type, dataClass, required, extra]) => [
+      name,
+      { type, dataClass, required, ...extra },
+    ]),
+  );
+}
+
+const HISTORICAL_AUTOMATIC_CATALOG_ROWS: readonly HistoricalDescriptorRow[] = [
+  [
+    "outcome",
+    "string",
+    "closed-enum",
+    true,
+    { values: ["applied", "unchanged", "stale", "cancelled", "failed", "retry-decision"] },
+  ],
+  ["phase", "string", "closed-enum", false, { values: ["catalog", "retry-decision"] }],
+  ["backgroundAttempt", "integer", "count", false],
+  ["configurationGeneration", "integer", "count", false],
+  [
+    "retryDisposition",
+    "string",
+    "closed-enum",
+    false,
+    {
+      values: [
+        "scheduled",
+        "exhausted",
+        "coalesced",
+        "in-flight",
+        "backoff",
+        "conclusive",
+        "complete",
+      ],
+    },
+  ],
+  ["retryDelayMs", "integer", "duration", false],
+  ["retryDeadlineMs", "integer", "count", false],
+  ["configuredModelCount", "integer", "count", true],
+  ["updatedModelCount", "integer", "count", true],
+  ["addedModelCount", "integer", "count", true],
+  ["removedModelCount", "integer", "count", true],
+  ["deploymentChangedModelCount", "integer", "count", true],
+  ["elapsedMs", "integer", "duration", true],
+  ["retryable", "boolean", "closed-enum", true],
+];
+
+const HISTORICAL_EMBEDDING_BATCH_RETRY_ROWS: readonly HistoricalDescriptorRow[] = [
+  ["capsuleIdDigest", "string", "digest", false, { maxLength: 64 }],
+  ["documentIdDigest", "string", "digest", false, { maxLength: 64 }],
+  ["attempt", "integer", "count", true],
+  ["zeroProgressRetries", "integer", "count", true],
+  ["maxRetries", "integer", "count", true],
+  ["delayMs", "number", "duration", true],
+  ["remainingCount", "integer", "count", true],
+  ["completedCount", "integer", "count", true],
+  ["transport", "string", "closed-enum", true, { values: ["array-batch"] }],
+  ["endpointDigest", "string", "digest", false, { maxLength: 16 }],
+  ["failureKind", "string", "error-kind", true, { maxLength: 64 }],
+];
+
 describe("automatic catalog field policy", () => {
   it("preserves the producer's exact ordered fourteen non-global descriptors", () => {
     const fields = activityLogAutomaticCatalogFields();
@@ -105,8 +186,10 @@ describe("automatic catalog field policy", () => {
       (entry) => entry.op === "gateway.catalog.automatic.completed",
     );
     expect(operation).toBeDefined();
-    const expected = Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2));
-    expect(fields).toEqual(expected);
+    expect(new Map(Object.entries(fields))).toEqual(
+      historicalDescriptors(HISTORICAL_AUTOMATIC_CATALOG_ROWS),
+    );
+    expect(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2))).toEqual(fields);
     expectOrdinaryDescriptor(fields, [
       "outcome",
       "phase",
@@ -313,7 +396,10 @@ describe("embedding batch retry field policy", () => {
       (entry) => entry.op === "embedding.batch.retry",
     );
     expect(operation).toBeDefined();
-    expect(fields).toEqual(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2)));
+    expect(new Map(Object.entries(fields))).toEqual(
+      historicalDescriptors(HISTORICAL_EMBEDDING_BATCH_RETRY_ROWS),
+    );
+    expect(Object.fromEntries(Object.entries(operation?.fields ?? {}).slice(2))).toEqual(fields);
     expectOrdinaryDescriptor(fields, [
       "capsuleIdDigest",
       "documentIdDigest",
