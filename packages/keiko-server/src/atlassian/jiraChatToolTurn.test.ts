@@ -46,6 +46,19 @@ import {
   syntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
+import { omittedReportFindingKeys } from "../chat-tool-report-coverage.js";
+import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
+
+// Pass-through spies: the turn's completeness check and its log line run as in production unless a
+// test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
+vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-tool-report-coverage.js")>();
+  return { ...actual, omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys) };
+});
+vi.mock("../chat-tool-turn-ending.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-tool-turn-ending.js")>();
+  return { ...actual, recordChatToolTurnCorrected: vi.fn(actual.recordChatToolTurnCorrected) };
+});
 
 type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
 const MODEL = "synthetic-jira-chat";
@@ -925,6 +938,63 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
     expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
   });
 });
+
+// S11 of epic #4173: Gemma's compliance answer left out the seven estimate deviations the report
+// listed. An answer that omits listed findings gets ONE further round naming them; the model writes
+// the final answer, and a second incomplete answer stands.
+describe.each([false, true])(
+  "an answer that leaves out listed report findings (stream=%s)",
+  (stream) => {
+    it("gets one round naming the omitted keys, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      // The second answer is not checked again: one correction per turn.
+      vi.mocked(omittedReportFindingKeys).mockReturnValueOnce(["RPT-50", "RPT-63"]);
+      const f = fixture();
+      const response = mockResponse({ captureBody: true });
+      const ctx = { ...sendContext(f, `report-omission-${String(stream)}`), res: response.res };
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+
+      // tool round, the incomplete answer, the correction round (a tool call), the final answer.
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("leaves out 2 issue(s)");
+      expect(correction(f.calls[2])).toContain("RPT-50, RPT-63");
+      expect(JSON.stringify(f.calls[2]?.messages)).toContain("No Jira projects are visible.");
+      expect(correction(f.calls[3])).not.toContain("leaves out");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "report-omission",
+        omittedFindingCount: 2,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toContain(
+        "RPT-",
+      );
+    });
+
+    it("asks nothing more of an answer that names every listed finding", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      const f = fixture();
+      const ctx = sendContext(f, `report-complete-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+      expect(f.calls).toHaveLength(2);
+      expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+    });
+  },
+);
 
 // #4176 AC4: Jira validates a whole request before applying it, so a client error with Jira's own
 // error document is a definitive rejection and the model's corrected retry runs in the same turn.

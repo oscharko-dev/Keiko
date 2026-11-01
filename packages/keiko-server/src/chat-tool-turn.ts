@@ -37,6 +37,7 @@ import {
   recordChatToolTurnEnded,
 } from "./chat-tool-turn-ending.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
+import { omittedReportFindingKeys, reportFindingCorrection } from "./chat-tool-report-coverage.js";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   findConfiguredCapability,
@@ -137,6 +138,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private correctedSinceProgress = false;
   /** The first admission of a correction round follows an attempt the turn could not use. */
   private correctionAdmissionPending = false;
+  /** The answer that left out listed report findings; it stands if the corrected round fails. */
+  private uncorrectedAnswer: NormalizedResponse | undefined;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
     this.instruction =
       options.guidance === undefined
@@ -490,12 +493,27 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     try {
       return await this.runRounds(model, request, signal, observeRound);
     } catch (error) {
+      const uncorrected = this.answerBeforeCorrection(signal);
+      if (uncorrected !== undefined) return uncorrected;
       const partial = this.partialAnswer(error, request.modelId, signal);
       if (partial === undefined) throw error;
       return partial;
     } finally {
       signal.removeEventListener("abort", cancel);
     }
+  }
+
+  /**
+   * The model's own answer stands when only its completeness correction failed: it is a better answer
+   * than the transcript. A human stop is not replaced.
+   */
+  private answerBeforeCorrection(signal: AbortSignal): NormalizedResponse | undefined {
+    const answer = this.uncorrectedAnswer;
+    if (answer === undefined) return undefined;
+    const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
+    if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
+    this.endedAnswer = answer;
+    return answer;
   }
 
   /**
@@ -619,12 +637,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       const response = await this.callRound(model, round); // NOSONAR typescript:S9382 -- each round depends on the previous round's results
       if (response === undefined) continue;
       observeRound?.(response);
-      this.promptTokens +=
-        response.usage.promptTokens + (response.discardedAttemptUsage?.promptTokens ?? 0);
-      this.completionTokens +=
-        response.usage.completionTokens + (response.discardedAttemptUsage?.completionTokens ?? 0);
-      if (response.toolCalls.length === 0)
-        return {
+      this.chargeUsage(response);
+      if (response.toolCalls.length === 0) {
+        const answer: NormalizedResponse = {
           ...response,
           usage: {
             ...response.usage,
@@ -632,6 +647,9 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
             completionTokens: this.completionTokens,
           },
         };
+        if (!this.correctOmittedFindings(answer)) return answer;
+        continue;
+      }
       requireDispatch(
         response.toolCalls.length <= this.limits.maxToolCalls - this.counters.toolCalls,
         "denied",
@@ -641,6 +659,38 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.correctedSinceProgress = false;
     }
     requireDispatch(false, "denied", "budget-exhausted");
+  }
+
+  /** Every round's usage, including attempts the gateway discarded, counts against the turn. */
+  private chargeUsage(response: NormalizedResponse): void {
+    this.promptTokens +=
+      response.usage.promptTokens + (response.discardedAttemptUsage?.promptTokens ?? 0);
+    this.completionTokens +=
+      response.usage.completionTokens + (response.discardedAttemptUsage?.completionTokens ?? 0);
+  }
+
+  /**
+   * An answer that leaves out issues the turn's `jira.report` finding pages list gets ONE further
+   * round carrying the omitted keys (S11 of epic #4173). The model writes the answer; Keiko only
+   * checks it against its own report. The round stays inside the Authority Envelope; a second
+   * incomplete answer stands, and a failed round falls back to the first answer.
+   */
+  private correctOmittedFindings(answer: NormalizedResponse): boolean {
+    if (this.uncorrectedAnswer !== undefined) return false;
+    if (this.counters.iterations >= this.limits.maxIterations) return false;
+    const omitted = omittedReportFindingKeys(this.settledExchanges, answer.content);
+    if (omitted.length === 0) return false;
+    this.uncorrectedAnswer = answer;
+    this.continuation.push({ role: "assistant", content: answer.content });
+    this.correction = { role: "system", content: reportFindingCorrection(omitted) };
+    recordChatToolTurnCorrected(processServerLogSink(), {
+      correlationId: this.options.correlationId,
+      messageId: this.options.message.id,
+      settledExchangeCount: this.settledExchanges.length,
+      correctionKind: "report-omission",
+      omittedFindingCount: omitted.length,
+    });
+    return true;
   }
 
   /**
@@ -676,6 +726,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
         correlationId: this.options.correlationId,
         messageId: this.options.message.id,
         settledExchangeCount: this.settledExchanges.length,
+        correctionKind: "tool-schema",
       });
       return undefined;
     }

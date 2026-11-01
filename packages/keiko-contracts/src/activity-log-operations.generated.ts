@@ -3302,6 +3302,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: true,
       },
+      correctionKind: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["tool-schema", "report-omission"],
+      },
+      omittedFindingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "state",

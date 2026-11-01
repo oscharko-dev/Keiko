@@ -891,7 +891,16 @@ that dispatches a tool call restores it, and a second rejection without progress
 its transcript answer as before. Every round stays inside the Authority Envelope's model-call and
 prompt budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
 inherits the correction. `chat.tool-turn.corrected` records each such round with the turn's settled
-exchange count.
+exchange count and `correctionKind` `tool-schema`.
+An answer that leaves out issues the turn's `jira.report` finding pages list (`deviations`,
+`orphans`) gets one further round in the same way (S11 of epic #4173: Gemma's compliance answer
+dropped all seven estimate deviations the report had listed). Keiko compares the issue keys of
+those pages with the answer deterministically; the correction names the omitted keys in one fixed
+sentence and the model writes the new answer, so Keiko adds no text of its own to the reply. It is
+once per turn: a second incomplete answer stands, and a round that fails falls back to the first
+answer rather than to the transcript; a human stop is not replaced. Figure sections are not checked.
+The round is recorded with `correctionKind` `report-omission` and `omittedFindingCount`, never the
+keys.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically

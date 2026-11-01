@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0462ee64a9145f22602269d97991e1aae623f6efaf085c8e2579b230e576a6dc",
+    "catalogDigest": "a9416a7b1644dc3b00c592b3abd3e110ad845d8e627ed983a33c65c9a47198bb",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3425,6 +3425,17 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "correctionKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["tool-schema", "report-omission"]
+          },
+          "omittedFindingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -3434,7 +3445,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:284",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:319"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:329"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59253,10 +59264,22 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "correctionKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "messageDigest",
                   "type": "string",
                   "dataClass": "digest",
                   "required": true
+                },
+                {
+                  "name": "omittedFindingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "settledExchangeCount",
@@ -59265,7 +59288,13 @@
                   "required": true
                 }
               ],
-              "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
               "frameCauseEvidence": {
                 "frames": false,
                 "causeChain": false

@@ -3654,10 +3654,22 @@
           "analyzerProjection": "timeline",
           "safeContextFields": [
             {
+              "name": "correctionKind",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "messageDigest",
               "type": "string",
               "dataClass": "digest",
               "required": true
+            },
+            {
+              "name": "omittedFindingCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             },
             {
               "name": "settledExchangeCount",
@@ -3666,7 +3678,7 @@
               "required": true
             }
           ],
-          "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+          "evidenceClasses": ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           "frameCauseEvidence": {
             "frames": false,
             "causeChain": false

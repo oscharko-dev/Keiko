@@ -243,17 +243,41 @@ describe("recordChatToolTurnContextFitted", () => {
 });
 
 describe("recordChatToolTurnCorrected", () => {
-  it("records only the settled exchange count under the turn correlation", () => {
+  it("records only the settled exchange count and the correction kind under the turn correlation", () => {
     const logs = createBufferedServerLogSink();
     recordChatToolTurnCorrected(logs, {
       correlationId: "turn-corrected-proof",
       messageId: "message-private-id",
       settledExchangeCount: 2,
+      correctionKind: "tool-schema",
     });
     const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
-    expect(event).toMatchObject({ level: "warn", extra: { settledExchangeCount: 2 } });
+    expect(event).toMatchObject({
+      level: "warn",
+      extra: { settledExchangeCount: 2, correctionKind: "tool-schema" },
+    });
+    expect(event?.extra).not.toHaveProperty("omittedFindingCount");
     const line = formatActivityLogProofLine(event ?? {});
     expectActivityLogProof("chat.tool-turn.corrected.line", line);
     expect(line).not.toContain("message-private-id");
+  });
+
+  it("counts the findings an answer left out, never naming them", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-omission-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 3,
+      correctionKind: "report-omission",
+      omittedFindingCount: 7,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({
+      correlationId: "turn-omission-proof",
+      extra: { correctionKind: "report-omission", omittedFindingCount: 7, settledExchangeCount: 3 },
+    });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.corrected.line", line);
+    expect(line).not.toMatch(/message-private-id|RPT-/u);
   });
 });
