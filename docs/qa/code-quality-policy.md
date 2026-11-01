@@ -32,7 +32,7 @@ findings per (file, rule). It compares those counts with the committed register
 | A new ledger entry matches no raised count            | Fails as a stale increase                         |
 | An older ledger entry was removed or changed          | Fails as rewritten history                        |
 
-The second output line reports the total before and after, for example `register: 46598 → 45320 (-1278)`.
+The second output line reports the total before and after, for example `register: 46618 → 45340 (-1278)`.
 
 **How to fix a failure.**
 
@@ -114,7 +114,7 @@ The ledger started empty on `dev`; #4145 adds no entry.
   register (`packages/keiko-ui/eslint-suppressions.json`).
 - The ratchet does not run the epic's responsibility qualifications. A green ratchet means "no new
   findings", not "this code is qualified" or "this rule is enforced".
-- The baseline on `dev` `3a2979be1` was 46,598 findings. Epic workstreams and ordinary `dev` work
+- The baseline on `dev` `7bbca2e34` was 46,618 findings. Epic workstreams and ordinary `dev` work
   prune the register; #3991 removes it at zero and activates full enforcement.
 
 ## Engine
