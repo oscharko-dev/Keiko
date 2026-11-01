@@ -648,6 +648,28 @@ describe("authoritative late mutation history", () => {
       },
     ]);
   });
+  // The projection is never persisted, so a polling client re-derives it on every read; the
+  // observation is evidence once, not once per poll.
+  it("records a projected outcome once however often the message is read", () => {
+    const f = observedMutationFixture();
+    const journal = f.store.chatToolMutations;
+    if (journal === undefined) throw new Error("Missing mutation owner");
+    expect(journal.beginDispatch(f.intent.invocationId, () => true)).toBe(true);
+    journal.acknowledge(f.intent.invocationId, 201);
+    for (let read = 0; read < 25; read++)
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe(
+        "succeeded-unconfirmed",
+      );
+    const projected = (): number =>
+      f.logs.events.filter((entry) => entry.op === "chat.tool-mutation.projected").length;
+    expect(projected()).toBe(1);
+    journal.settle(f.intent.invocationId, "succeeded");
+    for (let read = 0; read < 25; read++)
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe(
+        "succeeded",
+      );
+    expect(projected()).toBe(2);
+  });
   it.each([
     ["action_digest", "d".repeat(64)],
     ["invocation_id", "other-invocation"],

@@ -361,6 +361,8 @@ the stored transcript or resumes its turn. Existing read-grant observation event
 the grant proof and a message-hash correlation without exposing private subject details.
 Because the projection is not persisted, each (grant, state) observation is recorded once per
 process and database from bounded, insertion-ordered memory; repeated history reads stay silent.
+The same rule applies to `chat.tool-mutation.projected`: one message's projected set of journal
+outcomes is recorded once, and a later change of that set is recorded again.
 
 ## Verification
 
