@@ -29,7 +29,7 @@ import {
   repositoryInstructionsContentBudget,
   withoutRepositoryInstructionsTags,
 } from "./codingRuntimeRepositoryInstructions.js";
-import { makeOwnerPrivateDirectory } from "../ownerPrivateFixture.test-support.js";
+import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import { wholeFileDigest } from "./codingToolReadEditPorts.js";
 import { OPENCODE_PROMPT_TEXT_MAX_BYTES } from "./opencodeV2HttpClient.js";
 import type {

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/index.js";
-import { makeOwnerPrivateDirectory } from "../ownerPrivateFixture.test-support.js";
+import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

@@ -18,7 +18,7 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
-import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
+import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../test-support/symlink-fixture.js";
 import { codingJiraServerDefinition } from "./codingJiraPodBinding.js";
 import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {

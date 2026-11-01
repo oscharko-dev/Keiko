@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { EditorAgentSessionSnapshot, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { createNodeEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
+import { plantDirectoryRedirect } from "../test-support/symlink-fixture.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";

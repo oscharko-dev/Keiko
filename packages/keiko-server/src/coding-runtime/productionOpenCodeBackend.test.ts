@@ -68,7 +68,7 @@ import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeRes
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
-import { plantDirectoryRedirect, WINDOWS_HOST } from "../symlinkFixture.test-support.js";
+import { plantDirectoryRedirect, WINDOWS_HOST } from "../test-support/symlink-fixture.js";
 
 // The native filesystem capability describes the POSIX Seatbelt/namespace backends and validates
 // its roots with `path.posix` (keiko-sandbox seatbelt-execution-root), so a native macOS or Linux

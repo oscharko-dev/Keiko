@@ -9,7 +9,7 @@ import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { skipSeatbeltRootsOnWindowsHost } from "../symlinkFixture.test-support.js";
+import { skipSeatbeltRootsOnWindowsHost } from "../test-support/symlink-fixture.js";
 import {
   createRuntimeGatewayConfinement,
   buildRuntimeGatewaySeatbeltCommand,

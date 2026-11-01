@@ -14,7 +14,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { createMcpServerSecretStore } from "./mcpOAuthCredentialStore.js";
-import { makeOwnerPrivateDirectory } from "../ownerPrivateFixture.test-support.js";
+import { makeOwnerPrivateDirectory } from "../test-support/owner-private-fixture.js";
 import * as privateJson from "../private-json.js";
 import { createMcpSettingsStore } from "./mcpSettingsStore.js";
 

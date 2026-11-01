@@ -2,13 +2,13 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { grantOthersWrite, makeOwnerPrivate } from "./ownerPrivateFixture.test-support.js";
+import { grantOthersWrite, makeOwnerPrivate } from "./test-support/owner-private-fixture.js";
 import {
   OwnerPrivateFileRefused,
   ownerPrivateReaderFor,
   readOwnerPrivateFile,
 } from "./ownerPrivateStateFile.js";
-import { plantSymlinkOrSkip } from "./symlinkFixture.test-support.js";
+import { plantSymlinkOrSkip } from "./test-support/symlink-fixture.js";
 
 const roots: string[] = [];
 

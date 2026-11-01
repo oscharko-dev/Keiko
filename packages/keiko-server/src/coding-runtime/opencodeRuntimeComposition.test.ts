@@ -32,7 +32,7 @@ import {
   plantDirectoryRedirect,
   plantSymlinkOrSkip,
   WINDOWS_HOST,
-} from "../symlinkFixture.test-support.js";
+} from "../test-support/symlink-fixture.js";
 import {
   createCodingSessionContinuity,
   type CodingSessionContinuity,

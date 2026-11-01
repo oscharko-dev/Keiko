@@ -133,7 +133,7 @@ import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeV2Plugins } from "./opencodeRuntimeAdapter.js";
 import { createServerLogger, setServerLogger } from "../observability/index.js";
-import { WINDOWS_HOST } from "../symlinkFixture.test-support.js";
+import { WINDOWS_HOST } from "../test-support/symlink-fixture.js";
 
 const WINDOWS_PRE_EPOCH_MTIME_SKIP =
   "Windows utimes cannot plant a pre-epoch mtime on this host; the case runs on POSIX hosts";

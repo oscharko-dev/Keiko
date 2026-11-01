@@ -15,7 +15,8 @@
     "**/*.test.ts",
     "**/*.bench.ts",
     "**/_support.ts",
-    "src/tool-catalog/__fixtures__/**"
+    "src/tool-catalog/__fixtures__/**",
+    "src/test-support/**"
   ],
   "references": [
     {

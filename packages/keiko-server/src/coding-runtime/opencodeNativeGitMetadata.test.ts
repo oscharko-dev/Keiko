@@ -12,7 +12,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
+import { plantDirectoryRedirect } from "../test-support/symlink-fixture.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import {
   recordNativeGitMetadataResolution,

@@ -18,7 +18,7 @@ import {
 import {
   grantOthersWrite,
   makeOwnerPrivateDirectory,
-} from "../ownerPrivateFixture.test-support.js";
+} from "../test-support/owner-private-fixture.js";
 import { OwnerPrivateFileRefused } from "../ownerPrivateStateFile.js";
 import {
   OPENCODE_SKILL_SOURCES_FILE,

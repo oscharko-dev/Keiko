@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
+import { plantDirectoryRedirect } from "../test-support/symlink-fixture.js";
 import { sweepOrphanedOpenCodeRunState } from "./opencodeRunStateSweep.js";
 
 const roots: string[] = [];

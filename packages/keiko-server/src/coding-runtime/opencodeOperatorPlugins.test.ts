@@ -22,7 +22,7 @@ import {
 import {
   grantOthersWrite,
   makeOwnerPrivateDirectory,
-} from "../ownerPrivateFixture.test-support.js";
+} from "../test-support/owner-private-fixture.js";
 import { OwnerPrivateFileRefused } from "../ownerPrivateStateFile.js";
 import type { SecureWorkspaceTextReadResult } from "./secureWorkspaceTextRead.js";
 import {

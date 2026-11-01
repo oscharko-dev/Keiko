@@ -23,6 +23,7 @@ import {
   resolveWindowsSystemExecutable,
   sameWindowsSystemDirectoryIdentity,
 } from "./windows-system-directory.js";
+import { plantSymlinkOrSkip } from "./test-support/symlink-fixture.js";
 
 const HOSTILE_SYSTEM_ROOT_VECTORS: readonly [label: string, value: string][] = [
   ["empty string", ""],
@@ -442,7 +443,7 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
 
     it.runIf(process.platform === "win32")(
       "rejects a final executable symlink instead of following it",
-      () => {
+      (context) => {
         const root = mkdtempSync(join(tmpdir(), "keiko-system-binary-reparse-"));
         const selectedRoot = join(root, "Windows");
         const system32 = join(selectedRoot, "System32");
@@ -450,7 +451,7 @@ describe("resolveWindowsSystemBinary — resolved-binary existence (finding 4)",
         try {
           mkdirSync(system32, { recursive: true });
           writeFileSync(realBinary, "not an operating-system binary", "utf8");
-          symlinkSync(realBinary, join(system32, "cmd.exe"), "file");
+          plantSymlinkOrSkip(context, realBinary, join(system32, "cmd.exe"), "file");
 
           expect(() =>
             resolveWindowsSystemBinary(

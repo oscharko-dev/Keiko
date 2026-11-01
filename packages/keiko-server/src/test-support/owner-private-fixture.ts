@@ -5,7 +5,8 @@
 // accounts Modify (a profile or a non-system drive often does). A fixture that means "owner-private"
 // therefore sets it explicitly on both hosts, and one that means "others may write" grants that
 // explicitly. icacls is given SIDs only, so no localized account name is involved.
-// `.test-support.ts` is the package's name for a shared fixture module.
+// Shared fixture modules live under `src/test-support/` (KEIKO-0130): outside the build, coverage
+// and Sonar scope.
 
 import { spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";

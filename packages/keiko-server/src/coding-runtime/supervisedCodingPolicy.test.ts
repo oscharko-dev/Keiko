@@ -7,7 +7,7 @@ import {
   plantDirectoryRedirect,
   plantSymlinkOrSkip,
   WINDOWS_HOST,
-} from "../symlinkFixture.test-support.js";
+} from "../test-support/symlink-fixture.js";
 
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";

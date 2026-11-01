@@ -10,7 +10,6 @@ import {
   renameSync,
   readdirSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
   type PathLike,
   type Mode,
@@ -19,7 +18,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FileHandle } from "node:fs/promises";
 import { Worker } from "node:worker_threads";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type TestContext } from "vitest";
 import type { SecurityLogEvent } from "./log-port.js";
 import {
   attestPortableTreeKht1Sync,
@@ -30,6 +29,11 @@ import {
   PortableTreeAttestationError,
   type PortableTreeKht1Operation,
 } from "./portable-tree-attestation.js";
+import {
+  WINDOWS_HOST,
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "./test-support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -102,6 +106,9 @@ afterEach(async () => {
   }
   for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
 });
+
+const UNSAFE_LINK_KINDS = ["symbolic", "hard", "root", "directory"] as const;
+type UnsafeLinkKind = (typeof UNSAFE_LINK_KINDS)[number];
 
 function fixtureRoot(): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-kht1-"));
@@ -180,18 +187,30 @@ describe("portable KHT1 tree attestation", () => {
     }).not.toThrow();
   });
 
-  it("rejects symbolic links and hard-linked files through both drivers", async () => {
+  async function expectUnsupportedEntry(root: string): Promise<void> {
+    await expect(hashPortableTreeKht1(root, operation())).rejects.toThrow(/unsupported entry/u);
+    expect(() => {
+      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000);
+    }).toThrow(/unsupported entry/u);
+  }
+
+  it("rejects symbolic links through both drivers", async (context) => {
     const symbolicRoot = fixtureRoot();
     writeFileSync(join(symbolicRoot, "target.txt"), "target");
-    symlinkSync(join(symbolicRoot, "target.txt"), join(symbolicRoot, "link.txt"));
+    plantSymlinkOrSkip(context, join(symbolicRoot, "target.txt"), join(symbolicRoot, "link.txt"));
+    await expectUnsupportedEntry(symbolicRoot);
+  });
 
-    await expect(hashPortableTreeKht1(symbolicRoot, operation())).rejects.toThrow(
-      /unsupported entry/u,
-    );
-    expect(() => {
-      attestPortableTreeKht1Sync(symbolicRoot, "0".repeat(64), Date.now() + 5_000);
-    }).toThrow(/unsupported entry/u);
+  // A directory symlink on POSIX, a junction on Windows (no symlink privilege needed).
+  it("rejects a directory redirection through both drivers", async () => {
+    const redirectRoot = fixtureRoot();
+    mkdirSync(join(redirectRoot, "real"));
+    writeFileSync(join(redirectRoot, "real", "target.txt"), "target");
+    plantDirectoryRedirect(join(redirectRoot, "real"), join(redirectRoot, "alias"));
+    await expectUnsupportedEntry(redirectRoot);
+  });
 
+  it("rejects hard-linked files through both drivers", async () => {
     const hardLinkRoot = fixtureRoot();
     writeFileSync(join(hardLinkRoot, "first.txt"), "same inode");
     linkSync(join(hardLinkRoot, "first.txt"), join(hardLinkRoot, "second.txt"));
@@ -489,12 +508,16 @@ describe("portable KHT1 tree attestation", () => {
 describe("portable legacy sidecar tree attestation", () => {
   it("retains the canonical legacy tuple digest and selects the executable in the same content pass", async () => {
     const root = fixtureRoot();
-    const files = [
+    const portableFiles = [
       ["B.txt", "upper"],
       ["a.txt", "lower"],
       ["z/é.txt", "nested"],
-      ["line\nbreak.txt", "newline"],
     ] as const;
+    // NTFS refuses a newline in a file name, so a Windows tree cannot contain this entry at all;
+    // every POSIX host keeps it in the canonical tuple proof.
+    const files: readonly (readonly [string, string])[] = WINDOWS_HOST
+      ? portableFiles
+      : [...portableFiles, ["line\nbreak.txt", "newline"]];
     mkdirSync(join(root, "z"));
     for (const [name, body] of files) writeFileSync(join(root, name), body);
     const entries = files.map(([relativePath, body]) => ({
@@ -505,13 +528,13 @@ describe("portable legacy sidecar tree attestation", () => {
     observedIo.selectedPath = join(root, "a.txt");
     expect(await attestPortableSidecarTree(root, "a.txt", operation())).toEqual({
       treeSha256: expected,
-      selectedFileSha256: createHash("sha256").update(files[1][1]).digest("hex"),
+      selectedFileSha256: createHash("sha256").update(portableFiles[1][1]).digest("hex"),
     });
     expect(observedIo.selectedOpens).toBe(1);
     expect(observedIo.openHandles).toBe(0);
     expect(attestPortableSidecarTreeSync(root, "a.txt", Date.now() + 5_000)).toEqual({
       treeSha256: expected,
-      selectedFileSha256: createHash("sha256").update(files[1][1]).digest("hex"),
+      selectedFileSha256: createHash("sha256").update(portableFiles[1][1]).digest("hex"),
     });
     expect(await hashPortableTreeKht1(root, operation())).not.toBe(expected);
     expect(await attestPortableSidecarTree(root, "../outside", operation())).toEqual({
@@ -779,18 +802,36 @@ describe("portable legacy sidecar tree attestation", () => {
     expect(observedIo.openHandles).toBe(0);
   });
 
-  it.each(["symbolic", "hard", "root"] as const)("refuses an unsafe %s link", async (kind) => {
-    const root = fixtureRoot();
-    const target = join(root, "a.txt");
-    writeFileSync(target, "content");
-    let inspectedRoot = root;
-    if (kind === "symbolic") symlinkSync(target, join(root, "alias.txt"));
-    if (kind === "hard") linkSync(target, join(root, "alias.txt"));
-    if (kind === "root") {
-      inspectedRoot = `${root}-alias`;
+  // Each kind plants only its own link. The file symlink needs Windows symlink privilege and skips
+  // without it; the root and directory redirections are junctions on Windows (directory symlinks
+  // elsewhere), so a Windows host still proves the reparse boundary.
+  const plantUnsafeLink: Readonly<
+    Record<UnsafeLinkKind, (context: TestContext, root: string) => string>
+  > = {
+    symbolic: (context, root) => {
+      plantSymlinkOrSkip(context, join(root, "a.txt"), join(root, "alias.txt"));
+      return root;
+    },
+    hard: (_context, root) => {
+      linkSync(join(root, "a.txt"), join(root, "alias.txt"));
+      return root;
+    },
+    root: (_context, root) => {
+      const inspectedRoot = `${root}-alias`;
       roots.push(inspectedRoot);
-      symlinkSync(root, inspectedRoot);
-    }
+      plantDirectoryRedirect(root, inspectedRoot);
+      return inspectedRoot;
+    },
+    directory: (_context, root) => {
+      mkdirSync(join(root, "real"));
+      plantDirectoryRedirect(join(root, "real"), join(root, "alias"));
+      return root;
+    },
+  };
+  it.for(UNSAFE_LINK_KINDS)("refuses an unsafe %s link", async (kind, context) => {
+    const root = fixtureRoot();
+    writeFileSync(join(root, "a.txt"), "content");
+    const inspectedRoot = plantUnsafeLink[kind](context, root);
     await expect(
       attestPortableSidecarTree(inspectedRoot, "a.txt", operation()),
     ).rejects.toBeInstanceOf(PortableTreeAttestationError);

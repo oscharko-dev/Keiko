@@ -13,8 +13,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   grantOthersWrite,
   makeOwnerPrivateDirectory,
-} from "../ownerPrivateFixture.test-support.js";
-import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
+} from "../test-support/owner-private-fixture.js";
+import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../test-support/symlink-fixture.js";
 import { readPluginPackage, writePluginPackage } from "./opencodeOperatorPluginPackage.js";
 
 const roots: string[] = [];

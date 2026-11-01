@@ -19,7 +19,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
-import { plantSymlinkOrSkip, WINDOWS_HOST } from "../symlinkFixture.test-support.js";
+import { plantSymlinkOrSkip, WINDOWS_HOST } from "../test-support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,

@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   grantOthersWrite,
   makeOwnerPrivateDirectory,
-} from "../ownerPrivateFixture.test-support.js";
+} from "../test-support/owner-private-fixture.js";
 import {
   parsedConfigDocument,
   readConfigDocuments,

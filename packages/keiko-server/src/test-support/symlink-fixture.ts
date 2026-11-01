@@ -5,8 +5,8 @@
 // fixture fail on such a host, including tests that never touch the link. These helpers keep the
 // original link wherever the host allows it and turn only the missing Windows privilege into an
 // explicit, reasoned skip — never a silent pass. Directory escapes have a junction form that needs
-// no privilege, so a Windows host still exercises the reparse boundary itself. `.test-support.ts`
-// is the package's name for a shared fixture module; the coverage inventory excludes the suffix.
+// no privilege, so a Windows host still exercises the reparse boundary itself. Shared fixture
+// modules live under `src/test-support/` (KEIKO-0130): outside the build, coverage and Sonar scope.
 
 import { symlinkSync } from "node:fs";
 

@@ -24,7 +24,7 @@ import {
 import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
-import { plantSymlinkOrSkip, WINDOWS_HOST } from "../symlinkFixture.test-support.js";
+import { plantSymlinkOrSkip, WINDOWS_HOST } from "../test-support/symlink-fixture.js";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";

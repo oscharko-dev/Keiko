@@ -11,7 +11,7 @@ import { createDefaultChatCapability, type GatewayConfig } from "@oscharko-dev/k
 import { probeVerifiedGatewayConfig } from "../_support.js";
 import { admitCodingRunModel } from "../coding-sidecar-gateway.js";
 import { CONVERSATION_READINESS_MAX_AGE_MS } from "../deps.js";
-import { plantDirectoryRedirect } from "../symlinkFixture.test-support.js";
+import { plantDirectoryRedirect } from "../test-support/symlink-fixture.js";
 
 import {
   DEFAULT_RUNTIME_MAX_DURATION_MINUTES,
