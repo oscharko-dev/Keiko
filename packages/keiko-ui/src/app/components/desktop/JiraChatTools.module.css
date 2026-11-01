@@ -89,6 +89,12 @@
   display: block;
   color: var(--text-primary);
 }
+.cmpFactsGroup {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
 .cmpDraftNote {
   display: block;
   color: var(--text-secondary);

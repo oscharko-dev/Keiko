@@ -95,10 +95,10 @@ function ActionDetails({
   // Not memoized: the translator keeps its identity while a late-loading catalog refreshes it.
   const facts = jiraActionFacts(args, managed, t);
   return (
-    <div role="group" aria-label={t("chat.jira.writeApproval.preview")}>
+    <fieldset className={styles.cmpFactsGroup} aria-label={t("chat.jira.writeApproval.preview")}>
       {note === undefined ? null : <p className={styles.cmpDraftNote}>{t(note)}</p>}
       <DraftFields fields={facts} />
-    </div>
+    </fieldset>
   );
 }
 
@@ -165,9 +165,11 @@ function ApprovalHeader({ approval }: { readonly approval: ChatToolWriteApproval
 /** A staged draft that is not shown cannot be approved: the human would not see what it covers. */
 function StagedDraftNote({ status }: { readonly status: "loading" | "unavailable" }): ReactNode {
   const t = useTranslate();
+  if (status === "loading")
+    return <output className={styles.cmpDraftNote}>{t("chat.jira.draft.loading")}</output>;
   return (
-    <p role={status === "unavailable" ? "alert" : "status"} className={styles.cmpDraftNote}>
-      {t(status === "loading" ? "chat.jira.draft.loading" : "chat.jira.draft.unavailable")}
+    <p role="alert" className={styles.cmpDraftNote}>
+      {t("chat.jira.draft.unavailable")}
     </p>
   );
 }

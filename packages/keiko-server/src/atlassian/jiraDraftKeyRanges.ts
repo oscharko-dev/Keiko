@@ -1,3 +1,5 @@
+import { compareIssueKeys } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+
 const ISSUE_KEY = /^([A-Z][A-Z0-9_]{0,254})-([1-9]\d{0,17})$/u;
 
 interface Numbered {
@@ -36,7 +38,7 @@ export function compactIssueKeys(keys: readonly string[]): readonly string[] {
   const ranges = [...grouped].flatMap(([project, numbers]) =>
     runsOf(numbers).map(([from, to]) => label(project, from, to)),
   );
-  return [...ranges, ...[...plain].sort()];
+  return [...ranges, ...[...plain].sort(compareIssueKeys)];
 }
 /** Sorted, de-duplicated numbers as inclusive `[from, to]` runs of consecutive values. */
 function runsOf(numbers: readonly number[]): readonly (readonly [number, number])[] {

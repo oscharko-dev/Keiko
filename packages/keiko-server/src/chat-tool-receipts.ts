@@ -10,10 +10,10 @@ import { jiraMutationToolId } from "./atlassian/jiraMutationToolId.js";
  * single issue key of an ordinary write, or the per-item keys and states of a backlog draft
  * (#4178). Recovery answers and compacted continuations repeat only these, never result text.
  */
-const KEY_PATTERN = "[A-Z][A-Z0-9_]{0,254}-[1-9]\\d{0,17}";
+const KEY_PATTERN = String.raw`[A-Z][A-Z0-9_]{0,254}-[1-9]\d{0,17}`;
 const ISSUE_KEY = new RegExp(`^${KEY_PATTERN}$`, "u");
 /** A compact result names a run of created keys as `PROJ-3..PROJ-40` (#4178). */
-const ISSUE_KEY_RANGE = new RegExp(`^${KEY_PATTERN}\\.\\.${KEY_PATTERN}$`, "u");
+const ISSUE_KEY_RANGE = new RegExp(String.raw`^${KEY_PATTERN}\.\.${KEY_PATTERN}$`, "u");
 const DRAFT_STATES: ReadonlySet<unknown> = new Set(JIRA_DRAFT_ITEM_STATES);
 const DRAFT_TOOL_ID = jiraMutationToolId("jira.draft");
 
