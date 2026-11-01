@@ -22,6 +22,8 @@ import type { GateVariant } from "./cli.js";
 
 export interface GateServerOptions {
   readonly stateDir: string;
+  /** The evaluation repository, the server's initial project, as the dev BFF uses its checkout. */
+  readonly repository: string;
   readonly configPath: string;
   readonly port: number;
   readonly variant: GateVariant;
@@ -82,7 +84,7 @@ export async function startGateServer(options: GateServerOptions): Promise<GateS
     evidenceDir: undefined,
     uiDbPath: undefined,
     env,
-    initialProjectPath: options.stateDir,
+    initialProjectPath: options.repository,
     closeActivityLogOnDispose: true,
     reviewEvaluationSwitches: SWITCHES[options.variant],
   });

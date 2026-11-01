@@ -228,6 +228,7 @@ async function main(argv: readonly string[]): Promise<void> {
   git(args.repository, ["rev-parse", "--git-dir"]);
   const server = await startGateServer({
     stateDir: args.stateDir,
+    repository: args.repository,
     configPath: args.configPath,
     port: args.port,
     variant: args.variant,
