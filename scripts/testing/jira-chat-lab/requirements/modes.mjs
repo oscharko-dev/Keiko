@@ -91,9 +91,6 @@ export function gradeModeRun({ approval, writes, created, credited, newAtApprova
 
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
 const text = (value) => (typeof value === "string" && value.length > 0 ? value : undefined);
-// Object members that name a value for a human (a user, an option); anything else is shown as JSON.
-const IDENTIFYING_MEMBERS = new Set(["displayName", "name", "value", "key", "accountId", "id"]);
-
 /** Whether text is itself a JSON object or array (a model pasting its request as a value). */
 function isJsonText(value) {
   const trimmed = value.trim();
@@ -106,14 +103,26 @@ function isJsonText(value) {
   }
 }
 
-/** Whether a field value reaches the human as raw JSON instead of text or a list of text. */
-function showsRawJson(value) {
-  if (typeof value === "string") return isJsonText(value);
-  if (Array.isArray(value)) return value.some((entry) => showsRawJson(entry));
-  if (!isRecord(value)) return false;
-  const entries = Object.entries(value);
-  const [only] = entries;
-  return !(entries.length === 1 && IDENTIFYING_MEMBERS.has(only[0]) && typeof only[1] === "string");
+/**
+ * Dotted paths of every string leaf that is JSON text. The card lays nested values out as
+ * dotted-path rows and never prints JSON itself (#4178), so only a value the model wrote as JSON
+ * text still reaches the human as JSON. Iterative, so a hostile depth cannot overflow the stack.
+ */
+function jsonTextPaths(root) {
+  const found = [];
+  const pending = [["", root]];
+  while (pending.length > 0) {
+    const [path, value] = pending.pop();
+    if (typeof value === "string") {
+      if (isJsonText(value)) found.push(path);
+    } else if (Array.isArray(value)) {
+      value.forEach((entry, index) => pending.push([`${path}.${index + 1}`, entry]));
+    } else if (isRecord(value)) {
+      for (const [key, entry] of Object.entries(value))
+        pending.push([path === "" ? key : `${path}.${key}`, entry]);
+    }
+  }
+  return found;
 }
 
 function linksReadable(value) {
@@ -162,39 +171,34 @@ function draftItems(call) {
 }
 
 /**
- * Whether the approval of one stored tool call reaches the human as a readable preview. Only a
- * `jira.draft` has one: the card shows its items as a tree (summary, target, relations, fields) and
- * keeps the request JSON collapsed. The tree rule mirrors `jiraDraftTree` of the UI
- * (packages/keiko-ui/src/app/components/desktop/jiraDraftTree.ts): the UI is not importable here, so
- * a drift is caught by the same card test that owns the rule, not by this copy.
- * Any other write operation is shown as its exact request JSON.
+ * Whether the approval of one stored tool call reaches the human as a readable preview. The card
+ * never shows a request as JSON (#4178): a `jira.draft` whose items form a tree is shown as that
+ * tree, and every other request, an untreeable draft included, as named facts with nested values
+ * laid out as dotted paths. The rule mirrors `JiraWriteApproval`, `jiraActionFacts` and
+ * `jiraDraftTree` of the UI (packages/keiko-ui/src/app/components/desktop/): the UI is not
+ * importable here, so a drift is caught by the card tests that own the rule
+ * (`JiraWriteApproval.readable.test.tsx`), not by this copy. A value the model wrote as JSON text
+ * is still shown as that text, so it stays unreadable here.
  */
 export function gradeApprovalReadable(approval, call) {
-  const operation = approval?.operation;
-  if (operation !== "jira.draft") {
+  const operation = approval?.operation ?? "unknown operation";
+  if (!isRecord(call?.arguments)) {
+    return { readable: false, reason: `${operation} has no stored request to show` };
+  }
+  const raw = jsonTextPaths(call.arguments);
+  if (raw.length > 0) {
     return {
       readable: false,
-      reason: `${operation ?? "unknown operation"} is shown as raw request JSON, only a draft has a preview`,
+      reason: `${raw.length} values are JSON text the card shows verbatim (${[...new Set(raw)].slice(0, 4).join(", ")})`,
     };
+  }
+  if (operation !== "jira.draft") {
+    return { readable: true, reason: `${operation} shown as named facts` };
   }
   const items = draftItems(call);
-  if (items === undefined) {
-    return {
-      readable: false,
-      reason: "the draft is no readable item tree, the card falls back to raw JSON",
-    };
-  }
-  const raw = items.flatMap((item) =>
-    Object.entries(item.fields)
-      .filter(([, value]) => showsRawJson(value))
-      .map(([id]) => id),
-  );
-  return raw.length === 0
-    ? { readable: true, reason: `${items.length} draft items shown as a tree` }
-    : {
-        readable: false,
-        reason: `${raw.length} field values shown as raw JSON (${[...new Set(raw)].join(", ")})`,
-      };
+  return items === undefined
+    ? { readable: true, reason: "the draft is shown field by field under a note" }
+    : { readable: true, reason: `${items.length} draft items shown as a tree` };
 }
 
 /** All approvals the supervisor met: readable only when none of them shows raw JSON. */

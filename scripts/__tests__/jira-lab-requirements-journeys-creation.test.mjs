@@ -504,7 +504,10 @@ describe("S18 modes and readable approval", () => {
         if (early) create();
         const observed = await options.observeBeforeApproval();
         if (!early) create();
-        const args = unreadable ? { items: [{ ref: "x" }] } : draftArguments();
+        // A value the model wrote as JSON text is the one thing the card shows verbatim (#4178).
+        const args = unreadable
+          ? { items: [{ ref: "x", fields: { description: '{"raw": true}' } }] }
+          : draftArguments();
         return {
           toolExchanges: [draftExchange(keys)],
           writes: 1,
@@ -629,16 +632,18 @@ describe("S18 modes and readable approval", () => {
       expect(grade(draftArguments()).readable).toBe(true);
     });
 
-    it("rejects any operation but a draft: the card shows its exact request as JSON", () => {
-      const result = grade({ fields: { summary: "x" } }, "jira.create");
-      expect(result.readable).toBe(false);
-      expect(result.reason).toContain("jira.create");
+    it("reads any other operation as named facts and refuses a missing request", () => {
+      const result = grade({ fields: { summary: "x", parent: { key: "REQ-1" } } }, "jira.create");
+      expect(result).toEqual({ readable: true, reason: "jira.create shown as named facts" });
       expect(gradeApprovalReadable(undefined, undefined).readable).toBe(false);
+      expect(gradeApprovalReadable(approvalView("jira.edit"), { arguments: "x" }).readable).toBe(
+        false,
+      );
     });
 
-    it("rejects a draft the card cannot turn into a tree", () => {
+    it("reads a draft the card cannot turn into a tree field by field", () => {
       const item = draftArguments().items[0];
-      const bad = [
+      const untreeable = [
         { items: [] },
         { items: "x" },
         { items: [{ ...item, projectId: undefined }] },
@@ -647,11 +652,15 @@ describe("S18 modes and readable approval", () => {
         { items: [{ ...item, links: [{ type: "Relates", direction: "sideways", ref: "e2" }] }] },
         { items: [{ ...item, parent: { fieldId: "f", ref: "a", issueKey: "REQ-1" } }] },
       ];
-      for (const args of bad) expect(grade(args).readable).toBe(false);
+      for (const args of untreeable)
+        expect(grade(args)).toEqual({
+          readable: true,
+          reason: "the draft is shown field by field under a note",
+        });
       expect(gradeApprovalReadable(approvalView(), undefined).readable).toBe(false);
     });
 
-    it("rejects values that reach the human as raw JSON, and accepts options and users", () => {
+    it("rejects only values the model wrote as JSON text, at any depth and in any operation", () => {
       const withField = (value) => {
         const args = draftArguments();
         args.items[0].fields.extra = value;
@@ -659,17 +668,23 @@ describe("S18 modes and readable approval", () => {
       };
       expect(withField({ id: "10000" }).readable).toBe(true);
       expect(withField(["a", { name: "b" }]).readable).toBe(true);
-      expect(withField({ a: 1, b: 2 }).readable).toBe(false);
-      expect(withField('{"a": 1}').readable).toBe(false);
-      expect(withField(["ok", [{ a: { b: 1 } }]]).readable).toBe(false);
+      expect(withField({ a: 1, b: 2 }).readable).toBe(true);
+      expect(withField(["ok", [{ a: { b: 1 } }]]).readable).toBe(true);
       expect(withField("[not json").readable).toBe(true);
       expect(withField(7).readable).toBe(true);
+      expect(withField('{"a": 1}')).toEqual({
+        readable: false,
+        reason: "1 values are JSON text the card shows verbatim (items.1.fields.extra)",
+      });
+      expect(withField(["ok", [{ a: { b: "[1, 2]" } }]]).readable).toBe(false);
+      expect(grade({ fields: { description: ' {"x": 1}' } }, "jira.create").readable).toBe(false);
     });
 
     it("is unverified without approvals and red when one of several is unreadable", () => {
       expect(gradeApprovals([]).status).toBe("unverified");
       expect(gradeApprovals([approvalRecord()]).status).toBe("green");
-      const mixed = [approvalRecord(), approvalRecord({ x: 1 }, "jira.create")];
+      expect(gradeApprovals([approvalRecord({ x: 1 }, "jira.create")]).status).toBe("green");
+      const mixed = [approvalRecord(), approvalRecord({ x: '{"y": 1}' }, "jira.create")];
       expect(gradeApprovals(mixed).status).toBe("red");
     });
   });
