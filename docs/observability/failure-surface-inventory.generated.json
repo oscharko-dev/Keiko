@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9a737dc496fc51d16de4d4e2f5b02c690a0f9947836221fa06e4d1cf31c317ff"
+    "catalogDigest": "804b466782664e19617e2c2368333e9750fdc807cd531facb3162f3ed904030c"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,9 +67,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 622,
-    "proofCount": 645,
-    "resolvedProofCount": 645,
+    "operationCount": 624,
+    "proofCount": 647,
+    "resolvedProofCount": 647,
     "failureClassCount": 386,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
@@ -107,10 +107,12 @@
         "atlassian.credential.updated",
         "atlassian.jira-report",
         "chat.compaction.facts.classified",
+        "chat.compaction.summary.work",
         "chat.context.failed",
         "chat.context.management",
         "chat.context.selected",
         "chat.continuity.capture",
+        "chat.continuity.checkpoint",
         "chat.continuity.degraded",
         "chat.continuity.rehydration",
         "chat.creation.intent",
@@ -1273,6 +1275,9 @@
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
+    "chat.compaction.summary.work.line": [
+      "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
+    ],
     "chat.content-policy.resolved.setting": ["packages/keiko-server/src/deps-activity.test.ts"],
     "chat.context.failed.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.context.management.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
@@ -1284,6 +1289,9 @@
     "chat.continuity.capture.line": [
       "packages/keiko-server/src/chat-context-status.test.ts",
       "packages/keiko-server/src/chat-history-snapshot.test.ts"
+    ],
+    "chat.continuity.checkpoint.line": [
+      "packages/keiko-server/src/chat-continuity-persistence.test.ts"
     ],
     "chat.continuity.degraded.line": ["packages/keiko-server/src/chat-context-status.test.ts"],
     "chat.continuity.rehydration.line": ["packages/keiko-server/src/chat-history-snapshot.test.ts"],

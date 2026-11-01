@@ -632,7 +632,7 @@ and digest, otherwise nothing is sent and the model is told the file changed aft
 (`conflict`). Where policy requires a review and no approval is found (an expired record), the send
 is refused as `unreviewed`; a file that cannot be read for review gets no approval at all; under
 Full access the same admission, scan and bounds apply without a review. A refused or never-sent
-attachment leaves no remote effect and is not replayed: the journal retires its record (migration 55
+attachment leaves no remote effect and is not replayed: the journal retires its record (migration 57
 widens the operation check; the old record keeps its outcome under a retired action digest), so the
 retry in the same turn is a new attempt with a new review, while the replay of a dispatched or
 succeeded attachment is unchanged.

@@ -651,6 +651,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "A detached capsule indexing run failed before reaching a terminal state.",
   "The coding sidecar gateway stream failed mid-response.",
   "Audit or evidence persistence failed.",
+  "Private context checkpoint persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
   "Semantic memory retrieval skipped incompatible embeddings.",

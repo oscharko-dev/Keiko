@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { installConversationReadinessInitialization, type UiHandlerDeps } from "./deps.js";
+import {
+  beginChatCompactionWork,
+  chatCompactionWorkStopped,
+} from "./chat-compaction-model-call.js";
 
 // The Workbench description dispatcher, the semantic search lease and every cache keyed by the
 // handler graph (the PR-description application services among them) are attached to the graph the
@@ -40,5 +44,24 @@ describe("conversation readiness installation", () => {
     await served.dispose?.();
 
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("drains detached summaries before disposing the assembled services", async () => {
+    const order: string[] = [];
+    const served = installConversationReadinessInitialization(
+      graph(() => {
+        order.push("services-disposed");
+        return Promise.resolve();
+      }),
+    );
+    const work = beginChatCompactionWork(served);
+    if (work === undefined) throw new Error("Missing model work");
+    work.signal.addEventListener("abort", () => {
+      order.push("summary-cancelled");
+      work.finish();
+    });
+    await served.dispose?.();
+    expect(order).toEqual(["summary-cancelled", "services-disposed"]);
+    expect(chatCompactionWorkStopped(served)).toBe(true);
   });
 });

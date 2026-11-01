@@ -241,6 +241,7 @@ import {
   type ChatCompactionEvidenceInput,
 } from "./chat-compaction-evidence.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
+import { persistRequiredChatContinuityCheckpoint } from "./chat-continuity-checkpoint.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
@@ -1911,6 +1912,8 @@ function finalizeGatewayAssembly(
   selected: GatewayPromptAssembly | undefined,
   request: SendDesktopChatRequest,
   correlationId: string | undefined,
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
 ): GatewayPromptAssembly {
   if (selected === undefined) {
     throw new ContextOverflowError(
@@ -1922,6 +1925,13 @@ function finalizeGatewayAssembly(
     selected,
     request.attachments.filter((attachment) => attachment.kind === "image").length,
   );
+  if (selected.compaction !== undefined)
+    persistRequiredChatContinuityCheckpoint(deps, {
+      chatId: request.chatId,
+      modelId,
+      compaction: selected.compaction,
+      correlationId,
+    });
   return selected;
 }
 
@@ -1969,6 +1979,8 @@ export function buildGatewayAssembly(
     stampGatewayCompaction(selected, deps, modelId, snapshot),
     request,
     correlationId,
+    deps,
+    modelId,
   );
 }
 

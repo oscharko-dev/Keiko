@@ -2,19 +2,19 @@ import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "./schema.js";
 
-// V55 widens the journal's operation CHECK so `jira.attach` can be journaled (#4176). A SQLite
+// V57 widens the journal's operation CHECK so `jira.attach` can be journaled (#4176). A SQLite
 // CHECK cannot be altered in place, so the migration rebuilds the table: no row, column, index or
 // other constraint may be lost on the way.
-function v54Database(): DatabaseSync {
+function v56Database(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
   // The journal rows are seeded without their chats; the rebuild is what is under test.
   db.exec("PRAGMA foreign_keys = OFF");
   for (const migration of MIGRATIONS) {
-    if (migration.version > 54) break;
+    if (migration.version > 56) break;
     db.exec(migration.sql);
     migration.apply?.(db);
   }
-  db.exec("PRAGMA user_version = 54");
+  db.exec("PRAGMA user_version = 56");
   return db;
 }
 function insertMutation(db: DatabaseSync, operation: string, id: string): void {
@@ -26,12 +26,12 @@ function insertMutation(db: DatabaseSync, operation: string, id: string): void {
   ).run(id, "a".repeat(64), id.padEnd(64, "0"), operation);
 }
 
-describe("V55 journals jira.attach without losing the existing journal", () => {
+describe("V57 journals jira.attach without losing the existing journal", () => {
   it("is the current schema version", () => {
-    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(55);
+    expect(SCHEMA_VERSION).toBeGreaterThanOrEqual(57);
   });
-  it("refuses jira.attach before V55, accepts it after, and keeps every row", () => {
-    const db = v54Database();
+  it("refuses jira.attach before V57, accepts it after, and keeps every row", () => {
+    const db = v56Database();
     try {
       insertMutation(db, "jira.edit", "kept");
       expect(() => {
