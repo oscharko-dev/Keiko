@@ -1,5 +1,6 @@
 /* LocalSystem broker. The SCM image and supervisor are the same protected installed file. */
 #include "gateway_service.h"
+#include "gateway_loopback.h"
 #include "gateway_peer.h"
 #include "gateway_wfp.h"
 #include <userenv.h>
@@ -152,7 +153,7 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
   HANDLE source = NULL, job = NULL;
   PSID sid = NULL;
   wchar_t name[48];
-  BOOL owned = FALSE;
+  BOOL owned = FALSE, exempted = FALSE;
   DWORD cleanup = ERROR_SUCCESS;
   if (!transfer(pipe, hello, sizeof(hello), FALSE, stopping) || memcmp(hello, "KGH1", 4) ||
       keiko_gateway_peer_authenticate(pipe, image, &peer) != ERROR_SUCCESS ||
@@ -171,7 +172,13 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
   owned = TRUE;
   memcpy(ack + 4, nonce, CHALLENGE_SIZE);
   if (keiko_gateway_filters_open_guarded(sid, request.family, request.port, job, &filters) !=
-      ERROR_SUCCESS || !transfer(pipe, ack, sizeof(ack), TRUE, stopping)) goto done;
+      ERROR_SUCCESS) goto done;
+  /* Only now, with Keiko's per-tree confinement in force, lift the OS loopback isolation that
+   * otherwise drops the gateway connection at the listener. The child is still suspended: the
+   * acknowledgement below is what lets the caller resume it, so no packet precedes this. */
+  if (keiko_gateway_loopback_exempt(sid) != ERROR_SUCCESS) goto done;
+  exempted = TRUE;
+  if (!transfer(pipe, ack, sizeof(ack), TRUE, stopping)) goto done;
   for (;;) {
     JOBOBJECT_BASIC_ACCOUNTING_INFORMATION accounting;
     HANDLE waits[2] = {stopping, peer.process};
@@ -182,6 +189,10 @@ static DWORD serve(HANDLE pipe, HANDLE image) {
 done:
   if (owned) {
     (void)TerminateJobObject(job, 137);
+    /* Revoking only narrows access, so it precedes closing the filters and does not wait for
+     * verified termination; a failed revoke leaves an entry for a per-tree SID that the durable
+     * deny guard still blocks and that no later process can obtain. */
+    if (exempted) (void)keiko_gateway_loopback_revoke(sid);
     /* Retain durable denies if termination cannot be verified within the shutdown budget. */
     for (unsigned i = 0; i < 100; i++) {
       cleanup = keiko_gateway_filters_close(&filters);

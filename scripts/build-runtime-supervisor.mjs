@@ -10,6 +10,7 @@ const WINDOWS_SOURCE = resolve("native/runtime-supervisor/windows/keiko_runtime_
 export const windowsGatewaySources = [
   "gateway_installed",
   "gateway_service",
+  "gateway_loopback",
   "gateway_peer",
   "gateway_request",
   "gateway_wfp",
