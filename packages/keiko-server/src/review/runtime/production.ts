@@ -63,7 +63,7 @@ function boundedSetting(
 }
 
 /**
- * The Reviewer run's budgets: 600,000 prompt tokens and 20 minutes by default, operator-configurable
+ * The Reviewer run's budgets: 1,500,000 prompt tokens and 20 minutes by default, operator-configurable
  * but never above the coding runtime's configured envelope (ADR-0182 D1). Out of range fails closed.
  */
 export function configuredReviewRunBudget(

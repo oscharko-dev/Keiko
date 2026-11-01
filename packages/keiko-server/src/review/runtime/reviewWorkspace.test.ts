@@ -60,9 +60,9 @@ describe("createReviewWorkspaceLifecycle", () => {
 describe("configuredReviewRunBudget", () => {
   const envelope = { promptTokenBudget: 2_000_000, maxDurationMinutes: 120 };
 
-  it("defaults to 600,000 prompt tokens and 20 minutes", () => {
+  it("defaults to 1,500,000 prompt tokens and 20 minutes", () => {
     expect(configuredReviewRunBudget({}, envelope)).toEqual({
-      promptTokenBudget: 600_000,
+      promptTokenBudget: 1_500_000,
       maxDurationMinutes: 20,
     });
   });

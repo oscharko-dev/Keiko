@@ -450,7 +450,7 @@ Keiko for Quality review instance. It changes no Coding Workbench mode and adds 
   review worktree of ADR-0182 D3 at its head commit, the action classes are `workspace-read` alone,
   the command policy is `deny`, the network policy `deny-all` with no connector scope, the
   deployment ceiling and therefore the effective mode `governed-assist` (the envelope schema requires
-  a mode), and the budgets are the review run's own (600,000 prompt tokens and 20 minutes by
+  a mode), and the budgets are the review run's own (1,500,000 prompt tokens and 20 minutes by
   default, operator-configurable through `KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS` and
   `KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES`, never above the coding envelope; out of range fails
   closed). The envelope's validation is unchanged and admits these grants.

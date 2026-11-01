@@ -735,7 +735,7 @@ export const REVIEW_RULES_FILE_MAX_BYTES = 16 * 1024;
 export const REVIEW_RULES_FILE_DEFAULT_PATH = ".keiko/review-rules.md";
 
 /** Reviewer run budgets: defaults, never above the coding envelope maxima (ADR-0182 D1). */
-export const REVIEW_RUN_DEFAULT_PROMPT_TOKENS = 600_000;
+export const REVIEW_RUN_DEFAULT_PROMPT_TOKENS = 1_500_000;
 export const REVIEW_RUN_DEFAULT_DURATION_MINUTES = 20;
 /** The review instance stops after this long without a run. */
 export const REVIEW_RUNTIME_DEFAULT_IDLE_MS = 5 * 60 * 1000;
