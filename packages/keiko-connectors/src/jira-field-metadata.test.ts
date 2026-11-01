@@ -738,3 +738,122 @@ describe("escaped line breaks in rich text (#4178)", () => {
     ).toMatchObject({ ok: true });
   });
 });
+
+// #4176 AC5: every schema type the projection knows, an unknown custom type, missing metadata and
+// a field without the requested operation, each against one accepted and one refused value.
+describe("schema-type matrix (#4176)", () => {
+  const PREFIX = "com.atlassian.jira.plugin.system.customfieldtypes:";
+  const CHOICES = [{ id: "1", name: "High" }];
+  const SAMPLES = {
+    text: ["Ziel der Anforderung", 42],
+    number: [2.5, "2.5"],
+    date: ["2026-03-01", "01.03.2026"],
+    datetime: ["2026-03-01T10:00:00Z", "2026-03-01"],
+    option: [{ id: "1" }, { id: "9" }],
+    options: [[{ id: "1" }], [{ id: "9" }]],
+    user: [{ name: "jdoe" }, 42],
+    users: [[{ name: "jdoe" }], [42]],
+    strings: [["anforderung"], ["zwei worte"]],
+    opaque: [{ any: ["shape", 1] }, "control\u0000character"],
+  } as const;
+  // Users are never listed as choices: Jira offers them through a user search.
+  const choicesFor = (schema: Record<string, unknown>): Record<string, unknown> =>
+    schema.type === "user" || schema.items === "user" ? {} : { allowedValues: CHOICES };
+  const system = (id: string, schema: Record<string, unknown>): Record<string, unknown> =>
+    field(id, String(schema.type), { schema: { ...schema, system: id }, ...choicesFor(schema) });
+  const custom = (type: string, schema: Record<string, unknown>): Record<string, unknown> =>
+    field("customfield_10500", String(schema.type), {
+      schema: { ...schema, custom: type },
+      ...choicesFor(schema),
+    });
+  const CASES: readonly (readonly [string, Record<string, unknown>, keyof typeof SAMPLES])[] = [
+    ["summary", system("summary", { type: "string" }), "text"],
+    ["description", system("description", { type: "string" }), "text"],
+    ["environment", system("environment", { type: "string" }), "text"],
+    ["labels", system("labels", { type: "array", items: "string" }), "strings"],
+    ["priority", system("priority", { type: "priority" }), "option"],
+    ["assignee", system("assignee", { type: "user" }), "user"],
+    ["reporter", system("reporter", { type: "user" }), "user"],
+    ["duedate", system("duedate", { type: "date" }), "date"],
+    ["components", system("components", { type: "array", items: "component" }), "options"],
+    ["versions", system("versions", { type: "array", items: "version" }), "options"],
+    ["fixVersions", system("fixVersions", { type: "array", items: "version" }), "options"],
+    ["textfield", custom(`${PREFIX}textfield`, { type: "string" }), "text"],
+    ["textarea", custom(`${PREFIX}textarea`, { type: "string" }), "text"],
+    ["float", custom(`${PREFIX}float`, { type: "number" }), "number"],
+    ["datepicker", custom(`${PREFIX}datepicker`, { type: "date" }), "date"],
+    ["datetime", custom(`${PREFIX}datetime`, { type: "datetime" }), "datetime"],
+    ["select", custom(`${PREFIX}select`, { type: "option" }), "option"],
+    ["radiobuttons", custom(`${PREFIX}radiobuttons`, { type: "option" }), "option"],
+    ["multiselect", custom(`${PREFIX}multiselect`, { type: "array", items: "option" }), "options"],
+    [
+      "multicheckboxes",
+      custom(`${PREFIX}multicheckboxes`, { type: "array", items: "option" }),
+      "options",
+    ],
+    ["userpicker", custom(`${PREFIX}userpicker`, { type: "user" }), "user"],
+    [
+      "multiuserpicker",
+      custom(`${PREFIX}multiuserpicker`, { type: "array", items: "user" }),
+      "users",
+    ],
+    // An unmapped system custom type keeps a scalar schema type and stays opaque otherwise.
+    ["system custom, number schema", custom(`${PREFIX}importid`, { type: "number" }), "number"],
+    ["system custom, option schema", custom(`${PREFIX}other`, { type: "option" }), "opaque"],
+    // An unknown app type is never guessed from its familiar base type: Jira decides.
+    ["unknown app type", custom("vendor.app:estimate", { type: "string" }), "opaque"],
+    [
+      "unknown app array",
+      custom("vendor.app:sprint", { type: "array", items: "string" }),
+      "opaque",
+    ],
+  ];
+
+  it.each(CASES)("%s validates its values", (_name, raw, kind) => {
+    const parsed = parseJiraFieldMetadata([raw]);
+    if (!parsed.ok) throw new Error("Invalid fixture");
+    const [projected] = parsed.fields;
+    expect(projected?.kind).toBe(kind);
+    const id = String(raw.fieldId);
+    const [accepted, refused] = SAMPLES[kind];
+    expect(
+      validateJiraFieldChanges(parsed.fields, { [id]: accepted }, "edit", "data-center").ok,
+    ).toBe(true);
+    expect(
+      validateJiraFieldChanges(parsed.fields, { [id]: refused }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, fieldId: id });
+  });
+
+  it("refuses a field the metadata does not offer, and metadata that is missing", () => {
+    const parsed = parseJiraFieldMetadata([field("summary", "string")]);
+    if (!parsed.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(parsed.fields, { customfield_10500: "x" }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, reason: "invalid-field", fieldId: "customfield_10500" });
+    expect(validateJiraFieldChanges([], { summary: "x" }, "create", "data-center")).toMatchObject({
+      ok: false,
+      fieldId: "summary",
+    });
+    expect(parseJiraFieldMetadata(undefined)).toEqual({ ok: false, reason: "malformed-metadata" });
+    expect(parseJiraFieldMetadata({ values: [] })).toEqual({
+      ok: false,
+      reason: "malformed-metadata",
+    });
+  });
+
+  it.each([
+    ["only add", ["add"]],
+    ["no operation", []],
+  ])("refuses a set write to a field with %s", (_name, operations) => {
+    const parsed = parseJiraFieldMetadata([
+      field("customfield_10500", "string", {
+        operations,
+        schema: { type: "string", custom: `${PREFIX}textfield` },
+      }),
+    ]);
+    if (!parsed.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(parsed.fields, { customfield_10500: "x" }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, fieldId: "customfield_10500" });
+  });
+});
