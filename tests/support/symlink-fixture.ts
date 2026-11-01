@@ -14,7 +14,7 @@ import type { TestContext } from "vitest";
 
 export const WINDOWS_HOST = process.platform === "win32";
 
-export const WINDOWS_SYMLINK_SKIP =
+const WINDOWS_SYMLINK_SKIP =
   "Windows symlink privilege unavailable on this host; junction controls run separately";
 
 function isWindowsSymlinkPrivilegeError(error: unknown): boolean {

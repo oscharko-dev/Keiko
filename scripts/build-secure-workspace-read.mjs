@@ -1,5 +1,6 @@
-import { mkdir } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
@@ -130,11 +131,28 @@ export async function runSecureWorkspaceReadBuild({
   const compilerPath =
     target === "windows-x64" ? resolveCompilerImpl(compilerEnvironment.PATH, "cl.exe") : compiler;
   await mkdir(dirname(output), { recursive: true });
-  const result = spawnSyncImpl(compilerPath, args, {
-    stdio: "inherit",
-    env: compilerEnvironment,
+  return compileWithPrivateObjects(target, args, (compileArgs) => {
+    const result = spawnSyncImpl(compilerPath, compileArgs, {
+      stdio: "inherit",
+      env: compilerEnvironment,
+    });
+    return result.status ?? 1;
   });
-  return result.status ?? 1;
+}
+
+// cl writes one object file per translation unit into its working directory unless told
+// otherwise. They go to a private scratch directory that is removed afterwards: left in the checkout
+// or beside a staged helper they would make the native helper directory hold files the dev lane
+// does not admit, and it refuses the lane (#4068).
+export async function compileWithPrivateObjects(target, args, compile) {
+  if (target !== "windows-x64") return compile(args);
+  const objectDirectory = await mkdtemp(join(tmpdir(), "keiko-native-objects-"));
+  try {
+    // The trailing backslash tells cl that /Fo names a directory, not an object file.
+    return compile([`/Fo:${objectDirectory}` + "\\", ...args]);
+  } finally {
+    await rm(objectDirectory, { recursive: true, force: true });
+  }
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url))
