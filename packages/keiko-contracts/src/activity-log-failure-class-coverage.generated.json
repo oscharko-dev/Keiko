@@ -39948,6 +39948,12 @@
               "required": false
             },
             {
+              "name": "baselineSource",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "changedCount",
               "type": "integer",
               "dataClass": "count",

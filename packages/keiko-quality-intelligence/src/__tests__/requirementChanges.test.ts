@@ -60,6 +60,7 @@ describe("compareRequirementsWithTrace", () => {
       ["untraced", "LH-004", []],
     ]);
     expect(result.unchangedCount).toBe(1);
+    expect(result.unchanged.map((unchanged) => unchanged.id)).toEqual(["LH-003"]);
     expect(result.affectedIssues).toEqual(["REQ-1", "REQ-2"]);
     expect(result.tracedIssueCount).toBe(3);
     expect(result.unmatchedIssueCount).toBe(0);

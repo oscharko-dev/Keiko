@@ -245,12 +245,23 @@ function progressOf(count: number): JiraReport["progress"] {
   };
 }
 
-function reportOf(issues: readonly ReportedIssue[], complete: boolean): JiraReport {
+export interface ReportOptions {
+  /** False when the backlog was only partly read. */
+  readonly complete?: boolean;
+  readonly generatedAt?: string;
+  readonly projectKey?: string;
+}
+
+function reportOf(
+  issues: readonly ReportedIssue[],
+  complete: boolean,
+  options: ReportOptions,
+): JiraReport {
   return {
     digest: "d".repeat(64),
-    generatedAt: "2026-11-01T12:00:00.000Z",
+    generatedAt: options.generatedAt ?? "2026-11-01T12:00:00.000Z",
     scope: {
-      projectKey: "REQ",
+      projectKey: options.projectKey ?? "REQ",
       jql: "",
       estimateUnit: "seconds",
       asOf: "2026-11-01",
@@ -290,8 +301,23 @@ export function storeFinishedReport(
   store: JiraReportStore,
   owner: string,
   issues: readonly ReportedIssue[],
-  complete = true,
+  options: ReportOptions = {},
 ): string {
+  const session = store.start(owner, {
+    projectKey: options.projectKey ?? "REQ",
+    jql: undefined,
+    estimateFieldId: undefined,
+    asOf: undefined,
+    parentFieldIds: [],
+    requirementIds: [],
+  });
+  session.report = reportOf(issues, options.complete ?? true, options);
+  session.phase = "finished";
+  return session.id;
+}
+
+/** Starts a report for the owner that is still being read: no report yet, so no baseline. */
+export function storeReadingReport(store: JiraReportStore, owner: string): string {
   const session = store.start(owner, {
     projectKey: "REQ",
     jql: undefined,
@@ -300,7 +326,6 @@ export function storeFinishedReport(
     parentFieldIds: [],
     requirementIds: [],
   });
-  session.report = reportOf(issues, complete);
-  session.phase = "finished";
+  session.phase = "reading";
   return session.id;
 }

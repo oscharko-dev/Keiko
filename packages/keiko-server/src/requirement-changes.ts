@@ -4,7 +4,8 @@
 // left on each item, never through a model's reading of both. The backlog is a Jira report the Chat
 // already read under its own grant (`jira.report`, scope chosen by the model); this module reads no
 // Jira itself and so cannot widen the Chat's authority. The pure comparison is owned by
-// keiko-quality-intelligence; this module bounds the lists and says what the baseline could not see.
+// keiko-quality-intelligence; this module resolves the report, bounds the lists and says what the
+// baseline could not see.
 
 import type { JiraReport, JiraReportStore } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
@@ -20,10 +21,12 @@ import type { RequirementCollection } from "./requirement-inventory.js";
 
 export const CHANGE_LIST_MAX = 60;
 export const UNTRACED_LIST_MAX = 200;
+export const UNCHANGED_LIST_MAX = 200;
 export const AFFECTED_ISSUES_MAX = 120;
 const TITLE_CHARS_MAX = 160;
+const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
 
-export type ChangesRefusal = "report-required" | "report-not-found";
+export type ChangesRefusal = "report-required" | "report-reading" | "report-not-found";
 
 export interface ChangesCounts {
   readonly changed: number;
@@ -35,19 +38,87 @@ export interface ChangesCounts {
   readonly baselineComplete: boolean;
 }
 
-export type ChangesResolution =
-  | { readonly ok: true; readonly report: JiraReport }
-  | { readonly ok: false; readonly reason: ChangesRefusal };
+/** Which Jira report the comparison read: the one the model named, or the Chat's own of this turn. */
+export type ChangesBaselineSource = "explicit" | "turn";
 
-/** The report belongs to this Chat or is indistinguishable from absent; one still reading has none. */
+export interface ChangesBaselineQuery {
+  readonly reportId: string | undefined;
+  readonly projectKey: string | undefined;
+  /** When the turn began; a report read earlier may predate edits made since. */
+  readonly turnStartedAtMs: number | undefined;
+}
+
+export type ChangesResolution =
+  | { readonly ok: true; readonly report: JiraReport; readonly source: ChangesBaselineSource }
+  | { readonly ok: false; readonly reason: ChangesRefusal; readonly nextStep: string };
+
+const REPORT_CALL = "Call jira.report";
+
+function refusal(reason: ChangesRefusal, nextStep: string): ChangesResolution {
+  return { ok: false, reason, nextStep };
+}
+
+function requiredStep(projectKey: string | undefined): string {
+  const key = projectKey !== undefined && PROJECT_KEY.test(projectKey) ? projectKey : "<project>";
+  return (
+    `No Jira report was read in this turn. ${REPORT_CALL} with {"projectKey":"${key}"} ` +
+    "(repeat with its reportId until status is finished), then call this tool again with " +
+    'view "changes".'
+  );
+}
+
+function sameProject(report: JiraReport, projectKey: string | undefined): boolean {
+  return (
+    projectKey === undefined || report.scope.projectKey?.toLowerCase() === projectKey.toLowerCase()
+  );
+}
+
+function readThisTurn(report: JiraReport, turnStartedAtMs: number | undefined): boolean {
+  return turnStartedAtMs === undefined || Date.parse(report.generatedAt) >= turnStartedAtMs;
+}
+
+function explicitBaseline(
+  reports: JiraReportStore | undefined,
+  chatId: string,
+  reportId: string,
+): ChangesResolution {
+  const session = reports?.get(reportId, chatId);
+  if (session === undefined)
+    return refusal(
+      "report-not-found",
+      `That reportId is unknown to this Chat. Omit reportId, or ${REPORT_CALL} for the project first.`,
+    );
+  return session.report === undefined
+    ? refusal(
+        "report-reading",
+        `That report is still being read. ${REPORT_CALL} with {"reportId":"${reportId}"} until ` +
+          "its status is finished, then repeat this call.",
+      )
+    : { ok: true, report: session.report, source: "explicit" };
+}
+
+/**
+ * The report the comparison reads. A `reportId` names one; without it the Chat's newest finished
+ * report of this turn (of `projectKey`, when given) is the baseline, so the model needs no report
+ * id. A report belongs to the Chat that read it: another Chat's is indistinguishable from absent.
+ * A refusal names the exact next step.
+ */
 export function resolveChangesBaseline(
   reports: JiraReportStore | undefined,
   chatId: string,
-  reportId: string | undefined,
+  query: ChangesBaselineQuery,
 ): ChangesResolution {
-  if (reportId === undefined) return { ok: false, reason: "report-required" };
-  const report = reports?.get(reportId, chatId)?.report;
-  return report === undefined ? { ok: false, reason: "report-not-found" } : { ok: true, report };
+  if (query.reportId !== undefined) return explicitBaseline(reports, chatId, query.reportId);
+  const report = reports
+    ?.finished(chatId)
+    .flatMap((session) => (session.report === undefined ? [] : [session.report]))
+    .find(
+      (candidate) =>
+        sameProject(candidate, query.projectKey) && readThisTurn(candidate, query.turnStartedAtMs),
+    );
+  return report === undefined
+    ? refusal("report-required", requiredStep(query.projectKey))
+    : { ok: true, report, source: "turn" };
 }
 
 function bounded<Item>(
@@ -62,12 +133,11 @@ function bounded<Item>(
 
 /** A plain identifier unless several documents define it; then the scoped reference. */
 function nameOf(
-  change: RequirementChange<RequirementInventoryEntry>,
+  id: string,
+  entry: RequirementInventoryEntry | undefined,
   ambiguous: ReadonlySet<string>,
 ): string {
-  return change.entry !== undefined && ambiguous.has(change.id)
-    ? requirementReference(change.entry)
-    : change.id;
+  return entry !== undefined && ambiguous.has(id) ? requirementReference(entry) : id;
 }
 
 export interface ChangesView {
@@ -96,6 +166,7 @@ function baselineOf(result: Changes, report: JiraReport): CatalogJsonObject {
   const { completeness } = report;
   return {
     complete: completeness.complete,
+    generatedAt: report.generatedAt,
     issuesRead: completeness.issuesRead,
     ...(completeness.issuesTotal === undefined ? {} : { issuesTotal: completeness.issuesTotal }),
     tracedIssueCount: result.tracedIssueCount,
@@ -115,10 +186,11 @@ function listsOf(
   const changed = bounded(of("changed"), CHANGE_LIST_MAX, "changed", cut);
   const removed = bounded(of("removed"), CHANGE_LIST_MAX, "removed", cut);
   const untraced = bounded(of("untraced"), UNTRACED_LIST_MAX, "untraced", cut);
+  const unchanged = bounded(result.unchanged, UNCHANGED_LIST_MAX, "unchanged", cut);
   const affected = bounded(result.affectedIssues, AFFECTED_ISSUES_MAX, "affectedIssues", cut);
   return {
     changed: changed.map((item): CatalogJsonObject => ({
-      id: nameOf(item, ambiguous),
+      id: nameOf(item.id, item.entry, ambiguous),
       title: redact(item.entry?.title ?? "").slice(0, TITLE_CHARS_MAX),
       issues: [...item.issues],
     })),
@@ -126,7 +198,8 @@ function listsOf(
       id: item.id,
       issues: [...item.issues],
     })),
-    untraced: untraced.map((item) => nameOf(item, ambiguous)),
+    untraced: untraced.map((item) => nameOf(item.id, item.entry, ambiguous)),
+    unchanged: unchanged.map((entry) => nameOf(entry.id, entry, ambiguous)),
     affectedIssues: [...affected],
     ...(cut.length === 0 ? {} : { truncated: cut }),
   };

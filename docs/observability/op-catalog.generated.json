@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "fb2adbe0dca1347f6f069c4abc35f79390b7b8ace12c34b55db10edb7cd3a679",
+    "catalogDigest": "56a24cbaaded4bc3722ffe5d171ffa5b71215b438bbfbc2c6c87db04d37a630c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -31510,8 +31510,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.requirement-trace.applied.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:142",
-        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:183"]
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:149",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:190"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -31597,7 +31597,13 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["report-required", "report-not-found"]
+            "values": ["report-required", "report-reading", "report-not-found"]
+          },
+          "baselineSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["explicit", "turn"]
           },
           "changedCount": {
             "type": "integer",
@@ -31642,7 +31648,7 @@
           },
           {
             "field": "refusal",
-            "values": ["report-required", "report-not-found"]
+            "values": ["report-required", "report-reading", "report-not-found"]
           },
           {
             "field": "baselineComplete",
@@ -31663,8 +31669,8 @@
         "failureClasses": ["requirement-inventory"],
         "proofIds": ["knowledge.requirements.read.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:50",
-        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:116"]
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:51",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:123"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -95841,6 +95847,12 @@
                   "required": false
                 },
                 {
+                  "name": "baselineSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "changedCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -109809,20 +109821,20 @@
     {
       "op": "knowledge.requirement-trace.applied",
       "category": "search",
-      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:145",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:152",
       "package": "keiko-server"
     },
     {
       "op": "knowledge.requirements-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirementsTool.ts:443",
+      "site": "packages/keiko-server/src/requirementsTool.ts:452",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "knowledge.requirements.read",
       "category": "search",
-      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:53",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:54",
       "package": "keiko-server"
     },
     {

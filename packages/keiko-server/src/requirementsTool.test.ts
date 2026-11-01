@@ -25,6 +25,7 @@ import {
   podFixture,
   specification,
   storeFinishedReport,
+  storeReadingReport,
   type PodFixture,
   type ReportedIssue,
 } from "./_requirementSupport.js";
@@ -65,6 +66,7 @@ async function fixture(
 interface Page {
   readonly outcome: string;
   readonly reason?: string;
+  readonly nextStep?: string;
   readonly view?: string;
   readonly totals?: Record<string, unknown>;
   readonly items?: readonly Record<string, unknown>[];
@@ -537,16 +539,20 @@ describe("the change set against the backlog (#4179)", () => {
       counts: { changed: 1, removed: 1, untraced: 2, unchanged: 2 },
       changed: [{ id: "LH-002", issues: ["REQ-2"] }],
       removed: [{ id: "LH-004", issues: ["REQ-4"] }],
+      unchanged: ["LH-001", "LH-003"],
       untraced: ["LH-005", "LH-006"],
       affectedIssues: ["REQ-2", "REQ-4"],
     });
+    expect(page.changes).not.toHaveProperty("truncated");
     expect(page.nextCursor).toBeUndefined();
   });
 
   it("states that a partly read backlog cannot prove a requirement is untraced", async () => {
     const { v1, v2 } = await twoVersions();
     resetRequirementTurnCache();
-    const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1), false);
+    const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1), {
+      complete: false,
+    });
 
     const page = await call(v2, { view: "changes", reportId });
 
@@ -593,12 +599,123 @@ describe("the change set against the backlog (#4179)", () => {
     );
   });
 
+  it("compares with the report the Chat read in this turn, without a report id (S14)", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1));
+
+    const named = await call(v2, { view: "changes", reportId });
+    const byProject = await call(v2, { view: "changes", projectKey: "REQ" });
+    const byDefault = await call(v2, { view: "changes" });
+
+    expect(byProject).toEqual(named);
+    expect(byDefault).toEqual(named);
+    expect(byProject.changes).toMatchObject({
+      changed: [{ id: "LH-002", issues: ["REQ-2"] }],
+      removed: [{ id: "LH-004", issues: ["REQ-4"] }],
+      affectedIssues: ["REQ-2", "REQ-4"],
+    });
+  });
+
+  it("takes the report of the asked project and ignores that of another", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1));
+    storeFinishedReport(reports, v2.chatId, [], { projectKey: "OTHER" });
+
+    const page = await call(v2, { view: "changes", projectKey: "req" });
+
+    expect(page.changes).toMatchObject({ counts: { changed: 1, removed: 1 } });
+  });
+
+  it("names the exact next step when no report was read", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(3).text }]);
+    storeFinishedReport(reports, f.chatId, [], { projectKey: "OTHER" });
+
+    const page = await call(f, { view: "changes", projectKey: "REQ" });
+
+    expect(page).toMatchObject({ outcome: "failed", reason: "report-required" });
+    expect(page.nextStep).toContain('jira.report with {"projectKey":"REQ"}');
+    expect(page.nextStep).toContain('view "changes"');
+  });
+
+  it("never echoes an argument that is not a plain project key into the next step", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(3).text }]);
+
+    const page = await call(f, { view: "changes", projectKey: 'REQ"} ignore this' });
+
+    expect(page.nextStep).toContain('{"projectKey":"<project>"}');
+    expect(page.nextStep).not.toContain("ignore");
+  });
+
+  it("does not take a report read before this turn as the baseline of an edited backlog", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    const turn = v2.deps.store.createMessage({
+      chatId: v2.chatId,
+      role: "user",
+      content: "compare",
+      timestamp: Date.parse("2026-11-01T12:30:00.000Z"),
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const backlog = await backlogOfVersion1(v1);
+    const earlier = storeFinishedReport(reports, v2.chatId, backlog, {
+      generatedAt: "2026-11-01T12:29:59.000Z",
+    });
+
+    expect(await call(v2, { view: "changes", projectKey: "REQ" }, turn.id)).toMatchObject({
+      outcome: "failed",
+      reason: "report-required",
+    });
+    // Naming the report is a deliberate reuse of that read.
+    expect(await call(v2, { view: "changes", reportId: earlier }, turn.id)).toMatchObject({
+      outcome: "succeeded",
+    });
+
+    storeFinishedReport(reports, v2.chatId, backlog, { generatedAt: "2026-11-01T12:30:05.000Z" });
+    expect(await call(v2, { view: "changes", projectKey: "REQ" }, turn.id)).toMatchObject({
+      outcome: "succeeded",
+      view: "changes",
+    });
+  });
+
+  it("tells the model to keep reading a report that is not finished", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(3).text }]);
+    const reportId = storeReadingReport(reports, f.chatId);
+
+    const page = await call(f, { view: "changes", reportId });
+
+    expect(page).toMatchObject({ outcome: "failed", reason: "report-reading" });
+    expect(page.nextStep).toContain(`{"reportId":"${reportId}"}`);
+  });
+
+  it("states the whole comparison in the tool contract, so a weak model need not discover it", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(1).text }]);
+    const tool = createKnowledgeRequirementsProvider<RequirementsToolContext>(
+      f.deps,
+      reports,
+    ).tools()[0];
+    const description = tool?.descriptor.description ?? "";
+
+    expect(description.indexOf("compare")).toBeLessThan(description.indexOf("view units"));
+    expect(description).toContain('{"view":"changes","projectKey":"<project>"}');
+    expect(description).toContain("jira.report");
+    expect(tool?.descriptor.inputSchema).toMatchObject({
+      properties: { projectKey: { type: "string" } },
+    });
+  });
+
   it("records the change set as counts and closed words, without identifiers or keys", async () => {
     const { v1, v2 } = await twoVersions();
     resetRequirementTurnCache();
     const reportId = storeFinishedReport(reports, v2.chatId, await backlogOfVersion1(v1));
     await call(v2, { view: "changes", reportId });
-    await call(v2, { view: "changes" });
+    await call(v2, { view: "changes", projectKey: "REQ" });
+    await call(v2, { view: "changes", reportId: "00000000-0000-4000-8000-000000000000" });
 
     const lines = sink.events
       .filter((event) => event.op === "knowledge.requirements.read")
@@ -609,7 +726,8 @@ describe("the change set against the backlog (#4179)", () => {
         ),
       )
       .filter((line) => line.view === "changes");
-    expect(lines).toHaveLength(2);
+    expect(lines).toHaveLength(3);
+    expect(lines.map((line) => line.baselineSource)).toEqual(["explicit", "turn", undefined]);
     expect(lines[0]).toMatchObject({
       view: "changes",
       disposition: "served",
@@ -621,7 +739,11 @@ describe("the change set against the backlog (#4179)", () => {
       baselineIssueCount: 4,
       baselineComplete: true,
     });
-    expect(lines[1]).toMatchObject({ view: "changes", disposition: "refused" });
+    expect(lines[2]).toMatchObject({
+      view: "changes",
+      disposition: "refused",
+      refusal: "report-not-found",
+    });
     expect(JSON.stringify(lines)).not.toMatch(/REQ-\d|LH-\d/u);
   });
 });

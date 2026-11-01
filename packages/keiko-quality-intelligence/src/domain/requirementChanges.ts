@@ -50,6 +50,8 @@ export interface RequirementChanges<Entry extends ComparableRequirement = Compar
   /** Changed, then removed, then untraced; requirements in document order. */
   readonly items: readonly RequirementChange<Entry>[];
   readonly unchangedCount: number;
+  /** The unchanged requirements themselves, in document order. */
+  readonly unchanged: readonly Entry[];
   /** Items that name at least one requirement. */
   readonly tracedIssueCount: number;
   /** Traced items whose document is not among the current ones: counted, never judged. */
@@ -143,14 +145,14 @@ export function compareRequirementsWithTrace<Entry extends ComparableRequirement
   const known = new Set(entries.map((entry) => `${entry.documentScope}\u0000${entry.id}`));
   const changed: RequirementChange<Entry>[] = [];
   const untraced: RequirementChange<Entry>[] = [];
-  let unchangedCount = 0;
+  const unchanged: Entry[] = [];
   for (const entry of entries) {
     const state = stateOf(entry, issues);
     const item = { id: entry.id, documentScope: entry.documentScope, entry };
     if (!state.traced) untraced.push({ ...item, status: "untraced", issues: [] });
     else if (state.outdated.length > 0)
       changed.push({ ...item, status: "changed", issues: state.outdated });
-    else unchangedCount += 1;
+    else unchanged.push(entry);
   }
   const removed = removedItems(issues, current, known);
   const unmatched = issues.filter(
@@ -158,7 +160,8 @@ export function compareRequirementsWithTrace<Entry extends ComparableRequirement
   );
   return {
     items: [...changed, ...removed, ...untraced],
-    unchangedCount,
+    unchangedCount: unchanged.length,
+    unchanged,
     tracedIssueCount: issues.length,
     unmatchedIssueCount: unmatched.length,
     affectedIssues: sortedKeys([...changed, ...removed].flatMap((item) => item.issues)),

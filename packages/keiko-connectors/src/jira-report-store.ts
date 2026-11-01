@@ -22,6 +22,8 @@ export interface JiraReportStore {
   readonly get: (id: string, owner: string) => JiraReportSession | undefined;
   /** The same lookup without renewing the expiry: an export is not use of the report. */
   readonly peek: (id: string, owner: string) => JiraReportSession | undefined;
+  /** The owner's finished reports, newest first, without renewing their expiry. */
+  readonly finished: (owner: string) => readonly JiraReportSession[];
   /** Account for a session whose size changed and drop what no longer fits. */
   readonly settle: () => void;
   readonly size: () => number;
@@ -78,6 +80,15 @@ export function createJiraReportStore(options: JiraReportStoreOptions = {}): Jir
     const session = sessions.get(id);
     return session?.owner === owner ? session : undefined;
   };
+  const finished = (owner: string): readonly JiraReportSession[] => {
+    sweep();
+    return [...sessions.values()]
+      .filter(
+        (session) =>
+          session.owner === owner && session.phase === "finished" && session.report !== undefined,
+      )
+      .sort((left, right) => right.startedAt - left.startedAt);
+  };
   return {
     start: (owner, request, fingerprint = ""): JiraReportSession => {
       sweep();
@@ -93,6 +104,7 @@ export function createJiraReportStore(options: JiraReportStoreOptions = {}): Jir
       return session;
     },
     peek,
+    finished,
     settle: sweep,
     size: () => sessions.size,
   };

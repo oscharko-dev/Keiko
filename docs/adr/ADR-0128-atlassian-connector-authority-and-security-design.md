@@ -1020,7 +1020,7 @@ keeps the completed answer instead of failing the turn.
   (`requirement-inventory-formats.integration`); PDF line wrapping is only as stable as its
   extracted lines. Scanned documents (OCR) are not read. The result is a set of
   _detected units_, never claimed to be complete: the detector can miss or over-read, and says so.
-- _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit?, reportId? }`.
+- _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit?, reportId?, projectKey? }`.
   Units are paged in document order under an item bound (25, at most 50) and a byte bound (24,000
   bytes) that fit a 32k-token model; statements, criteria and findings are clipped, never silently
   dropped. Every page states honest totals: detected and matched units, documents scanned,
@@ -1057,11 +1057,20 @@ keeps the completed answer instead of failing the turn.
   bound, items whose requirement is gone (`removed`). Running those queries and merging them is
   derivation a local model's output budget does not carry (lab S14: the comparison turn ran out of
   budget after two inventory reads), so the `changes` view returns the result. The model first reads
-  the backlog with `jira.report` (scope of its choice, under the Chat's own Jira read grant); the
-  call then passes that `reportId` as `{ view: "changes", reportId }`. The tool reads no Jira itself
-  and accepts only a report of the same Chat, so it cannot widen the Chat's authority; a report
-  that is absent or belongs to another Chat is `report-not-found`, a call without one
-  `report-required`. The report row now keeps the issue's labels (bounded: 64 labels of 255
+  the backlog with `jira.report` (scope of its choice, under the Chat's own Jira read grant) and then
+  calls `{ view: "changes", projectKey }`. It needs no report id (lab S14, 2026-11-01: a local model
+  that had to carry one from a second tool never asked for the view at all, read the units, searched
+  Jira and compared by hand in a synthesis that ended at its 300-second limit; its tool description
+  named the precondition last): without `reportId` the
+  baseline is the Chat's newest finished report **of this turn** (of `projectKey`, case-insensitively,
+  when given), and `reportId` names one deliberately. A report read in an earlier turn is not taken
+  implicitly because the backlog may have been edited since; the refusal says so. The tool reads no
+  Jira itself and accepts only a report of the same Chat, so it cannot widen the Chat's authority.
+  Every refusal carries a `nextStep` sentence with the exact call to make: `report-required` (no
+  report of this turn: call `jira.report` with the project and repeat until `finished`, then repeat
+  this call), `report-reading` (a named report is still being read: continue it with its
+  `reportId`), `report-not-found` (unknown or another Chat's: omit `reportId`). The tool description
+  leads with this comparison and the two-call recipe. The report row now keeps the issue's labels (bounded: 64 labels of 255
   characters). `keiko-quality-intelligence` compares them with the current inventory, purely and
   without a model: per requirement of the current document, `changed` when an item that traces it
   (document label and requirement label) lacks the current `keiko-rev-*` label (an item naming the
@@ -1072,9 +1081,9 @@ keeps the completed answer instead of failing the turn.
   requirement of an item that traces several is judged on its own revision label. The result
   carries `baseline` (report complete, issues read and total, traced and unmatched item counts),
   exact `counts`, the changed requirements (id, title, outdated item keys), the removed ones (id,
-  item keys), the untraced ids and the `affectedIssues` (every item that traces a changed or
-  removed requirement, Jira-key ordered), each list bounded (60, 60, 200 and 120) with the cut
-  lists named in `truncated`. The honest limits: `untraced` means no item of the compared report
+  item keys), the unchanged and untraced ids and the `affectedIssues` (every item that traces a changed or
+  removed requirement, Jira-key ordered), each list bounded (60, 60, 200, 200 and 120) with the
+  cut lists named in `truncated`; `baseline` also states when the report was generated. The honest limits: `untraced` means no item of the compared report
   traces the requirement, which is a new requirement or one not yet derived; the labels cannot tell
   them apart, so the tool never calls it "new". A report that is incomplete (`baseline.complete`
   false) cannot prove a requirement untraced, and the scope of the report is the scope of the
@@ -1087,7 +1096,8 @@ keeps the completed answer instead of failing the turn.
   returned counts, documents scanned, not extracted and omitted, units omitted, result bytes, next
   page; the `changes` view adds the changed, removed, untraced, unchanged and affected-item counts,
   the traced baseline item count, whether the baseline report was complete, and the closed refusal
-  `report-required` or `report-not-found`, never an identifier or key);
+  `report-required`, `report-reading` or `report-not-found` and the closed `baselineSource`
+  `explicit`/`turn`, never an identifier or key);
   `knowledge.requirement-trace.applied` records, per create, edit or draft, the traced,
   refused and problem counts and the labels, footers and dropped labels applied. Counts and closed
   words only.

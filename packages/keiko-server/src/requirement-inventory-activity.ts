@@ -35,7 +35,8 @@ export interface RequirementReadActivity {
 }
 
 export interface RequirementChangesActivity {
-  readonly refusal?: "report-required" | "report-not-found";
+  readonly refusal?: "report-required" | "report-reading" | "report-not-found";
+  readonly baselineSource?: "explicit" | "turn";
   readonly changedCount?: number;
   readonly removedCount?: number;
   readonly untracedCount?: number;
@@ -81,7 +82,13 @@ const REQUIREMENTS_READ_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["report-required", "report-not-found"],
+      values: ["report-required", "report-reading", "report-not-found"],
+    },
+    baselineSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["explicit", "turn"],
     },
     changedCount: { ...COUNT, required: false },
     removedCount: { ...COUNT, required: false },
@@ -95,7 +102,7 @@ const REQUIREMENTS_READ_OPERATION = defineActivityLogOperation({
   },
   diagnosticWhen: [
     { field: "disposition", values: ["unavailable", "cursor-stale"] },
-    { field: "refusal", values: ["report-required", "report-not-found"] },
+    { field: "refusal", values: ["report-required", "report-reading", "report-not-found"] },
     { field: "baselineComplete", values: [false] },
     { field: "unitsOmitted", positive: true },
     { field: "documentsOmitted", positive: true },

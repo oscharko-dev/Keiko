@@ -4090,6 +4090,7 @@
     "tool-catalog.provider-result-invalid",
     "tool-catalog.settlement-emit-failed",
     "trust-grant-failed",
+    "turn",
     "type-definition",
     "typeDefinition",
     "typescript",

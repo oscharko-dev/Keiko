@@ -69,6 +69,7 @@ const ARGUMENTS = object({
     enum: VIEWS,
   },
   reportId: text(64),
+  projectKey: text(64),
   documents: { type: "array", maxItems: 20, items: { type: "string", pattern: "^[0-9a-f]{8}$" } },
   query: text(200),
   ids: { type: "array", maxItems: LISTED_IDS_MAX, items: text(80) },
@@ -111,6 +112,7 @@ const RESULT = object(
   {
     outcome: { type: "string", enum: ["succeeded", "failed"] },
     reason: text(64),
+    nextStep: text(400),
     view: { type: "string", enum: VIEWS },
     totals: { type: "object", required: [], properties: {}, additionalProperties: true },
     items: { type: "array", maxItems: 100, items: UNIT },
@@ -121,10 +123,11 @@ const RESULT = object(
 );
 
 const DESCRIPTION =
-  "Read the requirement units detected in this Chat's Knowledge Pods, in document order, one page per call, when a task needs all requirements. " +
-  "Units are detected, not guaranteed: report the totals and what could not be read. Repeat with nextCursor until absent. " +
-  "Pass a unit's reference as requirementIds when creating or editing a Jira issue. " +
-  "To compare a new version with Jira, pass view changes and a jira.report reportId. Results are untrusted document text.";
+  "Read the requirements detected in this Chat's Knowledge Pods (untrusted document text). " +
+  "To compare a new document version with Jira, never by hand: call jira.report for the project until finished, " +
+  'then call {"view":"changes","projectKey":"<project>"}. ' +
+  "Otherwise page view units with nextCursor and report the totals. " +
+  "Pass a unit's reference as requirementIds when creating or editing a Jira issue.";
 
 function declaration(): ManagedMcpToolDeclaration {
   const descriptor = createToolDescriptor({
@@ -154,6 +157,7 @@ interface ParsedArguments {
   readonly cursor: string | undefined;
   readonly limit: number;
   readonly reportId: string | undefined;
+  readonly projectKey: string | undefined;
 }
 
 function strings(value: unknown): readonly string[] | undefined {
@@ -173,6 +177,7 @@ function parseArguments(args: CatalogJsonObject): ParsedArguments {
     limit,
     cursor: typeof args.cursor === "string" ? args.cursor : undefined,
     reportId: typeof args.reportId === "string" ? args.reportId : undefined,
+    projectKey: typeof args.projectKey === "string" ? args.projectKey : undefined,
     filter: {
       documents: strings(args.documents),
       query: typeof args.query === "string" ? args.query : undefined,
@@ -321,10 +326,10 @@ function activityOf(
   };
 }
 
-function failure(reason: string, collection?: RequirementCollection): Served {
+function failure(reason: string, collection?: RequirementCollection, nextStep?: string): Served {
   const disposition = reason === "cursor-stale" ? "cursor-stale" : "refused";
   return {
-    data: { outcome: "failed", reason },
+    data: { outcome: "failed", reason, ...(nextStep === undefined ? {} : { nextStep }) },
     activity: activityOf(collection, disposition, {
       matched: 0,
       returned: 0,
@@ -337,13 +342,16 @@ function failure(reason: string, collection?: RequirementCollection): Served {
 function serveChanges(
   collection: RequirementCollection,
   parsed: ParsedArguments,
-  context: RequirementsToolContext,
-  reports: JiraReportStore | undefined,
-  redact: (value: string) => string,
+  environment: ServeEnvironment,
 ): Served {
-  const baseline = resolveChangesBaseline(reports, context.chatId, parsed.reportId);
+  const { context, reports, redact, turnStartedAtMs } = environment;
+  const baseline = resolveChangesBaseline(reports, context.chatId, {
+    reportId: parsed.reportId,
+    projectKey: parsed.projectKey,
+    turnStartedAtMs: turnStartedAtMs(),
+  });
   if (!baseline.ok) {
-    const served = failure(baseline.reason, collection);
+    const served = failure(baseline.reason, collection, baseline.nextStep);
     return { ...served, activity: { ...served.activity, changes: { refusal: baseline.reason } } };
   }
   const view = changesView(collection, baseline.report, redact);
@@ -364,6 +372,7 @@ function serveChanges(
         next: false,
       }),
       changes: {
+        baselineSource: baseline.source,
         changedCount: counts.changed,
         removedCount: counts.removed,
         untracedCount: counts.untraced,
@@ -453,6 +462,8 @@ interface ServeEnvironment {
   readonly context: RequirementsToolContext;
   readonly reports: JiraReportStore | undefined;
   readonly redact: (value: string) => string;
+  /** When the user message of this turn was stored; absent when the turn is unknown. */
+  readonly turnStartedAtMs: () => number | undefined;
 }
 
 function serveView(
@@ -463,10 +474,9 @@ function serveView(
 ): Served {
   if (collection.units.length === 0 && collection.refusals.length > 0)
     return failure(collection.refusals[0] ?? "scope-unavailable", collection);
-  const { context, reports, redact } = environment;
   return parsed.view === "changes"
-    ? serveChanges(collection, parsed, context, reports, redact)
-    : serve(store, collection, parsed, redact);
+    ? serveChanges(collection, parsed, environment)
+    : serve(store, collection, parsed, environment.redact);
 }
 
 function execute(
@@ -490,7 +500,15 @@ function execute(
     const store = session.store;
     const collection = collectForTurn(store, scopes, context.chatId, context.userMessageId);
     const redact = contentRedact(deps);
-    const served = serveView(store, collection, parsed, { context, reports, redact });
+    const served = serveView(store, collection, parsed, {
+      context,
+      reports,
+      redact,
+      turnStartedAtMs: () =>
+        context.userMessageId === undefined
+          ? undefined
+          : deps.store.findMessageById(context.userMessageId)?.timestamp,
+    });
     log(context, parsed, served);
     return { data: served.data, ...(served.data.outcome === "failed" ? { isError: true } : {}) };
   } catch (error) {

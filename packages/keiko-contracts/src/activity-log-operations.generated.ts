@@ -30277,7 +30277,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["report-required", "report-not-found"],
+        values: ["report-required", "report-reading", "report-not-found"],
+      },
+      baselineSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["explicit", "turn"],
       },
       changedCount: {
         type: "integer",
@@ -30328,7 +30334,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       },
       {
         field: "refusal",
-        values: ["report-required", "report-not-found"],
+        values: ["report-required", "report-reading", "report-not-found"],
       },
       {
         field: "baselineComplete",
