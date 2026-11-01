@@ -152,6 +152,8 @@ const SEPARATOR = /^\s*(?:[:–—]|-(?=\s)|[.)](?=\s|$))/u;
 const SLIDE_LABEL = /^(?:Slide|Folie|Seite|Page)\s+\d+\s*[:.\-–—]\s*/iu;
 const CRITERION_NUMBER = /^AC[\s-]?\d+\s*[:.)-]\s*/iu;
 const MERGED_ITEMS = /(?<=[.!?])(?=\p{Lu})/u;
+/** Presentation text joins the fields of a record on one line with a middle dot. */
+const FIELD_SEPARATOR = " · ";
 const SENTENCE_BREAK = /(?<=[.!?])\s+(?=\p{Lu})/u;
 const TITLE_FALLBACK_CHARS = 80;
 const STATEMENT_MIN_CHARS = 12;
@@ -344,13 +346,17 @@ function isKeyLine(text: string, vocabulary: CompiledVocabulary): boolean {
   return (
     vocabulary.priorityKey.test(text) ||
     vocabulary.criteriaKey.test(text) ||
-    vocabulary.metaKey.test(text)
+    vocabulary.metaKey.test(text) ||
+    vocabulary.statementKey.test(text)
   );
 }
 
 function advanceScan(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
   if (vocabulary.criteriaKey.test(text)) scan.inCriteria = true;
-  else if (vocabulary.priorityKey.test(text) || vocabulary.metaKey.test(text))
+  else if (vocabulary.statementKey.test(text)) {
+    scan.inCriteria = false;
+    scan.hasBody = true;
+  } else if (vocabulary.priorityKey.test(text) || vocabulary.metaKey.test(text))
     scan.inCriteria = false;
   else if (!scan.inCriteria) scan.hasBody = true;
 }
@@ -421,8 +427,18 @@ function buildBlocks(context: Context, candidates: readonly Candidate[]): readon
 
 interface Interpreted {
   readonly priority?: string;
+  /** The statement as presented, clipped to {@link STATEMENT_MAX_CHARS}. */
   readonly statement: string;
+  /** The complete statement the digest covers; absent when {@link Interpreted.statement} is it. */
+  readonly fullStatement?: string;
   readonly criteria: readonly string[];
+}
+
+/** The presented statement, and the complete one only where clipping lost something. */
+function statementOf(full: string): Pick<Interpreted, "statement" | "fullStatement"> {
+  return full.length <= STATEMENT_MAX_CHARS
+    ? { statement: full }
+    : { statement: full.slice(0, STATEMENT_MAX_CHARS), fullStatement: full };
 }
 
 type Mode = "text" | "criteria" | "meta";
@@ -450,18 +466,32 @@ function keyValue(segment: string, key: RegExp): string | undefined {
   return match === null ? undefined : segment.slice(match[0].length);
 }
 
+/** A statement label is presentation: only the text after it is content. */
+function readStatementLabel(state: BodyState, value: string): void {
+  state.mode = "text";
+  const statement = collapse(value);
+  if (statement.length > 0) state.statement.push(statement);
+}
+
+function readCriteria(state: BodyState, criteria: string): void {
+  state.mode = "criteria";
+  for (const item of criteria.split(MERGED_ITEMS)) {
+    const criterion = stripCriterionNumber(item);
+    if (criterion.length > 0) state.criteria.push(criterion);
+  }
+}
+
 function readSegment(state: BodyState, segment: string, vocabulary: CompiledVocabulary): void {
   const priority = keyValue(segment, vocabulary.priorityKey);
   const criteria = keyValue(segment, vocabulary.criteriaKey);
+  const label = keyValue(segment, vocabulary.statementKey);
   if (priority !== undefined) {
-    state.priority = collapse(trimTrailingMarks(priority));
+    state.priority = collapse(trimTrailingMarks(priority.split(FIELD_SEPARATOR)[0] ?? ""));
     state.mode = "text";
   } else if (criteria !== undefined) {
-    state.mode = "criteria";
-    for (const item of criteria.split(MERGED_ITEMS)) {
-      const criterion = stripCriterionNumber(item);
-      if (criterion.length > 0) state.criteria.push(criterion);
-    }
+    readCriteria(state, criteria);
+  } else if (label !== undefined) {
+    readStatementLabel(state, label);
   } else if (vocabulary.metaKey.test(segment)) {
     state.mode = "meta";
   } else if (state.mode === "criteria") {
@@ -480,7 +510,7 @@ function interpretBody(bodyLines: readonly Line[], vocabulary: CompiledVocabular
     ...(state.priority === undefined || state.priority.length === 0
       ? {}
       : { priority: state.priority }),
-    statement: state.statement.join(" ").slice(0, STATEMENT_MAX_CHARS),
+    ...statementOf(state.statement.join(" ")),
     criteria: state.criteria.filter((criterion) => criterion.length > 0),
   };
 }
@@ -488,7 +518,7 @@ function interpretBody(bodyLines: readonly Line[], vocabulary: CompiledVocabular
 function interpretRow(row: RowFields): Interpreted {
   return {
     ...(row.priority === undefined || row.priority.length === 0 ? {} : { priority: row.priority }),
-    statement: row.statement.slice(0, STATEMENT_MAX_CHARS),
+    ...statementOf(row.statement),
     criteria: row.criteria.flatMap((cell) =>
       cell
         .split(MERGED_ITEMS)
@@ -584,7 +614,7 @@ function toEntry(context: Context, parts: EntryParts): RequirementInventoryEntry
       id,
       title,
       priority: interpreted.priority,
-      statement: interpreted.statement,
+      statement: interpreted.fullStatement ?? interpreted.statement,
       criteria: interpreted.criteria,
     }),
   });
@@ -782,7 +812,7 @@ function statementUnits(context: Context, covered: ReadonlySet<number>): readonl
         idOrigin: "derived",
         unitKind: "statement",
         title: "",
-        interpreted: { statement: statement.slice(0, STATEMENT_MAX_CHARS), criteria: [] },
+        interpreted: { ...statementOf(statement), criteria: [] },
         sectionPath: sectionPathAt(context.sections, paragraph.start),
         start: paragraph.start,
         end: paragraph.end,

@@ -21,8 +21,10 @@ export const REQUIREMENT_DOCUMENT_LABEL_PREFIX = "keiko-doc-";
 export const REQUIREMENT_LABEL_PREFIX = "keiko-req-";
 export const REQUIREMENT_REVISION_LABEL_PREFIX = "keiko-rev-";
 const CRITERION_LABEL_PREFIX = "keiko-ac-";
-/** The first lines of the footer; a later edit replaces everything from here to the end. */
+/** The first lines of the footer; a later edit replaces the block from here to its end line. */
 export const REQUIREMENT_TRACE_FOOTER_START = "----\nKeiko traceability";
+/** The footer's last line: text a person writes after it is never part of the generated block. */
+export const REQUIREMENT_TRACE_FOOTER_END = "End of Keiko traceability";
 export const REQUIREMENT_REFERENCES_MAX = 8;
 
 export function shortRequirementDigest(digest: string): string {
@@ -58,6 +60,8 @@ export interface RequirementTraceUnit {
   readonly entry: RequirementInventoryEntry;
   readonly source: RequirementTraceSource;
   readonly findings: readonly string[];
+  /** The document defines this identifier with different content: no single definition exists. */
+  readonly conflicting?: boolean;
 }
 
 export interface ResolvedRequirementReference<
@@ -69,7 +73,10 @@ export interface ResolvedRequirementReference<
 export interface RequirementReferenceProblem {
   readonly reference: string;
   readonly reason: "malformed" | "unknown" | "ambiguous";
-  /** For an ambiguous reference: the scoped references that match. */
+  /**
+   * For an ambiguous reference: the scoped references that match. A reference to an identifier its
+   * document defines twice with different content is ambiguous too: its only candidate is itself.
+   */
   readonly candidates?: readonly string[];
 }
 export type RequirementReferenceResolution<
@@ -99,6 +106,8 @@ function resolveOne<Unit extends RequirementTraceUnit>(
       reason: "ambiguous",
       candidates: matches.map((unit) => requirementReference(unit.entry)).sort(compareStrings),
     };
+  if (only.conflicting === true)
+    return { reference, reason: "ambiguous", candidates: [requirementReference(only.entry)] };
   if (shape[3] === undefined) return { unit: only };
   const criterion = only.entry.acceptanceCriteria.find(
     (candidate) => candidate.id === `${id}/AC${shape[3] ?? ""}`,
@@ -164,7 +173,7 @@ function footerGroup(
 
 export interface RequirementTrace {
   readonly labels: readonly string[];
-  /** Plain text; starts with {@link REQUIREMENT_TRACE_FOOTER_START}. */
+  /** Plain text; starts with {@link REQUIREMENT_TRACE_FOOTER_START}, ends with the END line. */
   readonly footer: string;
 }
 
@@ -187,7 +196,7 @@ export function requirementTrace(
   const groups = resolved.map((item) => footerGroup(item, redactor).join("\n"));
   return {
     labels: [...labels],
-    footer: `${REQUIREMENT_TRACE_FOOTER_START}\n${groups.join("\n\n")}`,
+    footer: `${REQUIREMENT_TRACE_FOOTER_START}\n${groups.join("\n\n")}\n${REQUIREMENT_TRACE_FOOTER_END}`,
   };
 }
 
@@ -207,6 +216,11 @@ function quoted(values: readonly string[]): string {
 
 type Changeable = Pick<RequirementInventoryEntry, "id" | "digest" | "documentScope">;
 
+/** One requirement paired with its own current revision: carried, but not at that revision. */
+function stalePair(entry: Changeable): string {
+  return `(labels = "${requirementLabel(entry.id)}" AND labels != "${revisionLabel(entry.digest)}")`;
+}
+
 function staleBatches(
   scope: string,
   entries: readonly Changeable[],
@@ -215,7 +229,7 @@ function staleBatches(
   const queries: RequirementChangeQuery[] = [];
   let batch: Changeable[] = [];
   const build = (members: readonly Changeable[]): string =>
-    `labels = "${documentLabel(scope)}" AND labels in (${quoted(members.map((m) => requirementLabel(m.id)))}) AND labels not in (${quoted(members.map((m) => revisionLabel(m.digest)))})`;
+    `labels = "${documentLabel(scope)}" AND (${members.map(stalePair).join(" OR ")})`;
   const flush = (): void => {
     if (batch.length === 0) return;
     queries.push({

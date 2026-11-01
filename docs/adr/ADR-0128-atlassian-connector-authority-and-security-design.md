@@ -1032,7 +1032,12 @@ keeps the completed answer instead of failing the turn.
 - _Inventory._ `keiko-quality-intelligence` derives, deterministically and without a model, the
   requirement units of each document in document order: identifier, title, priority, acceptance
   criteria (`<id>/AC<n>`), section path, source span, closed quality findings and a content digest
-  of the normalized content only (no location, format or inventory version). An explicit identifier
+  of the normalized content only (no location, format or inventory version). The digest covers the
+  complete statement and every criterion; the 4,000-character clip is presentation only, so a
+  change after it still moves the digest and the revision label. A statement key (`Anforderung:`,
+  `Description:`, ...) and the middle dot a slide uses to join the fields of a record on one line
+  are presentation, not content, so a conversion of the same specification keeps its digests.
+  An explicit identifier
   follows `[A-Z][A-Z0-9]*(?:[-_][A-Z0-9]+)*-?\d+` (`LH-001`, `R-12`, `REQ-FUNC-001`, `REQ_003`);
   technical tokens (`HTTP-2`, `AES-256`, `ISO-27001`, `UTF-8`, `SHA-256`, `TLS-1`, ...) are reserved
   data, not requirements. Candidates are headings, strong lines (bracketed, separated), table rows
@@ -1059,25 +1064,39 @@ keeps the completed answer instead of failing the turn.
   dropped. Every page states honest totals: detected and matched units, documents scanned,
   documents not text-extracted, documents and units omitted by the collection bounds (64 documents,
   4M characters per document, 16M in total, 5,000 units), the cut reasons and a cursor until the
-  last page. A cursor binds the selection and the document revisions it was issued for; a changed
-  selection or document answers `cursor-stale` instead of skipping or repeating units. The
+  last page. The whole result, totals and cursor included, stays within the descriptor's byte bound:
+  one unit is rendered within 12,000 UTF-8 bytes (its character caps shrink together, flagged by
+  `statementTruncated` / `criteriaTruncated`), and a page budgets its items against the rest of the
+  result. A cursor binds the selection and the document revisions it was issued for (the `documents`
+  view binds the ordered document scopes and revisions); a changed selection, order or document
+  answers `cursor-stale` instead of skipping or repeating units. Within one turn, later pages and
+  the trace reuse the first read only while the resolved Pods are unchanged and still pass the
+  lifecycle and model-use floor; a Pod made stale or sealed meanwhile is refused as in a new turn. The
   `documents` view lists the documents read; `change-queries` returns label-only JQL batches. When a
   tool result is later compacted, the receipt keeps each unit's scoped reference, title and
   priority so the model can still list or reference units it has read.
 - _Identity and traceability._ A unit is referenced as `<documentScope>:<id>` (the first eight hex
   digits of the SHA-256 of the document identity) or, when unique, by its plain identifier. An
   identifier defined in several documents is reported as ambiguous and must be referenced with its
-  scope; the last definition never wins. `jira.create`, `jira.edit` and each `jira.draft` item take
+  scope; the last definition never wins. An identifier one document defines twice with different
+  content has no single definition: a reference to it is refused as ambiguous, scoped or not.
+  `jira.create`, `jira.edit` and each `jira.draft` item take
   an explicit `requirementIds` list (at most 8). The server validates every reference before
   anything is sent; an unknown, ambiguous or malformed reference, or unreadable Pods, refuses the
   call (the whole draft) with the closed reason and the offending references. Nothing is read from
   summaries, labels or descriptions. A valid reference adds the labels `keiko-requirement`,
   `keiko-doc-<scope>`, `keiko-req-<id>`, `keiko-rev-<12 hex of the content digest>` (and
   `keiko-ac-<id>-AC<n>`) and a plain-text footer `----` / `Keiko traceability` with the source
-  location, the document and requirement digests and the closed finding codes. The footer passes the
-  Chat content redactor and is neutralized for Jira wiki markup. On create the connector applies
-  them only where the create screen offers the fields; on edit it reads the issue, replaces
-  `keiko-rev-*` and rewrites the footer in place. What the instance dropped is returned in the tool
+  location, the document and requirement digests and the closed finding codes, closed by the line
+  `End of Keiko traceability`. The footer passes the Chat content redactor and is neutralized for
+  Jira wiki markup. On create the connector applies them only where the create screen offers the
+  fields; on edit it reads the issue, replaces `keiko-rev-*` and rewrites the footer in place: only
+  the block from its start line to its end line is replaced, so the human text before and after it
+  is kept, and a start without an end line is not an owned block. A description the read did not
+  return is unavailable evidence (an explicit `null` is empty), so the footer is not written over
+  it and `footerApplied` says so. The caller's own label intent (a replacement set or add/remove
+  updates) is applied first and the trace merged into the one legal field mutation, so it neither
+  conflicts with it nor removes trace labels the caller's set left out. What the instance dropped is returned in the tool
   result as `trace {labelsApplied, footerApplied, droppedLabels}` and counted on the log. The item
   identity, the journal and the approval are unaffected; `jira.draft` keeps its byte bound and no item-count limit.
   The traced labels and footer are part of the item the customer-template gate (#4177) judges, so a
@@ -1086,7 +1105,9 @@ keeps the completed answer instead of failing the turn.
 - _Change check._ A new document version is compared with the backlog through the labels alone;
   no earlier inventory is kept anywhere, so the baseline is what Jira holds. `change-queries`
   returns, per document, label-only JQL batches under the JQL length bound for items whose revision
-  label is outdated (`stale`), the traced set per document (`traced`) and, only where it fits the
+  label is outdated (`stale`; one clause per requirement and its own current revision, so a current
+  revision of one requirement never hides an outdated one on the same item), the traced set per
+  document (`traced`) and, only where it fits the
   bound, items whose requirement is gone (`removed`). Running those queries and merging them is
   derivation a local model's output budget does not carry (lab S14: the comparison turn ran out of
   budget after two inventory reads), so the `changes` view returns the result. The model first reads
@@ -1109,14 +1130,19 @@ keeps the completed answer instead of failing the turn.
   (document label and requirement label) lacks the current `keiko-rev-*` label (an item naming the
   requirement without any revision label counts as outdated), `unchanged` when every such item has
   it, `untraced` when no item of the report traces it; per item requirement label whose document is
-  still among the Pods but whose id that document no longer states, `removed`. An item of a
+  still among the Pods but whose id that document no longer states, `removed`, provided that
+  document's inventory is complete: a cut inventory (units beyond its bound) has not proved a
+  deletion, so such ids are listed apart as `unverifiedRemoved` and are neither removed nor
+  affected. An item of a
   document that is not in the Pods proves nothing and is only counted (`unmatchedIssueCount`). Each
   requirement of an item that traces several is judged on its own revision label. The result
   carries `baseline` (report complete, issues read and total, traced and unmatched item counts),
   exact `counts`, the changed requirements (id, title, outdated item keys), the removed ones (id,
   item keys), the unchanged and untraced ids and the `affectedIssues` (every item that traces a changed or
-  removed requirement, Jira-key ordered), each list bounded (60, 60, 200, 200 and 120) with the
-  cut lists named in `truncated`; `baseline` also states when the report was generated. The honest limits: `untraced` means no item of the compared report
+  removed requirement, Jira-key ordered), each list bounded (60, 60, 200, 200 and 120, and 10 item
+  keys under one requirement with `issueCount` stating the rest) with the cut lists named in
+  `truncated`; the lists shrink together until the whole object fits the descriptor's byte bound,
+  the counts always staying exact; `baseline` also states when the report was generated. The honest limits: `untraced` means no item of the compared report
   traces the requirement, which is a new requirement or one not yet derived; the labels cannot tell
   them apart, so the tool never calls it "new". A report that is incomplete (`baseline.complete`
   false) cannot prove a requirement untraced, and the scope of the report is the scope of the

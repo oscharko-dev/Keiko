@@ -30,12 +30,18 @@ import type { UiHandlerDeps } from "./deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import { openKnowledgeStoreForDeps } from "./local-knowledge-store-open.js";
-import { changesView, resolveChangesBaseline } from "./requirement-changes.js";
+import {
+  changesView,
+  resolveChangesBaseline,
+  type ChangesBaselineSource,
+  type ChangesCounts,
+} from "./requirement-changes.js";
 import {
   chatKnowledgeScopes,
   collectForTurn,
   contentRedact,
   decodeCursor,
+  documentsFingerprint,
   encodeCursor,
   fitWindow,
   pageLabelOf,
@@ -47,6 +53,7 @@ import {
 } from "./requirement-inventory.js";
 import {
   logRequirementRead,
+  type RequirementChangesActivity,
   type RequirementReadActivity,
   type RequirementReadDisposition,
   type RequirementReadView,
@@ -56,10 +63,18 @@ import {
 export const REQUIREMENTS_PAGE_BYTES_MAX = 24_000;
 export const REQUIREMENTS_PAGE_LIMIT_DEFAULT = 25;
 export const REQUIREMENTS_PAGE_LIMIT_MAX = 50;
+/** The tool result, as the descriptor bounds it: one page plus the totals and the envelope. */
+export const REQUIREMENTS_RESULT_BYTES_MAX = REQUIREMENTS_PAGE_BYTES_MAX + 8192;
+/** Room kept for the catalog envelope around the tool data, and per item for its page label. */
+const ENVELOPE_BYTES_RESERVE = 2048;
+const PAGE_LABEL_BYTES_RESERVE = 300;
+/** One rendered unit stays within this many UTF-8 bytes, whatever its script. */
+export const REQUIREMENT_UNIT_BYTES_MAX = 12_000;
 const STATEMENT_CHARS_MAX = 1500;
 const CRITERION_CHARS_MAX = 600;
 const CRITERIA_MAX = 20;
 const LISTED_IDS_MAX = 50;
+const UNIT_SCALES: readonly number[] = [1, 0.5, 0.25, 0.1, 0.02];
 
 const VIEWS: readonly RequirementReadView[] = ["units", "documents", "change-queries", "changes"];
 
@@ -141,7 +156,7 @@ function declaration(): ManagedMcpToolDeclaration {
     handlerRequirement: { id: KNOWLEDGE_REQUIREMENTS_TOOL, contractVersion: 1 },
     bounds: {
       maxArgumentBytes: 8192,
-      maxResultBytes: REQUIREMENTS_PAGE_BYTES_MAX + 8192,
+      maxResultBytes: REQUIREMENTS_RESULT_BYTES_MAX,
       maxResultCount: 100,
       maxDurationMs: 30_000,
     },
@@ -193,26 +208,48 @@ function clip(value: string, max: number): { readonly text: string; readonly cut
     : { text: value.slice(0, max), cut: true };
 }
 
-function renderUnit(
+interface UnitCaps {
+  readonly statement: number;
+  readonly criterion: number;
+  readonly criteria: number;
+  readonly title: number;
+  readonly part: number;
+  readonly path: number;
+}
+
+function capsAt(scale: number): UnitCaps {
+  const scaled = (max: number): number => Math.max(1, Math.floor(max * scale));
+  return {
+    statement: scaled(STATEMENT_CHARS_MAX),
+    criterion: scaled(CRITERION_CHARS_MAX),
+    criteria: scaled(CRITERIA_MAX),
+    title: scaled(400),
+    part: scaled(300),
+    path: scaled(12),
+  };
+}
+
+function renderUnitAt(
   unit: LocatedRequirementUnit,
   pageLabel: string | undefined,
   redact: (value: string) => string,
+  caps: UnitCaps,
 ): CatalogJsonObject {
   const { entry, source } = unit;
-  const statement = clip(redact(entry.statement), STATEMENT_CHARS_MAX);
-  const criteria = entry.acceptanceCriteria.slice(0, CRITERIA_MAX).map((criterion) => ({
+  const statement = clip(redact(entry.statement), caps.statement);
+  const criteria = entry.acceptanceCriteria.slice(0, caps.criteria).map((criterion) => ({
     id: criterion.id,
-    text: clip(redact(criterion.text), CRITERION_CHARS_MAX).text,
+    text: clip(redact(criterion.text), caps.criterion).text,
   }));
   const criteriaCut =
-    entry.acceptanceCriteria.length > CRITERIA_MAX ||
-    entry.acceptanceCriteria.some((criterion) => criterion.text.length > CRITERION_CHARS_MAX);
+    entry.acceptanceCriteria.length > caps.criteria ||
+    entry.acceptanceCriteria.some((criterion) => criterion.text.length > caps.criterion);
   return {
     reference: requirementReference(entry),
     id: entry.id,
     idOrigin: entry.idOrigin,
     unitKind: entry.unitKind,
-    title: redact(entry.title).slice(0, 400),
+    title: redact(entry.title).slice(0, caps.title),
     ...(entry.priority === undefined ? {} : { priority: entry.priority.slice(0, 200) }),
     statement: statement.text,
     ...(statement.cut ? { statementTruncated: true } : {}),
@@ -220,13 +257,31 @@ function renderUnit(
     ...(criteriaCut ? { criteriaTruncated: true } : {}),
     findings: [...unit.findings],
     documentScope: entry.documentScope,
-    documentName: redact(source.documentName).slice(0, 300),
-    sectionPath: entry.sectionPath.slice(0, 12).map((part) => redact(part).slice(0, 300)),
+    documentName: redact(source.documentName).slice(0, caps.part),
+    sectionPath: entry.sectionPath
+      .slice(0, caps.path)
+      .map((part) => redact(part).slice(0, caps.part)),
     ...(pageLabel === undefined ? {} : { pageLabel: pageLabel.slice(0, 64) }),
     characterStart: entry.characterStart,
     characterEnd: entry.characterEnd,
     revisionDigest: shortRequirementDigest(entry.digest),
   };
+}
+
+/**
+ * A unit within {@link REQUIREMENT_UNIT_BYTES_MAX} UTF-8 bytes: the character caps shrink together
+ * until it fits, and what was cut is flagged (`statementTruncated`, `criteriaTruncated`), so one
+ * oversized requirement can never make a result exceed its descriptor bound.
+ */
+function renderUnit(
+  unit: LocatedRequirementUnit,
+  pageLabel: string | undefined,
+  redact: (value: string) => string,
+): CatalogJsonObject {
+  const fitting = UNIT_SCALES.map((scale) => capsAt(scale)).find(
+    (caps) => byteSize(renderUnitAt(unit, pageLabel, redact, caps)) <= REQUIREMENT_UNIT_BYTES_MAX,
+  );
+  return renderUnitAt(unit, pageLabel, redact, fitting ?? capsAt(UNIT_SCALES.at(-1) ?? 0.02));
 }
 
 function totalsOf(collection: RequirementCollection, matchedCount: number): CatalogJsonObject {
@@ -267,7 +322,7 @@ function buildView(
         documentDigest: document.digest.slice(0, 12),
         unitCount: document.unitCount,
       })),
-      fingerprint: selectionFingerprint([], "documents"),
+      fingerprint: documentsFingerprint(collection.documents),
       units: [],
     };
   const fingerprint = selectionFingerprint(selected, parsed.view);
@@ -288,6 +343,24 @@ function buildView(
 
 function byteSize(value: CatalogJsonObject): number {
   return Buffer.byteLength(JSON.stringify(value));
+}
+
+/**
+ * The bytes the items of one page may take so the whole result - totals, view label, cursor and
+ * the catalog envelope - stays within the descriptor's bound.
+ */
+function itemsBudget(totals: CatalogJsonObject, view: RequirementReadView): number {
+  const shell = byteSize({
+    outcome: "succeeded",
+    view,
+    totals,
+    items: [],
+    nextCursor: "0".repeat(512),
+  });
+  return Math.min(
+    REQUIREMENTS_PAGE_BYTES_MAX,
+    REQUIREMENTS_RESULT_BYTES_MAX - ENVELOPE_BYTES_RESERVE - shell,
+  );
 }
 
 interface Served {
@@ -354,34 +427,48 @@ function serveChanges(
     const served = failure(baseline.reason, collection, baseline.nextStep);
     return { ...served, activity: { ...served.activity, changes: { refusal: baseline.reason } } };
   }
-  const view = changesView(collection, baseline.report, redact);
-  const { counts } = view;
-  const data: CatalogJsonObject = {
+  const shell: CatalogJsonObject = {
     outcome: "succeeded",
     view: "changes",
-    totals: totalsOf(collection, counts.changed + counts.removed + counts.untraced),
+    totals: totalsOf(collection, 0),
+  };
+  const view = changesView(
+    collection,
+    baseline.report,
+    redact,
+    REQUIREMENTS_RESULT_BYTES_MAX - ENVELOPE_BYTES_RESERVE - byteSize(shell),
+  );
+  const matched = view.counts.changed + view.counts.removed + view.counts.untraced;
+  const data: CatalogJsonObject = {
+    ...shell,
+    totals: totalsOf(collection, matched),
     changes: view.data,
   };
+  const activity = activityOf(collection, "served", {
+    matched,
+    returned: matched,
+    bytes: byteSize(data),
+    next: false,
+  });
   return {
     data,
-    activity: {
-      ...activityOf(collection, "served", {
-        matched: counts.changed + counts.removed + counts.untraced,
-        returned: counts.changed + counts.removed + counts.untraced,
-        bytes: byteSize(data),
-        next: false,
-      }),
-      changes: {
-        baselineSource: baseline.source,
-        changedCount: counts.changed,
-        removedCount: counts.removed,
-        untracedCount: counts.untraced,
-        unchangedCount: counts.unchanged,
-        affectedIssueCount: counts.affectedIssues,
-        baselineIssueCount: counts.baselineIssues,
-        baselineComplete: counts.baselineComplete,
-      },
-    },
+    activity: { ...activity, changes: changesActivity(view.counts, baseline.source) },
+  };
+}
+
+function changesActivity(
+  counts: ChangesCounts,
+  baselineSource: ChangesBaselineSource,
+): RequirementChangesActivity {
+  return {
+    baselineSource,
+    changedCount: counts.changed,
+    removedCount: counts.removed,
+    untracedCount: counts.untraced,
+    unchangedCount: counts.unchanged,
+    affectedIssueCount: counts.affectedIssues,
+    baselineIssueCount: counts.baselineIssues,
+    baselineComplete: counts.baselineComplete,
   };
 }
 
@@ -395,11 +482,12 @@ function serve(
   const cursor = parsed.cursor === undefined ? undefined : decodeCursor(parsed.cursor);
   if (parsed.cursor !== undefined && cursor?.fingerprint !== view.fingerprint)
     return failure("cursor-stale", collection);
+  const labelReserve = view.units.length > 0 ? PAGE_LABEL_BYTES_RESERVE : 0;
   const window = fitWindow(
-    view.items.map((item) => byteSize(item)),
+    view.items.map((item) => byteSize(item) + labelReserve),
     cursor?.offset ?? 0,
     parsed.limit,
-    REQUIREMENTS_PAGE_BYTES_MAX,
+    itemsBudget(totalsOf(collection, view.items.length), parsed.view),
   );
   // Page labels are read only for the units of the window this call returns.
   const page = view.items.slice(window.from, window.to).map((item, index) => {

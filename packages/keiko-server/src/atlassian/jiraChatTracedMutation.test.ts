@@ -176,3 +176,61 @@ describe("traced create and edit", () => {
     expect(call.seen).toEqual([undefined]);
   });
 });
+
+describe("a conflicting definition inside one document (#4179 review)", () => {
+  const CONFLICTING = [
+    "### LH-001 Aufbewahrung",
+    "",
+    "Daten werden zehn Tage aufbewahrt; die Frist beträgt 10 Tage.",
+    "",
+    "Priorität: Muss.",
+    "",
+    "### LH-001 Aufbewahrung ergänzt",
+    "",
+    "Daten werden neunzig Tage aufbewahrt; die Frist beträgt 90 Tage.",
+    "",
+    "Priorität: Muss.",
+    "",
+    "### LH-002 Anmeldung",
+    "",
+    "Das Portal unterstützt die Anmeldung; sie ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+
+  it.each(["jira.create", "jira.edit"] as const)(
+    "refuses %s that names the conflicting identifier before anything is sent",
+    async (operation) => {
+      f.cleanup();
+      f = await podFixture([{ capsuleId: "cap-conflict", text: CONFLICTING }]);
+      const refused = run();
+      const accepted = run({ labelsApplied: true, footerApplied: true, droppedLabels: [] });
+
+      const result = await executeTracedMutation(
+        f.deps,
+        turn(),
+        operation,
+        { requirementIds: ["LH-001"] },
+        refused.fn,
+      );
+      const clean = await executeTracedMutation(
+        f.deps,
+        turn(),
+        operation,
+        { requirementIds: ["LH-002"] },
+        accepted.fn,
+      );
+
+      expect(refused.seen).toHaveLength(0);
+      expect(result.isError).toBe(true);
+      expect(result.data).toMatchObject({
+        outcome: "rejected",
+        requirementRefusal: "references",
+        requirementProblems: [{ reference: "LH-001", reason: "ambiguous" }],
+      });
+      expect(accepted.seen).toHaveLength(1);
+      expect(clean.data).toMatchObject({ outcome: "succeeded" });
+    },
+  );
+});

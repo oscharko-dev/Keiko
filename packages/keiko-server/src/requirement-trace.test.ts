@@ -245,3 +245,65 @@ describe("trace results and evidence", () => {
     ).toHaveLength(0);
   });
 });
+
+describe("a document that defines one identifier twice (#4179 review)", () => {
+  /** LH-001 appears in the table of contents (harmless) and twice with different bodies. */
+  const CONFLICTING = [
+    "# Lastenheft",
+    "",
+    "Inhaltsverzeichnis",
+    "- LH-001 Aufbewahrung",
+    "- LH-002 Anmeldung",
+    "",
+    "### LH-001 Aufbewahrung",
+    "",
+    "Daten werden zehn Tage aufbewahrt; die Frist beträgt 10 Tage.",
+    "",
+    "Priorität: Muss.",
+    "",
+    "### LH-001 Aufbewahrung ergänzt",
+    "",
+    "Daten werden neunzig Tage aufbewahrt; die Frist beträgt 90 Tage.",
+    "",
+    "Priorität: Muss.",
+    "",
+    "### LH-002 Anmeldung",
+    "",
+    "Das Portal unterstützt die Anmeldung; sie ist innerhalb von 10 Minuten abgeschlossen.",
+    "",
+    "Priorität: Muss.",
+    "",
+  ].join("\n");
+
+  it("refuses a reference to the conflicting identifier and still resolves the unambiguous one", async () => {
+    const { open } = await session([{ capsuleId: "cap-a", text: CONFLICTING }]);
+    const trace = open();
+
+    const conflicting = trace.resolve(["LH-001"]);
+    const clean = trace.resolve(["LH-002"]);
+    trace.close();
+
+    expect(conflicting.ok).toBe(false);
+    if (conflicting.ok) throw new Error("expected a refusal");
+    expect(conflicting.problems).toMatchObject([
+      {
+        reference: "LH-001",
+        reason: "ambiguous",
+        candidates: [expect.stringMatching(/:LH-001$/u)],
+      },
+    ]);
+    expect(clean.ok).toBe(true);
+  });
+
+  it("does not let a document-scoped reference pick one of the two definitions", async () => {
+    const { open } = await session([{ capsuleId: "cap-a", text: CONFLICTING }]);
+    const trace = open();
+
+    const first = trace.resolve(["LH-001"]);
+    if (first.ok) throw new Error("expected a refusal");
+    const scoped = trace.resolve([first.problems[0]?.candidates?.[0] ?? ""]);
+    trace.close();
+
+    expect(scoped.ok).toBe(false);
+  });
+});

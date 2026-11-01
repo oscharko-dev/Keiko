@@ -6,6 +6,7 @@
 // summary, labels or description.
 
 import {
+  REQUIREMENT_TRACE_FOOTER_END,
   REQUIREMENT_TRACE_FOOTER_START,
   REQUIREMENT_REVISION_LABEL_PREFIX,
   requirementTrace,
@@ -104,6 +105,7 @@ function resolveAgainst(
       labels,
       footer,
       footerStart: REQUIREMENT_TRACE_FOOTER_START,
+      footerEnd: REQUIREMENT_TRACE_FOOTER_END,
       replaceLabelPrefixes: [REQUIREMENT_REVISION_LABEL_PREFIX],
     },
   };

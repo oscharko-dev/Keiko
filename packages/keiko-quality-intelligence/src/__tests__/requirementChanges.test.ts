@@ -131,3 +131,28 @@ describe("compareRequirementsWithTrace", () => {
     expect(result.affectedIssues).toEqual(["REQ-2", "REQ-10"]);
   });
 });
+
+describe("a removal needs a complete document inventory (#4179 review)", () => {
+  it("reports a traced requirement a cut inventory does not show as unverified, not removed", () => {
+    const kept = entriesOf(text({}, ["LH-001", "LH-002"]));
+    const scope = entry(kept, "LH-001").documentScope;
+    const issues = [
+      { key: "REQ-1", labels: labels([entry(kept, "LH-001")]) },
+      { key: "REQ-2", labels: labels([entry(kept, "LH-002")]) },
+    ];
+    const current = kept.filter((candidate) => candidate.id === "LH-001");
+
+    const complete = compareRequirementsWithTrace(current, [scope], issues);
+    const cut = compareRequirementsWithTrace(current, [scope], issues, [scope]);
+
+    expect(complete.items.map((item) => [item.status, item.id])).toContainEqual([
+      "removed",
+      "LH-002",
+    ]);
+    expect(cut.items.some((item) => item.status === "removed")).toBe(false);
+    expect(cut.unverifiedRemoved.map((item) => [item.id, item.issues])).toEqual([
+      ["LH-002", ["REQ-2"]],
+    ]);
+    expect(cut.affectedIssues).toEqual([]);
+  });
+});

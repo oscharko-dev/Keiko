@@ -11,7 +11,8 @@ import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { parseJiraDraft } from "./jira-draft.js";
 
 const START = "----\nKeiko traceability";
-const FOOTER = `${START}\nRequirement: LH-001 · Anmeldung`;
+const END = "End of Keiko traceability";
+const FOOTER = `${START}\nRequirement: LH-001 · Anmeldung\n${END}`;
 
 function field(id: string, operations: readonly string[]): JiraFieldMetadata {
   return {
@@ -35,6 +36,7 @@ function trace(report?: (outcome: JiraTraceOutcome) => void): JiraTraceRequest {
     ],
     footer: FOOTER,
     footerStart: START,
+    footerEnd: END,
     replaceLabelPrefixes: ["keiko-rev-"],
     ...(report === undefined ? {} : { report }),
   };
@@ -44,9 +46,25 @@ describe("descriptionWithFooter", () => {
   it("appends the footer, and replaces an earlier footer in place", () => {
     expect(descriptionWithFooter("Ziel", trace())).toBe(`Ziel\n\n${FOOTER}`);
     expect(descriptionWithFooter(undefined, trace())).toBe(FOOTER);
-    expect(descriptionWithFooter(`Ziel\n\n${START}\nRequirement: OLD`, trace())).toBe(
+    expect(descriptionWithFooter(`Ziel\n\n${START}\nRequirement: OLD\n${END}`, trace())).toBe(
       `Ziel\n\n${FOOTER}`,
     );
+  });
+
+  it("keeps the text on both sides of the earlier footer and is stable on a repeat", () => {
+    const once = descriptionWithFooter(
+      `Vorher\r\n\r\n${START}\nRequirement: OLD\n${END}\n\nNachher`,
+      trace(),
+    );
+
+    expect(once).toBe(`Vorher\n\n${FOOTER}\n\nNachher`);
+    expect(descriptionWithFooter(once, trace())).toBe(once);
+  });
+
+  it("does not treat a footer start without its end line as an owned block", () => {
+    const text = `Ziel\n\n${START}\nvon Hand`;
+
+    expect(descriptionWithFooter(text, trace())).toBe(`${text}\n\n${FOOTER}`);
   });
 });
 
@@ -121,7 +139,7 @@ describe("traceEditArguments", () => {
     const prior = ["keiko-requirement", "keiko-req-LH-001", "keiko-rev-oldoldoldold", "mine"];
 
     const traced = await traceEditArguments(
-      request(prior, `Ziel\n\n${START}\nRequirement: OLD`),
+      request(prior, `Ziel\n\n${START}\nRequirement: OLD\n${END}`),
       "SYN-1",
       { issueKey: "SYN-1", fields: { summary: "neu" } },
       METADATA,

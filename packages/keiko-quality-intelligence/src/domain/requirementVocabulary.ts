@@ -17,6 +17,8 @@ export interface RequirementVocabulary {
   readonly criteriaKeys: readonly string[];
   /** Keys whose line carries metadata, not statement text. */
   readonly metaKeys: readonly string[];
+  /** Keys that label the statement itself (`Anforderung: ...`); the label is not content. */
+  readonly statementKeys: readonly string[];
   /** Obligation phrases; a sentence containing one is a requirement statement. */
   readonly modalVerbs: readonly string[];
   /** Identifier prefixes that name a standard or a technology, never a requirement. */
@@ -109,6 +111,7 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "Status",
     "Hinweis",
     "Note",
+    "Speaker notes",
     "Anmerkung",
     "Abhängigkeit",
     "Abhängigkeiten",
@@ -119,6 +122,19 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "Fuente",
     "Origine",
     "Remarque",
+  ],
+  statementKeys: [
+    "Anforderung",
+    "Anforderungstext",
+    "Beschreibung",
+    "Requirement",
+    "Requirement text",
+    "Description",
+    "Statement",
+    "Exigence",
+    "Descripción",
+    "Requisito",
+    "Descrizione",
   ],
   modalVerbs: [
     "muss",
@@ -236,6 +252,8 @@ export interface CompiledVocabulary {
   readonly criteriaKey: RegExp;
   /** `^<meta key>\s*:` */
   readonly metaKey: RegExp;
+  /** `^<statement key>\s*:` */
+  readonly statementKey: RegExp;
   /** Global zero-width split point in front of an inline priority or criteria key. */
   readonly inlineKey: RegExp;
   /** A sentence with an obligation phrase. */
@@ -289,6 +307,7 @@ export function mergeRequirementVocabulary(
     priorityValues: merge(base.priorityValues, extra.priorityValues),
     criteriaKeys: merge(base.criteriaKeys, extra.criteriaKeys),
     metaKeys: merge(base.metaKeys, extra.metaKeys),
+    statementKeys: merge(base.statementKeys, extra.statementKeys),
     modalVerbs: merge(base.modalVerbs, extra.modalVerbs),
     reservedPrefixes: merge(base.reservedPrefixes, extra.reservedPrefixes),
     tableColumns: {
@@ -322,6 +341,10 @@ export function compileRequirementVocabulary(
     priorityKey: new RegExp(String.raw`^(?:${priorityKeys})\s*[:=]`, "iu"),
     criteriaKey: new RegExp(String.raw`^(?:${criteriaKeys})${LETTER_AFTER}\s*:?`, "iu"),
     metaKey: new RegExp(String.raw`^(?:${alternation(vocabulary.metaKeys)})\s*:`, "iu"),
+    statementKey: new RegExp(
+      String.raw`^(?:${alternation(vocabulary.statementKeys)})${LETTER_AFTER}\s*:`,
+      "iu",
+    ),
     inlineKey: new RegExp(String.raw`(?<=^|\s)(?=(?:${priorityKeys}|${criteriaKeys})\s*:)`, "giu"),
     modal: new RegExp(
       `${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}`,

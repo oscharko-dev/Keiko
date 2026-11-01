@@ -491,3 +491,109 @@ describe("derived identifiers (#4179 review, defect 6)", () => {
     expect(new Set(twice).size).toBe(2);
   });
 });
+
+describe("the content digest covers the complete requirement (#4179 review)", () => {
+  const LONG_HEAD = "Das Portal unterstützt die Anmeldung und ".repeat(110);
+  const tail = (obligation: string): string => `${LONG_HEAD}${obligation}`;
+  const intro = (text: string): string[] => (text === "" ? [] : [text, ""]);
+
+  function digestOf(lines: readonly string[], id: string): string | undefined {
+    return detect(lines).entries.find((entry) => entry.id === id)?.digest;
+  }
+
+  const layouts: readonly [string, (obligation: string, before?: string) => string[]][] = [
+    [
+      "a block",
+      (obligation, before = ""): string[] => [
+        ...intro(before),
+        "LH-001: Anmeldung",
+        tail(obligation),
+        "Priorität: Muss.",
+      ],
+    ],
+    [
+      "a table row",
+      (obligation, before = ""): string[] => [
+        ...intro(before),
+        "| ID | Titel | Anforderung |",
+        "| --- | --- | --- |",
+        `| LH-001 | Anmeldung | ${tail(obligation)} |`,
+      ],
+    ],
+  ];
+
+  it.each(layouts)(
+    "tells %s apart whose wording changes only after the presentation limit",
+    (_name, lines) => {
+      const first = digestOf(lines("Frist: 10 Tage."), "LH-001");
+      const second = digestOf(lines("Frist: 90 Tage."), "LH-001");
+      const moved = digestOf(lines("Frist: 10 Tage.", "Ein neuer Absatz davor."), "LH-001");
+
+      expect(tail("Frist: 10 Tage.").length).toBeGreaterThan(4000);
+      expect(first).toBeDefined();
+      expect(second).not.toBe(first);
+      // A change of location alone leaves the digest where it was.
+      expect(moved).toBe(first);
+    },
+  );
+
+  it("keeps the statement within the presentation limit while the digest sees all of it", () => {
+    const [entry] = detect([
+      "LH-001: Anmeldung",
+      tail("Frist: 10 Tage."),
+      "Priorität: Muss.",
+    ]).entries;
+
+    expect(entry?.statement.length).toBe(4000);
+    expect(entry?.digest).toBe(
+      requirementContentDigest({
+        id: "LH-001",
+        title: "Anmeldung",
+        priority: "Muss",
+        statement: tail("Frist: 10 Tage."),
+        criteria: [],
+      }),
+    );
+  });
+
+  it("tells a derived statement apart whose obligation follows the presentation limit", () => {
+    const sentence = (days: string): string =>
+      `Das System muss ${tail(`Daten ${days} Tage halten.`)}`;
+    const first = detect([sentence("10")]).entries[0];
+    const second = detect([sentence("90")]).entries[0];
+
+    expect(first?.idOrigin).toBe("derived");
+    expect(first?.statement.length).toBe(4000);
+    expect(second?.digest).not.toBe(first?.digest);
+  });
+});
+
+describe("a statement label is presentation, not content (#4179 review)", () => {
+  const BODY = "Das Portal unterstützt die Anmeldung; die Bearbeitung dauert 10 Minuten.";
+
+  it.each(["Anforderung", "Requirement", "Beschreibung", "Description"])(
+    "reads %s: as the statement without its label",
+    (label) => {
+      const labelled = detect(["LH-001: Anmeldung", `${label}: ${BODY}`, "Priorität: Muss"]);
+      const plain = detect(["LH-001: Anmeldung", BODY, "Priorität: Muss"]);
+
+      expect(labelled.entries[0]?.statement).toBe(BODY);
+      expect(labelled.entries[0]?.digest).toBe(plain.entries[0]?.digest);
+    },
+  );
+
+  it("reads a slide record line that joins priority and chapter with a middle dot", () => {
+    const [entry] = detect([
+      "LH-001: Anmeldung",
+      "Priorität: Muss · Kapitel 2",
+      `Anforderung: ${BODY}`,
+      "Abnahmekriterium: Die Anmeldung ist möglich.",
+      "Speaker notes: 5 Anforderungen, 10 Abnahmekriterien.",
+    ]).entries;
+
+    expect(entry?.priority).toBe("Muss");
+    expect(entry?.acceptanceCriteria.map((criterion) => criterion.text)).toEqual([
+      "Die Anmeldung ist möglich.",
+    ]);
+  });
+});

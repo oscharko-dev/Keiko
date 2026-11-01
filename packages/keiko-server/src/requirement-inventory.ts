@@ -81,6 +81,8 @@ export interface RequirementDocumentSummary {
   readonly name: string;
   readonly digest: string;
   readonly unitCount: number;
+  /** Units detected in the document but not kept; an incomplete inventory proves no removal. */
+  readonly unitsOmitted: number;
 }
 
 export interface RequirementCollection {
@@ -128,11 +130,13 @@ function readDocument(
   const entries = inventory.entries.slice(0, Math.max(0, room));
   const findings = assessRequirementInventoryQuality(entries);
   const source = { documentName: document.displayName, documentDigest: document.contentHash };
+  const conflicting = new Set(inventory.conflictingIds);
   for (const entry of entries)
     accumulator.units.push({
       entry,
       source,
       findings: findings.get(entry.id) ?? [],
+      ...(conflicting.has(entry.id) ? { conflicting: true } : {}),
       capsuleId: document.capsuleId,
       documentId: String(document.documentId),
     });
@@ -146,6 +150,7 @@ function readDocument(
     name: document.displayName,
     digest: document.contentHash,
     unitCount: entries.length,
+    unitsOmitted: inventory.totalCount - entries.length,
   });
 }
 
@@ -290,6 +295,14 @@ export function selectUnits(
   });
 }
 
+/** Binds a document-list cursor to the ordered documents and their content revisions. */
+export function documentsFingerprint(documents: readonly RequirementDocumentSummary[]): string {
+  const hash = createHash("sha256").update("documents");
+  for (const document of documents)
+    hash.update(`\n${document.documentScope}|${document.digest}|${String(document.unitCount)}`);
+  return hash.digest("hex").slice(0, 16);
+}
+
 /** Binds a cursor to the exact selection it was issued for; a changed document invalidates it. */
 export function selectionFingerprint(
   selected: readonly LocatedRequirementUnit[],
@@ -350,11 +363,41 @@ export function fitWindow(
 // ─── Per-turn reuse and redaction ────────────────────────────────────────────
 
 const TURN_CACHE_MAX = 8;
-const turnCache = new Map<string, RequirementCollection>();
+interface TurnEntry {
+  /** The resolved scope the units were read from; a different Pod state is a different read. */
+  readonly guard: string;
+  readonly collection: RequirementCollection;
+}
+const turnCache = new Map<string, TurnEntry>();
+
+/**
+ * The identity of the Pods a read would use right now, or undefined when any scope is unavailable
+ * or refused by the lifecycle or model-use floor. Reuse is allowed only under an unchanged guard,
+ * so a Pod sealed, replaced or made stale after the first read is never served from the cache.
+ */
+function scopeGuard(
+  store: KnowledgeStore,
+  scopes: readonly RequirementScopeQuery[],
+): string | undefined {
+  const parts: string[] = [];
+  for (const query of scopes) {
+    const resolved = resolveEnumerationScope(store, {
+      ...(query.capsuleId === undefined ? {} : { capsuleId: query.capsuleId }),
+      ...(query.capsuleSetId === undefined ? {} : { capsuleSetId: query.capsuleSetId }),
+    });
+    if (!resolved.ok) return undefined;
+    const capsules = resolved.scope.capsules ?? [];
+    if (scopeRefusal(capsules) !== undefined) return undefined;
+    for (const capsule of capsules)
+      parts.push(`${capsule.id}@${String(capsule.updatedAt)}:${capsule.lifecycleState}`);
+  }
+  return parts.sort(compareStrings).join("|");
+}
 
 /**
  * The units of a Chat's Pods for one turn: later pages and the trace of the same turn reuse the
- * first read, a new turn reads again so an edited document is never served stale.
+ * first read while the resolved Pods are unchanged and still permitted; a new turn reads again so
+ * an edited document is never served stale, and a Pod revoked mid-turn is refused as in a new turn.
  */
 export function collectForTurn(
   store: KnowledgeStore,
@@ -364,16 +407,24 @@ export function collectForTurn(
 ): RequirementCollection {
   if (userMessageId === undefined) return collectRequirementUnits(store, scopes);
   const key = `${chatId}|${userMessageId}`;
+  const guard = scopeGuard(store, scopes);
   const hit = turnCache.get(key);
-  if (hit !== undefined) return hit;
-  const value = collectRequirementUnits(store, scopes);
-  turnCache.set(key, value);
+  if (guard === undefined || hit?.guard !== guard) {
+    turnCache.delete(key);
+    const fresh = collectRequirementUnits(store, scopes);
+    if (guard !== undefined) rememberTurn(key, { guard, collection: fresh });
+    return fresh;
+  }
+  return hit.collection;
+}
+
+function rememberTurn(key: string, entry: TurnEntry): void {
+  turnCache.set(key, entry);
   while (turnCache.size > TURN_CACHE_MAX) {
     const oldest = turnCache.keys().next();
     if (oldest.done === true) break;
     turnCache.delete(oldest.value);
   }
-  return value;
 }
 
 /** The Chat content policy's redactor as a string function. */

@@ -17,12 +17,16 @@ import {
   type RequirementInventoryEntry,
 } from "@oscharko-dev/keiko-quality-intelligence";
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+
 import type { RequirementCollection } from "./requirement-inventory.js";
 
 export const CHANGE_LIST_MAX = 60;
 export const UNTRACED_LIST_MAX = 200;
 export const UNCHANGED_LIST_MAX = 200;
 export const AFFECTED_ISSUES_MAX = 120;
+/** Issue keys listed under one changed or removed requirement; `issueCount` states the rest. */
+export const ISSUES_PER_REQUIREMENT_MAX = 10;
 const TITLE_CHARS_MAX = 160;
 const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
 
@@ -125,9 +129,9 @@ function bounded<Item>(
   items: readonly Item[],
   max: number,
   name: string,
-  cut: string[],
+  cut: Set<string>,
 ): readonly Item[] {
-  if (items.length > max) cut.push(name);
+  if (items.length > max) cut.add(name);
   return items.slice(0, max);
 }
 
@@ -174,49 +178,117 @@ function baselineOf(result: Changes, report: JiraReport): CatalogJsonObject {
   };
 }
 
+/** How many entries each list of the view may carry; shrunk until the whole view fits its bytes. */
+interface ListCaps {
+  readonly changed: number;
+  readonly removed: number;
+  readonly untraced: number;
+  readonly unchanged: number;
+  readonly affected: number;
+  readonly issues: number;
+}
+
+const FULL_CAPS: ListCaps = {
+  changed: CHANGE_LIST_MAX,
+  removed: CHANGE_LIST_MAX,
+  untraced: UNTRACED_LIST_MAX,
+  unchanged: UNCHANGED_LIST_MAX,
+  affected: AFFECTED_ISSUES_MAX,
+  issues: ISSUES_PER_REQUIREMENT_MAX,
+};
+const SHRINK_DIVISORS: readonly number[] = [1, 2, 4, 8, 16, 32, 0];
+
+function shrunk(caps: ListCaps, divisor: number): ListCaps {
+  const by = (max: number): number => (divisor === 0 ? 0 : Math.floor(max / divisor));
+  return {
+    changed: by(caps.changed),
+    removed: by(caps.removed),
+    untraced: by(caps.untraced),
+    unchanged: by(caps.unchanged),
+    affected: by(caps.affected),
+    issues: divisor === 0 ? 0 : Math.max(1, by(caps.issues)),
+  };
+}
+
+function issuesOf(keys: readonly string[], caps: ListCaps, cut: Set<string>): CatalogJsonObject {
+  if (keys.length > caps.issues) cut.add("issues");
+  return {
+    issues: keys.slice(0, caps.issues),
+    ...(keys.length > caps.issues ? { issueCount: keys.length } : {}),
+  };
+}
+
 function listsOf(
   result: Changes,
   collection: RequirementCollection,
   redact: (value: string) => string,
+  caps: ListCaps,
 ): CatalogJsonObject {
   const ambiguous = new Set(collection.ambiguousIds);
-  const cut: string[] = [];
+  const cut = new Set<string>();
   const of = (status: RequirementChange["status"]): ChangeList =>
     result.items.filter((item) => item.status === status);
-  const changed = bounded(of("changed"), CHANGE_LIST_MAX, "changed", cut);
-  const removed = bounded(of("removed"), CHANGE_LIST_MAX, "removed", cut);
-  const untraced = bounded(of("untraced"), UNTRACED_LIST_MAX, "untraced", cut);
-  const unchanged = bounded(result.unchanged, UNCHANGED_LIST_MAX, "unchanged", cut);
-  const affected = bounded(result.affectedIssues, AFFECTED_ISSUES_MAX, "affectedIssues", cut);
+  const list = <Item>(items: readonly Item[], max: number, name: string): readonly Item[] =>
+    bounded(items, max, name, cut);
+  const changed = list(of("changed"), caps.changed, "changed");
+  const removed = list(of("removed"), caps.removed, "removed");
+  const untraced = list(of("untraced"), caps.untraced, "untraced");
+  const unchanged = list(result.unchanged, caps.unchanged, "unchanged");
+  const affected = list(result.affectedIssues, caps.affected, "affectedIssues");
+  const unverified = list(result.unverifiedRemoved, caps.removed, "unverifiedRemoved");
   return {
     changed: changed.map((item): CatalogJsonObject => ({
       id: nameOf(item.id, item.entry, ambiguous),
       title: redact(item.entry?.title ?? "").slice(0, TITLE_CHARS_MAX),
-      issues: [...item.issues],
+      ...issuesOf(item.issues, caps, cut),
     })),
     removed: removed.map((item): CatalogJsonObject => ({
       id: item.id,
-      issues: [...item.issues],
+      ...issuesOf(item.issues, caps, cut),
     })),
     untraced: untraced.map((item) => nameOf(item.id, item.entry, ambiguous)),
     unchanged: unchanged.map((entry) => nameOf(entry.id, entry, ambiguous)),
     affectedIssues: [...affected],
-    ...(cut.length === 0 ? {} : { truncated: cut }),
+    ...(result.unverifiedRemoved.length === 0
+      ? {}
+      : {
+          unverifiedRemoved: unverified.map((item) => item.id),
+          unverifiedRemovedCount: result.unverifiedRemoved.length,
+        }),
+    ...(cut.size === 0 ? {} : { truncated: [...cut].sort(compareStrings) }),
   };
 }
 
+function byteSize(value: CatalogJsonObject): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+/** The document scopes whose inventory a bound cut: no removal is judged against them. */
+function incompleteScopes(collection: RequirementCollection): readonly string[] {
+  return collection.documents
+    .filter((document) => document.unitsOmitted > 0)
+    .map((document) => document.documentScope);
+}
+
+/**
+ * The comparison of the current inventory with a finished report. The lists shrink together until
+ * the `changes` object fits `maxBytes` (the counts always state the full totals), and what was cut
+ * is named in `truncated`; a removal is judged only against a complete document inventory.
+ */
 export function changesView(
   collection: RequirementCollection,
   report: JiraReport,
   redact: (value: string) => string,
+  maxBytes: number = Number.POSITIVE_INFINITY,
 ): ChangesView {
   const result = compareRequirementsWithTrace(
     collection.units.map((unit) => unit.entry),
     collection.documents.map((document) => document.documentScope),
     report.rows.map((row) => ({ key: row.issue.key, labels: row.issue.labels })),
+    incompleteScopes(collection),
   );
   const counts = countsOf(result, report);
-  const data: CatalogJsonObject = {
+  const build = (caps: ListCaps): CatalogJsonObject => ({
     baseline: baselineOf(result, report),
     counts: {
       changed: counts.changed,
@@ -224,7 +296,11 @@ export function changesView(
       untraced: counts.untraced,
       unchanged: counts.unchanged,
     },
-    ...listsOf(result, collection, redact),
-  };
-  return { data, counts };
+    ...listsOf(result, collection, redact, caps),
+  });
+  for (const divisor of SHRINK_DIVISORS) {
+    const data = build(shrunk(FULL_CAPS, divisor));
+    if (byteSize(data) <= maxBytes || divisor === 0) return { data, counts };
+  }
+  return { data: build(shrunk(FULL_CAPS, 0)), counts };
 }

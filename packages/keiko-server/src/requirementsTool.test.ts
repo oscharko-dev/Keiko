@@ -5,6 +5,7 @@ import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createJiraReportStore, type JiraReportStore } from "@oscharko-dev/keiko-connectors";
+import { updateCapsuleDetails } from "@oscharko-dev/keiko-local-knowledge";
 import {
   REQUIREMENT_REVISION_LABEL_PREFIX,
   documentLabel,
@@ -32,6 +33,7 @@ import {
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetRequirementTurnCache } from "./requirement-inventory.js";
+import { openTraceSession } from "./requirement-trace.js";
 import {
   REQUIREMENTS_PAGE_BYTES_MAX,
   REQUIREMENTS_PAGE_LIMIT_MAX,
@@ -745,5 +747,208 @@ describe("the change set against the backlog (#4179)", () => {
       refusal: "report-not-found",
     });
     expect(JSON.stringify(lines)).not.toMatch(/REQ-\d|LH-\d/u);
+  });
+});
+
+// ─── Review findings on reuse, bounds and cursors (#4179) ───────────────────────────────────────
+
+describe("a Pod revoked inside a turn is refused as in a new turn (#4179 review)", () => {
+  it("refuses the next page and a traced write after the Pod was sealed, though the turn read it", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(60).text }]);
+    const first = await call(f, { limit: 1 });
+    expect(first.items).toHaveLength(1);
+    expect(first.nextCursor).toBeDefined();
+
+    f.withStore((store) => {
+      const [capsuleId] = f.capsuleIds;
+      if (capsuleId === undefined) throw new Error("expected a Pod");
+      updateCapsuleDetails(store, capsuleId, { modelUsePolicy: sealedLocalPodModelUsePolicy() });
+    });
+    const resumed = await call(f, { limit: 1, cursor: first.nextCursor ?? "" });
+    const trace = openTraceSession(f.deps, {
+      chatId: f.chatId,
+      userMessageId: "turn-1",
+      correlationId: "req-trace-0001",
+    });
+    const traced = trace.resolve(["LH-002"]);
+    trace.close();
+
+    expect(resumed).toMatchObject({ outcome: "failed" });
+    expect(resumed.items).toBeUndefined();
+    expect(["stale", "policy-denied"]).toContain(resumed.reason);
+    expect(traced.ok).toBe(false);
+  });
+
+  it("keeps serving the cached read while the Pod is unchanged", async () => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(60).text }]);
+    const first = await call(f, { limit: 1 });
+
+    const resumed = await call(f, { limit: 1, cursor: first.nextCursor ?? "" });
+
+    expect(resumed.outcome).toBe("succeeded");
+    expect(resumed.items).toHaveLength(1);
+  });
+});
+
+describe("one requirement never exceeds the result bound (#4179 review)", () => {
+  const bound = (f: PodFixture): number => {
+    const tool = createKnowledgeRequirementsProvider<RequirementsToolContext>(
+      f.deps,
+      reports,
+    ).tools()[0];
+    return tool?.descriptor.bounds.maxResultBytes ?? 0;
+  };
+  const specificationWith = (criterion: string, count: number): string =>
+    [
+      "### LH-001 Aufbewahrung",
+      "",
+      "Daten werden zehn Tage aufbewahrt; die Frist beträgt 10 Tage.",
+      "",
+      "Abnahmekriterien:",
+      ...Array.from({ length: count }, (_, index) => `- ${criterion}${String(index)}`),
+      "",
+      "Priorität: Muss.",
+      "",
+    ].join("\n");
+
+  it("clips an oversized multibyte unit explicitly and stays inside the descriptor bound", async () => {
+    const f = await fixture([
+      { capsuleId: "cap-cjk", text: specificationWith("要件の内容".repeat(118), 20) },
+    ]);
+
+    const page = await call(f, { ids: ["LH-001"] });
+
+    expect(page.outcome).toBe("succeeded");
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(bound(f));
+    expect(page.items).toHaveLength(1);
+    expect(page.items?.[0]).toMatchObject({ id: "LH-001", criteriaTruncated: true });
+    expect((page.items?.[0]?.acceptanceCriteria as unknown[]).length).toBeGreaterThan(0);
+  });
+
+  it("returns an ordinary unit whole, without any truncation flag", async () => {
+    const f = await fixture([{ capsuleId: "cap-plain", text: specificationWith("Kriterium ", 3) }]);
+
+    const page = await call(f, { ids: ["LH-001"] });
+
+    expect(page.items?.[0]).not.toHaveProperty("criteriaTruncated");
+    expect(page.items?.[0]).not.toHaveProperty("statementTruncated");
+    expect(page.items?.[0]?.acceptanceCriteria).toHaveLength(3);
+  });
+});
+
+describe("cursors are bound to what they enumerate (#4179 review)", () => {
+  function bind(f: PodFixture, indexes: readonly number[]): void {
+    const scopes = indexes.flatMap((index) => {
+      const capsuleId = f.capsuleIds[index];
+      return capsuleId === undefined
+        ? []
+        : [{ kind: "capsule" as const, capsuleId, connectedAtMs: 1 }];
+    });
+    f.deps.store.updateChat(f.chatId, { localKnowledgeScopes: scopes });
+  }
+  async function threePods(): Promise<PodFixture> {
+    const pods = ["a", "b", "c"].map((key) => ({
+      capsuleId: `cap-${key}`,
+      text: specification(2, { prefix: key.toUpperCase().repeat(2) }).text,
+      name: `${key}.md`,
+    }));
+    const f = await fixture(pods, { bindPods: false });
+    bind(f, [0, 1]);
+    return f;
+  }
+  const names = (page: Page): string[] =>
+    (page.items ?? []).map((item) => String(item.documentName));
+
+  it("continues a document list in a later turn while the documents are unchanged", async () => {
+    const f = await threePods();
+
+    const first = await call(f, { view: "documents", limit: 1 }, "turn-1");
+    const second = await call(
+      f,
+      { view: "documents", limit: 1, cursor: first.nextCursor ?? "" },
+      "turn-2",
+    );
+
+    expect(names(first)).toEqual(["a.md"]);
+    expect(names(second)).toEqual(["b.md"]);
+    expect(second.nextCursor).toBeUndefined();
+  });
+
+  it.each([
+    [
+      "reordered",
+      (f: PodFixture): void => {
+        bind(f, [1, 0]);
+      },
+    ],
+    [
+      "extended",
+      (f: PodFixture): void => {
+        bind(f, [0, 1, 2]);
+      },
+    ],
+    [
+      "reduced",
+      (f: PodFixture): void => {
+        bind(f, [0]);
+      },
+    ],
+    [
+      "revised",
+      (f: PodFixture): void => {
+        f.withStore((store) => {
+          store._internal.db
+            .prepare("UPDATE documents SET content_hash = ? WHERE capsule_id = 'cap-b'")
+            .run("e".repeat(64));
+        });
+      },
+    ],
+  ])("refuses the cursor of a document list that was %s", async (_name, change) => {
+    const f = await threePods();
+    const first = await call(f, { view: "documents", limit: 1 }, "turn-1");
+
+    change(f);
+    const resumed = await call(
+      f,
+      { view: "documents", limit: 1, cursor: first.nextCursor ?? "" },
+      "turn-2",
+    );
+
+    expect(resumed).toMatchObject({ outcome: "failed", reason: "cursor-stale" });
+  });
+});
+
+describe("the change view fits its descriptor bound (#4179 review)", () => {
+  it("lists a changed requirement traced by thousands of items without exceeding the bound", async () => {
+    const { v1, v2 } = await twoVersions();
+    resetRequirementTurnCache();
+    const labels = await traceLabels(v1, ["LH-002"]);
+    const backlog = Array.from({ length: 4000 }, (_, index) => ({
+      key: `REQ-${String(index + 1)}`,
+      labels,
+    }));
+    const reportId = storeFinishedReport(reports, v2.chatId, backlog);
+
+    const page = await call(v2, { view: "changes", reportId });
+
+    const tool = createKnowledgeRequirementsProvider<RequirementsToolContext>(
+      v2.deps,
+      reports,
+    ).tools()[0];
+    expect(page.outcome).toBe("succeeded");
+    expect(Buffer.byteLength(JSON.stringify(page))).toBeLessThanOrEqual(
+      tool?.descriptor.bounds.maxResultBytes ?? 0,
+    );
+    const changed = page.changes?.changed as {
+      id: string;
+      issues: string[];
+      issueCount?: number;
+    }[];
+    expect(changed).toHaveLength(1);
+    expect(changed[0]?.id).toBe("LH-002");
+    expect(changed[0]?.issueCount).toBe(4000);
+    expect(changed[0]?.issues.length).toBeLessThan(4000);
+    expect(page.changes?.truncated).toEqual(expect.arrayContaining(["affectedIssues", "issues"]));
+    expect(page.changes).toMatchObject({ counts: { changed: 1 } });
   });
 });

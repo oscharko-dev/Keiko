@@ -9,6 +9,7 @@ import {
   assessRequirementInventoryQuality,
 } from "../domain/requirementInventoryQuality.js";
 import {
+  REQUIREMENT_TRACE_FOOTER_END,
   REQUIREMENT_TRACE_FOOTER_START,
   REQUIREMENT_TRACE_MARKER_LABEL,
   documentLabel,
@@ -167,6 +168,7 @@ describe("requirement trace labels and footer (#4179 review, defect 7 and 11)", 
     const { footer } = requirementTrace([{ unit }]);
 
     expect(footer.startsWith(REQUIREMENT_TRACE_FOOTER_START)).toBe(true);
+    expect(footer.endsWith(`\n${REQUIREMENT_TRACE_FOOTER_END}`)).toBe(true);
     expect(footer).toContain("Requirement: LH-001 · Anmeldung");
     expect(footer).toContain(`Reference: ${requirementReference(unit.entry)}`);
     expect(footer).toContain("Source: Spec.md · page 3");
@@ -241,14 +243,38 @@ describe("change queries (#4179 review, defect 10)", () => {
       expect(query.jql).toContain(documentLabel(list[0]?.documentScope ?? ""));
   });
 
-  it("states a stale query as: the document, a requirement of the batch, none of its revisions", () => {
+  it("states a stale query as one clause per requirement and its own current revision", () => {
     const list = entries();
+    const [first, second] = list;
 
     const [stale] = requirementChangeQueries(list);
 
     expect(stale?.jql).toBe(
-      `labels = "${documentLabel(list[0]?.documentScope ?? "")}" AND labels in ("keiko-req-LH-001", "keiko-req-LH-002") AND labels not in ("${revisionLabel(list[0]?.digest ?? "")}", "${revisionLabel(list[1]?.digest ?? "")}")`,
+      `labels = "${documentLabel(first?.documentScope ?? "")}" AND ((labels = "keiko-req-LH-001" AND labels != "${revisionLabel(first?.digest ?? "")}") OR (labels = "keiko-req-LH-002" AND labels != "${revisionLabel(second?.digest ?? "")}"))`,
     );
+  });
+
+  it("selects an item derived from A (outdated) and B (current): a revision of B never hides A", () => {
+    const [a, b] = entries();
+    const [stale] = requirementChangeQueries(entries());
+    const clauses = [
+      ...(stale?.jql ?? "").matchAll(/\(labels = "([^"]+)" AND labels != "([^"]+)"\)/gu),
+    ].map((m) => ({ requirement: m[1] ?? "", revision: m[2] ?? "" }));
+    const selects = (labels: readonly string[]): boolean =>
+      clauses.some(
+        (clause) => labels.includes(clause.requirement) && !labels.includes(clause.revision),
+      );
+    const mixed = [
+      "keiko-req-LH-001",
+      "keiko-rev-oldoldoldold",
+      "keiko-req-LH-002",
+      revisionLabel(b?.digest ?? ""),
+    ];
+    const current = ["keiko-req-LH-001", revisionLabel(a?.digest ?? ""), ...mixed.slice(2)];
+
+    expect(clauses).toHaveLength(2);
+    expect(selects(mixed)).toBe(true);
+    expect(selects(current)).toBe(false);
   });
 
   it("scopes the queries per document and lists a removed query only where it fits", () => {

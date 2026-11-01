@@ -8,8 +8,11 @@
 //   unchanged a traced requirement every item still carries the current revision of,
 //   untraced  a requirement of the document that no item of the compared scope traces (new, or not
 //             derived yet: the labels cannot tell these apart).
-// An item of a document that is not among the current ones proves nothing about its requirements
-// and is only counted. The comparison is pure; reading the items is the caller's job.
+// A traced requirement the current inventory does not show is removed only when that document's
+// inventory is complete; a bounded inventory has not proved a deletion, so it is reported apart as
+// `unverifiedRemoved`. An item of a document that is not among the current ones proves nothing
+// about its requirements and is only counted. The comparison is pure; reading the items is the
+// caller's job.
 
 import {
   compareIssueKeys,
@@ -52,6 +55,11 @@ export interface RequirementChanges<Entry extends ComparableRequirement = Compar
   readonly unchangedCount: number;
   /** The unchanged requirements themselves, in document order. */
   readonly unchanged: readonly Entry[];
+  /**
+   * Traced requirements a bounded (incomplete) document inventory does not show: they may be
+   * removed or merely beyond the bound, so they are neither removed nor affected.
+   */
+  readonly unverifiedRemoved: readonly RequirementChange<never>[];
   /** Items that name at least one requirement. */
   readonly tracedIssueCount: number;
   /** Traced items whose document is not among the current ones: counted, never judged. */
@@ -102,11 +110,17 @@ function stateOf(
   };
 }
 
-function removedItems(
+interface Missing {
+  readonly removed: readonly RequirementChange<never>[];
+  readonly unverified: readonly RequirementChange<never>[];
+}
+
+function missingItems(
   issues: readonly ParsedIssue[],
   current: ReadonlySet<string>,
   known: ReadonlySet<string>,
-): readonly RequirementChange<never>[] {
+  incomplete: ReadonlySet<string>,
+): Missing {
   const removed = new Map<string, { id: string; scope: string; keys: string[] }>();
   for (const issue of issues) {
     const scopes = [...issue.documents].filter((scope) => current.has(scope)).sort(compareStrings);
@@ -119,7 +133,7 @@ function removedItems(
       removed.set(`${scope}\u0000${id}`, slot);
     }
   }
-  return [...removed.values()]
+  const all = [...removed.values()]
     .sort((left, right) => compareStrings(left.scope + left.id, right.scope + right.id))
     .map((item): RequirementChange<never> => ({
       status: "removed",
@@ -127,16 +141,22 @@ function removedItems(
       documentScope: item.scope,
       issues: sortedKeys(item.keys),
     }));
+  return {
+    removed: all.filter((item) => !incomplete.has(item.documentScope)),
+    unverified: all.filter((item) => incomplete.has(item.documentScope)),
+  };
 }
 
 /**
  * Compares the current inventory with the items of the backlog that carry the trace labels.
- * `documentScopes` lists every document the comparison may speak for, including one without units.
+ * `documentScopes` lists every document the comparison may speak for, including one without units;
+ * `incompleteScopes` names those whose inventory a bound cut, where no removal is judged.
  */
 export function compareRequirementsWithTrace<Entry extends ComparableRequirement>(
   entries: readonly Entry[],
   documentScopes: readonly string[],
   backlog: readonly RequirementTracedIssue[],
+  incompleteScopes: readonly string[] = [],
 ): RequirementChanges<Entry> {
   const issues = backlog
     .map((issue) => parse(issue))
@@ -154,7 +174,7 @@ export function compareRequirementsWithTrace<Entry extends ComparableRequirement
       changed.push({ ...item, status: "changed", issues: state.outdated });
     else unchanged.push(entry);
   }
-  const removed = removedItems(issues, current, known);
+  const { removed, unverified } = missingItems(issues, current, known, new Set(incompleteScopes));
   const unmatched = issues.filter(
     (issue) => ![...issue.documents].some((scope) => current.has(scope)),
   );
@@ -162,6 +182,7 @@ export function compareRequirementsWithTrace<Entry extends ComparableRequirement
     items: [...changed, ...removed, ...untraced],
     unchangedCount: unchanged.length,
     unchanged,
+    unverifiedRemoved: unverified,
     tracedIssueCount: issues.length,
     unmatchedIssueCount: unmatched.length,
     affectedIssues: sortedKeys([...changed, ...removed].flatMap((item) => item.issues)),

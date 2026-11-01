@@ -678,11 +678,13 @@ describe("executeJiraChatDraft (#4178)", () => {
 });
 
 describe("source traceability of a draft (#4179)", () => {
-  const FOOTER = "----\nKeiko traceability\nRequirement: LH-001 · Anmeldung";
+  const FOOTER =
+    "----\nKeiko traceability\nRequirement: LH-001 · Anmeldung\nEnd of Keiko traceability";
   const TRACE = {
     labels: ["keiko-requirement", "keiko-doc-aaaaaaaa", "keiko-req-LH-001"],
     footer: FOOTER,
     footerStart: "----\nKeiko traceability",
+    footerEnd: "End of Keiko traceability",
     replaceLabelPrefixes: ["keiko-rev-"],
   };
   const TRACED = {
