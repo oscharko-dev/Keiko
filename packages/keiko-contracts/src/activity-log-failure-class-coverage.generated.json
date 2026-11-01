@@ -25167,8 +25167,7 @@
         "state": [
           "gateway.conversation.admission",
           "gateway.readiness.automatic.joined",
-          "gateway.readiness.busy-retained",
-          "gateway.readiness.renewal.paused"
+          "gateway.readiness.busy-retained"
         ],
         "end": ["gateway.readiness.automatic.completed", "gateway.readiness.completed"],
         "failure": [],
@@ -25200,10 +25199,6 @@
           "mode": "correlation"
         },
         {
-          "op": "gateway.readiness.renewal.paused",
-          "mode": "correlation"
-        },
-        {
           "op": "gateway.readiness.started",
           "mode": "correlation"
         }
@@ -25216,7 +25211,6 @@
         "gateway.readiness.automatic.started",
         "gateway.readiness.busy-retained",
         "gateway.readiness.completed",
-        "gateway.readiness.renewal.paused",
         "gateway.readiness.started"
       ],
       "replayReferences": [],
@@ -25501,48 +25495,6 @@
             "causeChain": false
           },
           "proofIds": ["gateway.readiness.completed.line"],
-          "replayReferences": [],
-          "missingObligations": []
-        },
-        {
-          "op": "gateway.readiness.renewal.paused",
-          "owner": "keiko-server",
-          "category": "gateway",
-          "lifecycle": "state",
-          "causal": "correlation",
-          "analyzerProjection": "timeline",
-          "safeContextFields": [
-            {
-              "name": "idleMs",
-              "type": "integer",
-              "dataClass": "duration",
-              "required": false
-            },
-            {
-              "name": "modelIdDigest",
-              "type": "string",
-              "dataClass": "digest",
-              "required": false
-            },
-            {
-              "name": "paused",
-              "type": "string",
-              "dataClass": "closed-enum",
-              "required": true
-            }
-          ],
-          "evidenceClasses": [
-            "closed-enum",
-            "completeness-state",
-            "digest",
-            "duration",
-            "loss-state"
-          ],
-          "frameCauseEvidence": {
-            "frames": false,
-            "causeChain": false
-          },
-          "proofIds": ["gateway.readiness.renewal.paused.line"],
           "replayReferences": [],
           "missingObligations": []
         },

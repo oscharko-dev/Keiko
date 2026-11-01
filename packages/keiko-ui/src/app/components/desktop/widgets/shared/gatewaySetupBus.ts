@@ -91,10 +91,28 @@ export function notifyGatewayModelCatalogUpdated(correlationId?: string): void {
   );
 }
 
-/** Request a fresh gateway model catalog without changing configuration-readiness state. */
-export function requestGatewayModelCatalogRefresh(): void {
+/**
+ * Request a fresh gateway model catalog without changing configuration-readiness state. `check`
+ * marks a person's own step (opening the Workbench or a model picker): the server then checks
+ * again the models that are not ready, like a page load, so a model that was busy at startup can
+ * come back without a reload (customer 1.3.4). Automatic rereads never ask for it.
+ */
+export function requestGatewayModelCatalogRefresh(
+  options: { readonly check?: boolean } = {},
+): void {
   if (typeof window === "undefined") return;
-  window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT));
+  window.dispatchEvent(
+    new CustomEvent(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, {
+      detail: { check: options.check === true },
+    }),
+  );
+}
+
+/** Whether a catalog refresh request came from a person's own step and asks for a check. */
+export function gatewayModelCatalogCheckRequested(event: Event): boolean {
+  const detail: unknown = event instanceof CustomEvent ? event.detail : undefined;
+  if (typeof detail !== "object" || detail === null) return false;
+  return Object.getOwnPropertyDescriptor(detail, "check")?.value === true;
 }
 
 /** Only the actual catalog request can parent a consumer refresh; malformed event details carry none. */

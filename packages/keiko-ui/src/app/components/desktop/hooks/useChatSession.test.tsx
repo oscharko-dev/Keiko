@@ -455,6 +455,23 @@ describe("useChatSession bootstrap", () => {
     expect(result.current).toBe(false);
   });
 
+  // Customer 1.3.4: a model busy at startup was hidden from the pickers until a page reload.
+  // Opening the Workbench or a picker is the person asking, so that refresh checks again; an
+  // automatic reread never does, or the catalog poll would probe models in the background.
+  it("checks the models again only when a person opens a picker or the Workbench", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    const { result } = renderHook(() => useGatewayModelCatalogSettled());
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(vi.mocked(fetchModels).mock.calls.at(-1)?.[1]).toBe(false);
+    act(() => {
+      requestGatewayModelCatalogRefresh({ check: true });
+    });
+    await waitFor(() => expect(vi.mocked(fetchModels).mock.calls.at(-1)?.[1]).toBe(true));
+  });
+
   it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
     const catalog = [model({ id: "chat-live" }), model({ id: "chat-alt" })];
     vi.mocked(fetchModels).mockResolvedValue({ models: catalog });

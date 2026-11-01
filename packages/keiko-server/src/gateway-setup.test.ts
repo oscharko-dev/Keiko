@@ -11568,6 +11568,99 @@ describe("gateway setup writes the process activity log", () => {
     }
   });
 
+  // Discovery used to call `gatewayFetch` without a sink: a refused `/model/info` or `/models`
+  // request wrote `http.gateway.fetch.failed` into the null sink and only bumped `portUnwired`.
+  it("records a failed discovery request on the Activity Log under the setup correlation id", async () => {
+    const uiDir = await tempDir("keiko-gw-discovery-log-ui-");
+    const evidenceDir = await tempDir("keiko-gw-discovery-log-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      const href = fetchInputUrl(url);
+      if (href.endsWith("/model/info") || href.endsWith("/model/group/info")) {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      if (href.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "fallback-chat" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return answerSetupCall(url);
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          { baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" },
+          "corr-discovery-log",
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-discovery-log")).toBe(true);
+      expect(JSON.stringify(sink.events)).not.toContain("example-secret-token");
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("records a failed Figma credential smoke request instead of counting it port-unwired", async () => {
+    const uiDir = await tempDir("keiko-gw-figma-log-ui-");
+    const evidenceDir = await tempDir("keiko-gw-figma-log-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      if (new URL(fetchInputUrl(url)).hostname === "api.figma.com") {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      return answerSetupCall(url);
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com",
+            apiKey: "example-secret-token",
+            figmaAccessToken: "figd_log-smoke-token",
+          },
+          "corr-figma-log",
+        ),
+        deps,
+      );
+
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-figma-log")).toBe(true);
+      expect(failures.every((event) => event.errorKind !== undefined)).toBe(true);
+      expect(JSON.stringify(sink.events)).not.toContain("figd_log-smoke-token");
+    } finally {
+      deps.store.close();
+    }
+  });
+
   it("records an unsupported tool-calling verification without an error kind", async () => {
     const uiDir = await tempDir("keiko-gw-tool-unsupported-ui-");
     const evidenceDir = await tempDir("keiko-gw-tool-unsupported-ev-");

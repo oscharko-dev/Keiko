@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { requestLiteLLMRerank, type LiteLLMRerankRequest } from "./rerank-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 
 const SECRET_API_KEY = "sk-rerank-secret-1234567890";
 const QUERY = "Which policy mentions alpha?";
@@ -218,5 +219,27 @@ describe("requestLiteLLMRerank", () => {
     expect(serialized).not.toContain(QUERY);
     expect(serialized).not.toContain(DOCUMENTS[0] ?? "");
     expect(serialized).not.toContain("litellm.local");
+  });
+
+  // The rerank transport used to call `gatewayFetch` without a sink, so a failing reranker wrote
+  // its `http.gateway.fetch.failed` line into the null sink and only bumped `portUnwired`.
+  it("writes the transport failure line to the supplied sink under the caller correlation id", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const log: ModelGatewayLogSink = {
+      write(event: ModelGatewayLogEvent): void {
+        events.push(event);
+      },
+    };
+    const fetchImpl = vi.fn(() => Promise.reject(new Error("no route to reranker")));
+
+    const outcome = await requestLiteLLMRerank(
+      baseRequest({ fetchImpl, log, logContext: { correlationId: "rerank-corr-1" } }),
+    );
+
+    expect(outcome).toEqual({ ok: false, kind: "transport" });
+    const failed = events.find((event) => event.op === "http.gateway.fetch.failed");
+    expect(failed).toBeDefined();
+    expect(failed?.correlationId).toBe("rerank-corr-1");
+    expect(JSON.stringify(events)).not.toContain(SECRET_API_KEY);
   });
 });

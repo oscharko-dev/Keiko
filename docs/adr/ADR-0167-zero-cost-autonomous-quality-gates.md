@@ -155,7 +155,7 @@ under #4145, as a ratchet rather than as complete enforcement:
 - The ratchet does not run the epic's responsibility qualifications and therefore does not claim
   that any rule is qualified or fully enforced. Rule dispositions, thresholds, required contexts,
   review loops and integration authority are unchanged.
-- Baseline on `dev` `3a2979be1`: 7,239 files and 46,598 findings. Epic workstreams and ordinary
+- Baseline on `dev` `7bbca2e34`: 7,239 files and 46,618 findings. Epic workstreams and ordinary
   `dev` work prune the register; #3991 removes it at zero and activates full enforcement.
 
 Known limitation: counts are per file and rule, so fixing one finding and adding another of the same
@@ -174,8 +174,10 @@ over counting only enforceable findings and over landing the slices before #4145
   `pending-boundary-migration`, `test-witness` or `proof-fixture`. The second covers a check under
   the four boundary rules (no-runtime-typeof, no-unknown-parameters, no-unsafe-dictionary-type,
   no-known-value-widening) that a later reviewed migration moves while those rules are inactive for
-  its package. `from` is less than `to`, and `issue` is a positive issue number. Malformed,
-  duplicated or non-canonical ledgers fail closed.
+  its package. The fourth covers a test helper, typed fixture or type-level assertion that builds
+  or checks the expected value of a proof and receives no hostile input. Code that receives hostile
+  input is a `test-witness` instead. `from` is less than `to`, and `issue` is a positive issue
+  number. Malformed, duplicated or non-canonical ledgers fail closed.
 - `--prune-register` raises a count only to exactly the `to` of an entry with the same path, rule
   and `from`. Every other increase still fails with `code-quality-register-increase`.
 - The CI ratchet compares the committed register with the base commit's register. Each raised count
