@@ -4612,10 +4612,17 @@ function withModelVerification(
   result: CodingWorkbenchSidecarGatewayResult,
 ): CodingWorkbenchSidecarGatewayResult {
   if (result.status !== "available") return result;
-  const ready = currentConversationReadinessObservation(deps, result.modelAlias);
-  const verification: GatewayVerificationState =
-    ready === undefined ? "unverified" : ready ? "verified" : "failed";
-  return { ...result, verification };
+  return {
+    ...result,
+    verification: modelVerificationState(
+      currentConversationReadinessObservation(deps, result.modelAlias),
+    ),
+  };
+}
+
+function modelVerificationState(ready: boolean | undefined): GatewayVerificationState {
+  if (ready === undefined) return "unverified";
+  return ready ? "verified" : "failed";
 }
 
 // The Workbench reads the profile of the model its picker selected; a read that names none, or a
