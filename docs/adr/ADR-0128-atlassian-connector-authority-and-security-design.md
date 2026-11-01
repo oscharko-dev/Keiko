@@ -855,7 +855,7 @@ refuses before a request on `jira.create`, `jira.edit`, `jira.transition`, `jira
 `jira.comment`, `jira.attach` and a draft item: the refusal names the argument (an unknown one by the
 call's accepted list), carries the closed `JiraFieldValidationFailure`, and one bounded sentence on
 how to send it again, ending "Nothing was changed." A bare `field-validation` is no longer
-returned for a malformed argument. The refusal reaches only the model, never the Activity Log. (2) A draft refused before any request returns
+returned for a malformed argument. The refusal reaches only the model, never the Activity Log. A refused read (`jira.search` with a JQL Jira cannot parse, say) likewise hands the model Jira's own bounded `errorMessages` and per-field `errors`, sanitized by the same `JiraMutationFailureDetail` limits and declared in the read result schema; other remote fields stay dropped, and the Activity Log still records only the closed reason (lab S08 and S09 of epic #4173: both models received a bare `field-validation` for `summary ~ "[LH-002]"` and could not correct the query). (2) A draft refused before any request returns
 a fixed `guidance` sentence from a closed vocabulary (`JiraDraftProblem`: draft shape, missing items,
 a malformed item ref, id, fields, parent, link or requirement list, a duplicate,
 self or unknown ref, a cycle) with the 1-based item position where one item is at fault, ending in

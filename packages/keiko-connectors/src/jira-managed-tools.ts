@@ -255,7 +255,7 @@ async function read<Context extends ManagedMcpInvocationContext>(
     },
     { method: "GET", url, expect: ARRAY_READ_NAMES.has(name) ? "json-array" : "json" },
   );
-  if (!outcome.ok) return failure(outcome.reason);
+  if (!outcome.ok) return failure(outcome.reason, outcome.remote);
   const { startAt, maxResults } = selected;
   if (ARRAY_READ_NAMES.has(name))
     return boundJiraReadResult(

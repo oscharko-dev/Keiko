@@ -23,7 +23,11 @@ import type {
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 
 import { text, object } from "./jiraManagedSchemas.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import {
+  JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+  JIRA_FAILURE_MESSAGES_SCHEMA,
+  JIRA_MUTATION_DECLARATIONS,
+} from "./jiraManagedMutationDescriptors.js";
 import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
 import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 
@@ -228,6 +232,8 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
       {
         outcome: { type: "string", enum: ["succeeded", "failed"] },
         reason: text(64),
+        fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+        messages: JIRA_FAILURE_MESSAGES_SCHEMA,
         browseUrl: text(4096),
         items: { type: "array", maxItems: 100, items: definition.item },
         startAt: PAGE_NUMBER,

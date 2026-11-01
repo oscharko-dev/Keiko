@@ -140,7 +140,8 @@ const JIRA_DRAFT_ITEM_SCHEMA = object(
   },
   ["ref", "projectId", "issueTypeId", "fields"],
 );
-const FIELD_ERRORS = {
+/** Jira's own bounded explanation of a refusal; reads and mutations share it. */
+export const JIRA_FAILURE_FIELD_ERRORS_SCHEMA = {
   type: "array",
   maxItems: JIRA_MUTATION_DETAIL_LIMITS.fieldErrors,
   items: object(
@@ -152,7 +153,7 @@ const FIELD_ERRORS = {
     ["fieldId", "message"],
   ),
 };
-const MESSAGES = {
+export const JIRA_FAILURE_MESSAGES_SCHEMA = {
   type: "array",
   maxItems: JIRA_MUTATION_DETAIL_LIMITS.messages,
   items: text(JIRA_MUTATION_DETAIL_LIMITS.messageChars),
@@ -228,8 +229,8 @@ const DRAFT_RESULT_SCHEMA = object(
           reason: { type: "string", enum: ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS },
           fieldId: text(64),
           validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
-          fieldErrors: FIELD_ERRORS,
-          messages: MESSAGES,
+          fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+          messages: JIRA_FAILURE_MESSAGES_SCHEMA,
           ...LINK_RESULT,
           violations: JIRA_VIOLATIONS_SCHEMA,
           trace: TRACE_RESULT,
@@ -277,8 +278,8 @@ const RESULT_FIELDS = {
   attachmentId: text(128),
   fieldId: text(64),
   validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
-  fieldErrors: FIELD_ERRORS,
-  messages: MESSAGES,
+  fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+  messages: JIRA_FAILURE_MESSAGES_SCHEMA,
   ...LINK_RESULT,
   violations: JIRA_VIOLATIONS_SCHEMA,
 };

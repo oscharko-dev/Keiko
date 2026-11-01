@@ -282,6 +282,38 @@ it.each([
   },
 );
 
+it("hands the model Jira's own explanation of a refused search, bounded", async () => {
+  const f = fixture({});
+  f.http.mockResolvedValue(
+    response(
+      {
+        errorMessages: [
+          "Error in the JQL Query: The character '[' is a reserved JQL character.",
+          "x".repeat(400),
+        ],
+        errors: { jql: "The JQL query is not valid." },
+        privateDetail: "omit-me",
+      },
+      400,
+    ),
+  );
+  const result = await f.run("jira.search", { jql: 'summary ~ "[LH-002]"' });
+  expect(result).toEqual({
+    data: {
+      outcome: "failed",
+      reason: "field-validation",
+      fieldErrors: [{ fieldId: "jql", message: "The JQL query is not valid." }],
+      messages: [
+        "Error in the JQL Query: The character '[' is a reserved JQL character.",
+        expect.stringMatching(/^x+/u),
+      ],
+    },
+    isError: true,
+  });
+  expect(JSON.stringify(result)).not.toContain("omit-me");
+  expect(JSON.stringify(result).length).toBeLessThan(800);
+});
+
 it.each(["timeout", "network-error"] as const)(
   "classifies %s without pretending to observe a project",
   async (kind) => {

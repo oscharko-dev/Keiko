@@ -1,6 +1,7 @@
 import type {
   JiraFieldMetadata,
   JiraFieldReference,
+  JiraMutationFailureDetail,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -11,8 +12,22 @@ import {
   type JiraMetadataResult,
 } from "./jira-field-metadata.js";
 
-export function jiraReadFailure(reason: string): ManagedMcpToolResult {
-  return { data: { outcome: "failed", reason }, isError: true };
+/** A refused read carries Jira's own bounded explanation (an invalid JQL, say) when it gave one. */
+export function jiraReadFailure(
+  reason: string,
+  detail?: JiraMutationFailureDetail,
+): ManagedMcpToolResult {
+  return {
+    data: {
+      outcome: "failed",
+      reason,
+      ...(detail?.fieldErrors === undefined
+        ? {}
+        : { fieldErrors: detail.fieldErrors.map((error) => ({ ...error })) }),
+      ...(detail?.messages === undefined ? {} : { messages: [...detail.messages] }),
+    },
+    isError: true,
+  };
 }
 function referenceProjection(value: JiraFieldReference): CatalogJsonObject {
   return {
