@@ -223,8 +223,9 @@ export interface GatewayCallRequest extends GatewayRequest {
    * serialized into a provider request body. `steered` gives an answer the model could not use (it
    * exhausted its output budget without a tool call or a final answer, or ended after reasoning
    * without either) ONE further attempt with a fixed correction before the failure surfaces. Only
-   * the coding sidecar route sets it; every other call, the commit draft included, surfaces such an
-   * answer at once and never makes a hidden second generation.
+   * the coding sidecar route and the rounds of a Chat tool turn (S09 of epic #4173) set it; every
+   * other call, the commit draft included, surfaces such an answer at once and never makes a hidden
+   * second generation.
    */
   readonly answerRepair?: "steered" | undefined;
   /**

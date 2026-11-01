@@ -52,6 +52,7 @@ const MODEL = "synthetic-jira-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  draftToSend = DRAFT_ARGUMENTS;
   for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.restoreAllMocks();
 });
@@ -147,6 +148,35 @@ const DRAFT_ARGUMENTS = {
     { ref: "loose", projectId: "10000", issueTypeId: "10001", fields: { summary: "Loose" } },
   ],
 };
+// S09 of epic #4173: an epic, a task under it and two sub-tasks under that task, as ONE draft.
+const NESTED_DRAFT_ARGUMENTS = {
+  items: [
+    { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+    {
+      ref: "task",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Task" },
+      parent: { fieldId: "parent", ref: "epic" },
+    },
+    {
+      ref: "sub1",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Sub-task one" },
+      parent: { fieldId: "parent", ref: "task" },
+    },
+    {
+      ref: "sub2",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Sub-task two" },
+      parent: { fieldId: "parent", ref: "task" },
+    },
+  ],
+};
+/** The arguments the scripted model sends as its backlog draft. */
+let draftToSend: Record<string, unknown> = DRAFT_ARGUMENTS;
 /** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
 type Mutation = boolean | { readonly attach: string; beforeCall?: () => void };
 /** A backlog draft call: the fixed three-item draft, or arguments produced when the model calls. */
@@ -166,7 +196,7 @@ function toolArguments(
   draft: DraftCall,
   body = "Synthetic approved comment",
 ): Record<string, unknown> {
-  if (draft) return typeof draft === "function" ? draft() : DRAFT_ARGUMENTS;
+  if (draft) return typeof draft === "function" ? draft() : draftToSend;
   if (typeof mutation === "object")
     return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
   return mutation ? { issueKey: "KEIKO-1", body } : {};
@@ -777,6 +807,28 @@ async function approveReadForWrite(f: ReturnType<typeof fixture>): Promise<void>
   );
 }
 
+// S09 of epic #4173: Qwen read the field metadata of three issue types, then ended its next round
+// after reasoning without a tool call or an answer, and the whole turn ended with no write. Every
+// round of a tool turn now asks the gateway for its ONE steered repair of such an answer, so the
+// model is told once to call the next tool instead of the turn ending (bounded by the turn's own
+// model-call envelope; the gateway's repair mechanics are pinned in gateway.output-repair.test.ts).
+it.each([false, true])(
+  "asks the gateway for the one steered repair of an unusable answer on every round (stream=%s)",
+  async (stream) => {
+    const f = fixture();
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `steered-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(f.calls.length).toBeGreaterThanOrEqual(2);
+    expect(f.calls.map((call) => call.answerRepair)).toEqual(f.calls.map(() => "steered"));
+  },
+);
+
 // Pin (#4175 relocates the former fixed ten-round cap): the loop is bounded by the accepted
 // Authority Envelope's tool-call budget, dispatches nothing past it, and the turn that reaches it
 // answers from its own transcript instead of failing with every completed read discarded.
@@ -1202,6 +1254,27 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     expect(firstToolExchange(f).approval).toBeUndefined();
     expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain("draft-changed");
   });
+});
+
+// S09 of epic #4173 through the whole Chat turn: one approval creates the epic, the task under it
+// and both sub-tasks under that task, each child carrying the key its parent received.
+it("creates an epic, its task and two sub-tasks under that task from one approved draft", async () => {
+  draftToSend = NESTED_DRAFT_ARGUMENTS;
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "nested-draft"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  await decidePendingWrite(f, "approve");
+  expect((await pending).status).toBe(200);
+  expect(f.jira.posts().map((post) => post.fields)).toMatchObject([
+    { summary: "Epic" },
+    { summary: "Task", parent: { key: "SYN-1" } },
+    { summary: "Sub-task one", parent: { key: "SYN-2" } },
+    { summary: "Sub-task two", parent: { key: "SYN-2" } },
+  ]);
+  const exchange = firstToolExchange(f);
+  expect(exchange.mutationOutcome).toBe("succeeded");
+  expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":4');
 });
 
 // #4178: a hostile client names refs the reviewed draft does not contain. The decision route

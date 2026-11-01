@@ -726,9 +726,12 @@ spent its whole output budget on reasoning, or whose tool call the budget cut of
 (normalization checks `length` before it parses tool-call JSON, buffered and streamed alike; the same
 cut call with any other finish reason stays a `MalformedToolCallError`) — is never retried as is. On a call that asks for it, it
 is not surfaced at once either: the explicit `GatewayCallRequest.answerRepair: "steered"` (local,
-never serialized) is set by the coding sidecar route alone, so every other call — the commit draft
-and interactive chat included — still surfaces such an answer at once and never makes a hidden second
-generation (#3873 review). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
+never serialized) is set by the coding sidecar route and by every round of a Chat tool turn (S09 of
+epic #4173: Qwen ended a Jira turn after reasoning with three metadata reads settled and no write,
+and the turn ended; a multi-round task with settled work behind it must not die on one unusable
+round, and the repair counts against the turn's own model-call envelope), so every other call — the
+commit draft and plain interactive chat included — still surfaces such an answer at once and never
+makes a hidden second generation (#3873 review). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
 grants exactly one further attempt per call, at once, which the gateway sends as the ORIGINAL request
 plus one fixed system message (`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told
 that its previous answer used the whole budget without a tool call or a final answer and asked to

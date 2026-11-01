@@ -272,9 +272,14 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
     };
   };
+  // A tool turn is a multi-round task with settled work behind it: a model that ends a round after
+  // reasoning without a tool call or an answer gets the gateway's ONE steered repair instead of
+  // ending the whole turn (S09 of epic #4173: Qwen read the field metadata, produced nothing, and
+  // the turn ended with no writes). The repair is bounded by the turn's own model-call envelope.
   private requestForAttempt(request: GatewayCallRequest): GatewayCallRequest {
     return {
       ...request,
+      answerRepair: "steered",
       attemptAdmission: (input): ReturnType<ModelAttempt> => {
         const existing = request.attemptAdmission?.(input);
         if (request.attemptAdmission !== undefined && existing === undefined) return undefined;

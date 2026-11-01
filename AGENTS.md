@@ -1262,7 +1262,8 @@ from them, never a heuristic secret shape; every other tool's arguments keep the
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
-`answerRepair: "steered"` (the coding sidecar route alone; #3873, F17, F23), and the log records it
+`answerRepair: "steered"` (the coding sidecar route and every round of a Chat tool turn; #3873, F17,
+F23, S09 of epic #4173), and the log records it
 in closed words only: `gateway.retry.scheduled` names it with `reason=output-exhausted-repair` or
 `reason=empty-answer-repair` (`retryable-error` on every ordinary retry), and
 `coding-sidecar.gateway.outcome` and `coding-sidecar.gateway.turn-failed` record `repairAttempted`
