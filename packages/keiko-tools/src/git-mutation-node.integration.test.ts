@@ -24,7 +24,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { createNodeGitMutationAdapter } from "./git-mutation-node.js";
+import { createNodeGitMutationAdapter, readGitStageSupport } from "./git-mutation-node.js";
 import type {
   GitLocalMutationAdapter,
   GitVerifiedCommitPrecondition,
@@ -547,5 +547,76 @@ describe("node git mutation adapter — global identity and signing policy", () 
       "Global Dev <global@example.com>",
     );
     expectLastCommitSigned(identityRepo, identityHome);
+  });
+});
+
+// ─── Exact staging follows Git's EFFECTIVE line-ending configuration ─────────────────────────────
+//
+// Exact staging hashes the worktree bytes with `--no-filters`, so it is only equivalent to Git's own
+// staging while no line-ending conversion is in effect. Git resolves `core.autocrlf` /
+// `core.safecrlf` like every single-valued key: the most specific scope that sets it wins. Git for
+// Windows installs `core.autocrlf=true` in its SYSTEM scope by default, so a check that refuses on
+// ANY scope's `true` refused every repository on a stock Windows host — including one that opts
+// out locally, the documented override. The repository-local `false` must win, and an effective
+// conversion must still be refused.
+describe("node git mutation adapter — stage normalization follows the effective Git configuration", () => {
+  let normalizationHome: string;
+
+  beforeEach(() => {
+    normalizationHome = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-normalization-")));
+    writeFileSync(join(root, "a.txt"), "hello\n", "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(normalizationHome, { recursive: true, force: true });
+  });
+
+  function stageSupported(): Promise<boolean> {
+    return readGitStageSupport(
+      {
+        workspace: info,
+        processEnv: { PATH: process.env.PATH ?? "", HOME: normalizationHome },
+        now: () => Date.now(),
+      },
+      ["a.txt"],
+    );
+  }
+
+  function writeHomeGitConfig(body: string): void {
+    writeFileSync(join(normalizationHome, ".gitconfig"), body, "utf8");
+  }
+
+  it("admits exact staging when the repository-local scope disables an outer autocrlf", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n\tsafecrlf = true\n");
+    git(["config", "core.autocrlf", "false"]);
+    git(["config", "core.safecrlf", "false"]);
+
+    expect(await stageSupported()).toBe(true);
+  });
+
+  it("refuses exact staging when an outer autocrlf is not overridden", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = true\n");
+
+    expect(await stageSupported()).toBe(false);
+  });
+
+  it("refuses exact staging when the repository-local scope enables a conversion", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = false\n\tsafecrlf = false\n");
+    git(["config", "core.autocrlf", "input"]);
+    git(["config", "core.safecrlf", "false"]);
+
+    expect(await stageSupported()).toBe(false);
+  });
+
+  it("refuses exact staging when a key is set without a value, which Git reads as true", async () => {
+    writeHomeGitConfig("[core]\n\tautocrlf = false\n");
+    git(["config", "core.autocrlf", "false"]);
+    writeFileSync(
+      join(root, ".git", "config"),
+      `${readFileSync(join(root, ".git", "config"), "utf8")}[core]\n\tsafecrlf\n`,
+      "utf8",
+    );
+
+    expect(await stageSupported()).toBe(false);
   });
 });
