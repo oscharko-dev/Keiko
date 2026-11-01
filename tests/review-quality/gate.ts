@@ -224,7 +224,7 @@ function writeEvidence(
 async function main(argv: readonly string[]): Promise<void> {
   const args = parseGateArguments(argv);
   const checkout = process.cwd();
-  const configuration = gateConfiguration(checkout, args);
+  const configuration = gateConfiguration(checkout, args, process.env);
   const manifest = ReviewEval.REVIEW_EVALUATION_MANIFEST;
   const dataset = ReviewEval.loadReviewHarvestDataset(resolve(checkout, manifest.datasetPath));
   if (dataset.digest !== manifest.datasetDigest)

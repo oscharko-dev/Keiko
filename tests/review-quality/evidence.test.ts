@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { parseGateArguments } from "./cli.js";
 import {
+  BUDGET_SETTING_KEYS,
   CONFIGURATION_PATHS,
   gateConfiguration,
   renderGateCost,
@@ -75,18 +76,30 @@ afterEach(() => {
 
 describe("gateConfiguration", () => {
   it("digests the committed review code, the variant and the pair", () => {
-    const product = gateConfiguration(checkout, args("product"));
+    const product = gateConfiguration(checkout, args("product"), {});
     expect(product.checkoutCommit).toBe(git(checkout, ["rev-parse", "HEAD"]));
     expect(Object.keys(product.objects)).toEqual(expect.arrayContaining([...CONFIGURATION_PATHS]));
-    expect(gateConfiguration(checkout, args("product"))).toEqual(product);
-    const swapped = gateConfiguration(checkout, args("roles-swapped"));
+    expect(gateConfiguration(checkout, args("product"), {})).toEqual(product);
+    const swapped = gateConfiguration(checkout, args("roles-swapped"), {});
     expect(swapped.configurationDigest).not.toBe(product.configurationDigest);
     expect(swapped.promptDigest).toBe(product.promptDigest);
   });
 
+  it("records the run-budget settings and folds them into the digest", () => {
+    const defaults = gateConfiguration(checkout, args("product"), { UNRELATED: "1" });
+    expect(Object.keys(defaults.budgetSettings)).toEqual([...BUDGET_SETTING_KEYS]);
+    expect(Object.values(defaults.budgetSettings)).toEqual(BUDGET_SETTING_KEYS.map(() => null));
+    const raised = gateConfiguration(checkout, args("product"), {
+      KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS: "1500000",
+    });
+    expect(raised.budgetSettings.KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS).toBe("1500000");
+    expect(raised.configurationDigest).not.toBe(defaults.configurationDigest);
+    expect(raised.promptDigest).toBe(defaults.promptDigest);
+  });
+
   it("refuses to run on uncommitted review configuration", () => {
     writeFileSync(join(checkout, FILES[0] ?? ""), "// changed\n");
-    expect(() => gateConfiguration(checkout, args("product"))).toThrow(/uncommitted changes/u);
+    expect(() => gateConfiguration(checkout, args("product"), {})).toThrow(/uncommitted changes/u);
   });
 });
 

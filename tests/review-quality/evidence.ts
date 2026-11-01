@@ -1,7 +1,7 @@
 // The evidence of one offline gate run (Issue #4138): what was run, on which configuration, with
 // which result and at what cost, body-free. The configuration digest covers the committed review
-// code, the counter-check and presentation limits, the variant and the model pair, so two runs
-// with the same digest ran the same configuration. A run refuses to start when that code has
+// code, the counter-check and presentation limits, the run-budget settings, the variant and the model
+// pair, so two runs with the same digest ran the same configuration. A run refuses to start when that code has
 // uncommitted changes, because their digest would name a configuration nobody can check out.
 
 import { createHash } from "node:crypto";
@@ -22,11 +22,21 @@ const PROMPT_PATHS = [
   "packages/keiko-server/src/review/counter-check/prompt.ts",
 ] as const;
 
+/** The operator settings that bound a review run; an absent key keeps the product default. */
+export const BUDGET_SETTING_KEYS = [
+  "KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS",
+  "KEIKO_REVIEW_RUN_MAX_DURATION_MINUTES",
+  "KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS",
+  "KEIKO_CODING_RUNTIME_MAX_DURATION_MINUTES",
+] as const;
+
 export interface GateConfiguration {
   readonly checkoutCommit: string;
   readonly configurationDigest: string;
   readonly promptDigest: string;
   readonly objects: Readonly<Record<string, string>>;
+  /** Each budget setting's value, or `null` when the product default applies. */
+  readonly budgetSettings: Readonly<Record<string, string | null>>;
 }
 
 function sha256(value: string): string {
@@ -34,7 +44,11 @@ function sha256(value: string): string {
 }
 
 /** Reads the configuration identity of the checkout the gate runs from. */
-export function gateConfiguration(checkout: string, args: GateArguments): GateConfiguration {
+export function gateConfiguration(
+  checkout: string,
+  args: GateArguments,
+  env: Readonly<Record<string, string | undefined>>,
+): GateConfiguration {
   const dirty = git(checkout, ["status", "--porcelain", "--", ...CONFIGURATION_PATHS]);
   if (dirty !== "") {
     throw new Error("the review configuration has uncommitted changes; commit them before a run");
@@ -44,8 +58,11 @@ export function gateConfiguration(checkout: string, args: GateArguments): GateCo
   for (const path of [...CONFIGURATION_PATHS, ...PROMPT_PATHS]) {
     objects[path] = git(checkout, ["rev-parse", `HEAD:${path}`]);
   }
+  const budgetSettings: Record<string, string | null> = {};
+  for (const key of BUDGET_SETTING_KEYS) budgetSettings[key] = env[key] ?? null;
   const identity = {
     objects: CONFIGURATION_PATHS.map((path) => objects[path]),
+    budgetSettings,
     variant: args.variant,
     reviewerModelId: args.reviewerModelId,
     counterCheckerModelId: args.counterCheckerModelId,
@@ -55,6 +72,7 @@ export function gateConfiguration(checkout: string, args: GateArguments): GateCo
     configurationDigest: sha256(JSON.stringify(identity)),
     promptDigest: sha256(JSON.stringify(PROMPT_PATHS.map((path) => objects[path]))),
     objects,
+    budgetSettings,
   };
 }
 

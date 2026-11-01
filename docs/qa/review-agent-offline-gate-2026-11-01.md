@@ -49,6 +49,7 @@ pull request; the replay refuses that, and every row's `split` is `development`.
 | repro, probe-sampling, probe-nothink | product | Three-PR probes on #2978, #2979 and #2981 (`bb1affec1`): the authority refusal is now logged; Reviewer sampling at the model's recommended values, then without thinking. | `61ad9712f5b4`       | 0       | n/a                                         | 0                     | complete 2, model-failed 5, files-unprocessed 1, deadline-exceeded 1                      | 211 to 527 s     |
 | dev-2 (first attempt)                | product | `17342d886`: a macOS Reviewer failure settles on its own cause; counter-check wall time 300 s. Stopped after the role models' readiness lapsed.                           | `b752b79cb560`       | 0       | n/a                                         | 0                     | 29 skipped/policy-invalid, 1 deadline-exceeded                                            | 1 s              |
 | dev-2                                | product | `648cb03f8`: a role model whose readiness lapsed is checked again before the run.                                                                                         | `4c4d15ed983a`       | 0       | n/a (5 presented: 2 undecided, 3 unmatched) | 3                     | 14 budget-exhausted, 5 model-failed, 5 deadline-exceeded, 3 files-unprocessed, 3 complete | 183 s            |
+| dev-3                                | product | `bf7574364`: the Reviewer is told to report each finding once confirmed and to plan for about 15 read or search calls; the Counter-checker to use at most four.           | `dfcb28e93038`       | 0       | n/a (1 presented, unmatched)                | 1                     | 18 budget-exhausted, 6 model-failed, 4 complete, 1 deadline-exceeded, 1 files-unprocessed | 184 s            |
 
 Reading of the runs so far:
 
@@ -65,6 +66,14 @@ Reading of the runs so far:
   after a tool result, so a template switch cannot turn it off.
 - Four Reviewer runs ended on `invalid-tool-call`: a second invalid `keiko_review_report` or
   search call after the one schema repair.
+- dev-3 shows that the budget instructions did not change the Reviewer's behaviour. Its mean rose
+  to 395,913 prompt tokens per review. Budget-exhausted runs still made 20 to 30 read and search
+  calls, and the runs that reported did so only after 18 to 22 calls. Nine candidates were reported
+  in all and one was presented. Seven Reviewer turns produced the full 8,192 completion tokens
+  without a tool call.
+- From dev-4 on, the configuration digest also covers the run-budget operator settings
+  (`KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS` and the duration and coding-envelope keys), and the
+  evidence records their values.
 
 ## Final holdout run
 
