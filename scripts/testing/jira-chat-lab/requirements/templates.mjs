@@ -61,8 +61,8 @@ export const epicTemplateMarkdown = (project) =>
 
 /**
  * The templates a lead defines for the report project before judging its compliance (S11): the
- * epic template of the work project, and a task template that requires the epic link and, where
- * the instance offers one, the estimate field.
+ * epic template of the work project, a task template that requires the epic link and, where
+ * the instance offers one, the estimate field, and a bug template that requires the epic link.
  */
 export function complianceTemplates(project, fieldIds) {
   return [
@@ -75,6 +75,18 @@ export function complianceTemplates(project, fieldIds) {
         rule: STRUCTURE_RULES.Task,
         parentField: fieldIds.epicLink,
         requiredFields: fieldIds.storyPoints === undefined ? [] : [fieldIds.storyPoints],
+      }),
+    },
+    // The seed gives bugs a parent deviation (three bugs without an epic link), so the project lead
+    // defines a bug template too; without it the report checks no bug and S11 expected three
+    // deviations no template could raise.
+    {
+      name: `${project}-Bug`,
+      markdown: templateMarkdown({
+        project,
+        issueType: "Bug",
+        rule: STRUCTURE_RULES.Bug,
+        parentField: fieldIds.epicLink,
       }),
     },
   ];

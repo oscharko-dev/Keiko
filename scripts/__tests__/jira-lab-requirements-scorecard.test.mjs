@@ -505,7 +505,7 @@ describe("S11 compliance report", () => {
     );
   const verdict = (check) => scenarioVerdict(scenario("S11"), [{ layer: "journey", ...check }]);
 
-  it("judges RPT under the lead's epic and task templates and removes them afterwards", async () => {
+  it("judges RPT under the lead's epic, task and bug templates and removes them afterwards", async () => {
     const skills = fakeSkills();
     let activeDuringTurn = [];
     const act = () => {
@@ -513,14 +513,18 @@ describe("S11 compliance report", () => {
       return { answer: "", toolExchanges: [] };
     };
     await run("S11", context(fakeJira(), act, truth, skills));
-    expect(activeDuringTurn).toEqual(["template-import", "template-import"]);
+    expect(activeDuringTurn).toEqual(["template-import", "template-import", "template-import"]);
     const imported = skills.calls
       .filter((call) => call.name === "template-import")
       .map((call) => Buffer.from(call.body.contentBase64, "base64").toString("utf8"));
     expect(imported[0]).toMatch(/project: RPT\nissueType: "Epic"/u);
     expect(imported[1]).toContain(`parentField: "${FIELDS.epicLink}"`);
     expect(imported[1]).toContain(`requiredFields: ["${FIELDS.storyPoints}"]`);
-    expect(skills.calls.slice(2).map((call) => [call.name, call.path])).toEqual([
+    // The seed's bug parent deviations need a bug template that names the epic link.
+    expect(imported[2]).toMatch(/project: RPT\nissueType: "Bug"/u);
+    expect(imported[2]).toContain(`parentField: "${FIELDS.epicLink}"`);
+    expect(skills.calls.slice(3).map((call) => [call.name, call.path])).toEqual([
+      ["template-delete", "/api/skills/skill-3"],
       ["template-delete", "/api/skills/skill-2"],
       ["template-delete", "/api/skills/skill-1"],
     ]);

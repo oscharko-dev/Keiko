@@ -18,6 +18,7 @@ import { basename, join } from "node:path";
 import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
+import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { basicAuth, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
@@ -379,6 +380,33 @@ function reportJourney(id, { status, detail }, started) {
   );
 }
 
+/** One journey in its own fresh bound Chat; a lab error is a red check, never a lost scenario. */
+async function runJourney({ ctx, session, modelId, capsuleId, id }) {
+  let check;
+  try {
+    const mode = JOURNEY_MODES[id] ?? "autonomous-delivery";
+    check = await withWorkProjectLock(
+      session.directory,
+      id,
+      async () => {
+        const bound = await freshBoundChat(ctx, session, modelId, capsuleId, mode);
+        return JOURNEYS[id](ctx, bound.chat);
+      },
+      { log: (line) => console.log(JSON.stringify(line)) },
+    );
+  } catch (error) {
+    check = { status: "red", detail: `lab error: ${error.message}` };
+  }
+  if (id === "S14") {
+    await ctx.replaceSpecification(1).catch((error) => {
+      console.log(
+        JSON.stringify({ operation: "requirements-restore", error: String(error.message) }),
+      );
+    });
+  }
+  return check;
+}
+
 export async function runJourneys({ session, modelId, embeddingModelId, truth, ids }) {
   const checks = {};
   await withLiveChat({
@@ -405,20 +433,7 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
       const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
       for (const id of ordered) {
         const started = Date.now();
-        try {
-          const mode = JOURNEY_MODES[id] ?? "autonomous-delivery";
-          const bound = await freshBoundChat(ctx, session, modelId, capsuleId, mode);
-          checks[id] = await JOURNEYS[id](ctx, bound.chat);
-        } catch (error) {
-          checks[id] = { status: "red", detail: `lab error: ${error.message}` };
-        }
-        if (id === "S14") {
-          await ctx.replaceSpecification(1).catch((error) => {
-            console.log(
-              JSON.stringify({ operation: "requirements-restore", error: String(error.message) }),
-            );
-          });
-        }
+        checks[id] = await runJourney({ ctx, session, modelId, capsuleId, id });
         checks[id].durationMs = Date.now() - started;
         reportJourney(id, checks[id], started);
       }
