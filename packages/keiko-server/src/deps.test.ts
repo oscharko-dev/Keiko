@@ -800,6 +800,34 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   }, 15000);
 
+  // #4068 (W9): the graph opened the memory vault's node:sqlite handle and never closed it, so
+  // `dispose` left `keiko-memory.db` with its `-wal`/`-shm` siblings open. POSIX tolerates unlinking
+  // an open file; Windows does not, so the state directory of a disposed graph could not be removed
+  // and the WAL was never checkpointed. The closed handle is asserted on every OS; the removal is
+  // the Windows-visible consequence.
+  it("closes the memory vault it opened when the graph is disposed", async (): Promise<void> => {
+    const stateDir = tmp("memory-vault-dispose-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("memory-vault-dispose-ev-"),
+      env: { KEIKO_STATE_DIR: stateDir },
+      uiDbPath: join(stateDir, "ui-db", "keiko-ui.db"),
+    });
+    const vault = deps.memoryVault;
+    if (vault === undefined) throw new Error("memory vault not composed");
+    expect(vault.listMemoryScopes()).toEqual([]);
+    expect(existsSync(join(stateDir, "memory", "keiko-memory.db"))).toBe(true);
+
+    await deps.dispose?.();
+
+    expect(() => vault.listMemoryScopes()).toThrow();
+    // A second dispose (SIGTERM plus the CLI's finally block) must not fault on the closed vault.
+    await expect(deps.dispose?.()).resolves.toBeUndefined();
+    expect(() => {
+      rmSync(stateDir, { recursive: true, force: true });
+    }).not.toThrow();
+  }, 15000);
+
   // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure
   // go through the helper the dispose closure runs in its `finally`, reproduced here in the same
   // shape: the faulted cleanup is recorded with its full body-free description either way, an earlier
