@@ -404,6 +404,22 @@ describe("S07 reruns reconciled by the draft", () => {
     expect(check.detail).toContain("1 tasks created, 1 reconciled");
   });
 
+  it("credits the reconciled items of a draft whose overall status is failed", async () => {
+    const jira = fakeJira();
+    const epic = jira.createEpic("LH-002");
+    const existing = draftTask(jira, epic, 1);
+    const refused = draftExchange([["existing", existing], ["failed"]]);
+    const ctx = context(jira, () => ({
+      toolExchanges: [
+        { ...refused, result: { ...refused.result, status: "failed" } },
+        draftExchange([["created", draftTask(jira, epic, 2)]]),
+      ],
+    }));
+    const check = await run("S07", ctx);
+    expect(check.status).toBe("green");
+    expect(check.detail).toContain("1 tasks created, 1 reconciled");
+  });
+
   it("does not credit a pre-existing task the draft did not report", async () => {
     const jira = fakeJira();
     const epic = jira.createEpic("LH-002");

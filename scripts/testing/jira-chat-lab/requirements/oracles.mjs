@@ -69,7 +69,7 @@ function newIssues(beforeKeys, issues) {
 
 // ---------- reconciled draft items ----------
 
-import { completedToolExchange } from "./tool-exchanges.mjs";
+import { toolExchangeOf } from "./tool-exchanges.mjs";
 /** States whose issue key is an issue the draft stands behind; the other states name no issue. */
 const CREDITED_DRAFT_STATES = new Set(["created", "existing"]);
 const DRAFT_IDENTITY = /^keiko-draft-[0-9a-f]{20}$/;
@@ -85,7 +85,7 @@ const isRecord = (value) => typeof value === "object" && value !== null && !Arra
  */
 function draftReportedKeys(exchanges) {
   const draftResults = (Array.isArray(exchanges) ? exchanges : []).filter((exchange) =>
-    completedToolExchange(exchange, "jira.draft"),
+    toolExchangeOf(exchange, "jira.draft"),
   );
   const items = draftResults.flatMap((exchange) => {
     const list = exchange.result.data?.items;
