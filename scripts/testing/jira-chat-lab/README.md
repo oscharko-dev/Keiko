@@ -581,7 +581,7 @@ unit tests do not establish native live acceptance.
 
 ## Requirements scenario scorecard (epic #4173)
 
-`requirements/` holds the lab of epic #4173: the scenario catalog S01–S19, a model-free probe
+`requirements/` holds the lab of epic #4173: the scenario catalog S01–S20, a model-free probe
 layer, end-to-end Chat journeys and the scorecard that combines them. Every check is graded by an
 independent oracle (Jira REST/JQL reads or the generated ground truth), never by the model's own
 answer. `catalog.mjs` lists each scenario's obligations; a check names the obligations it covers
@@ -608,7 +608,13 @@ requires exactly one new Jira comment that is the tool's computed comment text v
 and S06 drive the skill-library template routes (`/api/skills`, `/api/skills/jira-templates`) with
 the template the structure rules describe (`templates.mjs`); the template is deleted again when the
 journey ends, because the library activates every valid template for every later write. S06 stays
-`unverified` unless the product actually refused a violating write in the turn. The oracles are unit-tested
+`unverified` unless the product actually refused a violating write in the turn. S20 (#4176 AC4)
+plans a task into the work project's lab sprint by name and id (`field-correction.mjs` creates the
+sprint once through Jira Software's board API). Keiko forwards the sprint field as opaque JSON, and
+Jira accepts it only as one numeric id while its metadata declares an array of strings, so Jira's
+own error decides the value. S20 is green only when a write result carried Jira's sprint error
+(never Keiko's own validation) and a later write put exactly one new task into that sprint; a
+correct task without any Jira rejection leaves it `unverified`. The oracles are unit-tested
 with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mjs`.
 
 ```sh

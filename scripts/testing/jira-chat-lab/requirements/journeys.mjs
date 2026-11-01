@@ -25,6 +25,7 @@ import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
 import { FORMATS } from "./formats.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
+import { labSprintSetup } from "./field-correction.mjs";
 
 const TURN_LIMIT_MS = 1_800_000;
 
@@ -360,6 +361,7 @@ function journeyContext(live, session, truth) {
     comments: (key) => issueComments(session, key),
     exportReport: (chat, reportId, format) => exportReport(ctx, chat, reportId, format),
     refusals: () => logMatchCount(ctx.root, "generation-changed"),
+    labSprint: () => labSprintSetup(session, WORK_PROJECT),
   };
   return ctx;
 }

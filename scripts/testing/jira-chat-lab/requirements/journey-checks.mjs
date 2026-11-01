@@ -13,6 +13,7 @@
 //   ctx.freshChat(toolMode)  -> another Chat bound to the same Pods in the given Chat tool mode
 //   ctx.useSpecificationFormat(format) -> the Pod holds the specification as that office format only
 //   ctx.replaceSpecification(version) -> the Pod holds the Markdown specification of that version
+//   ctx.labSprint()          -> { sprintId, fieldId } of the work project's lab sprint (S20)
 // ctx.turn(chat, content, { observeBeforeApproval }) calls the observer while a write approval is
 // pending, before it is decided; approvals.records lists { approval, call, observed } per approval.
 // A check names the catalog obligations it verifies in `covers`; the scorecard credits them only
@@ -38,6 +39,7 @@ import {
   turnIssues,
 } from "./oracles.mjs";
 import { everyFormatUsable } from "./formats.mjs";
+import { fieldErrorCorrection } from "./field-correction.mjs";
 import { bugWithRelationAndLink, subtasksUnderTask } from "./hierarchy.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { rerunCreatesNoDuplicates } from "./rerun.mjs";
@@ -572,6 +574,7 @@ export const JOURNEYS = {
   },
   S18: (ctx) => modesAndReadableApproval(ctx),
   S19: (ctx, chat) => rerunCreatesNoDuplicates(ctx, chat),
+  S20: (ctx, chat) => fieldErrorCorrection(ctx, chat),
 };
 
 export const JOURNEY_IDS = Object.freeze(Object.keys(JOURNEYS));

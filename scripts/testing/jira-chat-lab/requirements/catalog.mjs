@@ -144,4 +144,11 @@ export const SCENARIOS = Object.freeze([
     title: "No duplicates on re-run",
     obligations: ["rerun-creates-no-duplicates"],
   },
+  {
+    id: "S20",
+    requirement: "AC4",
+    issue: 4176,
+    title: "Jira's field error and the corrected retry",
+    obligations: ["jira-field-error-returned", "corrected-retry-succeeds"],
+  },
 ]);
