@@ -816,4 +816,6 @@ list through the documented `NetworkIsolationSetAppContainerConfig` API
 
 D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
 reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)
-is the qualification evidence for this decision.
+is the qualification evidence for this decision. It passed on 2026-11-01 (head `9b851924a`, Windows Server 2025): the confined root connected to
+the permitted gateway port and the hostile port stayed refused (10013), where the same probe had
+timed out (10060) before the exemption.
