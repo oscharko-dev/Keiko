@@ -24,12 +24,22 @@ export interface JiraReportFieldPlan {
   readonly parentFieldsNonKey: Set<string>;
   /** Discovered fields shown not to hold a parent: later pages no longer request them. */
   readonly parentFieldsRejected: Set<string>;
+  /**
+   * The parent keys a discovered field proposed, per issue. A field shown unreliable on a later
+   * page takes its proposals back before the report is built.
+   */
+  readonly parentProposals: Map<string, readonly ParentProposal[]>;
+  /** Requested fields a hit left out; an omission is unreadable evidence, never an empty value. */
+  readonly omittedFields: Set<string>;
   readonly estimateFieldId: string;
   readonly requirementIds: ReadonlySet<string>;
   readonly requiredByType: ReadonlyMap<string, readonly string[]>;
   readonly checker: JiraReportComplianceChecker | undefined;
   readonly includeDescription: boolean;
 }
+
+/** One discovered field's claim that an issue has the given parent. */
+export type ParentProposal = readonly [fieldId: string, parentKey: string];
 
 const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
 const RULE_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/u;
@@ -42,7 +52,6 @@ function subjectOf(value: string | undefined): string | undefined {
 }
 const TOKEN_PATTERN = /[A-Za-z0-9][A-Za-z0-9._-]*/gu;
 const SUMMARY_MAX = 255;
-export const JIRA_REPORT_LABELS_MAX = 64;
 const LABEL_CHARS_MAX = 255;
 const CATEGORIES: ReadonlySet<string> = new Set(JIRA_REPORT_STATUS_CATEGORIES);
 
@@ -69,30 +78,51 @@ function parentFieldKeyOf(value: unknown): string | undefined {
   return typeof key === "string" && ISSUE_KEY.test(key) ? key : undefined;
 }
 function parentKeyOf(
+  key: string,
   fields: Record<string, unknown>,
   plan: JiraReportFieldPlan,
 ): string | undefined {
   const system = issueKeyOf(fields.parent);
   if (system !== undefined) return system;
-  let found: string | undefined;
+  const proposals: ParentProposal[] = [];
   for (const id of plan.parentFieldIds) {
-    const key = parentFieldKeyOf(fields[id]);
-    if (key !== undefined) {
+    const proposed = parentFieldKeyOf(fields[id]);
+    if (proposed !== undefined) {
       plan.parentFieldsSeen.add(id);
-      found ??= key;
+      proposals.push([id, proposed]);
     } else if (!plan.namedParentFieldIds.has(id) && !isEmptyJiraValue(fields[id])) {
       plan.parentFieldsNonKey.add(id);
     }
   }
-  return found;
+  if (proposals.length > 0) plan.parentProposals.set(key, proposals);
+  return proposals[0]?.[1];
 }
 /**
- * A discovered field whose values are issue keys everywhere or nowhere is settled by value: one that
- * held something else and never a key is no parent field, so later pages stop asking for it.
+ * A discovered field is a parent field only when its values are issue keys everywhere or nowhere:
+ * one that held something else besides a key is an app's business field that happens to mention an
+ * issue, and one that never held a key is no parent field at all. Either way later pages stop
+ * asking for it, and `retractRejectedParents` takes back what it proposed. A field the caller
+ * named is the caller's mapping and is never narrowed.
  */
 export function rejectNonParentFields(plan: JiraReportFieldPlan): void {
-  for (const id of plan.parentFieldsNonKey)
-    if (!plan.parentFieldsSeen.has(id)) plan.parentFieldsRejected.add(id);
+  for (const id of plan.parentFieldsNonKey) {
+    plan.parentFieldsRejected.add(id);
+    plan.parentFieldsSeen.delete(id);
+  }
+}
+/** The issues with the parent their still-trusted fields propose; others are left as they are. */
+export function retractRejectedParents(
+  issues: ReadonlyMap<string, JiraReportIssue>,
+  plan: JiraReportFieldPlan,
+): ReadonlyMap<string, JiraReportIssue> {
+  const result = new Map(issues);
+  for (const [key, proposals] of plan.parentProposals) {
+    const issue = result.get(key);
+    const kept = proposals.find(([id]) => !plan.parentFieldsRejected.has(id));
+    if (issue !== undefined && issue.parentKey !== kept?.[1])
+      result.set(key, { ...issue, parentKey: kept?.[1] });
+  }
+  return result;
 }
 function linkedKeysOf(fields: Record<string, unknown>): readonly string[] {
   const keys = new Set<string>();
@@ -127,10 +157,16 @@ function requiredDeviations(
 ): readonly JiraReportDeviation[] {
   const result: JiraReportDeviation[] = [];
   for (const fieldId of plan.requiredByType.get(typeId) ?? []) {
-    if (Object.hasOwn(fields, fieldId) && isEmptyJiraValue(fields[fieldId]))
+    if (!Object.hasOwn(fields, fieldId)) plan.omittedFields.add(fieldId);
+    else if (isEmptyJiraValue(fields[fieldId]))
       result.push({ ruleId: JIRA_REPORT_REQUIRED_FIELD_RULE, fieldId });
   }
   return result;
+}
+/** Jira states an unassigned issue as `null`; a hit without the field says nothing about it. */
+function assignedOf(fields: Record<string, unknown>, plan: JiraReportFieldPlan): boolean {
+  if (!Object.hasOwn(fields, "assignee")) plan.omittedFields.add("assignee");
+  return fields.assignee !== null && fields.assignee !== undefined;
 }
 function checkerDeviations(
   facts: Parameters<JiraReportComplianceChecker["check"]>[0],
@@ -173,13 +209,15 @@ function trimTrailingSeparators(token: string): string {
   while (end > 0 && ".-_".includes(token.charAt(end - 1))) end -= 1;
   return token.slice(0, end);
 }
+/**
+ * Every label the response carries: the trace a write left on the issue and the requirement ids
+ * are read from them, so no count cut may hide one. The memory budget charges each label.
+ */
 function labelsOf(fields: Record<string, unknown>): readonly string[] {
   const labels = asArray(fields.labels)?.filter(
     (item): item is string => typeof item === "string" && item.length > 0,
   );
-  return (labels ?? [])
-    .slice(0, JIRA_REPORT_LABELS_MAX)
-    .map((label) => label.slice(0, LABEL_CHARS_MAX));
+  return (labels ?? []).map((label) => label.slice(0, LABEL_CHARS_MAX));
 }
 function referencedRequirements(
   summary: string,
@@ -267,9 +305,9 @@ export function parseJiraReportIssue(
     summary,
     statusName: stringOf(status?.name, 255) ?? "",
     category: statusCategory,
-    parentKey: parentKeyOf(fields, plan),
+    parentKey: parentKeyOf(key, fields, plan),
     linkedKeys: linkedKeysOf(fields),
-    assigned: fields.assignee !== null,
+    assigned: assignedOf(fields, plan),
     dueDate: stringOf(fields.duedate, 32),
     estimate: estimateOf(fields, plan),
     deviations: dedupeDeviations([

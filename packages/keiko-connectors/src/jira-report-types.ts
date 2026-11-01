@@ -198,10 +198,16 @@ export interface JiraReport {
     readonly issuesChecked: number;
     readonly issuesWithDeviations: number;
     readonly deviationCount: number;
+    /** Issues per rule, each issue once however many of its fields or sections break it. */
     readonly byRule: readonly { readonly ruleId: string; readonly count: number }[];
     readonly deviations: readonly JiraReportDeviationRecord[];
   };
   readonly coverage: {
+    /**
+     * `unobserved`: nothing in the scope holds work, so which issues are containers cannot be
+     * told and `uncoveredEpics` is not a statement that none is empty.
+     */
+    readonly containerRoles: "observed" | "unobserved";
     readonly uncoveredEpics: readonly string[];
     readonly orphans: readonly string[];
     readonly requirements:

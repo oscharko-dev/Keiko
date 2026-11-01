@@ -955,10 +955,17 @@ type, no Jira system role — whose values are issue keys on the issues read, or
 hierarchy app uses other type keys reads identically. Every candidate is read: there is no cap on
 their number, and a field list too long for one request is split across requests of at most 4000
 characters of field ids, merged by issue key. After a page, a discovered field whose values were
-free text or objects and never an issue key is no longer requested, so a crowded instance converges
-to its few real parent fields; a field that stayed empty, and every caller-named one, is kept), epics without members (a container is an
+free text or objects besides an issue key — or never an issue key — is no longer requested and
+takes back the parents it proposed, because a parent field holds issue keys everywhere or nowhere
+and an app's business field that mentions an issue is no hierarchy; the field metadata cannot state
+a field's role without naming an app, so a caller who knows the field names it in `parentFieldIds`
+and that mapping is never narrowed, and so a crowded instance converges to its few real parent
+fields; a field that stayed empty is kept), epics without members (a container is an
 issue of a type that holds work for another issue and is never held itself, so an empty epic is
-found without reading an Epic Name field), issues without an
+found without reading an Epic Name field; a scope in which nothing holds work — only new empty
+epics, or a JQL that leaves out their children — cannot tell a container from a standalone issue,
+and the report states that as `coverage.containerRoles: unobserved` instead of listing no empty
+epic), issues without an
 epic or parent (orphans; an issue link rescues an issue only when it reaches a container), the
 fields the instance requires on create per issue type from current create metadata (rule
 `required-field-empty`; project scope only), the deviations of the shared template checker when
@@ -995,7 +1002,16 @@ the unit. Overdue is judged on an explicit UTC date (`asOf`, default the day of 
 recorded in the report and in the digest, which also covers a hash of every export row. Lists sort
 by Unicode code point, never by locale.
 
-A read is never silently partial. The page size adapts to the 256 KiB transport cap (a truncated
+A read is never silently partial and no absence is read as a value. A search page counts only with
+Jira's own pagination coordinates (a non-negative integer `total`, a `startAt` equal to the offset
+asked, no more issues than the total leaves); otherwise the read ends `read-failed` with failure
+`malformed-payload`. A hit that leaves out a field the report requested (the assignee, a field
+required on create) ends it `read-failed` with failure `permission`: Jira states a missing value as
+`null`, so an omitted field is evidence the account could not read. A create-metadata page ends its
+collection only by `isLast` or a reached total; an empty page without either is malformed. A rule's
+count is the number of issues that break it, once each, however many fields or template elements
+they break (`deviationCount` counts every deviation). Labels are kept whole: the trace and the
+requirement identifiers are read from them and the memory budget below charges each one. The page size adapts to the 256 KiB transport cap (a truncated
 body halves it; a single issue that still does not fit ends the read as `issue-too-large`); the
 result of a call is `reading` (with `issuesRead`/`issuesTotal` progress and `reportId`, to be
 called again), `complete`, or `incomplete` with a closed reason (`read-failed`, `scope-changed` —

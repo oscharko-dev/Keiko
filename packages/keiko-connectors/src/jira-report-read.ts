@@ -8,6 +8,7 @@ import { createJiraReportHttp, type JiraReportHttp } from "./jira-report-http.js
 import {
   parseJiraReportIssue,
   rejectNonParentFields,
+  retractRejectedParents,
   type JiraReportFieldPlan,
 } from "./jira-report-issue.js";
 import { fetchJiraReportPage } from "./jira-report-page.js";
@@ -27,6 +28,7 @@ import type {
 import {
   jiraReportHierarchyOf,
   jiraReportIssueCost,
+  jiraReportProposalCost,
   type JiraReportReadDeps,
   type JiraReportSession,
 } from "./jira-report-session.js";
@@ -71,6 +73,8 @@ function fieldPlan(
     parentFieldsSeen: new Set(),
     parentFieldsNonKey: new Set(),
     parentFieldsRejected: new Set(),
+    parentProposals: new Map(),
+    omittedFields: new Set(),
     estimateFieldId: session.request.estimateFieldId ?? "timeoriginalestimate",
     requirementIds: new Set(session.request.requirementIds),
     requiredByType: required.byType,
@@ -123,6 +127,10 @@ function finish(
     (unchanged ? undefined : "scope-changed") ??
     (session.checker === "unavailable" ? "template-unreadable" : undefined);
   session.incomplete = incomplete;
+  if (session.plan !== undefined) {
+    session.issues = new Map(retractRejectedParents(session.issues, session.plan));
+    session.plan.parentProposals.clear();
+  }
   session.report = buildJiraReportOf(session, deps, incomplete);
   session.issues = new Map();
   session.phase = "finished";
@@ -196,16 +204,23 @@ async function initialize(
 
 interface PageRead {
   readonly issues: readonly unknown[];
-  readonly total: number | undefined;
+  readonly total: number;
 }
-function readPage(body: Record<string, unknown>): PageRead | undefined {
+/**
+ * A search page is evidence of completion only with Jira's own pagination coordinates: the total
+ * is a non-negative integer, the page starts where it was asked to, and it holds no more issues
+ * than the total leaves after that offset. Anything else is a malformed payload, never an
+ * empty or complete scope.
+ */
+function readPage(body: Record<string, unknown>, startAt: number): PageRead | undefined {
   const issues = asArray(body.issues);
-  if (issues === undefined) return undefined;
-  const total =
-    typeof body.total === "number" && Number.isSafeInteger(body.total) ? body.total : undefined;
+  const { total } = body;
+  if (issues === undefined || typeof total !== "number") return undefined;
+  if (!Number.isSafeInteger(total) || total < 0) return undefined;
+  if (body.startAt !== startAt || startAt + issues.length > total) return undefined;
   return { issues, total };
 }
-type Ingest = "ok" | "invalid" | "repeated" | "budget";
+type Ingest = "ok" | "invalid" | "repeated" | "budget" | "omitted";
 function ingestPage(
   session: JiraReportSession,
   raws: readonly unknown[],
@@ -215,9 +230,10 @@ function ingestPage(
   for (const raw of raws) {
     const issue = parseJiraReportIssue(raw, plan);
     if (issue === undefined) return "invalid";
+    if (plan.omittedFields.size > 0) return "omitted";
     if (session.issues.has(issue.key)) return "repeated";
     session.issues.set(issue.key, issue);
-    session.bytes += jiraReportIssueCost(issue);
+    session.bytes += jiraReportIssueCost(issue) + jiraReportProposalCost(plan, issue.key);
     session.lastKey = issue.key;
     session.startAt += 1;
     if (session.bytes > budget) return "budget";
@@ -268,7 +284,7 @@ function newIssuesOf(
   return first?.key === session.lastKey ? page.issues.slice(1) : undefined;
 }
 function scopeMoved(session: JiraReportSession, page: PageRead): boolean {
-  return session.total !== undefined && page.total !== undefined && page.total !== session.total;
+  return session.total !== undefined && page.total !== session.total;
 }
 function onPageRead(
   session: JiraReportSession,
@@ -291,19 +307,20 @@ function onPageRead(
   session.pageCount += 1;
   session.transientFailures = 0;
   session.failure = undefined;
-  session.total = page.total ?? session.total;
+  session.total = page.total;
   adaptPageSize(session, false);
   if (ingested === "ok") {
-    const done =
-      fresh.length === 0 || (session.total !== undefined && session.startAt >= session.total);
-    if (done) finish(session, deps);
+    if (fresh.length === 0 || session.startAt >= page.total) finish(session, deps);
     return;
   }
   const reasons = {
     invalid: "read-failed",
+    omitted: "read-failed",
     repeated: "scope-changed",
     budget: "memory-budget",
   } as const;
+  // A field the account may not see is left out of the hit; the report cannot count it as empty.
+  if (ingested === "omitted") session.failure = "permission";
   finish(session, deps, reasons[ingested]);
 }
 async function readNextPage(
@@ -325,10 +342,17 @@ async function readNextPage(
     finish(session, deps, "scope-changed");
     return;
   }
-  const page = fetched.kind === "page" ? readPage(fetched.body) : undefined;
+  if (fetched.kind === "failed") {
+    onPageFailure(session, deps, fetched.reason);
+    return;
+  }
+  const page = readPage(fetched.body, session.startAt - overlap);
   if (page !== undefined) onPageRead(session, deps, page, overlap);
-  else
-    onPageFailure(session, deps, fetched.kind === "failed" ? fetched.reason : "malformed-payload");
+  else {
+    // Jira answered, but without coherent pagination: fewer issues per page cannot repair that.
+    session.failure = "malformed-payload";
+    finish(session, deps, "read-failed");
+  }
 }
 
 async function pump(

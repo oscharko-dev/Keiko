@@ -119,6 +119,21 @@ function containerTypesOf(
   }
   return new Set([...holding].filter((typeName) => !held.has(typeName)));
 }
+/**
+ * Which issue types hold work is read from the work the scope contains. A scope in which nothing
+ * holds work (only new, empty containers, or a JQL that leaves out their children) cannot tell a
+ * container from a standalone issue, so the report states that instead of claiming none is empty.
+ */
+function containerRolesOf(
+  graph: Graph,
+  issues: readonly JiraReportIssue[],
+): JiraReport["coverage"]["containerRoles"] {
+  if (graph.containerTypes.size > 0) return "observed";
+  const undecided = issues.some(
+    (issue) => !issue.subtask && issue.parentKey === undefined && !graph.containers.has(issue.key),
+  );
+  return undecided ? "unobserved" : "observed";
+}
 function buildGraph(issues: readonly JiraReportIssue[]): Graph {
   const index = new Map(issues.map((issue) => [issue.key, issue]));
   const rootOf = new Map<string, string>();
@@ -260,8 +275,9 @@ function complianceOf(
   for (const issue of issues) {
     if (issue.deviations.length === 0) continue;
     deviationCount += issue.deviations.length;
-    for (const item of issue.deviations)
-      byRule.set(item.ruleId, (byRule.get(item.ruleId) ?? 0) + 1);
+    // An issue counts once per rule however many fields or template elements break it.
+    for (const ruleId of new Set(issue.deviations.map((item) => item.ruleId)))
+      byRule.set(ruleId, (byRule.get(ruleId) ?? 0) + 1);
     deviations.push({
       key: issue.key,
       ruleIds: [...new Set(issue.deviations.map((item) => item.ruleId))],
@@ -409,6 +425,7 @@ export function buildJiraReport(input: JiraReportInput): JiraReport {
     epics,
     compliance: complianceOf(issues, input),
     coverage: {
+      containerRoles: containerRolesOf(graph, issues),
       uncoveredEpics: issues
         .filter((issue) => !issue.subtask && graph.containerTypes.has(issue.typeName))
         .filter(

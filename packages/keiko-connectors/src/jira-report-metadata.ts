@@ -93,6 +93,20 @@ function requiredIds(values: readonly unknown[]): readonly string[] {
   }
   return ids;
 }
+type PageEnd = "last" | "more" | "malformed";
+/**
+ * Whether a createmeta page ends its collection. Jira's own completion statement (`isLast`) or a
+ * total this page reaches settles it; a page that starts elsewhere than asked, or that is empty
+ * without either statement, proves nothing and is malformed, never an empty rule set.
+ */
+function pageEnd(body: Record<string, unknown>, startAt: number, read: number): PageEnd {
+  const { total } = body;
+  const validTotal = typeof total === "number" && Number.isSafeInteger(total) && total >= 0;
+  if (body.startAt !== undefined && body.startAt !== startAt) return "malformed";
+  if (body.isLast === true) return "last";
+  if (validTotal) return startAt + read >= total ? "last" : read === 0 ? "malformed" : "more";
+  return "malformed";
+}
 /** Every page of one createmeta collection; the failure reason when a page cannot be read. */
 async function collectPages(
   http: JiraReportHttp,
@@ -106,13 +120,10 @@ async function collectPages(
   if (!outcome.ok) return outcome.reason;
   const values = asArray(outcome.body.values);
   if (values === undefined) return "malformed-payload";
+  const end = pageEnd(outcome.body, startAt, values.length);
+  if (end === "malformed") return "malformed-payload";
   into.push(...values);
-  const total = outcome.body.total;
-  const last =
-    outcome.body.isLast === true ||
-    values.length === 0 ||
-    (typeof total === "number" && startAt + values.length >= total);
-  return last ? undefined : collectPages(http, path, startAt + values.length, into);
+  return end === "last" ? undefined : collectPages(http, path, startAt + values.length, into);
 }
 type TypeRequirements =
   { readonly fields: readonly string[] } | { readonly reason: JiraReportFailure };

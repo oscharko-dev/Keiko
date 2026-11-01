@@ -291,7 +291,12 @@ function reportOf(
       byRule: [],
       deviations: [],
     },
-    coverage: { uncoveredEpics: [], orphans: [], requirements: undefined },
+    coverage: {
+      containerRoles: "observed",
+      uncoveredEpics: [],
+      orphans: [],
+      requirements: undefined,
+    },
     rows: rowsOf(issues),
   };
 }

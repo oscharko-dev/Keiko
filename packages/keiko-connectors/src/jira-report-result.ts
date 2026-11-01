@@ -149,6 +149,7 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
       deviations: listed(deviationItems(report)),
     },
     coverage: {
+      containerRoles: coverage.containerRoles,
       uncoveredEpics: listed(coverage.uncoveredEpics),
       orphans: listed(orphanItems(report)),
       requirements: requirementsSummary(report),

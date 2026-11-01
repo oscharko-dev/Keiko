@@ -114,6 +114,15 @@ export function jiraReportIssueCost(issue: JiraReportIssue): number {
   return ISSUE_BASE_BYTES + CHARACTER_BYTES * text + ENTRY_BYTES * entries;
 }
 
+/** What the parent keys that discovered fields proposed for one issue keep resident until built. */
+export function jiraReportProposalCost(plan: JiraReportFieldPlan, key: string): number {
+  const proposals = plan.parentProposals.get(key) ?? [];
+  return proposals.reduce(
+    (sum, [id, parent]) => sum + CHARACTER_BYTES * (id.length + parent.length) + ENTRY_BYTES,
+    0,
+  );
+}
+
 export function createJiraReportSession(input: {
   readonly id: string;
   readonly owner: string;

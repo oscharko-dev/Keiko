@@ -28,11 +28,12 @@ import { compareCodePoints } from "./jira-report-order.js";
 import { advanceJiraReportSession } from "./jira-report-read.js";
 import {
   jiraReportHierarchyOf,
+  JIRA_REPORT_SESSION_MAX_BYTES,
   type JiraReportReadDeps,
   type JiraReportRequest,
   type JiraReportSession,
 } from "./jira-report-session.js";
-import { JIRA_REPORT_STORE_MAX_BYTES, type JiraReportStore } from "./jira-report-store.js";
+import type { JiraReportStore } from "./jira-report-store.js";
 import { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
 import type { JiraReport, JiraReportCheckerPort } from "./jira-report-types.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -223,7 +224,10 @@ async function advance<Context extends ManagedMcpInvocationContext>(
     beforeEffect: context.beforeEffect,
     now,
     sliceMs: deps.sliceMs ?? JIRA_REPORT_READ_SLICE_MS,
-    memoryBudgetBytes: deps.memoryBudgetBytes ?? JIRA_REPORT_STORE_MAX_BYTES,
+    memoryBudgetBytes: Math.min(
+      deps.memoryBudgetBytes ?? JIRA_REPORT_SESSION_MAX_BYTES,
+      JIRA_REPORT_SESSION_MAX_BYTES,
+    ),
     checker:
       deps.checker ??
       (connection.issueTemplates === undefined

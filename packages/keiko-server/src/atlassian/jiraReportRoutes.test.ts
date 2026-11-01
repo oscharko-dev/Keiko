@@ -68,7 +68,12 @@ function seeded(): JiraReportStore {
       byRule: [],
       deviations: [],
     },
-    coverage: { uncoveredEpics: [], orphans: ["REP-1"], requirements: undefined },
+    coverage: {
+      containerRoles: "unobserved",
+      uncoveredEpics: [],
+      orphans: ["REP-1"],
+      requirements: undefined,
+    },
     rows: [
       {
         issue: {

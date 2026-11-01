@@ -244,11 +244,14 @@ function complianceSection(report: JiraReport): string {
 function listOf(items: readonly string[]): string {
   return items.length === 0 ? "_None._\n" : `${items.join(", ")}\n`;
 }
+const UNOBSERVED_ROLES_NOTE =
+  "_Not determinable: no issue in this scope holds work, so empty containers cannot be told from standalone issues._\n";
 function coverageSection(report: JiraReport): string {
   const { coverage } = report;
   const lines = [
     "## Coverage\n",
     "### Epics without members\n",
+    ...(coverage.containerRoles === "unobserved" ? [UNOBSERVED_ROLES_NOTE] : []),
     listOf(coverage.uncoveredEpics),
     "### Issues without an epic or parent\n",
     listOf(coverage.orphans),
@@ -346,7 +349,9 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
     `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesChecked)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     ...compliance.byRule.map((item) => `Rule ${item.ruleId}: ${String(item.count)} issues`),
-    keyList("Epics without members", coverage.uncoveredEpics),
+    ...(coverage.containerRoles === "unobserved"
+      ? ["Epics without members: not determinable, no issue in this scope holds work"]
+      : [keyList("Epics without members", coverage.uncoveredEpics)]),
     keyList("Issues without an epic or parent", coverage.orphans),
     ...(coverage.requirements === undefined
       ? []
