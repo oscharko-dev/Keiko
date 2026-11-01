@@ -363,6 +363,22 @@ function journeyContext(live, session, truth) {
 }
 
 /** Runs the selected journeys in one live Keiko session and returns checks keyed by scenario. */
+/**
+ * A journey that is not green names why at once, so a lane in progress can be diagnosed against
+ * the Activity Log window it ran in before the scorecard is written.
+ */
+function reportJourney(id, { status, detail }, started) {
+  console.log(
+    JSON.stringify({
+      operation: "requirements-journey",
+      id,
+      status,
+      startedAt: new Date(started).toISOString(),
+      ...(status === "green" || detail === undefined ? {} : { detail }),
+    }),
+  );
+}
+
 export async function runJourneys({ session, modelId, embeddingModelId, truth, ids }) {
   const checks = {};
   await withLiveChat({
@@ -404,9 +420,7 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
           });
         }
         checks[id].durationMs = Date.now() - started;
-        console.log(
-          JSON.stringify({ operation: "requirements-journey", id, status: checks[id].status }),
-        );
+        reportJourney(id, checks[id], started);
       }
     },
   });
