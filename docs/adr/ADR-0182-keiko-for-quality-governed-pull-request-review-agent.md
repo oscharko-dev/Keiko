@@ -54,7 +54,10 @@ root under `<stateDir>/review-runtime/`; it serves one review run at a time and 
 minutes (the idle stop is re-armed whenever a review releases the repository, including a review
 that ended before it reached the instance). Its workspace view names only the review worktree of D3 and is never the user's active
 task workspace pointer. Its sidecar reaches the server under `/api/review-sidecar/*`, which serves the
-same gateway and tool-facade handlers with the instance's own runtime capabilities. The review agent
+same gateway and tool-facade handlers with the instance's own runtime capabilities. The gateway
+handler buffers every upstream model call on that route, even where the provider streams: a review is
+not interactive, and a buffered answer is validated whole before any byte reaches the runtime, so a
+schema-invalid tool call that follows some text still gets its one correction (Issue #4138). The review agent
 is `keiko-reviewer` (`review` is reserved and an OpenCode command), defined in the generated
 configuration with Keiko's system prompt (`reviewPrompt.ts`, adapted from PR-Agent v0.49.0) and
 pinned as server-owned configuration. The review task carries the rules (from the base commit) and

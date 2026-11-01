@@ -30,6 +30,16 @@ export function sidecarGatewayRouteTemplate(ctx: Pick<RouteContext, "url">): str
     : "POST /api/coding-sidecar/gateway/chat/completions";
 }
 
+/**
+ * Whether the request's upstream model call is buffered whatever the capability streams. A review is
+ * not interactive, so the review sidecar buffers: the gateway validates the whole answer before any
+ * byte reaches the runtime, and a schema-invalid tool call after some text can still be corrected
+ * once (Issue #4138). A streamed call that already delivered that text cannot be retried.
+ */
+export function sidecarBuffersUpstream(ctx: Pick<RouteContext, "url">): boolean {
+  return sidecarRuntimePurpose(ctx) === "review";
+}
+
 /** The optional `runtimePurpose` field of a shared sidecar rejection line. */
 export function sidecarPurposeField(ctx: Pick<RouteContext, "url">): {
   readonly runtimePurpose?: "review";

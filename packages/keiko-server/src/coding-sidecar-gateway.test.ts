@@ -548,6 +548,43 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // #4138: a review is not interactive, so the review sidecar buffers its upstream call even where
+  // the capability streams. The whole answer is validated before any byte reaches the runtime, so a
+  // schema-invalid tool call after some text can still get its one correction; a streamed call that
+  // already delivered that text could not be retried (offline gate dev-4).
+  it.each([
+    { label: "review", path: "/api/review-sidecar/gateway/chat/completions", buffered: true },
+    { label: "coding", path: "/api/coding-sidecar/gateway/chat/completions", buffered: false },
+  ])("buffers the upstream call of a streamed turn only on the $label route", async (route) => {
+    resetGatewayInstanceCacheForTests();
+    const chat = vi
+      .spyOn(Gateway.prototype, "chat")
+      .mockImplementation(() => Promise.resolve(assistantResponse("azure-coding-model")));
+    const chatStream = vi
+      .spyOn(Gateway.prototype, "chatStream")
+      .mockImplementation(() => streamedResponse(assistantResponse("azure-coding-model")));
+    try {
+      const ctx = authenticatedContext({
+        model: "azure-coding-model",
+        stream: true,
+        messages: [{ role: "user", content: "continue" }],
+        tools: [],
+      });
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        { ...ctx, url: new URL(`http://127.0.0.1${route.path}`) },
+        depsValue(configValue(provider(), capability())),
+      );
+
+      expect(result).toBe(STREAMING);
+      expect(chat).toHaveBeenCalledTimes(route.buffered ? 1 : 0);
+      expect(chatStream).toHaveBeenCalledTimes(route.buffered ? 0 : 1);
+    } finally {
+      chat.mockRestore();
+      chatStream.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   // #4098 (owner decision): OpenCode receives the model's answer as written, credential floor only,
   // whatever the deployment's Chat content policy, so a quoted diff no longer becomes `[REDACTED]`.
   it.each([
@@ -8178,8 +8215,13 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
     expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
     // The repaired request is the original plus the fixed correction, never the reasoning quoted back.
     const repaired = bodies[1] as { readonly messages?: readonly { readonly content?: unknown }[] };
-    expect(repaired.messages?.at(-1)).toMatchObject({ role: "system" });
-    expect(String(repaired.messages?.at(-1)?.content)).toContain("whole output budget");
+    // #4138: the correction joins the leading system message; strict chat templates refuse a
+    // system message after another message.
+    const systemIndexes = (repaired.messages ?? []).flatMap((message, index) =>
+      (message as { readonly role?: unknown }).role === "system" ? [index] : [],
+    );
+    expect(systemIndexes).toEqual([0]);
+    expect(String(repaired.messages?.[0]?.content)).toContain("whole output budget");
     expect(JSON.stringify(bodies[1])).not.toContain("Think ");
     expect(lineOf(sink.events, "gateway.retry.scheduled")?.extra).toMatchObject({
       reason: "output-exhausted-repair",
@@ -8494,8 +8536,13 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
     expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
     // The repaired request is the original plus the fixed correction, never the reasoning quoted back.
     const repaired = bodies[1] as { readonly messages?: readonly { readonly content?: unknown }[] };
-    expect(repaired.messages?.at(-1)).toMatchObject({ role: "system" });
-    expect(String(repaired.messages?.at(-1)?.content)).toContain("ended after reasoning");
+    // #4138: the correction joins the leading system message; strict chat templates refuse a
+    // system message after another message.
+    const systemIndexes = (repaired.messages ?? []).flatMap((message, index) =>
+      (message as { readonly role?: unknown }).role === "system" ? [index] : [],
+    );
+    expect(systemIndexes).toEqual([0]);
+    expect(String(repaired.messages?.[0]?.content)).toContain("ended after reasoning");
     expect(JSON.stringify(bodies[1])).not.toContain("Think ");
     expect(lineOf(sink.events, "gateway.retry.scheduled")?.extra).toMatchObject({
       reason: "empty-answer-repair",

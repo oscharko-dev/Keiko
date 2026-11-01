@@ -115,6 +115,7 @@ import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogTo
 import {
   SIDECAR_RUNTIME_PURPOSE_FIELDS,
   sidecarGatewayRouteTemplate,
+  sidecarBuffersUpstream,
   sidecarPurposeField,
 } from "./review/runtime/sidecarSurface.js";
 import {
@@ -5081,10 +5082,9 @@ function productiveChatOptions(
     ...boundSkillProtection(ctx, deps, authentication, skillTurnMessageId),
     modelAlias: resolved.result.modelAlias,
     maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
-    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
-      deps,
-      resolved.result.supportsStreaming,
-    ),
+    upstreamStreamingSupported:
+      !sidecarBuffersUpstream(ctx) &&
+      upstreamGatewayStreamingSupported(deps, resolved.result.supportsStreaming),
     ...(authentication.reasoningEffort === undefined
       ? {}
       : { reasoningEffort: authentication.reasoningEffort }),
