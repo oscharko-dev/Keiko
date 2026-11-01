@@ -17,8 +17,8 @@ const PAGE = 100;
 const SECONDS_PER_HOUR = 3600;
 
 /** The seed rule of seed-projects.mjs: points `(n % 5) + 1`, every 13th Task left unestimated. */
-export const pointsFor = (n) => (n % 5) + 1;
-export const isUnestimated = (n) => n % 13 === 0;
+const pointsFor = (n) => (n % 5) + 1;
+const isUnestimated = (n) => n % 13 === 0;
 
 /**
  * What the oracle sums (`fieldId`, in `unit`) and what is written and placed on screens
@@ -82,7 +82,7 @@ export async function discoverEstimateField(jira, projectKey) {
 }
 
 /** Whether the create screen of each issue type and the edit screen of a Task offer the field. */
-export async function offeredOn(jira, projectKey, taskKey, fieldId) {
+async function offeredOn(jira, projectKey, taskKey, fieldId) {
   const base = `/rest/api/2/issue/createmeta/${projectKey}/issuetypes`;
   const create = {};
   for (const type of asList(await jira.call("types", "GET", base))) {
@@ -93,7 +93,7 @@ export async function offeredOn(jira, projectKey, taskKey, fieldId) {
   return { create, edit: edit?.fields?.[fieldId] !== undefined };
 }
 
-export const isOffered = (offered) => offered.create.Task === true && offered.edit;
+const isOffered = (offered) => offered.create.Task === true && offered.edit;
 
 async function tabsOf(jira, screenId) {
   const tabs = asList(await jira.call("tabs", "GET", `/rest/api/2/screens/${screenId}/tabs`));
@@ -147,7 +147,7 @@ export function expectedEstimates(truth, target) {
 }
 
 /** The estimate of every Task of the project as Jira holds it (`null`: no value). */
-export async function readEstimates(jira, projectKey, fieldId) {
+async function readEstimates(jira, projectKey, fieldId) {
   const values = new Map();
   const jql = encodeURIComponent(`project = ${projectKey} AND issuetype = Task`);
   for (let start = 0; ; start += PAGE) {
@@ -159,7 +159,7 @@ export async function readEstimates(jira, projectKey, fieldId) {
 }
 
 /** Writes the expected estimates that differ from what Jira holds; returns how many it wrote. */
-export async function writeEstimates(jira, target, expected, current) {
+async function writeEstimates(jira, target, expected, current) {
   let written = 0;
   for (const [key, value] of expected) {
     if (!current.has(key)) throw new TypeError(`Seeded Task ${key} is missing in Jira`);

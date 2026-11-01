@@ -37,6 +37,7 @@
         "scripts/testing/jira-chat-lab/seed-content.mjs",
         "scripts/testing/jira-chat-lab/seed.mjs",
         "scripts/testing/jira-chat-lab/requirements/scorecard.mjs",
+        "scripts/testing/jira-chat-lab/requirements/seed-estimates.mjs",
         "scripts/testing/jira-chat-lab/requirements/seed-projects.mjs",
         "scripts/testing/jira-chat-lab/session.mjs",
         "scripts/testing/jira-chat-lab/verify-connection.mjs",

@@ -227,7 +227,7 @@ const estimateLine = (estimate) =>
     : `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe des Feldes ${estimate.label} über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`;
 
 /** The S10 prompt; `estimate` names the field the instance estimates with (none: no line asked). */
-export const PROGRESS_PROMPT = (estimate) =>
+const PROGRESS_PROMPT = (estimate) =>
   [
     "Werte den Fortschritt des Jira-Projekts RPT aus. Antworte ausschließlich mit Zeilen in genau diesen Formaten, ohne weitere Zeilen:",
     "ANZAHL;<Vorgangstyp>;<Status>;<Anzahl> - eine Zeile je Kombination aus Vorgangstyp und Status, die im Projekt vorkommt (alle Vorgänge des Projekts, auch Epics).",
