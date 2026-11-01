@@ -253,7 +253,7 @@ const LOCAL_KNOWLEDGE_EN_MESSAGES = {
     "Searchable and citable as soon as it is indexed. Excerpts and questions go to the embedding and answer models configured for this installation.",
   "localKnowledge.create.policy.sealedLocal": "Sealed local",
   "localKnowledge.create.policy.sealedLocalDescription":
-    "Content is never released to any model. A sealed pod stays out of search and answers until you change this choice.",
+    "Content is never sent to an external model, never used to write answers and never released as raw text. Only local, on-device embedding and reranking are permitted. A sealed pod stays out of search and answers until you change this choice.",
   "localKnowledge.create.creating": "Creating...",
   "localKnowledge.create.submit": "Create Knowledge Pod",
   "localKnowledge.overview.backToWorkspace": "Back to Workspace",
@@ -958,7 +958,7 @@ const LOCAL_KNOWLEDGE_DE_MESSAGES: LocalKnowledgeMessageCatalog = {
     "Nach der Indexierung sofort durchsuchbar und zitierbar. Auszüge und Fragen gehen an die für diese Installation konfigurierten Embedding- und Antwortmodelle.",
   "localKnowledge.create.policy.sealedLocal": "Lokal versiegelt",
   "localKnowledge.create.policy.sealedLocalDescription":
-    "Inhalte werden nie an ein Modell weitergegeben. Ein versiegelter Pod bleibt aus Suche und Antworten ausgeschlossen, bis du die Auswahl änderst.",
+    "Inhalte werden nie an ein externes Modell gesendet, nie zum Formulieren von Antworten verwendet und nie als Rohtext freigegeben. Erlaubt sind nur lokales Embedding und Reranking auf diesem Gerät. Ein versiegelter Pod bleibt aus Suche und Antworten ausgeschlossen, bis du die Auswahl änderst.",
   "localKnowledge.create.creating": "Wird erstellt…",
   "localKnowledge.create.submit": "Knowledge Pod erstellen",
   "localKnowledge.overview.backToWorkspace": "Zurück zum Arbeitsbereich",

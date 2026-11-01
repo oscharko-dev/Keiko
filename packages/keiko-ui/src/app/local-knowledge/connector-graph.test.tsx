@@ -1058,7 +1058,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     expect(standard).toHaveAccessibleDescription(
       /searchable and citable as soon as it is indexed/i,
     );
-    expect(sealed).toHaveAccessibleDescription(/never released to any model/i);
+    expect(sealed).toHaveAccessibleDescription(/never sent to an external model/i);
 
     await user.click(sealed);
     await user.type(within(dialog).getByLabelText(/pod display name/i), "Sealed Docs");

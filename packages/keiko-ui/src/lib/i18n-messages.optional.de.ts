@@ -289,6 +289,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.jira.validate": "Gegen Jira prüfen",
   "chat.skills.jira.validating": "Wird geprüft…",
   "chat.skills.jira.valid": "Die Vorlage passt zur Jira-Instanz.",
+  "chat.skills.jira.partial":
+    "Nicht vollständig geprüft: Jira hat {checks} nicht geliefert, daher wurde die Vorlage nicht damit abgeglichen. Schreibaktionen, die sie steuert, können trotzdem abgelehnt werden.",
+  "chat.skills.jira.check.project": "Projektangaben",
+  "chat.skills.jira.check.fields": "Felder",
+  "chat.skills.jira.check.linkTypes": "Verknüpfungstypen",
+  "chat.skills.jira.check.transitions": "Workflow-Status",
   "chat.skills.jira.syntax":
     "Die Vorlage ist fehlerhaft ({codes}). Korrigiere sie und lade sie erneut hoch.",
   "chat.skills.jira.finding.unknown-project":

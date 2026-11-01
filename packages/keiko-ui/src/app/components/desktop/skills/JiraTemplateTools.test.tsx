@@ -32,6 +32,9 @@ vi.mock("@/lib/atlassian-connectors-api", () => ({
 vi.mock("../useConnectorRefresh", () => ({ useConnectorRefresh: vi.fn() }));
 
 const upload = vi.fn(() => Promise.resolve());
+function libraryOf(skills: MarkdownSkillLibrary["skills"]): MarkdownSkillLibrary {
+  return { ...library, skills };
+}
 const library = {
   skills: [],
   preview: undefined,
@@ -53,6 +56,16 @@ const ENTRY = {
   project: "SYN",
   issueType: "Story",
   activations: ["create", "transition:Ready"],
+};
+
+const DOCUMENT = {
+  id: "skill-1",
+  revision: 2,
+  digest: "a".repeat(64),
+  name: "Story template",
+  byteCount: 4,
+  createdAt: 1,
+  body: "BODY",
 };
 
 beforeEach(() => {
@@ -116,6 +129,118 @@ describe("Jira issue template tools", () => {
     if (validate) await user.click(validate);
     expect(templates.validateJiraTemplate).toHaveBeenCalledWith("pod-1", "BODY");
     expect(await screen.findByText(/Field Story Points does not exist/u)).toBeInTheDocument();
+  });
+
+  it("says which instance checks could not run instead of reporting a full match", async () => {
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      valid: true,
+      findings: [],
+      checked: { project: true, fields: false, linkTypes: true, transitions: false },
+    });
+    const user = await openPanel();
+    const [validate] = screen.getAllByRole("button", { name: "Validate against Jira" });
+    await waitFor(() => expect(validate).toBeEnabled());
+    if (validate) await user.click(validate);
+    expect(await screen.findByText(/Not fully checked/u)).toHaveTextContent(
+      "Jira did not provide its fields, workflow statuses",
+    );
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+    expect(await axe(document.body)).toHaveNoViolations();
+  });
+
+  it("reports a match only when every instance check ran", async () => {
+    vi.mocked(skills.readMarkdownSkill).mockResolvedValue(DOCUMENT);
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      valid: true,
+      findings: [],
+      checked: { project: true, fields: true, linkTypes: true, transitions: true },
+    });
+    const user = await openPanel();
+    const [validate] = screen.getAllByRole("button", { name: "Validate against Jira" });
+    await waitFor(() => expect(validate).toBeEnabled());
+    if (validate) await user.click(validate);
+    expect(await screen.findByText("The template matches the Jira instance.")).toBeInTheDocument();
+    expect(screen.queryByText(/Not fully checked/u)).not.toBeInTheDocument();
+  });
+
+  it("re-reads templates and validates the new revision after a same-count replacement", async () => {
+    const stored = (revision: number): MarkdownSkillLibrary["skills"] => [
+      {
+        id: "skill-1",
+        revision,
+        digest: String(revision).repeat(64),
+        name: "Story template",
+        byteCount: 4,
+        createdAt: 1,
+      },
+    ];
+    vi.mocked(skills.readMarkdownSkill).mockImplementation((reference) =>
+      Promise.resolve({
+        ...DOCUMENT,
+        revision: reference.revision,
+        body: `BODY-${String(reference.revision)}`,
+      }),
+    );
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      valid: true,
+      findings: [{ code: "unknown-field", subject: "Story Points" }],
+      checked: { project: true, fields: true, linkTypes: true, transitions: true },
+    });
+    const user = userEvent.setup();
+    const view = render(<JiraTemplateTools library={libraryOf(stored(2))} />);
+    await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
+    await screen.findByText("Story template");
+    const [first] = screen.getAllByRole("button", { name: "Validate against Jira" });
+    await waitFor(() => expect(first).toBeEnabled());
+    if (first) await user.click(first);
+    await screen.findByText(/Field Story Points does not exist/u);
+    expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith("pod-1", "BODY-2");
+    vi.mocked(templates.fetchJiraTemplates).mockResolvedValue([{ ...ENTRY, revision: 3 }]);
+    view.rerender(<JiraTemplateTools library={libraryOf(stored(3))} />);
+    await waitFor(() => expect(templates.fetchJiraTemplates).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(screen.queryByText(/Field Story Points does not exist/u)).not.toBeInTheDocument(),
+    );
+    const [second] = screen.getAllByRole("button", { name: "Validate against Jira" });
+    await waitFor(() => expect(second).toBeEnabled());
+    if (second) await user.click(second);
+    await waitFor(() =>
+      expect(skills.readMarkdownSkill).toHaveBeenLastCalledWith(
+        expect.objectContaining({ id: "skill-1", revision: 3 }),
+      ),
+    );
+    expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith("pod-1", "BODY-3");
+  });
+
+  it("starts each proposal from its own Markdown, not the previous project's edits", async () => {
+    vi.mocked(templates.proposeJiraTemplates).mockImplementation((_pod, projectKey) =>
+      Promise.resolve([
+        {
+          issueType: "Story",
+          markdown: `---\nproject: ${projectKey}\n---\n`,
+          sampledIssueCount: projectKey === "OLD" ? 3 : 5,
+        },
+      ]),
+    );
+    const user = await openPanel();
+    const key = screen.getByLabelText("Project key");
+    const propose = screen.getByRole("button", { name: "Propose from project" });
+    await user.type(key, "OLD");
+    await waitFor(() => expect(propose).toBeEnabled());
+    await user.click(propose);
+    expect(await screen.findByRole("textbox", { name: "Story" })).toHaveValue(
+      "---\nproject: OLD\n---\n",
+    );
+    await user.clear(key);
+    await user.type(key, "NEW");
+    await waitFor(() => expect(propose).toBeEnabled());
+    await user.click(propose);
+    await screen.findByText("Proposed for Story (5 issues sampled)");
+    expect(screen.getByRole("textbox", { name: "Story" })).toHaveValue("---\nproject: NEW\n---\n");
+    await user.click(screen.getByRole("button", { name: "Save as skill" }));
+    const [file] = upload.mock.calls[0] as unknown as [File];
+    expect(await file.text()).toBe("---\nproject: NEW\n---\n");
   });
 
   it("proposes templates from a project and saves an edited one as a skill", async () => {

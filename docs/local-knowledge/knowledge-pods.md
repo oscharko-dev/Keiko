@@ -239,8 +239,10 @@ body-free operation matrix. The create dialog asks for the policy in plain words
 - **Use configured models** (`standard`, the default) — the pod is searchable and citable
   as soon as it is indexed. Excerpts and questions go to the embedding and answer models
   configured for this installation, so no later settings step is needed.
-- **Sealed local** (`sealed-local`) — content is never released to any model. A sealed pod
-  stays out of search and answers until its policy is changed.
+- **Sealed local** (`sealed-local`) — content is never sent to an external model (embedding or
+  reranking), never used to write answers and never released as raw text. Only local, on-device
+  embedding and reranking are permitted by the policy. A sealed pod stays out of search and
+  answers until its policy is changed.
 
 A create request that omits the policy (an API caller, the manual and connector pod
 flows) also receives `standard`. Legacy persisted rows without an explicit policy resolve

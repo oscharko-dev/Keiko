@@ -110,17 +110,24 @@
   margin: 4px 0 0;
   font-size: var(--text-body-sm);
 }
+/* A label and its value share a row only while both fit: nested groups (and opaque dotted
+   paths) would otherwise accumulate non-shrinking labels past the panel edge (#4182). The value
+   wraps below its label instead, so every approved value stays inside the visible panel. */
 .cmpDraftFields > div {
   display: flex;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 0 8px;
   align-items: baseline;
   min-width: 0;
 }
 .cmpDraftFields dt {
   flex: none;
+  max-inline-size: 100%;
   color: var(--text-secondary);
+  overflow-wrap: anywhere;
 }
 .cmpDraftFields dd {
+  flex: 1 1 12ch;
   margin: 0;
   min-width: 0;
   color: var(--text-primary);
@@ -138,9 +145,15 @@
   margin: 0;
   padding-inline-start: 16px;
 }
+/* The design system's component minimum is 24 x 24 px (accessibility.html, visual-qa-matrix §3). */
 .cmpDraftMore {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 24px;
+  min-inline-size: 24px;
   margin-inline-start: 6px;
-  padding: 0;
+  padding: 0 4px;
   border: 0;
   background: none;
   color: var(--accent-text);

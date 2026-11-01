@@ -278,6 +278,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.skills.jira.validate": "Validate against Jira",
   "chat.skills.jira.validating": "Validating…",
   "chat.skills.jira.valid": "The template matches the Jira instance.",
+  "chat.skills.jira.partial":
+    "Not fully checked: Jira did not provide its {checks}, so the template was not compared with them. Writes it governs can still be refused.",
+  "chat.skills.jira.check.project": "project details",
+  "chat.skills.jira.check.fields": "fields",
+  "chat.skills.jira.check.linkTypes": "link types",
+  "chat.skills.jira.check.transitions": "workflow statuses",
   "chat.skills.jira.syntax": "The template is malformed ({codes}). Fix it and upload it again.",
   "chat.skills.jira.finding.unknown-project": "Project {subject} does not exist or is not visible.",
   "chat.skills.jira.finding.unknown-issue-type":
