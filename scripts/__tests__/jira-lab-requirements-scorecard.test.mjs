@@ -557,6 +557,58 @@ describe("S11 compliance report", () => {
     );
   });
 
+  describe("an answer grouped by deviation (Gemma, 2026-11-01)", () => {
+    it("credits each deviation its lead names to every issue of the list below it", async () => {
+      const answer = [
+        "### Epics",
+        "*   **Zusammenfassung entspricht nicht dem Muster `[LH-xxx] <title>`:**",
+        "    *   RPT-1",
+        "*   **Beschreibung: Abschnitt „Abgrenzung“ fehlt:**",
+        "    *   RPT-1",
+        "",
+        "### Tasks",
+        "*   **Zugehörigkeit zum Epic (Epic Link) fehlt:**",
+        "    *   RPT-3",
+      ].join("\n");
+      expect((await grade(answer)).status).toBe("green");
+    });
+
+    it("never credits a lead to the list above it", async () => {
+      // Read as a continuation of RPT-1, the second lead would describe its Abgrenzung deviation.
+      const answer = [
+        "- RPT-1: Zusammenfassung ohne Präfix",
+        "Abschnitt Abgrenzung fehlt:",
+        "- RPT-3",
+        "Epic-Zuordnung fehlt:",
+        "- RPT-3",
+      ].join("\n");
+      const check = await grade(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("1 of 3 seeded deviations not described");
+    });
+
+    it("is not green when a group leaves out one seeded deviation", async () => {
+      const answer = ["Zusammenfassung ohne Präfix:", "- RPT-1", "Epic fehlt:", "- RPT-3"].join(
+        "\n",
+      );
+      const check = await grade(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("1 of 3 seeded deviations not described");
+    });
+
+    it("describes nothing with a lead that states the fields are fine", async () => {
+      const answer = [
+        "Zusammenfassung und Abgrenzung sind korrekt:",
+        "- RPT-1",
+        "Epic fehlt:",
+        "- RPT-3",
+      ].join("\n");
+      const check = await grade(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("2 of 3 seeded deviations not described");
+    });
+  });
+
   it("does not take a compliant issue for a false finding", async () => {
     const answer = [
       "RPT-1: Zusammenfassung ohne Präfix; Abschnitt Abgrenzung fehlt",

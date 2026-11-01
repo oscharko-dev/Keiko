@@ -125,19 +125,51 @@ function deniesDeviation(clause) {
 
 const CLAUSE_BREAK = /[.;!?\n]+|\s+(?:aber|jedoch|während|whereas|but|however|although|obwohl)\s+/i;
 
-/** Per issue key, the clauses of the lines that name it and of the lines that continue them. */
+// A line that names no issue and ends in a colon, or a Markdown heading, introduces what follows.
+const LEAD = /^\s*(?:#{1,6}\s+\S.*|.*\S:[*_`\s]*)$/;
+const NAMES_ISSUE = new RegExp(ISSUE_KEY.source);
+
+/**
+ * For each line of a list that a lead introduces, the index of that lead: a lead whose next
+ * non-blank line names an issue covers every following line up to the first non-blank line that
+ * names none. "**Abschnitt Abgrenzung fehlt:**" over "* RPT-6, RPT-12" attributes it to both.
+ */
+function listLeads(lines) {
+  const leads = new Map();
+  let lead;
+  for (const [index, line] of lines.entries()) {
+    if (line.trim() === "") continue;
+    if (NAMES_ISSUE.test(line)) {
+      if (lead !== undefined) leads.set(index, lead);
+    } else {
+      lead = LEAD.test(line) ? index : undefined;
+    }
+  }
+  return leads;
+}
+
+/**
+ * Per issue key, the clauses of the lines that name it, of the lines that continue them and of the
+ * lead that introduces the list naming it. A lead that opens a list belongs to that list, never to
+ * the issues of the list before it.
+ */
 function clausesByKey(answer) {
+  const lines = answer.split("\n");
+  const leads = listLeads(lines);
+  const opening = new Set(leads.values());
   const segments = new Map();
   let current = [];
-  for (const line of answer.split("\n")) {
+  for (const [index, line] of lines.entries()) {
+    if (opening.has(index)) continue;
     const keys = line.match(ISSUE_KEY);
     if (keys) current = [...new Set(keys)];
-    for (const key of current) segments.set(key, [...(segments.get(key) ?? []), line]);
+    const attributed = leads.has(index) ? [lines[leads.get(index)], line] : [line];
+    for (const key of current) segments.set(key, [...(segments.get(key) ?? []), ...attributed]);
   }
   return new Map(
-    [...segments].map(([key, lines]) => [
+    [...segments].map(([key, keyLines]) => [
       key,
-      lines
+      keyLines
         .join("\n")
         .split(CLAUSE_BREAK)
         .map((clause) => clause.trim())
