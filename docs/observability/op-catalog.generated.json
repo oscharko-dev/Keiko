@@ -109711,7 +109711,7 @@
     {
       "op": "knowledge.requirement-trace",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirement-trace.ts:131",
+      "site": "packages/keiko-server/src/requirement-trace.ts:133",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109724,7 +109724,7 @@
     {
       "op": "knowledge.requirements-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirementsTool.ts:452",
+      "site": "packages/keiko-server/src/requirementsTool.ts:540",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
