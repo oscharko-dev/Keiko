@@ -134,10 +134,14 @@ function loopbackJson(origin, cookie, path, body, method, signal) {
   });
 }
 export async function jsonRequest(origin, cookie, name, path, body, method = "POST", signal) {
-  if (!origin.startsWith("http:") || globalThis.fetch !== NATIVE_FETCH)
-    return (await request(origin, cookie, name, path, body, method, signal)).json();
+  if (!origin.startsWith("http:") || globalThis.fetch !== NATIVE_FETCH) {
+    const response = await request(origin, cookie, name, path, body, method, signal);
+    return response.status === 204 ? null : response.json();
+  }
   const { status, text } = await loopbackJson(origin, cookie, path, body, method, signal);
   const ok = status >= 200 && status < 300;
+  // A successful mutation without a body (204) has nothing to parse.
+  if (status === 204) return null;
   let parsed;
   try {
     parsed = JSON.parse(text);

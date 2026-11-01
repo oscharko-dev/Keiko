@@ -6,9 +6,18 @@
 //   ctx.search(query, fields) -> every matching Jira issue (admin read, all pages)
 //   ctx.refusals()           -> count of generation-changed refusals in the live log
 //   ctx.truth                -> generated ground truth of the report project
+//   ctx.http(name, path, body, method) -> JSON of an ordinary Keiko route (skill library, exports)
+//   ctx.deselectSkill(chat)  -> the Chat keeps no selected skill, so only a template can teach it
+//   ctx.comments(key)        -> every comment of a Jira issue as { id, body } (admin read)
+//   ctx.exportReport(chat, reportId, format) -> the local export file of a finished report
 // A check names the catalog obligations it verifies in `covers`; the scorecard credits them only
 // when the check is green, so a check that covers part of a scenario never turns it green.
 import { STRUCTURE_RULES, buildCorpus, corpusChange } from "./corpus.mjs";
+import {
+  gradeCoverageMatrix,
+  requirementCoverageTruth,
+  structuredRequirementCoverage,
+} from "./coverage-matrix.mjs";
 import {
   epicConforms,
   gradeBacklog,
@@ -22,6 +31,26 @@ import {
   structuredDeviations,
   turnIssues,
 } from "./oracles.mjs";
+import { gradeProgress, progressTruth } from "./progress-report.mjs";
+import {
+  computedCommentTexts,
+  finishedReports,
+  gradeCsvExport,
+  gradeMarkdownExport,
+  gradeReportComment,
+} from "./report-export.mjs";
+import {
+  epicTemplateConforms,
+  epicTemplateMarkdown,
+  gradeProposal,
+  gradeTemplateListing,
+  gradeTemplateRepair,
+  gradeTemplateValidation,
+  listTemplates,
+  proposeTemplates,
+  validateTemplate,
+  withTemplate,
+} from "./templates.mjs";
 
 const result = (status, turn, detail, covers) => ({
   status,
@@ -46,7 +75,287 @@ const countsOf = (turn, label) =>
   `${turn.created.length} ${label} created, ${turn.reconciled.length} reconciled` +
   (turn.duplicates.length === 0 ? "" : `, ${turn.duplicates.length} duplicates`);
 
+/** A journey that never sent a Chat turn reports no duration or tool calls. */
+const NO_TURN = Object.freeze({ durationMs: 0, toolCalls: 0 });
+
+const EPIC_QUERY = "project = REQ AND issuetype = Epic";
+const EPIC_TEMPLATE = "REQ/Epic";
+
+/** The Jira Pod the Chat is bound to; the template routes read the instance through it. */
+const podOf = (chat) => chat.jiraPodBinding?.podId;
+
+/** Validates and lists a defined template: what the lead sees in the settings. */
+async function inspectTemplate(ctx, chat, markdown, skill) {
+  const podId = podOf(chat);
+  const [templates, validation] = await Promise.all([
+    listTemplates(ctx.http),
+    podId === undefined ? undefined : validateTemplate(ctx.http, markdown, podId),
+  ]);
+  return {
+    listing: gradeTemplateListing(templates, skill, { project: "REQ", issueType: "Epic" }),
+    validation: validation === undefined ? undefined : gradeTemplateValidation(validation),
+  };
+}
+
+/** Exactly one new epic for the requirement, and it satisfies the template as Jira holds it. */
+function appliedTemplate(epics, requirementId) {
+  const [epic] = epics.credited;
+  return (
+    epics.credited.length === 1 &&
+    epics.duplicates.length === 0 &&
+    epic.fields.summary.startsWith(`[${requirementId}]`) &&
+    epicTemplateConforms(epic)
+  );
+}
+
+async function templateDefinedAndApplied(ctx, chat) {
+  const markdown = epicTemplateMarkdown("REQ");
+  return withTemplate(ctx.http, markdown, "REQ-Epic", async (skill) => {
+    const { listing, validation } = await inspectTemplate(ctx, chat, markdown, skill);
+    if (validation === undefined) {
+      return result(
+        "unverified",
+        NO_TURN,
+        "the Chat is bound to no Jira Pod; nothing is credited",
+        [],
+      );
+    }
+    const before = await snapshotBefore(ctx, EPIC_QUERY);
+    await ctx.deselectSkill(chat);
+    const turn = await ctx.turn(
+      chat,
+      "Lege im Jira-Projekt REQ für die Anforderung LH-004 aus dem Lastenheft ein Epic an. Melde den Vorgangsschlüssel oder den genauen Fehler.",
+    );
+    const epics = turnIssues({
+      before,
+      issues: await ctx.search(EPIC_QUERY, "summary,description,labels"),
+      exchanges: turn.toolExchanges,
+    });
+    const applied = appliedTemplate(epics, "LH-004");
+    return result(
+      listing.defined && listing.activated && validation.ok && applied ? "green" : "red",
+      turn,
+      `template listed valid ${listing.defined}, active on create ${listing.activated}, instance findings ${validation.findings ?? "unchecked"}; ${countsOf(epics, "epics")}, ${applied ? "the epic satisfies the template" : "no single epic satisfying the template"}`,
+      ["template-defined", "template-activated", "template-applied"],
+    );
+  });
+}
+
+const sameIds = (left, right) =>
+  left.length === right.length &&
+  left.every((entry) => right.some((other) => other.id === entry.id));
+
+/** S02 without a Chat: the proposal is read-only, the lead reviews it and only then defines it. */
+async function proposalReviewedBeforeActivation(ctx, chat) {
+  const podId = podOf(chat);
+  if (podId === undefined) {
+    return result(
+      "unverified",
+      NO_TURN,
+      "the Chat is bound to no Jira Pod; nothing is credited",
+      [],
+    );
+  }
+  const before = await listTemplates(ctx.http);
+  const proposals = await proposeTemplates(ctx.http, "RPT", podId);
+  const after = await listTemplates(ctx.http);
+  const grades = ["Epic", "Task", "Bug"].map((type) => gradeProposal(proposals, type));
+  const unchanged = sameIds(before, after);
+  const epic = proposals.find((proposal) => proposal.issueType?.toLowerCase() === "epic");
+  const reviewed =
+    epic === undefined
+      ? false
+      : await withTemplate(ctx.http, epic.markdown, "RPT-Epic", async (skill) => {
+          const [listed, validation] = await Promise.all([
+            listTemplates(ctx.http),
+            validateTemplate(ctx.http, epic.markdown, podId),
+          ]);
+          const listing = gradeTemplateListing(listed, skill, {
+            project: "RPT",
+            issueType: "Epic",
+          });
+          return listing.defined && listing.activated && gradeTemplateValidation(validation).ok;
+        });
+  const fromIssues = grades.every((grade) => grade.ok);
+  const detail = grades
+    .map((g) => `${g.issueType} ${g.ok ? "ok" : `missing [${g.missing}] surplus [${g.surplus}]`}`)
+    .join(", ");
+  return result(
+    fromIssues && unchanged && reviewed ? "green" : "red",
+    NO_TURN,
+    `proposals ${detail}; library unchanged by proposing ${unchanged}; reviewed proposal validates and activates only once defined ${reviewed}`,
+    ["proposal-from-existing-issues", "proposal-reviewed-before-activation"],
+  );
+}
+
+async function violationsRepairedBeforeWrite(ctx, chat) {
+  const before = await snapshotBefore(ctx, EPIC_QUERY);
+  return withTemplate(ctx.http, epicTemplateMarkdown("REQ"), "REQ-Epic", async () => {
+    await ctx.deselectSkill(chat);
+    const turn = await ctx.turn(
+      chat,
+      "Lege im Jira-Projekt REQ für die Anforderung LH-005 zunächst ein Epic mit genau der Zusammenfassung „Schnelltest Statusanzeige“ und genau der Beschreibung „Kurzer Test.“ an. Falls das Anlegen abgelehnt wird, korrigiere den Vorgang anhand der gemeldeten Verstöße und lege ihn erneut an. Melde den Vorgangsschlüssel oder den genauen Fehler.",
+    );
+    const epics = turnIssues({
+      before,
+      issues: await ctx.search(EPIC_QUERY, "summary,description,labels"),
+      exchanges: turn.toolExchanges,
+    });
+    const grade = gradeTemplateRepair({
+      exchanges: turn.toolExchanges,
+      issues: epics.credited,
+      template: EPIC_TEMPLATE,
+    });
+    if (!grade.detected) {
+      return result(
+        "unverified",
+        turn,
+        `no template refusal in the turn (${grade.refusals} refusals, ${grade.issues} issues written); the gate was not exercised and nothing is credited`,
+        [],
+      );
+    }
+    return result(
+      grade.repaired ? "green" : "red",
+      turn,
+      `${grade.refusals} refusals (${grade.ruleIds.join(", ")}), ${grade.receipts} with a receipt, written after the first refusal ${grade.writtenAfter}, ${grade.issues} issues of the turn of which ${grade.nonconforming.length} violate the template`,
+      ["violations-detected", "repaired-before-write"],
+    );
+  });
+}
+
+// ---------- S10 ----------
+
+const PROGRESS_FIELDS = (fieldIds) =>
+  ["issuetype", "status", "parent", fieldIds.epicLink, fieldIds.storyPoints]
+    .filter((field) => field !== undefined)
+    .join(",");
+
+const PROGRESS_PROMPT = (withEstimate) =>
+  [
+    "Werte den Fortschritt des Jira-Projekts RPT aus. Antworte ausschließlich mit Zeilen in genau diesen Formaten, ohne weitere Zeilen:",
+    "ANZAHL;<Vorgangstyp>;<Status>;<Anzahl> - eine Zeile je Kombination aus Vorgangstyp und Status, die im Projekt vorkommt (alle Vorgänge des Projekts, auch Epics).",
+    "EPIC;<Epic-Schlüssel>;<Anzahl>;<davon erledigt> - eine Zeile je Epic des Projekts: die Anzahl aller dem Epic zugeordneten Vorgänge (Tasks, Bugs und deren Sub-Tasks, ohne das Epic selbst) und wie viele davon in der Statuskategorie Done sind.",
+    ...(withEstimate
+      ? [
+          "SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe des Feldes Story Points über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.",
+        ]
+      : []),
+  ].join("\n");
+
+async function projectProgress(ctx, chat) {
+  const turn = await ctx.turn(chat, PROGRESS_PROMPT(ctx.truth.fieldIds.storyPoints !== undefined));
+  const issues = await ctx.search("project = RPT", PROGRESS_FIELDS(ctx.truth.fieldIds));
+  const grade = gradeProgress(turn.answer, progressTruth(issues, ctx.truth.fieldIds));
+  const parts = [
+    ["counts-by-type-status", grade.counts],
+    ["per-epic-progress", grade.epics],
+    ["estimate-totals", grade.estimate],
+  ].filter(([, part]) => part.graded);
+  const failed = parts.filter(([, part]) => !part.ok);
+  const ungraded = [grade.epics, grade.estimate].filter((part) => !part.graded).length;
+  return result(
+    failed.length === 0 ? "green" : "red",
+    turn,
+    `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}`,
+    parts.map(([name]) => name),
+  );
+}
+
+// ---------- S12 ----------
+
+async function coverageMatrix(ctx, chat) {
+  const requirementIds = buildCorpus(1).truth.map((item) => item.id);
+  const turn = await ctx.turn(
+    chat,
+    "Erstelle eine Abdeckungsmatrix der Anforderungen des Lastenhefts für das Jira-Projekt RPT: welche Anforderung wird von welchen Vorgängen genannt und welche von keinem. Berücksichtige ALLE Anforderungen des Lastenhefts. Antworte ausschließlich mit einer Zeile je Anforderung im Format `LH-001;ABGEDECKT;RPT-1, RPT-2` (kommagetrennt die Schlüssel aller Vorgänge, die die Anforderung nennen) oder `LH-010;OFFEN;` (kein Vorgang nennt sie).",
+  );
+  const issues = await ctx.search("project = RPT", "summary,labels,description");
+  const truth = requirementCoverageTruth(issues, requirementIds);
+  const open = requirementIds.filter((id) => truth.get(id).size === 0);
+  const seeded = ctx.truth.uncoveredRequirements;
+  if (
+    seeded !== undefined &&
+    (seeded.length !== open.length || !open.every((id) => seeded.includes(id)))
+  ) {
+    return result(
+      "unverified",
+      turn,
+      `Jira names ${requirementIds.length - open.length} requirements but the seeded ground truth leaves ${seeded.length} uncovered; the laboratory drifted and nothing is credited`,
+      [],
+    );
+  }
+  const structured = structuredRequirementCoverage(turn.toolExchanges);
+  if (structured === undefined) {
+    return result(
+      "unverified",
+      turn,
+      "no complete jira.report result with requirement coverage in the turn; nothing is credited",
+      [],
+    );
+  }
+  const grade = gradeCoverageMatrix(turn.answer, truth, structured);
+  return result(
+    grade.matrixOk && grade.openOk ? "green" : "red",
+    turn,
+    `${grade.covered} covered and ${grade.open} open requirements expected; ${grade.wrong.length} requirements wrong in the answer or the tool result, ${grade.unreported.length} not reported by the tool, ${grade.invented.length} invented`,
+    ["coverage-matrix", "uncovered-requirements"],
+  );
+}
+
+// ---------- S13 ----------
+
+async function reportExportAndComment(ctx, chat) {
+  const target = ctx.truth.issues.find((issue) => issue.type === "Epic")?.key;
+  const known = new Set((await ctx.comments(target)).map((comment) => comment.id));
+  const turn = await ctx.turn(
+    chat,
+    `Erstelle einen vollständigen Bericht für das Jira-Projekt RPT (Fortschritt, Abweichungen, Abdeckung) und hinterlege den vom Berichtswerkzeug berechneten Kommentartext des Berichts unverändert als genau einen Kommentar am Vorgang ${target}. Melde den Schlüssel des Vorgangs.`,
+  );
+  const reports = finishedReports(turn.toolExchanges);
+  if (reports.length === 0) {
+    return result(
+      "unverified",
+      turn,
+      "no complete jira.report result in the turn; nothing is credited",
+      [],
+    );
+  }
+  const [comments, issues] = await Promise.all([
+    ctx.comments(target),
+    ctx.search("project = RPT", "summary"),
+  ]);
+  const comment = gradeReportComment(
+    comments.filter((entry) => !known.has(entry.id)),
+    computedCommentTexts(turn.toolExchanges),
+    reports,
+  );
+  const report = comment.report ?? reports.at(-1);
+  const exported = await Promise.all(
+    ["csv", "markdown"].map((format) => ctx.exportReport(chat, report.reportId, format)),
+  ).then(
+    ([csv, markdown]) => [
+      gradeCsvExport(
+        csv,
+        report.digest,
+        issues.map((issue) => issue.key),
+      ),
+      gradeMarkdownExport(markdown, report.digest),
+    ],
+    (error) => [{ ok: false, reason: `export request failed: ${String(error.message)}` }],
+  );
+  const readAll = report.issuesRead === issues.length;
+  const exportOk = readAll && exported.every((entry) => entry.ok);
+  return result(
+    exportOk && comment.ok ? "green" : "red",
+    turn,
+    `report read ${report.issuesRead} of ${issues.length} issues; exports: ${exported.map((entry) => entry.reason).join(" | ")}; ${comment.newComments} new comments on ${target}, ${comment.computedTexts} computed comment texts, comment is the computed text ${comment.ok}`,
+    ["report-export", "jira-comment"],
+  );
+}
+
 export const JOURNEYS = {
+  S01: (ctx, chat) => templateDefinedAndApplied(ctx, chat),
+  S02: (ctx, chat) => proposalReviewedBeforeActivation(ctx, chat),
   async S04(ctx, chat) {
     const truth = buildCorpus(1).truth;
     const turn = await ctx.turn(
@@ -92,6 +401,7 @@ export const JOURNEYS = {
       ["epic-per-requirement", "template-conformance", "single-approval"],
     );
   },
+  S06: (ctx, chat) => violationsRepairedBeforeWrite(ctx, chat),
   async S07(ctx, chat) {
     const query = "project = REQ AND issuetype = Task";
     const before = await snapshotBefore(ctx, query);
@@ -124,32 +434,7 @@ export const JOURNEYS = {
       ["tasks-created", "required-fields", "parent-relation"],
     );
   },
-  async S10(ctx, chat) {
-    const turn = await ctx.turn(
-      chat,
-      "Werte den Fortschritt des Jira-Projekts RPT aus. Antworte mit genau einer Zeile je Kombination im Format TYP;STATUS;ANZAHL für alle Vorgänge des Projekts, ohne weitere Zeilen.",
-    );
-    const issues = await ctx.search("project = RPT", "issuetype,status");
-    const expected = new Map();
-    for (const issue of issues) {
-      const key = `${issue.fields.issuetype.name};${issue.fields.status.name}`.toLowerCase();
-      expected.set(key, (expected.get(key) ?? 0) + 1);
-    }
-    const reported = new Map(
-      [...turn.answer.matchAll(/^\s*([^;\n]+);([^;\n]+);\s*(\d+)\s*$/gm)].map((m) => [
-        `${m[1].trim()};${m[2].trim()}`.toLowerCase(),
-        Number(m[3]),
-      ]),
-    );
-    const matched = [...expected].filter(([key, count]) => reported.get(key) === count).length;
-    const ok = matched === expected.size && reported.size === expected.size;
-    return result(
-      ok ? "green" : "red",
-      turn,
-      `${matched}/${expected.size} type/status counts exact over ${issues.length} issues`,
-      ["counts-by-type-status"],
-    );
-  },
+  S10: (ctx, chat) => projectProgress(ctx, chat),
   async S11(ctx, chat) {
     const turn = await ctx.turn(
       chat,
@@ -178,6 +463,8 @@ export const JOURNEYS = {
       ["deviating-issues", "deviation-detail"],
     );
   },
+  S12: (ctx, chat) => coverageMatrix(ctx, chat),
+  S13: (ctx, chat) => reportExportAndComment(ctx, chat),
   async S14(ctx, chat) {
     const query = "project = REQ AND issuetype = Epic";
     const change = corpusChange();

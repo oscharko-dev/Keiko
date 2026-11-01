@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
 import { basicAuth, labRequest } from "../lab-client.mjs";
@@ -222,6 +223,34 @@ async function jql(session, query, fields = "summary") {
   }
 }
 
+/** Every comment of one issue (admin read), as { id, body }. */
+async function issueComments(session, key) {
+  const path = `/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=1000`;
+  const page = await labRequest(session, "GET", path, basicAuth(session, "admin"));
+  if (page.status !== 200) throw new TypeError(`Oracle comment read failed (${page.status})`);
+  return page.value.comments.map(({ id, body }) => ({ id, body }));
+}
+
+/** The Chat keeps no selected skill; the Pod's documents and the product are its only sources. */
+async function deselectSkill(ctx, chat) {
+  const path = `/api/chats/${encodeURIComponent(chat.id)}/skill`;
+  const current = await api(ctx, "skill-read", path, undefined, "GET");
+  await api(
+    ctx,
+    "skill-deselect",
+    path,
+    { skill: null, expectedRevision: current.selection.revision },
+    "PUT",
+  );
+}
+
+/** The local export file of a finished report, as the report card downloads it. */
+function exportReport(ctx, chat, reportId, format) {
+  const query = new URLSearchParams({ chatId: chat.id, format });
+  const path = `/api/atlassian-connectors/jira-reports/${encodeURIComponent(reportId)}/export?${query.toString()}`;
+  return api(ctx, "report-export", path, undefined, "GET");
+}
+
 function logMatchCount(root, needle) {
   let count = 0;
   const stack = [root];
@@ -259,10 +288,28 @@ async function freshBoundChat(ctx, session, modelId, capsuleId, toolMode) {
     "PATCH",
   );
   await selectRulesSkill(ctx, bound.chat.id);
-  return bound;
+  // The template routes read the instance through the Chat's Jira Pod.
+  const jiraPodBinding = bound.chat.jiraPodBinding ?? base.jiraPodBinding;
+  return { ...bound, chat: { ...bound.chat, jiraPodBinding } };
 }
 
 export { JOURNEY_IDS };
+
+/** The live plumbing the journey checks are given (see journey-checks.mjs). */
+function journeyContext(live, session, truth) {
+  const ctx = {
+    ...live,
+    truth,
+    turn: (chat, content) => chatTurn(ctx, chat, content),
+    search: (query, fields) => jql(session, query, fields),
+    http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
+    deselectSkill: (chat) => deselectSkill(ctx, chat),
+    comments: (key) => issueComments(session, key),
+    exportReport: (chat, reportId, format) => exportReport(ctx, chat, reportId, format),
+    refusals: () => logMatchCount(ctx.root, "generation-changed"),
+  };
+  return ctx;
+}
 
 /** Runs the selected journeys in one live Keiko session and returns checks keyed by scenario. */
 export async function runJourneys({ session, modelId, embeddingModelId, truth, ids }) {
@@ -274,13 +321,7 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
     modelRetries: 1,
     retainState: true,
     run: async (live) => {
-      const ctx = {
-        ...live,
-        truth,
-        turn: (chat, content) => chatTurn(ctx, chat, content),
-        search: (query, fields) => jql(session, query, fields),
-        refusals: () => logMatchCount(ctx.root, "generation-changed"),
-      };
+      const ctx = journeyContext(live, session, truth);
       const capsuleId = await prepareDataPod(ctx);
       // S14 replaces the specification with its next version; it runs last and restores version 1.
       ctx.replaceSpecification = async (version) => {

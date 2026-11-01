@@ -587,7 +587,9 @@ independent oracle (Jira REST/JQL reads or the generated ground truth), never by
 answer. `catalog.mjs` lists each scenario's obligations; a check names the obligations it covers
 (`covers`) and `coverage.mjs` awards green only when every obligation is covered by a passing
 check, one of them an end-to-end journey. A journey that verifies only part of the contract leaves
-the scenario `partial` (for example S10 until per-epic progress and estimate totals are graded),
+the scenario `partial` (a check grades only the parts the instance gives input for: S10 credits
+per-epic progress and estimate totals only when the seeded project has the Epic Link and Story Points
+fields),
 and an obligation nobody covers keeps it from ever turning green. Creation journeys (S05, S07,
 S17) read the matching Jira issue keys before the turn and grade only the keys that appeared
 during it, so earlier journeys, reruns and the Jira actor's timezone cannot leak into the verdict.
@@ -596,7 +598,17 @@ and chapter per requirement, S11 each seeded deviation twice over (the structure
 that issue, and the answer attributes it to that issue without denying it; an answer such as
 "Keine Abweichung" or "vollständig und korrekt" leaves it undescribed, and a turn without a
 completed `jira.report` deviation list credits nothing and leaves S11 partial), and S17 a one-to-one mapping of the new
-epics onto the Muss requirements plus every created key in the answer. The oracles are unit-tested
+epics onto the Muss requirements plus every created key in the answer. S10 asks for three strict line formats
+(`ANZAHL;type;status;n`, `EPIC;key;members;done`, `SCHÄTZUNG;total;done;remaining`) and grades them
+against the issues Jira holds. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
+that name each requirement (tokenised like the product) and requires the complete `jira.report`
+result of the turn to state the same. S13 exports the finished report through the report card's
+route (CSV must list exactly the issues Jira holds, both files must carry the tool's digest) and
+requires exactly one new Jira comment that is the tool's computed comment text verbatim. S01, S02
+and S06 drive the skill-library template routes (`/api/skills`, `/api/skills/jira-templates`) with
+the template the structure rules describe (`templates.mjs`); the template is deleted again when the
+journey ends, because the library activates every valid template for every later write. S06 stays
+`unverified` unless the product actually refused a violating write in the turn. The oracles are unit-tested
 with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mjs`.
 
 ```sh
