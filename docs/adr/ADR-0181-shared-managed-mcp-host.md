@@ -359,6 +359,8 @@ history reads project the decision only onto the exact originating canonical mes
 matching grant identity, generations, disclosure and expiry. The projection never changes
 the stored transcript or resumes its turn. Existing read-grant observation events retain
 the grant proof and a message-hash correlation without exposing private subject details.
+Because the projection is not persisted, each (grant, state) observation is recorded once per
+process and database from bounded, insertion-ordered memory; repeated history reads stay silent.
 
 ## Verification
 

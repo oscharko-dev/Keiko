@@ -157,6 +157,26 @@ function observedReadGrant(
   return grant;
 }
 
+/** The projection is never persisted, so every history read re-derives the same transition and
+ * would log it again (a polling client wrote hundreds of identical lines). The first observation
+ * of each (grant, state) is recorded; repeats are not. Memory is process-local and per database,
+ * not a write from a read path, and bounded by insertion-ordered eviction: at worst an evicted
+ * observation is recorded once more, it is never withheld on first sight. */
+const RECORDED_READ_GRANT_OBSERVATIONS_MAX = 1024;
+const recordedReadGrantObservations = new WeakMap<DatabaseSync, Set<string>>();
+function firstReadGrantObservation(db: DatabaseSync, grant: ChatToolReadGrant): boolean {
+  const recorded = recordedReadGrantObservations.get(db) ?? new Set<string>();
+  recordedReadGrantObservations.set(db, recorded);
+  const key = `${grant.grantId}\u0000${grant.state}`;
+  if (recorded.has(key)) return false;
+  recorded.add(key);
+  if (recorded.size > RECORDED_READ_GRANT_OBSERVATIONS_MAX) {
+    const oldest = recorded.values().next();
+    if (oldest.done !== true) recorded.delete(oldest.value);
+  }
+  return true;
+}
+
 /** Recover only the original human decision; observation does not resume its interrupted turn. */
 function projectChatReadConsentHistory(db: DatabaseSync, message: ChatMessage): ChatMessage {
   const candidate = historicalConsent(message);
@@ -166,6 +186,7 @@ function projectChatReadConsentHistory(db: DatabaseSync, message: ChatMessage): 
   if (entry === undefined || !matchesReadConsent(message, view, entry)) return message;
   const grant = observedReadGrant(entry.grant, view.state, Date.now());
   if (grant === undefined) return message;
-  recordReadGrant(snapshotReadGrant({ ...entry, grant }, sha256Hex(message.id)), 0);
+  if (firstReadGrantObservation(db, grant))
+    recordReadGrant(snapshotReadGrant({ ...entry, grant }, sha256Hex(message.id)), 0);
   return { ...message, toolTranscript: { ...transcript, readGrant: projectChatReadGrant(grant) } };
 }
