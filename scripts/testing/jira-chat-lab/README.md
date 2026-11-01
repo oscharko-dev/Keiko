@@ -615,6 +615,11 @@ with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mj
 # Once per session: the empty work project REQ and the report project RPT with known ground truth
 node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session
 
+# Once per session, after the seed: a real estimate field for RPT (Story Points on the project's
+# screens, the seed's estimates on every Task, fieldIds.storyPoints and the Tasks' "estimate"
+# deviations in requirements-truth.json). Idempotent; without it S10 cannot grade estimate totals.
+node scripts/testing/jira-chat-lab/requirements/seed-estimates.mjs /absolute/private/session
+
 # Fast probes only (seconds, no model)
 node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session --project REQ
 

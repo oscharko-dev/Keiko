@@ -138,7 +138,8 @@ function taskPlan(fields, epics) {
       const deviations = [];
       if (n % 11 === 0) deviations.push("parent");
       if (n % 7 === 0) deviations.push("section:Testhinweise");
-      // Only when the instance offers an estimate field on the Task screen.
+      // Only when the instance offers an estimate field on the Task screen; otherwise
+      // seed-estimates.mjs adds the field and the estimates afterwards.
       const estimated = fields.storyPoints !== undefined;
       if (estimated && n % 13 === 0) deviations.push("estimate");
       const sections = STRUCTURE_RULES.Task.sections.filter(
