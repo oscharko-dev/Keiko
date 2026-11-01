@@ -731,7 +731,11 @@ epic #4173: Qwen ended a Jira turn after reasoning with three metadata reads set
 and the turn ended; a multi-round task with settled work behind it must not die on one unusable
 round, and the repair counts against the turn's own model-call envelope), so every other call — the
 commit draft and plain interactive chat included — still surfaces such an answer at once and never
-makes a hidden second generation (#3873 review). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
+makes a hidden second generation (#3873 review). The caller's `attemptAdmission` is told which
+admission is that repair's (`steeredRepair: true` on its input, once per repair, never on a provider
+retry of it, never on a call that did not ask for a repair), so a caller that keeps a synthesis grant
+can stop charging the unusable attempt before it to that grant while its own envelope still bounds the
+repair (S14 of epic #4173). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
 grants exactly one further attempt per call, at once, which the gateway sends as the ORIGINAL request
 plus one fixed system message (`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told
 that its previous answer used the whole budget without a tool call or a final answer and asked to

@@ -182,7 +182,18 @@ export interface GatewayCallRequest extends GatewayRequest {
    * existing retry policy. A refused grant is a non-provider admission failure.
    */
   readonly attemptAdmission?:
-    | ((input: { readonly promptTokens: number; readonly maxOutputTokens: number }) =>
+    | ((input: {
+        readonly promptTokens: number;
+        readonly maxOutputTokens: number;
+        /**
+         * True only for the attempt of the gateway's ONE steered repair (`answerRepair: "steered"`),
+         * announced once per repair even when the transport dispatches several HTTP requests. The
+         * attempt it follows produced neither a tool call nor an answer, so a caller that keeps a
+         * synthesis grant may stop charging that unusable attempt to the grant; the caller's own
+         * envelope still bounds the repair.
+         */
+        readonly steeredRepair?: true | undefined;
+      }) =>
         | {
             readonly maxOutputTokens?: number | undefined;
             settle(
@@ -937,6 +948,15 @@ function streamStartupRetryConfig(
 interface SteeredRepair {
   readonly reason: RetryRepairReason;
   readonly failure: Error;
+  // Set once the caller was told its admission is the repair's; a provider retry of the repaired
+  // attempt is an ordinary attempt again.
+  admissionAnnounced?: boolean;
+}
+
+function claimRepairAdmission(steered: SteeredRepair | undefined): boolean {
+  if (steered === undefined || steered.admissionAnnounced === true) return false;
+  steered.admissionAnnounced = true;
+  return true;
 }
 
 // The steered repair of a call, set the moment the repaired attempt starts and absent until then.
@@ -2211,6 +2231,7 @@ export class Gateway {
         request,
         state.route.capability,
         state.ids.correlationId,
+        claimRepairAdmission(state.outputRepair.steered),
       ),
     };
   }
@@ -2381,6 +2402,7 @@ export class Gateway {
         attempt.state.request,
         attempt.route.capability,
         attempt.correlationId,
+        claimRepairAdmission(attempt.state.steered),
       ),
     };
   }
@@ -2409,6 +2431,7 @@ export class Gateway {
   private callerAttemptReservation(
     request: GatewayCallRequest,
     capability: ModelCapability,
+    steeredRepair = false,
   ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
     const admit = request.attemptAdmission;
     if (admit === undefined) return undefined;
@@ -2418,6 +2441,7 @@ export class Gateway {
         contextWindow: profile.maxInputTokens,
       }),
       maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
+      ...(steeredRepair ? { steeredRepair: true as const } : {}),
     });
     if (reservation === undefined)
       throw new CallerAttemptAdmissionError(
@@ -2431,36 +2455,16 @@ export class Gateway {
     request: GatewayCallRequest,
     capability: ModelCapability,
     correlationId: string,
+    steeredRepair = false,
   ): {
     request: GatewayCallRequest;
     callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
     reservation: GatewaySpendReservation | undefined;
     dispatchObserved?: () => boolean;
   } {
-    if (adapter.attemptAdmissionBoundary === "transport") {
-      let dispatched = false;
-      return {
-        request: {
-          ...request,
-          attemptAdmission: (input) =>
-            this.reserveTransportAttempt(
-              {
-                ...request,
-                ...(input.maxOutputTokens <= 0 ? {} : { maxOutputTokens: input.maxOutputTokens }),
-              },
-              capability,
-              correlationId,
-              (observed): void => {
-                dispatched ||= observed;
-              },
-            ),
-        },
-        callerReservation: undefined,
-        reservation: undefined,
-        dispatchObserved: (): boolean => dispatched,
-      };
-    }
-    const callerReservation = this.callerAttemptReservation(request, capability);
+    if (adapter.attemptAdmissionBoundary === "transport")
+      return this.transportBoundaryAttempt(request, capability, correlationId, steeredRepair);
+    const callerReservation = this.callerAttemptReservation(request, capability, steeredRepair);
     try {
       request = callerAdmittedRequest(request, callerReservation);
       return {
@@ -2474,13 +2478,53 @@ export class Gateway {
     }
   }
 
+  // The adapter owns admission at its HTTP boundary: each dispatched request asks the caller. The
+  // repair is announced on the first HTTP request of its attempt only; a compatibility fallback
+  // re-dispatch of the same attempt is not another repair.
+  private transportBoundaryAttempt(
+    request: GatewayCallRequest,
+    capability: ModelCapability,
+    correlationId: string,
+    steeredRepair: boolean,
+  ): ReturnType<Gateway["reserveAdapterAttempt"]> {
+    let dispatched = false;
+    let announceRepair = steeredRepair;
+    return {
+      request: {
+        ...request,
+        attemptAdmission: (
+          input,
+        ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> => {
+          const announced = announceRepair;
+          announceRepair = false;
+          return this.reserveTransportAttempt(
+            {
+              ...request,
+              ...(input.maxOutputTokens <= 0 ? {} : { maxOutputTokens: input.maxOutputTokens }),
+            },
+            capability,
+            correlationId,
+            (observed): void => {
+              dispatched ||= observed;
+            },
+            announced,
+          );
+        },
+      },
+      callerReservation: undefined,
+      reservation: undefined,
+      dispatchObserved: (): boolean => dispatched,
+    };
+  }
+
   private reserveTransportAttempt(
     request: GatewayCallRequest,
     capability: ModelCapability,
     correlationId: string,
     observeDispatch: (dispatched: boolean) => void,
+    steeredRepair: boolean,
   ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
-    const caller = this.callerAttemptReservation(request, capability);
+    const caller = this.callerAttemptReservation(request, capability, steeredRepair);
     let spend: GatewaySpendReservation | undefined;
     try {
       request = callerAdmittedRequest(request, caller);

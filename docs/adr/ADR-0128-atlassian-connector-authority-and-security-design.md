@@ -857,6 +857,17 @@ Chat tool turn also asks the gateway for its one steered answer repair on every 
 round after reasoning, with three metadata reads settled and no write; the repair is bounded by the
 turn's own model-call envelope and logs as `gateway.retry.scheduled` with
 `reason=empty-answer-repair`.
+When the turn also carries connected sources (Pod or folder evidence with Jira tools), the
+grounded synthesis grant (two attempt slots, one input and output token grant) used to charge the
+exhausted round to that grant and then refused the repair before any HTTP dispatch
+(`GATEWAY_ATTEMPT_ADMISSION_DENIED`, `authority-denied`, HTTP 502; S14 of epic #4173). The gateway
+now announces the repair to the caller admission (`attemptAdmission` input `steeredRepair: true`,
+once per repair, never on a provider retry of it, never on a call that did not ask for one). The
+grounded attempt tracker then moves the preceding unusable attempt out of the synthesis grant into
+tool-round orchestration, exactly as a confirmed tool round: its usage stays in the reported total and
+the turn's Authority Envelope (`maxModelCalls`, prompt budget) still bounds and counts the repair.
+The repair itself is admitted against the grant like any attempt, so there is still exactly one
+repair per call and a second exhaustion fails closed.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically

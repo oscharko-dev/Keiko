@@ -136,6 +136,11 @@ export function createGroundedSynthesisAttemptAdmission(
   const admission: NonNullable<GatewayCallRequest["attemptAdmission"]> = (input) => {
     gatewayOwned = true;
     assertSynthesisAttemptActive(options);
+    // The gateway's one steered repair follows an attempt that produced neither a tool call nor an
+    // answer. That attempt is turn orchestration, bounded by the Chat tool turn's own envelope like
+    // a confirmed tool round, so it stops counting against the synthesis grant before the repair
+    // is admitted; its physical usage stays in the reported total.
+    if (input.steeredRepair === true) latest?.releaseUnusableAttempt();
     const pending = budget.pendingUsage();
     if (
       input.promptTokens > options.inputTokensMax - pending.promptTokens ||
@@ -222,15 +227,25 @@ function synthesisAttemptReservation(
   maxOutputTokens: number,
 ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> & {
   confirmToolRound(): boolean;
+  releaseUnusableAttempt(): void;
 } {
   let settled = false;
   let observed: GroundedAnswerUsage | undefined;
+  let charged: GroundedAnswerUsage | undefined;
   return {
     maxOutputTokens,
+    releaseUnusableAttempt(): void {
+      if (charged === undefined) return;
+      budget.recordToolRoundUsage(charged);
+      charged = undefined;
+      observed = undefined;
+      budget.releaseReservation();
+    },
     confirmToolRound(): boolean {
       if (observed === undefined) return false;
       budget.recordToolRoundUsage(observed);
       observed = undefined;
+      charged = undefined;
       budget.releaseReservation();
       return true;
     },
@@ -247,6 +262,7 @@ function synthesisAttemptReservation(
         outputState === "unknown" ? { ...reported, completionTokens: maxOutputTokens } : reported,
       );
       budget.recordUsage(usage);
+      charged = usage;
       if (outputState === "observed") observed = usage;
     },
   };
