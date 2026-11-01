@@ -5,19 +5,24 @@ import {
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
-import {
-  JIRA_DRAFT_ITEM_SCHEMA,
-  JIRA_VIOLATIONS_SCHEMA,
-} from "./jiraManagedMutationDescriptors.js";
+import { JIRA_VIOLATIONS_SCHEMA } from "./jiraManagedMutationDescriptors.js";
 
 const DESCRIPTION =
-  "Write a large backlog draft in pages. Send up to " +
+  "Write a backlog draft larger than jira.draft takes in pages of up to " +
   String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-  " items per call, in the same item form as jira.draft; the first call returns a draftId, later calls pass it to append. " +
-  "Every item is checked against the issue templates when it is appended, and a violating page is refused whole with the violations to correct. " +
-  "Items may name items of later pages by ref. Each result reports the itemCount, the unresolvedRefs still to be written and a draftDigest. " +
-  "When unresolvedRefCount is 0, call jira.draft once with only draftId and the draftDigest of the last result: the human then approves the whole draft once. " +
-  "This tool changes nothing in Jira and asks for no approval; appending after the digest was read makes that digest stale.";
+  " items in the jira.draft item form; pass the returned draftId to append. A page that breaks an issue template is refused whole with the violations to correct. " +
+  "When unresolvedRefCount is 0, call jira.draft with only draftId and the last draftDigest: the human approves the whole draft once. Changes nothing in Jira.";
+
+// The item form is jira.draft's, declared there once: repeating it here would spend the model's
+// context on every turn. The tool checks every item against that form and names the first item
+// that does not match it.
+const STAGED_ITEM = {
+  type: "object",
+  description: "One item in the jira.draft item form.",
+  properties: {},
+  required: [],
+  additionalProperties: true,
+};
 
 export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.freeze({
   name: "jira.draft-stage",
@@ -32,7 +37,7 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
           type: "array",
           minItems: 1,
           maxItems: JIRA_DRAFT_PAGE_ITEMS_MAX,
-          items: JIRA_DRAFT_ITEM_SCHEMA,
+          items: STAGED_ITEM,
         },
       },
       ["items"],

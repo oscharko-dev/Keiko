@@ -249,6 +249,18 @@ describe("jira.draft-stage (#4178)", () => {
     expect(h.deps.store.size()).toBe(0);
   });
 
+  it("names the first item that is not in the jira.draft item form", async () => {
+    const h = harness();
+    const result = await h.stage({
+      items: [item("a"), { ref: "b" }, { ref: "c" }] as unknown as CatalogJsonObject[],
+    });
+    expect(result.data).toMatchObject({ reason: "invalid-input" });
+    expect(text(result.data.guidance)).toMatch(/^Item 2 is not in the jira\.draft item form/u);
+    expect(text(result.data.guidance)).not.toContain('"b"');
+    const empty = await h.stage({ items: [] });
+    expect(text(empty.data.guidance)).toContain("1 to ");
+  });
+
   it("refuses an unknown draft, another Chat's draft and a repeated ref", async () => {
     const h = harness();
     const first = await h.stage({ items: [item("a") as CatalogJsonObject] });

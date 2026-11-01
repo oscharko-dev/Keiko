@@ -111,7 +111,7 @@ const DRAFT_LINKS = {
     ["type", "direction"],
   ),
 };
-export const JIRA_DRAFT_ITEM_SCHEMA = object(
+const JIRA_DRAFT_ITEM_SCHEMA = object(
   {
     ref: DRAFT_REF,
     projectId: NUMERIC_ID,
@@ -362,9 +362,9 @@ const DEFINITIONS: Readonly<
   },
   "jira.draft": {
     description:
-      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped, and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created. A draft of up to " +
+      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped, and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created. Send up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
-      " items can be sent here as items. A larger draft, of any size, is written first, in pages, with jira.draft-stage; then call jira.draft once with only the draftId and the draftDigest of the last staging result, so the whole draft is approved once. Never split one backlog into several approvals. A very large draft may not finish within one run: the result then lists the items not started as pending, and calling jira.draft again with the same draftId and draftDigest continues with them without creating anything twice.",
+      " items here; stage a larger draft of any size with jira.draft-stage, then pass its draftId and draftDigest here, so it is approved once. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     input: object(
       {
         items: {

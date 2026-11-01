@@ -65,6 +65,21 @@ interface StageArgs {
   readonly draftId: string | undefined;
   readonly items: readonly StagedJiraDraftItem[];
 }
+/**
+ * What to correct in a page that is not well formed. The declaration leaves the item form to
+ * jira.draft's, so this names the first item that does not match it (counting from 1).
+ */
+function invalidPageGuidance(raw: CatalogJsonObject): string {
+  const { items } = raw;
+  const page: readonly unknown[] = Array.isArray(items) ? items : [];
+  const index = page.findIndex((item) => !isJiraDraftItem(item));
+  const subject =
+    index < 0
+      ? `Send draftId (when appending) and 1 to ${String(JIRA_DRAFT_PAGE_ITEMS_MAX)} items.`
+      : `Item ${String(index + 1)} is not in the jira.draft item form: ref, projectId, issueTypeId and fields with summary; optionally parent, links and requirementIds.`;
+  return `${subject} Correct the page and send it again; nothing was staged.`;
+}
+
 /** One page of well-formed items and, when it extends a draft, that draft's id. */
 function parseStageArgs(raw: CatalogJsonObject): StageArgs | undefined {
   if (!Object.keys(raw).every((key) => STAGE_KEYS.has(key))) return undefined;
@@ -214,7 +229,10 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
   const startedAt = now();
   const args = parseStageArgs(rawArgs);
   const run: StageRun<Context> = { deps, context, args, startedAt };
-  if (args === undefined) return refuseStage(run, "invalid-input", 0);
+  if (args === undefined) {
+    const refused = refuseStage(run, "invalid-input", 0);
+    return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
+  }
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
   const template = await firstTemplateRefusal(args.items, context, connection);
   if (template !== undefined) {
