@@ -19,6 +19,7 @@ import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
+import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
 import { basicAuth, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
@@ -395,6 +396,10 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
       {
         log: (line) => console.log(JSON.stringify(line)),
         onWait: () => api(ctx, "session-keepalive", "/api/skills", undefined, "GET"),
+        prepare: () =>
+          clearWorkProject(session, WORK_PROJECT, {
+            log: (line) => console.log(JSON.stringify({ ...line, id })),
+          }),
       },
     );
   } catch (error) {

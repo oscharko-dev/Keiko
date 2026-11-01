@@ -87,6 +87,59 @@ describe("withWorkProjectLock", () => {
     );
   });
 
+  it("prepares a work-project journey only once it holds the lock, before it runs", async () => {
+    const dir = directory();
+    const order = [];
+    await expect(
+      withWorkProjectLock(
+        dir,
+        "S09",
+        () => {
+          order.push("run");
+          return Promise.resolve("ran");
+        },
+        {
+          prepare: () => {
+            order.push(existsSync(join(dir, "work-project.lock")) ? "prepare-locked" : "prepare");
+            return Promise.resolve();
+          },
+        },
+      ),
+    ).resolves.toBe("ran");
+    expect(order).toEqual(["prepare-locked", "run"]);
+  });
+
+  it("does not run the journey and releases the lock when preparing fails", async () => {
+    const dir = directory();
+    let ran = false;
+    await expect(
+      withWorkProjectLock(
+        dir,
+        "S05",
+        () => {
+          ran = true;
+          return Promise.resolve();
+        },
+        { prepare: () => Promise.reject(new Error("reset failed")) },
+      ),
+    ).rejects.toThrow("reset failed");
+    expect(ran).toBe(false);
+    expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
+  });
+
+  it("never prepares a journey that reads only the report project", async () => {
+    let prepared = false;
+    await expect(
+      withWorkProjectLock(directory(), "S12", () => Promise.resolve("read"), {
+        prepare: () => {
+          prepared = true;
+          return Promise.resolve();
+        },
+      }),
+    ).resolves.toBe("read");
+    expect(prepared).toBe(false);
+  });
+
   it("never holds the lock for a journey that reads only the report project", async () => {
     const dir = directory();
     const lock = join(dir, "work-project.lock");

@@ -47,6 +47,9 @@ function tryAcquire(lock, id) {
 /**
  * Runs `run` alone among the lanes sharing `directory` unless the journey reads only RPT.
  *
+ * `prepare` runs once the lock is held, before `run`, and only for a journey that writes the work
+ * project: the runner empties REQ there, so every creation journey starts from the seeded state.
+ *
  * `onWait` runs after every poll while the lock is held elsewhere. A lane waits as long as the other
  * lane's journey takes, and its paired app session expires after 30 idle minutes: on 2026-11-01 the
  * Qwen lane waited 30.4 minutes, then every journey failed its first request with 404. The journey
@@ -57,10 +60,21 @@ export async function withWorkProjectLock(
   directory,
   id,
   run,
-  { pollMs = 5_000, log, onWait } = {},
+  { pollMs = 5_000, log, onWait, prepare } = {},
 ) {
   if (REPORT_PROJECT_JOURNEYS.has(id)) return run();
   const lock = join(directory, LOCK);
+  await acquire(lock, id, { pollMs, log, onWait });
+  try {
+    await prepare?.();
+    return await run();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+/** Polls until this lane holds the lock, keeping the waiting lane's session alive meanwhile. */
+async function acquire(lock, id, { pollMs, log, onWait }) {
   let waitedMs = 0;
   while (!tryAcquire(lock, id)) {
     if (waitedMs === 0) log?.({ operation: "requirements-work-lock", id, state: "waiting" });
@@ -76,9 +90,4 @@ export async function withWorkProjectLock(
     });
   }
   if (waitedMs > 0) log?.({ operation: "requirements-work-lock", id, state: "acquired", waitedMs });
-  try {
-    return await run();
-  } finally {
-    rmSync(lock, { recursive: true, force: true });
-  }
 }
