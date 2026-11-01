@@ -158,10 +158,15 @@ function toolArguments(mutation: Mutation, draft: boolean): Record<string, unkno
     return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
   return mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {};
 }
+/** `true` keeps requesting a tool; a number requests that many rounds, then answers. */
+function endsTurn(repeatTools: boolean | number, round: number): boolean {
+  if (typeof repeatTools === "number") return round > repeatTools;
+  return !repeatTools && round % 2 === 0;
+}
 function syntheticModel(
   calls: GatewayCallRequest[],
   mutation: Mutation,
-  repeatTools: boolean,
+  repeatTools: boolean | number,
   draft: boolean,
 ): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
@@ -182,8 +187,7 @@ function syntheticModel(
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound" || (!repeatTools && calls.length % 2 === 0))
-      return base;
+    if (request.toolCatalog?.kind !== "bound" || endsTurn(repeatTools, calls.length)) return base;
     expect(reservation).toBeDefined();
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     const tool = request.toolCatalog.projection.tools.find(
@@ -219,7 +223,7 @@ function fixture(
   mutation: Mutation = false,
   writeResponse?: Promise<void>,
   acknowledgeWrite = true,
-  repeatTools = false,
+  repeatTools: boolean | number = false,
   draft = false,
 ): {
   deps: UiHandlerDeps;
@@ -751,6 +755,60 @@ it.each([false, true])(
     else expect(result).toMatchObject({ status: 200 });
   },
 );
+
+// #4175 acceptance: "A request that needs more tool calls than the former fixed cap completes within
+// the envelope." The former cap was 30 tool calls (the coding
+// harness DEFAULT_LIMITS the loop used before 006abd71a); 35 productive reads exceed it.
+const FORMER_FIXED_CAP = 30;
+const READS_PAST_FORMER_CAP = FORMER_FIXED_CAP + 5;
+describe.each([false, true])("a turn past the former fixed tool-call cap (stream=%s)", (stream) => {
+  async function runReads(
+    budget: UiHandlerDeps["chatToolTurnBudget"],
+  ): Promise<{ f: ReturnType<typeof fixture>; body: string }> {
+    const f = fixture(false, undefined, true, READS_PAST_FORMER_CAP);
+    if (budget !== undefined) Object.assign(f.deps, { chatToolTurnBudget: budget });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, "past-former-cap"), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    return { f, body: response.body() };
+  }
+
+  it("completes under the default envelope and answers after the last read", async () => {
+    expect(READS_PAST_FORMER_CAP).toBeGreaterThan(FORMER_FIXED_CAP);
+
+    const { f, body } = await runReads(undefined);
+
+    expect(f.requests()).toBe(READS_PAST_FORMER_CAP);
+    expect(f.calls).toHaveLength(READS_PAST_FORMER_CAP + 1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.turnState).toBe("completed");
+    expect(user?.toolTranscript?.exchanges).toHaveLength(READS_PAST_FORMER_CAP);
+    expect(
+      user?.toolTranscript?.exchanges.every((exchange) => exchange.result?.status === "completed"),
+    ).toBe(true);
+    expect(assistant?.content).toBe("No Jira projects are visible.");
+    expect(assistant?.content).not.toContain("budget");
+    if (stream) expect(body).toContain("event: done");
+  });
+
+  it("is cut at the former cap when the envelope is that narrow (control for the scenario)", async () => {
+    const { f } = await runReads({
+      maxRuntimeMs: 300_000,
+      maxToolCalls: FORMER_FIXED_CAP,
+      maxPromptTokens: 100_000,
+      maxPatchBytes: 0,
+    });
+
+    expect(f.requests()).toBe(FORMER_FIXED_CAP);
+    const [, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+  });
+});
 
 it.each([false, true])(
   "answers an exhausted turn with exactly the write Jira acknowledged (stream=%s, #4175)",

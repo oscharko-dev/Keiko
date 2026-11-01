@@ -105,3 +105,52 @@ describe("a partial link effect (#4176)", () => {
     });
   });
 });
+
+describe("Jira's own field errors (#4176)", () => {
+  const FIELD_ERRORS = [
+    { fieldId: "customfield_10000", message: "Option 'Rot' is not valid." },
+    { fieldId: "components", message: "Component 'Nope' does not exist." },
+  ] as const;
+
+  it("reach the model with the field id and Jira's message", () => {
+    const result = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldErrors: FIELD_ERRORS, messages: ["Issue could not be created."] },
+    });
+
+    expect(result).toEqual({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        fieldErrors: [
+          { fieldId: "customfield_10000", message: "Option 'Rot' is not valid." },
+          { fieldId: "components", message: "Component 'Nope' does not exist." },
+        ],
+        messages: ["Issue could not be created."],
+      },
+    });
+  });
+
+  it("are copied, so the result cannot alias the attempt's detail", () => {
+    const attempt: JiraMutationAttempt = {
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldErrors: FIELD_ERRORS },
+    };
+
+    const data = jiraAttemptToolResult("rejected", attempt).data as {
+      fieldErrors: { fieldId: string }[];
+    };
+
+    expect(data.fieldErrors).toEqual(FIELD_ERRORS);
+    expect(data.fieldErrors[0]).not.toBe(FIELD_ERRORS[0]);
+  });
+
+  it("are absent from a refusal that carries no detail", () => {
+    const data = jiraAttemptToolResult("rejected", { ok: false, reason: "field-validation" }).data;
+
+    expect(data).not.toHaveProperty("fieldErrors");
+  });
+});

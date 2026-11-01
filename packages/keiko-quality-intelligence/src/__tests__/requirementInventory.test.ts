@@ -254,6 +254,59 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
     });
   });
 
+  describe("a workbook extraction (Sheet!2: Header=cell | ...)", () => {
+    it("reads a row as a requirement with its header roles", () => {
+      const [row] = detect([
+        "Anforderungen!2: ID=FR-4 | Titel=Export | Anforderung=Der Export liefert CSV. | Priorität=Muss",
+      ]).entries;
+
+      expect(row).toMatchObject({
+        id: "FR-4",
+        unitKind: "table-row",
+        title: "Export",
+        priority: "Muss",
+        statement: "Der Export liefert CSV.",
+      });
+    });
+
+    it("reads the lines of a multi-line cell as separate criteria, whichever cell is last", () => {
+      const [last, middle] = [
+        detect([
+          "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=Datei ist UTF-8.",
+          "Datei hat eine Kopfzeile.",
+          "Sheet1!3: ID=FR-5 | Titel=Import",
+        ]).entries[0],
+        detect([
+          "Sheet1!2: ID=FR-6 | Titel=Export | Abnahmekriterien=Datei ist UTF-8.",
+          "Datei hat eine Kopfzeile. | Priorität=Soll",
+        ]).entries[0],
+      ];
+
+      expect(last?.acceptanceCriteria.map((item) => item.text)).toEqual([
+        "Datei ist UTF-8.",
+        "Datei hat eine Kopfzeile.",
+      ]);
+      expect(middle?.acceptanceCriteria.map((item) => item.text)).toEqual([
+        "Datei ist UTF-8.",
+        "Datei hat eine Kopfzeile.",
+      ]);
+      expect(middle?.priority).toBe("Soll");
+    });
+
+    it("ends a row at the blank line and defines nothing without an identifier in the first cell", () => {
+      const inventory = detect([
+        "Sheet1!2: ID=FR-4 | Titel=Export",
+        "",
+        "Eine Zeile, die keine Zelle ist.",
+        "Sheet1!3: Titel=Import | ID=FR-5",
+        "Seite!3: Notiz ohne Zellen",
+      ]);
+
+      expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-4"]);
+      expect(inventory.entries[0]?.acceptanceCriteria).toEqual([]);
+    });
+  });
+
   it("reads a priority tag in a heading", () => {
     const [entry] = detect(["## FR-9 Export (MUSS)", "Der Export liefert CSV."]).entries;
 

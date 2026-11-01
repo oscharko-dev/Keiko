@@ -109,8 +109,9 @@ const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
 function database(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
   chatId: string;
-  userMessageId: string;
-  turnRef: string;
+  /** The turn the next mutation belongs to; `nextTurn` admits a new human message. */
+  turn: () => { userMessageId: string; turnRef: string };
+  nextTurn: (requestId: string) => void;
   logs: ReturnType<typeof createBufferedServerLogSink>;
 } {
   const db = new DatabaseSync(":memory:");
@@ -121,29 +122,47 @@ function database(): {
     store.close();
   });
   const chat = store.createChat(store.createProject(process.cwd()).path, "Synthetic", "model");
-  const turn = store.admitChatTurn("synthetic-sdk-turn", {
-    chatId: chat.id,
-    role: "user",
-    content: "synthetic",
-    timestamp: 1000,
-    runId: undefined,
-    workflowId: undefined,
-    workflowStatus: undefined,
-    shortResult: undefined,
-    taskType: undefined,
-  });
-  if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
-    throw new Error("Expected admitted synthetic turn");
+  const admit = (requestId: string): { userMessageId: string; turnRef: string } => {
+    const turn = store.admitChatTurn(requestId, {
+      chatId: chat.id,
+      role: "user",
+      content: "synthetic",
+      timestamp: 1000,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    if (turn.kind !== "admitted" || turn.userMessage.canonicalTurnRef === undefined)
+      throw new Error("Expected admitted synthetic turn");
+    return { userMessageId: turn.userMessage.id, turnRef: turn.userMessage.canonicalTurnRef };
+  };
+  let current = admit("synthetic-sdk-turn");
   const logs = createBufferedServerLogSink();
   return {
     journal: createChatToolMutationStore(db, () => 1000, logs),
     chatId: chat.id,
-    userMessageId: turn.userMessage.id,
-    turnRef: turn.userMessage.canonicalTurnRef,
+    turn: () => current,
+    nextTurn: (requestId): void => {
+      current = admit(requestId);
+    },
     logs,
   };
 }
-type RemoteMode = "confirmed" | "readback-denied" | "lost-response";
+type RemoteMode = "confirmed" | "readback-denied" | "lost-response" | "rejects-bad-option";
+/** The value this synthetic Jira refuses with a field error, as Data Center does for a bad option. */
+const REJECTED_VALUE = "Rot";
+const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
+/** Data Center answers a bad option value with 400 and a field error in `errors`. */
+async function fieldRejection(mode: RemoteMode, request: Request): Promise<Response | undefined> {
+  if (mode !== "rejects-bad-option" || !(await request.clone().text()).includes(REJECTED_VALUE))
+    return undefined;
+  return new Response(
+    JSON.stringify({ errorMessages: [], errors: { customfield_10000: JIRA_FIELD_ERROR } }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+}
 function remote(
   mode: RemoteMode,
   beforeWrite: () => void,
@@ -173,6 +192,8 @@ function remote(
         beforeWrite();
         writes += 1;
       }
+      const rejected = await fieldRejection(mode, request);
+      if (rejected !== undefined) return rejected;
       const result =
         request.method === "GET"
           ? mode === "readback-denied" && writes > 0
@@ -240,6 +261,8 @@ async function fixture(
     args?: CatalogJsonObject,
   ) => Promise<CatalogToolDispatchOutcome>;
   intent: () => ChatToolMutationIntent;
+  /** The human sends another message: the next mutation belongs to a new turn. */
+  nextTurn: (requestId: string) => void;
   journal: ReturnType<typeof createChatToolMutationStore>;
   writes: () => number;
   state: SyntheticJira;
@@ -261,8 +284,8 @@ async function fixture(
     activeIntent = Object.freeze({
       invocationId: context.invocationId,
       chatId: context.chatId,
-      userMessageId: db.userMessageId,
-      turnRef: db.turnRef,
+      userMessageId: db.turn().userMessageId,
+      turnRef: db.turn().turnRef,
       actorId: context.actorId,
       podId: "synthetic-pod",
       bindingGeneration: context.binding.generation,
@@ -372,6 +395,7 @@ async function fixture(
       return activeIntent;
     },
     journal: db.journal,
+    nextTurn: db.nextTurn,
     writes: jira.writes,
     state: jira.state,
     logs: db.logs,
@@ -475,6 +499,44 @@ it.each(SINGLE_MUTATIONS)(
     expect(f.state).toMatchObject(REMOTE_STATE[operation]);
   },
 );
+it("returns Jira's field error to the model and lets the corrected retry succeed (#4176)", async () => {
+  const f = await fixture("rejects-bad-option");
+  const create = (value: string): CatalogJsonObject => ({
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Changed", customfield_10000: value },
+  });
+
+  const refused = await f.invoke("jira.create", create(REJECTED_VALUE));
+
+  // The journal cannot prove a 4xx caused no effect (a proxy can rewrite a response after commit),
+  // so the outcome stays unknown; Jira's field id and message still reach the model.
+  expect(refused).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "failed",
+      data: {
+        outcome: "unknown",
+        reason: "field-validation",
+        fieldErrors: [{ fieldId: "customfield_10000", message: JIRA_FIELD_ERROR }],
+      },
+    },
+  });
+  expect(f.writes()).toBe(1);
+  expect(f.state.fields).not.toMatchObject({ customfield_10000: REJECTED_VALUE });
+
+  f.nextTurn("synthetic-corrected-turn");
+  const corrected = await f.invoke("jira.create", create("Required"));
+
+  expect(corrected).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded", issueKey: "SYN-1" } },
+  });
+  expect(f.writes()).toBe(2);
+  expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
+  expect(f.logs.lines().join()).not.toContain(JIRA_FIELD_ERROR);
+});
+
 it("requires explicit clearing and rejects ambiguous assignment through the SDK path", async () => {
   const f = await fixture();
   expect(
