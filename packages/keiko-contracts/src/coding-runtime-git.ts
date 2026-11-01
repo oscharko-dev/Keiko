@@ -219,16 +219,22 @@ function sync(value: Record<string, unknown>): boolean {
 export function isSafeTaskBranchName(value: unknown): value is string {
   return typeof value === "string" && isSafeGitRefName(value) && !value.startsWith("-");
 }
+function isBranchStatus(
+  value: unknown,
+): value is keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS {
+  return (
+    typeof value === "string" && Object.hasOwn(CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS, value)
+  );
+}
+function branchStatusReason(status: unknown, reason: unknown): boolean {
+  if (!isBranchStatus(status)) return false;
+  const allowed: readonly unknown[] = CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS[status];
+  return allowed.includes(reason);
+}
 function branch(value: Record<string, unknown>): boolean {
   return (
     keys(value, ["kind", "status", "reason", "branch"]) &&
-    typeof value.status === "string" &&
-    Object.hasOwn(CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS, value.status) &&
-    (
-      CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS[
-        value.status as keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS
-      ] as readonly unknown[]
-    ).includes(value.reason) &&
+    branchStatusReason(value.status, value.reason) &&
     (value.branch === undefined || isSafeTaskBranchName(value.branch))
   );
 }
