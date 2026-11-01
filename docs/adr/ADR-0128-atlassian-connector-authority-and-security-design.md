@@ -850,7 +850,12 @@ child of a not-yet-existing parent, and any second issue, to `jira.draft`). `jir
 exactly (`{ "id": <same id> }`); it is then dropped, because it asks for the same issue (lab S07
 of epic #4173: Qwen repeated both and got four unexplained refusals). Any other value would
 override the routing, so it is refused before any request. The refusal names the field, is
-`invalid-field`, and says to send the change without it. (2) A draft refused before any request returns
+`invalid-field`, and says to send the change without it. The same holds for every argument Keiko
+refuses before a request on `jira.create`, `jira.edit`, `jira.transition`, `jira.assign`,
+`jira.comment`, `jira.attach` and a draft item: the refusal names the argument (an unknown one by the
+call's accepted list), carries the closed `JiraFieldValidationFailure`, and one bounded sentence on
+how to send it again, ending "Nothing was changed." A bare `field-validation` is no longer
+returned for a malformed argument. The refusal reaches only the model, never the Activity Log. (2) A draft refused before any request returns
 a fixed `guidance` sentence from a closed vocabulary (`JiraDraftProblem`: draft shape, missing items,
 a malformed item ref, id, fields, parent, link or requirement list, a duplicate,
 self or unknown ref, a cycle) with the 1-based item position where one item is at fault, ending in

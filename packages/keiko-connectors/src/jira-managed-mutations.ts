@@ -1,5 +1,6 @@
 import {
   isSafeAtlassianIdentifier,
+  type JiraFieldValidationFailure,
   type JiraMutationAttempt,
   type JiraMutationOperation,
   type JiraFieldMetadata,
@@ -142,6 +143,51 @@ function keysAllowed(args: CatalogJsonObject, allowed: readonly string[]): boole
   const keys = new Set(allowed);
   return Object.keys(args).every((key) => keys.has(key));
 }
+type Refusal = Extract<JiraMutationAttempt, { ok: false }>;
+/**
+ * Keiko's own refusal of a call's arguments names the argument and how to send it again: a bare
+ * `field-validation` left Qwen retrying the same create three times (2026-11-01, #4173).
+ */
+function refusedArgument(
+  fieldId: string | undefined,
+  validation: JiraFieldValidationFailure,
+  message: string,
+): Refusal {
+  return {
+    ...INVALID,
+    detail: {
+      ...(fieldId === undefined ? {} : { fieldId }),
+      validation,
+      messages: [`${message} Nothing was changed.`],
+    },
+  };
+}
+/** One argument check: whether it holds, and the refusal that names it when it does not. */
+type ArgumentCheck = readonly [
+  holds: boolean,
+  fieldId: string,
+  validation: JiraFieldValidationFailure,
+  message: string,
+];
+/** The first argument a call does not take, then the first check that fails, each by name. */
+function argumentRefusal(
+  args: CatalogJsonObject,
+  allowed: readonly string[],
+  checks: readonly ArgumentCheck[],
+): Refusal | undefined {
+  if (!keysAllowed(args, allowed))
+    return refusedArgument(
+      undefined,
+      "unsupported-field",
+      `This call takes only ${allowed.join(", ")}.`,
+    );
+  const failed = checks.find(([holds]) => !holds);
+  return failed === undefined ? undefined : refusedArgument(failed[1], failed[2], failed[3]);
+}
+const FIELDS_SHAPE =
+  "fields must be an object of field IDs and values, without project or issuetype.";
+const LINKS_SHAPE = "links must be a list of {type, direction, issueKey}, at most 20.";
+const UPDATES_SHAPE = "updates must be a list of label updates {fieldId, operation, value}.";
 function fieldsInput(value: unknown): Record<string, unknown> | undefined {
   const fields = asRecord(value);
   return fields !== undefined &&
@@ -245,16 +291,35 @@ function withoutRestatedRouting(
     ),
   };
 }
-function createArgumentsValid(
+function createArgumentsRefusal(
   args: CatalogJsonObject,
   fields: Record<string, unknown> | undefined,
   links: readonly JiraIssueLinkRequest[] | undefined,
-): boolean {
-  return (
-    keysAllowed(args, ["projectId", "issueTypeId", "fields", "links", "requirementIds"]) &&
-    fields !== undefined &&
-    links !== undefined &&
-    !Object.keys(fields).some(isCreateRoutingField)
+): Refusal | undefined {
+  return argumentRefusal(
+    args,
+    ["projectId", "issueTypeId", "fields", "links", "requirementIds"],
+    [
+      [
+        numericId(args.projectId),
+        "projectId",
+        "required-field",
+        "projectId must be the numeric project ID jira.projects returns.",
+      ],
+      [
+        numericId(args.issueTypeId),
+        "issueTypeId",
+        "required-field",
+        "issueTypeId must be the numeric issue-type ID jira.issue_types returns.",
+      ],
+      [
+        fields !== undefined && !Object.keys(fields).some(isCreateRoutingField),
+        "fields",
+        "invalid-field",
+        FIELDS_SHAPE,
+      ],
+      [links !== undefined, "links", "invalid-field", LINKS_SHAPE],
+    ],
   );
 }
 async function createIssue(
@@ -268,14 +333,11 @@ async function createIssue(
   if (!routed.ok) return routed;
   const fields = fieldsInput(routed.fields);
   const links = parseJiraIssueLinks(args.links);
-  if (
-    !createArgumentsValid(args, fields, links) ||
-    !numericId(projectId) ||
-    !numericId(issueTypeId) ||
-    fields === undefined ||
-    links === undefined
-  )
-    return INVALID;
+  const refused = createArgumentsRefusal(args, fields, links);
+  if (refused !== undefined) return refused;
+  // Narrowing only: the refusal above already named every argument these reject.
+  if (!numericId(projectId) || !numericId(issueTypeId) || fields === undefined) return INVALID;
+  if (links === undefined) return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
   const traced = trace === undefined ? fields : traceCreateFields(fields, metadata.fields, trace);
@@ -469,16 +531,25 @@ async function fieldMutation(
     plan,
   );
 }
-function editArgumentsValid(args: CatalogJsonObject): boolean {
+function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {
   const fields = fieldsInput(args.fields ?? {});
   const updates = asArray(args.updates ?? []);
   const links = parseJiraIssueLinks(args.links);
-  return (
-    keysAllowed(args, ["issueKey", "fields", "updates", "links", "requirementIds"]) &&
-    fields !== undefined &&
-    updates !== undefined &&
-    links !== undefined &&
-    Object.keys(fields).length + updates.length + links.length > 0
+  const changes = Object.keys(fields ?? {}).length + (updates?.length ?? 0) + (links?.length ?? 0);
+  return argumentRefusal(
+    args,
+    ["issueKey", "fields", "updates", "links", "requirementIds"],
+    [
+      [fields !== undefined, "fields", "invalid-field", FIELDS_SHAPE],
+      [updates !== undefined, "updates", "invalid-field", UPDATES_SHAPE],
+      [links !== undefined, "links", "invalid-field", LINKS_SHAPE],
+      [
+        changes > 0,
+        "fields",
+        "required-field",
+        "The edit names no change: send at least one field, label update or link.",
+      ],
+    ],
   );
 }
 async function editIssue(
@@ -488,7 +559,8 @@ async function editIssue(
   policy: MutationPolicy,
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
-  if (!editArgumentsValid(args)) return INVALID;
+  const refused = editArgumentsRefusal(args);
+  if (refused !== undefined) return refused;
   const metadata = await jiraEditMutationMetadata(request, issueKey);
   const target = { purpose: "edit", issueKey } as const;
   if (trace === undefined || !metadata.ok)
@@ -504,13 +576,22 @@ async function transitionIssue(
   policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const transitionId = args.transitionId;
-  if (
-    !keysAllowed(args, ["issueKey", "transitionId", "fields", "updates"]) ||
-    !numericId(transitionId) ||
-    fieldsInput(args.fields ?? {}) === undefined ||
-    asArray(args.updates ?? []) === undefined
-  )
-    return INVALID;
+  const refused = argumentRefusal(
+    args,
+    ["issueKey", "transitionId", "fields", "updates"],
+    [
+      [
+        numericId(transitionId),
+        "transitionId",
+        "required-field",
+        "transitionId must be the numeric ID jira.transitions returns for this issue.",
+      ],
+      [fieldsInput(args.fields ?? {}) !== undefined, "fields", "invalid-field", FIELDS_SHAPE],
+      [asArray(args.updates ?? []) !== undefined, "updates", "invalid-field", UPDATES_SHAPE],
+    ],
+  );
+  if (refused !== undefined) return refused;
+  if (!numericId(transitionId)) return INVALID;
   const metadata = await jiraTransitionMutationMetadata(request, issueKey, transitionId);
   if (!metadata.ok) return metadata;
   return fieldMutation(
@@ -554,7 +635,7 @@ async function checkAssignee(
       "edit",
       "data-center",
     );
-    return validated.ok ? { ok: true } : INVALID;
+    return validated.ok ? { ok: true } : validationFailure(validated);
   }
   const params = new URLSearchParams({ issueKey, username: name, startAt: "0", maxResults: "100" });
   const response = await request(
@@ -566,7 +647,13 @@ async function checkAssignee(
   if (!response.ok) return response;
   const users = response.items;
   if (response.status !== 200 || users === undefined || users.length > 100) return MALFORMED;
-  return uniqueActiveAssignee(users, name) ? { ok: true } : INVALID;
+  return uniqueActiveAssignee(users, name)
+    ? { ok: true }
+    : refusedArgument(
+        "assigneeName",
+        "invalid-field",
+        "assigneeName must be the exact user name of one active user jira.assignable_users returns.",
+      );
 }
 function uniqueActiveAssignee(users: readonly unknown[], name: string): boolean {
   const matches = users.map(asRecord).filter((user) => user?.name === name);
@@ -606,7 +693,21 @@ async function assignIssue(
   policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const name = assignmentName(args);
-  if (name === undefined) return INVALID;
+  if (name === undefined)
+    return (
+      argumentRefusal(
+        args,
+        ["issueKey", "assigneeName", "clearAssignee"],
+        [
+          [
+            false,
+            "assigneeName",
+            "required-field",
+            "Send assigneeName as one exact user name, or clearAssignee true without assigneeName.",
+          ],
+        ],
+      ) ?? INVALID
+    );
   const allowed = await checkAssignee(request, issueKey, name);
   if (!allowed.ok) return allowed;
   const gate = await admitAssignment(request, issueKey, name, policy);
@@ -628,13 +729,20 @@ async function addComment(
   issueKey: string,
 ): Promise<JiraMutationAttempt> {
   const body = args.body;
-  if (
-    !keysAllowed(args, ["issueKey", "body"]) ||
-    typeof body !== "string" ||
-    body.trim().length === 0 ||
-    body.length > 32768
-  )
-    return INVALID;
+  const refused = argumentRefusal(
+    args,
+    ["issueKey", "body"],
+    [
+      [
+        typeof body === "string" && body.trim().length > 0 && body.length <= 32768,
+        "body",
+        "required-field",
+        "body must be the comment text, not empty and at most 32768 characters.",
+      ],
+    ],
+  );
+  if (refused !== undefined) return refused;
+  if (typeof body !== "string") return INVALID;
   const response = await request(`issue/${encodeURIComponent(issueKey)}/comment`, "POST", { body });
   if (!response.ok) return dispatchFailure(response);
   const id = response.body?.id;
@@ -666,7 +774,12 @@ async function attachFile(
   connection: JiraManagedConnection,
 ): Promise<JiraMutationAttempt> {
   const parsed = parseJiraAttachmentArguments(args);
-  if (parsed === undefined) return INVALID;
+  if (parsed === undefined)
+    return refusedArgument(
+      "source",
+      "invalid-field",
+      "Send issueKey, source {kind, path} with a workspace-relative path, and an optional file name.",
+    );
   if (connection.attachmentSource === undefined) return { ok: false, reason: "unavailable" };
   const limit = await jiraAttachmentLimit(request);
   if (!limit.ok) return limit;
@@ -735,7 +848,12 @@ function draftItemInput(
   const resolved = resolveJiraDraftItem(item, keys);
   const links = parseJiraIssueLinks(resolved?.links);
   const fields = fieldsInput(resolved?.fields);
-  if (resolved === undefined || links === undefined || fields === undefined) return INVALID;
+  if (resolved === undefined || links === undefined || fields === undefined)
+    return refusedArgument(
+      undefined,
+      "invalid-field",
+      "This draft item's fields, links or parent could not be resolved.",
+    );
   if (trace === undefined && item.requirementIds !== undefined) return UNTRACED_REFERENCES;
   return { ok: true, links, fields };
 }
@@ -811,7 +929,14 @@ function dispatchMutation(
 ): Promise<JiraMutationAttempt> {
   if (operation === "jira.create") return createIssue(request, args, policy, trace);
   const issueKey = args.issueKey;
-  if (!isSafeAtlassianIdentifier(issueKey)) return Promise.resolve(INVALID);
+  if (!isSafeAtlassianIdentifier(issueKey))
+    return Promise.resolve(
+      refusedArgument(
+        "issueKey",
+        "required-field",
+        "issueKey must be one issue key such as ABC-123.",
+      ),
+    );
   switch (operation) {
     case "jira.edit":
       return editIssue(request, args, issueKey, policy, trace);

@@ -108,7 +108,8 @@ it("creates once when fields only restate projectId and issueTypeId (Qwen, 2026-
   ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
   const posted = f.http.mock.calls.filter(([request]) => request.method === "POST");
   expect(posted).toHaveLength(1);
-  expect(JSON.parse(posted[0]?.[0].bodyJson ?? "null").fields).toEqual({
+  const body = JSON.parse(posted[0]?.[0].bodyJson ?? "null") as { readonly fields?: unknown };
+  expect(body.fields).toEqual({
     project: { id: "10000" },
     issuetype: { id: "10001" },
     summary: "Synthetic",
@@ -369,27 +370,80 @@ it.each(["jira.create", "jira.transition"] as const)(
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
+// Each refusal names the argument and how to send it again (#4173): a bare `field-validation`
+// left Qwen retrying the same create; the refusal still happens before any HTTP.
+type ArgumentRefusalRow = [
+  JiraMutationOperation,
+  CatalogJsonObject,
+  { readonly fieldId?: string; readonly validation: string },
+];
+const UNSUPPORTED = { validation: "unsupported-field" } as const;
 it.each([
-  ["jira.create", { projectId: "10000/other", issueTypeId: "10001", fields: {} }],
-  ["jira.edit", { issueKey: "SYN-1", fields: { project: { id: "999" } } }],
-  ["jira.edit", { issueKey: "SYN-1", fields: {} }],
-  ["jira.edit", { issueKey: "SYN-1", fields: { summary: "Allowed" }, credentials: "forbidden" }],
-  ["jira.transition", { issueKey: "SYN-1", transitionId: "31?extra", fields: {} }],
-  ["jira.transition", { issueKey: "SYN-1", transitionId: "31", worklog: {} }],
-  ["jira.comment", { issueKey: "SYN-1", body: { type: "doc" } }],
-  ["jira.comment", { issueKey: "SYN-1", body: " " }],
-  ["jira.comment", { issueKey: "SYN-1", body: "x".repeat(32769) }],
-  ["jira.comment", { issueKey: "../outside", body: "Synthetic" }],
-  ["jira.assign", { issueKey: "SYN-1", assigneeName: "" }],
+  [
+    "jira.create",
+    { projectId: "10000/other", issueTypeId: "10001", fields: {} },
+    { fieldId: "projectId", validation: "required-field" },
+  ],
+  [
+    "jira.edit",
+    { issueKey: "SYN-1", fields: { project: { id: "999" } } },
+    { fieldId: "fields", validation: "invalid-field" },
+  ],
+  [
+    "jira.edit",
+    { issueKey: "SYN-1", fields: {} },
+    { fieldId: "fields", validation: "required-field" },
+  ],
+  [
+    "jira.edit",
+    { issueKey: "SYN-1", fields: { summary: "Allowed" }, credentials: "forbidden" },
+    UNSUPPORTED,
+  ],
+  [
+    "jira.transition",
+    { issueKey: "SYN-1", transitionId: "31?extra", fields: {} },
+    { fieldId: "transitionId", validation: "required-field" },
+  ],
+  ["jira.transition", { issueKey: "SYN-1", transitionId: "31", worklog: {} }, UNSUPPORTED],
+  [
+    "jira.comment",
+    { issueKey: "SYN-1", body: { type: "doc" } },
+    { fieldId: "body", validation: "required-field" },
+  ],
+  [
+    "jira.comment",
+    { issueKey: "SYN-1", body: " " },
+    { fieldId: "body", validation: "required-field" },
+  ],
+  [
+    "jira.comment",
+    { issueKey: "SYN-1", body: "x".repeat(32769) },
+    { fieldId: "body", validation: "required-field" },
+  ],
+  [
+    "jira.comment",
+    { issueKey: "../outside", body: "Synthetic" },
+    { fieldId: "issueKey", validation: "required-field" },
+  ],
+  [
+    "jira.assign",
+    { issueKey: "SYN-1", assigneeName: "" },
+    { fieldId: "assigneeName", validation: "required-field" },
+  ],
   [
     "jira.assign",
     { issueKey: "SYN-1", assigneeName: "synthetic-user", baseUrl: "https://other.invalid" },
+    UNSUPPORTED,
   ],
-] satisfies [JiraMutationOperation, CatalogJsonObject][])(
-  "rejects malformed/routing/compound %s arguments before HTTP (%#)",
-  async (operation, args) => {
+] satisfies ArgumentRefusalRow[])(
+  "rejects malformed/routing/compound %s arguments before HTTP, naming the argument (%#)",
+  async (operation, args, named) => {
     const f = fixture();
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "field-validation" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { ...named, messages: [expect.stringMatching(/\S\. Nothing was changed\.$/u)] },
+    });
     expect(f.http).not.toHaveBeenCalled();
   },
 );
@@ -534,7 +588,14 @@ it.each(["inactive", "unassign-forbidden"] as const)(
         issueKey: "SYN-1",
         ...(kind === "inactive" ? { assigneeName: "synthetic-user" } : { clearAssignee: true }),
       }),
-    ).toEqual({ ok: false, reason: "field-validation" });
+    ).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail:
+        kind === "inactive"
+          ? { fieldId: "assigneeName", validation: "invalid-field", messages: [expect.any(String)] }
+          : { fieldId: "assignee", validation: "required-field" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -637,9 +698,13 @@ it("refuses contradictory duplicate assignment identities before PUT", async () 
       { name: "synthetic-user", active: false },
     ]),
   );
-  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" })).toEqual(
-    { ok: false, reason: "field-validation" },
-  );
+  expect(
+    await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" }),
+  ).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "assigneeName", validation: "invalid-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 
