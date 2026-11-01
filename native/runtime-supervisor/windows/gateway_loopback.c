@@ -5,8 +5,8 @@
 /* FirewallAPI.dll's documented network-isolation configuration API. The list is machine-wide
  * and replaced as a whole, so every change is read-modify-write of the complete list under one
  * process-wide lock; entries this service did not add are carried over unchanged. */
-typedef DWORD(WINAPI *get_config_fn)(DWORD *, PSID_AND_ATTRIBUTES *);
-typedef DWORD(WINAPI *set_config_fn)(DWORD, PSID_AND_ATTRIBUTES);
+typedef keiko_gateway_loopback_get_fn get_config_fn;
+typedef keiko_gateway_loopback_set_fn set_config_fn;
 
 static SRWLOCK config_lock = SRWLOCK_INIT;
 
@@ -43,10 +43,10 @@ static DWORD load_api(struct loopback_api *api) {
  * analyzer cannot see the write and reports every read or HeapFree of them as uninitialized. */
 #pragma warning(push)
 #pragma warning(disable : 6001)
-static DWORD update(const struct loopback_api *api, PSID package_sid, int add) {
+static DWORD update(get_config_fn get, set_config_fn set, PSID package_sid, int add) {
   PSID_AND_ATTRIBUTES current = NULL, next = NULL;
   DWORD count = 0, kept = 0, index, result;
-  result = api->get(&count, &current);
+  result = get(&count, &current);
   if (result != ERROR_SUCCESS) return result;
   next = calloc((size_t)count + 1, sizeof(*next));
   if (next == NULL) result = ERROR_OUTOFMEMORY;
@@ -61,7 +61,7 @@ static DWORD update(const struct loopback_api *api, PSID package_sid, int add) {
   if (next != NULL) {
     DWORD wanted = kept + (add ? 1u : 0u);
     if (add) next[kept].Sid = package_sid;
-    if (wanted != count) result = api->set(wanted, next);
+    if (wanted != count) result = set(wanted, next);
     for (index = 0; index < kept; index++) HeapFree(GetProcessHeap(), 0, next[index].Sid);
     free(next);
   }
@@ -70,15 +70,24 @@ static DWORD update(const struct loopback_api *api, PSID package_sid, int add) {
 }
 #pragma warning(pop)
 
+DWORD keiko_gateway_loopback_apply(keiko_gateway_loopback_get_fn get,
+                                   keiko_gateway_loopback_set_fn set, PSID package_sid, int add) {
+  DWORD result;
+  if (get == NULL || set == NULL || package_sid == NULL || !IsValidSid(package_sid))
+    return ERROR_INVALID_PARAMETER;
+  AcquireSRWLockExclusive(&config_lock);
+  result = update(get, set, package_sid, add);
+  ReleaseSRWLockExclusive(&config_lock);
+  return result;
+}
+
 static DWORD change(PSID package_sid, int add) {
   struct loopback_api api = {0};
   DWORD result;
   if (package_sid == NULL || !IsValidSid(package_sid)) return ERROR_INVALID_PARAMETER;
   result = load_api(&api);
   if (result != ERROR_SUCCESS) return result;
-  AcquireSRWLockExclusive(&config_lock);
-  result = update(&api, package_sid, add);
-  ReleaseSRWLockExclusive(&config_lock);
+  result = keiko_gateway_loopback_apply(api.get, api.set, package_sid, add);
   if (api.module != NULL) FreeLibrary(api.module);
   return result;
 }

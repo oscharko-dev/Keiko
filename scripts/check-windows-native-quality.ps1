@@ -381,6 +381,17 @@ process.exit(41);
   & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
+  # #4068 W1/W11: the loopback-exemption list rules (keep foreign entries, never duplicate, remove
+  # only the run's SID, no rewrite of an unchanged list) against an in-memory configuration list.
+  $loopbackTest = Join-Path (Split-Path $supervisor) "gateway_loopback.test.c"
+  $loopbackTestOut = Join-Path $scratch "gateway-loopback-test.exe"
+  $loopbackScratch = Join-Path $scratch "loopback-test"
+  New-Item -ItemType Directory -Force -Path $loopbackScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$loopbackScratch\" "/Fe:$loopbackTestOut" (Join-Path (Split-Path $supervisor) "gateway_loopback.c") $loopbackTest /link advapi32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway loopback-exemption test analysis failed" }
+  & $loopbackTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway loopback-exemption rules failed" }
+
   # #4068 W2/W5: compiling a Job Object supervisor does not prove descendant cleanup. Exercise
   # the exact helper built above, including detached children and loss of the owning control pipe.
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs") --helper $supervisorOut

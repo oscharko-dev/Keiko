@@ -22,4 +22,14 @@ DWORD keiko_gateway_loopback_exempt(PSID package_sid);
  * succeeds. */
 DWORD keiko_gateway_loopback_revoke(PSID package_sid);
 
+/* FirewallAPI's NetworkIsolationGetAppContainerConfig / SetAppContainerConfig shapes. */
+typedef DWORD(WINAPI *keiko_gateway_loopback_get_fn)(DWORD *, PSID_AND_ATTRIBUTES *);
+typedef DWORD(WINAPI *keiko_gateway_loopback_set_fn)(DWORD, PSID_AND_ATTRIBUTES);
+
+/* The list update behind exempt (add != 0) and revoke (add == 0), with the configuration API
+ * supplied by the caller. Production passes FirewallAPI's functions; tests pass an in-memory
+ * list so the update rules are checked without administrator rights. */
+DWORD keiko_gateway_loopback_apply(keiko_gateway_loopback_get_fn get,
+                                   keiko_gateway_loopback_set_fn set, PSID package_sid, int add);
+
 #endif
