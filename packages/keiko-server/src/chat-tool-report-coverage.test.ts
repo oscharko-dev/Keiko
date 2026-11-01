@@ -174,8 +174,9 @@ describe("unsupportedIssueKeys", () => {
 it("asks for an answer with only shown keys in one fixed sentence", () => {
   expect(unsupportedIssueKeyCorrection(["REQ-42"])).toBe(
     "Your answer names 1 issue key(s) that no tool result of this turn and no earlier message " +
-      "contains: REQ-42. No tool created or read them. Answer again: name only issue keys a tool " +
-      "result shows. If a change was refused, say that nothing was created and give the reason " +
-      "the tool result states.",
+      "contains: REQ-42. No tool created or read them. Answer again and name only issue keys a " +
+      "tool result shows. If a change was refused, either correct the call as the tool result " +
+      "states and call the tool again, or say that nothing was created and give the reason the " +
+      "tool result states.",
   );
 });

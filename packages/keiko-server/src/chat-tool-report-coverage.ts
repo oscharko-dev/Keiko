@@ -160,7 +160,8 @@ export function unsupportedIssueKeyCorrection(unsupported: readonly string[]): s
   return (
     `Your answer names ${String(unsupported.length)} issue key(s) that no tool result of this turn ` +
     `and no earlier message contains: ${unsupported.join(", ")}. No tool created or read them. ` +
-    "Answer again: name only issue keys a tool result shows. If a change was refused, say that " +
-    "nothing was created and give the reason the tool result states."
+    "Answer again and name only issue keys a tool result shows. If a change was refused, either " +
+    "correct the call as the tool result states and call the tool again, or say that nothing " +
+    "was created and give the reason the tool result states."
   );
 }

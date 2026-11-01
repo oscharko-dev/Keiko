@@ -915,7 +915,9 @@ It considers only keys of the turn's Jira projects, which the turn learns from k
 Jira calls and results and from compact draft ranges, never from free text, so requirement ids and
 other `ABC-1` shapes are not judged. A key counts as shown when a tool call or result of the turn,
 an earlier message or a compact draft range (`SYN-1..SYN-1200`) contains it. The correction names
-the unshown keys in one fixed sentence. The rest is unchanged: once per turn, with the report
+the unshown keys in one fixed sentence. The correction round offers the turn's tools like any
+round, so the model may either correct a refused call as its tool result states and call the tool
+again, or report that nothing was created and why. The rest is unchanged: once per turn, with the report
 omission checked first, and the same fallbacks. It is recorded as `unsupported-issue-key` with
 `unsupportedKeyCount`, never the keys.
 

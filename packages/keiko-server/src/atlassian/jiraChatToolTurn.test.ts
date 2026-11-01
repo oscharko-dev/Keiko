@@ -1050,6 +1050,14 @@ describe.each([false, true])(
         JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
       expect(correction(f.calls[2])).toContain("names 1 issue key(s)");
       expect(correction(f.calls[2])).toContain("SYN-42");
+      expect(correction(f.calls[2])).toContain("call the tool again");
+      // The correction round offers the turn's tools, so a refused call can be corrected.
+      const offered = (request: GatewayCallRequest | undefined): readonly string[] =>
+        request?.toolCatalog?.kind === "bound"
+          ? request.toolCatalog.offered.toolRefs.map((ref) => ref.canonicalId)
+          : [];
+      expect(offered(f.calls[2])).toEqual(offered(f.calls[1]));
+      expect(offered(f.calls[2])).toContain("keiko.jira.create");
       expect(correction(f.calls[3])).not.toContain("issue key(s)");
       const [user, assistant] = f.deps.store.listMessages(f.chatId);
       expect(user?.turnState).toBe("completed");
