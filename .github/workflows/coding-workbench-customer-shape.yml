@@ -64,14 +64,15 @@ jobs:
           }
           $spec = node -p "const p=require('./package.json'); p.name+'@'+p.version"
           npm view $spec name version dist.integrity gitHead --json --registry=https://registry.npmjs.org/
-      - name: Install the published package into fresh npm and pinned Yarn projects
+      - name: Build the workspace packages the registry smoke loads
         shell: pwsh
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           npm run build:packages
-          if ($LASTEXITCODE) { exit $LASTEXITCODE }
-          npm run smoke:registry-install -- --qualify-ui
+      - name: Install the published package into fresh npm and pinned Yarn projects
+        shell: pwsh
+        run: npm run smoke:registry-install -- --qualify-ui
       - name: Execute the pinned published CLI with npx
         shell: pwsh
         run: |
