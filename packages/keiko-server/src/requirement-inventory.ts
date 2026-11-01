@@ -391,7 +391,8 @@ function scopeGuard(
     for (const capsule of capsules)
       parts.push(`${capsule.id}@${String(capsule.updatedAt)}:${capsule.lifecycleState}`);
   }
-  return parts.sort(compareStrings).join("|");
+  parts.sort(compareStrings);
+  return parts.join("|");
 }
 
 /**

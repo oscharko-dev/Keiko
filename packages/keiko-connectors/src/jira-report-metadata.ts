@@ -104,8 +104,9 @@ function pageEnd(body: Record<string, unknown>, startAt: number, read: number): 
   const validTotal = typeof total === "number" && Number.isSafeInteger(total) && total >= 0;
   if (body.startAt !== undefined && body.startAt !== startAt) return "malformed";
   if (body.isLast === true) return "last";
-  if (validTotal) return startAt + read >= total ? "last" : read === 0 ? "malformed" : "more";
-  return "malformed";
+  if (!validTotal) return "malformed";
+  if (startAt + read >= total) return "last";
+  return read === 0 ? "malformed" : "more";
 }
 /** Every page of one createmeta collection; the failure reason when a page cannot be read. */
 async function collectPages(

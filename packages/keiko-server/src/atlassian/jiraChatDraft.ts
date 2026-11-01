@@ -669,7 +669,8 @@ const PROBLEM_GUIDANCE: Readonly<Record<JiraDraftProblem, string>> = {
 const DRAFT_REFUSED = "Nothing was changed. Correct the draft and send it once.";
 function problemGuidance(problem: JiraDraftProblem, item: number | undefined): string {
   const sentence = PROBLEM_GUIDANCE[problem];
-  return `${item === undefined ? sentence : `Item ${String(item)} ${sentence}`} ${DRAFT_REFUSED}`;
+  const named = item === undefined ? sentence : `Item ${String(item)} ${sentence}`;
+  return `${named} ${DRAFT_REFUSED}`;
 }
 
 export async function executeJiraChatDraft(

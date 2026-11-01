@@ -74,6 +74,11 @@ const ESCAPES: Readonly<Record<string, string>> = {
   f: "\f",
 };
 
+/** The byte at `index` of a Latin-1 string (one code unit per byte); -1 outside it. */
+function byteAt(latin1: string, index: number): number {
+  return latin1.codePointAt(index) ?? -1;
+}
+
 function isRegular(code: number): boolean {
   return !SPACES.has(code) && !DELIMITERS.has(code);
 }
@@ -85,24 +90,24 @@ function isOctal(code: number): boolean {
 /** One backslash escape of a literal string: its text and the offset after it. */
 function readEscape(raw: string, at: number): { readonly text: string; readonly next: number } {
   const char = raw.charAt(at);
-  const code = raw.charCodeAt(at);
+  const code = byteAt(raw, at);
   if (isOctal(code)) {
     let end = at + 1;
-    while (end < at + 3 && isOctal(raw.charCodeAt(end))) end += 1;
-    return { text: String.fromCharCode(Number.parseInt(raw.slice(at, end), 8) & 0xff), next: end };
+    while (end < at + 3 && isOctal(byteAt(raw, end))) end += 1;
+    return { text: String.fromCodePoint(Number.parseInt(raw.slice(at, end), 8) & 0xff), next: end };
   }
-  if (code === CR) return { text: "", next: raw.charCodeAt(at + 1) === LF ? at + 2 : at + 1 };
+  if (code === CR) return { text: "", next: byteAt(raw, at + 1) === LF ? at + 2 : at + 1 };
   return { text: ESCAPES[char] ?? char, next: at + 1 };
 }
 
 /** The text of a PDF text string: UTF-16 and UTF-8 behind their byte order mark, else Latin-1. */
 function textStringVariants(latin1: string): readonly string[] {
-  const first = latin1.charCodeAt(0);
-  const second = latin1.charCodeAt(1);
+  const first = byteAt(latin1, 0);
+  const second = byteAt(latin1, 1);
   let decoded = latin1;
   if ((first === 0xfe && second === 0xff) || (first === 0xff && second === 0xfe)) {
     decoded = utf16Text(Buffer.from(latin1.slice(2), "latin1"), first === 0xfe);
-  } else if (first === 0xef && second === 0xbb && latin1.charCodeAt(2) === 0xbf) {
+  } else if (first === 0xef && second === 0xbb && byteAt(latin1, 2) === 0xbf) {
     decoded = Buffer.from(latin1.slice(3), "latin1").toString("utf8");
   }
   // A text string whose two-byte characters carry no byte order mark still reads as ASCII with NULs.
@@ -116,7 +121,7 @@ function utf16Text(bytes: Buffer, bigEndian: boolean): string {
 
 function decodeName(encoded: string): string {
   return encoded.replace(NAME_ESCAPE, (_match, hex: string) =>
-    String.fromCharCode(Number.parseInt(hex, 16)),
+    String.fromCodePoint(Number.parseInt(hex, 16)),
   );
 }
 
@@ -223,7 +228,7 @@ class PdfReader {
   }
 
   private step(): boolean {
-    const code = this.raw.charCodeAt(this.position);
+    const code = byteAt(this.raw, this.position);
     if (SPACES.has(code)) {
       this.position += 1;
       return true;
@@ -236,10 +241,10 @@ class PdfReader {
 
   private stepDelimiter(code: number): boolean {
     if (code === LT) {
-      return this.raw.charCodeAt(this.position + 1) === LT ? this.openDictionary() : this.readHex();
+      return byteAt(this.raw, this.position + 1) === LT ? this.openDictionary() : this.readHex();
     }
     if (code === GT) {
-      return this.raw.charCodeAt(this.position + 1) === GT
+      return byteAt(this.raw, this.position + 1) === GT
         ? this.closeDictionary()
         : this.recover(this.position + 1);
     }
@@ -254,11 +259,7 @@ class PdfReader {
 
   private skipComment(): boolean {
     let end = this.position;
-    while (
-      end < this.raw.length &&
-      this.raw.charCodeAt(end) !== LF &&
-      this.raw.charCodeAt(end) !== CR
-    ) {
+    while (end < this.raw.length && byteAt(this.raw, end) !== LF && byteAt(this.raw, end) !== CR) {
       end += 1;
     }
     this.position = end;
@@ -267,7 +268,7 @@ class PdfReader {
 
   private readName(): boolean {
     let end = this.position + 1;
-    while (end < this.raw.length && isRegular(this.raw.charCodeAt(end))) end += 1;
+    while (end < this.raw.length && isRegular(byteAt(this.raw, end))) end += 1;
     const name = decodeName(this.raw.slice(this.position + 1, end));
     this.names.add(name);
     this.token(`/${name}`);
@@ -295,23 +296,26 @@ class PdfReader {
     const parts: string[] = [];
     let depth = 1;
     let chunk = this.position + 1;
-    for (let index = chunk; index < this.raw.length; index += 1) {
-      const code = this.raw.charCodeAt(index);
+    let index = chunk;
+    while (index < this.raw.length) {
+      const code = byteAt(this.raw, index);
       if (code === BACKSLASH) {
         parts.push(this.raw.slice(chunk, index));
         const escape = readEscape(this.raw, index + 1);
         parts.push(escape.text);
         chunk = escape.next;
-        index = escape.next - 1;
+        index = escape.next;
         continue;
       }
       if (code === LPAREN) depth += 1;
       if (code === RPAREN) depth -= 1;
-      if (depth > 0) continue;
-      parts.push(this.raw.slice(chunk, index));
-      this.addString(parts.join(""));
-      this.position = index + 1;
-      return true;
+      if (depth === 0) {
+        parts.push(this.raw.slice(chunk, index));
+        this.addString(parts.join(""));
+        this.position = index + 1;
+        return true;
+      }
+      index += 1;
     }
     // Unterminated: a lenient reader still decodes what is there.
     parts.push(this.raw.slice(chunk));
@@ -334,7 +338,7 @@ class PdfReader {
 
   private readKeyword(): boolean {
     let end = this.position;
-    while (end < this.raw.length && isRegular(this.raw.charCodeAt(end))) end += 1;
+    while (end < this.raw.length && isRegular(byteAt(this.raw, end))) end += 1;
     const keyword = this.raw.slice(this.position, end);
     const keywordStart = this.position;
     this.position = end;
@@ -351,12 +355,12 @@ class PdfReader {
   private readStream(keywordStart: number): boolean {
     const after = this.position;
     const lineEnd = this.raw.startsWith("\r\n", after) ? after + 2 : after + 1;
-    if (this.raw.charCodeAt(after) !== LF && lineEnd !== after + 2) return this.recover(after);
+    if (byteAt(this.raw, after) !== LF && lineEnd !== after + 2) return this.recover(after);
     const endKeyword = this.raw.indexOf(END_STREAM, lineEnd);
     if (endKeyword < 0) return this.recover(this.raw.length);
     let end = endKeyword;
-    if (this.raw.charCodeAt(end - 1) === LF) end -= 1;
-    if (this.raw.charCodeAt(end - 1) === CR) end -= 1;
+    if (byteAt(this.raw, end - 1) === LF) end -= 1;
+    if (byteAt(this.raw, end - 1) === CR) end -= 1;
     end = Math.max(end, lineEnd);
     const filters =
       this.lastDictionary === undefined ? undefined : dictionaryFilters(this.lastDictionary);

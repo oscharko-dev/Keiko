@@ -28,7 +28,7 @@ export const AFFECTED_ISSUES_MAX = 120;
 /** Issue keys listed under one changed or removed requirement; `issueCount` states the rest. */
 export const ISSUES_PER_REQUIREMENT_MAX = 10;
 const TITLE_CHARS_MAX = 160;
-const PROJECT_KEY = /^[A-Za-z][A-Za-z0-9_]{0,63}$/u;
+const PROJECT_KEY = /^[A-Za-z]\w{0,63}$/u;
 
 export type ChangesRefusal = "report-required" | "report-reading" | "report-not-found";
 
