@@ -169,8 +169,10 @@ describe("generated field construction preservation", () => {
       ({ registrationSite, emitterSites, ...operation }) => operation,
     );
     withGeneratedRuntime(({ identity }) => {
-      // Derive the established runtime projection from the old checked-in catalog, independently
-      // of constructor expansion; bookkeeping alone is excluded by the existing projection.
+      // The checked-in catalog comes from the same generator and constructors, so this proves the
+      // runtime module and the catalog agree, not that a constructor kept its values. The literal
+      // descriptor pins in activity-log-field-contracts.test.ts cover that. Bookkeeping alone is
+      // excluded by the existing projection.
       const actual = identity.ACTIVITY_LOG_OPERATION_REGISTRY;
       expect(actual).toEqual(expected);
       for (const [index, operation] of actual.entries()) {
