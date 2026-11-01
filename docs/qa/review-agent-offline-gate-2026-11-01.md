@@ -51,6 +51,7 @@ pull request; the replay refuses that, and every row's `split` is `development`.
 | dev-2                                | product | `648cb03f8`: a role model whose readiness lapsed is checked again before the run.                                                                                         | `4c4d15ed983a`       | 0       | n/a (5 presented: 2 undecided, 3 unmatched)                                               | 3                     | 14 budget-exhausted, 5 model-failed, 5 deadline-exceeded, 3 files-unprocessed, 3 complete | 183 s            |
 | dev-3                                | product | `bf7574364`: the Reviewer is told to report each finding once confirmed and to plan for about 15 read or search calls; the Counter-checker to use at most four.           | `dfcb28e93038`       | 0       | n/a (1 presented, unmatched)                                                              | 1                     | 18 budget-exhausted, 6 model-failed, 4 complete, 1 deadline-exceeded, 1 files-unprocessed | 184 s            |
 | dev-4                                | product | `7b3437265` with `KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS=1500000`: the Reviewer prompt allowance raised from 600,000 to 1,500,000 tokens.                                     | `c2a4ccc7abfb`       | 4       | 75.0 % (3/4, Wilson 95 % interval 30.1 to 95.4 %; 15 presented, 2 undecided, 9 unmatched) | 3                     | 10 model-failed, 8 budget-exhausted, 5 complete, 5 files-unprocessed, 2 deadline-exceeded | 477 s            |
+| dev-5                                | product | `b6c850be8`: the review route buffers every upstream model call (`2b8e673dc`), and the Reviewer's default prompt allowance is 1,500,000 tokens.                           | `9b108e9e321b`       | 1       | 0.0 % (0/1, Wilson 95 % interval 0.0 to 79.3 %; 11 presented, 10 unmatched)               | 3                     | 9 budget-exhausted, 9 deadline-exceeded, 7 complete, 4 files-unprocessed, 1 model-failed  | 775 s            |
 
 Reading of the runs so far:
 
@@ -84,6 +85,21 @@ Reading of the runs so far:
 - From dev-4 on, the configuration digest also covers the run-budget operator settings
   (`KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS` and the duration and coding-envelope keys), and the
   evidence records their values.
+- dev-5 shows the buffered review route working. Model-failed runs fell from 10 to 1: the gateway
+  scheduled 17 schema repairs and only one Reviewer run still ended on `invalid-tool-call`. The
+  other nine failed turns are prompt-allowance refusals (`turn-rejected`), which settle as
+  `budget-exhausted`.
+- The Reviewer averaged 933,304 prompt tokens per review and reported 50 candidates. The
+  Counter-checker settled 48 of them: 11 confirmed, 17 refuted (16 `evidence-mismatch`, 1
+  `guarded-elsewhere`) and 20 undecided because the 300-second wall time ran out. Two candidates
+  stayed unchecked. Every `deadline-exceeded` settlement is a counter-check that ran out of time,
+  not the run's own duration.
+- Gemma generated about 12 tokens per second in every hour of the run (median per call), so the
+  timeouts come from the model's speed, not from contention. Decided checks took 58 to 285 seconds;
+  timed-out checks had made 1 to 8 tool calls.
+- The one decided finding was a false alarm, so the development verdict is `fail` at 0/1. With 1
+  to 4 decided findings per run, the development rate cannot tell dev-4 and dev-5 apart: most
+  presented findings overlap no historical thread (`unmatched`) and count in no rate.
 
 ## Final holdout run
 
