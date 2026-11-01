@@ -40885,6 +40885,12 @@
           "analyzerProjection": "failure-cluster",
           "safeContextFields": [
             {
+              "name": "authorityRefusal",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
               "name": "layer",
               "type": "string",
               "dataClass": "closed-enum",

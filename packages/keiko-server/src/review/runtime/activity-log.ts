@@ -85,6 +85,25 @@ const REVIEW_RUN_RUNTIME_STOPPED = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+/**
+ * Why the authority probe found no review authority (#4138): the workspace authority's closed
+ * refusal, an absent active workspace or principal, or a failure outside that vocabulary.
+ */
+export const REVIEW_AUTHORITY_REFUSALS = [
+  "no-active-workspace",
+  "no-principal",
+  "active-workspace",
+  "verified-head",
+  "issue-binding",
+  "workspace-instance",
+  "root-not-absolute",
+  "canonical-root",
+  "launch-rejected",
+  "filesystem-error",
+  "unexpected-error",
+] as const;
+export type ReviewAuthorityRefusal = (typeof REVIEW_AUTHORITY_REFUSALS)[number];
+
 const REVIEW_RUN_PROFILE_REFUSED = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -104,6 +123,13 @@ const REVIEW_RUN_PROFILE_REFUSED = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: ["configuration", "tool-set", "authority", "facade", "profile"],
+    },
+    // #4138: why the authority probe found no review authority; only with `authority-missing`.
+    authorityRefusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: REVIEW_AUTHORITY_REFUSALS,
     },
   },
   causal: "correlation",
@@ -298,6 +324,7 @@ export function logReviewProfileRefused(
   correlationId: string | undefined,
   reason: ReviewProfileRefusalReason,
   layer: ReviewProfileLayer,
+  authorityRefusal?: ReviewAuthorityRefusal,
 ): void {
   log.write(
     activityLogEvent(
@@ -307,7 +334,7 @@ export function logReviewProfileRefused(
         correlationId: correlationIdOrUnknown(correlationId),
         errorKind: "authority-denied",
       },
-      { reason, layer },
+      { reason, layer, ...(authorityRefusal === undefined ? {} : { authorityRefusal }) },
     ),
   );
 }

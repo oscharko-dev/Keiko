@@ -33,7 +33,7 @@ import {
   OPENCODE_RUNTIME_PROVIDER_ID,
   type OpenCodeContextGeometry,
 } from "../../coding-runtime/opencodeLaunchProfile.js";
-import type { ReviewProfileLayer } from "./activity-log.js";
+import type { ReviewAuthorityRefusal, ReviewProfileLayer } from "./activity-log.js";
 
 /** What the composition is about to launch, as the self-check reads it. */
 export interface ReviewRuntimeLayers {
@@ -50,6 +50,8 @@ export interface ReviewRuntimeLayers {
         readonly runtimePurpose: CodingRuntimePurpose | undefined;
       }
     | undefined;
+  /** Why the authority is absent; set only when `authority` is undefined. */
+  readonly authorityRefusal?: ReviewAuthorityRefusal | undefined;
   /** The purpose the run's tool facade and catalog bridge are composed with. */
   readonly facadePurpose: CodingRuntimePurpose | undefined;
 }
@@ -60,6 +62,7 @@ export type ReviewRuntimeSelfCheck =
       readonly ok: false;
       readonly reason: ReviewProfileRefusalReason;
       readonly layer: ReviewProfileLayer;
+      readonly authorityRefusal?: ReviewAuthorityRefusal | undefined;
     };
 
 /**
@@ -163,7 +166,14 @@ export function checkReviewRuntimeLayers(layers: ReviewRuntimeLayers): ReviewRun
   if (!reviewPluginSetIsExact(layers.pluginSources)) {
     return refusal("review-profile-invalid", "tool-set");
   }
-  if (layers.authority === undefined) return refusal("authority-missing", "authority");
+  if (layers.authority === undefined) {
+    return {
+      ok: false,
+      reason: "authority-missing",
+      layer: "authority",
+      authorityRefusal: layers.authorityRefusal ?? "unexpected-error",
+    };
+  }
   if (!reviewAuthorityIsExact(layers.authority)) {
     return refusal("review-profile-invalid", "authority");
   }

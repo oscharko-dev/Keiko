@@ -50,12 +50,14 @@ import {
   type ProductionCodingRuntimeResolverInput,
 } from "../../coding-runtime/productionCodingRuntimeResolver.js";
 import type { ProductionManagedWorktreeToolInput } from "../../coding-runtime/productionManagedWorktreeTools.js";
+import { CodingRuntimeLaunchRejectedError } from "../../coding-runtime/launchFailure.js";
 import { resolveProductionRuntimeContext } from "../../coding-runtime/productionRuntimeWorkspaceAuthority.js";
 import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
 import type { ServerLogSink } from "../../observability/index.js";
 import { runMigrations } from "../../store/schema.js";
 import type { WorkspaceRootAccess } from "../../task-workspace/workspace-root-access.js";
 import type { UiHandlerDeps } from "../../deps.js";
+import { REVIEW_AUTHORITY_REFUSALS, type ReviewAuthorityRefusal } from "./activity-log.js";
 import {
   createReviewWorkspaceLifecycle,
   type ReviewWorkspaceLifecycle,
@@ -119,7 +121,7 @@ export interface ReviewRuntimeComposition {
    * The authority a run started now would be minted with, resolved through the same workspace
    * authority path the resolver uses; `undefined` when none can be resolved (self-check layer 3).
    */
-  readonly authorityProbe: (modelId: string) => ReviewRuntimeAuthorityFacts | undefined;
+  readonly authorityProbe: (modelId: string) => ReviewRuntimeAuthorityProbe;
   /**
    * The purpose the composed resolver hands every run's tool facade and catalog bridge (self-check
    * layer 4). The composition sets it from its own review profile, never from a minted context.
@@ -138,14 +140,35 @@ interface ReviewRuntimeAuthorityFacts {
   readonly runtimePurpose: CodingRuntimePurpose | undefined;
 }
 
+/** The authority a run would be minted with, or the closed reason there is none (#4138). */
+export type ReviewRuntimeAuthorityProbe =
+  | { readonly ok: true; readonly facts: ReviewRuntimeAuthorityFacts }
+  | { readonly ok: false; readonly refusal: ReviewAuthorityRefusal };
+
+function workspaceRefusal(reason: string | undefined): ReviewAuthorityRefusal | undefined {
+  return REVIEW_AUTHORITY_REFUSALS.find((refusal) => refusal === reason);
+}
+
+/** The closed reason of a failed probe: the workspace authority's own, or the failure's class. */
+function authorityRefusalOf(error: Error): ReviewAuthorityRefusal {
+  if (error instanceof CodingRuntimeLaunchRejectedError) {
+    return workspaceRefusal(error.reason) ?? "launch-rejected";
+  }
+  const code = (error as { readonly code?: unknown }).code;
+  return typeof code === "string" && /^E[A-Z]+$/u.test(code)
+    ? "filesystem-error"
+    : "unexpected-error";
+}
+
 function probeAuthority(
   authority: ProductionCodingRuntimeResolverInput["workspaceAuthority"],
   workspace: ReviewWorkspaceLifecycle,
   principal: string | undefined,
   modelId: string,
-): ReviewRuntimeAuthorityFacts | undefined {
+): ReviewRuntimeAuthorityProbe {
   const active = workspace.getActive();
-  if (active === undefined || principal === undefined) return undefined;
+  if (active === undefined) return { ok: false, refusal: "no-active-workspace" };
+  if (principal === undefined) return { ok: false, refusal: "no-principal" };
   try {
     const context = resolveProductionRuntimeContext(authority, {
       runId: "review-self-check",
@@ -158,15 +181,18 @@ function probeAuthority(
       serverPrincipal: principal,
     });
     return {
-      actionClasses: context.actionClasses,
-      effectiveMode: resolveEffectiveCodingWorkbenchMode(
-        "governed-assist",
-        context.deploymentCeiling,
-      ),
-      runtimePurpose: context.runtimePurpose,
+      ok: true,
+      facts: {
+        actionClasses: context.actionClasses,
+        effectiveMode: resolveEffectiveCodingWorkbenchMode(
+          "governed-assist",
+          context.deploymentCeiling,
+        ),
+        runtimePurpose: context.runtimePurpose,
+      },
     };
   } catch (error) {
-    if (error instanceof Error) return undefined;
+    if (error instanceof Error) return { ok: false, refusal: authorityRefusalOf(error) };
     throw error;
   }
 }
@@ -314,7 +340,7 @@ function assembleComposition(
     readiness: parts.readiness,
     workspace: parts.workspace,
     expectStart: parts.confirmations.expect,
-    authorityProbe: (modelId): ReviewRuntimeAuthorityFacts | undefined =>
+    authorityProbe: (modelId): ReviewRuntimeAuthorityProbe =>
       probeAuthority(parts.authority, parts.workspace, input.serverPrincipal(), modelId),
     get facadePurpose(): CodingRuntimePurpose | undefined {
       return parts.facadePurpose();

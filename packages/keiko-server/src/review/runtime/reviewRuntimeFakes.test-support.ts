@@ -135,7 +135,7 @@ export function fakeReviewComposition(
     readiness: { toolProfile: "review" } as never,
     workspace,
     expectStart: () => undefined,
-    authorityProbe: () => undefined,
+    authorityProbe: () => ({ ok: false, refusal: "no-active-workspace" }),
     facadePurpose: "review",
     sidecarDeps: (base) => base,
     close: (): void => {

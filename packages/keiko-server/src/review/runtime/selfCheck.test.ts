@@ -206,11 +206,16 @@ describe("checkReviewRuntimeLayers", () => {
   });
 
   it("refuses a missing or widened review authority (layer 3)", () => {
+    // #4138: the closed reason the probe found travels with the refusal; none known is unexpected.
     expect(checkReviewRuntimeLayers(layers({ authority: undefined }))).toEqual({
       ok: false,
       reason: "authority-missing",
       layer: "authority",
+      authorityRefusal: "unexpected-error",
     });
+    expect(
+      checkReviewRuntimeLayers(layers({ authority: undefined, authorityRefusal: "verified-head" })),
+    ).toMatchObject({ reason: "authority-missing", authorityRefusal: "verified-head" });
     for (const authority of [
       { actionClasses: ["workspace-read", "workspace-write"], effectiveMode: "governed-assist" },
       { actionClasses: ["workspace-read"], effectiveMode: "supervised-coding" },

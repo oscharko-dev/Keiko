@@ -110,7 +110,8 @@ export function productionReviewRuntimeLayers(
     toolProfile,
     configValue: profile.ok ? profile.configValue : undefined,
     pluginSources: createGeneratedOpenCodeV2Plugins(toolProfile),
-    authority,
+    authority: authority.ok ? authority.facts : undefined,
+    authorityRefusal: authority.ok ? undefined : authority.refusal,
     facadePurpose: composition.facadePurpose,
   };
 }

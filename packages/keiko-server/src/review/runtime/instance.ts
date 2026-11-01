@@ -444,6 +444,7 @@ async function runOnInstance(
         request.correlationId,
         check.reason,
         check.layer,
+        check.authorityRefusal,
       );
       return { ok: false, reason: check.reason, rules: prepared.rules };
     }
