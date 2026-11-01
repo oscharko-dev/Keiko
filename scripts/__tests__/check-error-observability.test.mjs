@@ -273,3 +273,85 @@ describe("reviewed catches that may only return their fixed fallback (#3918)", (
     ).toHaveLength(1);
   });
 });
+
+const CLOSED_INSPECTION_REFUSAL =
+  'return { ok: false, errors: ["payload could not be inspected"] };';
+
+// Each owner may keep only the exact closed inspection refusal in its catch; any other fallback,
+// owner or path is an unregistered failure path.
+function describeClosedInspectionCatches(title, path, owners) {
+  describe(title, () => {
+    const refusal = CLOSED_INSPECTION_REFUSAL;
+    for (const owner of owners) {
+      it(`accepts only the exact closed inspection refusal for ${owner}`, () => {
+        const source = `function ${owner}(input) { try { return input.value; } catch { ${refusal} } }`;
+        expect(unregisteredFailurePathViolations(source, path)).toEqual([]);
+        expect(
+          unregisteredFailurePathViolations(source, "packages/fixture/src/other.ts"),
+        ).toHaveLength(1);
+        expect(
+          unregisteredFailurePathViolations(source.replace(owner, "otherOwner"), path),
+        ).toHaveLength(1);
+        for (const fallback of [
+          "",
+          "return input;",
+          'console.warn("private"); ' + refusal,
+          'return { ok: true, errors: ["payload could not be inspected"] };',
+          'return { ok: false, errors: ["private"] };',
+          "return { ok: false, errors: [message] };",
+          'return { ok: false, errors: ["payload could not be inspected", "extra"] };',
+          'return { ...input, ok: false, errors: ["payload could not be inspected"] };',
+          'return { ["ok"]: false, errors: ["payload could not be inspected"] };',
+        ])
+          expect(
+            unregisteredFailurePathViolations(source.replace(refusal, fallback), path),
+          ).toHaveLength(1);
+      });
+    }
+  });
+}
+
+describeClosedInspectionCatches(
+  "Command parser closed inspection catches (#3918)",
+  "packages/keiko-contracts/src/command-runner.ts",
+  ["parseCommandTaskRunRequest", "validateCommandTaskCatalog", "validateCommandTaskRunResult"],
+);
+
+describe("Managed LSP parser closed classification catch (#3918)", () => {
+  const path = "packages/keiko-contracts/src/managed-lsp-parse-safely.ts";
+  const source =
+    'function parserInspectionClass(error) { try { return classify(error); } catch { return "unknown"; } }';
+
+  it("accepts the exact managed-LSP helper and fixed unknown fallback", () => {
+    expect(unregisteredFailurePathViolations(source, path)).toEqual([]);
+  });
+
+  it("rejects the same helper at another module or owner", () => {
+    for (const otherPath of [
+      "packages/fixture/src/other.ts",
+      "packages/keiko-contracts/src/git-editor.ts",
+      "packages/keiko-contracts/src/dap-debug.ts",
+    ])
+      expect(unregisteredFailurePathViolations(source, otherPath)).toHaveLength(1);
+    expect(
+      unregisteredFailurePathViolations(
+        source.replace("parserInspectionClass", "otherOwner"),
+        path,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    "return error;",
+    "return error.name;",
+    'return "private-name";',
+    'return "unknown error";',
+    'return "unknown-error";',
+    "",
+    'console.warn("private-name"); return "unknown";',
+    'inspect(); return "unknown";',
+  ])("rejects a nonliteral or expanded fallback: %s", (fallback) => {
+    const changed = source.replace('return "unknown"; } }', `${fallback} } }`);
+    expect(unregisteredFailurePathViolations(changed, path)).toHaveLength(1);
+  });
+});

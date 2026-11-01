@@ -349,7 +349,42 @@ function isReviewedFailurePath(path, owner, node) {
   if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(site)) return false;
   if (REVIEWED_FIXED_FAILURE_FALLBACKS.has(site))
     return exactFailureFallback(node, REVIEWED_FIXED_FAILURE_FALLBACKS.get(site));
+  if (path === "packages/keiko-contracts/src/command-runner.ts")
+    return exactCommandInspectionRefusal(node);
   return true;
+}
+
+function namedFailureProperty(property, name) {
+  return (
+    ts.isPropertyAssignment(property) &&
+    ts.isIdentifier(property.name) &&
+    property.name.text === name
+  );
+}
+
+function exactInspectionErrors(property) {
+  if (!namedFailureProperty(property, "errors")) return false;
+  const value = property.initializer;
+  return (
+    ts.isArrayLiteralExpression(value) &&
+    value.elements.length === 1 &&
+    ts.isStringLiteral(value.elements[0]) &&
+    value.elements[0].text === "payload could not be inspected"
+  );
+}
+
+function exactCommandInspectionRefusal(node) {
+  if (node.block.statements.length !== 1) return false;
+  const statement = node.block.statements[0];
+  if (!ts.isReturnStatement(statement) || statement.expression === undefined) return false;
+  const expression = statement.expression;
+  if (!ts.isObjectLiteralExpression(expression) || expression.properties.length !== 2) return false;
+  const [ok, errors] = expression.properties;
+  return (
+    namedFailureProperty(ok, "ok") &&
+    ok.initializer.kind === ts.SyntaxKind.FalseKeyword &&
+    exactInspectionErrors(errors)
+  );
 }
 
 function exactFailureFallback(node, value) {
