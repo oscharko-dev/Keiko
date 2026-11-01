@@ -319,11 +319,36 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
     "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
       "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-contracts/src/observability.ts:completeRegistrationShape":
+      "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
+    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind":
+      "An unreadable error kind becomes the closed registration-mismatch refusal carried by the rejection sentinel to the physical writer.",
   }),
 );
 
-function isReviewedFailurePath(path, owner) {
-  return REVIEWED_FAILURE_PATH_EXEMPTIONS.has(`${path}:${owner}`);
+// A reviewed catch listed here may only return exactly this fixed fallback.
+const REVIEWED_FIXED_FAILURE_FALLBACKS = new Map([
+  ["packages/keiko-contracts/src/observability.ts:completeRegistrationShape", false],
+  [
+    "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind",
+    "registration-mismatch",
+  ],
+]);
+
+function isReviewedFailurePath(path, owner, node) {
+  const site = `${path}:${owner}`;
+  if (!REVIEWED_FAILURE_PATH_EXEMPTIONS.has(site)) return false;
+  if (REVIEWED_FIXED_FAILURE_FALLBACKS.has(site))
+    return exactFailureFallback(node, REVIEWED_FIXED_FAILURE_FALLBACKS.get(site));
+  return true;
+}
+
+function exactFailureFallback(node, value) {
+  if (node.block.statements.length !== 1) return false;
+  const statement = node.block.statements[0];
+  if (!ts.isReturnStatement(statement) || statement.expression === undefined) return false;
+  if (value === false) return statement.expression.kind === ts.SyntaxKind.FalseKeyword;
+  return ts.isStringLiteral(statement.expression) && statement.expression.text === value;
 }
 
 function hasRawConsoleCall(node) {
@@ -633,7 +658,7 @@ function failurePathFinding(sourceFile, node, path) {
   const line = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1;
   const owner = catchFunctionName(node);
   if (hasRawConsoleCall(node)) return { path, line, owner, kind: "raw-console-catch" };
-  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner)) {
+  if (!hasEvidenceOrPropagation(node) && !isReviewedFailurePath(path, owner, node)) {
     return { path, line, owner, kind: "unregistered-catch" };
   }
   return undefined;

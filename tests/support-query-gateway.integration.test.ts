@@ -18,7 +18,10 @@ import {
   CircuitBreaker,
   executeWithRetry,
 } from "../packages/keiko-model-gateway/src/resilience.js";
-import type { ModelGatewayLogEvent } from "../packages/keiko-model-gateway/src/observability.js";
+import type {
+  ModelGatewayLogTransport,
+  ModelGatewayLogEvent,
+} from "../packages/keiko-model-gateway/src/observability.js";
 import type {
   Clock,
   GatewayStreamChunk,
@@ -79,12 +82,12 @@ function query(stateDir: string): SupportQueryResult {
 }
 
 interface Recorder {
-  readonly write: (event: ModelGatewayLogEvent) => void;
-  readonly events: ModelGatewayLogEvent[];
+  readonly write: (event: ModelGatewayLogTransport) => void;
+  readonly events: ModelGatewayLogTransport[];
 }
 
 function recorder(): Recorder {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return {
     events,
     write: (event): void => {
@@ -185,18 +188,20 @@ async function circuitWait(
   return log;
 }
 
-function event(log: Recorder, op: string, field: string, value: string): ModelGatewayLogEvent {
-  const found = log.events.find((entry) => entry.op === op && entry.extra?.[field] === value);
+function event(log: Recorder, op: string, field: string, value: string): ModelGatewayLogTransport {
+  const found = log.events.find(
+    (entry) => entry.op === op && normalFixtureEvent(entry).extra?.[field] === value,
+  );
   if (found === undefined) throw new TypeError("Actual gateway event was not emitted");
   return found;
 }
 
 function expectDiagnosticDeclaration(
-  entry: ModelGatewayLogEvent,
+  entry: ModelGatewayLogTransport,
   condition: ActivityLogDiagnosticCondition,
 ): void {
   expect(entry).toMatchObject({ level: "info", extra: { completeness: "complete", loss: "none" } });
-  expect(entry.errorKind).toBeUndefined();
+  expect(normalFixtureEvent(entry).errorKind).toBeUndefined();
   expect(activityLogEventRegistration(entry)).toMatchObject({ diagnosticWhen: [condition] });
 }
 
@@ -288,7 +293,7 @@ describe("manual support selection of actual gateway outcomes", () => {
     expect(
       log.events
         .filter((entry) => entry.op === "gateway.circuit.wait")
-        .map((entry) => entry.extra?.outcome),
+        .map((entry) => normalFixtureEvent(entry).extra?.outcome),
     ).toEqual(["started", "timer"]);
     for (const entry of log.events) sink.write(entry);
     sink.flush?.();
@@ -398,3 +403,15 @@ describe("manual support selection of actual gateway outcomes", () => {
     ).toBe(true);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

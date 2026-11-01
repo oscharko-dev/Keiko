@@ -69,15 +69,26 @@ be reconsidered only after a later live probe proves durable zero-cost, fail-clo
 
 ### D3 — Add zero-tolerance OSS gates for semantic clones and secrets
 
-Fallow 3.34.0 is exact-version locked and runs semantic duplicate analysis only over the changed
-surface. Any introduced semantic clone group of at least 100 tokens and 10 lines fails. Ignoring
+Fallow is exact-version locked (3.35.0 at the 2026-11-01 amendment) and runs semantic
+duplicate analysis against the pull request's base commit (see the 2026-11-01 amendment). Any
+introduced semantic clone group of at least 100 tokens and 10 lines fails. Ignoring
 imports avoids punishing required module boilerplate while still detecting renamed-variable and
 restructured copy/paste that text-only duplication misses.
 
 The 2026-10-24 security repair raises the original 3.9.1 pin to 3.34.0 for
 GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5. The command, token/line floors and zero-issue
-requirement are unchanged. Newly exposed inherited clones remain gate failures until resolved;
-the upgrade grants no baseline exemption or suppression authority.
+requirement are unchanged, and the upgrade grants no exemption or suppression authority.
+
+**Amendment, 2026-11-01 (owner decision, epic #3914).** The gate compares each pull request with its
+base commit (`fallow audit --only dupes --gate new-only --base <base>`). A clone group that already
+exists at the base is inherited. Any group that the change creates is introduced and fails the
+gate. String literals stay part of the comparison (`ignoreStringValues: false`), so two
+registrations that differ only in their op names, owners or proof ids are not clones. No source
+family is excluded: generated files, i18n catalogs and the failure-class tables are measured like
+any other source. The shrink-only `docs/qa/fallow/dupes-baseline.json` from 2026-10-24 and its
+helpers are removed; the base comparison replaces them. `.fallowrc.json` must equal the
+configuration the gate pins, or the gate fails. On failure the gate names each introduced group's
+`file:start-end` locations, or the closed check that refused the evidence.
 
 Gitleaks 8.30.1 runs from an official checksum-pinned release binary, never from the non-OSS hosted
 action. It redacts all finding output and scans the complete pull-request commit range. That range
@@ -124,6 +135,57 @@ ADR-0168 temporarily superseded the rollback's installation state and restored G
 quota-tolerant reviewer. ADR-0169 supersedes that later state as well: the provider, App,
 configuration, and review authority are fully retired.
 
+### D6 — Anti-slop findings ratchet on `dev` (owner decision, 2026-10-30)
+
+Epic #3914 built a repository-owned code-quality engine: Oxlint 1.78.0 running
+`oxlint-plugin-anti-slop` with 22 noncosmetic rules under `scripts/code-quality-policy.json`. Its
+complete enforcement depends on responsibility qualifications that remain on the epic branch until
+#3991. The owner's "Delivery amendment 2" to #3914 (2026-10-30) lands the engine on `dev` first,
+under #4145, as a ratchet rather than as complete enforcement:
+
+- `npm run check:code-quality-policy -- --mode ratchet` scans the whole repository and counts
+  findings per (file, rule). The required `ci` context runs it on every pull request.
+- The counts are compared with the committed register `scripts/code-quality-register.json`. An
+  increase, or a new file with findings, fails with file, rule and line. A decrease fails until the
+  register is shrunk with `--prune-register`, which only lowers counts or removes entries and
+  refuses to widen. Entries for deleted or renamed files fail as stale.
+- Inline Oxlint suppression directives remain rejected, so the register is the only tolerance. It is
+  a shrink-only bridge, the same model as the `keiko-ui` ESLint bulk-suppression register, not a
+  permanent baseline.
+- The ratchet does not run the epic's responsibility qualifications and therefore does not claim
+  that any rule is qualified or fully enforced. Rule dispositions, thresholds, required contexts,
+  review loops and integration authority are unchanged.
+- Baseline on `dev` `7bbca2e34`: 7,239 files and 46,618 findings. Epic workstreams and ordinary
+  `dev` work prune the register; #3991 removes it at zero and activates full enforcement.
+
+Known limitation: counts are per file and rule, so fixing one finding and adding another of the same
+rule in the same file nets out. This is accepted for the bridge period and closes when #3991
+removes the register.
+
+Reviewed increases (owner decision, 2026-11-01). The epic's delivery slices add findings that the
+epic qualifies elsewhere or migrates later: validators adapted by responsibility records, boundary
+checks that HELPER-COMPONENT-MIGRATION-008 on #3918 moves later, tests and fixtures that exercise
+hostile input, and proof fixtures. The ratchet does not run those qualifications, so a
+strictly shrink-only register would refuse every slice. The owner chose a reviewed increase list
+over counting only enforceable findings and over landing the slices before #4145:
+
+- `scripts/code-quality-register-increases.json` (version 1) lists entries of `path`, `rule`,
+  `from`, `to`, `reason` and `issue`. `reason` is `qualified-boundary`,
+  `pending-boundary-migration`, `test-witness` or `proof-fixture`. The second covers a check under
+  the four boundary rules (no-runtime-typeof, no-unknown-parameters, no-unsafe-dictionary-type,
+  no-known-value-widening) that a later reviewed migration moves while those rules are inactive for
+  its package. The fourth covers a test helper, typed fixture or type-level assertion that builds
+  or checks the expected value of a proof and receives no hostile input. Code that receives hostile
+  input is a `test-witness` instead. `from` is less than `to`, and `issue` is a positive issue
+  number. Malformed, duplicated or non-canonical ledgers fail closed.
+- `--prune-register` raises a count only to exactly the `to` of an entry with the same path, rule
+  and `from`. Every other increase still fails with `code-quality-register-increase`.
+- The CI ratchet compares the committed register with the base commit's register. Each raised count
+  needs one entry that the change adds; an entry the base already holds cannot approve a new raise.
+  An added entry that matches no raise is stale, and a removed or changed base entry is rewritten
+  history. Both fail. A CI comparison without a base fails, and CI still refuses register writes.
+- The ledger started empty on `dev`. Entries accumulate as reviewed history in later slice PRs.
+
 ## Consequences
 
 - A stopped review subscription can no longer deadlock or falsely satisfy Keiko's core quality bar.
@@ -135,10 +197,12 @@ configuration, and review authority are fully retired.
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.
+- Existing anti-slop findings on `dev` can only decrease until #3991 activates full enforcement (D6).
 
 ## References
 
 - [Autonomous quality gates](../qa/autonomous-quality-gates.md)
+- [Code-quality policy and dev ratchet](../qa/code-quality-policy.md)
 - [External quality-gate runbook](../qa/external-quality-gates.md)
 - [Review standards](../qa/review-standards.md)
 - [CodSpeed benchmark variance](https://codspeed.io/docs/instruments/cpu/regression-causes)

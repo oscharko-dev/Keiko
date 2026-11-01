@@ -212,7 +212,7 @@ export function isDefectFingerprint(value: unknown): value is string {
 export function isSupportIncidentSurface(value: unknown): value is SupportIncidentSurface {
   return (
     value === SUPPORT_INCIDENT_UNATTRIBUTED ||
-    (ACTIVITY_LOG_FAILURE_SURFACES as readonly unknown[]).includes(value)
+    new Set<unknown>(ACTIVITY_LOG_FAILURE_SURFACES).has(value)
   );
 }
 
@@ -432,7 +432,30 @@ function isEpochMs(value: unknown): value is number {
 }
 
 function isOneOf<T extends string>(values: readonly T[], value: unknown): value is T {
-  return (values as readonly unknown[]).includes(value);
+  const allowed: readonly unknown[] = values;
+  return new Set(allowed).has(value);
+}
+
+function everySupportMember(
+  value: readonly unknown[],
+  maximum: number,
+  validMember: (entry: unknown) => boolean,
+): boolean {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maximum) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !validMember(value[index])) return false;
+  }
+  return true;
+}
+
+function isStringSupportArray(value: readonly unknown[]): value is readonly string[] {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || typeof value[index] !== "string") return false;
+  }
+  return true;
 }
 
 function validFingerprint(value: unknown): value is SupportIncidentFingerprint {
@@ -469,7 +492,11 @@ function validCorrelation(value: unknown): value is SupportIncidentCorrelation {
       isActivityLogCorrelationId(value.rootCorrelationId)) &&
     Array.isArray(children) &&
     children.length <= MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS &&
-    children.every(isActivityLogCorrelationId) &&
+    everySupportMember(
+      children,
+      MAX_SUPPORT_INCIDENT_CHILD_CORRELATIONS,
+      isActivityLogCorrelationId,
+    ) &&
     // A child is an operation spawned under its root: no producer names one without the other.
     (children.length === 0 || value.rootCorrelationId !== undefined)
   );
@@ -564,14 +591,19 @@ function validRecordHeader(value: PlainObject): boolean {
  * and describes nothing, exactly like an unreadable Activity Log pin record.
  */
 export function parseSupportIncidentRecord(value: unknown): SupportIncidentRecord | undefined {
-  if (!isPlainObject(value) || !validRecordHeader(value)) return undefined;
-  return validFingerprint(value.fingerprint) &&
+  return isSupportIncidentRecord(value) ? value : undefined;
+}
+
+function isSupportIncidentRecord(value: unknown): value is SupportIncidentRecord {
+  return (
+    isPlainObject(value) &&
+    validRecordHeader(value) &&
+    validFingerprint(value.fingerprint) &&
     validCorrelation(value.correlation) &&
     validBuild(value.build) &&
     validWindow(value.window) &&
     validPin(value.pin)
-    ? (value as unknown as SupportIncidentRecord)
-    : undefined;
+  );
 }
 
 // ─── The resolved descriptor and its two projections ───────────────────────────────────────────
@@ -778,7 +810,9 @@ function validProjectionSegments(value: unknown): boolean {
   return (
     Array.isArray(value) &&
     value.length <= 4096 &&
-    value.every(
+    everySupportMember(
+      value,
+      4096,
       (segment: unknown) =>
         isPlainObject(segment) &&
         hasOnlyKeys(segment, ["segmentId", "state", "sizeBytes"]) &&
@@ -817,7 +851,19 @@ function validCoverageCounts(value: PlainObject): boolean {
   );
 }
 
-function validProjectionEvidence(value: PlainObject): boolean {
+type ProjectionEvidence = Pick<
+  SupportIncidentPrivateProjection,
+  | "integrity"
+  | "completeness"
+  | "loss"
+  | "sufficiencyStatus"
+  | "sufficiencyReasons"
+  | "segments"
+  | "lineCount"
+  | "coverage"
+>;
+
+function validProjectionEvidence(value: PlainObject): value is PlainObject & ProjectionEvidence {
   return (
     isOneOf(SUPPORT_INCIDENT_EVIDENCE_INTEGRITY, value.integrity) &&
     isOneOf(["complete", "partial", "unknown"], value.completeness) &&
@@ -828,10 +874,11 @@ function validProjectionEvidence(value: PlainObject): boolean {
     isOneOf(["complete", "degraded", "insufficient"], value.sufficiencyStatus) &&
     Array.isArray(value.sufficiencyReasons) &&
     value.sufficiencyReasons.length <= 64 &&
-    value.sufficiencyReasons.every(
+    everySupportMember(
+      value.sufficiencyReasons,
+      64,
       (reason: unknown) =>
-        typeof reason === "string" &&
-        DIAGNOSTIC_SUFFICIENCY_REASONS.includes(reason as DiagnosticSufficiencyReason),
+        typeof reason === "string" && isOneOf(DIAGNOSTIC_SUFFICIENCY_REASONS, reason),
     ) &&
     validProjectionSegments(value.segments) &&
     isCount(value.lineCount) &&
@@ -886,7 +933,7 @@ export function isClientReportFailure(
   if (!validClientReportErrorEvidence(value)) return false;
   if (
     !Array.isArray(value.context) ||
-    !value.context.every((token: unknown): token is string => typeof token === "string") ||
+    !isStringSupportArray(value.context) ||
     !isClientDefectContext(value.context)
   )
     return false;
@@ -910,24 +957,27 @@ function validClientReport(value: unknown, projection: PlainObject): boolean {
 export function parseSupportIncidentPrivateProjection(
   value: unknown,
 ): SupportIncidentPrivateProjection | undefined {
+  return isSupportIncidentPrivateProjection(value) ? value : undefined;
+}
+
+function isSupportIncidentPrivateProjection(
+  value: unknown,
+): value is SupportIncidentPrivateProjection {
   if (!isPlainObject(value) || !hasOnlyKeys(value, PRIVATE_PROJECTION_KEYS, ["clientReport"]))
-    return undefined;
+    return false;
   const record = projectionRecord(value);
   if (
     record === undefined ||
     !validProjectionEvidence(value) ||
     !validClientReport(value.clientReport, value)
   )
-    return undefined;
-  if (
-    diagnosticSufficiencyStatus(value.sufficiencyReasons as DiagnosticSufficiencyReason[]) !==
-    value.sufficiencyStatus
-  )
-    return undefined;
+    return false;
+  if (diagnosticSufficiencyStatus(value.sufficiencyReasons) !== value.sufficiencyStatus)
+    return false;
   if (
     record.build.productVersion !== value.productVersion ||
     record.build.platformClass !== value.platformClass
   )
-    return undefined;
-  return value as unknown as SupportIncidentPrivateProjection;
+    return false;
+  return true;
 }

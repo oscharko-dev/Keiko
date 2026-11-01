@@ -8,7 +8,11 @@
 import { describe, expect, it } from "vitest";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { Gateway, type GatewayCallRequest } from "./gateway.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import type {
+  ModelGatewayLogEvent,
+  ModelGatewayLogTransport,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import type {
   GatewayConfig,
@@ -135,10 +139,10 @@ function scriptedAdapter(attempts: readonly (readonly Step[])[]): {
 }
 
 function recorder(): {
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
   readonly sink: ModelGatewayLogSink;
 } {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   return { events, sink: { write: (event): void => void events.push(event) } };
 }
 
@@ -169,7 +173,7 @@ function terminal(chunks: readonly GatewayStreamChunk[]): NormalizedResponse {
   return last.response;
 }
 
-function lineOf(events: readonly ModelGatewayLogEvent[], op: string): ModelGatewayLogEvent {
+function lineOf(events: readonly ModelGatewayLogTransport[], op: string): ModelGatewayLogTransport {
   const line = events.find((event) => event.op === op);
   if (line === undefined) throw new TypeError(`missing ${op}`);
   return line;
@@ -330,7 +334,7 @@ describe("Gateway reasoning policy (#3878)", () => {
     expect(
       log.events
         .filter((event) => event.op === "gateway.retry.scheduled")
-        .map((event) => event.extra?.reason),
+        .map((event) => normalFixtureEvent(event).extra?.reason),
     ).toEqual(["retryable-error"]);
   });
 
@@ -364,3 +368,15 @@ describe("Gateway reasoning policy (#3878)", () => {
     expect(kinds(chunks)).toEqual([`reasoning:${REASONING}`, "delta:answer", "done"]);
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

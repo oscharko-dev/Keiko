@@ -1,4 +1,4 @@
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import { describe, expect, it, vi } from "vitest";
 import { Gateway } from "./gateway.js";
 import { createDefaultChatCapability } from "./capabilities.js";
@@ -216,7 +216,7 @@ const smallVisionRequest: GatewayRequest = {
 
 describe.each([false, true])("8k vision admission, streaming=%s", (streaming) => {
   it.each([undefined, 0, 100])("admits an image with reported count %s", async (reported) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const adapterCall = vi.fn<ProviderAdapter["call"]>(() => Promise.resolve(response));
     const gateway = new Gateway(
       {
@@ -259,8 +259,20 @@ describe.each([false, true])("8k vision admission, streaming=%s", (streaming) =>
         counterSource: "gateway-reported",
       });
     else {
-      expect(admission?.extra?.promptTokens).toBeGreaterThan(100);
-      expect(admission?.extra?.promptTokens).toBeLessThan(6912);
+      expect(normalFixtureEvent(admission)?.extra?.promptTokens).toBeGreaterThan(100);
+      expect(normalFixtureEvent(admission)?.extra?.promptTokens).toBeLessThan(6912);
     }
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Gateway, type GatewaySpendReservation } from "./gateway.js";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { createDefaultChatCapability } from "./capabilities.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -89,7 +89,7 @@ describe("Gateway.chat", () => {
       maxOutputTokens: 131_072,
     };
     const requests: GatewayRequest[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gateway = new Gateway(
       { ...config([provider()]), capabilities: [capability] },
       {

@@ -9,6 +9,12 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
+import { defineSynchronousLogDeliveryContract } from "../../../tests/support/synchronous-log-delivery-contract.js";
+import {
+  defineClassifierObservationContract,
+  inheritedFallbackCause,
+} from "../../../tests/support/log-classifier-observations.js";
 import {
   activityLogLossCounters,
   resetActivityLogLossCountersForTests,
@@ -156,16 +162,7 @@ describe("emitKnowledgeLogEvent", () => {
     sink: KnowledgeLogSink;
     events: KnowledgeLogEvent[];
   } {
-    const events: KnowledgeLogEvent[] = [];
-    return {
-      sink: {
-        write: (event): void => {
-          if (failingOps.includes(event.op)) throw failure();
-          events.push(event);
-        },
-      },
-      events,
-    };
+    return createFailingRecordingSink<KnowledgeLogEvent>(failingOps, failure);
   }
 
   it("does nothing at all when no sink is wired", () => {
@@ -364,4 +361,142 @@ describe("emitKnowledgeLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+});
+
+describe("#3918 synchronous port delivery observations", () => {
+  defineSynchronousLogDeliveryContract<
+    KnowledgeLogEvent,
+    KnowledgeLogSink,
+    "knowledge.index.started"
+  >({
+    emit: emitKnowledgeLogEvent,
+    makeSink: (readWrite): KnowledgeLogSink => ({
+      get write(): (received: KnowledgeLogEvent) => void {
+        return readWrite(this);
+      },
+    }),
+    unreadOperationEvent: (readOp): KnowledgeLogEvent => ({
+      category: "indexing",
+      get op(): never {
+        return readOp();
+      },
+    }),
+    countedOperationEvent: (readOp): KnowledgeLogEvent => ({
+      category: "indexing",
+      get op(): "knowledge.index.started" {
+        return readOp();
+      },
+    }),
+    droppedOp: "knowledge.index.started",
+    noticeOp: "knowledge.log.sink-failed",
+  });
+});
+
+describe("#3918 classifier foreign observation contract", (): void => {
+  defineClassifierObservationContract(knowledgeErrorKind);
+});
+
+it("#3918 preserves inherited fallback observations through the registered failure port", (): void => {
+  resetActivityLogLossCountersForTests();
+  try {
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    const cause: Error = inheritedFallbackCause(trace, receivers);
+    const notices: KnowledgeLogEvent[] = [];
+    const sink: KnowledgeLogSink = {
+      write(event): void {
+        if (event.op !== "knowledge.log.sink-failed") throw cause;
+        notices.push(event);
+      },
+    };
+    emitKnowledgeLogEvent(sink, { category: "diagnostic", op: "knowledge.store.quarantined" });
+    expect(trace).toEqual(["code", "name"]);
+    expect(receivers).toHaveLength(2);
+    expect(receivers[0]).toBe(cause);
+    expect(receivers[1]).toBe(cause);
+    expect(notices).toHaveLength(1);
+    const line = formatActivityLogProofLine(notices[0] ?? {});
+    const persisted = expectActivityLogProof("knowledge.log.sink-failed.body-free", line);
+    expect(persisted.failureKind).toBe("ENOSPC");
+    expect(line).not.toContain("private-classifier-canary");
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+  } finally {
+    resetActivityLogLossCountersForTests();
+  }
+});
+
+interface RepeatedKnowledgeFailureProbe {
+  readonly sink: KnowledgeLogSink;
+  readonly event: KnowledgeLogEvent;
+  readonly trace: string[];
+  readonly failure: Error;
+}
+
+function repeatedKnowledgeFailureProbe(): RepeatedKnowledgeFailureProbe {
+  const trace: string[] = [];
+  const failure: Error = Object.freeze(new TypeError("synthetic second failed-operation refusal"));
+  const cause: Error = new TypeError("synthetic primary sink refusal");
+  Object.defineProperty(cause, "code", {
+    get(): string {
+      trace.push("cause");
+      return "ENOSPC";
+    },
+  });
+  let opReads = 0;
+  const event: KnowledgeLogEvent = {
+    category: "indexing",
+    get op(): string {
+      opReads += 1;
+      trace.push(`op:${String(opReads)}`);
+      if (opReads === 2) throw failure;
+      return "knowledge.index.started";
+    },
+  };
+  const sink: KnowledgeLogSink = {
+    write(received): never {
+      trace.push(received === event ? "primary" : "notice");
+      throw cause;
+    },
+  };
+  return { sink, event, trace, failure };
+}
+
+it("#3918 observes a second failed operation before report suppression", (): void => {
+  const probe = repeatedKnowledgeFailureProbe();
+  const original = Object.getOwnPropertyDescriptor(process, "emitWarning");
+  if (original === undefined) throw new TypeError("missing process warning descriptor");
+  let warningReads = 0;
+  try {
+    resetActivityLogLossCountersForTests();
+    Object.defineProperty(process, "emitWarning", {
+      configurable: true,
+      get(): never {
+        warningReads += 1;
+        probe.trace.push("warning");
+        throw new TypeError("synthetic warning getter refusal");
+      },
+    });
+    emitKnowledgeLogEvent(probe.sink, probe.event);
+    let observed: unknown;
+    try {
+      emitKnowledgeLogEvent(probe.sink, probe.event);
+    } catch (error: unknown) {
+      observed = error;
+    }
+    expect(observed).toBe(probe.failure);
+    expect(probe.trace).toEqual([
+      "primary",
+      "op:1",
+      "cause",
+      "notice",
+      "warning",
+      "primary",
+      "op:2",
+    ]);
+    expect(warningReads).toBe(1);
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(2);
+  } finally {
+    Object.defineProperty(process, "emitWarning", original);
+    resetActivityLogLossCountersForTests();
+  }
 });

@@ -9,6 +9,12 @@
 //     silently.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
+import { defineSynchronousLogDeliveryContract } from "../../../tests/support/synchronous-log-delivery-contract.js";
+import {
+  defineClassifierObservationContract,
+  inheritedFallbackCause,
+} from "../../../tests/support/log-classifier-observations.js";
 import {
   activityLogLossCounters,
   resetActivityLogLossCountersForTests,
@@ -126,16 +132,7 @@ describe("emitConsolidationLogEvent", () => {
     sink: ConsolidationLogSink;
     events: ConsolidationLogEvent[];
   } {
-    const events: ConsolidationLogEvent[] = [];
-    return {
-      sink: {
-        write: (event): void => {
-          if (failingOps.includes(event.op)) throw failure();
-          events.push(event);
-        },
-      },
-      events,
-    };
+    return createFailingRecordingSink<ConsolidationLogEvent>(failingOps, failure);
   }
 
   it("does nothing at all when no sink is wired", () => {
@@ -336,4 +333,69 @@ describe("emitConsolidationLogEvent loss accounting", () => {
       resetActivityLogLossCountersForTests();
     }
   });
+});
+
+describe("#3918 synchronous port delivery observations", () => {
+  defineSynchronousLogDeliveryContract<
+    ConsolidationLogEvent,
+    ConsolidationLogSink,
+    "consolidation.summary.fallback"
+  >({
+    emit: emitConsolidationLogEvent,
+    makeSink: (readWrite): ConsolidationLogSink => ({
+      get write(): (received: ConsolidationLogEvent) => void {
+        return readWrite(this);
+      },
+    }),
+    unreadOperationEvent: (readOp): ConsolidationLogEvent => ({
+      category: "consolidation",
+      get op(): never {
+        return readOp();
+      },
+    }),
+    countedOperationEvent: (readOp): ConsolidationLogEvent => ({
+      category: "consolidation",
+      get op(): "consolidation.summary.fallback" {
+        return readOp();
+      },
+    }),
+    droppedOp: "consolidation.summary.fallback",
+    noticeOp: "consolidation.log.sink-failed",
+  });
+});
+
+describe("#3918 classifier foreign observation contract", (): void => {
+  defineClassifierObservationContract(consolidationErrorKind);
+});
+
+it("#3918 preserves inherited fallback observations through the registered failure port", (): void => {
+  resetActivityLogLossCountersForTests();
+  try {
+    const trace: string[] = [];
+    const receivers: unknown[] = [];
+    const cause: Error = inheritedFallbackCause(trace, receivers);
+    const notices: ConsolidationLogEvent[] = [];
+    const sink: ConsolidationLogSink = {
+      write(event): void {
+        if (event.op !== "consolidation.log.sink-failed") throw cause;
+        notices.push(event);
+      },
+    };
+    emitConsolidationLogEvent(sink, {
+      category: "consolidation",
+      op: "consolidation.summary.fallback",
+    });
+    expect(trace).toEqual(["code", "name"]);
+    expect(receivers).toHaveLength(2);
+    expect(receivers[0]).toBe(cause);
+    expect(receivers[1]).toBe(cause);
+    expect(notices).toHaveLength(1);
+    const line = formatActivityLogProofLine(notices[0] ?? {});
+    const persisted = expectActivityLogProof("consolidation.log.sink-failed.body-free", line);
+    expect(persisted.failureKind).toBe("ENOSPC");
+    expect(line).not.toContain("private-classifier-canary");
+    expect(activityLogLossCounters()["port-sink-failed"]).toBe(1);
+  } finally {
+    resetActivityLogLossCountersForTests();
+  }
 });

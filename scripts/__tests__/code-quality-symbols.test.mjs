@@ -1,0 +1,6015 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Buffer } from "node:buffer";
+import {
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+  existsSync,
+  symlinkSync,
+  statSync,
+  utimesSync,
+} from "node:fs";
+import { join, dirname } from "node:path";
+import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
+import {
+  collectPolicyInventory,
+  collectPolicySubject,
+  preparedModuleReceipt,
+} from "../lib/code-quality-inventory.mjs";
+import ts from "typescript";
+import { createCompilerContext, visitCompilerNodes } from "../lib/code-quality-compiler.mjs";
+import * as productionModuleFacts from "../lib/code-quality-production.mjs";
+import { SYMBOL_LIMITS, symbolLimits } from "../lib/code-quality-policy.mjs";
+import { compilerNodeAt, declarationMapPosition } from "../lib/code-quality-provenance.mjs";
+import {
+  collectiveHelperBudgetDetails,
+  createSymbolResolver,
+} from "../lib/code-quality-symbols.mjs";
+import {
+  createConsumerSeamFixture,
+  createObservationOptionsFixture,
+  createBooleanObservationFixture,
+  createObjectValidatorFixture,
+  createMetadataSourceFixture,
+  createDirectObservationCheckerFixture,
+  createPhysicalRegistrationObservationFixture,
+  createResponsibilityFixture,
+  createEnforcementFixture,
+  createCrossOwnerEnforcementFixture,
+  createForeignDiagnosticFixture,
+  replaceConsumerCallFixture,
+  replaceEnforcementOwner,
+  createDiagnosticFixture,
+  createContextDiagnosticFixture,
+  createDictionaryEnforcementFixture,
+  createRawHelperEnforcementFixture,
+  createCollectiveParserFixture,
+  createPrivateModuleParserFixture,
+  createPrivateModuleCapacityFixture,
+  createTypedRecheckFixture,
+  createCanonicalDecoderFixture,
+  createReadonlyLiteralDataFixture,
+} from "./support/code-quality-responsibility-fixture.mjs";
+import {
+  createPublicParserFixture,
+  createSymbolFixture,
+  emitSymbolFixture,
+  packSymbolFixture,
+} from "./support/code-quality-symbol-fixture.mjs";
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, execFileSync: vi.fn(actual.execFileSync) };
+});
+
+vi.mock("typescript", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    default: {
+      ...actual.default,
+      getPreEmitDiagnostics: vi.fn(actual.default.getPreEmitDiagnostics),
+    },
+  };
+});
+
+const { execFileSync: originalExecFileSync } = await vi.importActual("node:child_process");
+const fixtures = [];
+afterEach(() => {
+  vi.mocked(ts.getPreEmitDiagnostics).mockClear();
+  vi.mocked(execFileSync).mockReset();
+  vi.mocked(execFileSync).mockImplementation(originalExecFileSync);
+  for (const { root, resolver } of fixtures.splice(0)) {
+    resolver?.close();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+async function fixture(options = {}) {
+  const own = createSymbolFixture();
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options);
+  return own;
+}
+const reference = { consumerPath: "src/consumer.ts", specifier: "alpha", exportName: "parse" };
+
+function positionLookupCompiler(nodes = SYMBOL_LIMITS.nodes) {
+  return { state: { nodes: 0, limits: { ...SYMBOL_LIMITS, nodes } } };
+}
+
+describe("charged declaration position lookup (#3918)", () => {
+  it("locates a declaration without traversing unrelated source subtrees", () => {
+    const unrelated = Array.from({ length: 512 }, (_, index) => `void ${index};`).join("\n");
+    const text = `function unrelated() {\n${unrelated}\n}\nfunction needle() { return 1; }`;
+    const source = ts.createSourceFile("lookup.ts", text, ts.ScriptTarget.Latest, true);
+    const target = source.statements[1].name;
+    const compiler = positionLookupCompiler(64);
+    expect(compilerNodeAt(compiler, source, target.getStart(source))).toBe(target);
+    expect(compiler.state.nodes).toBeGreaterThan(0);
+  });
+
+  it("preserves leading-trivia fallback and the last equal-span preorder selection", () => {
+    const source = ts.createSourceFile(
+      "lookup.ts",
+      "/* before */\nneedle",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const compiler = positionLookupCompiler();
+    expect(compilerNodeAt(compiler, source, 0)).toBe(source);
+    expect(compilerNodeAt(compiler, source, source.text.indexOf("needle"))).toBe(
+      source.statements[0].expression,
+    );
+  });
+
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 0.5, 6])(
+    "rejects invalid position %s before charging a traversal",
+    (offset) => {
+      const source = ts.createSourceFile("lookup.ts", "needle", ts.ScriptTarget.Latest, true);
+      const compiler = positionLookupCompiler();
+      expect(() => compilerNodeAt(compiler, source, offset)).toThrow("invalid-symbol-position");
+      expect(compiler.state.nodes).toBe(0);
+    },
+  );
+
+  it("charges siblings on both sides of the selected position before pruning", () => {
+    const source = ts.createSourceFile(
+      "lookup.ts",
+      "before;\nneedle;\nafter;",
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const selected = source.statements[1].expression;
+    const inspected = [
+      source,
+      source.statements[0],
+      source.statements[1],
+      selected,
+      source.statements[2],
+      source.endOfFileToken,
+    ];
+    const compiler = positionLookupCompiler(inspected.length);
+    const offset = selected.getStart(source);
+    expect(compilerNodeAt(compiler, source, offset)).toBe(selected);
+    expect(compiler.state.nodes).toBe(inspected.length);
+    const insufficient = positionLookupCompiler(inspected.length - 1);
+    expect(() => compilerNodeAt(insufficient, source, offset)).toThrow("symbol-node-budget");
+  });
+
+  it("charges inspected nodes and refuses an insufficient lookup budget", () => {
+    const source = ts.createSourceFile("lookup.ts", "needle", ts.ScriptTarget.Latest, true);
+    const compiler = positionLookupCompiler(1);
+    expect(() => compilerNodeAt(compiler, source, 0)).toThrow("symbol-node-budget");
+    expect(compiler.state.nodes).toBe(2);
+  });
+});
+
+describe("configured canonical symbol resolver interface (#3918)", () => {
+  it.each([
+    ["symbol", createSymbolFixture, ["alpha"]],
+    ["responsibility", createResponsibilityFixture, ["alpha"]],
+    ["enforcement", createEnforcementFixture, ["alpha"]],
+    ["raw-helper", createRawHelperEnforcementFixture, ["alpha"]],
+    ["dictionary", createDictionaryEnforcementFixture, ["alpha"]],
+    ["diagnostic", createDiagnosticFixture, ["alpha"]],
+    ["foreign-diagnostic", createForeignDiagnosticFixture, ["alpha", "beta"]],
+    ["cross-owner", createCrossOwnerEnforcementFixture, ["alpha", "beta"]],
+    ["consumer", createConsumerSeamFixture, ["alpha", "beta"]],
+    ["consumer-callback", () => createConsumerSeamFixture("callback"), ["alpha", "beta"]],
+  ])("finalizes %s assembly once per actual owner", async (_name, create, owners) => {
+    const own = create();
+    fixtures.push(own);
+    const calls = vi.mocked(execFileSync).mock.calls.filter(([, args]) => args[0] === "-p");
+    const checked = vi.mocked(ts.getPreEmitDiagnostics).mock.calls.length;
+    for (const owner of owners) {
+      const directory = join(own.root, "packages", owner);
+      const declaration = readFileSync(join(directory, "dist/owner.d.ts"), "utf8");
+      expect(declaration.length).toBeGreaterThan(0);
+      const map = JSON.parse(readFileSync(join(directory, "dist/owner.d.ts.map"), "utf8"));
+      expect(map.sources).toContain("../src/owner.ts");
+      expect(map.mappings.length).toBeGreaterThan(0);
+      const runtime = await import(pathToFileURL(join(directory, "dist/owner.js")).href);
+      if (owner === "alpha") {
+        expect(runtime.validate(_name === "dictionary" ? { value: 1 } : 1)).toEqual(
+          _name.includes("diagnostic") ? [] : { ok: true, value: 1 },
+        );
+        expect(runtime.validate(null)).toEqual(
+          _name.includes("diagnostic") ? ["invalid"] : { ok: false },
+        );
+      } else if (_name === "foreign-diagnostic") expect(runtime.healthy).toBe(true);
+      else expect(runtime.consume(1)).toBe(1);
+    }
+    expect(calls.map(([, args]) => args[1])).toEqual(
+      owners.map((owner) => join(own.root, "packages", owner, "tsconfig.json")),
+    );
+    expect(checked).toBe(owners.length);
+    for (const [, , options] of calls)
+      expect(options).toMatchObject({
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 1024 * 1024,
+      });
+  });
+
+  it("keeps returned-fixture mutation compilation eager and roots independent", async () => {
+    const first = createEnforcementFixture();
+    fixtures.push(first);
+    const second = createConsumerSeamFixture();
+    fixtures.push(second);
+    expect(first.root).not.toBe(second.root);
+    vi.mocked(execFileSync).mockClear();
+    vi.mocked(ts.getPreEmitDiagnostics).mockClear();
+    replaceEnforcementOwner(first, "lying-predicate");
+    replaceConsumerCallFixture(second, "alias");
+    expect(vi.mocked(ts.getPreEmitDiagnostics)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(execFileSync).mock.calls.map(([, args]) => args[1])).toEqual([
+      join(first.root, "packages/alpha/tsconfig.json"),
+      join(second.root, "packages/beta/tsconfig.json"),
+    ]);
+    const runtime = await import(
+      pathToFileURL(join(second.root, "packages/beta/dist/owner.js")).href
+    );
+    expect(runtime.consume(42)).toBe(42);
+    second.resolver = createSymbolResolver(await collectPolicySubject(second.root));
+    expect(second.resolver.resolveExport(second.record.consumer).identities).toHaveLength(1);
+  });
+
+  it("reuses detached export facts for an exact repeated selector without compiler traversal", async () => {
+    const own = await fixture();
+    const selector = { ...reference };
+    const first = own.resolver.resolveExport(selector);
+    const expected = structuredClone(first);
+    const before = own.resolver.stats();
+    first.identities[0].owner = "caller-mutation";
+    const repeated = own.resolver.resolveExport({ ...reference });
+    expect(repeated).toEqual(expected);
+    expect(repeated).not.toBe(first);
+    expect(own.resolver.stats()).toEqual(before);
+    selector.exportName = "caller-selector-mutation";
+    repeated.identities[0].owner = "second-caller-mutation";
+    expect(own.resolver.resolveExport({ ...reference })).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+  });
+
+  it("keeps changing accessor export entries out of the data-selector cache", async () => {
+    const own = await fixture();
+    const expected = own.resolver.resolveExport(reference);
+    own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    let specifierReads = 0;
+    let exportReads = 0;
+    const request = {
+      get consumerPath() {
+        return reference.consumerPath;
+      },
+      get specifier() {
+        return ++specifierReads === 1 ? "alpha" : "alpha/runtime";
+      },
+      get exportName() {
+        return ++exportReads === 1 ? "parse" : "validate";
+      },
+    };
+    const cold = own.resolver.resolveExport(request);
+    expect(cold.identities[0].entry).toEqual({
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    expect(own.resolver.resolveExport(reference)).toEqual(expected);
+  });
+
+  it.each(["accessor", "inherited", "proxy"])(
+    "preserves the original cold property schedule for %s selectors",
+    async (kind) => {
+      const own = await fixture();
+      const expected = own.resolver.resolveExport(reference);
+      const reads = [];
+      const descriptors = Object.fromEntries(
+        Object.entries(reference).map(([name, value]) => [
+          name,
+          {
+            get() {
+              reads.push(name);
+              expect(this).toBe(request);
+              return value;
+            },
+          },
+        ]),
+      );
+      let request;
+      if (kind === "proxy")
+        request = new Proxy(
+          { ...reference },
+          {
+            get(target, name, receiver) {
+              reads.push(name);
+              return Reflect.get(target, name, receiver);
+            },
+            getOwnPropertyDescriptor() {
+              throw new Error("unexpected-descriptor-trap");
+            },
+          },
+        );
+      else
+        request =
+          kind === "inherited"
+            ? Object.create(Object.defineProperties({}, descriptors))
+            : Object.defineProperties({}, descriptors);
+      const before = own.resolver.stats();
+      expect(own.resolver.resolveExport(request)).toEqual(expected);
+      expect(reads).toEqual([
+        "consumerPath",
+        "specifier",
+        "specifier",
+        "exportName",
+        "specifier",
+        "exportName",
+      ]);
+      expect(own.resolver.stats().nodes).toBeGreaterThan(before.nodes);
+    },
+  );
+
+  it.each(["accessor", "proxy"])("preserves the first cold %s error", async (kind) => {
+    const own = await fixture();
+    own.resolver.resolveExport(reference);
+    const error = new Error("selector-read-failure");
+    const reads = [];
+    const request =
+      kind === "proxy"
+        ? new Proxy(
+            { ...reference },
+            {
+              get(_target, name) {
+                reads.push(name);
+                throw error;
+              },
+              getOwnPropertyDescriptor() {
+                throw new Error("unexpected-descriptor-trap");
+              },
+            },
+          )
+        : {
+            get consumerPath() {
+              reads.push("consumerPath");
+              throw error;
+            },
+            get specifier() {
+              throw new Error("unexpected-specifier-read");
+            },
+            get exportName() {
+              throw new Error("unexpected-export-read");
+            },
+          };
+    expect(() => own.resolver.resolveExport(request)).toThrow(error);
+    expect(reads).toEqual(["consumerPath"]);
+    expect(own.resolver.resolveExport(reference).identities[0].entry).toEqual({
+      specifier: "alpha",
+      exportName: "parse",
+    });
+  });
+
+  it.each(["array", "function"])("reuses own data selectors on a %s request", async (kind) => {
+    const own = await fixture();
+    const expected = own.resolver.resolveExport(reference);
+    const before = own.resolver.stats();
+    const request = Object.assign(
+      kind === "array"
+        ? []
+        : function selector() {
+            return undefined;
+          },
+      reference,
+    );
+    expect(own.resolver.resolveExport(request)).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+  });
+
+  it.each([
+    { ...reference, consumerPath: "packages/alpha/src/owner.ts" },
+    { ...reference, specifier: "missing" },
+    { ...reference, exportName: "missing" },
+    { ...reference, specifier: { toString: () => reference.specifier } },
+  ])("keeps export fact keys exact and nonstring selectors cold %j", async (selector) => {
+    const own = await fixture();
+    own.resolver.resolveExport(reference);
+    expect(() => own.resolver.resolveExport(selector)).toThrow();
+    expect(own.resolver.resolveExport(reference).identities).toHaveLength(1);
+  });
+
+  it("retains only one successful export selector and releases it on close", async () => {
+    const own = await fixture();
+    own.resolver.resolveExport(reference);
+    const first = own.resolver.stats();
+    own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    const second = own.resolver.stats();
+    expect(second.nodes).toBeGreaterThan(first.nodes);
+    own.resolver.resolveExport(reference);
+    expect(own.resolver.stats().nodes).toBeGreaterThan(second.nodes);
+    own.resolver.close();
+    expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-resolver-closed");
+  });
+
+  it.each(["source", "config", "manifest", "membership"])(
+    "keeps complete %s currentness validation on export fact hits",
+    async (kind) => {
+      const own = await fixture();
+      own.resolver.resolveExport(reference);
+      const paths = {
+        source: "packages/alpha/src/owner.ts",
+        config: "packages/alpha/tsconfig.json",
+        manifest: "packages/alpha/package.json",
+        membership: "packages/alpha/src/added.ts",
+      };
+      const path = paths[kind];
+      own.put(
+        path,
+        kind === "membership"
+          ? "export const added = 1;"
+          : readFileSync(join(own.root, path), "utf8") + "\n",
+      );
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        kind === "membership" ? "symbol-membership-changed" : "symbol-subject-changed",
+      );
+    },
+  );
+
+  it.each(["owner.d.ts", "owner.d.ts.map"])(
+    "refuses same-byte generated %s symlinks on export fact hits",
+    async (name) => {
+      const own = await fixture();
+      own.resolver.resolveExport(reference);
+      const path = join(own.root, "packages/alpha/dist", name);
+      const replacement = `${path}.retained`;
+      writeFileSync(replacement, readFileSync(path));
+      unlinkSync(path);
+      symlinkSync(replacement, path);
+      expect(() => own.resolver.resolveExport(reference)).toThrow("unsafe-symbol-source");
+    },
+  );
+
+  it("keeps proof roles distinct and rechecks same-byte public runtime symlinks on hits", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const expected = own.resolver.resolveProofExport(own.record.input);
+    const before = own.resolver.stats();
+    expect(own.resolver.resolveProofExport({ ...own.record.input })).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+    expect(() => own.resolver.resolveExport(own.record.input)).toThrow("untyped-symbol-source");
+    const path = join(own.root, "packages/alpha/dist/index.js");
+    const replacement = `${path}.retained`;
+    writeFileSync(replacement, readFileSync(path));
+    unlinkSync(path);
+    symlinkSync(replacement, path);
+    expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow("unsafe-symbol-source");
+  });
+
+  it("resolves exact raw helper checking operations through its actual compiler owner", async () => {
+    const own = createRawHelperEnforcementFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const slots = own.resolver.rawCheckingSlots(identity, 0);
+    expect(slots).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ rule: "anti-slop/no-runtime-typeof", line: 2, column: 10 }),
+        expect.objectContaining({ rule: "anti-slop/no-known-value-widening", line: 7, column: 15 }),
+      ]),
+    );
+  }, 15_000);
+  it("reuses guarded raw checking facts without exposing a mutable cache or surviving source changes", async () => {
+    const own = createRawHelperEnforcementFixture("aliases");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const first = own.resolver.rawCheckingSlots(identity, 0);
+    const before = own.resolver.stats();
+    const expected = structuredClone(first);
+    first[0].column = 999;
+    expect(own.resolver.rawCheckingSlots(identity, 0)).toEqual(expected);
+    expect(own.resolver.stats()).toEqual(before);
+    own.put("packages/alpha/src/owner.ts", "export const changed = true;\n");
+    expect(() => own.resolver.rawCheckingSlots(identity, 0)).toThrow("symbol-subject-changed");
+  }, 15_000);
+
+  it.each([{ aliases: 1 }, { nodes: 1 }])(
+    "keeps raw checking traversal inside actual configured budgets %j",
+    async (limits) => {
+      const own = createRawHelperEnforcementFixture("aliases");
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root), limits);
+      expect(() => {
+        const identity = own.resolver.resolveExport(own.record.input).identities[0];
+        return own.resolver.rawCheckingSlots(identity, 0);
+      }).toThrow(/symbol-(alias|node)-budget/u);
+    },
+    15_000,
+  );
+
+  it("qualifies actual native nested/generated owner declarations without API-emitter map equivalence", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const fields = Array.from(
+      { length: 32 },
+      (_, index) =>
+        `readonly item${index}: { readonly nested: readonly { readonly value: number }[] };`,
+    ).join("\n");
+    const values = Array.from(
+      { length: 16 },
+      (_, index) => `{ kind: 'kind${index}', values: [${index}, ${index + 1}] }`,
+    ).join(",");
+    own.put(
+      "packages/alpha/src/generated/catalog.ts",
+      `export interface GeneratedCatalog {\n${fields}\n}\nexport const generated = [${values}] as const;\n`,
+    );
+    own.put(
+      "packages/alpha/src/owner.ts",
+      "import { generated } from './generated/catalog.js';\nexport function validate(input: unknown): typeof generated { return generated; }\n",
+    );
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(own.resolver.resolveExport(reference).identities[0]).toMatchObject({
+      owner: "alpha",
+      producer: { path: "packages/alpha/src/owner.ts" },
+    });
+  });
+
+  it.each(["added", "existing"])("rejects %s nonselected native mapping changes", async (mode) => {
+    const own = await fixture();
+    const path = join(own.root, "packages/alpha/dist/owner.d.ts.map");
+    const payload = JSON.parse(readFileSync(path, "utf8"));
+    const changed = structuredClone(payload);
+    changed.mappings =
+      mode === "added"
+        ? `${payload.mappings};AAAA`
+        : payload.mappings.slice(0, -1) + (payload.mappings.at(-1) === "A" ? "C" : "A");
+    const declaration = ts.createSourceFile(
+      "owner.d.ts",
+      readFileSync(join(own.root, "packages/alpha/dist/owner.d.ts"), "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    ).statements[0];
+    expect(declarationMapPosition(declaration, JSON.stringify(changed)).mapped).toEqual(
+      declarationMapPosition(declaration, JSON.stringify(payload)).mapped,
+    );
+    own.put("packages/alpha/dist/owner.d.ts.map", JSON.stringify(changed));
+    expect(() => own.resolver.resolveExport(reference)).toThrow("stale-declaration-provenance");
+  });
+
+  it.each(["unavailable", "nonzero", "timeout", "output"])(
+    "settles actual %s compiler failures and cleans private output",
+    async (mode) => {
+      const own = await fixture({ emissionTimeout: 250, emissionOutputBytes: 32 });
+      let scratch;
+      let timedOutPid;
+      let failureCode;
+      vi.mocked(execFileSync).mockImplementation((_executable, args, options) => {
+        if (!args.includes("--emitDeclarationOnly"))
+          return originalExecFileSync(_executable, args, options);
+        scratch = dirname(args[args.indexOf("--outDir") + 1]);
+        if (mode === "unavailable")
+          return originalExecFileSync(join(scratch, "missing-compiler"), [], options);
+        const scripts = {
+          nonzero: "process.exit(7)",
+          timeout: "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)",
+          output: "process.stdout.write('x'.repeat(4096))",
+        };
+        try {
+          return originalExecFileSync(process.execPath, ["-e", scripts[mode]], options);
+        } catch (error) {
+          failureCode = error.code ?? error.status;
+          if (mode === "timeout") timedOutPid = Number(error.stdout);
+          throw error;
+        }
+      });
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        "unqualified-declaration-emission",
+      );
+      const calls = vi
+        .mocked(execFileSync)
+        .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")).length;
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        "unqualified-declaration-emission",
+      );
+      expect(
+        vi
+          .mocked(execFileSync)
+          .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")),
+      ).toHaveLength(calls);
+      expect(calls).toBe(1);
+      if (mode === "timeout") {
+        expect(failureCode).toBe("ETIMEDOUT");
+        expect(timedOutPid).toBeGreaterThan(0);
+        expect(() => process.kill(timedOutPid, 0)).toThrow();
+      }
+      if (mode === "nonzero") expect(failureCode).toBe(7);
+      if (mode === "output") expect(failureCode).toBe("ENOBUFS");
+      expect(scratch).toBeTruthy();
+      expect(existsSync(scratch)).toBe(false);
+    },
+  );
+
+  it("reuses a real owner emission across program eviction without touching live build outputs", async () => {
+    const own = await fixture({ programs: 1 });
+    const path = join(own.root, "packages/alpha/tsconfig.tsbuildinfo");
+    const before = readFileSync(path);
+    vi.mocked(execFileSync).mockClear();
+    own.resolver.resolveExport(reference);
+    own.resolver.expressionFactsAt({
+      path: "src/consumer.ts",
+      offset: readFileSync(join(own.root, "src/consumer.ts"), "utf8").indexOf("1);"),
+    });
+    own.resolver.resolveExport(reference);
+    expect(
+      vi
+        .mocked(execFileSync)
+        .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")),
+    ).toHaveLength(1);
+    expect(readFileSync(path)).toEqual(before);
+    expect(own.resolver.stats().created).toBeGreaterThan(2);
+  });
+
+  it.each(["source", "config"])(
+    "rejects %s change during actual native emission and cleans scratch",
+    async (kind) => {
+      const own = await fixture();
+      let scratch;
+      vi.mocked(execFileSync).mockImplementation((executable, args, options) => {
+        const result = originalExecFileSync(executable, args, options);
+        if (args.includes("--emitDeclarationOnly")) {
+          scratch = dirname(args[args.indexOf("--outDir") + 1]);
+          const path =
+            kind === "source" ? "packages/alpha/src/owner.ts" : "packages/alpha/tsconfig.json";
+          own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+        }
+        return result;
+      });
+      expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-subject-changed");
+      expect(existsSync(scratch)).toBe(false);
+    },
+  );
+
+  it("cleans bounded actual native output when the retained emission budget is exceeded", async () => {
+    const own = await fixture({ emitBytes: 1 });
+    let scratch;
+    vi.mocked(execFileSync).mockImplementation((executable, args, options) => {
+      if (args.includes("--emitDeclarationOnly"))
+        scratch = dirname(args[args.indexOf("--outDir") + 1]);
+      return originalExecFileSync(executable, args, options);
+    });
+    expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-emission-budget");
+    expect(scratch).toBeTruthy();
+    expect(existsSync(scratch)).toBe(false);
+  });
+
+  it("routes a configured declaration directory to private output without rewriting live declarations", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+    config.compilerOptions.declarationDir = "types";
+    own.put("packages/alpha/tsconfig.json", config);
+    const manifest = JSON.parse(
+      readFileSync(join(own.root, "packages/alpha/package.json"), "utf8"),
+    );
+    manifest.exports["."].types = "./types/index.d.ts";
+    manifest.exports["./runtime"].types = "./types/owner.d.ts";
+    manifest.files.push("types");
+    own.put("packages/alpha/package.json", manifest);
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const live = readFileSync(join(own.root, "packages/alpha/types/owner.d.ts.map"));
+    vi.mocked(execFileSync).mockClear();
+    expect(own.resolver.resolveExport(reference).identities[0].owner).toBe("alpha");
+    const [, args] = vi
+      .mocked(execFileSync)
+      .mock.calls.find(([, command]) => command.includes("--emitDeclarationOnly"));
+    expect(args[args.indexOf("--declarationDir") + 1]).toBe(args[args.indexOf("--outDir") + 1]);
+    expect(readFileSync(join(own.root, "packages/alpha/types/owner.d.ts.map"))).toEqual(live);
+  });
+
+  it("binds exact callable annotation slots through the same canonical alias and bounded programs", async () => {
+    const own = await fixture();
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const slots = own.resolver.callableSlots(identity);
+    expect(slots.parameters[0]).toMatchObject({
+      kind: "parameter",
+      index: 0,
+      path: "packages/alpha/src/owner.ts",
+      type: { kind: "unknown" },
+    });
+    const text = readFileSync(join(own.root, identity.producer.path), "utf8");
+    expect(text.slice(slots.parameters[0].start, slots.parameters[0].end)).toBe("unknown");
+    expect(slots.result.kind).toBe("return");
+    expect(() => own.resolver.callableSlots({ ...identity, owner: "foreign" })).toThrow(
+      "mismatched-responsibility-producer",
+    );
+    expect(own.resolver.stats().created).toBeLessThanOrEqual(2);
+    own.put(identity.producer.path, text.replace("unknown", "number "));
+    expect(() => own.resolver.callableSlots(identity)).toThrow("symbol-subject-changed");
+  });
+
+  it("reports checker-owned open indexes and pre-assertion types without trusting casts or recursive dictionaries", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const path = "packages/alpha/src/unsafe.ts";
+    const source =
+      "export function cast(input: unknown): number { return input as number; }\nexport function dictionary(input: Record<string, unknown>): Record<string, unknown> { return input; }\ninterface Recursive { [key: string]: Recursive }\nexport function recursive(input: Recursive): Recursive { return input; }\n";
+    own.put(path, source);
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(own.resolver.expressionFactsAt({ path, offset: source.indexOf("input as") })).toEqual({
+      type: { kind: "primitive" },
+      beforeAssertions: { kind: "unknown" },
+    });
+    const dictionary = own.resolver.expressionFactsAt({
+      path,
+      offset: source.indexOf("return input;") + "return ".length,
+    });
+    expect(dictionary.type).toEqual({ kind: "object", indexes: [{ kind: "unknown" }] });
+    expect(
+      own.resolver.expressionFactsAt({ path, offset: source.lastIndexOf("input;") }).type,
+    ).toEqual({ kind: "object", indexes: [{ kind: "typed" }] });
+  });
+  it("keeps the public inventory identical while reusing internal parsed contexts and emissions", async () => {
+    const own = await fixture();
+    expect(await collectPolicyInventory(own.root)).toEqual(own.subject.inventory);
+    expect(own.subject.outputs.get("packages/alpha/dist/owner.d.ts")).toBe(
+      "packages/alpha/src/owner.ts",
+    );
+    expect(own.resolver.stats().created).toBe(0);
+  });
+
+  it("binds non-executable proof source bytes to the same current subject", async () => {
+    const own = await fixture();
+    const identity = own.resolver.sourceIdentity("src/consumer.ts");
+    expect(identity).toEqual({
+      path: "src/consumer.ts",
+      sha256: own.subject.inventory.files.find((file) => file.path === "src/consumer.ts").sha256,
+    });
+    expect(() => own.resolver.sourceIdentity("../escape.ts")).toThrow();
+    own.put(identity.path, "export const changed = true;\n");
+    expect(() => own.resolver.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+
+  it("uses real ECMAScript globals without admitting unrelated browser fixture APIs", () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/standard.ts",
+      "export const values = new Map<string, number>(); export const ready: Promise<number> = Promise.resolve(1);",
+    );
+    expect(() => emitSymbolFixture(own.root)).not.toThrow();
+    own.put("packages/alpha/src/browser.ts", "export const title = document.title;");
+    expect(() => emitSymbolFixture(own.root)).toThrow("symbol-fixture-types");
+  });
+
+  it("resolves real built main/subpath aliases and executes the packed owner behavior", async () => {
+    const own = await fixture();
+    const main = own.resolver.resolveExport(reference);
+    const runtime = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "validate",
+    });
+    expect(main.identities[0].producer).toEqual(runtime.identities[0].producer);
+    expect(main.identities[0]).toMatchObject({
+      owner: "alpha",
+      entry: { specifier: "alpha", exportName: "parse" },
+      producer: { path: "packages/alpha/src/owner.ts", kind: "FunctionDeclaration" },
+    });
+    expect(main.signatures[0]).toMatchObject({
+      parameters: [{ index: 0, type: { kind: "unknown" } }],
+      result: { kind: "union", members: 2 },
+    });
+    expect(packSymbolFixture(own.root)[0].files.map((file) => file.path)).toContain(
+      "dist/owner.d.ts.map",
+    );
+    const url = pathToFileURL(join(own.root, "packages/alpha/dist/index.js")).href;
+    const output = execFileSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `const { parse } = await import(${JSON.stringify(url)}); process.stdout.write(JSON.stringify([parse(1), parse("x")]));`,
+      ],
+      { encoding: "utf8", timeout: 10_000 },
+    );
+    expect(JSON.parse(output)).toEqual([{ ok: true, value: 1 }, { ok: false }]);
+  });
+
+  it.each(["missing", "wrong", "stale", "escape"])(
+    "rejects %s declaration provenance",
+    async (mode) => {
+      const own = await fixture();
+      const path = join(own.root, "packages/alpha/dist/owner.d.ts");
+      const mapPath = `${path}.map`;
+      if (mode === "missing") unlinkSync(mapPath);
+      if (mode === "wrong") writeFileSync(mapPath, "{}");
+      if (mode === "stale")
+        writeFileSync(path, readFileSync(path, "utf8").replace("unknown", "string"));
+      if (mode === "escape") {
+        const map = JSON.parse(readFileSync(mapPath, "utf8"));
+        map.sources = ["../../../../outside.ts"];
+        writeFileSync(mapPath, JSON.stringify(map));
+      }
+      expect(() => own.resolver.resolveExport(reference)).toThrow(
+        mode === "missing" ? "ENOENT" : "stale-declaration-provenance",
+      );
+    },
+  );
+
+  it("rejects unchanged-name/span declarations after a real producer type change", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const path = join(own.root, "packages/alpha/src/owner.ts");
+    writeFileSync(path, readFileSync(path, "utf8").replace("unknown", "number "));
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(() => own.resolver.resolveExport(reference)).toThrow("stale-declaration-provenance");
+  });
+
+  it("retains actual incoming calls through aliases and independent compiler contexts", async () => {
+    const own = await fixture();
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const result = own.resolver.incomingUses(identity);
+    expect(
+      result.uses.filter((use) => use.path === "src/consumer.ts" && use.kind === "call"),
+    ).toHaveLength(2);
+    expect(result.partial).toBe(false);
+    expect(own.resolver.stats().programs).toBeLessThanOrEqual(2);
+  });
+
+  it.each(["source", "config", "declaration"])(
+    "rejects %s mutation after resolver creation",
+    async (kind) => {
+      const own = await fixture();
+      own.resolver.resolveExport(reference);
+      const paths = {
+        source: "packages/alpha/src/owner.ts",
+        config: "packages/alpha/tsconfig.json",
+        declaration: "packages/alpha/dist/owner.d.ts",
+      };
+      own.put(paths[kind], readFileSync(join(own.root, paths[kind]), "utf8") + "\n");
+      expect(() => own.resolver.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it("bounds source, node and emission qualification without accepting partial facts", async () => {
+    for (const options of [{ sourceBytes: 1 }, { nodes: 1 }, { emitBytes: 1 }]) {
+      const own = await fixture(options);
+      expect(() => own.resolver.resolveExport(reference)).toThrow();
+    }
+  });
+
+  it("refuses invalid configuration, absent exports and use after release", async () => {
+    const own = await fixture();
+    expect(() => createSymbolResolver(own.subject, { programs: 0 })).toThrow(
+      "invalid-symbol-budget",
+    );
+    expect(() => own.resolver.resolveExport({ ...reference, specifier: "missing" })).toThrow(
+      "unresolved-export-entry",
+    );
+    expect(() => own.resolver.resolveExport({ ...reference, exportName: "missing" })).toThrow(
+      "unresolved-owner-symbol",
+    );
+    own.resolver.close();
+    expect(() => own.resolver.describeAt({ path: "src/consumer.ts", offset: 0 })).toThrow(
+      "symbol-resolver-closed",
+    );
+  });
+  it("qualifies optional/rest parameters, type aliases and actual predicates", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/extra.ts",
+      `export type Dictionary = Record<string, unknown>;
+export function optional(input?: unknown, ...rest: unknown[]): boolean { return input === rest[0]; }
+export function predicate(input: unknown): input is number { return typeof input === "number"; }
+export function asserted(input: unknown): asserts input is number { if (typeof input !== "number") throw new TypeError(); }
+export function never(): never { throw new TypeError(); }
+export function primitive(): string { return "x"; }
+export function untyped(input: any): any { return input; }
+`,
+    );
+    own.put(
+      "packages/alpha/src/index.ts",
+      'export { validate as parse } from "./owner.js"; export * from "./extra.js";',
+    );
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const exported = (exportName) => own.resolver.resolveExport({ ...reference, exportName });
+    expect(exported("Dictionary").type).toEqual({
+      kind: "object",
+      indexes: [{ kind: "unknown" }],
+    });
+    expect(exported("optional").signatures[0].parameters).toMatchObject([
+      { optional: true, rest: false },
+      { optional: false, rest: true },
+    ]);
+    expect(exported("predicate").signatures[0].predicate).toEqual({
+      kind: "Identifier",
+      parameterIndex: 0,
+    });
+    expect(exported("asserted").signatures[0].predicate.kind).toBe("AssertsIdentifier");
+    expect(exported("never").signatures[0].result.kind).toBe("never");
+    expect(exported("primitive").signatures[0].result.kind).toBe("primitive");
+    expect(exported("untyped").signatures[0].parameters[0].type.kind).toBe("any");
+  });
+
+  it("keeps Bundler and source-override contexts distinct from built NodeNext consumers", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put("packages/ui/package.json", { name: "ui", private: true, type: "module" });
+    own.put("packages/ui/tsconfig.json", {
+      compilerOptions: {
+        module: "ESNext",
+        moduleResolution: "Bundler",
+        noEmit: true,
+        strict: true,
+        types: [],
+        lib: ["ES2022"],
+      },
+      include: ["src"],
+    });
+    own.put(
+      "packages/ui/src/index.ts",
+      'import { parse } from "alpha"; export const ui = parse(1);',
+    );
+    own.put("packages/cli/package.json", { name: "cli", private: true, type: "module" });
+    own.put("packages/cli/tsconfig.json", {
+      compilerOptions: {
+        module: "NodeNext",
+        moduleResolution: "NodeNext",
+        noEmit: true,
+        strict: true,
+        types: [],
+        lib: ["ES2022"],
+        paths: { alpha: ["../alpha/src/index.ts"] },
+      },
+      include: ["src"],
+    });
+    own.put(
+      "packages/cli/src/index.ts",
+      'import { parse } from "alpha"; export const cli = parse(1);',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject, { programs: 1 });
+    const canonical = own.resolver.resolveExport(reference).identities[0].producer;
+    for (const directory of ["ui", "cli"]) {
+      const facts = own.resolver.resolveExport({
+        ...reference,
+        consumerPath: `packages/${directory}/src/index.ts`,
+      });
+      expect(facts.identities[0].producer).toEqual(canonical);
+    }
+    expect(own.resolver.stats().programs).toBe(1);
+    expect(own.resolver.stats().created).toBeGreaterThan(2);
+  });
+
+  it("uses UTF-16 spans and reports incomplete/untyped incoming coverage honestly", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const text =
+      '/* 😀 */ import { parse } from "alpha"; export const result = parse(1); export { parse }; export type Parse = typeof parse;';
+    own.put("src/consumer.ts", text);
+    own.put("scripts/ordinary.mjs", "export const value = 1;");
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.describeAt({
+      path: "src/consumer.ts",
+      offset: text.indexOf("parse(1)"),
+    }).identities[0];
+    expect(identity.producer.path).toBe("packages/alpha/src/owner.ts");
+    const incoming = own.resolver.incomingUses(identity);
+    expect(incoming.untyped).toContain("scripts/ordinary.mjs");
+    expect(incoming.complete).toBe(false);
+    expect(incoming.uses.map((use) => use.kind)).toEqual(
+      expect.arrayContaining(["call", "reexport", "type-reference"]),
+    );
+    expect(own.resolver.incomingUses(identity, ["src/consumer.ts"]).partial).toBe(true);
+    expect(() => own.resolver.describeAt({ path: "src/consumer.ts", offset: -1 })).toThrow(
+      "invalid-symbol-position",
+    );
+    expect(() => own.resolver.describeAt({ path: "absent.ts", offset: 0 })).toThrow(
+      "unaccounted-symbol-source",
+    );
+  });
+
+  it.each(["context", "outputs"])("rejects mutable internal %s provenance", async (mode) => {
+    const own = await fixture();
+    if (mode === "context") own.subject.contexts.get("").options.module = 1;
+    else own.subject.outputs.set("packages/alpha/dist/owner.d.ts", "src/consumer.ts");
+    expect(() => own.resolver.assertCurrent()).toThrow("symbol-context-changed");
+  });
+  it("validates declaration positions through the actual compiler-produced map", async () => {
+    const own = await fixture();
+    const path = join(own.root, "packages/alpha/dist/owner.d.ts");
+    const declaration = ts.createSourceFile(
+      path,
+      readFileSync(path, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    ).statements[0];
+    const payload = JSON.parse(readFileSync(`${path}.map`, "utf8"));
+    expect(declarationMapPosition(declaration, JSON.stringify(payload)).mapped.originalLine).toBe(
+      0,
+    );
+    for (const replacement of [{ version: 2 }, { sources: null }, { sources: [] }]) {
+      expect(() =>
+        declarationMapPosition(declaration, JSON.stringify({ ...payload, ...replacement })),
+      ).toThrow("invalid-declaration-map");
+    }
+    expect(() =>
+      declarationMapPosition(declaration, JSON.stringify({ ...payload, mappings: "" })),
+    ).toThrow("unmapped-declaration-position");
+  });
+
+  it("refuses declarations from an unowned dependency and a diagnostic-bearing owner", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put("node_modules/foreign/package.json", {
+      name: "foreign",
+      type: "module",
+      types: "index.d.ts",
+    });
+    own.put(
+      "node_modules/foreign/index.d.ts",
+      "export declare function validate(input: unknown): boolean;",
+    );
+    own.put(
+      "src/consumer.ts",
+      'import { validate } from "foreign"; import { parse } from "alpha"; export const result = parse(1);',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(() =>
+      own.resolver.resolveExport({ ...reference, specifier: "foreign", exportName: "validate" }),
+    ).toThrow("unqualified-declaration-owner");
+    own.resolver.close();
+    own.put(
+      "packages/alpha/src/owner.ts",
+      'export function validate(input: unknown): boolean { const broken: number = "wrong"; return input === broken; }',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(() => own.resolver.resolveExport(reference)).toThrow("unqualified-declaration-emission");
+  });
+
+  it("describes owned local source declarations without inventing a package export", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    const text = "export function local(input: unknown): unknown { return input; }";
+    own.put("src/local.ts", text);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const facts = own.resolver.describeAt({ path: "src/local.ts", offset: text.indexOf("local") });
+    expect(facts.identities[0]).toMatchObject({
+      owner: "root-product",
+      entry: null,
+      producer: { path: "src/local.ts" },
+    });
+  });
+  it("rejects a stale public barrel even when its ultimate producer remains fresh", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put("packages/alpha/src/index.ts", 'export { validate as replacement } from "./owner.js";');
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(() => own.resolver.resolveExport(reference)).toThrow("stale-declaration-provenance");
+    own.resolver.close();
+    emitSymbolFixture(own.root);
+    own.put(
+      "src/consumer.ts",
+      'import { validate } from "alpha/runtime"; export const result = validate(1);',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(
+      own.resolver.resolveExport({
+        ...reference,
+        specifier: "alpha/runtime",
+        exportName: "validate",
+      }).identities[0].producer.path,
+    ).toBe("packages/alpha/src/owner.ts");
+  });
+  it.each(["package-name", "package-directory", "file-scope", "production"])(
+    "rejects mutated %s owner metadata",
+    async (mode) => {
+      const own = await fixture();
+      if (mode === "package-name") own.subject.inventory.packages[0].name = "fabricated-owner";
+      if (mode === "package-directory") own.subject.inventory.packages[0].directory = "src";
+      if (mode === "file-scope")
+        own.subject.inventory.files.find((file) => file.path === "src/consumer.ts").scope =
+          "fabricated-scope";
+      if (mode === "production")
+        own.subject.inventory.files.find((file) => file.path === "src/consumer.ts").production =
+          false;
+      expect(() => own.resolver.assertCurrent()).toThrow("symbol-context-changed");
+      expect(() => own.resolver.resolveExport(reference)).toThrow("symbol-context-changed");
+    },
+  );
+  it("rejects stale intermediate reexports without losing the unchanged final producer", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/bridge.ts",
+      'export { validate as parse } from "./owner.js"; export const version = "before";',
+    );
+    own.put("packages/alpha/src/index.ts", 'export { parse } from "./bridge.js";');
+    emitSymbolFixture(own.root);
+    own.put(
+      "packages/alpha/src/bridge.ts",
+      'export { validate as parse } from "./owner.js"; export const version = 1;',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(() => own.resolver.resolveExport(reference)).toThrow("stale-declaration-provenance");
+    own.resolver.close();
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    expect(own.resolver.resolveExport(reference).identities[0].producer.path).toBe(
+      "packages/alpha/src/owner.ts",
+    );
+  });
+  it.each(["src/added.ts", "packages/alpha/src/added.ts"])(
+    "rejects actual new consumer membership at %s",
+    async (path) => {
+      const own = await fixture();
+      const identity = own.resolver.resolveExport(reference).identities[0];
+      expect(() => own.resolver.assertCurrent()).not.toThrow();
+      own.put(path, 'import { parse } from "alpha"; export const added = parse(1);');
+      expect(() => own.resolver.assertCurrent()).toThrow("symbol-membership-changed");
+      expect(() => own.resolver.incomingUses(identity)).toThrow("symbol-membership-changed");
+    },
+  );
+  it.each([
+    ["dot", "ns.parse(1)"],
+    ["literal", 'ns["parse"](1)'],
+    ["stable-key", "ns[key](1)"],
+    ["wrapped", '(ns["parse"] as typeof ns.parse)(1)'],
+    ["template", "ns[`parse`](1)"],
+    ["wrapped-key", "ns[(key as string)](1)"],
+    ["non-null", "ns.parse!(1)"],
+    ["satisfies", "(ns.parse satisfies typeof ns.parse)(1)"],
+    ["type-assertion", "(<typeof ns.parse>ns.parse)(1)"],
+    ["local-alias", "alias(1)"],
+  ])("records actual checker-owned %s member invocations", async (_mode, expression) => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/namespace-consumer.ts",
+      `import * as ns from "alpha"; const key = "parse"; const alias = ns[key]; export const result = ${expression};`,
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const result = own.resolver.incomingUses(identity);
+    expect(
+      result.uses.filter((use) => use.path === "src/namespace-consumer.ts" && use.kind === "call"),
+    ).toHaveLength(1);
+    expect(
+      result.uses.filter((use) => use.path === "src/consumer.ts" && use.kind === "call"),
+    ).toHaveLength(2);
+  });
+
+  it("marks unknown computed namespace calls incomplete instead of dropping consumers", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/namespace-consumer.ts",
+      'import * as ns from "alpha"; export function invoke(key: string): unknown { return ns[key](1); }',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    expect(own.resolver.incomingUses(identity)).toMatchObject({ complete: false, partial: false });
+  });
+  it("retains exported const-function calls and checker-bound aliases in the producer file", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      'export const validate = (input: unknown): boolean => typeof input === "number"; const local = validate; export const executed = local(1);',
+    );
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const facts = own.resolver.incomingUses(identity);
+    expect(facts.uses.filter((use) => use.kind === "call")).toHaveLength(3);
+  });
+
+  it.each([
+    "let alias = ns.parse; export const result = alias(1);",
+    "const { parse: alias } = ns; export const result = alias(1);",
+    "export function invoke(callback: typeof ns.parse): void { callback(1); }",
+  ])("reports unsupported callable alias binding incomplete: %s", async (body) => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put("src/namespace-consumer.ts", 'import * as ns from "alpha"; ' + body);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    expect(own.resolver.incomingUses(identity).complete).toBe(false);
+  });
+  it("does not turn an asserted unknown key into a complete owner call", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/namespace-consumer.ts",
+      'import * as ns from "alpha"; export function invoke(key: string): void { ns[key as "parse"](1); }',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    expect(own.resolver.incomingUses(identity).complete).toBe(false);
+  });
+  it.each([
+    "const first = ns.parse; const second = first; export const result = second(1);",
+    'const first = "parse"; const second = first; export const result = ns[second](1);',
+  ])("bounds actual const key/callee alias traversal", async (body) => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put("src/namespace-consumer.ts", 'import * as ns from "alpha"; ' + body);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject, { aliases: 1 });
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    expect(() => own.resolver.incomingUses(identity)).toThrow("symbol-alias-budget");
+  });
+  it("retains checker-bound immutable namespace aliases", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/namespace-consumer.ts",
+      'import * as ns from "alpha"; const first = ns; const second = first; export const result = second.parse(1);',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const facts = own.resolver.incomingUses(identity);
+    expect(
+      facts.uses.filter((use) => use.path === "src/namespace-consumer.ts" && use.kind === "call"),
+    ).toHaveLength(1);
+    expect(facts.complete).toBe(true);
+  });
+
+  it("refuses a type-only namespace as a runtime member receiver", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/namespace-consumer.ts",
+      'import type * as ns from "alpha"; export const invoke = (): unknown => ns.parse(1);',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const facts = own.resolver.incomingUses(identity);
+    expect(facts.complete).toBe(false);
+    expect(facts.unresolved).toBeGreaterThan(0);
+    expect(
+      facts.uses.filter((use) => use.path === "src/namespace-consumer.ts" && use.kind === "call"),
+    ).toHaveLength(0);
+  });
+
+  it("keeps an asserted opaque namespace receiver incomplete", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/namespace-consumer.ts",
+      'export function invoke(value: unknown): unknown { const fake = value as typeof import("alpha"); return fake.parse(1); }',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    expect(own.resolver.incomingUses(identity).complete).toBe(false);
+  });
+});
+
+describe("canonical consumer implementation call binding (#3918)", () => {
+  it.each(["direct", "one", "two", "overload"])(
+    "resolves the actual implementation of public consumer seam %s",
+    async (variant) => {
+      const own = createConsumerSeamFixture(variant);
+      fixtures.push(own);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "src/public-consumer.test.mjs")).href
+      );
+      expect(runtime.consume(1)).toBe(1);
+      own.subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(own.subject);
+      const producer = own.resolver.resolveExport(own.record.transform).identities[0];
+      const consumerFacts = own.resolver.resolveExport(own.record.consumer);
+      expect(consumerFacts.identities).toHaveLength(1);
+      expect(consumerFacts.signatures).toHaveLength(1);
+      const consumer = consumerFacts.identities[0];
+      const binding = own.resolver.consumerCalls(consumer, producer, "beta");
+      expect(binding.implementation.owner).toBe("beta");
+      expect(binding.bound).toBe(true);
+      expect(binding.calls).toHaveLength(1);
+      const call = binding.calls[0];
+      expect(readFileSync(join(own.root, call.path), "utf8").slice(call.start, call.end)).toBe(
+        "validate(input)",
+      );
+    },
+    15_000,
+  );
+
+  it("keeps the overload public signature distinct and rechecks source currentness", async () => {
+    const own = createConsumerSeamFixture("overload");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.transform).identities[0];
+    const consumer = own.resolver.resolveExport(own.record.consumer).identities[0];
+    const binding = own.resolver.consumerCalls(consumer, producer, "beta");
+    expect(binding.implementation.producer.start).not.toBe(consumer.producer.start);
+    expect(binding.implementation.producer.path).toBe(consumer.producer.path);
+    own.put("packages/beta/src/owner.ts", "export const changed = true;\n");
+    expect(() => own.resolver.consumerCalls(consumer, producer, "beta")).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 15_000);
+
+  it("bounds the private sibling walk with the existing alias budget", async () => {
+    const own = createConsumerSeamFixture("two");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), { aliases: 1 });
+    const producer = own.resolver.resolveExport(own.record.transform).identities[0];
+    const consumer = own.resolver.resolveExport(own.record.consumer).identities[0];
+    expect(() => own.resolver.consumerCalls(consumer, producer, "beta")).toThrow(
+      "symbol-alias-budget",
+    );
+  }, 15_000);
+
+  async function consumerFixture(body, options = {}) {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8") + body,
+    );
+    emitSymbolFixture(own.root);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject, options);
+    return own;
+  }
+
+  it("keeps a public const alias distinct from the actual inline-callback implementation", async () => {
+    const own = await consumerFixture(
+      "function withOp(action: () => unknown): unknown { return action(); } function handle(input: number): unknown { return withOp(() => validate(input)); } export const consume = handle;",
+    );
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    const bound = own.resolver.consumerCalls(consumer, producer, "alpha");
+    expect(consumer.producer.kind).toBe("VariableDeclaration");
+    expect(bound.implementation.producer.kind).toBe("FunctionDeclaration");
+    expect(bound.bound).toBe(true);
+    expect(bound.calls).toHaveLength(1);
+    const call = bound.calls[0];
+    expect(readFileSync(join(own.root, call.path), "utf8").slice(call.start, call.end)).toBe(
+      "validate(input)",
+    );
+  });
+
+  it("binds a short canonical witness without budgeting unrelated logging descendants", async () => {
+    const helpers = Array.from(
+      { length: 70 },
+      (_, index) => `function noise${index}(input: number): unknown { return input; }`,
+    ).join("\n");
+    const calls = Array.from({ length: 70 }, (_, index) => `noise${index}(input);`).join(" ");
+    const own = await consumerFixture(
+      `function checked(input: number): unknown { return validate(input); } ${helpers}
+      export function consume(input: number): unknown { ${calls} return checked(input); }`,
+    );
+    const runtime = await import(
+      pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+    );
+    expect(runtime.consume(1)).toEqual({ ok: true, value: 1 });
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    const binding = own.resolver.consumerCalls(consumer, producer, "alpha");
+    expect(binding.bound).toBe(true);
+    expect(binding.calls).toHaveLength(1);
+  }, 15_000);
+
+  function witnessBinding(own) {
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    return own.resolver.consumerCalls(consumer, producer, "alpha");
+  }
+
+  function witnessChain(prefix, count) {
+    return Array.from({ length: count }, (_, index) => {
+      const next = index + 1 === count ? "validate(input)" : `${prefix}${index + 1}(input)`;
+      return `function ${prefix}${index}(input: number): unknown { return ${next}; }`;
+    }).join("\n");
+  }
+
+  it("keeps exactly64 contributing states inside the unchanged consumer budget", async () => {
+    const own = await consumerFixture(
+      `${witnessChain("hop", 63)} export function consume(input: number): unknown { return hop0(input); }`,
+    );
+    expect(witnessBinding(own).calls).toHaveLength(1);
+  }, 15_000);
+
+  it("refuses an actual65-state contributing consumer witness", async () => {
+    const own = await consumerFixture(
+      `${witnessChain("hop", 64)} export function consume(input: number): unknown { return hop0(input); }`,
+    );
+    expect(() => witnessBinding(own)).toThrow("symbol-alias-budget");
+  }, 15_000);
+
+  it("counts the union of contributing branches once rather than granting64 per branch", async () => {
+    const own = await consumerFixture(
+      `${witnessChain("left", 32)} ${witnessChain("right", 32)}
+      export function consume(input: number): unknown { left0(input); return right0(input); }`,
+    );
+    expect(() => witnessBinding(own)).toThrow("symbol-alias-budget");
+  }, 15_000);
+
+  it("includes both real caller branches of one shared canonical witness", async () => {
+    const own = await consumerFixture(
+      `function checked(input: number): unknown { return validate(input); }
+      function left(input: number): unknown { return checked(input); }
+      function right(input: number): unknown { return checked(input); }
+      export function consume(input: number): unknown { left(input); return right(input); }`,
+    );
+    expect(witnessBinding(own).calls).toHaveLength(1);
+  }, 15_000);
+
+  it.each([
+    ["private-outside", "function outside(input: number): unknown { return checked(input); }"],
+    [
+      "exported-outside",
+      "export function outside(input: number): unknown { return checked(input); }",
+    ],
+    ["returned", "function outside(): unknown { return checked; }"],
+    ["container", "const holder = { checked };"],
+    [
+      "callback",
+      "function invoke(action: (input: number) => unknown): unknown { return action(1); } const outcome = invoke(checked);",
+    ],
+  ])(
+    "refuses incomplete incoming witness references: %s",
+    async (_variant, outside) => {
+      const own = await consumerFixture(
+        `function checked(input: number): unknown { return validate(input); } ${outside}
+      export function consume(input: number): unknown { return checked(input); }`,
+      );
+      expect(witnessBinding(own).bound).toBe(false);
+    },
+    15_000,
+  );
+
+  it.each([
+    ["mutable", "let call = checked;"],
+    ["opaque", "const call = checked as (input: number) => unknown;"],
+  ])(
+    "keeps %s callee aliases outside a closed consumer witness",
+    async (_variant, alias) => {
+      const own = await consumerFixture(
+        `function checked(input: number): unknown { return validate(input); } ${alias}
+      export function consume(input: number): unknown { return call(input); }`,
+      );
+      expect(witnessBinding(own).bound).toBe(false);
+    },
+    15_000,
+  );
+
+  it("retains an independent qualified witness without claiming a separate escaped helper", async () => {
+    const own = await consumerFixture(
+      `function first(input: number): unknown { return validate(input); }
+      function escaped(input: number): unknown { return validate(input); }
+      const holder = { escaped };
+      export function consume(input: number): unknown { escaped(input); return first(input); }`,
+    );
+    const binding = witnessBinding(own);
+    expect(binding.bound).toBe(true);
+    expect(binding.calls).toHaveLength(1);
+    expect(
+      readFileSync(join(own.root, binding.calls[0].path), "utf8").slice(
+        binding.calls[0].start,
+        binding.calls[0].end,
+      ),
+    ).toBe("validate(input)");
+  }, 15_000);
+
+  it("refuses a contributing cycle even when a canonical producer call is present", async () => {
+    const own = await consumerFixture(
+      `function first(input: number): unknown { if (input < 0) return second(input); return validate(input); }
+      function second(input: number): unknown { return first(input); }
+      export function consume(input: number): unknown { return first(input); }`,
+    );
+    expect(() => witnessBinding(own)).toThrow("unsupported-consumer-helper-cycle");
+  }, 15_000);
+
+  it("refuses a counterfeit producer in an otherwise direct consumer", async () => {
+    const own = await consumerFixture(
+      `export function consume(input: number): unknown {
+        const validate = (value: number): unknown => value;
+        return validate(input);
+      }`,
+    );
+    expect(witnessBinding(own).bound).toBe(false);
+  }, 15_000);
+
+  it("rechecks the current config before reusing a target-directed witness", async () => {
+    const own = await consumerFixture(
+      "function checked(input: number): unknown { return validate(input); } export function consume(input: number): unknown { return checked(input); }",
+    );
+    expect(witnessBinding(own).bound).toBe(true);
+    const path = "packages/alpha/tsconfig.json";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+    expect(() => witnessBinding(own)).toThrow("symbol-subject-changed");
+  }, 15_000);
+
+  it("uses the actual alias budget for exported implementation chains", async () => {
+    const own = await consumerFixture(
+      "function handle(input: number): unknown { return validate(input); } const second = handle; const first = second; export const consume = first;",
+      { aliases: 1 },
+    );
+    const producer = own.resolver.resolveExport(reference).identities[0];
+    const consumer = own.resolver.resolveExport({
+      ...reference,
+      specifier: "alpha/runtime",
+      exportName: "consume",
+    }).identities[0];
+    expect(() => own.resolver.consumerCalls(consumer, producer, "alpha")).toThrow(
+      "symbol-alias-budget",
+    );
+  });
+});
+
+describe("public diagnostic declaration entry (#3918)", () => {
+  it.each(["missing", "nonselected"])(
+    "rejects %s barrel entry map with a fresh final producer",
+    async (mode) => {
+      const own = createDiagnosticFixture();
+      fixtures.push(own);
+      const final = readFileSync(join(own.root, "packages/alpha/dist/owner.d.ts.map"));
+      const map = join(own.root, "packages/alpha/dist/index.d.ts.map");
+      if (mode === "missing") unlinkSync(map);
+      else {
+        const payload = JSON.parse(readFileSync(map));
+        payload.mappings += ";AAAA";
+        writeFileSync(map, JSON.stringify(payload));
+      }
+      const subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      expect(readFileSync(join(own.root, "packages/alpha/dist/owner.d.ts.map"))).toEqual(final);
+      expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow();
+    },
+  );
+});
+
+describe("shared public proof compiler state (#3918)", () => {
+  it("shares roots, two retained roles and one Native emission across eviction", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    const paths = [...own.record.proofs];
+    const compiler = createCompilerContext(subject, {}, [{ owner: "packages/alpha", paths }]);
+    try {
+      const original = compiler.program("packages/alpha/src/owner.ts");
+      const proof = compiler.proofProgram(paths[0]);
+      expect(proof.config.fileNames).toEqual(
+        [...new Set([...original.config.fileNames, join(subject.root, paths[0])])].sort(),
+      );
+      expect(proof.config.options).toEqual({ ...original.config.options, noEmit: true });
+      expect(compiler.proofProgram(paths[0])).toBe(proof);
+      expect(compiler.state.programs.size).toBe(2);
+      compiler.program("src/consumer.ts");
+      expect(compiler.state.programs.size).toBe(2);
+      expect(compiler.state.created).toBe(3);
+      paths.push("packages/alpha/src/unselected.test.ts");
+      expect(() => compiler.assertCurrent()).toThrow("symbol-proof-context-changed");
+    } finally {
+      compiler.close();
+    }
+    expect(compiler.state.programs.size).toBe(0);
+    expect(() => compiler.proofProgram(paths[0])).toThrow("symbol-resolver-closed");
+    own.resolver = createSymbolResolver(subject, { programs: 1 }, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    vi.mocked(execFileSync).mockClear();
+    own.resolver.resolveProofExport(own.record.input);
+    own.resolver.resolveExport(reference);
+    own.resolver.resolveProofExport(own.record.input);
+    expect(
+      vi
+        .mocked(execFileSync)
+        .mock.calls.filter(([, args]) => args.includes("--emitDeclarationOnly")),
+    ).toHaveLength(1);
+  });
+  it.each(["packages/alpha/src/owner.ts", "src/consumer.ts", "packages/beta/src/proof.test.ts"])(
+    "rejects undeclared or unowned proof root %s",
+    async (path) => {
+      const own = createDiagnosticFixture();
+      fixtures.push(own);
+      const subject = await collectPolicySubject(own.root);
+      expect(() =>
+        createSymbolResolver(subject, {}, [{ owner: "packages/alpha", paths: [path] }]),
+      ).toThrow("invalid-proof-root");
+    },
+  );
+  it.each(["proof", "config", "export"])(
+    "rejects observed %s mutation across proof and production",
+    async (mode) => {
+      const own = createDiagnosticFixture();
+      fixtures.push(own);
+      const subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      own.resolver.resolveProofExport(own.record.input);
+      const path =
+        mode === "proof"
+          ? own.record.proofs[0]
+          : mode === "config"
+            ? "packages/alpha/tsconfig.json"
+            : "packages/alpha/package.json";
+      own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+      expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow(
+        "symbol-subject-changed",
+      );
+    },
+  );
+  it.each([{ sourceBytes: 1 }, { nodes: 1 }, { emitBytes: 1 }, { aliases: 1 }])(
+    "keeps proof contexts within shared budget %j",
+    async (limits) => {
+      const own = createDiagnosticFixture();
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root), limits, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow();
+    },
+  );
+  it("rejects an intermediate full-map mutation with the final owner fresh", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    own.put("packages/alpha/src/bridge.ts", 'export { validate as parse } from "./owner.js";');
+    own.put("packages/alpha/src/index.ts", 'export { parse } from "./bridge.js";');
+    emitSymbolFixture(own.root);
+    const map = join(own.root, "packages/alpha/dist/bridge.d.ts.map");
+    const payload = JSON.parse(readFileSync(map));
+    payload.mappings += ";AAAA";
+    writeFileSync(map, JSON.stringify(payload));
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow(
+      "stale-declaration-provenance",
+    );
+  });
+});
+
+describe("closed public entry selection (#3918)", () => {
+  it.each([
+    "runtime-producer",
+    "missing-runtime",
+    "extra-condition",
+    "nested-condition",
+    "wildcard",
+    "dist-override",
+    "require-mode",
+  ])("refuses %s public entry", async (mode) => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    const manifest = JSON.parse(readFileSync(join(own.root, "packages/alpha/package.json")));
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    if (mode === "runtime-producer") manifest.exports["."].import = "./dist/owner.js";
+    if (mode === "extra-condition") manifest.exports["."].default = "./dist/index.js";
+    if (mode === "nested-condition") manifest.exports["."].import = { default: "./dist/index.js" };
+    if (mode === "wildcard") {
+      manifest.exports["./*"] = manifest.exports["."];
+      own.put(
+        own.record.proofs[0],
+        readFileSync(join(own.root, own.record.proofs[0]), "utf8").replace(
+          'from "alpha"',
+          'from "alpha/index"',
+        ),
+      );
+      own.record.input.specifier = "alpha/index";
+    }
+    if (mode === "dist-override") config.compilerOptions.paths = { alpha: ["./dist/index.d.ts"] };
+    if (mode === "require-mode") {
+      manifest.type = "commonjs";
+      config.compilerOptions.verbatimModuleSyntax = false;
+    }
+    own.put("packages/alpha/package.json", manifest);
+    own.put("packages/alpha/tsconfig.json", config);
+    if (mode === "require-mode") emitSymbolFixture(own.root);
+    if (mode === "missing-runtime") unlinkSync(join(own.root, "packages/alpha/dist/index.js"));
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow();
+  });
+});
+
+describe("diagnostic proof guard challenges (#3918)", () => {
+  it("rejects a local ReadonlyArray impersonation after qualifying the actual producer", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const healthy = own.resolver.resolveProofExport(own.record.input).identities[0];
+    expect(own.resolver.diagnosticBinding(own.record.consumer, healthy).bound).toBe(true);
+    own.resolver.close();
+    own.put(
+      "packages/alpha/src/owner.ts",
+      'interface ReadonlyArray<T> { readonly length: number; readonly value: T; }\nexport function validate(input: unknown): ReadonlyArray<string> { return { length: typeof input === "number" ? 0 : 1, value: "invalid" }; }\n',
+    );
+    emitSymbolFixture(own.root);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const actual = own.resolver.resolveProofExport(own.record.input).identities[0];
+    expect(actual.producer.path).toBe("packages/alpha/src/owner.ts");
+    expect(own.resolver.diagnosticBinding(own.record.consumer, actual).bound).toBe(false);
+  });
+  it("rejects stale original input before returning a cached proof Program", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    const compiler = createCompilerContext(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    try {
+      const path = own.record.proofs[0];
+      const proof = compiler.proofProgram(path);
+      expect(compiler.proofProgram(path)).toBe(proof);
+      own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+      expect(() => compiler.proofProgram(path)).toThrow("symbol-subject-changed");
+    } finally {
+      compiler.close();
+    }
+  });
+  it("detaches immutable derived configuration from original compiler options", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    const original = subject.contexts.get("packages/alpha");
+    const libraries = [...original.options.lib];
+    const compiler = createCompilerContext(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    try {
+      const proof = compiler.proofProgram(own.record.proofs[0]);
+      expect(proof.config.options).toEqual({ ...original.options, noEmit: true });
+      const mutations = [
+        () => proof.config.fileNames.push(join(subject.root, "unselected.ts")),
+        () => {
+          proof.config.options.strict = false;
+        },
+        () => proof.config.options.lib.push("lib.dom.d.ts"),
+      ];
+      const errors = [];
+      for (const mutate of mutations) {
+        try {
+          mutate();
+        } catch (error) {
+          if (!(error instanceof TypeError)) throw error;
+          errors.push(error);
+        }
+      }
+      expect(original.options.lib).toEqual(libraries);
+      expect(errors).toHaveLength(mutations.length);
+      expect(compiler.proofProgram(own.record.proofs[0])).toBe(proof);
+    } finally {
+      compiler.close();
+    }
+  });
+  it.each([
+    { type: "ReadonlyArray<string>", bound: true },
+    { type: "string[]", bound: false },
+  ])("preserves the intrinsic result contract for $type", async ({ type, bound }) => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      `export function validate(input: unknown): ${type} { return typeof input === "number" ? [] : ["invalid"]; }\n`,
+    );
+    emitSymbolFixture(own.root);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const actual = own.resolver.resolveProofExport(own.record.input).identities[0];
+    expect(actual.producer.path).toBe("packages/alpha/src/owner.ts");
+    expect(own.resolver.diagnosticBinding(own.record.consumer, actual).bound).toBe(bound);
+  });
+  it("detaches nested paths and rootDirs without freezing the original AST", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json")));
+    config.compilerOptions.paths = { "unused/*": ["./src/*"] };
+    config.compilerOptions.rootDirs = ["./src"];
+    own.put("packages/alpha/tsconfig.json", config);
+    emitSymbolFixture(own.root);
+    const subject = await collectPolicySubject(own.root);
+    const original = subject.contexts.get("packages/alpha");
+    const paths = structuredClone(original.options.paths);
+    const rootDirs = [...original.options.rootDirs];
+    const configFile = Object.getOwnPropertyDescriptor(original.options, "configFile");
+    const compiler = createCompilerContext(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    try {
+      const proof = compiler.proofProgram(own.record.proofs[0]);
+      expect(() => proof.config.options.paths["unused/*"].push("./other/*")).toThrow(TypeError);
+      expect(() => proof.config.options.rootDirs.push(join(subject.root, "other"))).toThrow(
+        TypeError,
+      );
+      expect(original.options.paths).toEqual(paths);
+      expect(original.options.rootDirs).toEqual(rootDirs);
+      expect(Object.isFrozen(original.options)).toBe(false);
+      expect(proof.config.options.configFile).toBe(original.options.configFile);
+      expect(Object.getOwnPropertyDescriptor(proof.config.options, "configFile").enumerable).toBe(
+        false,
+      );
+      expect(Object.getOwnPropertyDescriptor(proof.config.options, "configFile").value).toBe(
+        original.options.configFile,
+      );
+      expect(Object.getOwnPropertyDescriptor(original.options, "configFile")).toEqual(configFile);
+      expect(Object.isFrozen(original.options.configFile)).toBe(false);
+      expect(proof.config.projectReferences).toBe(original.projectReferences);
+    } finally {
+      compiler.close();
+    }
+  });
+});
+
+describe("captured unknown predicate arguments (#3918)", () => {
+  it("adds only actual captured unknown call arguments without growing the raw helper graph", async () => {
+    const own = createRawHelperEnforcementFixture("captured");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const legacy = own.resolver.rawCheckingSlots(identity, 0);
+    const slots = own.resolver.rawCheckingSlots(identity, 0, true);
+    const captured = slots.filter((slot) => slot.capturedUnknownPredicate);
+    expect(captured.map(({ start, end, origin }) => [source.slice(start, end), origin])).toEqual([
+      ["first", ["first"]],
+      ["second", ["second"]],
+    ]);
+    expect(slots.filter((slot) => !slot.capturedUnknownPredicate)).toEqual(legacy);
+    expect(own.resolver.rawCheckingSlots(identity, 0)).toEqual(legacy);
+  });
+
+  it.each(["typed-capture", "unchecked-capture"])(
+    "withholds captured grants from %s",
+    async (variant) => {
+      const own = createRawHelperEnforcementFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const identity = own.resolver.resolveExport(own.record.input).identities[0];
+      const legacy = own.resolver.rawCheckingSlots(identity, 0);
+      expect(own.resolver.rawCheckingSlots(identity, 0, true)).toEqual(legacy);
+    },
+  );
+});
+
+describe("optional callback captured unknown predicates (#3918)", () => {
+  async function optionalFixture(variant = "optional-capture", options = {}) {
+    const own = createRawHelperEnforcementFixture(variant);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), options);
+    own.identity = own.resolver.resolveExport(own.record.input).identities[0];
+    return own;
+  }
+
+  it("adds only captured arguments through the exact optional edge and preserves legacy slots", async () => {
+    const own = await optionalFixture();
+    const source = readFileSync(join(own.root, own.identity.producer.path), "utf8");
+    const legacy = own.resolver.rawCheckingSlots(own.identity, 0);
+    const slots = own.resolver.rawCheckingSlots(own.identity, 0, true);
+    expect(
+      slots
+        .filter((slot) => slot.capturedUnknownPredicate)
+        .map(({ start, end, origin }) => [source.slice(start, end), origin]),
+    ).toEqual([
+      ["first", ["first"]],
+      ["second", ["second"]],
+    ]);
+    expect(slots.filter((slot) => !slot.capturedUnknownPredicate)).toEqual(legacy);
+    expect(own.resolver.rawCheckingSlots(own.identity, 0, false)).toEqual(legacy);
+    expect(legacy.every((slot) => !slot.capturedUnknownPredicate)).toBe(true);
+  });
+
+  it.each([
+    "wrong-value",
+    "altered-body",
+    "exported",
+    "escape",
+    "reference",
+    "write",
+    "shadow",
+    "shadow-undefined",
+    "extra-argument",
+    "optional-call",
+    "default",
+    "predicate-write",
+    "wrapper-export-alias",
+    "wrapper-export-default",
+  ])("withholds supplemental authority from %s", async (variant) => {
+    const own = await optionalFixture(`optional-capture-${variant}`);
+    const legacy = own.resolver.rawCheckingSlots(own.identity, 0);
+    expect(own.resolver.rawCheckingSlots(own.identity, 0, true)).toEqual(legacy);
+  });
+
+  it("retains cycle refusal on a newly reachable callback", async () => {
+    const own = await optionalFixture("optional-capture-cycle");
+    expect(() => own.resolver.rawCheckingSlots(own.identity, 0, true)).toThrow(
+      "unsupported-raw-helper-cycle",
+    );
+  });
+
+  it("bounds supplemental states with the configured alias budget", async () => {
+    const own = await optionalFixture("optional-capture", { aliases: 4 });
+    expect(() => own.resolver.rawCheckingSlots(own.identity, 0, true)).toThrow(
+      "symbol-alias-budget",
+    );
+  });
+
+  it("keeps supplemental cache facts immutable and rejects changed source", async () => {
+    const own = await optionalFixture();
+    const slots = own.resolver.rawCheckingSlots(own.identity, 0, true);
+    const slot = slots.find((entry) => entry.capturedUnknownPredicate);
+    expect(slot).toBeDefined();
+    slot.origin.push("untrusted");
+    expect(own.resolver.rawCheckingSlots(own.identity, 0, true)).not.toEqual(slots);
+    const path = own.identity.producer.path;
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n// changed source\n");
+    expect(() => own.resolver.rawCheckingSlots(own.identity, 0, true)).toThrow();
+  });
+});
+
+describe("dictionary exact-member before controls (#3918)", () => {
+  it.each(["direct", "unicode"])(
+    "binds only exact %s dictionary members",
+    async (variant) => {
+      const own = createDictionaryEnforcementFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const identity = own.resolver.resolveExport(own.record.input).identities[0];
+      const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+      const slots = own.resolver.rawCheckingSlots(identity, 0);
+      expect(own.resolver.callableSlots(identity).parameters[0].type.kind).toBe("unknown");
+      const dictionaries = slots.filter(
+        ({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(dictionaries).toHaveLength(3);
+      expect(dictionaries.map(({ start, end }) => source.slice(start, end))).toEqual([
+        "Record<string, unknown>",
+        "Record<string, unknown>",
+        "Record<string, unknown>",
+      ]);
+      expect(
+        dictionaries.every(({ start }) => start < source.indexOf("export function unrelated")),
+      ).toBe(true);
+    },
+    30_000,
+  );
+
+  it("exposes shallow intersection indexes without treating the output as primitive", async () => {
+    const own = createDictionaryEnforcementFixture("intersection");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.output).identities[0];
+    const facts = own.resolver.callableSlots(identity);
+    expect(facts.parameters[0].type.kind).toBe("unknown");
+    expect(facts.result.type.indexes).toEqual([{ kind: "unknown" }]);
+  }, 30_000);
+
+  it("withdraws predicate recheck after explicit intersection raw erasure", async () => {
+    const own = createDictionaryEnforcementFixture("erasure");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const offset = source.indexOf("fields(erased)") + "fields(".length;
+    expect(own.resolver.callableSlots(identity).parameters[0].type.kind).toBe("unknown");
+    const slots = own.resolver.rawCheckingSlots(identity, 0);
+    expect(
+      slots.filter(
+        ({ rule, start }) => rule === "anti-slop/no-known-value-widening" && start === offset,
+      ),
+    ).toEqual([]);
+  }, 30_000);
+});
+
+describe("dictionary bounded refusal controls (#3918)", () => {
+  it("keeps dictionary helper cycles rejected by the existing raw closure", async () => {
+    const own = createDictionaryEnforcementFixture("cycle");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(() => own.resolver.rawCheckingSlots(identity, 0)).toThrow(
+      "unsupported-raw-helper-cycle",
+    );
+  }, 30_000);
+
+  it.each([
+    ["typed-index", 0],
+    ["any-index", 0],
+    ["counterfeit", 0],
+    ["alias-member", 0],
+    ["export-helper", 1],
+    ["reexport-helper", 1],
+    ["second-caller", 1],
+    ["callback", 1],
+    ["return-escape", 1],
+    ["helper-write", 1],
+    ["root-write", 0],
+    ["unused", 1],
+    ["deferred", 1],
+    ["computed", 1],
+    ["reflective", 1],
+    ["destructured", 1],
+    ["mutable-alias", 1],
+    ["parameter-intersection", 2],
+    ["other-predicate-parameter", 2],
+  ])(
+    "retains dictionary enforcement for %s",
+    async (variant, count) => {
+      const own = createDictionaryEnforcementFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const identity = own.resolver.resolveExport(own.record.input).identities[0];
+      expect(own.resolver.callableSlots(identity).parameters[0].type.kind).toBe("unknown");
+      const slots = own.resolver.rawCheckingSlots(identity, 0);
+      expect(
+        slots.filter(({ rule }) => rule === "anti-slop/no-unsafe-dictionary-type"),
+      ).toHaveLength(count);
+    },
+    30_000,
+  );
+});
+
+describe("public parser symbol and runtime binding (#3918)", () => {
+  it.each(["direct", "reasons", "instantiated-reasons"])(
+    "binds the actual %s named public subpath and unchanged runtime results",
+    async (variant) => {
+      const own = createPublicParserFixture(variant);
+      fixtures.push(own);
+      const subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      const producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+      const binding = own.resolver.parserBinding(own.record.consumer, producer);
+      expect(binding).toMatchObject({ bound: true, status: "ready" });
+      const runtime = await import(
+        pathToFileURL(join(own.root, "packages/alpha/src/proof.test.ts")).href
+      );
+      expect(runtime.publicParse(7)).toEqual({ ok: true, value: 7 });
+      expect(runtime.publicParse(null)).toEqual({
+        ok: false,
+        [variant.endsWith("reasons") ? "reasons" : "errors"]: ["invalid"],
+      });
+    },
+  );
+  it.each([{ nodes: 1 }, { sourceBytes: 1 }, { emitBytes: 1 }])(
+    "retains actual configured parser budgets %j",
+    async (options) => {
+      const own = createPublicParserFixture();
+      fixtures.push(own);
+      const subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(subject, options, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      expect(() => own.resolver.resolveProofExport(own.record.input)).toThrow();
+    },
+  );
+  it("rechecks proof/runtime snapshots and never shares mutable binding facts", async () => {
+    const own = createPublicParserFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+    const first = own.resolver.parserBinding(own.record.consumer, producer);
+    first.bound = false;
+    expect(own.resolver.parserBinding(own.record.consumer, producer).bound).toBe(true);
+    own.put(
+      own.record.consumer.consumerPath,
+      readFileSync(join(own.root, own.record.consumer.consumerPath), "utf8") + "\n",
+    );
+    expect(() => own.resolver.parserBinding(own.record.consumer, producer)).toThrow();
+  });
+});
+
+describe("public parser separate executed controls (#3918)", () => {
+  it.each(["unknown", "any"])(
+    "rejects declaration-only nested %s weakening through the strict owning proof",
+    async (erasure) => {
+      const own = createPublicParserFixture("nested-typed");
+      fixtures.push(own);
+      const proof =
+        readFileSync(join(own.root, own.record.consumer.consumerPath), "utf8") +
+        `
+      type Nested = Extract<ParseResult, { ok: true }>["value"]["nested"];
+      type IsAny<T> = 0 extends (1 & T) ? true : false;
+      export const retainedType: IsAny<Nested> = false;
+      export function nestedNumber(result: ParseResult): number {
+        if (!result.ok) throw new TypeError("invalid");
+        return result.value.nested;
+      }
+    `;
+      own.put(own.record.consumer.consumerPath, proof);
+      let subject = await collectPolicySubject(own.root);
+      let resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      try {
+        expect(resolver.resolveProofConsumer(own.record.consumer).signatures).toHaveLength(1);
+      } finally {
+        resolver.close();
+      }
+      const owner = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+      own.put("packages/alpha/src/owner.ts", owner.replace("nested: number", `nested: ${erasure}`));
+      emitSymbolFixture(own.root);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+      );
+      expect(runtime.validate(7)).toEqual({ ok: true, value: { nested: 7 } });
+      subject = await collectPolicySubject(own.root);
+      resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      try {
+        expect(() => resolver.resolveProofConsumer(own.record.consumer)).toThrow(
+          "unqualified-proof-context",
+        );
+      } finally {
+        resolver.close();
+      }
+    },
+  );
+  it.each(["direct", "reasons"])(
+    "rejects a same-signature unchecked %s body through actual public runtime assertions",
+    async (variant) => {
+      const own = createPublicParserFixture(variant);
+      fixtures.push(own);
+      const owner = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+      own.put(
+        "packages/alpha/src/owner.ts",
+        owner.replace(
+          `{ ok: false, ${variant === "reasons" ? "reasons" : "errors"}: ["invalid"] }`,
+          "{ ok: true, value: 0 }",
+        ),
+      );
+      emitSymbolFixture(own.root);
+      const runtime = await import(
+        pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+      );
+      expect(runtime.validate(7)).toEqual({ ok: true, value: 7 });
+      expect(() =>
+        expect(runtime.validate(null)).toEqual({
+          ok: false,
+          [variant === "reasons" ? "reasons" : "errors"]: ["invalid"],
+        }),
+      ).toThrow();
+      const subject = await collectPolicySubject(own.root);
+      const resolver = createSymbolResolver(subject, {}, [
+        { owner: "packages/alpha", paths: own.record.proofs },
+      ]);
+      try {
+        const producer = resolver.resolveProofExport(own.record.input).identities[0];
+        expect(resolver.parserBinding(own.record.consumer, producer).status).toBe("ready");
+      } finally {
+        resolver.close();
+      }
+    },
+  );
+});
+
+async function currentnessFixture(prepare, options = {}) {
+  const own = createSymbolFixture(false, prepare);
+  fixtures.push(own);
+  const subject = await collectPolicySubject(own.root);
+  const compiler = createCompilerContext(subject, options);
+  own.resolver = compiler;
+  return { ...own, compiler };
+}
+
+function configureSourceBudgetOwner(own, kind) {
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  own.put("packages/budget/package.json", {
+    name: "budget",
+    version: "0.0.0",
+    type: "module",
+    exports: {},
+  });
+  own.put("packages/budget/tsconfig.json", config);
+  own.budgetPath = "packages/budget/src/consumer.ts";
+  own.metadataPath = "packages/budget/node_modules/fixture-bound/package.json";
+  own.declarationPath = "packages/budget/node_modules/fixture-bound/index.d.ts";
+  own.put(
+    own.budgetPath,
+    'import type { Bound } from "fixture-bound";\n' +
+      "export const observed: Bound = { value: 1 };\n",
+  );
+  own.put(own.metadataPath, {
+    name: "fixture-bound",
+    version: "0.0.0",
+    types: "index.d.ts",
+    ...(kind === "metadata"
+      ? { fixturePadding: "fixture-owned package metadata bytes ".repeat(8192) }
+      : {}),
+  });
+  own.put(
+    own.declarationPath,
+    (kind === "source" ? `/* ${"fixture-owned source budget bytes ".repeat(8192)} */\n` : "") +
+      "export interface Bound { readonly value: number; }\n",
+  );
+}
+
+async function sourceBudgetFixture(kind = "source") {
+  const own = createSymbolFixture(false, (value) => configureSourceBudgetOwner(value, kind), [
+    "packages/budget",
+  ]);
+  own.resources = [];
+  own.resolver = { close: () => own.resources.forEach((resource) => resource.close()) };
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  return own;
+}
+
+function sourceBudgetCompiler(own, options = {}) {
+  const compiler = createCompilerContext(own.subject, options);
+  own.resources.push(compiler);
+  return compiler;
+}
+
+function observedSourceBudgetError(work) {
+  try {
+    work();
+    return undefined;
+  } catch (error) {
+    return error;
+  }
+}
+
+function measuredSourceBudgetProgram(own) {
+  const compiler = sourceBudgetCompiler(own);
+  compiler.program("packages/alpha/src/owner.ts");
+  const context = compiler.program(own.budgetPath);
+  const dependencyPath = join(own.subject.root, own.declarationPath);
+  const dependency = context.program.getSourceFile(dependencyPath);
+  expect(dependency).toBeDefined();
+  expect(dependency.text.length).toBeGreaterThan(0);
+  expect(dependency.text).toContain("export interface Bound");
+  expect(compiler.state.snapshots.has(dependencyPath)).toBe(true);
+  const dependencyBytes = Buffer.byteLength(
+    readFileSync(join(own.subject.root, own.declarationPath), "utf8"),
+  );
+  return { total: compiler.state.bytes, limit: compiler.state.bytes - dependencyBytes };
+}
+
+function refusedSourceBudgetProgram(own, control) {
+  const compiler = sourceBudgetCompiler(own, { sourceBytes: control.limit });
+  compiler.program("packages/alpha/src/owner.ts");
+  const refusal = observedSourceBudgetError(() => compiler.program(own.budgetPath));
+  expect(compiler.state.bytes).toBeGreaterThan(control.limit);
+  expect(compiler.state.snapshots.has(join(own.subject.root, own.declarationPath))).toBe(false);
+  const admission = {
+    attemptedBytes: compiler.state.bytes,
+    sourceLimit: control.limit,
+    refusedWitnessAbsent: !compiler.state.snapshots.has(
+      join(own.subject.root, own.declarationPath),
+    ),
+  };
+  expect(refusal, JSON.stringify(admission)).toBeInstanceOf(TypeError);
+  expect(refusal.message).toBe("symbol-source-budget");
+  return { compiler, refusal };
+}
+
+function sourceBudgetWork(compiler, own) {
+  const source = join(own.subject.root, own.budgetPath);
+  const config = own.subject.contexts.get("packages/budget");
+  return [
+    () => compiler.read("packages/alpha/src/owner.ts"),
+    () => compiler.context(own.budgetPath),
+    () => compiler.program("packages/alpha/src/owner.ts"),
+    () => compiler.program(own.budgetPath),
+    () => compiler.assertCurrent(),
+    () => compiler.resolveModule(source, "fixture-bound", config, ts.ModuleKind.ESNext),
+  ];
+}
+
+describe("compiler-owned source admission refusal (#3918)", () => {
+  it("rejects a real swallowed TypeScript declaration read before returning a Program", async () => {
+    const own = await sourceBudgetFixture();
+    const control = measuredSourceBudgetProgram(own);
+    const { compiler } = refusedSourceBudgetProgram(own, control);
+    expect(compiler.state.programs.size).toBe(1);
+    expect(
+      [...compiler.state.programs.values()].every((entry) => entry.owner === "packages/alpha"),
+    ).toBe(true);
+    expect(
+      compiler.state.snapshots.has(join(own.subject.root, "packages/alpha/src/owner.ts")),
+    ).toBe(true);
+  }, 30_000);
+
+  it("keeps the first own error across admitted reads, cached Programs and currentness", async () => {
+    const own = await sourceBudgetFixture();
+    const { compiler, refusal } = refusedSourceBudgetProgram(own, measuredSourceBudgetProgram(own));
+    const before = {
+      bytes: compiler.state.bytes,
+      snapshots: compiler.state.snapshots.size,
+      created: compiler.state.created,
+    };
+    for (const work of sourceBudgetWork(compiler, own))
+      expect(observedSourceBudgetError(work)).toBe(refusal);
+    expect({
+      bytes: compiler.state.bytes,
+      snapshots: compiler.state.snapshots.size,
+      created: compiler.state.created,
+    }).toEqual(before);
+  }, 30_000);
+
+  it("keeps a live private error after exposed observation metadata is rewritten", async () => {
+    const own = await sourceBudgetFixture();
+    const { compiler, refusal } = refusedSourceBudgetProgram(own, measuredSourceBudgetProgram(own));
+    compiler.state.bytes = 0;
+    compiler.state.limits.sourceBytes = Number.MAX_SAFE_INTEGER;
+    compiler.state.snapshots.clear();
+    compiler.state.programs.clear();
+    for (const work of sourceBudgetWork(compiler, own))
+      expect(observedSourceBudgetError(work)).toBe(refusal);
+    expect(compiler.state.bytes).toBe(0);
+    expect(compiler.state.snapshots.size).toBe(0);
+    expect(compiler.state.programs.size).toBe(0);
+  }, 30_000);
+
+  it("admits the actual exact-byte profile and refuses one byte below it", async () => {
+    const own = await sourceBudgetFixture();
+    const control = measuredSourceBudgetProgram(own);
+    const exact = sourceBudgetCompiler(own, { sourceBytes: control.total });
+    exact.program("packages/alpha/src/owner.ts");
+    const context = exact.program(own.budgetPath);
+    expect(
+      context.program.getSourceFile(join(own.subject.root, own.declarationPath)).text,
+    ).toContain("export interface Bound");
+    expect(exact.state.bytes).toBe(control.total);
+    const lower = sourceBudgetCompiler(own, { sourceBytes: control.total - 1 });
+    lower.program("packages/alpha/src/owner.ts");
+    const refusal = observedSourceBudgetError(() => lower.program(own.budgetPath));
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal.message).toBe("symbol-source-budget");
+    expect(lower.state.bytes).toBeGreaterThan(control.total - 1);
+  }, 30_000);
+
+  it.each([ts.ModuleKind.ESNext, ts.ModuleKind.CommonJS])(
+    "preserves first metadata refusal and healthy module resolution in mode %s",
+    async (mode) => {
+      const own = await sourceBudgetFixture("metadata");
+      const source = join(own.subject.root, own.budgetPath);
+      const config = own.subject.contexts.get("packages/budget");
+      const healthy = sourceBudgetCompiler(own);
+      healthy.read("packages/budget/package.json");
+      const resolved = healthy.resolveModule(source, "fixture-bound", config, mode);
+      expect(resolved.resolvedFileName).toBe(join(own.subject.root, own.declarationPath));
+      expect(healthy.state.snapshots.has(join(own.subject.root, own.metadataPath))).toBe(true);
+      const metadataBytes = Buffer.byteLength(
+        readFileSync(join(own.subject.root, own.metadataPath), "utf8"),
+      );
+      const limit = healthy.state.bytes - metadataBytes;
+      expect(limit).toBeGreaterThan(0);
+      const bounded = sourceBudgetCompiler(own, { sourceBytes: limit });
+      bounded.read("packages/budget/package.json");
+      const refusal = observedSourceBudgetError(() =>
+        bounded.resolveModule(source, "fixture-bound", config, mode),
+      );
+      expect(refusal).toBeInstanceOf(TypeError);
+      expect(refusal.message).toBe("symbol-source-budget");
+      expect(bounded.state.bytes).toBeGreaterThan(limit);
+      expect(bounded.state.snapshots.has(join(own.subject.root, own.metadataPath))).toBe(false);
+      expect(bounded.state.created).toBe(0);
+      const before = { bytes: bounded.state.bytes, snapshots: bounded.state.snapshots.size };
+      for (const work of sourceBudgetWork(bounded, own))
+        expect(observedSourceBudgetError(work)).toBe(refusal);
+      expect({ bytes: bounded.state.bytes, snapshots: bounded.state.snapshots.size }).toEqual(
+        before,
+      );
+      expect(bounded.state.created).toBe(0);
+      const unresolved = sourceBudgetCompiler(own);
+      expect(unresolved.resolveModule(source, "fixture-missing", config, mode)).toBeUndefined();
+      expect(() => unresolved.assertCurrent()).not.toThrow();
+    },
+    30_000,
+  );
+
+  it("preserves cached public facts refusal, stats and unconditional close", async () => {
+    const own = await sourceBudgetFixture();
+    const path = join(own.subject.root, own.budgetPath);
+    const offset = readFileSync(path, "utf8").indexOf("observed");
+    const healthy = createSymbolResolver(own.subject);
+    own.resources.push(healthy);
+    const expected = healthy.resolveExport(reference);
+    healthy.describeAt({ path: own.budgetPath, offset });
+    const dependencyBytes = Buffer.byteLength(
+      readFileSync(join(own.subject.root, own.declarationPath), "utf8"),
+    );
+    const resolver = createSymbolResolver(own.subject, {
+      sourceBytes: healthy.stats().sourceBytes - dependencyBytes,
+    });
+    own.resources.push(resolver);
+    expect(resolver.resolveExport(reference)).toEqual(expected);
+    const refusal = observedSourceBudgetError(() =>
+      resolver.describeAt({ path: own.budgetPath, offset }),
+    );
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal.message).toBe("symbol-source-budget");
+    const before = resolver.stats();
+    expect(observedSourceBudgetError(() => resolver.resolveExport(reference))).toBe(refusal);
+    expect(resolver.stats()).toEqual(before);
+    expect(() => resolver.close()).not.toThrow();
+    expect(() => resolver.close()).not.toThrow();
+    expect(resolver.stats().programs).toBe(0);
+    expect(resolver.stats().sourceBytes).toBe(before.sourceBytes);
+    expect(() => resolver.assertCurrent()).toThrow("symbol-resolver-closed");
+    const fresh = sourceBudgetCompiler(own);
+    expect(fresh.program(own.budgetPath).program.getSourceFile(path).text).toContain("observed");
+  }, 30_000);
+
+  it("does not latch an unrelated same-message input observation error", async () => {
+    const own = await currentnessFixture();
+    const inputs = own.compiler.state.inputs;
+    const original = inputs[Symbol.iterator];
+    const sentinel = new TypeError("symbol-source-budget");
+    inputs[Symbol.iterator] = () => {
+      throw sentinel;
+    };
+    try {
+      expect(observedSourceBudgetError(() => own.compiler.assertCurrent())).toBe(sentinel);
+    } finally {
+      inputs[Symbol.iterator] = original;
+    }
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    expect(() => own.compiler.read("src/consumer.ts")).not.toThrow();
+  });
+
+  it("retains production semantic facts and proof-role semantic rejection", async () => {
+    const own = await currentnessFixture(({ put }) => {
+      put("src/consumer.ts", 'export const wrong: number = "wrong";\n');
+      put("src/semantic.test.ts", 'export const wrong: number = "wrong";\n');
+    });
+    const context = own.compiler.program("src/consumer.ts");
+    expect(ts.getPreEmitDiagnostics(context.program).length).toBeGreaterThan(0);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    own.compiler.close();
+    const proof = createCompilerContext(own.compiler.state.subject, {}, [
+      { owner: "", paths: ["src/semantic.test.ts"] },
+    ]);
+    try {
+      expect(() => proof.proofProgram("src/semantic.test.ts")).toThrow("unqualified-proof-context");
+    } finally {
+      proof.close();
+    }
+  }, 30_000);
+});
+
+function currentnessTargetBufferAllocations(compiler, byteLength) {
+  const allocate = Buffer.allocUnsafe;
+  let allocations = 0;
+  const traced = vi.spyOn(Buffer, "allocUnsafe").mockImplementation((size) => {
+    if (size === byteLength) allocations += 1;
+    return Reflect.apply(allocate, Buffer, [size]);
+  });
+  try {
+    compiler.assertCurrent();
+    compiler.assertCurrent();
+  } finally {
+    traced.mockRestore();
+  }
+  return allocations;
+}
+
+// Work regression controls, not a newly discovered content-admission defect. The tracer delegates
+// every allocation to Node and observes only the byte length of the actual admitted fixture.
+async function collectiveSymbolFixture(variant = "direct", options = {}) {
+  const own = createCollectiveParserFixture(variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    {
+      owner: "packages/alpha",
+      paths: ["packages/alpha/src/proof.test.ts"],
+    },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+  return own;
+}
+
+describe("collective exact raw symbol closure (#3918)", () => {
+  it("preserves existing const callable producer coordinates without public-proof certification", async () => {
+    const own = createCollectiveParserFixture("public-const-alias");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const roots = own.records.map((record) => ({
+      identity: own.resolver.resolveExport({ ...record.input, consumerPath: "src/consumer.ts" })
+        .identities[0],
+      index: 0,
+      recordId: record.id,
+    }));
+    expect(roots[0].identity.producer.kind).toBe("VariableDeclaration");
+    expect(roots[2].identity.producer).toEqual(roots[0].identity.producer);
+    const slots = own.resolver.collectiveRawCheckingSlots(roots, "anti-slop/no-unknown-parameters");
+    const variable = slots.filter(
+      (slot) => slot.producerIdentity.producer.kind === "VariableDeclaration",
+    );
+    expect(variable).toHaveLength(1);
+    expect(variable[0].producerIdentity.producer).toEqual(roots[0].identity.producer);
+  }, 30_000);
+
+  it("withholds empty, typed and written roots and bounds the incoming root set", async () => {
+    const own = await collectiveSymbolFixture("domain");
+    expect(own.resolver.collectiveRawCheckingSlots([], "anti-slop/no-runtime-typeof")).toEqual([]);
+    const domain = own.resolver.resolveProofExport({
+      ...own.records[0].input,
+      exportName: "domain",
+    }).identities[0];
+    expect(
+      own.resolver.collectiveRawCheckingSlots(
+        [{ identity: domain, index: 0, recordId: "domain" }],
+        "anti-slop/no-runtime-typeof",
+      ),
+    ).toEqual([]);
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(
+        Array(65).fill(own.rawRoots[0]),
+        "anti-slop/no-runtime-typeof",
+      ),
+    ).toThrow("symbol-alias-budget");
+    const written = await collectiveSymbolFixture("root-write");
+    expect(
+      written.resolver.collectiveRawCheckingSlots(
+        [written.rawRoots[0]],
+        "anti-slop/no-runtime-typeof",
+      ),
+    ).toEqual([]);
+  }, 30_000);
+
+  it("preserves legacy second-caller refusal and closes only canonical registered roots", async () => {
+    const own = await collectiveSymbolFixture();
+    const legacy = own.resolver.rawCheckingSlots(own.rawRoots[0].identity, 0);
+    expect(legacy.filter(({ rule }) => rule === "anti-slop/no-unknown-parameters")).toHaveLength(1);
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots).toHaveLength(4);
+    expect(
+      slots.filter(
+        ({ contributingResponsibilityIds }) => contributingResponsibilityIds.length === 2,
+      ),
+    ).toHaveLength(2);
+    expect(
+      own.resolver
+        .collectiveRawCheckingSlots([...own.rawRoots].reverse(), "anti-slop/no-unknown-parameters")
+        .sort((a, b) => a.start - b.start),
+    ).toEqual(slots.sort((a, b) => a.start - b.start));
+  }, 30_000);
+
+  it.each(["counterfeit", "alias-member"])(
+    "does not grant intrinsic dictionary slots to %s members",
+    async (variant) => {
+      const own = await collectiveSymbolFixture(variant);
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unsafe-dictionary-type",
+      );
+      if (variant === "counterfeit") expect(slots).toEqual([]);
+      else expect(slots).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("keeps narrowed call operands and nonraw second parameters outside the closure", async () => {
+    const own = await collectiveSymbolFixture("narrowed");
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const start = source.indexOf("input: unknown", source.indexOf("function primitive")) + 7;
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots.some((slot) => slot.start === start)).toBe(false);
+    const second = await collectiveSymbolFixture("second-parameter");
+    expect(
+      second.resolver
+        .collectiveRawCheckingSlots(second.rawRoots, "anti-slop/no-unknown-parameters")
+        .some((slot) => slot.index === 1),
+    ).toBe(false);
+  }, 30_000);
+
+  it("rejects collective cycles, existing alias budget exhaustion and fresh source mutation", async () => {
+    const cycle = await collectiveSymbolFixture("cycle");
+    expect(() =>
+      cycle.resolver.collectiveRawCheckingSlots(cycle.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("unsupported-raw-helper-cycle");
+    const bounded = await collectiveSymbolFixture("direct", { aliases: 2 });
+    expect(() =>
+      bounded.resolver.collectiveRawCheckingSlots(bounded.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-alias-budget");
+    const changed = await collectiveSymbolFixture();
+    const path = join(changed.root, "packages/alpha/src/owner.ts");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() =>
+      changed.resolver.collectiveRawCheckingSlots(changed.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-subject-changed");
+  }, 30_000);
+});
+
+function privateModuleReceiptVariant(own, variant) {
+  if (variant === "receipt-node-failure")
+    own.put(
+      "receipt-production.mjs",
+      `const boundArray = [${"0,".repeat(100_000)}];\n` + "void import(boundArray);\n".repeat(55),
+    );
+  if (variant === "fact-shapes")
+    own.put(
+      "src/module-facts.ts",
+      'import type { isRecord as Shape } from "../packages/alpha/src/helper.js";\n' +
+        'export { type isRecord } from "../packages/alpha/src/helper.js";\n' +
+        'declare const flag: boolean; const base = "../packages/alpha/src/";\n' +
+        'let path = flag ? base + "helper.js" : `${base}leaf-first.js`; void import(path);\n',
+    );
+  if (variant === "receipt-alias-failure")
+    own.put(
+      "src/module-aliases.ts",
+      'const path0 = "../packages/alpha/src/helper.js";\n' +
+        Array.from(
+          { length: SYMBOL_LIMITS.aliases },
+          (_, index) => `const path${index + 1} = path${index};\n`,
+        ).join("") +
+        `void import(path${SYMBOL_LIMITS.aliases});\n`,
+    );
+}
+
+async function privateModuleSymbolFixture(variant = "direct", options = {}) {
+  const own = createPrivateModuleParserFixture(variant);
+  fixtures.push(own);
+  if (variant === "cache-eviction")
+    own.put("src/cache-owner.ts", "export function evictionOwner(): number { return 1; }\n");
+  privateModuleReceiptVariant(own, variant);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    {
+      owner: "packages/alpha",
+      paths: ["packages/alpha/src/proof.test.ts"],
+    },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+  return own;
+}
+
+async function privateCapacitySymbolFixture(stateCount, variant = "connected", options = {}) {
+  const own = createPrivateModuleCapacityFixture(stateCount, variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  resetExposureResolver(own, options);
+  return own;
+}
+
+function expectOwnedCapacityRefusal(operation, limit, observedCount = limit + 1) {
+  let refusal;
+  try {
+    operation();
+  } catch (error) {
+    refusal = error;
+  }
+  expect(refusal).toBeInstanceOf(TypeError);
+  expect(refusal.message).toBe("symbol-alias-budget");
+  expect(collectiveHelperBudgetDetails(refusal)).toEqual({ limit, observedCount });
+}
+
+function expectCompletePrivateCapacitySlots(own, slots, count) {
+  expect(slots).toHaveLength(count);
+  const shared = slots.filter((slot) => slot.path.endsWith("/capacity-shared.ts"));
+  expect(shared).toHaveLength(1);
+  expect(shared[0].contributingResponsibilityIds).toEqual(
+    own.records.map((record) => record.id).sort(),
+  );
+  expect(slots.every((slot) => slot.producerIdentity.owner === "alpha")).toBe(true);
+  expect(new Set(slots.map((slot) => JSON.stringify(slot)))).toEqual(
+    new Set(
+      own.resolver
+        .collectiveRawCheckingSlots([...own.rawRoots].reverse(), privateCapacityRule)
+        .map((slot) => JSON.stringify(slot)),
+    ),
+  );
+}
+
+async function expectPrivateCapacityRuntime(own) {
+  const runtime = await import(pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href);
+  expect(runtime.first(1)).toEqual({ ok: true, value: 0 });
+  expect(runtime.first("wrong")).toEqual({ ok: false, errors: ["invalid"] });
+}
+
+const privateCapacityRule = "anti-slop/no-unknown-parameters";
+
+describe("separate collective private-helper capacity contract (#3918)", () => {
+  it("admits the existing connected multi-root fixture beyond the individual discovery ceiling", async () => {
+    const own = await collectiveSymbolFixture("cardinality");
+    expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([own.rawRoots]);
+    const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+    expect(slots.length).toBeGreaterThan(SYMBOL_LIMITS.aliases);
+    expect(
+      slots.some((slot) => slot.contributingResponsibilityIds.length === own.rawRoots.length),
+    ).toBe(true);
+    expect(new Set(slots.map((slot) => JSON.stringify(slot)))).toEqual(
+      new Set(
+        own.resolver
+          .collectiveRawCheckingSlots([...own.rawRoots].reverse(), privateCapacityRule)
+          .map((slot) => JSON.stringify(slot)),
+      ),
+    );
+  }, 30_000);
+
+  it("keeps the named union capacity separate from every other finite resolver limit", () => {
+    expect(SYMBOL_LIMITS.collectiveStates).toBe(256);
+    const selected = symbolLimits({ collectiveStates: 2 });
+    expect(selected.collectiveStates).toBe(2);
+    for (const [name, value] of Object.entries(SYMBOL_LIMITS))
+      if (name !== "collectiveStates") expect(selected[name]).toBe(value);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects the invalid collective capacity %s through the production option validator",
+    (collectiveStates) => {
+      expect(() => symbolLimits({ collectiveStates })).toThrow("invalid-symbol-budget");
+    },
+  );
+
+  it.each(["at", "over"])(
+    "enforces the actual connected union %s the production default with individually bounded roots",
+    async (boundary) => {
+      const count = SYMBOL_LIMITS.collectiveStates + (boundary === "over" ? 1 : 0);
+      const own = await privateCapacitySymbolFixture(count);
+      for (const root of own.rawRoots)
+        expect(
+          own.resolver.collectiveRawCheckingSlots([root], privateCapacityRule).length,
+        ).toBeGreaterThan(0);
+      expect(
+        own.capacity.branches.every((branch) => branch.gates.length + 2 <= SYMBOL_LIMITS.aliases),
+      ).toBe(true);
+      expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([
+        [...own.rawRoots].sort((left, right) =>
+          left.recordId < right.recordId ? -1 : left.recordId > right.recordId ? 1 : 0,
+        ),
+      ]);
+      if (boundary === "over") {
+        expectOwnedCapacityRefusal(
+          () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+          SYMBOL_LIMITS.collectiveStates,
+        );
+        return;
+      }
+      const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+      expectCompletePrivateCapacitySlots(own, slots, count);
+      await expectPrivateCapacityRuntime(own);
+    },
+    60_000,
+  );
+
+  it("retains the historical whole-union refusal through an explicit 64-state profile", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates, "connected", {
+      collectiveStates: SYMBOL_LIMITS.aliases,
+    });
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it("does not let root insertion exceed a smaller explicitly selected union ceiling", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates, "connected", {
+      collectiveStates: 2,
+    });
+    expect(own.rawRoots.length).toBeGreaterThan(2);
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      2,
+    );
+  }, 30_000);
+
+  it("keeps request cardinality bounded before canonical root deduplication", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates);
+    const requests = Array.from({ length: SYMBOL_LIMITS.aliases + 1 }, (_, index) => ({
+      ...own.rawRoots[0],
+      recordId: `request-${index}`,
+    }));
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it("keeps one canonical root at its original discovery ceiling despite record aliases", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.aliases + 1, "single-root");
+    for (const requests of [
+      own.rawRoots,
+      [own.rawRoots[0], { ...own.rawRoots[0], recordId: "alias" }],
+    ])
+      expectOwnedCapacityRefusal(
+        () => own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule),
+        SYMBOL_LIMITS.aliases,
+      );
+  }, 30_000);
+
+  it("keeps a disconnected request list on its original union ceiling", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.aliases + 1, "disconnected");
+    expect(own.resolver.collectiveRawComponents(own.rawRoots)).toHaveLength(own.rawRoots.length);
+    for (const root of own.rawRoots)
+      expect(
+        own.resolver.collectiveRawCheckingSlots([root], privateCapacityRule).length,
+      ).toBeGreaterThan(0);
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it("does not treat an absent canonical parameter as a complete connected root set", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates);
+    const absent = { ...own.rawRoots[0], index: 1, recordId: "absent-parameter" };
+    expect(own.resolver.collectiveRawComponents([absent])).toEqual([[absent]]);
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots([...own.rawRoots, absent], privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 30_000);
+
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+    [true, true],
+  ])(
+    "refuses real oversized-root fallbacks with reversed=%s and warm=%s",
+    async (reversed, warm) => {
+      const own = await privateCapacitySymbolFixture(
+        SYMBOL_LIMITS.aliases + 1,
+        "refused-root-pair",
+      );
+      const requests = reversed ? [...own.rawRoots].reverse() : own.rawRoots;
+      if (warm) {
+        for (const request of requests)
+          expectOwnedCapacityRefusal(
+            () => own.resolver.collectiveRawCheckingSlots([request], privateCapacityRule),
+            SYMBOL_LIMITS.aliases,
+          );
+      }
+      const components = own.resolver.collectiveRawComponents(requests);
+      expect(components).toHaveLength(2);
+      expect(components.every((component) => component.length === 1)).toBe(true);
+      expect(new Set(components.flat().map((request) => request.recordId))).toEqual(
+        new Set(requests.map((request) => request.recordId)),
+      );
+      expectOwnedCapacityRefusal(
+        () => own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule),
+        SYMBOL_LIMITS.aliases,
+      );
+    },
+    60_000,
+  );
+
+  it("admits exact-ceiling roots even when their successful discovery cannot enter the cache", async () => {
+    const count = 2 * (SYMBOL_LIMITS.aliases - 1) + 1;
+    const own = await privateCapacitySymbolFixture(count);
+    expect(
+      own.capacity.branches.every((branch) => branch.gates.length + 2 === SYMBOL_LIMITS.aliases),
+    ).toBe(true);
+    for (let index = 0; index < SYMBOL_LIMITS.aliases; index += 1)
+      own.resolver.collectiveRawComponents([{ ...own.rawRoots[0], recordId: `warm-${index}` }]);
+    const requests = own.rawRoots.map((root) => ({
+      ...root,
+      recordId: `uncached-${root.recordId}`,
+    }));
+    const before = own.resolver.stats().nodes;
+    expect(own.resolver.collectiveRawCheckingSlots(requests, privateCapacityRule)).toHaveLength(
+      count,
+    );
+    expect(own.resolver.stats().nodes).toBeGreaterThan(before);
+    own.resolver.close();
+    resetExposureResolver(own, { aliases: SYMBOL_LIMITS.aliases - 1 });
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots([own.rawRoots[0]], privateCapacityRule),
+      SYMBOL_LIMITS.aliases - 1,
+    );
+  }, 60_000);
+
+  it("does not leak a successful larger context into an unrelated oversized single root", async () => {
+    const own = await privateCapacitySymbolFixture(
+      SYMBOL_LIMITS.collectiveStates,
+      "unrelated-oversized",
+    );
+    const component = own.rawRoots.filter((request) => request.recordId !== "fixture-oversized");
+    const unrelated = own.rawRoots.find((request) => request.recordId === "fixture-oversized");
+    expect(own.resolver.collectiveRawCheckingSlots(component, privateCapacityRule)).toHaveLength(
+      SYMBOL_LIMITS.collectiveStates,
+    );
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots([unrelated], privateCapacityRule),
+      SYMBOL_LIMITS.aliases,
+    );
+    expectOwnedCapacityRefusal(
+      () =>
+        own.resolver.collectiveRawCheckingSlots(
+          [unrelated, { ...unrelated, recordId: "same-root-alias" }],
+          privateCapacityRule,
+        ),
+      SYMBOL_LIMITS.aliases,
+    );
+  }, 60_000);
+
+  it.each(["private-cycle", "mixed-cycle", "public-cycle"])(
+    "preserves the actual %s instead of pruning an ineligible or public state",
+    async (variant) => {
+      const own = await privateCapacitySymbolFixture(6, variant);
+      if (variant === "public-cycle") {
+        for (const [name, file] of [
+          [own.capacity.terminals[0], "capacity-shared.ts"],
+          [own.capacity.branches[0].gates[0], "capacity-helpers.ts"],
+        ]) {
+          const identity = own.resolver.resolveExport({
+            consumerPath: "src/consumer.ts",
+            specifier: "alpha/runtime",
+            exportName: name,
+          }).identities[0];
+          expect(identity.producer.path).toBe(`packages/alpha/src/${file}`);
+        }
+      }
+      expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+        "unsupported-raw-helper-cycle",
+      );
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      ).toThrow("unsupported-raw-helper-cycle");
+    },
+    30_000,
+  );
+
+  it("counts a publicly exposed terminal before refusing the entire oversized union", async () => {
+    const own = await privateCapacitySymbolFixture(
+      SYMBOL_LIMITS.collectiveStates + 1,
+      "public-terminal",
+    );
+    expectOwnedCapacityRefusal(
+      () => own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      SYMBOL_LIMITS.collectiveStates,
+    );
+  }, 60_000);
+
+  it("preserves a public caller's downstream denial inside an admitted larger graph", async () => {
+    const own = await privateCapacitySymbolFixture(SYMBOL_LIMITS.collectiveStates, "public-gate");
+    const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+    const name = own.capacity.branches[0].gates[0];
+    const identity = own.resolver.resolveExport({
+      consumerPath: "src/consumer.ts",
+      specifier: "alpha/runtime",
+      exportName: name,
+    }).identities[0];
+    expect(slots).toHaveLength(SYMBOL_LIMITS.collectiveStates - 2);
+    expect(slots.some((slot) => slot.path.endsWith("/capacity-shared.ts"))).toBe(false);
+    expect(
+      slots.some(
+        (slot) =>
+          slot.producerIdentity.producer.path === identity.producer.path &&
+          slot.producerIdentity.producer.start === identity.producer.start,
+      ),
+    ).toBe(false);
+  }, 60_000);
+});
+
+function configureExposureConsumer(own, incoming = "direct", unusedSource = null) {
+  if (incoming === "barrel") {
+    own.put(
+      "packages/alpha/src/exposure-barrel.ts",
+      'export { isRecord as renamedRecord } from "./helper.js";\n',
+    );
+    emitSymbolFixture(own.root);
+  }
+  const config = JSON.parse(readFileSync(join(own.root, "packages/alpha/tsconfig.json"), "utf8"));
+  own.put("packages/exposure-ui/package.json", {
+    name: "exposure-ui",
+    version: "0.0.0",
+    type: "module",
+    private: true,
+    exports: {},
+  });
+  own.put("packages/exposure-ui/tsconfig.json", config);
+  own.put("packages/exposure-ui/src/consumer.ts", exposureConsumerSource(incoming));
+  own.dependencyPath = "packages/exposure-ui/node_modules/fixture-bound/package.json";
+  own.put(own.dependencyPath, {
+    name: "fixture-bound",
+    version: "0.0.0",
+    types: "index.d.ts",
+    fixturePadding: "fixture-owned package metadata bytes ".repeat(8192),
+  });
+  own.put(
+    "packages/exposure-ui/node_modules/fixture-bound/index.d.ts",
+    "export interface Bound { readonly value: number; }\n",
+  );
+  if (unusedSource !== null) {
+    own.unusedSourcePath = "packages/exposure-ui/src/unused-source.ts";
+    own.put(own.unusedSourcePath, `export const unused = ${JSON.stringify(unusedSource)};\n`);
+  }
+  emitSymbolFixture(own.root, "packages/exposure-ui");
+}
+
+function exposureConsumerSource(incoming) {
+  const imports = {
+    direct: 'import { isRecord } from "../../alpha/dist/helper.js";\n',
+    barrel: 'import { renamedRecord as isRecord } from "../../alpha/dist/exposure-barrel.js";\n',
+    "type-only": 'import type { isRecord as Guard } from "../../alpha/dist/helper.js";\n',
+    "inline-type-only":
+      'import { guard, type isRecord as Guard } from "../../alpha/dist/helper.js";\n',
+    unrelated: 'import { guard } from "../../alpha/dist/helper.js";\n',
+  };
+  const observations = {
+    direct: "export const observed = isRecord(null); ",
+    barrel: "export const observed = isRecord(null); ",
+    "type-only": "export type ImportedGuard = typeof Guard; ",
+    "inline-type-only":
+      "export const observed = guard(1); export type ImportedGuard = typeof Guard; ",
+    unrelated: "export const observed = guard(1); ",
+  };
+  return (
+    imports[incoming] +
+    'import type { Bound } from "fixture-bound";\n' +
+    observations[incoming] +
+    "export type Domain = Bound;\n"
+  );
+}
+
+function resetExposureResolver(own, options = {}) {
+  own.resolver?.close();
+  own.resolver = createSymbolResolver(own.subject, options, [
+    { owner: "packages/alpha", paths: ["packages/alpha/src/proof.test.ts"] },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+}
+
+async function exposureConsumerFixture(
+  variant = "public-subpath",
+  incoming = "direct",
+  unusedSource = null,
+) {
+  const own = createPrivateModuleParserFixture(variant);
+  fixtures.push(own);
+  configureExposureConsumer(own, incoming, unusedSource);
+  own.subject = await collectPolicySubject(own.root);
+  resetExposureResolver(own);
+  return own;
+}
+
+function measuredExposureControl(own) {
+  const path = "packages/exposure-ui/src/consumer.ts";
+  const before = own.resolver.stats();
+  const text = readFileSync(join(own.root, path), "utf8");
+  own.resolver.describeAt({ path, offset: text.indexOf("observed") });
+  const dependencyBytes = Buffer.byteLength(
+    readFileSync(join(own.root, own.dependencyPath), "utf8"),
+  );
+  expect(own.resolver.stats().sourceBytes - before.sourceBytes).toBeGreaterThan(dependencyBytes);
+  expect(own.resolver.stats().created).toBeGreaterThan(before.created);
+  const slots = own.resolver.collectiveRawCheckingSlots(
+    own.rawRoots,
+    "anti-slop/no-unknown-parameters",
+  );
+  const stats = own.resolver.stats();
+  return { slots, stats, dependencyBytes, sourceBytes: stats.sourceBytes - dependencyBytes };
+}
+
+// Work-admission regression: the limit comes from an actual generous resolver and one independently
+// loaded package manifest, not a copy of compiler accounting or the production source-byte ceiling.
+describe("public raw producer exposure ordering (#3918)", () => {
+  it("withholds a public helper before admitting an irrelevant foreign Program", async () => {
+    const own = await exposureConsumerFixture();
+    const control = measuredExposureControl(own);
+    expect(control.slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual(
+      [],
+    );
+    const rootPaths = new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]);
+    expect(control.slots.filter((slot) => rootPaths.has(slot.path))).toHaveLength(2);
+    expect(control.sourceBytes).toBeGreaterThan(0);
+    resetExposureResolver(own, { sourceBytes: control.sourceBytes });
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots).toEqual(control.slots);
+    const actual = own.resolver.stats();
+    expect(actual.sourceBytes).toBeLessThanOrEqual(control.sourceBytes);
+    expect(control.stats.sourceBytes - actual.sourceBytes).toBeGreaterThanOrEqual(
+      control.dependencyBytes,
+    );
+    expect(actual.created).toBeLessThan(control.stats.created);
+  }, 30_000);
+
+  it.each(["direct", "public-named", "colocated-type-reexport", "colocated-inline-type-reexport"])(
+    "retains the full incoming-owner walk without a direct public witness for %s",
+    async (variant) => {
+      // A same-owner renamed reexport keeps this a real fallback: there is no direct foreign
+      // incoming entry on the producer, and only canonical reachability reaches the consumer.
+      const own = await exposureConsumerFixture(variant, "barrel");
+      const control = measuredExposureControl(own);
+      expect(control.slots.length).toBeGreaterThan(0);
+      resetExposureResolver(own, { sourceBytes: control.sourceBytes });
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+      ).toThrow("symbol-source-budget");
+    },
+    30_000,
+  );
+
+  it.each([
+    "packages/alpha/package.json",
+    "packages/alpha/dist/helper.js",
+    "packages/alpha/dist/helper.d.ts",
+    "packages/alpha/dist/helper.d.ts.map",
+  ])(
+    "revalidates the cached public witness after %s changes",
+    async (path) => {
+      const own = await privateModuleSymbolFixture("public-subpath");
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters");
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+});
+
+function expectForeignHelperDenial(slots) {
+  expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual([]);
+  const paths = new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]);
+  expect(slots.filter((slot) => paths.has(slot.path))).toHaveLength(2);
+}
+
+describe("conclusive foreign raw-helper incoming denial (#3918)", () => {
+  it("withholds a directly foreign-called helper within actual small-source admission bytes", async () => {
+    const small = await exposureConsumerFixture("direct", "direct", "healthy");
+    const large = await exposureConsumerFixture(
+      "direct",
+      "direct",
+      "fixture-owned unused UI source é ".repeat(8192),
+    );
+    const row = preparedModuleReceipt(large.subject).rows.find(
+      (entry) => entry.path === large.unusedSourcePath,
+    );
+    expect(row).toBeDefined();
+    expect(row.references).toEqual([]);
+    const expected = small.resolver.collectiveRawCheckingSlots(small.rawRoots, privateCapacityRule);
+    expectForeignHelperDenial(expected);
+    const control = small.resolver.stats();
+    expect(control.sourceBytes).toBeGreaterThan(0);
+    resetExposureResolver(large, { sourceBytes: control.sourceBytes });
+    const slots = large.resolver.collectiveRawCheckingSlots(large.rawRoots, privateCapacityRule);
+    expect(slots).toEqual(expected);
+    expectForeignHelperDenial(slots);
+    const actual = large.resolver.stats();
+    expect(actual.sourceBytes).toBeLessThanOrEqual(control.sourceBytes);
+    expect(actual.created).toBe(control.created);
+  }, 60_000);
+
+  it("charges the complete foreign source when it is explicitly requested after denial", async () => {
+    const own = await exposureConsumerFixture(
+      "direct",
+      "direct",
+      "fixture-owned deferred UI source é ".repeat(4096),
+    );
+    expectForeignHelperDenial(
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+    );
+    const input = own.subject.inventory.files.find((file) => file.path === own.unusedSourcePath);
+    expect(input).toBeDefined();
+    const before = own.resolver.stats().sourceBytes;
+    expect(own.resolver.sourceIdentity(own.unusedSourcePath)).toEqual({
+      path: own.unusedSourcePath,
+      sha256: input.sha256,
+    });
+    expect(own.resolver.stats().sourceBytes - before).toBe(
+      readFileSync(join(own.root, own.unusedSourcePath)).length,
+    );
+  }, 30_000);
+
+  it.each([
+    "packages/exposure-ui/package.json",
+    "packages/exposure-ui/tsconfig.json",
+    "packages/exposure-ui/src/consumer.ts",
+    "packages/exposure-ui/src/unused-source.ts",
+  ])(
+    "revalidates a cached foreign denial after %s changes",
+    async (path) => {
+      const own = await exposureConsumerFixture("direct", "direct", "healthy");
+      expectForeignHelperDenial(
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      );
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+
+  it.each(["type-only", "inline-type-only", "unrelated"])(
+    "retains healthy helper loans for an irrelevant foreign %s binding",
+    async (incoming) => {
+      const control = await privateModuleSymbolFixture();
+      const own = await exposureConsumerFixture("direct", incoming, "healthy");
+      const expected = control.resolver.collectiveRawCheckingSlots(
+        control.rawRoots,
+        privateCapacityRule,
+      );
+      const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+      expect(slots).toEqual(expected);
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(1);
+    },
+    60_000,
+  );
+});
+
+function canonicalBarrelConsumerSource(incoming) {
+  const path = "../../alpha/dist/exposure-barrel.js";
+  const sources = {
+    unrelated: `import { unrelated as local } from "${path}";\nexport const observed = local(1);\n`,
+    confusing: `import { isRecord as local } from "${path}";\nexport const observed = local(1);\n`,
+    multiple: `import { unrelated as local, isRecord as other } from "${path}";\nexport const observed = local(1) && other(1);\n`,
+    "inline-type-only": `import { unrelated as local, type renamedRecord as Guard } from "${path}";\nexport const observed = local(1); export type ImportedGuard = typeof Guard;\n`,
+    "type-only": `import { type renamedRecord as Guard } from "${path}";\nexport const observed = true; export type ImportedGuard = typeof Guard;\n`,
+    renamed: `import { renamedRecord as local } from "${path}";\nexport const observed = local(null);\n`,
+    mixed: `import { unrelated as local, renamedRecord as actual } from "${path}";\nexport const observed = local(1) && actual(null);\n`,
+    namespace: `import * as local from "${path}";\nexport const observed = local.unrelated(1);\n`,
+    "namespace-value": `import { helpers as local } from "${path}";\nexport const observed = local.isRecord(null);\n`,
+    star: `export * from "${path}";\nexport const observed = true;\n`,
+    default: `import local from "${path}";\nexport const observed = local(null);\n`,
+    "mixed-default": `import actual, { unrelated as local } from "${path}";\nexport const observed = actual(null) && local(1);\n`,
+    "named-default": `import { default as actual, unrelated as local } from "${path}";\nexport const observed = actual(null) && local(1);\n`,
+    dynamic: `export async function observed(): Promise<boolean> { const local = await import("${path}"); return local.unrelated(1); }\n`,
+    "synthetic-import-equals":
+      'import actual = require("../../alpha/dist/synthetic.cjs");\nexport const observed = actual() && actual.unrelated === 1;\n',
+    "synthetic-default":
+      'import actual, { unrelated as local } from "../../alpha/dist/synthetic.cjs";\nexport const observed = actual() && local === 1;\n',
+    computed: `const directory = "../../alpha/dist/";\nexport async function observed(): Promise<boolean> { const local = await import(directory + "exposure-barrel.js"); return local.unrelated(1); }\n`,
+  };
+  return (
+    sources[incoming] + 'import type { Bound } from "fixture-bound";\nexport type Domain = Bound;\n'
+  );
+}
+
+function canonicalBarrelSource(shape) {
+  if (shape === "healthy") return 'export { guard as unrelated } from "./helper.js";\n';
+  if (shape === "wrapper-only" || shape === "wrapper")
+    return (
+      'import { isRecord, fields } from "./helper.js";\n' +
+      "export function unrelated(input: unknown): boolean { if (!isRecord(input)) return false; return fields(input); }\n" +
+      (shape === "wrapper" ? 'export { isRecord as renamedRecord } from "./helper.js";\n' : "")
+    );
+  return (
+    'export { isRecord as renamedRecord, isRecord as default, guard as unrelated, guard as isRecord } from "./helper.js";\n' +
+    'export * as helpers from "./helper.js";\n'
+  );
+}
+
+function configureCanonicalBarrelPadding(own, kind, count) {
+  const metadata = JSON.parse(readFileSync(join(own.root, own.dependencyPath), "utf8"));
+  metadata.fixturePadding = kind === "metadata" ? "fixture-owned metadata é ".repeat(count) : "";
+  own.put(own.dependencyPath, metadata);
+  own.declarationPath = "packages/exposure-ui/node_modules/fixture-bound/index.d.ts";
+  own.put(
+    own.declarationPath,
+    (kind === "declaration" ? `/* ${"fixture-owned declaration é ".repeat(count)} */\n` : "") +
+      "export interface Bound { readonly value: number; }\n",
+  );
+}
+
+async function canonicalBarrelExposureFixture(
+  incoming = "unrelated",
+  { aliases = 64, kind = "metadata", count = 0, shape = "barrel", publicBarrel = false } = {},
+) {
+  const own = createPrivateModuleParserFixture();
+  fixtures.push(own);
+  configureExposureConsumer(own, "unrelated");
+  own.barrelPath = "packages/alpha/src/exposure-barrel.ts";
+  own.put(own.barrelPath, canonicalBarrelSource(shape));
+  own.put("packages/exposure-ui/src/consumer.ts", canonicalBarrelConsumerSource(incoming));
+  configureCanonicalBarrelPadding(own, kind, count);
+  if (incoming.startsWith("synthetic-"))
+    own.put(
+      "packages/alpha/src/synthetic.cts",
+      "function synthetic(): boolean { return true; }\n" +
+        "namespace synthetic { export const unrelated = 1; }\nexport = synthetic;\n",
+    );
+  if (publicBarrel) {
+    const path = "packages/alpha/package.json";
+    const manifest = JSON.parse(readFileSync(join(own.root, path), "utf8"));
+    manifest.exports["./barrel"] = {
+      types: "./dist/exposure-barrel.d.ts",
+      import: "./dist/exposure-barrel.js",
+    };
+    own.put(path, manifest);
+  }
+  emitSymbolFixture(own.root);
+  emitSymbolFixture(own.root, "packages/exposure-ui");
+  own.subject = await collectPolicySubject(own.root);
+  own.aliases = aliases;
+  resetExposureResolver(own, { aliases });
+  return own;
+}
+
+function canonicalBarrelSlots(own) {
+  return own.resolver.collectiveRawCheckingSlots(own.rawRoots, privateCapacityRule);
+}
+
+function canonicalBarrelConsumerStatement(own) {
+  return preparedModuleReceipt(own.subject).rows.find(
+    (row) => row.path === "packages/exposure-ui/src/consumer.ts",
+  ).statements[0];
+}
+
+function canonicalBarrelDependencyBytes(own) {
+  return [own.dependencyPath, own.declarationPath].reduce(
+    (total, path) => total + readFileSync(join(own.root, path)).length,
+    0,
+  );
+}
+
+function expectCanonicalBarrelRootSlots(slots) {
+  expectForeignHelperDenial(slots);
+  expect(slots.every((slot) => slot.producerIdentity.owner === "alpha")).toBe(true);
+}
+
+// The small control executes the real resolver. Only a type-only dependency outside the production
+// inventory grows, so neither prepared nor fallback indexing has already admitted its padding.
+describe("canonical named barrel incoming relevance (#3918)", () => {
+  it.each([
+    [64, "metadata"],
+    [63, "metadata"],
+    [64, "declaration"],
+    [63, "declaration"],
+  ])(
+    "avoids unrelated barrel consumer bytes under actual small-source admission (%i, %s)",
+    async (aliases, kind) => {
+      const small = await canonicalBarrelExposureFixture("unrelated", { aliases, kind });
+      const large = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        kind,
+        count: 8192,
+      });
+      expect(large.subject.inventory.files.some((file) => file.path === large.dependencyPath)).toBe(
+        false,
+      );
+      expect(
+        large.subject.inventory.files.some((file) => file.path === large.declarationPath),
+      ).toBe(false);
+      const expected = canonicalBarrelSlots(small);
+      expectCanonicalBarrelRootSlots(expected);
+      const control = small.resolver.stats();
+      const generous = canonicalBarrelSlots(large);
+      expect(generous).toEqual(expected);
+      expectCanonicalBarrelRootSlots(generous);
+      const generousStats = large.resolver.stats();
+      resetExposureResolver(large, { aliases, sourceBytes: control.sourceBytes });
+      const slots = canonicalBarrelSlots(large);
+      expect(slots).toEqual(expected);
+      expectCanonicalBarrelRootSlots(slots);
+      expect(large.resolver.stats().sourceBytes).toBe(control.sourceBytes);
+      expect(large.resolver.stats().created).toBe(control.created);
+      expect(generousStats.sourceBytes).toBe(control.sourceBytes);
+      expect(generousStats.created).toBe(control.created);
+    },
+    60_000,
+  );
+
+  it.each([64, 63])(
+    "charges the deferred foreign Program and its full type-only dependencies (%i)",
+    async (aliases) => {
+      const own = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        kind: "declaration",
+        count: 4096,
+      });
+      const expected = canonicalBarrelSlots(own);
+      expectCanonicalBarrelRootSlots(expected);
+      const before = own.resolver.stats();
+      const path = "packages/exposure-ui/src/consumer.ts";
+      const text = readFileSync(join(own.root, path), "utf8");
+      own.resolver.describeAt({ path, offset: text.indexOf("observed") });
+      const actual = own.resolver.stats();
+      expect(actual.created).toBeGreaterThan(before.created);
+      expect(actual.sourceBytes - before.sourceBytes).toBeGreaterThanOrEqual(
+        canonicalBarrelDependencyBytes(own),
+      );
+      expect(canonicalBarrelSlots(own)).toEqual(expected);
+      own.put(
+        own.declarationPath,
+        readFileSync(join(own.root, own.declarationPath), "utf8") + "\n",
+      );
+      expect(() => own.resolver.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+    60_000,
+  );
+
+  it.each(["confusing", "multiple", "inline-type-only", "type-only"])(
+    "skips only conclusively unrelated canonical named bindings for %s",
+    async (incoming) => {
+      for (const aliases of [64, 63]) {
+        const control = await canonicalBarrelExposureFixture("unrelated", { aliases });
+        const own = await canonicalBarrelExposureFixture(incoming, { aliases });
+        const expected = canonicalBarrelSlots(control);
+        expectCanonicalBarrelRootSlots(expected);
+        expect(canonicalBarrelSlots(own)).toEqual(expected);
+        expect(own.resolver.stats().created).toBe(control.resolver.stats().created);
+        const bindings = canonicalBarrelConsumerStatement(own).bindings;
+        expect(bindings).not.toBeNull();
+        if (incoming === "confusing")
+          expect(bindings).toEqual([{ name: "isRecord", isTypeOnly: false }]);
+        if (incoming === "type-only")
+          expect(bindings).toEqual([{ name: "renamedRecord", isTypeOnly: true }]);
+      }
+    },
+    60_000,
+  );
+
+  it.each([
+    "renamed",
+    "mixed",
+    "namespace-value",
+    "namespace",
+    "star",
+    "default",
+    "mixed-default",
+    "named-default",
+    "dynamic",
+    "computed",
+  ])(
+    "retains the real foreign walk for a conservative %s binding",
+    async (incoming) => {
+      for (const aliases of [64, 63]) {
+        const own = await canonicalBarrelExposureFixture(incoming, { aliases, count: 8192 });
+        const control = measuredExposureControl(own);
+        expectCanonicalBarrelRootSlots(control.slots);
+        resetExposureResolver(own, { aliases, sourceBytes: control.sourceBytes });
+        expect(() => canonicalBarrelSlots(own)).toThrow("symbol-source-budget");
+        if (incoming === "default" || incoming === "mixed-default")
+          expect(canonicalBarrelConsumerStatement(own).bindings).toBeNull();
+        if (incoming === "named-default")
+          expect(canonicalBarrelConsumerStatement(own).bindings).toEqual([
+            { name: "default", isTypeOnly: false },
+            { name: "unrelated", isTypeOnly: false },
+          ]);
+      }
+    },
+    60_000,
+  );
+
+  it.each([64, 63])(
+    "keeps public barrel denial after an unrelated import is excluded (%i)",
+    async (aliases) => {
+      const control = await canonicalBarrelExposureFixture("unrelated", { aliases });
+      const own = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        publicBarrel: true,
+      });
+      const expected = canonicalBarrelSlots(control);
+      expectCanonicalBarrelRootSlots(expected);
+      expect(canonicalBarrelSlots(own)).toEqual(expected);
+      expectCanonicalBarrelRootSlots(canonicalBarrelSlots(own));
+    },
+    60_000,
+  );
+
+  it.each([
+    [64, "wrapper-only"],
+    [63, "wrapper-only"],
+    [64, "wrapper"],
+    [63, "wrapper"],
+  ])(
+    "retains global helper and downstream denial for a nonalias exported wrapper (%i, %s)",
+    async (aliases, shape) => {
+      const healthy = await canonicalBarrelExposureFixture("unrelated", {
+        aliases,
+        shape: "healthy",
+      });
+      const own = await canonicalBarrelExposureFixture("unrelated", { aliases, shape });
+      const positive = canonicalBarrelSlots(healthy);
+      expect(positive.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(
+        1,
+      );
+      expect(positive.filter((slot) => slot.path.includes("/leaf"))).toHaveLength(2);
+      const denied = canonicalBarrelSlots(own);
+      expectCanonicalBarrelRootSlots(denied);
+      expect(denied.filter((slot) => slot.path.includes("/leaf"))).toEqual([]);
+      expect(own.resolver.stats().created).toBe(healthy.resolver.stats().created);
+      expect(new Set(denied.map((slot) => slot.path))).toEqual(
+        new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]),
+      );
+    },
+    60_000,
+  );
+
+  it.each(["synthetic-default", "synthetic-import-equals"])(
+    "retains the complete conservative descriptor for actual %s interop",
+    async (incoming) => {
+      const own = await canonicalBarrelExposureFixture(incoming);
+      expect(canonicalBarrelConsumerStatement(own).bindings).toBeNull();
+      const path = "packages/exposure-ui/src/consumer.ts";
+      const text = readFileSync(join(own.root, path), "utf8");
+      own.resolver.describeAt({ path, offset: text.indexOf("observed") });
+      expect(own.resolver.stats().created).toBeGreaterThan(1);
+    },
+    30_000,
+  );
+
+  it.each([
+    [64, "packages/alpha/dist/exposure-barrel.js"],
+    [63, "packages/alpha/dist/exposure-barrel.js"],
+    [64, "packages/alpha/dist/exposure-barrel.d.ts"],
+    [63, "packages/alpha/dist/exposure-barrel.d.ts"],
+    [64, "packages/alpha/dist/exposure-barrel.d.ts.map"],
+    [63, "packages/alpha/dist/exposure-barrel.d.ts.map"],
+  ])(
+    "revalidates observed barrel output after a cached negative (%i, %s)",
+    async (aliases, path) => {
+      const own = await canonicalBarrelExposureFixture("unrelated", { aliases });
+      const expected = canonicalBarrelSlots(own);
+      expectCanonicalBarrelRootSlots(expected);
+      expect(canonicalBarrelSlots(own)).toEqual(expected);
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() => canonicalBarrelSlots(own)).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+
+  it.each([
+    "packages/alpha/src/exposure-barrel.ts",
+    "packages/alpha/dist/exposure-barrel.js",
+    "packages/exposure-ui/src/consumer.ts",
+    "packages/exposure-ui/tsconfig.json",
+  ])(
+    "revalidates skipped-consumer evidence after %s changes",
+    async (path) => {
+      const own = await canonicalBarrelExposureFixture();
+      expectCanonicalBarrelRootSlots(canonicalBarrelSlots(own));
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, readFileSync(absolute, "utf8") + "\n");
+      expect(() => canonicalBarrelSlots(own)).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+});
+
+function evictPrivateModuleProgram(own) {
+  const path = "src/cache-owner.ts";
+  const text = readFileSync(join(own.root, path), "utf8");
+  own.resolver.describeAt({ path, offset: text.indexOf("evictionOwner") });
+  expect(own.resolver.stats().programs).toBe(1);
+}
+
+function privateModuleSyntaxReferences(text, limit = 64) {
+  const source = ts.createSourceFile("owned.ts", text, ts.ScriptTarget.Latest, true);
+  const nodes = [];
+  const visit = (node) => {
+    nodes.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return productionModuleFacts.productionModuleReferences(
+    nodes,
+    { verbatimModuleSyntax: true },
+    limit,
+  );
+}
+
+function originalModuleReferenceFacts(compiler, root, row) {
+  const source = ts.createSourceFile(
+    row.path,
+    readFileSync(join(root, row.path), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const nodes = [];
+  visitCompilerNodes(compiler.state, source, (node) => nodes.push(node));
+  return productionModuleFacts
+    .productionModuleReferences(
+      nodes,
+      compiler.context(row.path).config.options,
+      compiler.state.limits.aliases,
+      (node) => visitCompilerNodes(compiler.state, node, () => undefined),
+    )
+    .map(({ node, specifiers }) => ({ start: node.getStart(), specifiers }));
+}
+
+async function zeroEdgeAdmissionFixture(padding) {
+  const own = createPrivateModuleParserFixture();
+  fixtures.push(own);
+  own.zeroEdgePath = "scripts/unused-module.mjs";
+  own.put(own.zeroEdgePath, `export const unused = ${JSON.stringify(padding)};\n`);
+  own.subject = await collectPolicySubject(own.root);
+  resetExposureResolver(own);
+  const row = preparedModuleReceipt(own.subject).rows.find(
+    (entry) => entry.path === own.zeroEdgePath,
+  );
+  expect(row).toBeDefined();
+  expect(row.references).toEqual([]);
+  return own;
+}
+
+describe("prepared zero-edge module admission (#3918)", () => {
+  it("keeps unused incoming-index text unadmitted until an actual source request", async () => {
+    const small = await zeroEdgeAdmissionFixture("healthy");
+    const large = await zeroEdgeAdmissionFixture("unused é ".repeat(4096));
+    const rule = "anti-slop/no-unknown-parameters";
+    expect(large.resolver.stats().sourceBytes).toBe(small.resolver.stats().sourceBytes);
+    const expected = small.resolver.collectiveRawCheckingSlots(small.rawRoots, rule);
+    expect(expected.length).toBeGreaterThan(0);
+    expect(large.resolver.collectiveRawCheckingSlots(large.rawRoots, rule)).toEqual(expected);
+    expect(large.resolver.stats().sourceBytes).toBe(small.resolver.stats().sourceBytes);
+    const before = large.resolver.stats().sourceBytes;
+    const input = large.subject.inventory.files.find((file) => file.path === large.zeroEdgePath);
+    expect(large.resolver.sourceIdentity(large.zeroEdgePath)).toEqual({
+      path: large.zeroEdgePath,
+      sha256: input.sha256,
+    });
+    expect(large.resolver.stats().sourceBytes - before).toBe(
+      readFileSync(join(large.root, large.zeroEdgePath)).length,
+    );
+  }, 30_000);
+
+  it.each(["changed", "symlink"])(
+    "still rejects a %s zero-edge source after incoming-index construction",
+    async (kind) => {
+      const own = await zeroEdgeAdmissionFixture("healthy");
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unknown-parameters",
+      );
+      expect(slots.length).toBeGreaterThan(0);
+      const path = join(own.root, own.zeroEdgePath);
+      if (kind === "changed") writeFileSync(path, readFileSync(path, "utf8") + "\n");
+      else {
+        const target = join(own.root, "node_modules/unused-original.mjs");
+        writeFileSync(target, readFileSync(path));
+        unlinkSync(path);
+        symlinkSync(target, path);
+      }
+      expect(() => own.resolver.assertCurrent()).toThrow(
+        kind === "changed" ? "symbol-subject-changed" : "unsafe-symbol-source",
+      );
+    },
+    30_000,
+  );
+});
+
+describe("inventory-prepared private module receipt", () => {
+  it("recomputes an actually exhausted preparation under a larger custom node profile", async () => {
+    const own = await privateModuleSymbolFixture("receipt-node-failure", {
+      nodes: SYMBOL_LIMITS.nodes * 3,
+    });
+    const healthy = await privateModuleSymbolFixture();
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.failure).toBe("symbol-node-budget");
+    expect(receipt.nodes).toBeGreaterThan(receipt.limits.nodes);
+    const defaults = createSymbolResolver(own.subject);
+    const rule = "anti-slop/no-unknown-parameters";
+    try {
+      expect(() => defaults.collectiveRawCheckingSlots(own.rawRoots, rule)).toThrow(
+        "symbol-node-budget",
+      );
+      const before = own.resolver.stats().nodes;
+      expect(own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toEqual(
+        healthy.resolver.collectiveRawCheckingSlots(healthy.rawRoots, rule),
+      );
+      expect(own.resolver.stats().nodes).toBeGreaterThan(before);
+    } finally {
+      defaults.close();
+    }
+  }, 30_000);
+
+  // REVIEW-3918-012: preparation shares the 96 MiB symbol source ceiling (ADR-0167 D4) and charges
+  // each production source once on its own counter.
+  it("charges preparation once per production source against the shared source ceiling", async () => {
+    const own = await privateModuleSymbolFixture("fact-shapes");
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.limits).toEqual(symbolLimits());
+    expect(receipt.limits.sourceBytes).toBe(96 * 1024 * 1024);
+    expect(receipt.sourceBytes).toBe(
+      receipt.rows.reduce(
+        (total, row) => total + Buffer.byteLength(readFileSync(join(own.root, row.path), "utf8")),
+        0,
+      ),
+    );
+  });
+
+  it("matches the complete existing extractor without a second inventory AST walk", async () => {
+    const own = await privateModuleSymbolFixture("fact-shapes");
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.failure).toBeNull();
+    expect(receipt.nodes).toBeGreaterThan(0);
+    expect(receipt.rows.map((row) => row.path).sort()).toEqual(
+      own.subject.inventory.files
+        .filter((file) => file.production)
+        .map((file) => file.path)
+        .sort(),
+    );
+    const statements = receipt.rows.find((row) => row.path === "src/module-facts.ts").statements;
+    expect(statements[0].bindings).toEqual([{ name: "isRecord", isTypeOnly: false }]);
+    expect(statements[1].bindings).toEqual([{ name: "isRecord", isTypeOnly: true }]);
+    const compiler = createCompilerContext(own.subject);
+    try {
+      for (const row of receipt.rows) {
+        expect(row.sourceSha256).toBe(
+          own.subject.inventory.files.find((file) => file.path === row.path).sha256,
+        );
+        expect(row.references).toEqual(originalModuleReferenceFacts(compiler, own.root, row));
+      }
+    } finally {
+      compiler.close();
+    }
+  }, 30_000);
+
+  it("seeds actual additional visits once for each independent compiler", async () => {
+    const own = await privateModuleSymbolFixture();
+    const receipt = preparedModuleReceipt(own.subject);
+    const first = createCompilerContext(own.subject);
+    const second = createCompilerContext(own.subject);
+    try {
+      expect(first.state.nodes).toBe(receipt.nodes);
+      expect(second.state.nodes).toBe(receipt.nodes);
+      const source = ts.createSourceFile(
+        "visit.ts",
+        "const value = 1;",
+        ts.ScriptTarget.Latest,
+        true,
+      );
+      visitCompilerNodes(first.state, source, () => undefined);
+      expect(first.state.nodes).toBeGreaterThan(receipt.nodes);
+      expect(second.state.nodes).toBe(receipt.nodes);
+      second.assertCurrent();
+      expect(second.state.nodes).toBe(receipt.nodes);
+    } finally {
+      first.close();
+      second.close();
+    }
+  }, 30_000);
+
+  it("makes receipt facts immutable and rejects a replacement with the same digest", async () => {
+    const own = await privateModuleSymbolFixture();
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(() => {
+      receipt.nodes = 0;
+    }).toThrow(TypeError);
+    expect(() => {
+      receipt.rows[0].references.push({ start: 0, specifiers: [] });
+    }).toThrow(TypeError);
+    own.subject.moduleReceipt = structuredClone(receipt);
+    expect(() => own.resolver.assertCurrent()).toThrow("symbol-module-facts-changed");
+  }, 30_000);
+
+  it.each(["options", "outputs", "scope", "membership"])(
+    "rejects changed %s before constructing a second compiler",
+    async (kind) => {
+      const own = await privateModuleSymbolFixture();
+      if (kind === "options") {
+        const options = own.subject.contexts.get("packages/alpha").options;
+        options.verbatimModuleSyntax = !options.verbatimModuleSyntax;
+      }
+      if (kind === "outputs") own.subject.outputs.set("phantom.js", "packages/alpha/src/helper.ts");
+      if (kind === "scope")
+        own.subject.inventory.files.find((file) => file.production).scope = "changed";
+      if (kind === "membership") own.subject.membership.paths.push("phantom.ts");
+      expect(() => createCompilerContext(own.subject)).toThrow("symbol-module-facts-changed");
+    },
+    30_000,
+  );
+
+  it("uses fully charged extraction for an incompatible alias profile", async () => {
+    const prepared = await privateModuleSymbolFixture();
+    const fallback = await privateModuleSymbolFixture("direct", { aliases: 8 });
+    const rule = "anti-slop/no-unknown-parameters";
+    const beforePrepared = prepared.resolver.stats().nodes;
+    const beforeFallback = fallback.resolver.stats().nodes;
+    const expected = prepared.resolver.collectiveRawCheckingSlots(prepared.rawRoots, rule);
+    expect(fallback.resolver.collectiveRawCheckingSlots(fallback.rawRoots, rule)).toEqual(expected);
+    expect(fallback.resolver.stats().nodes - beforeFallback).toBeGreaterThan(
+      prepared.resolver.stats().nodes - beforePrepared,
+    );
+  }, 30_000);
+
+  it("retains a closed failed preparation instead of borrowing partial rows", async () => {
+    const own = await privateModuleSymbolFixture("receipt-alias-failure");
+    const receipt = preparedModuleReceipt(own.subject);
+    expect(receipt.failure).toBe("symbol-alias-budget");
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-alias-budget");
+  }, 30_000);
+});
+
+describe("bounded private module specifier facts (#3918)", () => {
+  it.each([
+    'const path = flag ? "./helper.js" : "./other.js"; import(path);',
+    'const base = "./"; const path = base + "helper.js"; import(path);',
+    'const base = "./"; const path = `${base}helper.js`; import(path);',
+    'let path = "./helper.js"; path = userPath; import(path);',
+    'import(new URL("./helper.js", import.meta.url).href);',
+    'import(opaque("./helper.js"));',
+    'import { createRequire as make } from "node:module"; const load = make(import.meta.url); const alias = load; alias("./helper.js");',
+  ])("retains concrete helper alternatives from %s", (source) => {
+    expect(privateModuleSyntaxReferences(source).flatMap((entry) => entry.specifiers)).toContain(
+      "./helper.js",
+    );
+  });
+
+  it("does not certify an unrelated unresolved runtime loader", () => {
+    const references = privateModuleSyntaxReferences(
+      "export function load(path: string): Promise<unknown> { return import(path); }",
+    );
+    expect(references).toHaveLength(1);
+    expect(references[0].specifiers).toEqual([]);
+  });
+
+  it("bounds supported specifier aliases and finite alternatives", () => {
+    expect(() =>
+      privateModuleSyntaxReferences('const a = "./helper.js"; const b = a; import(b);', 2),
+    ).toThrow("symbol-alias-budget");
+    expect(() =>
+      privateModuleSyntaxReferences('import(flag ? "./helper.js" : "./other.js");', 1),
+    ).toThrow("symbol-alias-budget");
+  });
+});
+
+describe("private imported raw helper source closure (#3918)", () => {
+  it("owns exact dictionary, typeof and unknown slots across two bound public modules", async () => {
+    const own = await privateModuleSymbolFixture();
+    const runtime = await import(
+      pathToFileURL(join(own.root, "packages/alpha/dist/owner.js")).href
+    );
+    for (const name of ["first", "second"]) {
+      expect(runtime[name]({ value: 3 })).toEqual({ ok: true, value: 3 });
+      expect(runtime[name]({ value: "wrong" })).toEqual({ ok: false, errors: ["invalid"] });
+    }
+    const path = "packages/alpha/src/helper.ts";
+    const text = readFileSync(join(own.root, path), "utf8");
+    const expected = [
+      ["anti-slop/no-unknown-parameters", 1, text.indexOf("unknown")],
+      ["anti-slop/no-runtime-typeof", 2, text.indexOf("typeof input")],
+      ["anti-slop/no-unsafe-dictionary-type", 3, text.indexOf("Record<string, unknown>")],
+    ];
+    for (const [rule, count, start] of expected) {
+      const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+      const helper = slots.filter((slot) => slot.path === path);
+      expect(helper).toHaveLength(count);
+      expect(helper).toContainEqual(
+        expect.objectContaining({
+          path,
+          rule,
+          start,
+          contributingResponsibilityIds: ["fixture-first", "fixture-second"],
+          producerIdentity: expect.objectContaining({
+            owner: "alpha",
+            producer: expect.objectContaining({ path }),
+          }),
+        }),
+      );
+    }
+  }, 30_000);
+
+  it("reuses detached discovery and all raw rule facts after Program eviction", async () => {
+    const own = await privateModuleSymbolFixture("cache-eviction", { programs: 1 });
+    const rules = [
+      "anti-slop/no-unknown-parameters",
+      "anti-slop/no-unsafe-dictionary-type",
+      "anti-slop/no-runtime-typeof",
+    ];
+    const components = own.resolver.collectiveRawComponents(own.rawRoots);
+    const expected = rules.map((rule) =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule),
+    );
+    expect(expected.every((slots) => slots.length > 0)).toBe(true);
+    evictPrivateModuleProgram(own);
+    const before = own.resolver.stats();
+    expect(own.resolver.collectiveRawComponents([...own.rawRoots].reverse())).toEqual(components);
+    for (const [index, rule] of rules.entries())
+      expect(own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toEqual(expected[index]);
+    expect(own.resolver.stats().nodes - before.nodes).toBe(0);
+    expect(own.resolver.stats().created).toBe(before.created);
+  }, 30_000);
+
+  it("separates complete root sets and clones detached returned slot facts", async () => {
+    const own = await privateModuleSymbolFixture();
+    const rule = "anti-slop/no-unknown-parameters";
+    const expected = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    const firstOnly = own.resolver.collectiveRawCheckingSlots([own.rawRoots[0]], rule);
+    expect(firstOnly.some((slot) => slot.path === "packages/alpha/src/helper.ts")).toBe(false);
+    const result = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    result[0].contributingResponsibilityIds.push("changed");
+    result[0].producerIdentity.producer.path = "changed.ts";
+    expect(own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toEqual(expected);
+    own.resolver.close();
+    expect(() => own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule)).toThrow(
+      "symbol-resolver-closed",
+    );
+    expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+      "symbol-resolver-closed",
+    );
+  }, 30_000);
+
+  it("keeps responsibility IDs and parameter indices in detached request identity", async () => {
+    const own = await privateModuleSymbolFixture();
+    const rule = "anti-slop/no-unknown-parameters";
+    own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    const renamed = own.rawRoots.map((root) => ({ ...root, recordId: `renamed-${root.recordId}` }));
+    const slots = own.resolver.collectiveRawCheckingSlots(renamed, rule);
+    expect(slots.length).toBeGreaterThan(0);
+    expect(
+      slots.every((slot) =>
+        slot.contributingResponsibilityIds.every((id) => id.startsWith("renamed-")),
+      ),
+    ).toBe(true);
+    const absent = own.rawRoots.map((root) => ({ ...root, index: 1 }));
+    expect(own.resolver.collectiveRawCheckingSlots(absent, rule)).toEqual([]);
+  }, 30_000);
+
+  it("computes uncached successful requests when detached cache capacity is exhausted", async () => {
+    const own = await privateModuleSymbolFixture("cache-eviction", { programs: 1, aliases: 8 });
+    const rule = "anti-slop/no-unknown-parameters";
+    let requests;
+    let expected;
+    for (let index = 0; index < 9; index += 1) {
+      requests = own.rawRoots.map((root) => ({ ...root, recordId: `${index}-${root.recordId}` }));
+      expected = own.resolver.collectiveRawCheckingSlots(requests, rule);
+    }
+    evictPrivateModuleProgram(own);
+    const before = own.resolver.stats().nodes;
+    expect(own.resolver.collectiveRawCheckingSlots(requests, rule)).toEqual(expected);
+    expect(own.resolver.stats().nodes).toBeGreaterThan(before);
+  }, 30_000);
+
+  it("keeps same-offset leaf identities separate and results independent of root order", async () => {
+    const own = await privateModuleSymbolFixture();
+    const rule = "anti-slop/no-unknown-parameters";
+    const slots = own.resolver.collectiveRawCheckingSlots(own.rawRoots, rule);
+    const leaves = slots.filter((slot) => slot.path.includes("/leaf"));
+    expect(leaves).toHaveLength(2);
+    expect(leaves[0].start).toBe(leaves[1].start);
+    expect(leaves[0].producerIdentity.producer.path).not.toBe(
+      leaves[1].producerIdentity.producer.path,
+    );
+    const sort = (values) =>
+      values.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    expect(
+      sort(own.resolver.collectiveRawCheckingSlots([...own.rawRoots].reverse(), rule)),
+    ).toEqual(sort(slots));
+    const reordered = await privateModuleSymbolFixture("import-order");
+    expect(sort(reordered.resolver.collectiveRawCheckingSlots(reordered.rawRoots, rule))).toEqual(
+      sort(slots),
+    );
+  }, 30_000);
+
+  it.each([
+    "one-root",
+    "sealed-root",
+    "unknown-loader",
+    "type-only",
+    "unrelated-public",
+    "default-condition",
+    "unrelated-noexports",
+    "colocated-type-only",
+    "colocated-inline-type-only",
+    "colocated-type-reexport",
+    "colocated-inline-type-reexport",
+  ])(
+    "admits the finite private graph with %s",
+    async (variant) => {
+      const own = await privateModuleSymbolFixture(variant);
+      if (variant === "sealed-root" || variant === "unrelated-noexports")
+        expect(JSON.parse(readFileSync(join(own.root, "package.json"), "utf8")).exports).toEqual(
+          {},
+        );
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-runtime-typeof",
+      );
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it.each([
+    "third-caller",
+    "typed-caller",
+    "foreign-caller",
+    "callback",
+    "return-escape",
+    "namespace",
+    "dynamic",
+    "computed",
+    "finite-loader",
+    "mutable-alias",
+    "public-named",
+    "public-star",
+    "public-namespace",
+    "public-default",
+    "public-subpath",
+    "relevant-unsupported",
+    "default-named-escape",
+    "export-alias-escape",
+    "relevant-main",
+    "unsealed-ancestor",
+  ])(
+    "withholds the predicate for observed %s while preserving root slots",
+    async (variant) => {
+      const own = await privateModuleSymbolFixture(variant);
+      if (variant === "unsealed-ancestor") {
+        const manifest = JSON.parse(readFileSync(join(own.root, "package.json"), "utf8"));
+        expect(manifest.private).toBe(true);
+        expect(manifest).not.toHaveProperty("exports");
+        expect(manifest).not.toHaveProperty("main");
+      }
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unknown-parameters",
+      );
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual([]);
+      const rootPaths = new Set(["packages/alpha/src/owner.ts", "packages/alpha/src/second.ts"]);
+      expect(slots.filter((slot) => rootPaths.has(slot.path))).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("retains cycle and alias budget refusals", async () => {
+    const cycle = await privateModuleSymbolFixture("cycle");
+    expect(() =>
+      cycle.resolver.collectiveRawCheckingSlots(cycle.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("unsupported-raw-helper-cycle");
+    const aliases = await privateModuleSymbolFixture("direct", { aliases: 2 });
+    expect(() =>
+      aliases.resolver.collectiveRawCheckingSlots(aliases.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-alias-budget");
+  }, 30_000);
+
+  it.each([
+    ["nodes", "symbol-node-budget"],
+    ["sourceBytes", "symbol-source-budget"],
+  ])(
+    "charges imported closure to the existing cumulative %s bound",
+    async (limit, reason) => {
+      const own = await privateModuleSymbolFixture();
+      const before = own.resolver.stats();
+      own.resolver.close();
+      own.resolver = createSymbolResolver(own.subject, { [limit]: before[limit] });
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+      ).toThrow(reason);
+    },
+    30_000,
+  );
+
+  it.each(["collector", "readonly-dictionary"])(
+    "does not widen dictionary or predicate-call eligibility for %s",
+    async (variant) => {
+      const own = await privateModuleSymbolFixture(variant);
+      const path = "packages/alpha/src/helper.ts";
+      const text = readFileSync(join(own.root, path), "utf8");
+      const marker =
+        variant === "collector"
+          ? "Record<string, unknown>): string[]"
+          : "Readonly<Record<string, unknown>>";
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unsafe-dictionary-type",
+      );
+      expect(slots.some((slot) => slot.path === path && slot.start === text.indexOf(marker))).toBe(
+        false,
+      );
+      expect(
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-known-value-widening"),
+      ).toEqual([]);
+    },
+    30_000,
+  );
+
+  it.each([
+    "helper.ts",
+    "second.ts",
+    "index.ts",
+    "proof.test.ts",
+    "../package.json",
+    "../tsconfig.json",
+    "../dist/helper.js",
+    "../dist/helper.d.ts.map",
+  ])(
+    "rejects changed %s after module facts have been cached",
+    async (name) => {
+      const own = await privateModuleSymbolFixture();
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof");
+      const path = join(own.root, "packages/alpha/src", name);
+      writeFileSync(path, readFileSync(path, "utf8") + "\n");
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+
+  it("rejects membership mutation after the reference index is cached", async () => {
+    const own = await privateModuleSymbolFixture();
+    own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof");
+    own.subject.membership.paths.push("packages/alpha/src/phantom.ts");
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-runtime-typeof"),
+    ).toThrow("symbol-context-changed");
+  }, 30_000);
+});
+
+describe("compiler lossless canonical currentness work", () => {
+  it.each(["plain", "é🙂"])(
+    "freshly observes admitted %s without allocating raw target buffers",
+    async (label) => {
+      const path = "src/currentness.ts";
+      const text = `export const label = "${label.repeat(10_007)}";\n`;
+      const own = await currentnessFixture(({ put }) => put(path, text));
+      const observed = own.compiler.read(path);
+      expect(observed).toBe(text);
+      expect(currentnessTargetBufferAllocations(own.compiler, Buffer.byteLength(observed))).toBe(0);
+      const absolute = join(own.root, path);
+      writeFileSync(absolute, Buffer.concat([Buffer.from(observed), Buffer.from([0x80])]));
+      expect(readFileSync(absolute, "utf8")).toContain("\uFFFD");
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it.each(["input", "snapshot-only"])(
+    "keeps literal U+FFFD %s text on the fresh raw-byte fallback",
+    async (mode) => {
+      const input = "src/currentness.ts";
+      const text = `export const label = "${"\uFFFD".repeat(4_017)}";\n`;
+      const own = await currentnessFixture(({ put }) => put(input, text));
+      const path = mode === "input" ? input : "packages/alpha/dist/owner.d.ts";
+      const absolute = join(own.root, path);
+      if (mode === "snapshot-only") writeFileSync(absolute, text);
+      const observed = own.compiler.read(path);
+      expect(observed).toBe(text);
+      expect(
+        currentnessTargetBufferAllocations(own.compiler, Buffer.byteLength(observed)),
+      ).toBeGreaterThan(0);
+      writeFileSync(absolute, text.replace("\uFFFD", "\uFFFE"));
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+});
+
+describe("fresh compiler content observations (#3918)", () => {
+  it.each(["plain", "é🙂"])("preserves unchanged %s text and repeated admission", async (label) => {
+    const path = "src/currentness.ts";
+    const text = `export const label = "${label}";\n`;
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    const admittedBytes = own.compiler.state.bytes;
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    expect(own.compiler.read(path)).toBe(text);
+    expect(own.compiler.state.bytes).toBe(admittedBytes);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+  });
+
+  it.each(["admitted", "input-only"])(
+    "refuses a same-size %s rewrite with restored timestamps",
+    async (mode) => {
+      const path = "src/currentness.ts";
+      const text = 'export const label = "first";\n';
+      const timestamp = new Date("2020-01-01T00:00:00.000Z");
+      const own = await currentnessFixture(({ root, put }) => {
+        put(path, text);
+        utimesSync(join(root, path), timestamp, timestamp);
+      });
+      const absolute = join(own.root, path);
+      if (mode === "admitted") expect(own.compiler.read(path)).toBe(text);
+      else expect(own.compiler.state.snapshots.has(absolute)).toBe(false);
+      expect(() => own.compiler.assertCurrent()).not.toThrow();
+      const original = statSync(absolute);
+      writeFileSync(absolute, text.replace("first", "other"));
+      utimesSync(absolute, original.atime, original.mtime);
+      expect(statSync(absolute).size).toBe(original.size);
+      expect(statSync(absolute).mtimeMs).toBe(original.mtimeMs);
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it("refuses a changed snapshot-only generated output", async () => {
+    const own = await currentnessFixture();
+    const path = "packages/alpha/dist/owner.d.ts";
+    const absolute = join(own.root, path);
+    const text = readFileSync(absolute, "utf8");
+    expect(own.compiler.state.inputs.has(path)).toBe(false);
+    expect(own.compiler.read(path)).toBe(text);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    writeFileSync(absolute, text + "\n");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+
+  it("freshly refuses mutation after the complete input pass", async () => {
+    const path = "src/currentness.ts";
+    const text = 'export const label = "first";\n';
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+    const inputs = own.compiler.state.inputs;
+    const originalIterator = inputs[Symbol.iterator].bind(inputs);
+    let visits = 0;
+    let inputPassCompleted = false;
+    inputs[Symbol.iterator] = function* () {
+      for (const entry of originalIterator()) {
+        visits += 1;
+        yield entry;
+      }
+      inputPassCompleted = true;
+      writeFileSync(join(own.root, path), text.replace("first", "other"));
+    };
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    expect(visits).toBe(inputs.size);
+    expect(inputPassCompleted).toBe(true);
+  });
+
+  it.each(["input", "snapshot-only"])(
+    "refuses malformed %s bytes even when decoded text is identical",
+    async (mode) => {
+      const input = "src/currentness.ts";
+      const text = 'export const label = "\uFFFD";\n';
+      const own = await currentnessFixture(({ put }) => put(input, text));
+      const path = mode === "input" ? input : "packages/alpha/dist/owner.d.ts";
+      const absolute = join(own.root, path);
+      if (mode === "snapshot-only") writeFileSync(absolute, text);
+      expect(own.compiler.read(path)).toBe(text);
+      expect(() => own.compiler.assertCurrent()).not.toThrow();
+      const raw = Buffer.concat([
+        Buffer.from('export const label = "'),
+        Buffer.from([0x80]),
+        Buffer.from('";\n'),
+      ]);
+      expect(raw.toString("utf8")).toBe(text);
+      expect(raw).not.toEqual(Buffer.from(text));
+      writeFileSync(absolute, raw);
+      expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    },
+  );
+
+  it("preserves digest refusal for malformed admitted text and equivalent decoding", async () => {
+    const own = await currentnessFixture();
+    const path = "packages/alpha/dist/owner.d.ts";
+    const absolute = join(own.root, path);
+    writeFileSync(absolute, Buffer.from([0x80]));
+    expect(own.compiler.read(path)).toBe("\uFFFD");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+    writeFileSync(absolute, Buffer.from([0x81]));
+    expect(readFileSync(absolute, "utf8")).toBe("\uFFFD");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+
+  it("bounds multibyte snapshot storage and clears it on close", async () => {
+    const own = await currentnessFixture(undefined, { sourceBytes: 6 });
+    const path = "packages/alpha/dist/owner.d.ts";
+    writeFileSync(join(own.root, path), "é🙂");
+    expect(own.compiler.read(path)).toBe("é🙂");
+    expect(own.compiler.state.bytes).toBe(6);
+    expect(own.compiler.read(path)).toBe("é🙂");
+    expect(own.compiler.state.bytes).toBe(6);
+    expect(() => own.compiler.read("src/consumer.ts")).toThrow("symbol-source-budget");
+    expect(own.compiler.state.snapshots.size).toBe(1);
+    own.compiler.close();
+    expect(own.compiler.state.snapshots.size).toBe(0);
+    expect(() => own.compiler.read(path)).toThrow("symbol-resolver-closed");
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-resolver-closed");
+  });
+});
+
+// Candidate representation proof, not an original runtime defect: private mutable byte storage
+// must not let the exposed metadata rewrite the admitted witness.
+describe("compiler private canonical byte witness", () => {
+  it("keeps currentness refusal after attempting to rewrite reachable byte storage", async () => {
+    const path = "src/currentness.ts";
+    const original = 'export const label = "first";\n';
+    const changed = Buffer.from(original.replace("first", "other"));
+    const own = await currentnessFixture(({ put }) => put(path, original));
+    expect(own.compiler.read(path)).toBe(original);
+    const previous = own.compiler.state.snapshots.get(join(own.compiler.state.subject.root, path));
+    for (const value of Object.values(previous)) {
+      if (Buffer.isBuffer(value)) changed.copy(value);
+    }
+    writeFileSync(join(own.root, path), changed);
+    expect(() => own.compiler.assertCurrent()).toThrow("symbol-subject-changed");
+  });
+});
+
+// Preservation controls for the proposed Linux native path-resolution fastpath.
+describe("compiler canonical source path preservation", () => {
+  it("repeatedly admits a canonical nested Unicode source path", async () => {
+    const path = "src/é🙂/currentness.ts";
+    const text = "export const current = 1;\n";
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    expect(own.compiler.read(path)).toBe(text);
+    expect(() => own.compiler.assertCurrent()).not.toThrow();
+  });
+
+  it("refuses a same-byte parent redirect after source admission", async () => {
+    const path = "src/currentness.ts";
+    const text = "export const current = 1;\n";
+    const own = await currentnessFixture(({ put }) => put(path, text));
+    expect(own.compiler.read(path)).toBe(text);
+    const source = join(own.compiler.state.subject.root, "src");
+    const retained = `${source}.retained`;
+    renameSync(source, retained);
+    symlinkSync(retained, source, "junction");
+    expect(readFileSync(join(source, "currentness.ts"), "utf8")).toBe(text);
+    expect(() => own.compiler.read(path)).toThrow("unsafe-symbol-source");
+  });
+});
+
+// Candidate-only fallback branch controls; these do not claim an original runtime defect.
+describe.skipIf(process.platform !== "linux")("compiler native path compatibility fallback", () => {
+  it.each(["exception", "different-spelling"])(
+    "uses ordinary resolution for a healthy source after native %s",
+    async (mode) => {
+      const path = "src/currentness.ts";
+      const text = "export const current = 1;\n";
+      const own = await currentnessFixture(({ put }) => put(path, text));
+      const native = vi.spyOn(realpathSync, "native").mockImplementation(() => {
+        if (mode === "exception") throw new TypeError("fixture-native-unavailable");
+        return "fixture-different-spelling";
+      });
+      try {
+        expect(own.compiler.read(path)).toBe(text);
+        expect(native).toHaveBeenCalledTimes(1);
+      } finally {
+        native.mockRestore();
+      }
+    },
+  );
+
+  it.each(["exception", "different-spelling"])(
+    "retains ordinary parent-redirect refusal after native %s",
+    async (mode) => {
+      const path = "src/currentness.ts";
+      const text = "export const current = 1;\n";
+      const own = await currentnessFixture(({ put }) => put(path, text));
+      expect(own.compiler.read(path)).toBe(text);
+      const source = join(own.compiler.state.subject.root, "src");
+      const retained = `${source}.retained`;
+      renameSync(source, retained);
+      symlinkSync(retained, source, "junction");
+      const native = vi.spyOn(realpathSync, "native").mockImplementation(() => {
+        if (mode === "exception") throw new TypeError("fixture-native-unavailable");
+        return "fixture-different-spelling";
+      });
+      try {
+        expect(() => own.compiler.read(path)).toThrow("unsafe-symbol-source");
+        expect(native).toHaveBeenCalledTimes(1);
+      } finally {
+        native.mockRestore();
+      }
+    },
+  );
+
+  it("propagates the real ordinary error after native resolution becomes unavailable", async () => {
+    const path = "src/currentness.ts";
+    const own = await currentnessFixture(({ put }) => put(path, "export const current = 1;\n"));
+    const absolute = join(own.compiler.state.subject.root, path);
+    const native = vi.spyOn(realpathSync, "native").mockImplementation(() => {
+      unlinkSync(absolute);
+      throw new TypeError("fixture-native-unavailable");
+    });
+    try {
+      expect(() => own.compiler.read(path)).toThrow(expect.objectContaining({ code: "ENOENT" }));
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally {
+      native.mockRestore();
+    }
+  });
+});
+
+// Work regression control: every observed subprocess still executes the real Git executable.
+describe("one-query fresh currentness membership (#3918)", () => {
+  it("executes one bounded membership query on each currentness invocation", async () => {
+    const own = await currentnessFixture();
+    const observations = [];
+    for (let invocation = 0; invocation < 2; invocation += 1) {
+      vi.mocked(execFileSync).mockClear();
+      own.compiler.assertCurrent();
+      observations.push(
+        vi.mocked(execFileSync).mock.calls.filter(([, args]) => args[0] === "ls-files"),
+      );
+    }
+    expect(observations.map((calls) => calls.length)).toEqual([1, 1]);
+    for (const calls of observations) {
+      expect(calls[0][1]).toEqual([
+        "ls-files",
+        "-z",
+        "-t",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+      ]);
+      expect(calls[0][2]).toMatchObject({ timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+    }
+  });
+});
+
+async function typedSymbolFixture(variant = "direct", options = {}) {
+  const own = createTypedRecheckFixture(variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    { owner: "packages/alpha", paths: own.records[0].proofs },
+  ]);
+  return own;
+}
+
+// These controls use native-emitted public declarations, not fabricated checker facts.
+describe("typed finite public recheck symbols (#3918)", () => {
+  it("admits only each actual guarded argument and immutable full-argument public forwarding", async () => {
+    const own = await typedSymbolFixture();
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    for (const record of own.records) {
+      const identity = own.resolver.resolveProofExport(record.input).identities[0];
+      const facts = own.resolver.typedRecheckFacts(identity, record.input.parameterIndex);
+      expect(facts.slots).toHaveLength(1);
+      const [slot] = facts.slots;
+      expect(slot).toMatchObject({
+        kind: "argument",
+        rule: record.rules[0],
+        parameterIndex: record.input.parameterIndex,
+      });
+      expect(source.slice(slot.start, slot.end)).toBe(
+        record.input.exportName === "eligible"
+          ? "value"
+          : record.input.parameterIndex
+            ? "to"
+            : "from",
+      );
+      expect(source.slice(facts.predicate.producer.start, facts.predicate.producer.end)).toContain(
+        "function isState",
+      );
+      expect(own.resolver.typedRecheckBinding(record.consumer, identity)).toMatchObject({
+        bound: true,
+        status: "ready",
+      });
+    }
+  }, 30_000);
+
+  it.each([
+    "removed",
+    "inert",
+    "alias",
+    "written",
+    "deferred",
+    "duplicate",
+    "forwarding",
+    "captured-tail",
+    "asserted-tail",
+    "mutated-tail",
+    "asserted",
+    "rebound",
+    "generic",
+    "foreign",
+    "foreign-domain",
+    "wrong-index",
+    "overloaded",
+  ])(
+    "refuses the actual %s selected-argument guard",
+    async (variant) => {
+      const own = await typedSymbolFixture(variant);
+      const identity = own.resolver.resolveProofExport(own.records[0].input).identities[0];
+      expect(() => own.resolver.typedRecheckFacts(identity, 0)).toThrow(/typed-recheck/);
+    },
+    30_000,
+  );
+
+  it.each([
+    "proof-swapped",
+    "proof-constant",
+    "proof-result",
+    "proof-wide-result",
+    "proof-alias",
+    "proof-wide",
+    "proof-counterfeit",
+  ])(
+    "refuses %s public forwarding without granting a typed slot",
+    async (variant) => {
+      const own = await typedSymbolFixture(variant);
+      const record = own.records[0];
+      const identity = own.resolver.resolveProofExport(record.input).identities[0];
+      expect(own.resolver.typedRecheckBinding(record.consumer, identity)).toEqual({
+        bound: false,
+        status: "incomplete",
+      });
+    },
+    30_000,
+  );
+
+  it("does not certify predicate truth and still revalidates source on every public operation", async () => {
+    const own = await typedSymbolFixture("lying");
+    const identity = own.resolver.resolveProofExport(own.records[0].input).identities[0];
+    expect(own.resolver.typedRecheckFacts(identity, 0).slots).toHaveLength(1);
+    own.put(
+      "packages/alpha/src/owner.ts",
+      readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8") + "\n",
+    );
+    expect(() => own.resolver.typedRecheckFacts(identity, 0)).toThrow("symbol-subject-changed");
+    expect(() => own.resolver.typedRecheckBinding(own.records[0].consumer, identity)).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 30_000);
+});
+
+describe("typed recheck shared resolver refusal bounds (#3918)", () => {
+  it.each([{ sourceBytes: 1 }, { nodes: 1 }, { emitBytes: 1 }, { aliases: 1 }])(
+    "retains the existing shared bound %j",
+    async (limits) => {
+      const own = await typedSymbolFixture("direct", limits);
+      if (limits.aliases) {
+        own.resolver.close();
+        own.put(
+          "src/namespace-alias.ts",
+          'import * as ns from "alpha/runtime"; const first = ns.transition; const second = first; export const result = second("ready", "done");\n',
+        );
+        own.subject = await collectPolicySubject(own.root);
+        own.resolver = createSymbolResolver(own.subject, limits);
+        const identity = own.resolver.resolveExport({
+          ...own.records[0].input,
+          consumerPath: "src/namespace-alias.ts",
+        }).identities[0];
+        expect(() => own.resolver.incomingUses(identity)).toThrow("symbol-alias-budget");
+        own.resolver.close();
+        own.resolver = createSymbolResolver(own.subject);
+        expect(
+          own.resolver
+            .incomingUses(identity)
+            .uses.filter((use) => use.path === "src/namespace-alias.ts" && use.kind === "call"),
+        ).toHaveLength(1);
+        return;
+      }
+      expect(() => own.resolver.resolveProofExport(own.records[0].input)).toThrow();
+    },
+    30_000,
+  );
+
+  it("refuses a producer identity rebound to a different owner", async () => {
+    const own = await typedSymbolFixture();
+    const identity = own.resolver.resolveProofExport(own.records[0].input).identities[0];
+    expect(() => own.resolver.typedRecheckFacts({ ...identity, owner: "foreign" }, 0)).toThrow(
+      "mismatched-responsibility-producer",
+    );
+  }, 30_000);
+});
+
+describe("selected typed parameter guard identity (#3918)", () => {
+  it("withholds a missing second guard even when includes still refuses malformed values", async () => {
+    const own = await typedSymbolFixture("removed-to");
+    const identity = own.resolver.resolveProofExport(own.records[1].input).identities[0];
+    expect(() => own.resolver.typedRecheckFacts(identity, 1)).toThrow(
+      "ambiguous-typed-recheck-guard",
+    );
+    expect(own.resolver.typedRecheckFacts(identity, 0).slots).toHaveLength(1);
+  }, 30_000);
+});
+
+describe("canonical typed list forwarding result (#3918)", () => {
+  it("refuses a type-correct cloned list rather than certifying unchanged result identity", async () => {
+    const own = await typedSymbolFixture("proof-clone");
+    const record = own.records[2];
+    const identity = own.resolver.resolveProofExport(record.input).identities[0];
+    expect(own.resolver.typedRecheckBinding(record.consumer, identity)).toEqual({
+      bound: false,
+      status: "incomplete",
+    });
+  }, 30_000);
+});
+
+async function canonicalDecoderSymbolFixture(variant = "direct", options = {}) {
+  const own = createCanonicalDecoderFixture(variant);
+  fixtures.push(own);
+  if (["public-any", "public-concrete"].includes(variant)) {
+    const path = "packages/alpha/dist/owner.d.ts";
+    const text = readFileSync(join(own.root, path), "utf8");
+    const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
+    const declaration = source.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === "parseCanonicalSupportJson",
+    );
+    const replacement = variant === "public-any" ? "any" : "string";
+    own.put(
+      path,
+      text.slice(0, declaration.type.getStart(source)) +
+        replacement +
+        text.slice(declaration.type.end),
+    );
+  }
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    { owner: "packages/alpha", paths: own.records[0].proofs },
+  ]);
+  const record = own.records[0];
+  own.decoder = own.resolver.resolveProofExport(record.input).identities[0];
+  own.canonicalizer = own.resolver.resolveProofExport(record.output).identities[0];
+  return own;
+}
+
+describe("raw canonical JSON decoder symbols (#3918)", () => {
+  it("binds the actual ordered preflight raw identity and exact unknown return", async () => {
+    const own = await canonicalDecoderSymbolFixture();
+    const facts = own.resolver.canonicalDecoderFacts(own.decoder, own.canonicalizer);
+    const source = readFileSync(join(own.root, facts.slot.path), "utf8");
+    expect(source.slice(facts.slot.start, facts.slot.end)).toBe("unknown");
+    expect(facts.slot).toMatchObject({ kind: "return", rule: "anti-slop/no-unknown-returns" });
+    expect(facts.preflight).toEqual([
+      "text-length",
+      "utf8-bytes",
+      "json-shape",
+      "builtin-json-parse",
+      "canonical-comparison",
+    ]);
+    expect(
+      own.resolver.canonicalDecoderBinding(own.records[0].consumer, own.decoder, own.canonicalizer),
+    ).toMatchObject({ bound: true, status: "ready" });
+  }, 30_000);
+
+  it.each([
+    "budget-helper-throws",
+    "budget-helper-wrong-reason",
+    "budget-helper-extra-statement",
+    "budget-outer-return",
+    "removed-preflight",
+    "reordered-preflight",
+    "removed-byte-budget",
+    "bypassed-canonicality",
+    "cloned-return",
+    "lying-decoder",
+    "decoder-generic",
+    "decoder-default",
+    "canonicalizer-generic",
+    "coerced-parse",
+    "captured-return",
+    "shadowed-json",
+    "shadowed-encoder",
+  ])(
+    "refuses %s rather than granting a return-shaped waiver",
+    async (variant) => {
+      const own = await canonicalDecoderSymbolFixture(variant);
+      expect(() => own.resolver.canonicalDecoderFacts(own.decoder, own.canonicalizer)).toThrow(
+        "unsupported-raw-canonical-json-decoder",
+      );
+    },
+    30_000,
+  );
+
+  it.each(["wrong-argument", "raw-alias", "wrong-result", "mutable-raw"])(
+    "refuses the actual %s public witness",
+    async (variant) => {
+      const own = await canonicalDecoderSymbolFixture(variant);
+      expect(
+        own.resolver.canonicalDecoderBinding(
+          own.records[0].consumer,
+          own.decoder,
+          own.canonicalizer,
+        ),
+      ).toEqual({ bound: false, status: "incomplete" });
+    },
+    30_000,
+  );
+
+  it("refuses a canonicalizer rebound to the decoder or a foreign owner", async () => {
+    const own = await canonicalDecoderSymbolFixture();
+    expect(() => own.resolver.canonicalDecoderFacts(own.decoder, own.decoder)).toThrow(
+      "unsupported-raw-canonical-json-decoder",
+    );
+    expect(() =>
+      own.resolver.canonicalDecoderFacts(own.decoder, { ...own.canonicalizer, owner: "foreign" }),
+    ).toThrow();
+    expect(
+      own.resolver.canonicalDecoderBinding(own.records[0].consumer, own.decoder, own.decoder),
+    ).toEqual({ bound: false, status: "incomplete" });
+  }, 30_000);
+
+  it.each(["public-any", "public-concrete"])(
+    "refuses stale %s public declarations before witness admission",
+    async (variant) => {
+      await expect(canonicalDecoderSymbolFixture(variant)).rejects.toThrow(
+        "stale-declaration-provenance",
+      );
+    },
+    30_000,
+  );
+
+  it.each(["source", "public", "proof"])(
+    "rechecks %s currentness on both public operations",
+    async (changed) => {
+      const own = await canonicalDecoderSymbolFixture();
+      own.resolver.canonicalDecoderFacts(own.decoder, own.canonicalizer);
+      const path =
+        changed === "source"
+          ? "packages/alpha/src/owner.ts"
+          : changed === "public"
+            ? "packages/alpha/dist/owner.d.ts"
+            : own.records[0].proofs[0];
+      own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+      expect(() => own.resolver.canonicalDecoderFacts(own.decoder, own.canonicalizer)).toThrow(
+        "symbol-subject-changed",
+      );
+      expect(() =>
+        own.resolver.canonicalDecoderBinding(
+          own.records[0].consumer,
+          own.decoder,
+          own.canonicalizer,
+        ),
+      ).toThrow("symbol-subject-changed");
+    },
+    30_000,
+  );
+});
+
+describe("raw canonical JSON decoder shared qualification bounds (#3918)", () => {
+  it.each([{ sourceBytes: 1 }, { nodes: 1 }, { emitBytes: 1 }])(
+    "refuses partial public qualification under the existing bound %j",
+    async (options) => {
+      const own = createCanonicalDecoderFixture();
+      fixtures.push(own);
+      own.subject = await collectPolicySubject(own.root);
+      own.resolver = createSymbolResolver(own.subject, options, [
+        { owner: "packages/alpha", paths: own.records[0].proofs },
+      ]);
+      expect(() => own.resolver.resolveProofExport(own.records[0].input)).toThrow();
+    },
+    30_000,
+  );
+});
+
+function publicStarFixture(mode = "single") {
+  const own = createSymbolFixture(false, (fixture) => {
+    fixture.put(
+      "src/consumer.ts",
+      'import { parse } from "alpha"; export const result = parse(1);',
+    );
+    fixture.put(
+      "packages/alpha/src/proof.test.ts",
+      'import { parse } from "alpha"; export const result = parse(1);',
+    );
+    const config = JSON.parse(readFileSync(join(fixture.root, "packages/alpha/tsconfig.json")));
+    config.exclude = ["**/*.test.ts"];
+    fixture.put("packages/alpha/tsconfig.json", config);
+    fixture.put(
+      "packages/alpha/src/owner.ts",
+      "export function parse(input: unknown): boolean { return input === 1; }",
+    );
+    fixture.put("packages/alpha/src/bridge.ts", 'export { parse } from "./owner.js";');
+    fixture.put("packages/alpha/src/alternate.ts", 'export { parse } from "./owner.js";');
+    fixture.put("packages/alpha/src/side.ts", "export const unrelated = true;");
+    fixture.put("packages/alpha/src/nested.ts", 'export * from "./side.js";');
+    fixture.put("packages/alpha/src/other.ts", "export const other = true;");
+    fixture.put("packages/alpha/src/last.ts", "export const last = true;");
+    const entries = {
+      single: 'export * from "./bridge.js";',
+      nested:
+        'export * from "./bridge.js"; export * from "./nested.js"; export * from "./other.js"; export * from "./last.js";',
+      explicit: 'export { parse } from "./owner.js"; export * from "./nested.js";',
+      direct:
+        'export function parse(input: unknown): boolean { return input === 1; } export * from "./nested.js";',
+      zero: 'export * from "./side.js";',
+      duplicate: 'export * from "./bridge.js"; export * from "./alternate.js";',
+      typeonly: 'export type { parse } from "./owner.js"; export * from "./bridge.js";',
+      typestar: 'export type * from "./owner.js";',
+      namespace: 'export * as parse from "./owner.js"; export * from "./bridge.js";',
+      variable:
+        'export const parse = (input: unknown): boolean => input === 1; export * from "./bridge.js";',
+      cycle: 'export * from "./cycle.js";',
+    };
+    fixture.put("packages/alpha/src/cycle.ts", 'export * from "./index.js";');
+    fixture.put("packages/alpha/src/index.ts", entries[mode] ?? entries.nested);
+  });
+  fixtures.push(own);
+  return own;
+}
+
+async function publicStarResolver(own, options = {}) {
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, options, [
+    { owner: "packages/alpha", paths: ["packages/alpha/src/proof.test.ts"] },
+  ]);
+  return own.resolver;
+}
+
+const starRequest = {
+  consumerPath: "packages/alpha/src/proof.test.ts",
+  specifier: "alpha",
+  exportName: "parse",
+};
+
+describe("qualified value-star public declaration entries (#3918)", () => {
+  it.each(["single", "nested", "explicit", "direct"])(
+    "resolves actual native %s entries with exact explicit precedence",
+    async (mode) => {
+      const own = publicStarFixture(mode);
+      const resolver = await publicStarResolver(own);
+      expect(resolver.resolveProofExport(starRequest).identities[0].producer.path).toBe(
+        mode === "direct" ? "packages/alpha/src/index.ts" : "packages/alpha/src/owner.ts",
+      );
+    },
+    30_000,
+  );
+
+  it.each(["zero", "duplicate", "typeonly", "typestar", "namespace", "variable", "cycle"])(
+    "refuses actual native %s entries rather than guessing a value route",
+    async (mode) => {
+      const own = publicStarFixture(mode);
+      const resolver = await publicStarResolver(own);
+      expect(() => resolver.resolveProofExport(starRequest)).toThrow();
+    },
+    30_000,
+  );
+
+  it("shares the existing alias budget across all branches", async () => {
+    const own = publicStarFixture("nested");
+    const resolver = await publicStarResolver(own, { aliases: 3 });
+    expect(() => resolver.resolveProofExport(starRequest)).toThrow("symbol-alias-budget");
+  }, 30_000);
+
+  it.each(["runtime", "declaration", "map", "forged-map", "stale-source", "source-override"])(
+    "refuses %s on a traversed intermediate branch with a fresh ultimate producer",
+    async (mode) => {
+      const own = publicStarFixture("nested");
+      const base = "packages/alpha/dist/nested";
+      if (mode === "runtime") unlinkSync(join(own.root, `${base}.js`));
+      if (mode === "declaration") unlinkSync(join(own.root, `${base}.d.ts`));
+      if (mode === "map") unlinkSync(join(own.root, `${base}.d.ts.map`));
+      if (mode === "forged-map") {
+        const payload = JSON.parse(readFileSync(join(own.root, `${base}.d.ts.map`)));
+        payload.mappings += ";AAAA";
+        own.put(`${base}.d.ts.map`, payload);
+      }
+      if (mode === "stale-source")
+        own.put("packages/alpha/src/nested.ts", "export const replaced = true;");
+      if (mode === "source-override") {
+        const path = "packages/alpha/tsconfig.json";
+        const config = JSON.parse(readFileSync(join(own.root, path)));
+        config.compilerOptions.paths = { "./nested.js": ["packages/alpha/src/nested.ts"] };
+        own.put(path, config);
+      }
+      const resolver = await publicStarResolver(own);
+      expect(() => resolver.resolveProofExport(starRequest)).toThrow();
+    },
+    30_000,
+  );
+
+  it("rejects an observed intermediate change before returning a cached public entry", async () => {
+    const own = publicStarFixture("nested");
+    const resolver = await publicStarResolver(own);
+    expect(resolver.resolveProofExport(starRequest).identities).toHaveLength(1);
+    own.put("packages/alpha/src/nested.ts", "export const replaced = true;");
+    expect(() => resolver.resolveProofExport(starRequest)).toThrow("symbol-subject-changed");
+  }, 30_000);
+});
+
+describe("owner-tagged collective cardinality errors (#3918)", () => {
+  it("preserves low-level TypeError refusal and exposes only copied factory-owned counts", async () => {
+    const own = await collectiveSymbolFixture("cardinality", { collectiveStates: 64 });
+    const { collectiveHelperBudgetDetails } = await import("../lib/code-quality-symbols.mjs");
+    let refusal;
+    try {
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters");
+    } catch (error) {
+      refusal = error;
+    }
+    expect(refusal).toBeInstanceOf(TypeError);
+    expect(refusal.message).toBe("symbol-alias-budget");
+    expect(collectiveHelperBudgetDetails(refusal)).toEqual({ limit: 64, observedCount: 65 });
+    const copy = collectiveHelperBudgetDetails(refusal);
+    copy.limit = 999;
+    expect(collectiveHelperBudgetDetails(refusal)).toEqual({ limit: 64, observedCount: 65 });
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(
+        Array(65).fill(own.rawRoots[0]),
+        "anti-slop/no-unknown-parameters",
+      ),
+    ).toThrow("symbol-alias-budget");
+  }, 30_000);
+
+  it("does not inspect counterfeit exception properties or confuse source and cycle errors", async () => {
+    const { collectiveHelperBudgetDetails } = await import("../lib/code-quality-symbols.mjs");
+    const counterfeit = new Proxy(new TypeError("symbol-alias-budget"), {
+      get: () => {
+        throw new Error("exception property inspected");
+      },
+      getPrototypeOf: () => {
+        throw new Error("exception prototype inspected");
+      },
+    });
+    for (const error of [
+      counterfeit,
+      new TypeError("symbol-alias-budget"),
+      null,
+      "symbol-alias-budget",
+    ])
+      expect(collectiveHelperBudgetDetails(error)).toBeNull();
+    const cycle = await collectiveSymbolFixture("cycle");
+    try {
+      cycle.resolver.collectiveRawCheckingSlots(cycle.rawRoots, "anti-slop/no-unknown-parameters");
+      throw new Error("cycle unexpectedly accepted");
+    } catch (error) {
+      expect(error.message).toBe("unsupported-raw-helper-cycle");
+      expect(collectiveHelperBudgetDetails(error)).toBeNull();
+    }
+  }, 30_000);
+});
+
+async function contextEnvelopeSymbolFixture(variant = "direct") {
+  const own = createContextDiagnosticFixture(variant);
+  fixtures.push(own);
+  own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+    { owner: "packages/alpha", paths: own.record.proofs },
+  ]);
+  own.producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+  return own;
+}
+
+describe("closed context diagnostic envelope binding (#3918)", () => {
+  it("binds the exact owned closed diagnostic envelope without inventing a value", async () => {
+    const own = await contextEnvelopeSymbolFixture();
+    const binding = own.resolver.diagnosticBinding(own.record.consumer, own.producer);
+    expect(binding.bound).toBe(true);
+    expect(binding.calls).toHaveLength(1);
+    expect(binding.implementation.owner).toBe("alpha");
+    const legacy = createDiagnosticFixture();
+    fixtures.push(legacy);
+    legacy.resolver = createSymbolResolver(await collectPolicySubject(legacy.root), {}, [
+      { owner: "packages/alpha", paths: legacy.record.proofs },
+    ]);
+    const producer = legacy.resolver.resolveProofExport(legacy.record.input).identities[0];
+    expect(legacy.resolver.diagnosticBinding(legacy.record.consumer, producer).bound).toBe(true);
+  }, 30_000);
+
+  it.each([
+    "erased",
+    "unknown-reasons",
+    "mutable-array",
+    "mutable-property",
+    "mutable-ok",
+    "nonstring-reasons",
+    "optional-reasons",
+    "optional-ok",
+    "index",
+    "success-value",
+    "unrelated",
+    "unaliased",
+    "foreign-alias",
+    "constant",
+    "polarity",
+    "fabricated",
+    "negated",
+    "input",
+    "local",
+    "wrong-producer",
+    "annotated",
+    "numeric-erasure",
+  ])(
+    "rejects the noncanonical diagnostic envelope or flow: %s",
+    async (variant) => {
+      const own = await contextEnvelopeSymbolFixture(variant);
+      expect(own.resolver.diagnosticBinding(own.record.consumer, own.producer).bound).toBe(false);
+    },
+    30_000,
+  );
+
+  it("refuses source drift before reusing a closed envelope proof binding", async () => {
+    const own = await contextEnvelopeSymbolFixture();
+    expect(own.resolver.diagnosticBinding(own.record.consumer, own.producer).bound).toBe(true);
+    const path = join(own.root, own.record.consumer.consumerPath);
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => own.resolver.diagnosticBinding(own.record.consumer, own.producer)).toThrow(
+      "symbol-subject-changed",
+    );
+  }, 30_000);
+});
+
+const JSON_BYTE_MEASUREMENT_OWNER =
+  'type CodingWorkbenchRuntimeQuestionRequest = { readonly id: string; readonly questions: readonly unknown[] };\nexport const CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES = 64 * 1_024;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT = 256;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT = 32;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT = 32;\nconst CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS = 4_096;\nfunction isRecord(value: unknown): value is Record<string, unknown> { return typeof value === "object" && value !== null && !Array.isArray(value); }\nexport function first(value: unknown): boolean { if (!isRecord(value)) return false; const errors: string[] = []; return checkQuestionsResponse(value, errors) && errors.length === 0; }\nexport function second(value: unknown): boolean { if (!isRecord(value)) return false; const errors: string[] = []; return checkQuestionsChannel(value, errors) && errors.length === 0; }\nexport function third(value: unknown): boolean { if (!isRecord(value)) return false; const errors: string[] = []; return validateAnswers(value.answers, errors) && errors.length === 0; }\nfunction checkQuestionsResponse(value: Record<string, unknown>, errors: string[]): boolean { return checkBoundedQuestionRequests(value.questions, value, errors); }\nfunction checkQuestionsChannel(value: Record<string, unknown>, errors: string[]): boolean { const session = value.session === "active"; const admitted = checkBoundedQuestionRequests(value.questions, value, errors); return session && admitted; }\nfunction validateQuestionRequests(value: readonly unknown[], _errors: string[]): value is readonly CodingWorkbenchRuntimeQuestionRequest[] { return value.every(item => typeof item === "object" && item !== null); }\nfunction validText(value: unknown, max: number): value is string { return typeof value === "string" && value.length > 0 && value.length <= max; }\nfunction checkBoundedQuestionRequests(\n  questions: unknown,\n  container: object,\n  errors: string[],\n): questions is readonly CodingWorkbenchRuntimeQuestionRequest[] {\n  if (\n    !Array.isArray(questions) ||\n    questions.length > CODING_WORKBENCH_RUNTIME_QUESTION_REQUEST_MAX_COUNT\n  ) {\n    errors.push("questions must be a bounded array");\n    return false;\n  }\n  const admitted = validateQuestionRequests(questions, errors);\n  if (\n    errors.length === 0 &&\n    serializedBytes(container) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES\n  )\n    errors.push("questions response exceeds the aggregate UTF-8 byte budget");\n  return admitted;\n}\nfunction validateAnswers(\n  value: unknown,\n  errors: string[],\n): value is readonly (readonly string[])[] {\n  if (\n    !Array.isArray(value) ||\n    value.length < 1 ||\n    value.length > CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT\n  ) {\n    errors.push("answers must be a bounded non-empty array");\n    return false;\n  }\n  const count = value.length;\n  let admitted = true;\n  for (let index = 0; index < count; index += 1) {\n    const answer: unknown = value[index];\n    if (!validAnswerMembers(answer)) {\n      errors.push(`answers[${String(index)}] must contain bounded strings`);\n      admitted = false;\n      if (!(index in value)) return false;\n    } else if (new Set(answer).size !== answer.length) {\n      errors.push(`answers[${String(index)}] must not contain duplicate selections`);\n    }\n  }\n  // Per-array caps above bound each answer individually (32 arrays x 32 selections x 4096 chars),\n  // but not their sum: matches the aggregate budget checkBoundedQuestionRequests already enforces\n  // on the outbound side, gated on no per-item error the same way that function gates its own check.\n  if (\n    errors.length === 0 &&\n    serializedBytes({ answers: value }) > CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES\n  )\n    errors.push("answers exceed the aggregate UTF-8 byte budget");\n  return admitted;\n}\nfunction validAnswerMembers(value: unknown): value is readonly string[] {\n  if (\n    !Array.isArray(value) ||\n    value.length > CODING_WORKBENCH_RUNTIME_QUESTION_SELECTIONS_MAX_COUNT\n  )\n    return false;\n  const count = value.length;\n  for (let index = 0; index < count; index += 1) {\n    const selection: unknown = value[index];\n    if (!validText(selection, CODING_WORKBENCH_RUNTIME_QUESTION_TEXT_MAX_CHARS)) return false;\n  }\n  return true;\n}\nfunction serializedBytes(value: object): number {\n  try {\n    return new TextEncoder().encode(JSON.stringify(value)).length;\n  } catch {\n    return Number.POSITIVE_INFINITY;\n  }\n}';
+
+async function jsonByteMeasurementFixture(variant = "direct") {
+  const own = createSymbolFixture(false, (fixture) => {
+    const config = JSON.parse(readFileSync(join(fixture.root, "packages/alpha/tsconfig.json")));
+    config.compilerOptions.lib = ["ES2022", "DOM"];
+    fixture.put("packages/alpha/tsconfig.json", config);
+    fixture.put("packages/alpha/src/owner.ts", numericOwnerVariant(variant));
+    fixture.put("packages/alpha/src/index.ts", 'export { first as parse } from "./owner.js";\n');
+    fixture.put(
+      "src/consumer.ts",
+      'import { first, second, third } from "alpha/runtime"; export const value = [first(1), second(1), third(1)];\n',
+    );
+  });
+  fixtures.push(own);
+  own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+  own.rawRoots = ["first", "second", "third"]
+    .filter((name) => variant !== "missing-answer" || name !== "third")
+    .filter((name) => variant !== "missing-channel" || name !== "second")
+    .map((exportName) => ({
+      identity: own.resolver.resolveExport({
+        consumerPath: "src/consumer.ts",
+        specifier: "alpha/runtime",
+        exportName,
+      }).identities[0],
+      index: 0,
+      recordId: "fixture-" + exportName,
+    }));
+  return own;
+}
+
+describe("exact numeric JSON byte object form (#3918)", () => {
+  it("recognizes only the two closed measurement annotations across all three real incoming roots", async () => {
+    const own = await jsonByteMeasurementFixture();
+    const result = own.resolver.collectiveJsonByteMeasurement(own.rawRoots);
+    expect(result.status).toBe("recognized");
+    expect(result.form).toBe("json-utf8-byte-measurement");
+    expect(result.slots).toHaveLength(2);
+    expect(
+      result.slots
+        .map((slot) => ({ index: slot.index, contributors: slot.contributingResponsibilityIds }))
+        .sort((a, b) => a.index - b.index),
+    ).toEqual([
+      { index: 0, contributors: ["fixture-first", "fixture-second", "fixture-third"] },
+      { index: 1, contributors: ["fixture-first", "fixture-second"] },
+    ]);
+  });
+});
+
+function numericOwnerVariant(variant) {
+  const source = JSON_BYTE_MEASUREMENT_OWNER;
+  if (variant === "one-parameter-caller")
+    return source
+      .replace("checkQuestionsResponse(value, errors)", "checkQuestionsResponse(value)")
+      .replace(
+        "function checkQuestionsResponse(value: Record<string, unknown>, errors: string[]): boolean { return checkBoundedQuestionRequests(value.questions, value, errors); }",
+        "function checkQuestionsResponse(value: Record<string, unknown>): boolean { const errors: string[] = []; return checkBoundedQuestionRequests(value.questions, value, errors); }",
+      );
+  const replacements = {
+    "byte-length": [
+      ".encode(JSON.stringify(value)).length",
+      ".encode(JSON.stringify(value)).byteLength",
+    ],
+    "stringify-args": ["JSON.stringify(value)", "JSON.stringify(value, null)"],
+    fallback: ["return Number.POSITIVE_INFINITY;", "return 0;"],
+    "catch-binding": ["} catch {", "} catch (_error) {"],
+    finally: [
+      "return Number.POSITIVE_INFINITY;\n  }",
+      "return Number.POSITIVE_INFINITY;\n  } finally { void 0; }",
+    ],
+    "projected-container": [
+      "serializedBytes(container)",
+      "serializedBytes({ questions: container })",
+    ],
+    "answers-key": ["serializedBytes({ answers: value })", "serializedBytes({ other: value })"],
+    "answers-origin": [
+      "validateAnswers(value.answers, errors)",
+      "validateAnswers(value.other, errors)",
+    ],
+    "parameter-mutation": [
+      "const admitted = validateQuestionRequests(questions, errors);",
+      "container = {}; const admitted = validateQuestionRequests(questions, errors);",
+    ],
+    "zero-gate": [
+      "errors.length === 0 &&\n    serializedBytes(container)",
+      "serializedBytes(container)",
+    ],
+    comparison: ["serializedBytes(container) >", "serializedBytes(container) >="],
+    cap: ["MAX_UTF8_BYTES = 64 * 1_024", "MAX_UTF8_BYTES = 32 * 1_024"],
+    early: [
+      "const admitted = validateQuestionRequests(questions, errors);",
+      "const measured = serializedBytes(container); const admitted = validateQuestionRequests(questions, errors);",
+    ],
+    duplicate: ["new Set(answer).size !== answer.length", "false"],
+  };
+  if (replacements[variant]) {
+    const [before, after] = replacements[variant];
+    if (!source.includes(before)) throw new TypeError("numeric-fixture-mutation-missing");
+    return source.replace(before, after);
+  }
+  const additions = {
+    "JSON-shadow": "const JSON = globalThis.JSON;\n",
+    "encoder-shadow": "const TextEncoder = globalThis.TextEncoder;\n",
+    "encoder-foreign": "declare global { interface TextEncoder { foreignMarker(): void; } }\n",
+    "Number-shadow": "const Number = globalThis.Number;\n",
+    "leaf-export": "export { serializedBytes };\n",
+    "leaf-escape": "const escape = { serializedBytes };\n",
+    "extra-incoming":
+      "function outside(value: object): number { return serializedBytes(value); }\n",
+    "forwarder-export": "export { checkBoundedQuestionRequests };\n",
+    "unrelated-object": "function unrelated(value: object): object { return value; }\n",
+  };
+  return additions[variant] ? source + additions[variant] : source;
+}
+
+describe("numeric object closed-form refusals (#3918)", () => {
+  it.each([
+    "JSON-shadow",
+    "encoder-shadow",
+    "encoder-foreign",
+    "Number-shadow",
+    "byte-length",
+    "stringify-args",
+    "fallback",
+    "catch-binding",
+    "finally",
+    "leaf-export",
+    "leaf-escape",
+    "extra-incoming",
+    "one-parameter-caller",
+    "missing-answer",
+    "missing-channel",
+    "projected-container",
+    "answers-key",
+    "answers-origin",
+    "forwarder-export",
+    "parameter-mutation",
+    "zero-gate",
+    "comparison",
+    "cap",
+    "early",
+    "duplicate",
+  ])("refuses unsupported numeric form: %s", async (variant) => {
+    const own = await jsonByteMeasurementFixture(variant);
+    const result = own.resolver.collectiveJsonByteMeasurement(own.rawRoots);
+    expect(result).toEqual({
+      form: "json-utf8-byte-measurement",
+      status: "withheld",
+      reason: "unsupported-json-byte-form",
+      slots: [],
+    });
+  });
+  it("does not grant an unrelated object annotation beside the closed two-slot form", async () => {
+    const own = await jsonByteMeasurementFixture("unrelated-object");
+    const result = own.resolver.collectiveJsonByteMeasurement(own.rawRoots);
+    expect(result.status).toBe("recognized");
+    expect(result.slots).toHaveLength(2);
+    expect(
+      result.slots.every((slot) =>
+        JSON_BYTE_MEASUREMENT_OWNER.slice(
+          slot.producerIdentity.producer.start,
+          slot.producerIdentity.producer.end,
+        ).includes("serializedBytes"),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("separate collective slot result contracts (#3918)", () => {
+  it("returns closed withheld numeric descriptors for empty and nonraw roots", async () => {
+    const own = await collectiveSymbolFixture("domain");
+    const domain = own.resolver.resolveProofExport({
+      ...own.records[0].input,
+      exportName: "domain",
+    }).identities[0];
+    const withheld = {
+      form: "json-utf8-byte-measurement",
+      status: "withheld",
+      reason: "unsupported-json-byte-form",
+      slots: [],
+    };
+    expect(own.resolver.collectiveJsonByteMeasurement([])).toEqual(withheld);
+    expect(
+      own.resolver.collectiveJsonByteMeasurement([
+        { identity: domain, index: 0, recordId: "domain" },
+      ]),
+    ).toEqual(withheld);
+  });
+
+  it("propagates actual numeric collective capacity errors", async () => {
+    const own = await collectiveSymbolFixture();
+    expect(() =>
+      own.resolver.collectiveJsonByteMeasurement(Array(65).fill(own.rawRoots[0])),
+    ).toThrow("symbol-alias-budget");
+  });
+
+  it("propagates actual numeric collective cycles", async () => {
+    const cycle = await collectiveSymbolFixture("cycle");
+    expect(() => cycle.resolver.collectiveJsonByteMeasurement(cycle.rawRoots)).toThrow(
+      "unsupported-raw-helper-cycle",
+    );
+  });
+
+  it("propagates actual numeric source currentness errors", async () => {
+    const changed = await collectiveSymbolFixture();
+    const path = join(changed.root, "packages/alpha/src/owner.ts");
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => changed.resolver.collectiveJsonByteMeasurement(changed.rawRoots)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+
+  it("keeps the legacy object-rule operation array-valued for empty and supported roots", async () => {
+    const own = await jsonByteMeasurementFixture();
+    expect(own.resolver.collectiveRawCheckingSlots([], "anti-slop/no-object-parameters")).toEqual(
+      [],
+    );
+    expect(
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-object-parameters"),
+    ).toEqual([]);
+  });
+});
+
+describe("closed optional observation compiler facts", () => {
+  it("adds exactly the two own-key and one owning-input coordinates to legacy facts", async () => {
+    const own = createObservationOptionsFixture();
+    fixtures.push(own);
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const roles = own.resolver.resolveProofExport(own.record.input);
+    const identity = roles.identities[0];
+    const before = own.resolver.propertyObservationFacts(identity);
+    const after = own.resolver.propertyObservationFacts(identity, {
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+    });
+    expect(before.slots).toHaveLength(3);
+    expect(after.slots.slice(0, 3)).toStrictEqual(before.slots);
+    expect(after.slots).toHaveLength(6);
+    expect(after.identity).toStrictEqual(before.identity);
+    expect(after.root).toStrictEqual(before.root);
+    expect(
+      after.slots.slice(3).every((slot) => slot.rule === "anti-slop/no-object-parameters"),
+    ).toBe(true);
+    expect(after.additionalObservations.map(({ form }) => form)).toEqual([
+      "raw-object-input",
+      "own-key-identity",
+    ]);
+    const path = "packages/alpha/src/owner.ts";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n// source changed\n");
+    expect(() =>
+      own.resolver.propertyObservationFacts(identity, { rawObjectInput: true }),
+    ).toThrow();
+  });
+});
+
+describe("direct whole-receiver observation checker facts", () => {
+  it("adds four direct checker inputs without granting shared carriers or other parameters", async () => {
+    const own = createDirectObservationCheckerFixture();
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const identity = own.resolver.resolveProofExport(own.record.input).identities[0];
+    const legacy = { rawObjectInput: true, additionalObservationForms: ["own-key-identity"] };
+    const before = own.resolver.propertyObservationFacts(identity, legacy);
+    expect(before.slots).toHaveLength(6);
+    const after = own.resolver.propertyObservationFacts(identity, {
+      ...legacy,
+      directRawCheckerInputs: true,
+    });
+    expect(after.slots.slice(0, 6)).toStrictEqual(before.slots);
+    expect(after.slots).toHaveLength(10);
+    expect(
+      after.slots
+        .slice(6)
+        .every((slot) => slot.index === 0 && slot.rule === "anti-slop/no-object-parameters"),
+    ).toBe(true);
+    expect(
+      after.slots
+        .slice(6)
+        .every(
+          (slot) =>
+            slot.observationRoots.length === 1 &&
+            slot.observationRoots[0].identity.producer.start === identity.producer.start,
+        ),
+    ).toBe(true);
+  });
+});
+
+describe("owned optional object validator facts (#3918)", () => {
+  it("binds only the exact public input without granting private raw call-result helpers", async () => {
+    const own = createObjectValidatorFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const facts = own.resolver.objectValidatorFacts(identity);
+    expect(facts.slots).toHaveLength(1);
+    expect(facts.slots[0]).toMatchObject({ index: 0, rawObjectValidatorInput: true });
+    const slot = facts.slots[0];
+    expect(source.slice(slot.start, slot.end)).toBe("object");
+    expect(slot.start).toBeGreaterThan(source.indexOf("export function validate"));
+    expect(facts.identity).toEqual(identity);
+  });
+
+  it.each([
+    "wrong-input",
+    "aliased-input",
+    "optional-input",
+    "unknown-result",
+    "foreign-result",
+    "anonymous-result",
+    "extra-arm",
+    "generic",
+  ])("withholds unsupported %s boundary facts", async (variant) => {
+    const own = createObjectValidatorFixture(variant);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(() => own.resolver.objectValidatorFacts(identity)).toThrow(
+      "unsupported-object-validator-boundary",
+    );
+  });
+});
+
+describe("optional raw typeof operands (#3918)", () => {
+  it("adds only intrinsic nullish residues while retaining domain and erasure refusals", async () => {
+    const own = createRawHelperEnforcementFixture("optional-typeof");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const start = source.indexOf("function fields(");
+    const end = source.indexOf("export function validate(");
+    const slots = own.resolver
+      .rawCheckingSlots(identity, 0)
+      .filter(
+        (slot) =>
+          slot.rule === "anti-slop/no-runtime-typeof" && slot.start > start && slot.end < end,
+      );
+    const markers = ["direct", "optional", "nullish", "not-null", "alias", "primitive-guard"];
+    expect(slots.map((slot) => slot.start)).toEqual(
+      markers.map((marker) => source.indexOf("typeof", source.indexOf(`/* ${marker} */`))),
+    );
+    own.resolver.assertCurrent();
+  });
+});
+
+describe("raw metadata source facts and bounded consumers (#3918)", () => {
+  it("binds the source root only and requires both real incoming public consumers", async () => {
+    const own = createMetadataSourceFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    const first = own.resolver.metadataSourceConsumer(own.record.consumer).identities[0];
+    const second = own.resolver.metadataSourceConsumer(own.record.metadataSourceInput.companion)
+      .identities[0];
+    const facts = own.resolver.metadataSourceFacts(producer);
+    expect(facts.slots).toHaveLength(1);
+    expect(facts.slots[0]).toMatchObject({
+      index: 0,
+      rule: "anti-slop/no-object-parameters",
+      rawMetadataSourceInput: true,
+    });
+    const text = readFileSync(join(own.root, producer.producer.path), "utf8");
+    expect(text.slice(facts.slots[0].start, facts.slots[0].end)).toBe("object");
+    expect(own.resolver.consumerCalls(first, producer, "alpha").bound).toBe(false);
+    const binding = own.resolver.metadataSourceBinding(first, second, producer, "alpha");
+    expect(binding).toMatchObject({
+      bound: true,
+      status: "ready",
+      implementations: [first, second],
+    });
+    expect(binding.calls).toHaveLength(1);
+    expect(() => own.resolver.metadataSourceBinding(first, first, producer, "alpha")).toThrow(
+      "unsupported-metadata-source-consumers",
+    );
+  });
+
+  it.each(["wrong-source", "wrong-target"])(
+    "withholds an unsupported %s signature",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const producer = own.resolver.resolveExport(own.record.input).identities[0];
+      expect(() => own.resolver.metadataSourceFacts(producer)).toThrow(
+        "unsupported-metadata-source-boundary",
+      );
+    },
+  );
+
+  it.each(["third-caller", "callback-escape", "unbound-second"])(
+    "keeps %s outside the closed pair",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const producer = own.resolver.resolveExport(own.record.input).identities[0];
+      const first = own.resolver.metadataSourceConsumer(own.record.consumer).identities[0];
+      const second = own.resolver.metadataSourceConsumer(own.record.metadataSourceInput.companion)
+        .identities[0];
+      expect(own.resolver.metadataSourceBinding(first, second, producer, "alpha").bound).toBe(
+        false,
+      );
+    },
+  );
+});
+
+describe("owned structural predicate stage facts (#3918)", () => {
+  it("adds only the private owned predicate input under explicit opt-in", async () => {
+    const own = createObjectValidatorFixture("valid", true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const original = own.resolver.objectValidatorFacts(identity);
+    expect(original.slots).toHaveLength(1);
+    const expanded = own.resolver.objectValidatorFacts(identity, true);
+    expect(expanded.slots).toHaveLength(2);
+    expect(expanded.slots[0]).toEqual(original.slots[0]);
+    expect(expanded.slots[1]).toMatchObject({
+      index: 0,
+      rule: "anti-slop/no-object-parameters",
+      rawObjectValidatorInput: true,
+      ownedPredicateStageInput: true,
+    });
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    expect(expanded.slots[1].start).toBe(source.indexOf("view: object") + "view: ".length);
+    expect(source.slice(expanded.slots[1].start, expanded.slots[1].end)).toBe("object");
+  });
+
+  it.each([
+    [
+      "different owned predicate target",
+      (source) =>
+        source.replace("view is View", "view is OtherView") +
+        '\ninterface OtherView { readonly owner: string; readonly lifecycle: "loss" | "state" }',
+      "unsupported-owned-predicate-stage",
+    ],
+    [
+      "unchecked raw return",
+      (source) =>
+        source.replace(
+          "export function validate(input: object): View | undefined { const view = raw(input); return view !== undefined && complete(view) ? view : undefined; }",
+          "export function validate(input: object): object | undefined { return raw(input); }",
+        ),
+      "unsupported-object-validator-boundary",
+    ],
+    [
+      "private predicate escape",
+      (source) => source + "\nconst callbacks = [complete]; void callbacks;",
+      "unsupported-owned-predicate-stage",
+    ],
+  ])("withholds the new stage for %s", async (_name, mutate, reason) => {
+    const own = createObjectValidatorFixture("valid", true);
+    fixtures.push(own);
+    const path = "packages/alpha/src/owner.ts";
+    const original = readFileSync(join(own.root, path), "utf8");
+    const changed = mutate(original);
+    expect(changed).not.toBe(original);
+    own.put(path, changed);
+    emitSymbolFixture(own.root);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(() => own.resolver.objectValidatorFacts(identity, true)).toThrow(reason);
+  });
+
+  it("refuses currentness drift before returning an owned predicate fact", async () => {
+    const own = createObjectValidatorFixture("valid", true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const path = join(own.root, identity.producer.path);
+    writeFileSync(path, readFileSync(path, "utf8") + "\n");
+    expect(() => own.resolver.objectValidatorFacts(identity, true)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+});
+
+describe("owned refusal marker pair facts (#3918)", () => {
+  it("keeps the source default and adds only the canonical marker identity parameters", async () => {
+    const own = createMetadataSourceFixture("valid", true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    const original = own.resolver.metadataSourceFacts(producer);
+    expect(original.slots).toHaveLength(1);
+    const opted = own.resolver.metadataSourceFacts(producer, true);
+    expect(opted.slots.slice(0, 1)).toEqual(original.slots);
+    expect(opted.slots).toHaveLength(3);
+    const source = readFileSync(join(own.root, producer.producer.path), "utf8");
+    expect(opted.slots.slice(1).map((slot) => source.slice(slot.start, slot.end))).toEqual([
+      "object",
+      "object",
+    ]);
+    expect(
+      opted.slots.slice(1).every((slot) => slot.ownedMarkerPairInput && slot.index === 0),
+    ).toBe(true);
+    expect(() => own.resolver.metadataSourceFacts(producer, "true")).toThrow(
+      "unsupported-owned-marker-pair-option",
+    );
+    own.resolver.assertCurrent();
+  });
+
+  it.each(["direct-caller", "key-type"])(
+    "accounts for %s without certifying another caller",
+    async (variant) => {
+      const own = createMetadataSourceFixture(variant, true);
+      fixtures.push(own);
+      own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+      const producer = own.resolver.resolveExport(own.record.input).identities[0];
+      expect(own.resolver.metadataSourceFacts(producer, true).slots).toHaveLength(3);
+    },
+  );
+
+  it.each([
+    "wrong-key",
+    "mutable-descriptor",
+    "wrong-builtin",
+    "helper-escape",
+    "key-escape",
+    "default-parameter",
+    "foreign-domain",
+    "shadowed-builtin",
+  ])("withholds the whole optional pair for %s", async (variant) => {
+    const own = createMetadataSourceFixture(variant, true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(producer).slots).toHaveLength(1);
+    expect(() => own.resolver.metadataSourceFacts(producer, true)).toThrow(
+      "unsupported-owned-marker-pair",
+    );
+  });
+
+  it("retains the existing alias budget and current source guard", async () => {
+    const own = createMetadataSourceFixture("valid", true);
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject);
+    const producer = own.resolver.resolveExport(own.record.input).identities[0];
+    own.resolver.close();
+    own.resolver = createSymbolResolver(subject, { aliases: 2 });
+    expect(() => own.resolver.metadataSourceFacts(producer, true)).toThrow("symbol-alias-budget");
+    own.resolver.close();
+    own.resolver = createSymbolResolver(subject);
+    const current = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(current, true).slots).toHaveLength(3);
+    own.put(
+      current.producer.path,
+      readFileSync(join(own.root, current.producer.path), "utf8") + "\n",
+    );
+    expect(() => own.resolver.metadataSourceFacts(current, true)).toThrow("symbol-subject-changed");
+  });
+});
+
+describe("owned raw-registration transport facts (#3918)", () => {
+  it("retains defaults and adds exactly the raw-registration transport parameters", async () => {
+    const own = createMetadataSourceFixture("valid", true, true);
+    fixtures.push(own);
+    // Keep the original-engine FIRST independent of new policy-schema admission.
+    delete own.record.ownedRegistrationTransport;
+    own.put("scripts/code-quality-policy.json", own.policy);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const original = own.resolver.metadataSourceFacts(identity);
+    expect(original.slots).toHaveLength(1);
+    const marker = own.resolver.metadataSourceFacts(identity, true);
+    expect(marker.slots).toHaveLength(3);
+    const combined = own.resolver.metadataSourceFacts(identity, true, true);
+    expect(combined.slots.slice(0, 3)).toEqual(marker.slots);
+    expect(combined.slots).toHaveLength(6);
+    expect(combined.slots.slice(3).map((slot) => slot.index)).toEqual([0, 1, 0]);
+    expect(combined.slots.slice(3).every((slot) => slot.ownedRegistrationTransportInput)).toBe(
+      true,
+    );
+    const transport = own.resolver.metadataSourceFacts(identity, false, true);
+    expect(transport.slots).toEqual([...original.slots, ...combined.slots.slice(3)]);
+  });
+
+  it.each([
+    "registration-key",
+    "registration-copy",
+    "registration-default",
+    "registration-side-call",
+    "registration-escape",
+  ])("withholds the closed transport for %s", async (variant) => {
+    const own = createMetadataSourceFixture(variant, true, true);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(identity).slots).toHaveLength(1);
+    expect(own.resolver.metadataSourceFacts(identity, true).slots).toHaveLength(3);
+    expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
+      "unsupported-owned-registration-transport",
+    );
+  });
+
+  it("retains shared identity capacity and currentness for the new form", async () => {
+    const own = createMetadataSourceFixture("valid", true, true);
+    fixtures.push(own);
+    const subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(subject, { aliases: 4 });
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    expect(own.resolver.metadataSourceFacts(identity, true).slots).toHaveLength(3);
+    expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
+      "symbol-alias-budget",
+    );
+    own.resolver.close();
+    own.resolver = createSymbolResolver(subject);
+    expect(own.resolver.metadataSourceFacts(identity, true, true).slots).toHaveLength(6);
+    expect(() => own.resolver.metadataSourceFacts(identity, true, "true")).toThrow(
+      "unsupported-owned-registration-transport-option",
+    );
+    const path = identity.producer.path;
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+    expect(() => own.resolver.metadataSourceFacts(identity, true, true)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+});
+
+describe("physical raw registration comparison inputs (#3918)", () => {
+  it("retains legacy slots and adds only the two original attachment inputs", async () => {
+    const own = createPhysicalRegistrationObservationFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport({
+      ...own.record.input,
+      consumerPath: "src/consumer.ts",
+    }).identities[0];
+    const options = { rawObjectInput: true, additionalObservationForms: ["own-key-identity"] };
+    const original = own.resolver.propertyObservationFacts(identity, options);
+    expect(original.slots).toHaveLength(6);
+    const expanded = own.resolver.propertyObservationFacts(identity, {
+      ...options,
+      directRawCheckerInputs: true,
+    });
+    expect(expanded.slots).toHaveLength(10);
+    expect(expanded.slots.slice(0, 6)).toEqual(original.slots);
+    const added = expanded.slots.filter((slot) => slot.physicalRegistrationInput);
+    expect(added).toHaveLength(2);
+    const source = readFileSync(join(own.root, identity.producer.path), "utf8");
+    const starts = ["function checkRegistration(", "function matchesRegistration("].map(
+      (name) =>
+        source.indexOf("registration: object", source.indexOf(name)) + "registration: ".length,
+    );
+    expect(added.map((slot) => slot.start)).toEqual(starts);
+    expect(added.map((slot) => slot.index)).toEqual([1, 0]);
+    expect(added.every((slot) => slot.observationRoots[0].identity === identity)).toBe(true);
+  });
+
+  it.each([
+    "missing-refusal",
+    "copied-registration",
+    "receiver-escape",
+    "outside-caller",
+    "foreign-key",
+  ])("withholds original attachment inputs for %s", async (variant) => {
+    const own = createPhysicalRegistrationObservationFixture(variant);
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport({
+      ...own.record.input,
+      consumerPath: "src/consumer.ts",
+    }).identities[0];
+    const facts = own.resolver.propertyObservationFacts(identity, {
+      rawObjectInput: true,
+      additionalObservationForms: ["own-key-identity"],
+      directRawCheckerInputs: true,
+    });
+    expect(facts.slots.filter((slot) => slot.physicalRegistrationInput)).toEqual([]);
+  });
+});
+
+describe("boolean raw object observation facts (#3918)", () => {
+  it("accounts only the declared root while retaining the default observer facts", async () => {
+    const own = createBooleanObservationFixture();
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport({
+      ...own.record.input,
+      consumerPath: "src/consumer.ts",
+    }).identities[0];
+    const original = own.resolver.propertyObservationFacts(identity);
+    expect(original.slots).toHaveLength(3);
+    const selected = own.resolver.propertyObservationFacts(identity, { rawObjectInput: true });
+    expect(selected.slots).toHaveLength(1);
+    expect(selected.slots[0]).toMatchObject({
+      kind: "parameter",
+      index: 0,
+      rule: "anti-slop/no-object-parameters",
+      observationRoots: [{ identity, index: 0 }],
+    });
+    expect(selected.slots[0].start).toBeGreaterThan(original.slots[0].start);
+    expect(() =>
+      own.resolver.propertyObservationFacts(identity, {
+        rawObjectInput: true,
+        directRawCheckerInputs: true,
+      }),
+    ).toThrow("unsupported-object-observation-boundary");
+    own.put(
+      "packages/alpha/src/owner.ts",
+      readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8") +
+        "\n// currentness changed",
+    );
+    expect(() =>
+      own.resolver.propertyObservationFacts(identity, { rawObjectInput: true }),
+    ).toThrow();
+  });
+});
+
+function importedUnsupportedSource(variant) {
+  if (variant === "bodyless")
+    return "export declare function ignored(input: unknown): boolean;\nexport const marker = true;\n";
+  if (variant === "escape")
+    return (
+      'import { isRecord } from "./helper.js";\n' +
+      "function bind(check: (input: unknown) => boolean): (input: unknown) => boolean { return check; }\n" +
+      "export const ignored = bind(isRecord);\n"
+    );
+  return (
+    'function bind(): (input: unknown) => boolean { return (input: unknown): boolean => typeof input === "object"; }\n' +
+    "export const ignored = bind();\n"
+  );
+}
+
+async function importedUnsupportedFixture(variant = "private") {
+  const own = createPrivateModuleParserFixture();
+  fixtures.push(own);
+  own.put("packages/alpha/src/ignored.ts", importedUnsupportedSource(variant));
+  for (const name of ["owner", "second"]) {
+    const path = `packages/alpha/src/${name}.ts`;
+    const source = readFileSync(join(own.root, path), "utf8");
+    own.put(
+      path,
+      'import { ignored } from "./ignored.js";\n' +
+        source.replace("if (!check(input)", "if (!ignored(input) || !check(input)"),
+    );
+  }
+  if (variant === "public") {
+    const path = "packages/alpha/src/owner.ts";
+    own.put(
+      path,
+      readFileSync(join(own.root, path), "utf8") + 'export { ignored } from "./ignored.js";\n',
+    );
+  }
+  emitSymbolFixture(own.root);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject, {}, [
+    { owner: "packages/alpha", paths: ["packages/alpha/src/proof.test.ts"] },
+  ]);
+  own.rawRoots = own.records.map((record) => ({
+    identity: own.resolver.resolveProofExport(record.input).identities[0],
+    index: 0,
+    recordId: record.id,
+  }));
+  return own;
+}
+
+describe("unsupported imported callable eligibility (#3918)", () => {
+  it.each(["private", "public"])(
+    "ignores the %s factory without losing genuine helper or root facts",
+    async (variant) => {
+      const own = await importedUnsupportedFixture(variant);
+      expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([own.rawRoots]);
+      const slots = own.resolver.collectiveRawCheckingSlots(
+        own.rawRoots,
+        "anti-slop/no-unknown-parameters",
+      );
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/ignored.ts")).toEqual([]);
+      expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toHaveLength(1);
+      for (const name of ["owner", "second"])
+        expect(slots.filter((slot) => slot.path === `packages/alpha/src/${name}.ts`)).toHaveLength(
+          1,
+        );
+      expect(slots.filter((slot) => slot.path.includes("/leaf"))).toHaveLength(2);
+    },
+    30_000,
+  );
+
+  it("keeps direct selected factory rejection separate from indirect exclusion", async () => {
+    const own = await importedUnsupportedFixture("public");
+    const identity = own.resolver.resolveExport({
+      ...own.records[0].input,
+      consumerPath: "src/consumer.ts",
+      exportName: "ignored",
+    }).identities[0];
+    expect(identity.producer.kind).toBe("VariableDeclaration");
+    expect(() => own.resolver.callableSlots(identity)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    const roots = [{ identity, index: 0, recordId: "selected-factory" }];
+    expect(() => own.resolver.collectiveRawComponents(roots)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(roots, "anti-slop/no-unknown-parameters"),
+    ).toThrow("unsupported-responsibility-callable");
+  }, 30_000);
+
+  it("retains the eligible named bodyless declaration refusal", async () => {
+    const own = await importedUnsupportedFixture("bodyless");
+    expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+    ).toThrow("unsupported-responsibility-callable");
+  }, 30_000);
+
+  it.each(["ignored.js", "ignored.d.ts"])(
+    "checks existing %s output provenance before excluding the factory",
+    async (name) => {
+      const own = await importedUnsupportedFixture();
+      const path = join(own.root, "packages/alpha/dist", name);
+      const retained = `${path}.retained`;
+      renameSync(path, retained);
+      symlinkSync(retained, path);
+      expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+        "unsafe-symbol-source",
+      );
+      expect(() =>
+        own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+      ).toThrow("unsafe-symbol-source");
+    },
+    30_000,
+  );
+
+  it("checks source currentness before excluding the factory", async () => {
+    const own = await importedUnsupportedFixture();
+    const path = "packages/alpha/src/ignored.ts";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n// changed source\n");
+    expect(() => own.resolver.collectiveRawComponents(own.rawRoots)).toThrow(
+      "symbol-subject-changed",
+    );
+    expect(() =>
+      own.resolver.collectiveRawCheckingSlots(own.rawRoots, "anti-slop/no-unknown-parameters"),
+    ).toThrow("symbol-subject-changed");
+  }, 30_000);
+
+  it("withholds a genuine named helper escaping into the ignored factory", async () => {
+    const own = await importedUnsupportedFixture("escape");
+    expect(own.resolver.collectiveRawComponents(own.rawRoots)).toEqual([own.rawRoots]);
+    const slots = own.resolver.collectiveRawCheckingSlots(
+      own.rawRoots,
+      "anti-slop/no-unknown-parameters",
+    );
+    expect(slots.filter((slot) => slot.path === "packages/alpha/src/ignored.ts")).toEqual([]);
+    expect(slots.filter((slot) => slot.path === "packages/alpha/src/helper.ts")).toEqual([]);
+    for (const name of ["owner", "second"])
+      expect(slots.filter((slot) => slot.path === `packages/alpha/src/${name}.ts`)).toHaveLength(1);
+  }, 30_000);
+});
+
+async function readonlyLiteralDataFixture(variant = "valid") {
+  const own = createReadonlyLiteralDataFixture(variant);
+  fixtures.push(own);
+  own.subject = await collectPolicySubject(own.root);
+  own.resolver = createSymbolResolver(own.subject);
+  return own;
+}
+
+const literalDataReference = {
+  consumerPath: "src/consumer.ts",
+  specifier: "alpha",
+  exportName: "surfaces",
+};
+
+describe("readonly literal data facts without semantic loans (#3918)", () => {
+  it("resolves own literal data through the existing export entrypoint", async () => {
+    const own = await readonlyLiteralDataFixture();
+    const facts = own.resolver.resolveExport(literalDataReference);
+    expect(facts).toMatchObject({
+      signatures: [],
+      literalData: {
+        origin: "readonly-open-string-literal-data",
+        declaration: { producer: { path: "packages/alpha/src/owner.ts" } },
+        valueDomain: { producer: { path: "packages/alpha/src/owner.ts" } },
+        ownEntries: [
+          { key: "one", value: "tools" },
+          { key: "two", value: "runtime" },
+        ],
+        ownValueVocabulary: ["runtime", "tools"],
+        initializer: { path: "packages/alpha/src/owner.ts", line: 2 },
+      },
+    });
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const expectedInitializer = '{ one: "tools", two: "runtime" }';
+    const start = source.indexOf(expectedInitializer);
+    expect(start).toBeGreaterThan(0);
+    expect(facts.literalData.initializer).toMatchObject({
+      start,
+      end: start + expectedInitializer.length,
+      column: start - source.indexOf("\n"),
+    });
+    expect(
+      source.slice(facts.literalData.initializer.start, facts.literalData.initializer.end),
+    ).toBe(expectedInitializer);
+  });
+
+  it("keeps canonical data identity through public and runtime aliases", async () => {
+    const own = await readonlyLiteralDataFixture();
+    const publicFacts = own.resolver.resolveExport(literalDataReference);
+    const runtimeFacts = own.resolver.resolveExport({
+      ...literalDataReference,
+      specifier: "alpha/runtime",
+      exportName: "SURFACES",
+    });
+    expect(publicFacts.identities[0].producer).toEqual(runtimeFacts.identities[0].producer);
+    expect(runtimeFacts).toMatchObject({
+      signatures: [],
+      literalData: {
+        origin: "readonly-open-string-literal-data",
+        ownEntries: [
+          { key: "one", value: "tools" },
+          { key: "two", value: "runtime" },
+        ],
+      },
+    });
+  });
+
+  it("continues refusing a data export as a callable responsibility", async () => {
+    const own = await readonlyLiteralDataFixture();
+    const facts = own.resolver.resolveExport(literalDataReference);
+    expect(() => own.resolver.callableSlots(facts.identities[0])).toThrow(
+      "unsupported-responsibility-callable",
+    );
+    expect(() => own.resolver.typedRecheckFacts(facts.identities[0], 0)).toThrow(
+      "unsupported-responsibility-callable",
+    );
+  });
+
+  it.each([
+    "mutable",
+    "mutable-view",
+    "open-value",
+    "unknown-value",
+    "spread",
+    "computed",
+    "accessor",
+    "asserted",
+    "asserted-value",
+    "dynamic",
+    "shadow",
+    "proto",
+  ])("does not claim literal data for the %s declaration", async (variant) => {
+    const own = await readonlyLiteralDataFixture(variant);
+    const facts = own.resolver.resolveExport(literalDataReference);
+    expect(facts.signatures).toEqual([]);
+    expect(facts).not.toHaveProperty("literalData");
+  });
+
+  it("retains subject-currentness refusal after resolving data facts", async () => {
+    const own = await readonlyLiteralDataFixture();
+    own.resolver.resolveExport(literalDataReference);
+    const path = "packages/alpha/src/owner.ts";
+    own.put(path, readFileSync(join(own.root, path), "utf8") + "\n");
+    expect(() => own.resolver.resolveExport(literalDataReference)).toThrow(
+      "symbol-subject-changed",
+    );
+  });
+});

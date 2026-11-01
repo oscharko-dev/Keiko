@@ -3,7 +3,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { gatewayFetch } from "@oscharko-dev/keiko-model-gateway/internal/http";
-import type { ModelGatewayLogEvent } from "../packages/keiko-model-gateway/src/observability.js";
+import type { ModelGatewayLogTransport } from "../packages/keiko-model-gateway/src/observability.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import {
   expectRegisteredActivityLogLine,
@@ -11,7 +11,7 @@ import {
 } from "./support/activity-log-proof.js";
 
 async function nativeResponse(status: number): Promise<{
-  events: ModelGatewayLogEvent[];
+  events: ModelGatewayLogTransport[];
   response?: Response;
   error?: unknown;
   effects: number;
@@ -26,7 +26,7 @@ async function nativeResponse(status: number): Promise<{
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const port = (server.address() as AddressInfo).port;
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   try {
     const response = await gatewayFetch("http://127.0.0.1:9/synthetic-write", {
       method: "PUT",

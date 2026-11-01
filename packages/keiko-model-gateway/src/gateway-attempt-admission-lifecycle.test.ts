@@ -3,7 +3,7 @@ import { Gateway, type GatewayCallRequest } from "./gateway.js";
 import { createDefaultChatCapability } from "./capabilities.js";
 import { parseGatewayConfig } from "./config.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 
 const MODEL = "attempt-lifecycle-proof";
 const REQUEST: GatewayCallRequest = {
@@ -64,14 +64,14 @@ function fixture(content?: string): {
   readonly spendSettle: ReturnType<typeof vi.fn>;
   readonly reserve: ReturnType<typeof vi.fn>;
   readonly fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
-  readonly events: ModelGatewayLogEvent[];
+  readonly events: ModelGatewayLogTransport[];
 } {
   const stream = providerStream(content);
   const settle = vi.fn<AttemptReservation["settle"]>();
   const spendSettle = vi.fn();
   const reserve = vi.fn(() => ({ settle: spendSettle }));
   const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(stream.response));
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const gateway = new Gateway(
     parseGatewayConfig({
       providers: [
@@ -94,7 +94,13 @@ function fixture(content?: string): {
         log: { write: (event): void => void events.push(event) },
       }),
       spendBudget: { reserve },
-      log: { write: (event): void => void events.push(event) },
+      log: {
+        write: (event): void => {
+          if (event.category === "diagnostic")
+            throw new TypeError("Expected normal fixture evidence");
+          events.push(event);
+        },
+      },
     },
   );
   const admission = vi.fn<NonNullable<GatewayCallRequest["attemptAdmission"]>>(() => ({ settle }));

@@ -36,7 +36,9 @@ workflow, validator, package command, or protected context.
 ## Repository-owned enforcement
 
 - Fallow rejects every semantic clone group introduced by the diff at the governed token and line
-  floors.
+  floors. It compares the pull request with its base commit, keeps string literals in the
+  comparison and excludes no source family; a group that exists at the base is inherited. A
+  failure names each introduced group's locations (ADR-0167 D3 amendment, 2026-11-01).
 - The checksum-pinned Gitleaks binary rejects secrets anywhere in the pull-request commit range and
   emits fully redacted diagnostics.
 - Strict TypeScript, ESLint, formatting, architecture, contract, coverage, package, security,

@@ -33,12 +33,12 @@
 // unknown>`, so `processServerLogSink()` remains a valid `MemoryVaultLogSink` with no adapter.
 
 import { createHash } from "node:crypto";
+import { securityErrorKind, writeActivityLogPortEvent } from "@oscharko-dev/keiko-security";
 
 import {
   activityLogEvent,
-  classifyErrorKind,
   defineActivityLogOperation,
-  recordActivityLogLoss,
+  type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
@@ -92,12 +92,15 @@ export interface MemoryVaultLogEvent {
   readonly extra?: Readonly<MemoryVaultLogExtra> | undefined;
 }
 
+// A registered emission may also be the body-free rejection of an event that failed its contract.
+export type MemoryVaultLogTransport = MemoryVaultLogEvent | RejectedActivityLogEvent;
+
 export interface MemoryVaultLogSink {
-  readonly write: (event: MemoryVaultLogEvent) => void;
+  readonly write: (event: MemoryVaultLogTransport) => void;
 }
 
 const NULL_SINK: MemoryVaultLogSink = {
-  write(_event: MemoryVaultLogEvent): void {
+  write(_event: MemoryVaultLogTransport): void {
     // Explicit no-op: the default whenever no caller wired a sink.
   },
 };
@@ -114,11 +117,9 @@ export function startMemoryVaultLogTimer(): () => number {
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
-// The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
-// `keiko-contracts` rather than declared here, so this reducer and the ones in `knowledge-log.ts`,
-// `log-port.ts`, `keiko-activity-log/src/server-log.ts` and
-// `keiko-model-gateway/src/observability.ts` cannot drift into accepting different things: an
-// identifier, a taxonomy code, a constructor name — never a sentence.
+// Security's `securityErrorKind` (ADR-0173 D11) owns the guarded `code`/`name` reads and
+// canonical Contracts shape gate shared by Knowledge, Consolidation, Vault and Gateway:
+// an identifier, a taxonomy code, a constructor name — never a sentence.
 //
 // READING the property is itself a call into foreign code — `code`/`name` are ordinary properties
 // on an object this layer did not build, so an accessor or Proxy trap can throw. Every call site
@@ -126,23 +127,13 @@ export function startMemoryVaultLogTimer(): () => number {
 // just threw), so a throw here would replace a diagnosable failure with a classification failure.
 // An unreadable property degrades to the next candidate, exactly like a property whose value fails
 // the shape gate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = (error as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
 
 // Classification only: the coded `code`, else the constructor `name`, else "unknown". The message
 // is NEVER read — a thrown error's message routinely carries a path or a fragment of the value
 // that failed — and neither `code` nor `name` is trusted just because it is called one: both must
 // pass `classifyErrorKind`'s shape gate first.
 export function memoryVaultErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) return "unknown";
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+  return securityErrorKind(error);
 }
 
 // ─── Writing a line must never become the failure it describes ────────────────
@@ -181,32 +172,22 @@ const MEMORY_VAULT_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function operationDigest(op: MemoryVaultLogOp): string {
+function operationDigest(op: MemoryVaultLogTransport["op"]): string {
   return createHash("sha256").update(op).digest("hex").slice(0, 16);
 }
 
 export function emitMemoryVaultLogEvent(
   sink: MemoryVaultLogSink | undefined,
-  event: MemoryVaultLogEvent,
+  event: MemoryVaultLogTransport,
 ): void {
-  if (sink === undefined) {
-    // An unwired port loses the event it was handed; the loss is counted like any other (#3532).
-    recordActivityLogLoss("port-unwired");
-    return;
-  }
-  try {
-    sink.write(event);
-  } catch (cause) {
-    // Every failure is a lost line and is counted in the process loss ledger; only the stderr
-    // notice below is limited to once per sink.
-    recordActivityLogLoss("port-sink-failed");
-    reportFailedMemoryVaultLogSink(sink, event.op, cause);
-  }
+  writeActivityLogPortEvent(sink, event, (failedSink, failedEvent, cause): void => {
+    reportFailedMemoryVaultLogSink(failedSink, failedEvent.op, cause);
+  });
 }
 
 function reportFailedMemoryVaultLogSink(
   sink: MemoryVaultLogSink,
-  droppedOp: MemoryVaultLogOp,
+  droppedOp: MemoryVaultLogTransport["op"],
   cause: unknown,
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;

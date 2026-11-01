@@ -9,6 +9,7 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFailingRecordingSink } from "../../../tests/support/recording-log-sink.js";
 import {
   activityLogLossCounters,
   resetActivityLogLossCountersForTests,
@@ -19,7 +20,7 @@ import {
   memoryVaultErrorKind,
   nullMemoryVaultLogSink,
   startMemoryVaultLogTimer,
-  type MemoryVaultLogEvent,
+  type MemoryVaultLogTransport,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
 import {
@@ -109,18 +110,9 @@ describe("emitMemoryVaultLogEvent", () => {
 
   function recordingSinkThatFailsOn(failingOps: readonly string[]): {
     sink: MemoryVaultLogSink;
-    events: MemoryVaultLogEvent[];
+    events: MemoryVaultLogTransport[];
   } {
-    const events: MemoryVaultLogEvent[] = [];
-    return {
-      sink: {
-        write: (event): void => {
-          if (failingOps.includes(event.op)) throw failure();
-          events.push(event);
-        },
-      },
-      events,
-    };
+    return createFailingRecordingSink<MemoryVaultLogTransport>(failingOps, failure);
   }
 
   it("does nothing at all when no sink is wired", () => {
@@ -270,9 +262,9 @@ describe("startMemoryVaultLogTimer", () => {
   });
 });
 
-describe("MemoryVaultLogEvent", () => {
+describe("MemoryVaultLogTransport", () => {
   it("carries only the envelope a redacting sink expects", () => {
-    const event: MemoryVaultLogEvent = {
+    const event: MemoryVaultLogTransport = {
       level: "warn",
       category: "memory",
       op: "memory-vault.store.opened",
@@ -301,8 +293,8 @@ describe("MemoryVaultLogEvent", () => {
   it("rejects an arbitrary op and an arbitrary extra field at compile time", () => {
     // @ts-expect-error — `op` is now a closed `MemoryVaultLogOp` union; a caller-chosen string is
     // no longer assignable.
-    const badOp: MemoryVaultLogEvent = { category: "memory", op: "arbitrary.caller.chosen.op" };
-    const badExtra: MemoryVaultLogEvent = {
+    const badOp: MemoryVaultLogTransport = { category: "memory", op: "arbitrary.caller.chosen.op" };
+    const badExtra: MemoryVaultLogTransport = {
       category: "memory",
       op: "memory-vault.store.opened",
       // @ts-expect-error — `extra` is now a closed, body-free `MemoryVaultLogExtra` schema; an

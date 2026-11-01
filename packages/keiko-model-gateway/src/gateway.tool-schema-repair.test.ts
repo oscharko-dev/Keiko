@@ -13,7 +13,7 @@ import {
   type GatewayCallRequest,
   type GatewaySpendReservation,
 } from "./gateway.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import type { Clock, GatewayConfig, ModelProviderConfig, NormalizedResponse } from "./types.js";
@@ -27,7 +27,7 @@ const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const INVALID_ARGUMENT_SECRET = "private-invalid-argument-body";
 
 it("keeps repaired catalog diagnostics correlated without unwired projection loss", async () => {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const fetchImpl = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(invalidArguments("call-repair-correlation"))
@@ -170,7 +170,7 @@ function invalidArguments(callId: string): Response {
 }
 
 async function observedRepairPromptTokens(): Promise<number> {
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   let calls = 0;
   await new Gateway(config(), {
     clock: clock(),
@@ -179,8 +179,9 @@ async function observedRepairPromptTokens(): Promise<number> {
       Promise.resolve(++calls === 1 ? invalidArguments("call-margin") : successfulResponse()),
     log: { write: (event): void => void events.push(event) },
   }).chat(request());
-  const tokens = events.find((event) => event.op === "gateway.tool-catalog.repair")?.extra
-    ?.promptTokens;
+  const tokens = normalFixtureEvent(
+    events.find((event) => event.op === "gateway.tool-catalog.repair"),
+  )?.extra?.promptTokens;
   if (typeof tokens !== "number") throw new TypeError("Expected measured repair token count");
   return tokens;
 }
@@ -190,7 +191,7 @@ describe("Gateway bounded tool-schema repair", () => {
     const bodies: Record<string, unknown>[] = [];
     const reserved: GatewayCallRequest[] = [];
     const settle = vi.fn();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let providerCalls = 0;
     const fetchImpl: typeof fetch = (_url, init) => {
       bodies.push(parsedProviderBody(init));
@@ -263,7 +264,7 @@ describe("Gateway bounded tool-schema repair", () => {
 
   it("hashes an oversized provider tool-call id before writing bounded repair evidence", async () => {
     const providerToolCallId = `call-${"provider-controlled".repeat(20)}`;
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const corrected: NormalizedResponse = {
       modelId: MODEL_ID,
       content: "corrected",
@@ -311,7 +312,7 @@ describe("Gateway bounded tool-schema repair", () => {
   // dialect's rule; the rejected line carries the same names for the operator.
   it("names the missing required properties and the dialect rule in the correction", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let providerCalls = 0;
     const gateway = new Gateway(config(), {
       clock: clock(),
@@ -363,7 +364,7 @@ describe("Gateway bounded tool-schema repair", () => {
 
   it("replaces the correction suffix across exhausted retries instead of growing the request", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let providerCalls = 0;
     const gateway = new Gateway(config(), {
       clock: clock(),
@@ -420,7 +421,7 @@ describe("Gateway bounded tool-schema repair", () => {
     const basePromptTokens = countGatewayPromptTokens({ messages: base.messages, tools });
     const contextWindow = basePromptTokens + 2_048;
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(invalidArguments("call-context")));
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gateway = new Gateway(config(contextWindow), {
       fetchImpl,
       clock: clock(),
@@ -462,7 +463,7 @@ describe("Gateway bounded tool-schema repair", () => {
     expect(promptTokens).toBe(context.maxInputTokens - context.reservedOutputTokens);
     expect(promptTokens).toBeGreaterThan(context.effectiveInputBudget);
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(invalidArguments("call-margin")));
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const gateway = new Gateway(boundedConfig, {
       fetchImpl,
       clock: clock(),
@@ -559,7 +560,7 @@ async function drainStream(gateway: Gateway): Promise<NormalizedResponse | undef
 describe("Gateway streamed tool-schema repair (#3873 review)", () => {
   it("sends one schema correction after a tool-call-only stream the catalog rejected", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     let providerCalls = 0;
     const gateway = new Gateway(config(), {
       clock: clock(),
@@ -596,19 +597,19 @@ describe("Gateway streamed tool-schema repair (#3873 review)", () => {
     expect(
       events
         .filter((event) => event.op === "gateway.tool-catalog.repair")
-        .map((event) => event.extra?.state),
+        .map((event) => normalFixtureEvent(event).extra?.state),
     ).toEqual(["scheduled"]);
     expect(
       events
         .filter((event) => event.op === "gateway.retry.scheduled")
-        .map((event) => event.extra?.reason),
+        .map((event) => normalFixtureEvent(event).extra?.reason),
     ).toEqual(["retryable-error"]);
   });
 
   // Answer text the caller already received commits the stream: a preface sentence, then a
   // malformed call, surfaces at once, because a repair would deliver the sentence a second time.
   it("does not repair a rejected tool call that follows answer text the caller received", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const preface = { content: "I will edit the file." };
     const call = {
       tool_calls: [
@@ -652,7 +653,7 @@ describe("Gateway streamed tool-schema repair (#3873 review)", () => {
 
   // Without a correction there is nothing to repair: the stream is not replayed as it was.
   it("does not replay a streamed catalog rejection that carries no repair", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl = vi.fn(() =>
       Promise.resolve(streamedToolCall("call-unoffered", "not_an_offered_tool", {})),
     );
@@ -702,7 +703,7 @@ it("refuses a complete schema-bearing repair that overflows only after the first
   expect(initialTokens).toBeLessThanOrEqual(profile.effectiveInputBudget);
   expect(initialTokens).toBeGreaterThan(profile.effectiveInputBudget - 10);
   const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(invalidArguments("call-margin")));
-  const events: ModelGatewayLogEvent[] = [];
+  const events: ModelGatewayLogTransport[] = [];
   const gateway = new Gateway(cfg, {
     fetchImpl,
     clock: clock(),
@@ -718,14 +719,14 @@ it("refuses a complete schema-bearing repair that overflows only after the first
   expect(
     events
       .filter((event) => event.op === "gateway.prompt.admission")
-      .map((event) => event.extra?.state),
+      .map((event) => normalFixtureEvent(event).extra?.state),
   ).toEqual(["admitted", "overflow"]);
 });
 
 it.each([false, true])(
   "joins catalog admission to one call lifecycle, expired=%s",
   async (expired) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl = vi.fn<typeof fetch>(() => Promise.resolve(successfulResponse()));
     const gateway = new Gateway(config(), {
       clock: clock(),
@@ -757,3 +758,15 @@ it.each([false, true])(
     }
   },
 );
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

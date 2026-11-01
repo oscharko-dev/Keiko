@@ -7,6 +7,7 @@ import {
   type ActivityLogErrorKind,
   type ActivityLogFields,
   type RegisteredActivityLogEvent,
+  type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 const PROCESS_FATAL_OPERATION = defineActivityLogOperation({
@@ -167,7 +168,7 @@ export interface ProcessExitingActivityInput {
 
 export function processExitingActivityLogEvent(
   input: ProcessExitingActivityInput,
-): ProcessExitingEvent {
+): ProcessExitingEvent | RejectedActivityLogEvent {
   const onShutdownErrorKind =
     input.onShutdownErrorKind === undefined
       ? undefined
@@ -185,7 +186,9 @@ export function processExitingActivityLogEvent(
   );
 }
 
-export function processFatalActivityLogEvent(input: ProcessFatalActivityInput): ProcessFatalEvent {
+export function processFatalActivityLogEvent(
+  input: ProcessFatalActivityInput,
+): ProcessFatalEvent | RejectedActivityLogEvent {
   const failureKind = classifyErrorKind(input.failureKind) ?? "unknown";
   const sessionId = boundedSessionId(input.sessionId);
   return activityLogEvent(

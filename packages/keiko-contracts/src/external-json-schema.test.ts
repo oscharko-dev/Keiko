@@ -71,4 +71,37 @@ describe("untrusted external schema safety admission", () => {
     expect(isBoundedExternalJsonSchema(cycle)).toBe(false);
     expect(isBoundedExternalJsonSchema(JSON.parse('{"__proto__":{}}'))).toBe(false);
   });
+
+  // REVIEW-3918-014: RFC 6901 reference decoding and traversal at the admission boundary.
+  const defs = { "a~b": { type: "string" }, "a/b": { type: "number" }, "": { type: "boolean" } };
+  it.each([
+    ["an escaped tilde key", "#/$defs/a~0b", true],
+    ["an escaped slash key", "#/$defs/a~1b", true],
+    ["an empty key", "#/$defs/", true],
+    ["a percent-encoded key", "#/$defs/a%7E0b", true],
+    ["a boolean schema", "#/allOf/0", true],
+    ["an object schema in a list", "#/allOf/1", true],
+    ["an invalid ~2 escape", "#/$defs/a~2b", false],
+    ["a trailing tilde", "#/$defs/a~", false],
+    ["a missing key", "#/$defs/missing", false],
+    ["the root's empty key", "#/", false],
+    ["a number", "#/maxLength", false],
+    ["an array", "#/allOf", false],
+    ["an array length", "#/allOf/length", false],
+    ["a relative pointer", "$defs/a~0b", false],
+    ["a remote reference", "https://example.invalid/schema#/$defs/a~0b", false],
+  ])("resolves a reference to %s as admitted=%s", (_name, $ref, admitted) => {
+    const schema = {
+      maxLength: 3,
+      allOf: [true, { type: "null" }],
+      $defs: defs,
+      properties: { x: { $ref } },
+    };
+    expect(isBoundedExternalJsonSchema(schema)).toBe(admitted);
+  });
+  it("throws the opaque admission failure for a malformed percent-encoded reference", () => {
+    expect(() =>
+      isBoundedExternalJsonSchema({ properties: { x: { $ref: "#/%E0%A4%A" } } }),
+    ).toThrow(new TypeError("Invalid external JSON schema"));
+  });
 });

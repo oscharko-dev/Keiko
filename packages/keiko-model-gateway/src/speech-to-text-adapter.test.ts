@@ -1,8 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
-import { classifyDispatchError, requestSpeechToText } from "./speech-to-text-adapter.js";
+import {
+  expectHealthyVoiceCompletion,
+  expectRateLimitedVoiceCompletion,
+  fireVoiceTimeoutAtFloor,
+  rethrowAbortedRequest,
+} from "./__fixtures__/speech-adapter-observations.js";
+import { registerSpeechRoutingContract } from "./__fixtures__/speech-routing-contract.js";
+import { describe, expect, it } from "vitest";
+import { observeSpeechCompletionFields } from "./__fixtures__/speech-completion-observation.js";
+import { requestSpeechToText as publicSpeechToText } from "@oscharko-dev/keiko-model-gateway";
+import { resetActivityLogLossCountersForTests } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  classifyDispatchError,
+  requestSpeechToText,
+  type SpeechToTextRequest,
+  type SpeechToTextOutcome,
+} from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type {
+  ModelGatewayLogTransport,
+  ModelGatewayLogEvent,
+  ModelGatewayLogSink,
+} from "./observability.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -44,7 +63,7 @@ async function bodyToText(init: RequestInit): Promise<string> {
 
 describe("requestSpeechToText", () => {
   it("records provider HTTP status and sent audio format without provider error bodies", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -109,7 +128,7 @@ describe("requestSpeechToText", () => {
   it("supports a custom apiKeyHeaderName (Azure api-key) and an optional language field", async () => {
     let header: string | null = null;
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl = mockFetch(async (_url, init) => {
       header = (init.headers as Record<string, string>)["api-key"] ?? null;
       body = await bodyToText(init);
@@ -174,7 +193,7 @@ describe("requestSpeechToText", () => {
       },
     });
     expect(events[2]?.extra).not.toHaveProperty("failureKind");
-    expect(events[2]?.errorKind).toBeUndefined();
+    expect(normalFixtureEvent(events[2])?.errorKind).toBeUndefined();
 
     // Activity Log proof (#3532): the normalization line as the production file sink would
     // persist it.
@@ -212,7 +231,7 @@ describe("requestSpeechToText", () => {
 
   it("preserves a primary language tag without emitting a normalization event", async () => {
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -243,7 +262,7 @@ describe("requestSpeechToText", () => {
 
   it("omits an empty language hint without emitting a normalization event", async () => {
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -270,7 +289,7 @@ describe("requestSpeechToText", () => {
 
   it("normalizes a maximum-length validated language hint and logs the boundary", async () => {
     let body = "";
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -326,6 +345,23 @@ describe("requestSpeechToText", () => {
     expect(body).toContain("\r\n\r\nKeiko, Repository\r\n");
   });
 
+  registerSpeechRoutingContract({
+    path: "/audio/transcriptions",
+    endpoint: ENDPOINT,
+    request: (routing, onRequest) =>
+      requestSpeechToText(
+        Object.assign(routing, {
+          apiKey: SECRET_API_KEY,
+          audio: AUDIO,
+          mimeType: "audio/wav",
+          fetchImpl: mockFetch((url) => {
+            onRequest(url);
+            return ok({ text: "routed transcript" });
+          }),
+        }),
+      ),
+  });
+
   it("supports Azure OpenAI deployment endpoints with a separate api-version", async () => {
     let seenUrl = "";
     let seenHeader: string | null = null;
@@ -374,7 +410,7 @@ describe("requestSpeechToText", () => {
   // segment may end inside a word, so "Tests" reached the composer as "T\nests". The segments
   // already carry their own spacing; joined as they are, the transcript reads as spoken.
   it("joins whisper segments a provider separated with line breaks, and records how many it removed", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -413,7 +449,7 @@ describe("requestSpeechToText", () => {
       { text: "first line\nsecond line", segments: [{ text: "first line" }, { start: 1 }] },
     ],
   ])("keeps the provider's own line breaks for %s", async (_name, body) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -605,13 +641,7 @@ describe("requestSpeechToText", () => {
   // already-fired signal so the whole request path — dispatch, classification, and the outcome
   // `requestSpeechToText` returns — is exercised exactly as it would be for a real fired timeout.
   it("wires the floored internal deadline into the outbound fetch and ends in a timeout outcome", async () => {
-    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
-      if (ms !== GATEWAY_VOICE_TIMEOUT_FLOOR_MS) return nativeTimeout(ms);
-      const controller = new AbortController();
-      controller.abort(new DOMException("the provider did not answer in time", "TimeoutError"));
-      return controller.signal;
-    });
+    const timeoutSpy = fireVoiceTimeoutAtFloor();
     try {
       const outcome = await requestSpeechToText({
         endpoint: ENDPOINT,
@@ -622,12 +652,7 @@ describe("requestSpeechToText", () => {
         // Below the floor: proves the CALL that reaches AbortSignal.timeout carries the floored
         // value, not the caller's smaller configured one.
         timeoutMs: 5_000,
-        fetchImpl: mockFetch((_url, init) => {
-          if (init.signal?.aborted === true) {
-            throw init.signal.reason as Error;
-          }
-          throw new Error("the request should have carried an already-aborted signal");
-        }),
+        fetchImpl: mockFetch(rethrowAbortedRequest),
       });
       expect(timeoutSpy).toHaveBeenCalledWith(GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
       expect(outcome).toEqual({ ok: false, kind: "timeout" });
@@ -640,7 +665,7 @@ describe("requestSpeechToText", () => {
   // rate limit, and an invalid response indistinguishable from a still-running call). Proves the
   // timeout path specifically, since that is the scenario the finding names.
   it("logs the completed line with a timeout failureKind and errorKind on a timeout outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -673,7 +698,7 @@ describe("requestSpeechToText", () => {
   // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate
   // limit from a timeout instead of collapsing every failure into one shape.
   it("logs the completed line with a rate-limited failureKind and errorKind on a 429 outcome", async () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
@@ -772,5 +797,376 @@ describe("requestSpeechToText", () => {
       fetchImpl,
     });
     expect(seenUrl).toBe("https://stt.example.invalid/v1/audio/transcriptions");
+  });
+});
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}
+
+interface SttCompletionObservation {
+  active: boolean;
+  readonly status: 200 | 429;
+  readonly refusedField: "none" | "endpoint" | "modelId";
+  readonly failure: Error;
+  readonly trace: string[];
+  readonly requestReceivers: unknown[];
+  readonly sinkReceivers: unknown[];
+  readonly events: ModelGatewayLogTransport[];
+}
+
+function sttCompletionObservation(
+  status: 200 | 429,
+  refusedField: "none" | "endpoint" | "modelId",
+): SttCompletionObservation {
+  const failure: Error = Object.freeze(new TypeError("synthetic STT completion field refusal"));
+  return {
+    active: false,
+    status,
+    refusedField,
+    failure,
+    trace: [],
+    requestReceivers: [],
+    sinkReceivers: [],
+    events: [],
+  };
+}
+
+function sttCompletionSink(state: SttCompletionObservation): ModelGatewayLogSink {
+  return {
+    get correlationId(): string | undefined {
+      if (state.active) {
+        state.trace.push("sink.correlationId");
+        state.sinkReceivers.push(this);
+      }
+      return state.status === 200 ? "corr-stt-owning-sink" : undefined;
+    },
+    get write(): (event: ModelGatewayLogTransport) => void {
+      if (state.active) {
+        state.trace.push("sink.write.get");
+        state.sinkReceivers.push(this);
+      }
+      return function (this: ModelGatewayLogSink, event: ModelGatewayLogTransport): void {
+        if (state.active) {
+          state.trace.push("sink.write.call");
+          state.sinkReceivers.push(this);
+        }
+        state.events.push(event);
+      };
+    },
+  };
+}
+
+function sttCompletionRequest(
+  state: SttCompletionObservation,
+  sink: ModelGatewayLogSink,
+): SpeechToTextRequest {
+  return {
+    endpoint: ENDPOINT,
+    apiKey: SECRET_API_KEY,
+    modelId: "keiko-stt",
+    audio: AUDIO,
+    mimeType: "audio/webm",
+    log: sink,
+    correlationId: state.status === 200 ? "corr-stt-completion-request" : undefined,
+    fetchImpl: mockFetch(() => {
+      state.active = true;
+      return state.status === 200
+        ? ok({ text: "private completion transcript" })
+        : new Response(JSON.stringify({ error: "private provider body" }), { status: 429 });
+    }),
+  };
+}
+
+function observeSttCompletionFields(
+  request: SpeechToTextRequest,
+  sink: ModelGatewayLogSink,
+  state: SttCompletionObservation,
+): () => void {
+  const fields = [
+    ["endpoint", ENDPOINT],
+    ["modelId", "keiko-stt"],
+    ["log", sink],
+    ["correlationId", request.correlationId],
+  ] as const;
+  return observeSpeechCompletionFields(
+    request,
+    fields,
+    state,
+    () => state.status === 429,
+    "not a provider endpoint",
+  );
+}
+
+function expectSttCompletionOrder(
+  state: SttCompletionObservation,
+  request: SpeechToTextRequest,
+  sink: ModelGatewayLogSink,
+): void {
+  expect(state.trace).toEqual([
+    "log",
+    "sink.correlationId",
+    ...(state.status === 200 ? ["sink.correlationId"] : []),
+    "correlationId",
+    "endpoint",
+    "modelId",
+    "sink.write.get",
+    "sink.write.call",
+  ]);
+  expect(state.requestReceivers).toHaveLength(4);
+  for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+  expect(state.sinkReceivers).toHaveLength(state.status === 200 ? 4 : 3);
+  for (const receiver of state.sinkReceivers) expect(receiver).toBe(sink);
+}
+
+function expectSttCompletionMetadata(
+  state: SttCompletionObservation,
+  completed: ModelGatewayLogEvent | undefined,
+): void {
+  expect(completed).toMatchObject({
+    op: "speech.stt.request.completed",
+    level: state.status === 200 ? "info" : "warn",
+    extra: {
+      modelId: "keiko-stt",
+      outcome: state.status === 200 ? "succeeded" : "failed",
+      httpStatus: state.status,
+    },
+  });
+}
+
+function expectSttCompletionEvent(state: SttCompletionObservation): void {
+  const dispatch = normalFixtureEvent(state.events[0]);
+  const completed = normalFixtureEvent(state.events.at(-1));
+  expectSttCompletionMetadata(state, completed);
+  if (state.status === 200) {
+    expectHealthyVoiceCompletion(dispatch, completed, "corr-stt-completion-request");
+  } else {
+    expectRateLimitedVoiceCompletion(completed);
+  }
+  for (const secret of [
+    ENDPOINT,
+    SECRET_API_KEY,
+    AUDIO_MARKER,
+    "private completion transcript",
+    "private provider body",
+  ]) {
+    expect(JSON.stringify(state.events)).not.toContain(secret);
+  }
+}
+
+const STT_COMPLETION_SURFACES = [
+  { name: "source", run: requestSpeechToText },
+  { name: "public", run: publicSpeechToText },
+] as const;
+
+// Completion is activated only by the actual owned fetch seam, after dispatch has read the request.
+describe("STT completion evidence observations (#3918)", (): void => {
+  for (const surface of STT_COMPLETION_SURFACES) {
+    for (const status of [200, 429] as const) {
+      it(`${surface.name} retains completion field order and ${String(status)} metadata`, async (): Promise<void> => {
+        const state = sttCompletionObservation(status, "none");
+        const sink = sttCompletionSink(state);
+        const request = sttCompletionRequest(state, sink);
+        const restore = observeSttCompletionFields(request, sink, state);
+        let outcome: SpeechToTextOutcome | undefined;
+        resetActivityLogLossCountersForTests();
+        try {
+          outcome = await surface.run(request);
+        } finally {
+          try {
+            restore();
+          } finally {
+            resetActivityLogLossCountersForTests();
+          }
+        }
+        expect(outcome).toEqual(
+          status === 200
+            ? { ok: true, value: { transcript: "private completion transcript" } }
+            : { ok: false, kind: "rate-limited" },
+        );
+        expectSttCompletionOrder(state, request, sink);
+        expectSttCompletionEvent(state);
+      });
+    }
+    for (const refusedField of ["endpoint", "modelId"] as const) {
+      it(`${surface.name} preserves the exact completion ${refusedField} exception`, async (): Promise<void> => {
+        const state = sttCompletionObservation(200, refusedField);
+        const sink = sttCompletionSink(state);
+        const request = sttCompletionRequest(state, sink);
+        const restore = observeSttCompletionFields(request, sink, state);
+        let caught: unknown;
+        resetActivityLogLossCountersForTests();
+        try {
+          await surface.run(request);
+        } catch (error) {
+          caught = error;
+        } finally {
+          try {
+            restore();
+          } finally {
+            resetActivityLogLossCountersForTests();
+          }
+        }
+        expect(caught).toBe(state.failure);
+        expect(state.trace).toEqual([
+          "log",
+          "sink.correlationId",
+          "sink.correlationId",
+          "correlationId",
+          "endpoint",
+          ...(refusedField === "modelId" ? ["modelId"] : []),
+        ]);
+        expect(state.events).toHaveLength(1);
+        expect(normalFixtureEvent(state.events[0])?.op).toBe("speech.stt.request.dispatch");
+        expect(state.requestReceivers).toHaveLength(refusedField === "endpoint" ? 3 : 4);
+        for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+        expect(state.sinkReceivers).toHaveLength(2);
+        for (const receiver of state.sinkReceivers) expect(receiver).toBe(sink);
+      });
+    }
+  }
+});
+
+describe("speech completion descriptor fixture controls", (): void => {
+  it("bypasses inactive observations without reading the live rate condition", (): void => {
+    const state = sttCompletionObservation(429, "endpoint");
+    const sink = sttCompletionSink(state);
+    const request = sttCompletionRequest(state, sink);
+    let rateReads = 0;
+    Object.defineProperty(state, "status", {
+      get(): never {
+        rateReads += 1;
+        throw new TypeError("Inactive completion must not inspect the rate condition");
+      },
+    });
+    const restore = observeSttCompletionFields(request, sink, state);
+    try {
+      expect(request.endpoint).toBe(ENDPOINT);
+      expect(request.modelId).toBe("keiko-stt");
+      expect(request.log).toBe(sink);
+      expect(request.correlationId).toBeUndefined();
+      expect(rateReads).toBe(0);
+      expect(state.trace).toEqual([]);
+      expect(state.requestReceivers).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("defers the live endpoint condition and preserves default and explicit receivers", (): void => {
+    const state = sttCompletionObservation(429, "none");
+    const sink = sttCompletionSink(state);
+    const request = sttCompletionRequest(state, sink);
+    let status: 200 | 429 = 429;
+    let rateReads = 0;
+    Object.defineProperty(state, "status", {
+      get(): 200 | 429 {
+        rateReads += 1;
+        return status;
+      },
+    });
+    const restore = observeSttCompletionFields(request, sink, state);
+    try {
+      state.active = true;
+      expect(request.log).toBe(sink);
+      expect(request.modelId).toBe("keiko-stt");
+      expect(request.correlationId).toBeUndefined();
+      expect(rateReads).toBe(0);
+      expect(request.endpoint).toBe("not a provider endpoint");
+      expect(rateReads).toBe(1);
+      expect(state.trace).toEqual(["log", "modelId", "correlationId", "endpoint"]);
+      expect(state.requestReceivers).toHaveLength(4);
+      for (const receiver of state.requestReceivers) expect(receiver).toBe(request);
+      status = 200;
+      const receiver = { completionReceiver: true };
+      const value: unknown = Reflect.get(request, "endpoint", receiver);
+      expect(value).toBe(ENDPOINT);
+      expect(rateReads).toBe(2);
+      expect(state.requestReceivers.at(-1)).toBe(receiver);
+    } finally {
+      restore();
+    }
+  });
+
+  const refusedFields: readonly ["endpoint", "modelId"] = ["endpoint", "modelId"];
+  for (const refusedField of refusedFields) {
+    it(`retains the exact ${refusedField} failure before any rate observation`, (): void => {
+      const state = sttCompletionObservation(200, refusedField);
+      const sink = sttCompletionSink(state);
+      const request = sttCompletionRequest(state, sink);
+      let rateReads = 0;
+      Object.defineProperty(state, "status", {
+        get(): never {
+          rateReads += 1;
+          throw new TypeError("Refused completion must not inspect the rate condition");
+        },
+      });
+      const restore = observeSttCompletionFields(request, sink, state);
+      let observed: unknown;
+      try {
+        state.active = true;
+        observed = request[refusedField];
+      } catch (error) {
+        observed = error;
+      } finally {
+        restore();
+      }
+      expect(observed).toBe(state.failure);
+      expect(rateReads).toBe(0);
+      expect(state.trace).toEqual([refusedField]);
+      expect(state.requestReceivers).toHaveLength(1);
+      expect(state.requestReceivers[0]).toBe(request);
+    });
+  }
+
+  it("restores original accessors and distinguishes absent from own undefined fields", (): void => {
+    const state = sttCompletionObservation(200, "none");
+    const sink = sttCompletionSink(state);
+    const request = sttCompletionRequest(state, sink);
+    const originalReceivers: unknown[] = [];
+    const originalEndpoint = function (this: SpeechToTextRequest): string {
+      originalReceivers.push(this);
+      return ENDPOINT;
+    };
+    Object.defineProperty(request, "endpoint", {
+      configurable: true,
+      enumerable: false,
+      get: originalEndpoint,
+    });
+    Object.defineProperty(request, "log", {
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: undefined,
+    });
+    Reflect.deleteProperty(request, "correlationId");
+    const before = Object.getOwnPropertyDescriptors(request);
+    const restore = observeSttCompletionFields(request, sink, state);
+    try {
+      expect(request.log).toBe(sink);
+      expect(Object.hasOwn(request, "correlationId")).toBe(true);
+      expect(originalReceivers).toEqual([]);
+    } finally {
+      restore();
+    }
+    expect(Object.getOwnPropertyDescriptors(request)).toEqual(before);
+    expect(Object.hasOwn(request, "correlationId")).toBe(false);
+    expect(Object.hasOwn(request, "log")).toBe(true);
+    expect(request.log).toBeUndefined();
+    expect(Object.getOwnPropertyDescriptor(request, "endpoint")).toHaveProperty(
+      "get",
+      originalEndpoint,
+    );
+    expect(request.endpoint).toBe(ENDPOINT);
+    expect(originalReceivers).toHaveLength(1);
+    expect(originalReceivers[0]).toBe(request);
   });
 });
