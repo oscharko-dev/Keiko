@@ -2101,11 +2101,19 @@ async function fetchDiscoveryJson(
   url: string,
   apiKey: string,
   apiKeyHeaderName: string,
-  egress?: GatewayEgressConfig,
+  egress: GatewayEgressConfig | undefined,
+  correlationId: string | undefined,
   signal: AbortSignal = AbortSignal.timeout(DISCOVERY_TIMEOUT_MS),
 ): Promise<unknown> {
   signal.throwIfAborted();
-  const response = await fetchDiscoveryResponse(url, apiKey, apiKeyHeaderName, egress, signal);
+  const response = await fetchDiscoveryResponse(
+    url,
+    apiKey,
+    apiKeyHeaderName,
+    egress,
+    correlationId,
+    signal,
+  );
   if (!response.ok) {
     throw Object.assign(new Error("model discovery returned an error status"), {
       httpStatus: response.status,
@@ -2132,6 +2140,7 @@ async function fetchDiscoveryResponse(
   apiKey: string,
   apiKeyHeaderName: string,
   egress: GatewayEgressConfig | undefined,
+  correlationId: string | undefined,
   signal: AbortSignal,
 ): Promise<Response> {
   try {
@@ -2140,6 +2149,10 @@ async function fetchDiscoveryResponse(
       headers: apiKeyHeaders(apiKey, apiKeyHeaderName),
       signal,
       ...(egress !== undefined ? { egress } : {}),
+      // Discovery is where a wrong endpoint, blocked proxy or untrusted certificate first shows.
+      // Without a sink those `http.gateway.fetch.failed` / TLS-trust lines count as `port-unwired`.
+      log: processServerLogSink(),
+      logContext: { correlationId },
     });
   } catch (cause) {
     signal.throwIfAborted();
@@ -2197,6 +2210,7 @@ async function discoverLiteLlmModelInfo(
         apiKey,
         apiKeyHeaderName,
         egress,
+        correlationId,
         discoveryManagementSignal(signal, deadlineAt, endpoints.length - index),
       );
       const discovered = parseModelDiscovery(payload, correlationId);
@@ -2269,6 +2283,7 @@ async function defaultGatewayModelDiscovery(
       apiKey,
       apiKeyHeaderName,
       egress,
+      correlationId,
       signal,
     );
     const discovered = listedDiscoveryResult(payload, litellmModels, correlationId, allowEmpty);
@@ -3670,6 +3685,7 @@ function figmaReason(body: unknown): string | undefined {
 async function defaultFigmaCredentialTester(
   accessToken: string,
   egress?: GatewayEgressConfig,
+  correlationId?: string,
 ): Promise<void> {
   try {
     const response = await gatewayFetch(FIGMA_ME_ENDPOINT, {
@@ -3681,6 +3697,10 @@ async function defaultFigmaCredentialTester(
       redirect: "manual",
       signal: AbortSignal.timeout(FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS),
       ...(egress !== undefined ? { egress } : {}),
+      // A blocked proxy or untrusted certificate surfaces here first; without a sink the transport
+      // lines are lost and counted as `port-unwired`.
+      log: processServerLogSink(),
+      logContext: { correlationId },
     });
     let body: unknown;
     try {
@@ -7786,7 +7806,12 @@ async function verifySubmittedFigmaCredential(
   if (!request.verifyFigmaCredential || request.figmaAccessToken === undefined) {
     return undefined;
   }
-  const tester: FigmaCredentialTester = deps.figmaCredentialTester ?? defaultFigmaCredentialTester;
+  // The seam keeps its 2-arg shape; the real tester closes over the request correlation so its
+  // transport lines join the setup request (ADR-0173 D5).
+  const tester: FigmaCredentialTester =
+    deps.figmaCredentialTester ??
+    ((accessToken, egress): Promise<void> =>
+      defaultFigmaCredentialTester(accessToken, egress, request.correlationId));
   try {
     await tester(request.figmaAccessToken, currentGatewayEgressConfig(deps));
     return undefined;

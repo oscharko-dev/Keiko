@@ -536,6 +536,7 @@ import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindow
 import { abortCodingRunSessionLeases } from "./coding-app-session/codingRunSessionLease.js";
 import {
   admitCodingRunModel,
+  awaitCodingRunModelReadiness,
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
@@ -4528,6 +4529,12 @@ interface UiHandlerDepsAssemblyArgs {
   readonly mcpConnections?: ConfiguredMcpConnections | undefined;
   /** The Jira Pods a Coding run may be started with; absent without the managed MCP relay. */
   readonly codingJiraPods?: CodingJiraPods | undefined;
+  /** The model check a coding run's start awaits; bound once the deps graph that runs it exists. */
+  readonly codingModelReadiness?: CodingModelReadinessBinding | undefined;
+}
+
+interface CodingModelReadinessBinding {
+  check?: (modelId: string | undefined, correlationId: string | undefined) => Promise<void>;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -4965,10 +4972,9 @@ function buildMcpServices(args: UiHandlerDepsAssemblyArgs): {
 function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
   const { mcpSettings, mcpConnections, mcpAuthorization, codingJiraPods } = buildMcpServices(args);
   const dapRuntime = createDapRuntimeReference(args.options);
-  const services = assembleUiHandlerRuntimeServices(
-    { ...args, mcpConnections, codingJiraPods },
-    dapRuntime,
-  );
+  const codingModelReadiness: CodingModelReadinessBinding = {};
+  const runtimeArgs = { ...args, mcpConnections, codingJiraPods, codingModelReadiness };
+  const services = assembleUiHandlerRuntimeServices(runtimeArgs, dapRuntime);
   // #3399: one shared hook instance, so recordStatus/readStatus coordinate through the SAME
   // in-process expected-version cache (createPrDescriptionReceiptStatusHooks's own contract) rather
   // than each call building an independent, uncoordinated bridge over the same durable store.
@@ -5025,7 +5031,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionGeneration,
     deps,
   );
-  attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
+  attachCodingRuntimeDeps(services.codingRuntimeControlPlane, codingModelReadiness, deps);
   installCodingJiraPods(deps, codingJiraPods);
   return installConversationReadinessInitialization(installChatToolCatalogs(deps, args.options));
 }
@@ -5291,6 +5297,18 @@ function createUiCodingRuntimeRepositoryInstructions(
 // derived from the assembled deps graph, which does not exist when the resolver is composed. A
 // composition without a knowledge store binds a lease that opens no provider, and the search stays
 // lexical and says so.
+// The coding runtime reaches two services of the finished graph: repository semantic search, and
+// the model check a run's start awaits (customer 1.3.4).
+function attachCodingRuntimeDeps(
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  readiness: CodingModelReadinessBinding,
+  deps: UiHandlerDeps,
+): void {
+  attachRepositorySemanticSearch(codingRuntimeControlPlane, deps);
+  readiness.check = (modelId, correlationId): Promise<void> =>
+    awaitCodingRunModelReadiness(deps, modelId, correlationId);
+}
+
 function attachRepositorySemanticSearch(
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
   deps: UiHandlerDeps,
@@ -6404,6 +6422,8 @@ function runtimeWorkspaceAuthority(
         reasoningEffort,
         args.runtimeConfig,
       ),
+    prepareManagedModel: (modelId, correlationId): Promise<void> =>
+      args.codingModelReadiness?.check?.(modelId, correlationId) ?? Promise.resolve(),
   };
 }
 

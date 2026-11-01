@@ -2273,7 +2273,7 @@ function ComposerContextControls({
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
           onOpen={() => {
-            requestGatewayModelCatalogRefresh();
+            requestGatewayModelCatalogRefresh({ check: true });
           }}
           sections={[
             {

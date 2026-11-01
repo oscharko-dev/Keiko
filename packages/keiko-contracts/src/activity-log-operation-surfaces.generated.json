@@ -310,7 +310,6 @@
   "gateway.readiness.compatibility-retry.failed": "model-gateway",
   "gateway.readiness.compatibility-retry.skipped": "model-gateway",
   "gateway.readiness.completed": "model-gateway",
-  "gateway.readiness.renewal.paused": "model-gateway",
   "gateway.readiness.started": "model-gateway",
   "gateway.reranker.setup.resolved": "model-gateway",
   "gateway.retry.budget-exhausted": "model-gateway",

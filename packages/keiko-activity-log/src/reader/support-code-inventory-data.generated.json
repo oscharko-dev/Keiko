@@ -1128,6 +1128,7 @@
     "keiko-server/atlassian/jiraReportDescriptor",
     "keiko-server/atlassian/jiraReportRoutes",
     "keiko-server/atlassian/jiraTemplateLog",
+    "keiko-server/atlassian/jiraToolGuidance",
     "keiko-server/atlassian/syncRoutes",
     "keiko-server/atlassian/syncService",
     "keiko-server/atlassian/wiring",
