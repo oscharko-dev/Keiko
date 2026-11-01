@@ -737,7 +737,7 @@ describe("gatewayFetch remembers origins that need the CA bundle", () => {
     return { port: await listen(origin), handshakeAttempts: (): number => attempts };
   }
 
-  function recordingLog(events: ModelGatewayLogEvent[]): GatewayFetchOptions["log"] {
+  function recordingLog(events: ModelGatewayLogTransport[]): GatewayFetchOptions["log"] {
     return {
       write: (event): void => {
         events.push(event);
@@ -745,12 +745,12 @@ describe("gatewayFetch remembers origins that need the CA bundle", () => {
     };
   }
 
-  const fallbackLines = (events: readonly ModelGatewayLogEvent[]): number =>
+  const fallbackLines = (events: readonly ModelGatewayLogTransport[]): number =>
     events.filter((event) => event.op === "http.gateway.tls.ca-bundle-fallback").length;
 
   async function callOnce(
     port: number,
-    events: ModelGatewayLogEvent[],
+    events: ModelGatewayLogTransport[],
     caBundle: string | null = caBundlePath,
   ): Promise<unknown> {
     const response = await gatewayFetch(`https://127.0.0.1:${String(port)}/secure`, {
@@ -763,7 +763,7 @@ describe("gatewayFetch remembers origins that need the CA bundle", () => {
 
   it("skips the rejected default handshake and the warning on later calls to the same origin", async () => {
     const origin = await startOrigin();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     expect(await callOnce(origin.port, events)).toEqual({ secure: true });
     expect(origin.handshakeAttempts()).toBe(2);
     expect(fallbackLines(events)).toBe(1);
@@ -777,7 +777,7 @@ describe("gatewayFetch remembers origins that need the CA bundle", () => {
   it("falls back on its own for a different origin", async () => {
     const first = await startOrigin();
     const second = await startOrigin();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     await callOnce(first.port, events);
     await callOnce(second.port, events);
     expect(first.handshakeAttempts()).toBe(2);
@@ -792,7 +792,7 @@ describe("gatewayFetch remembers origins that need the CA bundle", () => {
 
   it("forgets the origin when the CA-bundle path later fails on TLS trust", async () => {
     const origin = await startOrigin();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     await callOnce(origin.port, events);
     expect(fallbackLines(events)).toBe(1);
 
@@ -814,7 +814,7 @@ describe("gatewayFetch remembers origins that need the CA bundle", () => {
 
   it("does not remember an origin the CA bundle cannot verify either", async () => {
     const origin = await startOrigin();
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     await expect(callOnce(origin.port, events, null)).rejects.toMatchObject({
       code: "TLS_CA_FAILURE",
     });
