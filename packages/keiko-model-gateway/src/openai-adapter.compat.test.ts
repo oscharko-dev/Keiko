@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Gateway } from "./gateway.js";
 import { OpenAiAdapter, resetChatCompatibilityMemoForTests } from "./openai-adapter.js";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport, ModelGatewayLogEvent } from "./observability.js";
 import type {
   GatewayStreamChunk,
   ModelProviderConfig,
@@ -336,7 +336,7 @@ describe("OpenAI-compatible chat compatibility", () => {
     "does not resend a message-only refusal with $metadata parameter metadata: $refusal",
     async ({ metadata, refusal }) => {
       const bodies: Record<string, unknown>[] = [];
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const correlationId = `run-policy-${metadata}`;
       const errorParameter = metadata === "null" ? null : "stream_options";
       const gateway = new Gateway(
@@ -393,7 +393,7 @@ describe("OpenAI-compatible chat compatibility", () => {
 
   it("answers through LiteLLM when it reinserts stream_options downstream", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const adapter = new OpenAiAdapter({
       requestId: "proxy-reinserts-stream-options",
       costClass: "low",
@@ -437,7 +437,7 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(
       events
         .filter((event) => event.op === "chat.request.compatibility-retry")
-        .map((event) => event.extra?.omittedField),
+        .map((event) => normalFixtureEvent(event).extra?.omittedField),
     ).toEqual(["stream_options", "stream"]);
   });
 
@@ -682,7 +682,7 @@ describe("OpenAI-compatible chat compatibility", () => {
     it("waits the remaining budget, not the silence bound, for the buffered retry", async () => {
       vi.useFakeTimers();
       const bodies: Record<string, unknown>[] = [];
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const adapter = new OpenAiAdapter({
         requestId: "buffered-retry-start",
         costClass: "low",
@@ -754,7 +754,7 @@ describe("OpenAI-compatible chat compatibility", () => {
 
   it("retries a strict proxy without optional streaming usage and remembers the accepted shape", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const fetchImpl: typeof fetch = (_url, init) => {
       const body = requestBody(init);
       bodies.push(body);
@@ -962,7 +962,7 @@ describe("OpenAI-compatible chat compatibility", () => {
 
     it("retries once with the other field and keeps it for the endpoint", async () => {
       const bodies: Record<string, unknown>[] = [];
-      const events: ModelGatewayLogEvent[] = [];
+      const events: ModelGatewayLogTransport[] = [];
       const adapter = new OpenAiAdapter({
         requestId: "token-field",
         costClass: "low",
@@ -1170,3 +1170,15 @@ describe("OpenAI-compatible chat compatibility", () => {
     });
   });
 });
+
+// The recorder retains every transport. A normal-only assertion requires its closed arm.
+function normalFixtureEvent(event: ModelGatewayLogTransport): ModelGatewayLogEvent;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined;
+function normalFixtureEvent(
+  event: ModelGatewayLogTransport | undefined,
+): ModelGatewayLogEvent | undefined {
+  if (event?.category === "diagnostic") throw new TypeError("Expected normal fixture evidence");
+  return event;
+}

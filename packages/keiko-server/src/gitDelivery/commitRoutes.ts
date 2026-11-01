@@ -59,6 +59,7 @@ import {
 import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import { validateGitCommitMessage } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import {
+  activityLogCommitDraftModelFields,
   activityLogEvent,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
@@ -163,74 +164,7 @@ const COMMIT_PREVIEW_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const COMMIT_DRAFT_MODEL_FIELDS = {
-  outcome: {
-    type: "string",
-    dataClass: "closed-enum",
-    required: true,
-    values: ["succeeded", "failed"],
-  },
-  failureCode: {
-    type: "string",
-    dataClass: "closed-enum",
-    required: false,
-    values: [
-      "GIT_DELIVERY_COMMIT_BAD_REQUEST",
-      "GIT_DELIVERY_COMMIT_PAYLOAD_TOO_LARGE",
-      "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
-      "GIT_DELIVERY_COMMIT_DRAFT_CONTEXT_TOO_LARGE",
-      "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
-      "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
-      "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
-      "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
-      "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
-      "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
-      "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
-      "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
-      "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
-    ],
-  },
-  // #3591 (1.1.7): the bounds the model call ran under, present once a model was resolved — the
-  // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
-  // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
-  // can be reconstructed from this line alone.
-  maxOutputTokens: { type: "integer", dataClass: "count", required: false },
-  deadlineMs: { type: "integer", dataClass: "duration", required: false },
-  promptTokens: { type: "integer", dataClass: "count", required: false },
-  maxPromptTokens: { type: "integer", dataClass: "count", required: false },
-  diffCompacted: { type: "boolean", dataClass: "closed-enum", required: false },
-  generationAttempts: { type: "integer", dataClass: "count", required: false },
-  reused: { type: "boolean", dataClass: "closed-enum", required: false },
-  draftKeyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
-  normalizationVersion: {
-    type: "string",
-    dataClass: "closed-enum",
-    required: false,
-    values: ["1"],
-  },
-  normalizationRule: {
-    type: "string",
-    dataClass: "closed-enum",
-    required: false,
-    values: ["body-only", "terminal-trailers", "explicit-trailers"],
-  },
-  normalizationChanged: { type: "boolean", dataClass: "closed-enum", required: false },
-  bodyBulletCount: { type: "integer", dataClass: "count", required: false },
-  trailerLikeLineCount: { type: "integer", dataClass: "count", required: false },
-  trailerCount: { type: "integer", dataClass: "count", required: false },
-  trailerContinuationCount: {
-    type: "integer",
-    dataClass: "count",
-    required: false,
-  },
-  trailerParagraphBreakCount: {
-    type: "integer",
-    dataClass: "count",
-    required: false,
-  },
-  referenceTrailerCount: { type: "integer", dataClass: "count", required: false },
-  breakingTrailerCount: { type: "integer", dataClass: "count", required: false },
-} as const;
+const COMMIT_DRAFT_MODEL_FIELDS = activityLogCommitDraftModelFields();
 
 const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

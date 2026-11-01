@@ -20,8 +20,37 @@
 // bypasses the `extra` redaction path entirely: this shape gate is the only thing standing
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
+import {
+  activityLogCompletenessField,
+  activityLogLossField,
+  type ActivityLogFieldContract,
+} from "./activity-log-field-contracts.js";
+
 import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";
 import { containsAbsolutePath } from "./text-safety.js";
+
+export {
+  type ActivityLogFieldContract,
+  type ActivityLogBoundedStringFieldContract,
+  type ActivityLogBoundedStringArrayFieldContract,
+  activityLogBoundedStringField,
+  activityLogBoundedStringArrayField,
+  type ActivityLogCompletenessFieldContract,
+  type ActivityLogLossFieldContract,
+  activityLogAutomaticCatalogFields,
+  activityLogEmbeddingBatchRetryFields,
+  type ActivityLogEmbeddingBatchRetryFields,
+  activityLogWorkspaceIoFields,
+  type ActivityLogWorkspaceIoFields,
+  activityLogLossSummaryFields,
+  type ActivityLogLossSummaryFields,
+  activityLogCommitDraftModelFields,
+  type ActivityLogCommitDraftModelFields,
+  activityLogBooleanField,
+  activityLogCountField,
+  activityLogDurationField,
+  activityLogStringEnumField,
+} from "./activity-log-field-contracts.js";
 
 export {
   ACTIVITY_LOG_CATALOG_DIGEST,
@@ -308,10 +337,12 @@ export function diagnosticSufficiencyStatus(
   return reasons.length > 0 ? "degraded" : "complete";
 }
 
+const activityLogErrorKinds: readonly string[] = ACTIVITY_LOG_ERROR_KINDS;
+const activityLogCompletenessStates: readonly string[] = ACTIVITY_LOG_COMPLETENESS_STATES;
+const activityLogLossStates: readonly string[] = ACTIVITY_LOG_LOSS_STATES;
+
 export function isActivityLogErrorKind(value: unknown): value is ActivityLogErrorKind {
-  return (
-    typeof value === "string" && (ACTIVITY_LOG_ERROR_KINDS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && new Set(activityLogErrorKinds).has(value);
 }
 
 export function activityLogErrorKindOr(
@@ -365,49 +396,12 @@ export function isActivityLogSequence(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
-interface ActivityLogFieldContractBase {
-  readonly required: boolean;
-  readonly maxLength?: number | undefined;
-  readonly maxItems?: number | undefined;
-  readonly values?: readonly string[] | undefined;
-}
-
-// Keep the declared primitive and semantic class coupled. The generated-registry program consumes
-// TypeScript diagnostics, so an impossible pair is rejected at generation time rather than becoming
-// a runtime contract whose data class can never be enforced coherently.
-export type ActivityLogFieldContract = ActivityLogFieldContractBase &
-  (
-    | { readonly type: "boolean"; readonly dataClass: "closed-enum" }
-    | {
-        readonly type: "integer";
-        readonly dataClass: "count" | "duration" | "safe-version";
-      }
-    | { readonly type: "number"; readonly dataClass: "count" | "duration" }
-    | {
-        readonly type: "string";
-        readonly dataClass:
-          | "closed-enum"
-          | "completeness-state"
-          | "digest"
-          | "error-kind"
-          | "loss-state"
-          | "opaque-id"
-          | "safe-platform-class"
-          | "safe-version";
-      }
-    | {
-        readonly type: "string-array";
-        readonly dataClass:
-          "closed-enum" | "digest" | "error-kind" | "opaque-id" | "safe-platform-class";
-      }
-  );
-
 // These two fields are part of every persisted v2 operation, not optional per-emitter metadata.
 // Centralizing them keeps loss/completeness evidence structurally present while still allowing an
 // emitter to override the safe defaults when an operation is partial or a known loss occurred.
 export const ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS = {
-  completeness: { type: "string", dataClass: "completeness-state", required: true },
-  loss: { type: "string", dataClass: "loss-state", required: true },
+  completeness: activityLogCompletenessField(),
+  loss: activityLogLossField(),
 } as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
 
 type ActivityLogGlobalFieldContracts = typeof ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
@@ -711,11 +705,9 @@ function semanticStringFailure(
 ): ActivityLogEventFailureKind | undefined {
   switch (contract.dataClass) {
     case "completeness-state":
-      return vocabularyFailure(
-        (ACTIVITY_LOG_COMPLETENESS_STATES as readonly string[]).includes(value),
-      );
+      return vocabularyFailure(new Set(activityLogCompletenessStates).has(value));
     case "loss-state":
-      return vocabularyFailure((ACTIVITY_LOG_LOSS_STATES as readonly string[]).includes(value));
+      return vocabularyFailure(new Set(activityLogLossStates).has(value));
     case "digest":
       return vocabularyFailure(ACTIVITY_LOG_DIGEST_VALUE.test(value));
     case "error-kind":
@@ -837,8 +829,10 @@ export function activityLogOperationSchema(
 ): ActivityLogOperationRegistration | undefined {
   activityLogOperationByOp ??= new Map(
     ACTIVITY_LOG_OPERATION_REGISTRY.map(
-      (registration) =>
-        [registration.op, registration as ActivityLogOperationRegistration] as const,
+      (registration): readonly [string, ActivityLogOperationRegistration] => [
+        registration.op,
+        registration,
+      ],
     ),
   );
   return activityLogOperationByOp.get(op);
@@ -987,22 +981,154 @@ const ACTIVITY_LOG_EVENT_FAILURE_KIND_SET: ReadonlySet<unknown> = new Set(
   ACTIVITY_LOG_EVENT_FAILURE_KINDS,
 );
 
+function rawActivityLogEventRegistration(event: object): object | undefined {
+  const registration = runtimeProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION);
+  return typeof registration === "object" && registration !== null ? registration : undefined;
+}
+
+function registrationMembers(
+  value: readonly unknown[],
+  valid: (entry: unknown, index: number) => boolean,
+): boolean {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !valid(value[index], index)) return false;
+  }
+  return true;
+}
+
+function registrationStrings(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && registrationMembers(value, (entry) => typeof entry === "string");
+}
+
+function registrationBooleans(value: unknown): value is readonly boolean[] {
+  return Array.isArray(value) && registrationMembers(value, (entry) => typeof entry === "boolean");
+}
+
+/** Exposes the existing primitive/class policy to canonical descriptor construction. */
+export function activityLogFieldTypeClassPair(
+  type: ActivityLogFieldContract["type"],
+  dataClass: ActivityLogFieldContract["dataClass"],
+): boolean {
+  return registeredFieldTypePair({ type, dataClass });
+}
+
+function registeredFieldTypePair(value: Readonly<Record<string, unknown>>): boolean {
+  const dataClass = value.dataClass;
+  switch (value.type) {
+    case "boolean":
+      return dataClass === "closed-enum";
+    case "integer":
+      return new Set<unknown>(["count", "duration", "safe-version"]).has(dataClass);
+    case "number":
+      return new Set<unknown>(["count", "duration"]).has(dataClass);
+    case "string":
+      return new Set<unknown>(
+        ACTIVITY_LOG_DATA_CLASSES.filter((entry) => entry !== "count" && entry !== "duration"),
+      ).has(dataClass);
+    case "string-array":
+      return new Set<unknown>([
+        "closed-enum",
+        "digest",
+        "error-kind",
+        "opaque-id",
+        "safe-platform-class",
+      ]).has(dataClass);
+    default:
+      return false;
+  }
+}
+
+function optionalRegistrationNumber(value: unknown): boolean {
+  return value === undefined || typeof value === "number";
+}
+
+function registeredFieldShape(value: unknown): value is ActivityLogFieldContract {
+  if (!isRegisteredFieldObject(value)) return false;
+  const values = value.values;
+  return (
+    registeredFieldTypePair(value) &&
+    typeof value.required === "boolean" &&
+    optionalRegistrationNumber(value.maxLength) &&
+    optionalRegistrationNumber(value.maxItems) &&
+    (values === undefined || registrationStrings(values))
+  );
+}
+
+function registrationFields(
+  value: unknown,
+): value is Readonly<Record<string, ActivityLogFieldContract>> {
+  return (
+    isRegisteredFieldObject(value) &&
+    Reflect.ownKeys(value).every(
+      (key) => typeof key !== "string" || registeredFieldShape(runtimeProperty(value, key)),
+    )
+  );
+}
+
+function registrationDiagnosticShape(value: unknown): boolean {
+  if (!isRegisteredFieldObject(value) || typeof value.field !== "string") return false;
+  if ("positive" in value) return value.positive === true;
+  return registrationStrings(value.values) || registrationBooleans(value.values);
+}
+
+function registrationDiagnostics(
+  fields: Readonly<Record<string, ActivityLogFieldContract>>,
+  value: unknown,
+  present: boolean,
+): boolean {
+  return (
+    (value !== undefined || !present) &&
+    (value === undefined ||
+      (Array.isArray(value) && registrationMembers(value, registrationDiagnosticShape))) &&
+    isActivityLogDiagnosticWhen(fields, value)
+  );
+}
+
+function completeRegistrationShape(value: object): value is ActivityLogOperationRegistration {
+  try {
+    const fields = runtimeProperty(value, "fields");
+    return [
+      runtimeProperty(value, "contractKind") === "activity-log-operation",
+      runtimeProperty(value, "schemaVersion") === 1,
+      typeof runtimeProperty(value, "op") === "string",
+      new Set<unknown>(ACTIVITY_LOG_CATEGORIES).has(runtimeProperty(value, "category")),
+      typeof runtimeProperty(value, "owner") === "string",
+      typeof runtimeProperty(value, "emitter") === "string",
+      registrationFields(fields) &&
+        registrationDiagnostics(
+          fields,
+          runtimeProperty(value, "diagnosticWhen"),
+          Object.hasOwn(value, "diagnosticWhen"),
+        ),
+      new Set<unknown>(["none", "correlation", "parent-correlation"]).has(
+        runtimeProperty(value, "causal"),
+      ),
+      new Set<unknown>(ACTIVITY_LOG_LIFECYCLE_PHASES).has(runtimeProperty(value, "lifecycle")),
+      new Set<unknown>(ACTIVITY_LOG_ANALYZER_PROJECTIONS).has(
+        runtimeProperty(value, "analyzerProjection"),
+      ),
+      registrationStrings(runtimeProperty(value, "failureClasses")),
+      registrationStrings(runtimeProperty(value, "proofIds")),
+      new Set<unknown>(ACTIVITY_LOG_RELEASE_IMPACTS).has(runtimeProperty(value, "releaseImpact")),
+    ].every(Boolean);
+  } catch {
+    return false;
+  }
+}
+
+/** A complete structural view of the attachment; canonical write authority is checked separately. */
 export function activityLogEventRegistration(
   event: object,
 ): ActivityLogOperationRegistration | undefined {
-  const registration = (event as Readonly<Record<PropertyKey, unknown>>)[
-    ACTIVITY_LOG_EVENT_REGISTRATION
-  ];
-  return registration !== null && typeof registration === "object"
-    ? (registration as ActivityLogOperationRegistration)
+  const registration = rawActivityLogEventRegistration(event);
+  return registration !== undefined && completeRegistrationShape(registration)
+    ? registration
     : undefined;
 }
 
-/** Marks an event built outside `activityLogEvent()` with its canonical registration. */
-export function attachActivityLogEventRegistration<Event extends object>(
-  event: Event,
-  registration: ActivityLogOperationRegistration | undefined,
-): Event {
+function attachRawActivityLogRegistration(event: object, registration: object | undefined): void {
   if (registration !== undefined) {
     Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
       value: registration,
@@ -1011,6 +1137,14 @@ export function attachActivityLogEventRegistration<Event extends object>(
       writable: false,
     });
   }
+}
+
+/** Marks an event built outside `activityLogEvent()` with its canonical registration. */
+export function attachActivityLogEventRegistration<Event extends object>(
+  event: Event,
+  registration: ActivityLogOperationRegistration | undefined,
+): Event {
+  attachRawActivityLogRegistration(event, registration);
   return event;
 }
 
@@ -1036,9 +1170,20 @@ export function withActivityLogParentCorrelation<Event extends object>(
   event: Event,
   parentCorrelationId: string,
 ): Event {
-  const own: unknown = Reflect.get(event, "parentCorrelationId");
+  const own: unknown = runtimeProperty(event, "parentCorrelationId");
   if (typeof own === "string") return event;
   return reboundActivityLogEvent(event, { ...event, parentCorrelationId });
+}
+
+/** Copies only existing raw registration and closed refusal markers, without certifying either object. */
+export function copyActivityLogEventMetadata<Target extends object>(
+  source: object,
+  target: Target,
+): Target {
+  attachRawActivityLogRegistration(target, rawActivityLogEventRegistration(source));
+  const rejection = activityLogEventRejection(source);
+  if (rejection !== undefined) markActivityLogEventRejection(target, rejection);
+  return target;
 }
 
 // Carries the registration and rejection markers of `event` over to its copy `rebound`.
@@ -1046,10 +1191,7 @@ function reboundActivityLogEvent<Event extends object, Copy extends Event>(
   event: Event,
   rebound: Copy,
 ): Copy {
-  attachActivityLogEventRegistration(rebound, activityLogEventRegistration(event));
-  const rejection = activityLogEventRejection(event);
-  if (rejection !== undefined) markActivityLogEventRejection(rebound, rejection);
-  return rebound;
+  return copyActivityLogEventMetadata(event, rebound);
 }
 
 function markActivityLogEventRejection(
@@ -1065,12 +1207,12 @@ function markActivityLogEventRejection(
 }
 
 function activityLogEventRejection(event: object): ActivityLogEventFailureKind | undefined {
-  const rejection: unknown = (event as Readonly<Record<PropertyKey, unknown>>)[
-    ACTIVITY_LOG_EVENT_REJECTION
-  ];
-  return ACTIVITY_LOG_EVENT_FAILURE_KIND_SET.has(rejection)
-    ? (rejection as ActivityLogEventFailureKind)
-    : undefined;
+  const rejection = runtimeProperty(event, ACTIVITY_LOG_EVENT_REJECTION);
+  return isActivityLogEventFailureKind(rejection) ? rejection : undefined;
+}
+
+function isActivityLogEventFailureKind(value: unknown): value is ActivityLogEventFailureKind {
+  return ACTIVITY_LOG_EVENT_FAILURE_KIND_SET.has(value);
 }
 
 /**
@@ -1081,7 +1223,7 @@ function activityLogEventRejection(event: object): ActivityLogEventFailureKind |
 export function activityLogEventWillBeRejected(event: object): boolean {
   return (
     activityLogEventRejection(event) !== undefined ||
-    activityLogEventRegistration(event) === undefined
+    rawActivityLogEventRegistration(event) === undefined
   );
 }
 
@@ -1097,7 +1239,7 @@ const ACTIVITY_LOG_EVENT_KEYS: ReadonlySet<string> = new Set([
   "extra",
 ]);
 
-const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
+const ACTIVITY_LOG_LEVELS: ReadonlySet<unknown> = new Set(["debug", "info", "warn", "error"]);
 
 function registeredOptionalString(value: unknown): string | undefined {
   if (value === undefined) return undefined;
@@ -1113,10 +1255,16 @@ function registeredOptionalNumber(value: unknown): number | undefined {
 
 function registeredLevel(value: unknown): ActivityLogEventEnvelope["level"] {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !ACTIVITY_LOG_LEVELS.has(value)) {
+  if (!isRegisteredLevel(value)) {
     throw new ActivityLogEventValidationError("invalid-field-vocabulary");
   }
-  return value as ActivityLogEventEnvelope["level"];
+  return value;
+}
+
+function isRegisteredLevel(
+  value: unknown,
+): value is NonNullable<ActivityLogEventEnvelope["level"]> {
+  return typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value);
 }
 
 function registeredErrorKind(value: unknown): ActivityLogErrorKind | undefined {
@@ -1127,15 +1275,15 @@ function registeredErrorKind(value: unknown): ActivityLogErrorKind | undefined {
   return value;
 }
 
-function registeredEventEnvelope(
-  event: Readonly<Record<PropertyKey, unknown>>,
-): ActivityLogEventEnvelope {
-  const level = registeredLevel(event.level);
-  const correlationId = registeredOptionalString(event.correlationId);
-  const parentCorrelationId = registeredOptionalString(event.parentCorrelationId);
-  const durationMs = registeredOptionalNumber(event.durationMs);
-  const status = registeredOptionalNumber(event.status);
-  const errorKind = registeredErrorKind(event.errorKind);
+function registeredEventEnvelope(event: object): ActivityLogEventEnvelope {
+  const level = registeredLevel(runtimeProperty(event, "level"));
+  const correlationId = registeredOptionalString(runtimeProperty(event, "correlationId"));
+  const parentCorrelationId = registeredOptionalString(
+    runtimeProperty(event, "parentCorrelationId"),
+  );
+  const durationMs = registeredOptionalNumber(runtimeProperty(event, "durationMs"));
+  const status = registeredOptionalNumber(runtimeProperty(event, "status"));
+  const errorKind = registeredErrorKind(runtimeProperty(event, "errorKind"));
   return {
     ...(level === undefined ? {} : { level }),
     ...(correlationId === undefined ? {} : { correlationId }),
@@ -1152,20 +1300,17 @@ function hasExactOwnKeys(left: object, right: object): boolean {
   return leftKeys.length === rightKeys.size && leftKeys.every((key) => rightKeys.has(key));
 }
 
-function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+function sameStringArray(left: unknown, right: readonly string[]): boolean {
   return (
     Array.isArray(left) &&
     Array.isArray(right) &&
     left.length === right.length &&
-    left.every((value, index) => value === right[index])
+    registrationMembers(left, (value, index) => value === right[index])
   );
 }
 
-function sameFieldContract(
-  left: ActivityLogFieldContract,
-  right: ActivityLogFieldContract,
-): boolean {
-  if (!hasExactOwnKeys(left, right)) return false;
+function sameFieldContract(left: unknown, right: ActivityLogFieldContract): boolean {
+  if (!isRegisteredFieldObject(left) || !hasExactOwnKeys(left, right)) return false;
   const valuesMatch =
     left.values === undefined
       ? right.values === undefined
@@ -1181,42 +1326,47 @@ function sameFieldContract(
 }
 
 function sameRegistrationFields(
-  left: Readonly<Record<string, ActivityLogFieldContract>>,
+  left: unknown,
   right: Readonly<Record<string, ActivityLogFieldContract>>,
 ): boolean {
-  if (!hasExactOwnKeys(left, right)) return false;
-  return Object.entries(left).every(([name, contract]) => {
+  if (!isRegisteredFieldObject(left) || !hasExactOwnKeys(left, right)) return false;
+  return Object.entries(left).every(([name, contract]: readonly [string, unknown]) => {
     const canonical = right[name];
     return canonical !== undefined && sameFieldContract(contract, canonical);
   });
 }
 
+function sameDiagnosticCondition(
+  left: unknown,
+  right: ActivityLogDiagnosticCondition | undefined,
+): boolean {
+  if (
+    !isRegisteredFieldObject(left) ||
+    right === undefined ||
+    !hasExactOwnKeys(left, right) ||
+    left.field !== right.field
+  )
+    return false;
+  if ("positive" in left) return "positive" in right && left.positive === right.positive;
+  if (!("values" in right) || !Array.isArray(left.values)) return false;
+  const values: readonly unknown[] = left.values;
+  return (
+    values.length === right.values.length &&
+    registrationMembers(values, (value, index) => value === right.values[index])
+  );
+}
+
 function sameDiagnosticWhen(
-  left: readonly ActivityLogDiagnosticCondition[] | undefined,
+  left: unknown,
   right: readonly ActivityLogDiagnosticCondition[] | undefined,
 ): boolean {
   if (left === undefined || right === undefined) return left === right;
   return (
+    Array.isArray(left) &&
     left.length === right.length &&
-    left.every((condition, index) => {
-      const other = right[index];
-      if (
-        other === undefined ||
-        !hasExactOwnKeys(condition, other) ||
-        condition.field !== other.field
-      )
-        return false;
-      if ("positive" in condition)
-        return (
-          "positive" in other &&
-          runtimeProperty(condition, "positive") === runtimeProperty(other, "positive")
-        );
-      return (
-        "values" in other &&
-        condition.values.length === other.values.length &&
-        condition.values.every((value, valueIndex) => value === other.values[valueIndex])
-      );
-    })
+    registrationMembers(left, (condition, index) =>
+      sameDiagnosticCondition(condition, right[index]),
+    )
   );
 }
 
@@ -1226,7 +1376,7 @@ function runtimeProperty(value: object, key: PropertyKey): unknown {
 }
 
 function registrationMatchesCanonical(
-  registration: ActivityLogOperationRegistration,
+  registration: object,
   canonical: ActivityLogOperationRegistration,
 ): boolean {
   try {
@@ -1237,28 +1387,37 @@ function registrationMatchesCanonical(
         runtimeProperty(canonical, "schemaVersion");
     return [
       hasExactOwnKeys(registration, canonical) && fixedIdentityMatches,
-      registration.op === canonical.op,
-      registration.category === canonical.category,
-      registration.owner === canonical.owner,
-      registration.emitter === canonical.emitter,
-      sameRegistrationFields(registration.fields, canonical.fields),
-      sameDiagnosticWhen(registration.diagnosticWhen, canonical.diagnosticWhen),
-      registration.causal === canonical.causal,
-      registration.lifecycle === canonical.lifecycle,
-      registration.analyzerProjection === canonical.analyzerProjection,
-      sameStringArray(registration.failureClasses, canonical.failureClasses) &&
-        sameStringArray(registration.proofIds, canonical.proofIds),
-      registration.releaseImpact === canonical.releaseImpact,
+      runtimeProperty(registration, "op") === canonical.op,
+      runtimeProperty(registration, "category") === canonical.category,
+      runtimeProperty(registration, "owner") === canonical.owner,
+      runtimeProperty(registration, "emitter") === canonical.emitter,
+      sameRegistrationFields(runtimeProperty(registration, "fields"), canonical.fields),
+      sameDiagnosticWhen(runtimeProperty(registration, "diagnosticWhen"), canonical.diagnosticWhen),
+      runtimeProperty(registration, "causal") === canonical.causal,
+      runtimeProperty(registration, "lifecycle") === canonical.lifecycle,
+      runtimeProperty(registration, "analyzerProjection") === canonical.analyzerProjection,
+      sameStringArray(runtimeProperty(registration, "failureClasses"), canonical.failureClasses) &&
+        sameStringArray(runtimeProperty(registration, "proofIds"), canonical.proofIds),
+      runtimeProperty(registration, "releaseImpact") === canonical.releaseImpact,
     ].every(Boolean);
   } catch {
     return false;
   }
 }
 
-function canonicalRegistrationForEvent(
-  event: Readonly<Record<PropertyKey, unknown>>,
-): ActivityLogOperationRegistration {
-  const canonical = typeof event.op === "string" ? activityLogOperationSchema(event.op) : undefined;
+function schemaForObservedOperation(value: unknown): ActivityLogOperationRegistration | undefined {
+  return typeof value === "string" ? activityLogOperationSchema(value) : undefined;
+}
+
+function isRegisteredFieldObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function canonicalRegistrationForEvent(event: object): ActivityLogOperationRegistration {
+  const canonical =
+    typeof runtimeProperty(event, "op") === "string"
+      ? schemaForObservedOperation(runtimeProperty(event, "op"))
+      : undefined;
   if (canonical === undefined) {
     throw new ActivityLogEventValidationError("unregistered-operation");
   }
@@ -1266,37 +1425,42 @@ function canonicalRegistrationForEvent(
 }
 
 function validateCanonicalRegistration(
-  event: Readonly<Record<PropertyKey, unknown>>,
-  registration: ActivityLogOperationRegistration,
+  event: object,
+  registration: object,
   canonical: ActivityLogOperationRegistration,
 ): void {
   if (
     !registrationMatchesCanonical(registration, canonical) ||
-    event.op !== canonical.op ||
-    event.category !== canonical.category
+    runtimeProperty(event, "op") !== canonical.op ||
+    runtimeProperty(event, "category") !== canonical.category
   ) {
     throw new ActivityLogEventValidationError("registration-mismatch");
   }
 }
 
-function registeredEventFields(
-  event: Readonly<Record<PropertyKey, unknown>>,
-): Readonly<Record<string, unknown>> {
-  if (typeof event.extra !== "object" || event.extra === null || Array.isArray(event.extra)) {
+function registeredEventFields(event: object): Readonly<Record<string, unknown>> {
+  if (
+    typeof runtimeProperty(event, "extra") !== "object" ||
+    runtimeProperty(event, "extra") === null ||
+    Array.isArray(runtimeProperty(event, "extra"))
+  ) {
     throw new ActivityLogEventValidationError("fields-not-object");
   }
-  return event.extra as Readonly<Record<string, unknown>>;
+  const fields = runtimeProperty(event, "extra");
+  if (!isRegisteredFieldObject(fields)) {
+    throw new ActivityLogEventValidationError("fields-not-object");
+  }
+  return fields;
 }
 
 export function validateRegisteredActivityLogEvent(
   candidate: object,
 ): ActivityLogOperationRegistration {
-  // Interface-typed events (ServerLogEvent, SecurityLogEvent, ...) carry no index signature, so the
-  // public signature accepts any object and the runtime checks below treat it as an open record.
-  const event = candidate as Readonly<Record<PropertyKey, unknown>>;
+  // Interface-typed events need no index signature: each observed property starts as unknown.
+  const event = candidate;
   const rejection = activityLogEventRejection(event);
   if (rejection !== undefined) throw new ActivityLogEventValidationError(rejection);
-  const registration = activityLogEventRegistration(event);
+  const registration = rawActivityLogEventRegistration(event);
   if (registration === undefined) {
     throw new ActivityLogEventValidationError("unregistered-operation");
   }
@@ -1314,36 +1478,74 @@ type BoundActivityLogEvent<Registration extends ActivityLogOperationRegistration
   RegisteredActivityLogEvent<Registration> &
     ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> };
 
-function rejectedActivityLogEvent<Registration extends ActivityLogOperationRegistration>(
-  error: unknown,
-): BoundActivityLogEvent<Registration> {
-  const rejection =
-    error instanceof ActivityLogEventValidationError ? error.kind : "registration-mismatch";
-  const event = {
+/** A failed construction is a closed transport refusal, never the requested operation. */
+interface RejectedActivityLogEventFields {
+  readonly level: "error";
+  readonly category: "diagnostic";
+  readonly op: "server-log.write-failed";
+  readonly extra: {
+    readonly completeness: "unknown";
+    readonly loss: "event-dropped";
+  };
+  readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
+}
+
+export type RejectedActivityLogEvent = RejectedActivityLogEventFields & {
+  readonly [ACTIVITY_LOG_EVENT_REJECTION]: ActivityLogEventFailureKind;
+};
+
+export type ActivityLogEmission<Registration extends ActivityLogOperationRegistration> =
+  BoundActivityLogEvent<Registration> | RejectedActivityLogEvent;
+
+function rejectedActivityLogEventKind(error: unknown): ActivityLogEventFailureKind {
+  if (!(error instanceof ActivityLogEventValidationError)) return "registration-mismatch";
+  try {
+    const kind: unknown = error.kind;
+    return isActivityLogEventFailureKind(kind) ? kind : "registration-mismatch";
+  } catch {
+    return "registration-mismatch";
+  }
+}
+
+function rejectedActivityLogEvent(error: unknown): RejectedActivityLogEvent {
+  const rejection = rejectedActivityLogEventKind(error);
+  const event: RejectedActivityLogEventFields = {
     level: "error",
     category: "diagnostic",
     op: "server-log.write-failed",
     extra: { completeness: "unknown", loss: "event-dropped" },
   };
   markActivityLogEventRejection(event, rejection);
-  return event as unknown as BoundActivityLogEvent<Registration>;
+  // SAFETY: these closed fields and the admitted kind are constructed here. The immutable
+  // marker was installed on this same object; observability.test.ts pins its exact descriptor.
+  // This nominal attachment confers no registration or write authority.
+  return event as RejectedActivityLogEvent;
 }
 
 function validDiagnosticValues(contract: ActivityLogFieldContract, value: unknown): boolean {
   if (!Array.isArray(value) || value.length === 0) return false;
   const values: readonly unknown[] = value;
-  if (new Set(values).size !== values.length || contract.dataClass !== "closed-enum") return false;
-  if (contract.type === "boolean") return values.every((entry) => typeof entry === "boolean");
+  if (
+    new Set<unknown>(Array.prototype.values.call(values)).size !== values.length ||
+    contract.dataClass !== "closed-enum"
+  )
+    return false;
+  if (contract.type === "boolean")
+    return registrationMembers(values, (entry) => typeof entry === "boolean");
   return (
     contract.type === "string" &&
     contract.values !== undefined &&
-    values.every((entry) => typeof entry === "string" && contract.values?.includes(entry))
+    registrationMembers(
+      values,
+      (entry) => typeof entry === "string" && contract.values?.includes(entry) === true,
+    )
   );
 }
 
 function diagnosticConditionMatchesContract(
   contract: ActivityLogFieldContract,
-  candidate: object,
+  candidate: { readonly field: unknown },
 ): boolean {
   const fieldType = runtimeProperty(contract, "type");
   if ("positive" in candidate)
@@ -1380,7 +1582,7 @@ export function isActivityLogDiagnosticWhen(
   if (!Array.isArray(candidate) || candidate.length === 0) return false;
   const conditions: readonly unknown[] = candidate;
   const seen = new Set<string>();
-  return conditions.every((condition) => {
+  return registrationMembers(conditions, (condition) => {
     if (!validDiagnosticCondition(fields, condition) || seen.has(condition.field)) return false;
     seen.add(condition.field);
     return true;
@@ -1435,10 +1637,13 @@ export function activityLogEvent<
   registration: Registration,
   envelope: ActivityLogEventEnvelope,
   fields: ExactActivityLogFields<Registration, Fields>,
-): BoundActivityLogEvent<Registration> {
+): ActivityLogEmission<Registration> {
   try {
     const normalizedEnvelope = normalizeActivityLogEnvelope(registration, envelope);
     validateActivityLogEnvelope(registration, normalizedEnvelope);
+    // SAFETY: this local field mapping gains no public authority until the complete registered
+    // field validator below succeeds. observability.test.ts pins malformed/default fields;
+    // validation failures return the separate closed refusal arm.
     const normalizedFields = {
       completeness: "complete",
       loss: "none",
@@ -1453,7 +1658,7 @@ export function activityLogEvent<
     };
     return attachActivityLogEventRegistration(event, registration);
   } catch (error) {
-    return rejectedActivityLogEvent<Registration>(error);
+    return rejectedActivityLogEvent(error);
   }
 }
 

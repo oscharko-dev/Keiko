@@ -12,6 +12,7 @@ import {
   type CodeTaskSha256Digest,
 } from "./code-task-acceptance.js";
 import { isCodeTaskSkillId, type CodeTaskSkillId } from "./code-task-auxiliary.js";
+import { isOneOf } from "./contract-validation-primitives.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 
 export const SKILL_DISCOVERY_SCHEMA_VERSION = 1;
@@ -111,10 +112,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   );
 }
 
-function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
@@ -161,98 +158,198 @@ function isProfileVersion(value: unknown): value is number {
 }
 
 function strictlyAscending(values: readonly string[]): boolean {
-  return values.every((value, index) => index === 0 || (values[index - 1] ?? "") < value);
+  const count = values.length;
+  for (let index = 0; index < count; index += 1) {
+    const value = values[index];
+    if (typeof value !== "string") return false;
+    const ascending = index === 0 || (values[index - 1] ?? "") < value;
+    if (!ascending) return false;
+  }
+  return true;
 }
 
-function compatibilityErrors(value: unknown, path: string): string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = unknownKeys(value, COMPATIBILITY_KEYS, path);
-  const profile = ownField(value, "profile");
-  if (typeof profile !== "string" || !PROFILE_ID_PATTERN.test(profile)) {
-    errors.push(`${path}.profile is invalid`);
+function checkCompatibility(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is SkillCompatibilityV1 {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return false;
   }
+  errors.push(...unknownKeys(value, COMPATIBILITY_KEYS, path));
+  const profile = ownField(value, "profile");
+  const profileValid = typeof profile === "string" && PROFILE_ID_PATTERN.test(profile);
+  if (!profileValid) errors.push(`${path}.profile is invalid`);
   const minVersion = ownField(value, "minVersion");
   const maxVersion = ownField(value, "maxVersion");
-  if (!isProfileVersion(minVersion)) errors.push(`${path}.minVersion is invalid`);
-  if (!isProfileVersion(maxVersion)) errors.push(`${path}.maxVersion is invalid`);
-  if (isProfileVersion(minVersion) && isProfileVersion(maxVersion) && minVersion > maxVersion) {
+  const min = isProfileVersion(minVersion);
+  const max = isProfileVersion(maxVersion);
+  if (!min) errors.push(`${path}.minVersion is invalid`);
+  if (!max) errors.push(`${path}.maxVersion is invalid`);
+  if (isProfileVersion(minVersion) && isProfileVersion(maxVersion) && minVersion > maxVersion)
     errors.push(`${path}.minVersion must not exceed maxVersion`);
-  }
-  return errors;
+  return [profileValid, min, max].every(Boolean);
 }
 
-function capabilitiesErrors(value: unknown, path: string): string[] {
-  if (!Array.isArray(value)) return [`${path} must be an array`];
+function checkCapabilities(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is readonly string[] {
+  if (!Array.isArray(value)) {
+    errors.push(`${path} must be an array`);
+    return false;
+  }
   if (value.length > SKILL_DISCOVERY_LIMITS.maxCapabilities) {
-    return [`${path} must hold at most ${String(SKILL_DISCOVERY_LIMITS.maxCapabilities)} ids`];
+    errors.push(`${path} must hold at most ${String(SKILL_DISCOVERY_LIMITS.maxCapabilities)} ids`);
+    return false;
   }
-  const errors: string[] = value.flatMap((id: unknown, index) =>
-    isCapabilityId(id) ? [] : [`${path}[${String(index)}] is invalid`],
-  );
-  if (errors.length === 0 && !strictlyAscending(value as readonly string[])) {
+  const admitted = checkCapabilityMembers(value, path, errors);
+  if (errors.length === 0 && admitted && !strictlyAscending(value))
     errors.push(`${path} must be sorted and unique`);
+  return admitted;
+}
+
+function checkCapabilityMembers(
+  value: readonly unknown[],
+  path: string,
+  errors: string[],
+): value is readonly string[] {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    if (!isCapabilityId(value[index])) {
+      errors.push(`${path}[${String(index)}] is invalid`);
+      admitted = false;
+      if (!(index in value)) return false;
+    }
   }
-  return errors;
+  return admitted;
 }
 
 /** A compatibility range with a valid profile id and 1 <= minVersion <= maxVersion. */
 export function isSkillCompatibilityV1(value: unknown): value is SkillCompatibilityV1 {
-  return compatibilityErrors(value, "compatibility").length === 0;
+  const errors: string[] = [];
+  const admitted = checkCompatibility(value, "compatibility", errors);
+  return admitted && errors.length === 0;
 }
 
 /** A sorted, unique, bounded set of ids in the catalog's canonical tool identity shape. */
 export function isSkillCapabilitySet(value: unknown): value is readonly string[] {
-  return capabilitiesErrors(value, "capabilities").length === 0;
+  const errors: string[] = [];
+  const admitted = checkCapabilities(value, "capabilities", errors);
+  return admitted && errors.length === 0;
 }
 
-function readinessErrors(value: unknown, path: string): string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
+function checkReadiness(value: unknown, path: string, errors: string[]): value is SkillReadinessV1 {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
   const state = ownField(value, "state");
-  if (state === "ready") return unknownKeys(value, ["state"], path);
-  if (state !== "unavailable") return [`${path}.state must be ready or unavailable`];
-  const errors = unknownKeys(value, ["state", "reason"], path);
-  if (!isOneOf(ownField(value, "reason"), SKILL_UNAVAILABLE_REASONS)) {
-    errors.push(`${path}.reason is invalid`);
+  if (state === "ready") {
+    errors.push(...unknownKeys(value, ["state"], path));
+    return true;
   }
-  return errors;
+  if (state !== "unavailable") {
+    errors.push(`${path}.state must be ready or unavailable`);
+    return false;
+  }
+  errors.push(...unknownKeys(value, ["state", "reason"], path));
+  const reason = isOneOf(ownField(value, "reason"), SKILL_UNAVAILABLE_REASONS);
+  if (!reason) errors.push(`${path}.reason is invalid`);
+  return reason;
 }
 
-function entryErrors(value: unknown, path: string): string[] {
-  if (!isRecord(value)) return [`${path} must be an object`];
-  const errors = unknownKeys(value, ENTRY_KEYS, path);
+function checkEntry(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is SkillDiscoveryEntryV1 {
+  if (!isRecord(value)) {
+    errors.push(`${path} must be an object`);
+    return false;
+  }
+  errors.push(...unknownKeys(value, ENTRY_KEYS, path));
   const skillId = ownField(value, "skillId");
-  if (!isCodeTaskSkillId(skillId)) {
-    errors.push(`${path}.skillId is invalid`);
-  } else if (ownField(value, "version") !== skillVersionOf(skillId)) {
-    errors.push(`${path}.version must be the version of skillId`);
+  const id = isCodeTaskSkillId(skillId);
+  let version = false;
+  if (!id) errors.push(`${path}.skillId is invalid`);
+  else {
+    version = ownField(value, "version") === skillVersionOf(skillId);
+    if (!version) errors.push(`${path}.version must be the version of skillId`);
   }
-  if (!isCodeTaskSha256Digest(ownField(value, "sourceDigest"))) {
-    errors.push(`${path}.sourceDigest is invalid`);
-  }
-  if (!isSkillCategory(ownField(value, "category"))) errors.push(`${path}.category is invalid`);
-  errors.push(
-    ...capabilitiesErrors(ownField(value, "capabilities"), `${path}.capabilities`),
-    ...compatibilityErrors(ownField(value, "compatibility"), `${path}.compatibility`),
-    ...readinessErrors(ownField(value, "readiness"), `${path}.readiness`),
+  const digest = isCodeTaskSha256Digest(ownField(value, "sourceDigest"));
+  if (!digest) errors.push(`${path}.sourceDigest is invalid`);
+  const category = isSkillCategory(ownField(value, "category"));
+  if (!category) errors.push(`${path}.category is invalid`);
+  // Each nested owner starts with its original independent local error collection.
+  const capabilityErrors: string[] = [];
+  const compatibilityErrors: string[] = [];
+  const readinessErrors: string[] = [];
+  const capabilities = checkCapabilities(
+    ownField(value, "capabilities"),
+    `${path}.capabilities`,
+    capabilityErrors,
   );
-  return errors;
+  const compatibility = checkCompatibility(
+    ownField(value, "compatibility"),
+    `${path}.compatibility`,
+    compatibilityErrors,
+  );
+  const readiness = checkReadiness(
+    ownField(value, "readiness"),
+    `${path}.readiness`,
+    readinessErrors,
+  );
+  errors.push(...capabilityErrors, ...compatibilityErrors, ...readinessErrors);
+  return [id, version, digest, category, capabilities, compatibility, readiness].every(Boolean);
 }
 
-function skillsErrors(value: unknown): string[] {
-  if (!Array.isArray(value)) return ["skills must be an array"];
-  if (value.length > SKILL_DISCOVERY_LIMITS.maxSkills) {
-    return [`skills must hold at most ${String(SKILL_DISCOVERY_LIMITS.maxSkills)} entries`];
+function checkSkills(value: unknown, errors: string[]): value is readonly SkillDiscoveryEntryV1[] {
+  if (!Array.isArray(value)) {
+    errors.push("skills must be an array");
+    return false;
   }
-  const errors: string[] = value.flatMap((entry: unknown, index) =>
-    entryErrors(entry, `skills[${String(index)}]`),
-  );
-  if (errors.length > 0) return errors;
+  if (value.length > SKILL_DISCOVERY_LIMITS.maxSkills) {
+    errors.push(`skills must hold at most ${String(SKILL_DISCOVERY_LIMITS.maxSkills)} entries`);
+    return false;
+  }
+  const members: string[] = [];
+  const entries: readonly unknown[] = value;
+  const admitted = checkSkillMembers(entries, members);
+  errors.push(...members);
+  if (members.length > 0 || !admitted) return false;
   // One version per skill: two ids of one skill (`@1` beside `@1.0`, or an older version beside a
   // newer one) would let a downgraded or confusable binding hide behind the listing.
-  const names = (value as readonly SkillDiscoveryEntryV1[]).map((entry) =>
-    skillNameOf(entry.skillId),
-  );
-  return new Set(names).size === names.length ? [] : ["skills must name each skill once"];
+  // Preserve the separate second observation used for one-version-per-skill admission.
+  const names: string[] = [];
+  const count = entries.length;
+  for (let index = 0; index < count; index += 1) {
+    const entry = entries[index];
+    if (entry === undefined) throw new TypeError("skill entry is unavailable");
+    names.push(skillNameOf(entry.skillId));
+  }
+  if (new Set(names).size !== names.length) errors.push("skills must name each skill once");
+  return true;
+}
+
+function checkSkillMembers(
+  value: readonly unknown[],
+  errors: string[],
+): value is readonly SkillDiscoveryEntryV1[] {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const path = `skills[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${path} must be an object`);
+      return false;
+    }
+    admitted = checkEntry(value[index], path, errors) && admitted;
+  }
+  return admitted;
 }
 
 /** Validates a discovery result exactly and closed: no key, value or skill outside the contract. */
@@ -261,16 +358,22 @@ export function validateSkillDiscoveryResultV1(
 ): CodingWorkbenchValidationResult<SkillDiscoveryResultV1> {
   if (!isRecord(value)) return { ok: false, errors: ["skill discovery result must be an object"] };
   const errors = unknownKeys(value, RESULT_KEYS, "skillDiscovery");
-  if (ownField(value, "schemaVersion") !== SKILL_DISCOVERY_SCHEMA_VERSION) {
-    errors.push("schemaVersion must be the literal 1");
-  }
-  if (!isCodeTaskSha256Digest(ownField(value, "catalogDigest"))) {
-    errors.push("catalogDigest is invalid");
-  }
-  errors.push(...skillsErrors(ownField(value, "skills")));
-  return errors.length === 0
-    ? { ok: true, value: value as unknown as SkillDiscoveryResultV1 }
-    : { ok: false, errors };
+  const admitted = checkDiscoveryResult(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkDiscoveryResult(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & SkillDiscoveryResultV1 {
+  const version = ownField(value, "schemaVersion") === SKILL_DISCOVERY_SCHEMA_VERSION;
+  if (!version) errors.push("schemaVersion must be the literal 1");
+  const digest = isCodeTaskSha256Digest(ownField(value, "catalogDigest"));
+  if (!digest) errors.push("catalogDigest is invalid");
+  const memberErrors: string[] = [];
+  const skills = checkSkills(ownField(value, "skills"), memberErrors);
+  errors.push(...memberErrors);
+  return version && digest && skills;
 }
 
 // ─── The operator's channel (#3417) ──────────────────────────────────────────────
@@ -310,19 +413,25 @@ export function validateCodingWorkbenchRuntimeSkillsChannelPayload(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSkillsChannelPayload> {
   if (!isRecord(value)) return { ok: false, errors: ["skills channel payload must be an object"] };
   const errors = unknownKeys(value, SKILLS_CHANNEL_KEYS, "skillsChannelPayload");
+  const admitted = checkSkillsChannel(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkSkillsChannel(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeSkillsChannelPayload {
   const session = ownField(value, "session");
-  if (!isOneOf(session, CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES)) {
-    errors.push("skillsChannelPayload.session is invalid");
-  }
+  const sessionValid = isOneOf(session, CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES);
+  if (!sessionValid) errors.push("skillsChannelPayload.session is invalid");
   const skills = ownField(value, "skills");
-  if (session === "unpaired" && skills !== undefined) {
+  if (session === "unpaired" && skills !== undefined)
     errors.push("skillsChannelPayload.skills must be absent when the session is unpaired");
-  }
+  let listingValid = true;
   if (skills !== undefined) {
     const listing = validateSkillDiscoveryResultV1(skills);
+    listingValid = listing.ok;
     if (!listing.ok) errors.push(...listing.errors);
   }
-  return errors.length === 0
-    ? { ok: true, value: value as unknown as CodingWorkbenchRuntimeSkillsChannelPayload }
-    : { ok: false, errors };
+  return sessionValid && listingValid;
 }

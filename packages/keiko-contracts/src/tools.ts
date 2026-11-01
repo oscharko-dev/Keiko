@@ -46,7 +46,9 @@ export type NetworkPolicy = "inherit" | "none";
 
 const NETWORK_GATEWAY_POLICY_KEYS = new Set(["mode", "host", "port"]);
 
-function ownNetworkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {
+function ownNetworkGatewayPolicyData(
+  value: unknown,
+): Readonly<Partial<Record<keyof NetworkGatewayPolicy, unknown>>> | undefined {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
   const prototype: unknown = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) return undefined;
@@ -61,10 +63,17 @@ function ownNetworkGatewayPolicyData(value: unknown): Record<string, unknown> | 
   ) {
     return undefined;
   }
-  return Object.fromEntries(entries.map(([key, descriptor]) => [key, descriptor.value as unknown]));
+  return Object.fromEntries(
+    entries.map(([key, descriptor]) => {
+      const value: unknown = descriptor.value;
+      return [key, value];
+    }),
+  );
 }
 
-function networkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {
+function networkGatewayPolicyData(
+  value: unknown,
+): Readonly<Partial<Record<keyof NetworkGatewayPolicy, unknown>>> | undefined {
   try {
     return ownNetworkGatewayPolicyData(value);
   } catch {

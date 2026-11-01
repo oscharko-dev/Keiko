@@ -3,12 +3,7 @@ import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "./coding-workbench-runtime-constants.js";
 import { GITHUB_ISSUE_NUMBER_MAX } from "./github-issue-reference.js";
 import { isSafeGitRefName } from "./git-repository.js";
-import {
-  exactKeys,
-  isRecord,
-  result,
-  validateSafeId,
-} from "./coding-workbench-runtime-api-validation.js";
+import { exactKeys, isRecord, validateSafeId } from "./coding-workbench-runtime-api-validation.js";
 
 export const CODING_WORKBENCH_ISSUE_NUMBER_MAX = GITHUB_ISSUE_NUMBER_MAX;
 const DIGEST_FIELDS = [
@@ -25,21 +20,38 @@ export function validateCodingWorkbenchIssueBinding(
 ): CodingWorkbenchValidationResult<CodingWorkbenchIssueBinding> {
   if (!isRecord(value)) return { ok: false, errors: ["issueBinding must be an object"] };
   const errors = exactKeys(value, KEYS, "issueBinding");
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION)
-    errors.push("issueBinding.schemaVersion is invalid");
-  validateSafeId(value.repositoryId, "issueBinding.repositoryId", errors, 128);
-  for (const field of DIGEST_FIELDS) {
-    if (typeof value[field] !== "string" || !/^[a-f0-9]{64}$/u.test(value[field]))
-      errors.push(`issueBinding.${field} must be a sha256 digest`);
-  }
-  if (!validIssueNumber(value.issueNumber))
-    errors.push("issueBinding.issueNumber must be a bounded positive integer");
-  if (typeof value.defaultBaseRef !== "string" || !isSafeGitRefName(value.defaultBaseRef))
-    errors.push("issueBinding.defaultBaseRef must be a bounded safe git ref");
-  return result(value, errors);
+  const admitted = checkIssueBinding(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
 
-function validIssueNumber(value: unknown): boolean {
+function checkIssueBinding(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchIssueBinding {
+  const version = value.schemaVersion === CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
+  if (!version) errors.push("issueBinding.schemaVersion is invalid");
+  const repository = validateSafeId(value.repositoryId, "issueBinding.repositoryId", errors, 128);
+  let digests = true;
+  for (const field of DIGEST_FIELDS) {
+    if (!digestFieldValid(value, field)) {
+      errors.push(`issueBinding.${field} must be a sha256 digest`);
+      digests = false;
+    }
+  }
+  const issueNumber = validIssueNumber(value.issueNumber);
+  if (!issueNumber) errors.push("issueBinding.issueNumber must be a bounded positive integer");
+  const ref = typeof value.defaultBaseRef === "string" && isSafeGitRefName(value.defaultBaseRef);
+  if (!ref) errors.push("issueBinding.defaultBaseRef must be a bounded safe git ref");
+  return [version, repository, digests, issueNumber, ref].every(Boolean);
+}
+
+function digestFieldValid(value: Record<string, unknown>, field: string): boolean {
+  if (typeof value[field] !== "string") return false;
+  const digest: unknown = value[field];
+  return typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest);
+}
+
+function validIssueNumber(value: unknown): value is number {
   return (
     typeof value === "number" &&
     Number.isSafeInteger(value) &&

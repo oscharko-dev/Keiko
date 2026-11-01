@@ -23,7 +23,7 @@ import type {
   GatewayNativeToolAdvertisement,
   GatewayToolCatalogAdvertisement,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import { withCorrelationId } from "./observability.js";
 import {
   createGatewayToolCatalogBridge,
@@ -337,7 +337,7 @@ function removedLegacyRequest(): GatewayRequest {
 }
 function adapter(
   fetchImpl: typeof fetch,
-  log: ModelGatewayLogEvent[] = [],
+  log: ModelGatewayLogTransport[] = [],
   now = (): number => NOW,
 ): OpenAiAdapter {
   return new OpenAiAdapter({
@@ -474,7 +474,7 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     expect(JSON.stringify(result)).not.toContain(CONFIG.apiKey);
   });
   it("emits correlated body-free projection, binding and rejection activity", async () => {
-    const log: ModelGatewayLogEvent[] = [];
+    const log: ModelGatewayLogTransport[] = [];
     await adapter(() => Promise.resolve(response()), log).call(
       { ...request(), toolCatalog: advertisement() },
       CONFIG,
@@ -672,7 +672,7 @@ describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
   });
 
   it("logs a body-free passthrough event instead of a catalog bind for a native extension call", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: openCodeGatewayCatalogAdvertisement(NOW) },
       (): number => NOW,
@@ -739,7 +739,7 @@ describe("native extensions (OpenCode V2 question, #3414 follow-up)", () => {
     // Production wires every adapter's log sink through `withCorrelationId` before it ever
     // reaches this bridge (see OpenAiAdapter's constructor) -- exercising that same wrapper here
     // is what proves the id is threaded, rather than merely asserting the op name.
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const sink = withCorrelationId(
       {
         write: (event): void => {
@@ -823,7 +823,7 @@ describe("provider invocation batch bounds", () => {
         type: "function",
         function: { name: "read_file", arguments: '{"path":"src/example.ts"}' },
       }));
-      const log: ModelGatewayLogEvent[] = [];
+      const log: ModelGatewayLogTransport[] = [];
       const subject = adapter(
         () =>
           Promise.resolve(
@@ -986,7 +986,7 @@ describe("inactive native Code Mode provider advertisement", () => {
   });
 
   it("keeps execute unbound and logs no JavaScript body", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: codeModeAdvertisement() },
       () => NOW,
@@ -1098,8 +1098,8 @@ function nativeBridge(
   toolCatalog: unknown = nativeAdvertisement(),
   now: () => number = (): number => NOW,
   recordProjection = true,
-): { readonly bridge: GatewayToolCatalogBridge; readonly events: ModelGatewayLogEvent[] } {
-  const events: ModelGatewayLogEvent[] = [];
+): { readonly bridge: GatewayToolCatalogBridge; readonly events: ModelGatewayLogTransport[] } {
+  const events: ModelGatewayLogTransport[] = [];
   const bridge = createGatewayToolCatalogBridge(
     { ...request(), toolCatalog } as GatewayRequest,
     now,
@@ -1141,7 +1141,7 @@ function textResponse(
   };
 }
 
-function opsOf(events: readonly ModelGatewayLogEvent[]): string[] {
+function opsOf(events: readonly ModelGatewayLogTransport[]): string[] {
   return events.map((event) => event.op);
 }
 
@@ -1269,7 +1269,7 @@ describe("native tool advertisement bridge: admission", () => {
       looseNativeAdvertisement({ offered: { offerId: "", expiresAt: "2030-01-01T00:00:00Z" } }),
     ],
   ])("refuses a native advertisement with %s before any transport", (_label, toolCatalog) => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     expect(() =>
       createGatewayToolCatalogBridge(
         { ...request(), toolCatalog } as unknown as GatewayRequest,
@@ -1363,7 +1363,7 @@ describe("native tool advertisement bridge: call binding", () => {
   });
 
   it("logs a body-free passthrough line under the tool-set digest and the caller's correlation", () => {
-    const events: ModelGatewayLogEvent[] = [];
+    const events: ModelGatewayLogTransport[] = [];
     const bridge = createGatewayToolCatalogBridge(
       { ...request(), toolCatalog: nativeAdvertisement() },
       () => NOW,

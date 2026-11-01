@@ -110,109 +110,140 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const strings: readonly string[] = allowed;
+  return typeof value === "string" && strings.includes(value);
 }
 
 function validateStringField(
   record: Record<string, unknown>,
   key: string,
   errors: string[],
-  optional = false,
   label = key,
-): void {
+): boolean {
   const value = record[key];
-  if (value === undefined && optional) return;
   if (typeof value !== "string" || value.length === 0) {
     errors.push(`${label} must be a non-empty string`);
+    return false;
   }
+  return true;
 }
 
-function validateCommandSource(value: unknown, path: string, errors: string[]): void {
+function validateCommandSource(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is RuntimeCommandSource {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
+  let valid = true;
   if (!isOneOf(value.type, ["package-json-script", "ecosystem-manifest", "lockfile"] as const)) {
     errors.push(`${path}.type is invalid`);
+    valid = false;
   }
-  validateStringField(value, "path", errors, false, `${path}.path`);
-  // A capability response is UI-facing and evidence-adjacent, so an absolute path here would reveal
-  // the operator's home directory name, repository location, or container layout. The sibling
-  // contract (verification.ts) already shape-checks its own path field; this one only required a
-  // non-empty string, and the single test that claimed to prove "content-free" output asserted
-  // against a hand-written literal rather than any validator behaviour.
+  const pathOk = validateStringField(value, "path", errors, `${path}.path`);
+  // Keep the portable-path boundary shared with the sibling workspace contracts.
   if (typeof value.path === "string" && !isPortableWorkspaceRelativePath(value.path)) {
     errors.push(`${path}.path must be workspace-relative`);
+    valid = false;
   }
-  validateCommandSourceOptionals(value, path, errors);
+  const optionalsOk = validateCommandSourceOptionals(value, path, errors);
+  return valid && pathOk && optionalsOk;
 }
 
 function validateCommandSourceOptionals(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (value.commandKind !== undefined && !isOneOf(value.commandKind, RUNTIME_COMMAND_KINDS)) {
     errors.push(`${path}.commandKind is invalid`);
+    valid = false;
   }
   if (value.scriptName !== undefined && typeof value.scriptName !== "string") {
     errors.push(`${path}.scriptName must be a string`);
+    valid = false;
   }
   if (value.packageManager !== undefined && typeof value.packageManager !== "string") {
     errors.push(`${path}.packageManager must be a string`);
+    valid = false;
   }
+  return valid;
 }
 
 function validateCapabilityRequiredFields(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
-  validateStringField(value, "id", errors);
-  validateStringField(value, "label", errors);
+): boolean {
+  const idOk = validateStringField(value, "id", errors);
+  const labelOk = validateStringField(value, "label", errors);
+  let valid = true;
   if (!isOneOf(value.kind, RUNTIME_CAPABILITY_KINDS)) {
     errors.push(`${path}.kind is invalid`);
+    valid = false;
   }
   if (!isOneOf(value.state, RUNTIME_CAPABILITY_STATES)) {
     errors.push(`${path}.state is invalid`);
+    valid = false;
   }
+  return idOk && labelOk && valid;
 }
 
 function validateCapabilityOptionalFields(
   value: Record<string, unknown>,
   path: string,
   errors: string[],
-): void {
+): boolean {
+  let valid = true;
   if (value.version !== undefined && typeof value.version !== "string") {
     errors.push(`${path}.version must be a string`);
+    valid = false;
   }
   if (
     value.unavailableReason !== undefined &&
     !isOneOf(value.unavailableReason, RUNTIME_CAPABILITY_UNAVAILABLE_REASONS)
   ) {
     errors.push(`${path}.unavailableReason is invalid`);
+    valid = false;
   }
   if (value.remediationHint !== undefined && typeof value.remediationHint !== "string") {
     errors.push(`${path}.remediationHint must be a string`);
+    valid = false;
   }
   if (value.source !== undefined) {
-    validateCommandSource(value.source, `${path}.source`, errors);
+    const sourceOk = validateCommandSource(value.source, `${path}.source`, errors);
+    valid = sourceOk && valid;
   }
+  return valid;
 }
 
-function validateCapability(value: unknown, index: number, errors: string[]): void {
+function validateCapability(
+  value: unknown,
+  index: number,
+  errors: string[],
+): value is RuntimeCapability {
   const path = `capabilities[${String(index)}]`;
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
-  validateCapabilityRequiredFields(value, path, errors);
-  validateCapabilityOptionalFields(value, path, errors);
+  const requiredOk = validateCapabilityRequiredFields(value, path, errors);
+  const optionalOk = validateCapabilityOptionalFields(value, path, errors);
+  return requiredOk && optionalOk;
 }
 
-function validateResponseScalars(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== RUNTIME_CAPABILITY_SCHEMA_VERSION)
+function validateResponseScalars(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Omit<RuntimeCapabilitiesResponse, "capabilities"> {
+  let valid = true;
+  if (value.schemaVersion !== RUNTIME_CAPABILITY_SCHEMA_VERSION) {
     errors.push("schemaVersion is invalid");
+    valid = false;
+  }
   const generatedAtMs = value.generatedAtMs;
   if (
     typeof generatedAtMs !== "number" ||
@@ -220,21 +251,39 @@ function validateResponseScalars(value: Record<string, unknown>, errors: string[
     generatedAtMs < 0
   ) {
     errors.push("generatedAtMs must be a non-negative safe integer");
+    valid = false;
   }
   const deadlineMs = value.deadlineMs;
   if (typeof deadlineMs !== "number" || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1) {
     errors.push("deadlineMs must be a positive safe integer");
+    valid = false;
   }
+  return valid;
 }
 
-function validateCapabilitiesArray(value: Record<string, unknown>, errors: string[]): void {
+function validateCapabilityEntries(value: unknown, errors: string[]): value is RuntimeCapability[] {
+  if (!Array.isArray(value)) {
+    errors.push("capabilities must be an array");
+    return false;
+  }
+  const length = value.length;
+  let valid = true;
+  for (let index = 0; index < length; index++) {
+    const entryOk = validateCapability(value[index], index, errors);
+    valid = entryOk && valid;
+  }
+  return valid;
+}
+
+function validateCapabilitiesArray(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & Pick<RuntimeCapabilitiesResponse, "capabilities"> {
   if (!Array.isArray(value.capabilities)) {
     errors.push("capabilities must be an array");
-  } else {
-    value.capabilities.forEach((entry, index) => {
-      validateCapability(entry, index, errors);
-    });
+    return false;
   }
+  return validateCapabilityEntries(value.capabilities, errors);
 }
 
 export function validateRuntimeCapabilitiesResponse(value: unknown): RuntimeCapabilitiesParse {
@@ -242,10 +291,10 @@ export function validateRuntimeCapabilitiesResponse(value: unknown): RuntimeCapa
   if (!isRecord(value)) {
     return { ok: false, errors: ["response must be an object"] };
   }
-  validateResponseScalars(value, errors);
-  validateCapabilitiesArray(value, errors);
-  if (errors.length > 0) {
+  const scalarsOk = validateResponseScalars(value, errors);
+  const capabilitiesOk = validateCapabilitiesArray(value, errors);
+  if (!scalarsOk || !capabilitiesOk) {
     return { ok: false, errors };
   }
-  return { ok: true, value: value as unknown as RuntimeCapabilitiesResponse };
+  return { ok: true, value };
 }

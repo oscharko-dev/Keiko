@@ -206,14 +206,28 @@ function reportFailedSecurityLogSink(
   warnFailedSecurityLogSink(droppedOpDigest, errorKind);
 }
 
-function warnFailedSecurityLogSink(droppedOpDigest: string, errorKind: string): void {
+function warnFailedSecurityLogSink(
+  droppedOpDigest: string,
+  errorKind: string,
+  channel: "security" | "activity" = "security",
+): void {
   try {
-    process.emitWarning("Keiko security log sink is failing; log lines are being dropped.", {
-      type: "KeikoActivityLog",
-      code: "KEIKO_LOG_SINK_FAILED",
-      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
-    });
+    process.emitWarning(
+      channel === "security"
+        ? "Keiko security log sink is failing; log lines are being dropped."
+        : "Keiko activity log sink is failing; log lines are being dropped.",
+      {
+        type: "KeikoActivityLog",
+        code: "KEIKO_LOG_SINK_FAILED",
+        detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
+      },
+    );
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.
   }
+}
+
+/** Internal fixed warning action for injected activity-log ports. */
+export function reportActivityLogPortWarning(droppedOpDigest: string, errorKind: string): void {
+  warnFailedSecurityLogSink(droppedOpDigest, errorKind, "activity");
 }

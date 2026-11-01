@@ -24,12 +24,13 @@
 
 import {
   activityLogEvent,
-  classifyErrorKind,
   defineActivityLogOperation,
   recordActivityLogLoss,
   withActivityLogCorrelation,
   type ActivityLogErrorKind,
+  type RejectedActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { securityErrorKind } from "@oscharko-dev/keiko-security";
 import {
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
@@ -52,6 +53,9 @@ export interface ModelGatewayLogEvent {
   readonly errorKind?: string | undefined;
   readonly extra?: Readonly<Record<string, unknown>> | undefined;
 }
+
+// A registered emission may also be the body-free rejection of an event that failed its contract.
+export type ModelGatewayLogTransport = ModelGatewayLogEvent | RejectedActivityLogEvent;
 
 export interface GatewayFailureEvidence {
   readonly frames: readonly string[];
@@ -90,7 +94,7 @@ export function gatewayFailureEvidence(
 export interface ModelGatewayLogSink {
   /** The composition root supplies the existing body-free stack/cause reducers. */
   readonly errorEvidence?: ((error: unknown) => GatewayFailureEvidence) | undefined;
-  readonly write: (event: ModelGatewayLogEvent) => void;
+  readonly write: (event: ModelGatewayLogTransport) => void;
   readonly correlationId?: string | undefined;
   // Cheap level predicate — the ONLY way a below-threshold event can cost nothing here.
   //
@@ -121,7 +125,7 @@ export function logLevelEnabled(sink: ModelGatewayLogSink, level: ModelGatewayLo
 // call site allocates nothing beyond the event it is about to discard. Its predicate refuses every
 // level, so a gated site wired to no sink at all does not even build the event it would discard.
 export const nullModelGatewayLogSink: ModelGatewayLogSink = Object.freeze({
-  write(_event: ModelGatewayLogEvent): void {
+  write(_event: ModelGatewayLogTransport): void {
     // The default for every unwired call site: the event is lost, and counted as such (#3532).
     recordActivityLogLoss("port-unwired");
   },
@@ -172,7 +176,7 @@ const GATEWAY_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
 
 function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
   return {
-    write(event: ModelGatewayLogEvent): void {
+    write(event: ModelGatewayLogTransport): void {
       try {
         sink.write(event);
       } catch (cause) {
@@ -199,7 +203,7 @@ function isolateLogSink(sink: ModelGatewayLogSink): ModelGatewayLogSink {
 
 function reportFailedLogSink(
   sink: ModelGatewayLogSink,
-  droppedEvent: ModelGatewayLogEvent,
+  droppedEvent: ModelGatewayLogTransport,
   cause: unknown,
 ): void {
   if (REPORTED_FAILED_SINKS.has(sink)) return;
@@ -273,7 +277,7 @@ export function withCorrelationId(
     return sink;
   }
   return {
-    write(event: ModelGatewayLogEvent): void {
+    write(event: ModelGatewayLogTransport): void {
       sink.write(event.correlationId === undefined ? correlatedEvent(event, correlationId) : event);
     },
     enabled(level: ModelGatewayLogLevel): boolean {
@@ -288,7 +292,10 @@ export function logCorrelationId(sink: ModelGatewayLogSink): string | undefined 
   return sink.correlationId;
 }
 
-function correlatedEvent(event: ModelGatewayLogEvent, correlationId: string): ModelGatewayLogEvent {
+function correlatedEvent(
+  event: ModelGatewayLogTransport,
+  correlationId: string,
+): ModelGatewayLogTransport {
   return withActivityLogCorrelation(event, correlationId);
 }
 
@@ -306,34 +313,21 @@ export function logTimer(): () => number {
 // `extra` redaction entirely and is only length/prose-checked at the far end. A non-conforming
 // `code` is not hypothetical: SDKs routinely set it to a sentence ("The request body was rejected:
 // …"), which is a provider message reaching the log through the one field guaranteed to be
-// exempt from field-name policy. `classifyErrorKind` (ADR-0173 D11) is the identical shape gate
-// `keiko-server` and `keiko-local-knowledge` apply, imported from `keiko-contracts` rather than
-// restated here so the three surfaces cannot drift into accepting different things: an
-// identifier, a code, a taxonomy label — never a sentence.
+// exempt from field-name policy. Security's `securityErrorKind` (ADR-0173 D11) owns the guarded
+// reads and canonical Contracts shape gate, shared with the Knowledge, Consolidation and Vault
+// ports: an identifier, a code, a taxonomy label — never a sentence.
 //
 // Reading `code`/`name` also runs foreign code: an accessor, or a Proxy `get` trap, both of which
 // can throw. Every caller classifies a cause while it is already handling a failure — a retry
 // ladder mid-`catch`, a resilience event mid-construction — so a throw here would escape ahead of
 // any sink guard and replace the real failure with an unrelated "hostile accessor" crash. An
 // unreadable property is an unclassifiable one and must degrade to the next candidate.
-function errorKindProperty(error: object, key: string): string | undefined {
-  let value: unknown;
-  try {
-    value = (error as Record<string, unknown>)[key];
-  } catch {
-    return undefined;
-  }
-  return classifyErrorKind(value);
-}
 
 // The error's KIND, never its text. A provider's `message` routinely carries the rejected body,
 // the endpoint, or an echoed prompt fragment, so it is not read here at all — the taxonomy code
 // (`PROXY_BLOCKED_BY_POLICY`, `RATE_LIMIT`, …) is what an operator greps for anyway.
 export function logErrorKind(error: unknown): string {
-  if (typeof error !== "object" || error === null) {
-    return "unknown";
-  }
-  return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
+  return securityErrorKind(error);
 }
 
 const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{

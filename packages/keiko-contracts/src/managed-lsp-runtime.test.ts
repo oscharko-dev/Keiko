@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  installIgnoredProtocolMetadata,
+  itPreservesCapturedExtent,
+  protocolEnumerationInput,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 
 import {
   MANAGED_LSP_BUILD_TAG_MAX_COUNT,
@@ -16,6 +21,7 @@ import {
   matchesManagedLspConfigurationPrecondition,
   parseManagedLspRuntimeConfiguration,
   resolveManagedLspSetting,
+  type ManagedLspRuntimeParseResult as SourceRuntimeResult,
 } from "./managed-lsp-runtime.js";
 
 function approved(runtimeId: string): Record<string, unknown> {
@@ -500,3 +506,212 @@ describe("managed LSP runtime configuration", () => {
     expect(parseManagedLspRuntimeConfiguration(hostile).ok).toBe(false);
   });
 });
+
+import {
+  parseManagedLspRuntimeConfiguration as publicRuntime,
+  type ManagedLspRuntimeParseResult,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
+
+describe.each([
+  ["source", parseManagedLspRuntimeConfiguration],
+  ["public", publicRuntime],
+] as const)("3918 runtime owning admission %s", (_surface, parse) => {
+  it("retains the complete healthy Go configuration and settings", () => {
+    const input = configuration("go", goSettings());
+    const result = parse(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.settings).toBe(input.settings);
+    if (result.value.language === "go") expect(result.value.settings.moduleDownloads).toBe(false);
+  });
+  it("refuses an absent physical build tag", () => {
+    expect(
+      parse(configuration("go", { ...goSettings(), buildTags: new Array<unknown>(1) })),
+    ).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+  });
+  it("refuses a malformed physical build tag concealed by caller every", () => {
+    const buildTags = [42];
+    Object.defineProperty(buildTags, "every", { value: (): boolean => true });
+    expect(parse(configuration("go", { ...goSettings(), buildTags }))).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+  });
+  it("refuses a malformed path concealed by caller validation and projection", () => {
+    const extraPaths = [{}];
+    Object.defineProperty(extraPaths, "every", { value: (): boolean => true });
+    Object.defineProperty(extraPaths, "map", { value: (): string[] => ["src"] });
+    expect(parse(configuration("python", { ...pythonSettings(), extraPaths }))).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+  });
+});
+
+describe.each([
+  ["source", parseManagedLspRuntimeConfiguration],
+  ["public", publicRuntime],
+] as const)("3918 managed-lsp-runtime captured extent %s", (_surface, parse) => {
+  itPreservesCapturedExtent({
+    member: "integration",
+    bound: MANAGED_LSP_BUILD_TAG_MAX_COUNT,
+    admit: (observed) => parse(configuration("go", { ...goSettings(), buildTags: observed })).ok,
+  });
+});
+
+describe.each([
+  ["source", parseManagedLspRuntimeConfiguration],
+  ["public", publicRuntime],
+] as const)("3918 runtime original exclusion-limit %s", (_surface, parse) => {
+  it.each([NaN, undefined])(
+    "preserves the original negative first-cap path observation %s",
+    (first) => {
+      let lengths = 0;
+      const paths = new Proxy([contained("src")], {
+        get(target, key, receiver): unknown {
+          if (key === "length") return lengths++ === 0 ? first : target.length;
+          const datum: unknown = Reflect.get(target, key, receiver);
+          return datum;
+        },
+      });
+      const result = parse(configuration("python", { ...pythonSettings(), extraPaths: paths }));
+      expect(result.ok).toBe(true);
+      if (result.ok && result.value.language === "python")
+        expect(result.value.settings.extraPaths).toBe(paths);
+      expect(lengths).toBeGreaterThan(1);
+    },
+  );
+});
+
+export function parsePublicManagedLspRuntimeConfiguration(
+  input: unknown,
+): ManagedLspRuntimeParseResult {
+  const result = publicRuntime(input);
+  return result;
+}
+
+describe("Managed LSP runtime configuration public parser (#3918)", () => {
+  it("pins independent source public and forwarding checked runtime types", () => {
+    expectTypeOf(parseManagedLspRuntimeConfiguration).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(publicRuntime).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parsePublicManagedLspRuntimeConfiguration).parameter(0).toEqualTypeOf<unknown>();
+    expectTypeOf(parseManagedLspRuntimeConfiguration).returns.toEqualTypeOf<SourceRuntimeResult>();
+    expectTypeOf(publicRuntime).returns.toEqualTypeOf<ManagedLspRuntimeParseResult>();
+    expectTypeOf(
+      parsePublicManagedLspRuntimeConfiguration,
+    ).returns.toEqualTypeOf<ManagedLspRuntimeParseResult>();
+    expectTypeOf(publicRuntime).returns.not.toBeAny();
+    type Success = Extract<ReturnType<typeof publicRuntime>, { readonly ok: true }>;
+    type Failure = Extract<ReturnType<typeof publicRuntime>, { readonly ok: false }>;
+    type Go = Extract<Success["value"], { readonly language: "go" }>;
+    expectTypeOf<Success["value"]["language"]>().toEqualTypeOf<
+      "python" | "go" | "shell" | "java" | "rust"
+    >();
+    expectTypeOf<Success["value"]["revision"]>().toEqualTypeOf<number>();
+    expectTypeOf<Go["settings"]["moduleDownloads"]>().toEqualTypeOf<false>();
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
+  });
+
+  it("retains all five bounded configurations and settings identities", () => {
+    for (const entry of [
+      { language: "python", settings: pythonSettings() },
+      { language: "go", settings: goSettings() },
+      { language: "shell", settings: shellSettings() },
+      { language: "java", settings: javaSettings() },
+      { language: "rust", settings: rustSettings() },
+    ]) {
+      const input = configuration(entry.language, entry.settings);
+      const result = parsePublicManagedLspRuntimeConfiguration(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy public managed LSP runtime refused");
+      expect(result.value).toBe(input);
+      expect(result.value.settings).toBe(entry.settings);
+    }
+  });
+
+  it("refuses raw shapes provenance authority paths and cross-language settings", () => {
+    for (const input of [null, [], 1, "configuration"])
+      expect(parsePublicManagedLspRuntimeConfiguration(input)).toEqual({
+        ok: false,
+        errors: ["runtime configuration must be an object"],
+      });
+    for (const input of [
+      { ...pythonConfiguration(), revision: 8 },
+      {
+        ...pythonConfiguration(),
+        provenance: {
+          activation: "workspace",
+          runtime: "legacyEnvironment",
+          settings: "workspace",
+        },
+      },
+      configuration("go", { ...goSettings(), moduleDownloads: true }),
+      configuration("python", { ...pythonSettings(), extraPaths: [contained("../outside")] }),
+      configuration("python", goSettings()),
+      { ...pythonConfiguration(), raw: true },
+    ])
+      expect(parsePublicManagedLspRuntimeConfiguration(input)).toEqual({
+        ok: false,
+        errors: ["runtime configuration is invalid or contains unknown fields"],
+      });
+  });
+});
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves protocol key enumeration before closed-field refusal`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime");
+    const trace: string[] = [];
+    const value = protocolEnumerationInput(trace);
+    expect(module.parseManagedLspRuntimeConfiguration(value)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+    expect(trace).toEqual([
+      "ownKeys",
+      "descriptor:unexpected",
+      "descriptor:schemaVersion",
+      "get:schemaVersion",
+    ]);
+  });
+
+  it(`${surface}: retains ignored symbol and non-enumerable protocol metadata`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime");
+    const value = pythonConfiguration();
+    let reads = 0;
+    installIgnoredProtocolMetadata(value, (): void => {
+      reads += 1;
+    });
+    expect(module.parseManagedLspRuntimeConfiguration(value).ok).toBe(true);
+    expect(reads).toBe(0);
+  });
+
+  it(`${surface}: rejects a non-string protocol vocabulary member without coercion`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./managed-lsp-runtime.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime");
+    let coercions = 0;
+    const foreign = {
+      toString: (): never => {
+        coercions += 1;
+        throw new TypeError("Protocol enum coercion");
+      },
+    };
+    const value = { ...pythonConfiguration(), activation: foreign };
+    expect(module.parseManagedLspRuntimeConfiguration(value)).toEqual({
+      ok: false,
+      errors: ["runtime configuration is invalid or contains unknown fields"],
+    });
+    expect(coercions).toBe(0);
+  });
+}

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { CODING_WORKBENCH_MODES, resolveEffectiveCodingWorkbenchMode } from "./coding-workbench.js";
 import { validateCodingWorkbenchAuthorityEnvelope } from "./coding-workbench-validation.js";
@@ -263,5 +264,232 @@ describe("configured MCP Chat authority", () => {
       false,
     );
     expect(validateChatToolReadGrant({ ...value, kind: "jira-chat-read-grant" }).ok).toBe(false);
+  });
+});
+
+import { expectTypeOf } from "vitest";
+import * as authoritySource from "./chat-tool-authority.js";
+import * as authorityPublic from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
+import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
+
+type ExpectedChatAuthorityValidators = [
+  (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolAuthoritySubject>,
+  (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolAuthorityEnvelope>,
+  (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolReadConsentDecision>,
+  (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolReadGrant>,
+  (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolWriteApprovalView>,
+  (
+    value: unknown,
+  ) => CodingWorkbenchValidationResult<authoritySource.ChatToolWriteApprovalDecision>,
+];
+
+type ChatAuthorityAdmissionCase = readonly [
+  name: string,
+  source: (value: unknown) => CodingWorkbenchValidationResult<unknown>,
+  published: (value: unknown) => CodingWorkbenchValidationResult<unknown>,
+  makeInput: () => unknown,
+  nonRecordError: string,
+];
+
+function mcpWriteApprovalProjection(): authoritySource.ChatToolWriteApprovalView {
+  return {
+    kind: "mcp-chat-write",
+    approvalId: "approval-mcp-1",
+    chatId: "chat-mcp-1",
+    configurationDigest: "c".repeat(64),
+    invocationId: "invocation-mcp-1",
+    operation: "notes_lookup",
+    actionDigest: "d".repeat(64),
+    requestedAt: 1_700_000_000_000,
+    expiresAt: 1_700_000_600_000,
+    state: "pending",
+  };
+}
+
+const authorityAdmissionCases: readonly ChatAuthorityAdmissionCase[] = [
+  [
+    "subject",
+    authoritySource.validateChatToolAuthoritySubject,
+    authorityPublic.validateChatToolAuthoritySubject,
+    (): authoritySource.ChatToolAuthoritySubject => envelope().subject,
+    "chatAuthority.subject must be an object",
+  ],
+  [
+    "envelope",
+    authoritySource.validateChatToolAuthorityEnvelope,
+    authorityPublic.validateChatToolAuthorityEnvelope,
+    envelope,
+    "chatAuthority must be an object",
+  ],
+  [
+    "read consent",
+    authoritySource.validateChatToolReadConsentDecision,
+    authorityPublic.validateChatToolReadConsentDecision,
+    (): authoritySource.ChatToolReadConsentDecision => ({
+      decision: "approve",
+      disclosureVersion: authoritySource.MCP_CHAT_READ_DISCLOSURE_VERSION,
+    }),
+    "chatReadConsent must be an object",
+  ],
+  [
+    "read grant",
+    authoritySource.validateChatToolReadGrant,
+    authorityPublic.validateChatToolReadGrant,
+    readGrant,
+    "chatReadGrant must be an object",
+  ],
+  [
+    "write projection",
+    authoritySource.validateChatToolWriteApprovalView,
+    authorityPublic.validateChatToolWriteApprovalView,
+    mcpWriteApprovalProjection,
+    "chatWriteApproval must be an object",
+  ],
+  [
+    "write decision",
+    authoritySource.validateChatToolWriteApprovalDecision,
+    authorityPublic.validateChatToolWriteApprovalDecision,
+    (): authoritySource.ChatToolWriteApprovalDecision => ({
+      decision: "approve",
+      actionDigest: "e".repeat(64),
+    }),
+    "chatWriteDecision must be an object",
+  ],
+];
+
+describe("concrete Chat authority admission", () => {
+  it("retains the six concrete unknown-input source and public signatures", () => {
+    expectTypeOf<
+      [
+        typeof authoritySource.validateChatToolAuthoritySubject,
+        typeof authoritySource.validateChatToolAuthorityEnvelope,
+        typeof authoritySource.validateChatToolReadConsentDecision,
+        typeof authoritySource.validateChatToolReadGrant,
+        typeof authoritySource.validateChatToolWriteApprovalView,
+        typeof authoritySource.validateChatToolWriteApprovalDecision,
+      ]
+    >().toEqualTypeOf<ExpectedChatAuthorityValidators>();
+    expectTypeOf<
+      [
+        typeof authorityPublic.validateChatToolAuthoritySubject,
+        typeof authorityPublic.validateChatToolAuthorityEnvelope,
+        typeof authorityPublic.validateChatToolReadConsentDecision,
+        typeof authorityPublic.validateChatToolReadGrant,
+        typeof authorityPublic.validateChatToolWriteApprovalView,
+        typeof authorityPublic.validateChatToolWriteApprovalDecision,
+      ]
+    >().toEqualTypeOf<ExpectedChatAuthorityValidators>();
+  });
+
+  it.each(authorityAdmissionCases)(
+    "preserves admitted %s identity and its complete non-record refusal",
+    (_name, source, published, makeInput, nonRecordError): void => {
+      for (const validate of [source, published]) {
+        const value = makeInput();
+        const result = validate(value);
+        expect(result).toEqual({ ok: true, value });
+        if (!result.ok) throw new TypeError("Expected admitted Chat authority fixture");
+        expect(result.value).toBe(value);
+        expect(validate(null)).toEqual({ ok: false, errors: [nonRecordError] });
+      }
+    },
+  );
+
+  it("keeps the full ordered authority diagnostics without exposing unknown private fields", () => {
+    const input = {
+      ...envelope(),
+      schemaVersion: "2",
+      runId: "",
+      effectiveMode: "autonomous-delivery",
+      budget: { ...envelope().budget, maxPatchBytes: 1 },
+      approvalProofDigest: "",
+      "private-field-must-not-appear": "private-value",
+    };
+    const errors = [
+      "chatAuthority has unknown fields",
+      "chatAuthority kind or schemaVersion is invalid",
+      "chatAuthority.runId must be a bounded safe identifier",
+      "chatAuthority.effectiveMode must match the shared mode ceiling",
+      "chatAuthority.budget.maxPatchBytes must be zero",
+      "chatAuthority.approvalProofDigest must be a SHA-256 digest",
+    ];
+    for (const validate of [
+      authoritySource.validateChatToolAuthorityEnvelope,
+      authorityPublic.validateChatToolAuthorityEnvelope,
+    ])
+      expect(validate(input)).toEqual({ ok: false, errors });
+  });
+
+  it("preserves consent getter phases, admitted identity and the exact second-read failure", () => {
+    for (const validate of [
+      authoritySource.validateChatToolReadConsentDecision,
+      authorityPublic.validateChatToolReadConsentDecision,
+    ]) {
+      let reads = 0;
+      const value = {
+        decision: "approve",
+        get disclosureVersion(): string {
+          reads += 1;
+          return authoritySource.MCP_CHAT_READ_DISCLOSURE_VERSION;
+        },
+      };
+      const result = validate(value);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new TypeError("Expected admitted consent fixture");
+      expect(result.value).toBe(value);
+      expect(reads).toBe(2);
+      const failure: TypeError = Object.freeze(new TypeError("consent second read failed"));
+      let attempts = 0;
+      const hostile = {
+        decision: "approve",
+        get disclosureVersion(): string {
+          attempts += 1;
+          if (attempts === 2) throw failure;
+          return authoritySource.MCP_CHAT_READ_DISCLOSURE_VERSION;
+        },
+      };
+      let caught: unknown;
+      try {
+        validate(hostile);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBe(failure);
+      expect(attempts).toBe(2);
+    }
+  });
+});
+
+// REVIEW-3918-013: this module and bff-wire import each other. A process whose first contracts
+// import is this public subpath must still load, and bff-wire must then read the grant states at
+// call time; a load-time read either throws a TDZ ReferenceError or rejects every read grant.
+const FIRST_IMPORT_CONTROL = `
+import { strict as assert } from "node:assert";
+const authority = await import("@oscharko-dev/keiko-contracts/runtime/chat-tool-authority");
+const wire = await import("@oscharko-dev/keiko-contracts/runtime/bff-wire");
+const view = (state) => ({
+  kind: "jira-chat-read", grantId: "grant-1", chatId: "chat-1", state,
+  disclosureVersion: authority.CHAT_TOOL_READ_DISCLOSURE_VERSION, requestedAt: 1, expiresAt: 2,
+  podId: "pod-1", bindingGeneration: 1, authenticationGeneration: 1,
+});
+for (const state of authority.CHAT_TOOL_READ_GRANT_STATES)
+  assert.equal(wire.isChatToolReadGrantView(view(state)), true, state);
+assert.equal(wire.isChatToolReadGrantView(view("approved")), false);
+`;
+
+describe("chat tool authority module graph (REVIEW-3918-013)", () => {
+  it("loads as the first contracts import and validates read-grant views afterwards", () => {
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "--eval", FIRST_IMPORT_CONTROL],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        killSignal: "SIGKILL",
+        maxBuffer: 16 * 1024,
+      },
+    );
+    expect(child.error).toBeUndefined();
+    expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: "" });
   });
 });

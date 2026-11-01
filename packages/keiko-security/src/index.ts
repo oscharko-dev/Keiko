@@ -203,3 +203,5 @@ export {
 } from "./windows-shortcuts.js";
 
 export * from "./errors/index.js";
+
+export { writeActivityLogPortEvent, reportActivityLogPortFailure } from "./log-port-delivery.js";

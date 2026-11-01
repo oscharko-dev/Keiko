@@ -17,6 +17,8 @@ import {
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
   type CodingSafeActivityFeed,
+  type CodingSafeActivityMessage,
+  type CodingSafeActivityTurn,
   type CodingSafeActivityPlan,
 } from "./coding-safe-activity.js";
 
@@ -457,6 +459,50 @@ describe("coding safe-activity contract", () => {
     }
   });
 
+  it("preserves local serialization phases after earlier member errors", async () => {
+    const { vi } = await import("vitest");
+    const base = availableFeed();
+    if (base.availability !== "available") throw new TypeError("expected available fixture");
+    const turn = base.turns[0];
+    if (turn === undefined) throw new TypeError("expected turn fixture");
+    const [first, second] = turn.messages;
+    if (first === undefined || second === undefined) {
+      throw new TypeError("expected nested fixture");
+    }
+    const badMessage = { ...first, role: "system", occurredAt: "invalid" };
+    const sibling = { ...second, messageId: "msg_trace_sibling" };
+    const laterMessage = { ...first, messageId: "msg_trace_later" };
+    const laterTurn = {
+      ...turn,
+      turnId: "turn_trace_later",
+      messages: [laterMessage],
+      tools: [],
+    };
+    const currentPlan = plan();
+    const value = {
+      ...base,
+      turns: [{ ...turn, messages: [badMessage, sibling] }, laterTurn],
+      plan: currentPlan,
+    };
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(validateCodingSafeActivityFeed(value)).toEqual({
+        ok: false,
+        errors: [
+          "safeActivityFeed.turns[0].messages[0].role is invalid",
+          "safeActivityFeed.turns[0].messages[0].occurredAt must be a strict UTC millisecond instant",
+        ],
+      });
+      expect(stringify).toHaveBeenCalledTimes(4);
+      expect(stringify.mock.calls[0]?.[0]).toBe(sibling);
+      expect(stringify.mock.calls[1]?.[0]).toBe(laterMessage);
+      expect(stringify.mock.calls[2]?.[0]).toBe(laterTurn);
+      expect(stringify.mock.calls[3]?.[0]).toBe(currentPlan);
+    } finally {
+      stringify.mockRestore();
+    }
+  });
+
   // KEIKO-0749: validatePlan / validateTurn / validateMessage each call `serializedBytes` (a
   // full JSON.stringify traversal) to check the deep byte budget. Before the fix they ran that
   // call even when the structure had already failed shape validation — wasting a deep
@@ -563,4 +609,518 @@ function planStep(
     truncated: false,
     ...overrides,
   } as CodingSafeActivityPlan["steps"][number];
+}
+
+describe("C2 owning activity member admissions", () => {
+  it.each(["turns", "messages", "tools", "segments", "steps"] as const)(
+    "refuses skipped malformed %s members",
+    (surface) => {
+      const base = availableFeed();
+      if (base.availability !== "available") throw new Error("expected available fixture");
+      const turn = base.turns[0];
+      const message = turn?.messages[0];
+      if (turn === undefined || message === undefined) throw new Error("expected nested fixture");
+      const entries: unknown[] = [null];
+      Object.defineProperty(entries, "forEach", { value: (): void => undefined });
+      const value =
+        surface === "turns"
+          ? { ...base, turns: entries }
+          : surface === "messages"
+            ? { ...base, turns: [{ ...turn, messages: entries }] }
+            : surface === "tools"
+              ? { ...base, turns: [{ ...turn, tools: entries }] }
+              : surface === "segments"
+                ? { ...base, turns: [{ ...turn, messages: [{ ...message, segments: entries }] }] }
+                : {
+                    ...base,
+                    plan: {
+                      revision: 1,
+                      anchorMessageId: "msg_assistant_1",
+                      updatedAt: base.updatedAt,
+                      steps: entries,
+                      truncated: false,
+                    },
+                  };
+      expect(validateCodingSafeActivityFeed(value).ok).toBe(false);
+    },
+  );
+
+  it("retains a healthy original feed reference", () => {
+    const value = availableFeed();
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+
+  it("refuses a sparse turn list with one owning diagnostic", () => {
+    const entries: unknown[] = [];
+    entries.length = CODING_SAFE_ACTIVITY_MAX_TURNS;
+    const result = validateCodingSafeActivityFeed({ ...availableFeed(), turns: entries });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.errors).toHaveLength(1);
+  });
+});
+
+function truncationObservationParent(
+  surface: string,
+  turn: CodingSafeActivityTurn,
+  message: CodingSafeActivityMessage,
+): { parent: Record<string, unknown>; healthy: unknown } {
+  if (surface === "steps") return { parent: { ...plan() }, healthy: plan().steps };
+  if (surface === "segments") return { parent: { ...message }, healthy: message.segments };
+  return { parent: { ...turn }, healthy: turn.messages };
+}
+
+describe("safe-activity nested truncation observations", () => {
+  it.each([
+    { surface: "steps", path: "safeActivityFeed.plan", member: "steps" },
+    { surface: "segments", path: "safeActivityFeed.turns[0].messages[0]", member: "segments" },
+    { surface: "messages", path: "safeActivityFeed.turns[0]", member: "messages" },
+  ])("retains the second truncation-scan observation for $surface", ({ surface, path, member }) => {
+    const feed = availableFeed();
+    if (feed.availability !== "available") throw new TypeError("expected available fixture");
+    const turn = feed.turns[0];
+    const message = turn?.messages[0];
+    if (turn === undefined || message === undefined) throw new TypeError("expected nested fixture");
+    const { parent, healthy } = truncationObservationParent(surface, turn, message);
+    let reads = 0;
+    Object.defineProperty(parent, surface, {
+      enumerable: true,
+      get: (): unknown => (++reads === 3 ? [{ truncated: true }] : healthy),
+    });
+    const value: unknown =
+      surface === "steps"
+        ? { ...feed, plan: parent }
+        : surface === "segments"
+          ? { ...feed, turns: [{ ...turn, messages: [parent] }] }
+          : { ...feed, turns: [parent] };
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: [`${path}.truncated must reflect truncated ${member}`],
+    });
+    expect(reads).toBe(3);
+  });
+});
+
+describe("C2 observed safe-activity scalar admissions", () => {
+  it.each([
+    { observations: [0, Number.NaN, Number.NaN], expectedReads: 2 },
+    { observations: [0, 1, Number.NaN], expectedReads: 3 },
+  ])(
+    "refuses an invalid later dropped-event observation $observations",
+    ({ observations, expectedReads }) => {
+      const value = unavailableCodingSafeActivityFeed(
+        "run-safe-activity-1",
+        "2026-07-18T17:00:00.000Z",
+      );
+      let reads = 0;
+      Object.defineProperty(value, "droppedEventCount", {
+        enumerable: true,
+        get: (): unknown => observations[reads++] ?? 0,
+      });
+      expect(validateCodingSafeActivityFeed(value)).toEqual({
+        ok: false,
+        errors: ["safeActivityFeed.droppedEventCount is invalid"],
+      });
+      expect(reads).toBe(expectedReads);
+    },
+  );
+
+  it("preserves three healthy dropped-event observations and the serialization read", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    const observations = [0, 1, 2, 3];
+    let reads = 0;
+    Object.defineProperty(value, "droppedEventCount", {
+      enumerable: true,
+      get: (): unknown => observations[reads++] ?? 3,
+    });
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(4);
+  });
+
+  it("refuses an invalid second plan revision", () => {
+    const value = { ...availableFeed(), plan: plan() };
+    let reads = 0;
+    Object.defineProperty(value.plan, "revision", {
+      enumerable: true,
+      get: (): unknown => (++reads === 2 ? Number.NaN : 1),
+    });
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: ["safeActivityFeed.plan.revision must be a positive safe integer"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("preserves two healthy plan revision observations and both serialization reads", () => {
+    const value = { ...availableFeed(), plan: plan() };
+    let reads = 0;
+    Object.defineProperty(value.plan, "revision", { enumerable: true, get: (): number => ++reads });
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(4);
+  });
+
+  it("reports the original availability diagnostic for a later invalid variant", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    const observations = ["unavailable", "available", "invalid"];
+    let reads = 0;
+    Object.defineProperty(value, "availability", {
+      enumerable: true,
+      get: (): unknown => observations[reads++] ?? "unavailable",
+    });
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: ["safeActivityFeed.availability is invalid"],
+    });
+    expect(reads).toBe(3);
+  });
+
+  it("does not repeat the base availability diagnostic", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    let reads = 0;
+    Object.defineProperty(value, "availability", {
+      enumerable: true,
+      get: (): string => (++reads === 1 ? "unavailable" : "invalid"),
+    });
+    expect(validateCodingSafeActivityFeed(value)).toEqual({
+      ok: false,
+      errors: ["safeActivityFeed.availability is invalid"],
+    });
+    expect(reads).toBe(4);
+  });
+
+  it("retains a healthy changing availability schedule", () => {
+    const value = unavailableCodingSafeActivityFeed(
+      "run-safe-activity-1",
+      "2026-07-18T17:00:00.000Z",
+    );
+    const observations = ["unavailable", "available", "unavailable", "unavailable"];
+    let reads = 0;
+    Object.defineProperty(value, "availability", {
+      enumerable: true,
+      get: (): unknown => observations[reads++] ?? "unavailable",
+    });
+    const result = validateCodingSafeActivityFeed(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+    expect(reads).toBe(4);
+  });
+});
+
+// Fixed ORIGINAL characterization includes admission and the existing later truncation scan.
+type PhysicalActivityField = "steps" | "segments" | "messages" | "tools";
+
+const PHYSICAL_ACTIVITY_GROWTH_TRACE = [
+  "get:length",
+  "get:length",
+  "has:0",
+  "get:0",
+  "get:length",
+  "has:0",
+  "get:0",
+  "has:1",
+  "get:1",
+];
+const PHYSICAL_ACTIVITY_CASES = [
+  {
+    field: "steps",
+    parentError: "safeActivityFeed.plan.revision must be a positive safe integer",
+    reads: PHYSICAL_ACTIVITY_GROWTH_TRACE,
+  },
+  {
+    field: "segments",
+    parentError: "safeActivityFeed.turns[0].messages[0].role is invalid",
+    reads: PHYSICAL_ACTIVITY_GROWTH_TRACE,
+  },
+  {
+    field: "messages",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    reads: PHYSICAL_ACTIVITY_GROWTH_TRACE,
+  },
+  {
+    field: "tools",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    reads: ["get:length", "get:length", "has:0", "get:0"],
+  },
+] as const;
+
+async function physicalActivityValidator(
+  surface: "source" | "public",
+): Promise<typeof validateCodingSafeActivityFeed> {
+  return surface === "source"
+    ? validateCodingSafeActivityFeed
+    : (await import("@oscharko-dev/keiko-contracts/runtime/coding-safe-activity"))
+        .validateCodingSafeActivityFeed;
+}
+
+function physicalActivityInput(field: PhysicalActivityField, members: unknown): unknown {
+  const feed = availableFeed();
+  if (feed.availability !== "available") throw new TypeError("Expected available fixture");
+  const turn = feed.turns[0];
+  const message = turn?.messages[0];
+  if (turn === undefined || message === undefined) throw new TypeError("Expected nested fixture");
+  if (field === "steps")
+    return { ...feed, turns: [], plan: { ...plan(), revision: 0, steps: members } };
+  if (field === "segments")
+    return {
+      ...feed,
+      turns: [
+        { ...turn, messages: [{ ...message, role: "invalid", segments: members }], tools: [] },
+      ],
+    };
+  if (field === "messages")
+    return { ...feed, turns: [{ ...turn, turnId: "", messages: members, tools: [] }] };
+  return { ...feed, turns: [{ ...turn, turnId: "", messages: [], tools: members }] };
+}
+
+function physicalActivityMember(field: PhysicalActivityField): unknown {
+  if (field === "steps") return planStep({});
+  const feed = availableFeed();
+  if (feed.availability !== "available") throw new TypeError("Expected available fixture");
+  const turn = feed.turns[0];
+  const message = turn?.messages[0];
+  const segment = message?.segments[0];
+  const tool = turn?.tools[0];
+  if (message === undefined || segment === undefined || tool === undefined)
+    throw new TypeError("Expected nested fixture");
+  const members = { messages: message, segments: segment, tools: tool };
+  return members[field];
+}
+
+function observedPhysicalActivityMembers(
+  members: unknown[],
+  reads: string[],
+): { readonly values: unknown[]; readonly lengthReads: () => number } {
+  let lengths = 0;
+  const values = new Proxy(members, {
+    get(target, key, receiver): unknown {
+      reads.push(`get:${String(key)}`);
+      if (key === "length") lengths += 1;
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key): boolean {
+      reads.push(`has:${String(key)}`);
+      return Reflect.has(target, key);
+    },
+  });
+  return { values, lengthReads: (): number => lengths };
+}
+
+for (const surface of ["source", "public"] as const) {
+  it.each(PHYSICAL_ACTIVITY_CASES)(
+    `${surface}: retains inherited $field growth outside its captured admission extent`,
+    async ({ field, parentError, reads: expectedReads }) => {
+      const validate = await physicalActivityValidator(surface);
+      const reads: string[] = [];
+      const members = new Array<unknown>(1);
+      const member = physicalActivityMember(field);
+      Object.setPrototypeOf(
+        members,
+        Object.defineProperty([], "0", {
+          get: (): unknown => {
+            if (members.length === 1) members.push(null);
+            return member;
+          },
+        }),
+      );
+      const observed = observedPhysicalActivityMembers(members, reads);
+      expect(validate(physicalActivityInput(field, observed.values))).toEqual({
+        ok: false,
+        errors: [parentError],
+      });
+      expect(reads).toEqual(expectedReads);
+      expect(members).toHaveLength(2);
+    },
+  );
+
+  it(`${surface}: stops plan admission at a hole before the later truncation observation`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const reads: string[] = [];
+    const members = new Array<unknown>(2);
+    const observed = observedPhysicalActivityMembers(members, reads);
+    Object.defineProperty(members, "1", {
+      get: (): unknown => {
+        if (observed.lengthReads() === 2) throw new TypeError("Admission reached a later member");
+        return planStep({});
+      },
+    });
+    expect(validate(physicalActivityInput("steps", observed.values))).toEqual({
+      ok: false,
+      errors: [
+        "safeActivityFeed.plan.revision must be a positive safe integer",
+        "safeActivityFeed.plan.steps[0] must be an object",
+      ],
+    });
+    expect(reads).toEqual([
+      "get:length",
+      "get:length",
+      "has:0",
+      "get:length",
+      "has:0",
+      "has:1",
+      "get:1",
+    ]);
+  });
+
+  it(`${surface}: continues after an invalid message and keeps the inspection refusal`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const reads: string[] = [];
+    const failure = new TypeError("fixture-activity-inspection");
+    const member = physicalActivityMember("messages");
+    if (typeof member !== "object" || member === null) throw new TypeError("Expected message");
+    const throwing = Object.defineProperty(member, "messageId", {
+      get: (): never => {
+        throw failure;
+      },
+    });
+    const observed = observedPhysicalActivityMembers([null, throwing], reads);
+    expect(validate(physicalActivityInput("messages", observed.values))).toEqual({
+      ok: false,
+      errors: ["safe activity feed validation failed"],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0", "has:1", "get:1"]);
+  });
+
+  it(`${surface}: retains message and tool identity sets across turns`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const feed = availableFeed();
+    const healthy = validate(feed);
+    expect(healthy.ok).toBe(true);
+    if (healthy.ok) expect(healthy.value).toBe(feed);
+    if (feed.availability !== "available") throw new TypeError("Expected available fixture");
+    const turn = feed.turns[0];
+    const message = turn?.messages[0];
+    const tool = turn?.tools[0];
+    if (turn === undefined || message === undefined || tool === undefined)
+      throw new TypeError("Expected nested fixture");
+    expect(
+      validate({
+        ...feed,
+        turns: [turn, { ...turn, turnId: "turn_array_second", messages: [message], tools: [tool] }],
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "safeActivityFeed.turns[1].messages[0].messageId must be unique",
+        "safeActivityFeed.turns[1].tools[0].callId must be unique",
+      ],
+    });
+  });
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: uses the later captured tool extent after a different bound observation`, async () => {
+    const validate = await physicalActivityValidator(surface);
+    const reads: string[] = [];
+    let lengths = 0;
+    const values = new Proxy([physicalActivityMember("tools"), null], {
+      get(target, key, receiver): unknown {
+        reads.push(`get:${String(key)}`);
+        if (key === "length") {
+          lengths += 1;
+          return lengths === 1 ? 1 : 2;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+      has(target, key): boolean {
+        reads.push(`has:${String(key)}`);
+        return Reflect.has(target, key);
+      },
+    });
+    expect(validate(physicalActivityInput("tools", values))).toEqual({
+      ok: false,
+      errors: [
+        "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+        "safeActivityFeed.turns[0].tools[1] must be an object",
+      ],
+    });
+    expect(reads).toEqual(["get:length", "get:length", "has:0", "get:0", "has:1", "get:1"]);
+  });
+}
+
+const BOUNDED_ACTIVITY_ADMISSION_CASES = [
+  {
+    field: "steps",
+    path: "safeActivityFeed.plan.steps",
+    parentError: "safeActivityFeed.plan.revision must be a positive safe integer",
+    limit: CODING_SAFE_ACTIVITY_MAX_PLAN_STEPS,
+    lengthReads: 2,
+  },
+  {
+    field: "segments",
+    path: "safeActivityFeed.turns[0].messages[0].segments",
+    parentError: "safeActivityFeed.turns[0].messages[0].role is invalid",
+    limit: CODING_SAFE_ACTIVITY_MAX_SEGMENTS_PER_MESSAGE,
+    lengthReads: 2,
+  },
+  {
+    field: "messages",
+    path: "safeActivityFeed.turns[0].messages",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    limit: CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
+    lengthReads: 2,
+  },
+  {
+    field: "tools",
+    path: "safeActivityFeed.turns[0].tools",
+    parentError: "safeActivityFeed.turns[0].turnId must be a bounded safe identifier",
+    limit: CODING_SAFE_ACTIVITY_MAX_TOOLS_PER_TURN,
+    lengthReads: 1,
+  },
+] as const;
+
+for (const surface of ["source", "public"] as const) {
+  it.each(BOUNDED_ACTIVITY_ADMISSION_CASES)(
+    `${surface}: rejects a non-array $field without consulting its length`,
+    async ({ field, path, parentError }) => {
+      const validate = await physicalActivityValidator(surface);
+      const members = Object.defineProperty({}, "length", {
+        get: (): never => {
+          throw new TypeError("Non-array admission inspected length");
+        },
+      });
+      expect(validate(physicalActivityInput(field, members))).toEqual({
+        ok: false,
+        errors: [parentError, `${path} must be a bounded array`],
+      });
+    },
+  );
+
+  it.each(BOUNDED_ACTIVITY_ADMISSION_CASES)(
+    `${surface}: rejects over-bound $field before physical member admission`,
+    async ({ field, path, parentError, limit, lengthReads }) => {
+      const validate = await physicalActivityValidator(surface);
+      const reads: string[] = [];
+      let lengths = 0;
+      const members = new Proxy([], {
+        get(target, key, receiver): unknown {
+          reads.push(`get:${String(key)}`);
+          if (key === "length") return ++lengths === 1 ? limit + 1 : 0;
+          return Reflect.get(target, key, receiver);
+        },
+        has(target, key): boolean {
+          reads.push(`has:${String(key)}`);
+          return Reflect.has(target, key);
+        },
+      });
+      expect(validate(physicalActivityInput(field, members))).toEqual({
+        ok: false,
+        errors: [parentError, `${path} must be a bounded array`],
+      });
+      expect(reads).toEqual(Array.from({ length: lengthReads }, () => "get:length"));
+    },
+  );
 }

@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import * as publicPrimitives from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import * as sourcePrimitives from "./workspace-contract-primitives.js";
 import {
   WORKSPACE_POLICY_VERSION_PATTERN,
   hasWorkspaceControlCharacter,
@@ -308,5 +310,185 @@ describe("isWorkspaceRevision / hasWorkspaceControlCharacter / WORKSPACE_POLICY_
     WORKSPACE_POLICY_VERSION_PATTERN.lastIndex = 999_999;
     expect(WORKSPACE_POLICY_VERSION_PATTERN.test("v1.2.3")).toBe(true);
     WORKSPACE_POLICY_VERSION_PATTERN.lastIndex = 0;
+  });
+});
+
+function isNumber(candidate: unknown): candidate is number {
+  return typeof candidate === "number";
+}
+
+function pinPublicRevision(input: unknown): void {
+  if (publicPrimitives.isWorkspaceRevision(input)) {
+    expectTypeOf(input).toEqualTypeOf<number>();
+  }
+}
+
+function pinPublicFact(input: unknown): void {
+  if (!publicPrimitives.isWorkspaceFact(input, isNumber)) return;
+  expectTypeOf(input.outcome).toEqualTypeOf<"known" | "unknown" | "unavailable" | "absent">();
+  if (input.outcome === "known") expectTypeOf(input.value).toEqualTypeOf<number>();
+}
+
+describe.each([
+  ["source", sourcePrimitives],
+  ["public", publicPrimitives],
+] as const)("%s workspace primitive preservation", (_entrypoint, primitives) => {
+  it.each([0, -0, 42, Number.MAX_SAFE_INTEGER])("accepts native safe revision %s", (value) => {
+    expect(primitives.isWorkspaceRevision(value)).toBe(true);
+    pinPublicRevision(value);
+  });
+
+  it.each([
+    -1,
+    0.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    NaN,
+    Infinity,
+    -Infinity,
+    "0",
+    null,
+    undefined,
+    0n,
+    Symbol("revision"),
+  ])("refuses non-revisions without conversion %s", (value) => {
+    expect(primitives.isWorkspaceRevision(value)).toBe(false);
+  });
+
+  it("calls the real safe-integer check once before returning", () => {
+    const original = Number.isSafeInteger;
+    const seen: unknown[] = [];
+    const check = vi
+      .spyOn(Number, "isSafeInteger")
+      .mockImplementation((value: unknown): boolean => {
+        seen.push(value);
+        return original(value);
+      });
+    try {
+      expect(primitives.isWorkspaceRevision("0")).toBe(false);
+      expect(seen).toEqual(["0"]);
+    } finally {
+      check.mockRestore();
+    }
+  });
+
+  it("does not coerce objects into numeric revisions", () => {
+    const candidate = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(primitives.isWorkspaceRevision(candidate)).toBe(false);
+    expect(primitives.isWorkspaceRevision(Object(0))).toBe(false);
+  });
+
+  it.each(["unknown", "unavailable", "absent"])(
+    "preserves the closed fact outcome %s",
+    (outcome) => {
+      const fact = { outcome };
+      expect(primitives.isWorkspaceFact(fact, isNumber)).toBe(true);
+      pinPublicFact(fact);
+      expect(primitives.isWorkspaceFact({ ...fact, value: undefined }, isNumber)).toBe(false);
+    },
+  );
+
+  it("does not call the payload guard for non-known or malformed outcomes", () => {
+    let calls = 0;
+    function guard(_candidate: unknown): _candidate is number {
+      calls++;
+      return false;
+    }
+    for (const outcome of ["unknown", "unavailable", "absent"]) {
+      expect(primitives.isWorkspaceFact({ outcome }, guard)).toBe(true);
+    }
+    expect(primitives.isWorkspaceFact({ outcome: "future" }, guard)).toBe(false);
+    expect(primitives.isWorkspaceFact({ outcome: 1 }, guard)).toBe(false);
+    expect(calls).toBe(0);
+    expect(primitives.isWorkspaceFact({ outcome: "known" }, guard)).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it("delegates the known payload once and revalidates mutation", () => {
+    const payload = { revision: 0 };
+    const fact = { outcome: "known", value: payload };
+    const seen: unknown[] = [];
+    function guard(candidate: unknown): candidate is { revision: number } {
+      seen.push(candidate);
+      return (
+        primitives.isWorkspaceRecord(candidate) &&
+        primitives.isWorkspaceRevision(candidate.revision)
+      );
+    }
+    expect(primitives.isWorkspaceFact(fact, guard)).toBe(true);
+    expect(seen).toEqual([payload]);
+    expect(seen[0]).toBe(payload);
+    payload.revision = -1;
+    expect(primitives.isWorkspaceFact(fact, guard)).toBe(false);
+    expect(seen).toEqual([payload, payload]);
+    expect(primitives.isWorkspaceFact({ outcome: "known", value: "0" }, isNumber)).toBe(false);
+    pinPublicFact({ outcome: "known", value: 0 });
+  });
+
+  it("keeps key refusal before callback invocation and catches callback throws", () => {
+    let calls = 0;
+    function guard(_candidate: unknown): _candidate is number {
+      calls++;
+      throw new Error("callback refusal");
+    }
+    expect(primitives.isWorkspaceFact({ outcome: "known", value: 0, extra: true }, guard)).toBe(
+      false,
+    );
+    expect(calls).toBe(0);
+    expect(primitives.isWorkspaceFact({ outcome: "known", value: 0 }, guard)).toBe(false);
+    expect(calls).toBe(1);
+  });
+
+  it("retains known getter and own-key read scheduling", () => {
+    const reads: string[] = [];
+    const fact = new Proxy(
+      { outcome: "known", value: 1 },
+      {
+        get(target, key, receiver): unknown {
+          reads.push(String(key));
+          return Reflect.get(target, key, receiver);
+        },
+        ownKeys(target): (string | symbol)[] {
+          reads.push("keys");
+          return Reflect.ownKeys(target);
+        },
+      },
+    );
+    expect(primitives.isWorkspaceFact(fact, isNumber)).toBe(true);
+    expect(reads).toEqual(["outcome", "outcome", "keys", "value"]);
+  });
+
+  it("preserves separate changing-outcome reads and closed membership dispatch", () => {
+    let reads = 0;
+    const fact = {
+      get outcome(): string {
+        reads++;
+        return reads === 1 ? "unknown" : reads === 2 ? "absent" : "unavailable";
+      },
+    };
+    expect(primitives.isWorkspaceFact(fact, isNumber)).toBe(true);
+    expect(reads).toBe(3);
+    expect(primitives.isWorkspaceFact({ outcome: "future" }, isNumber)).toBe(false);
+  });
+
+  it("fails closed for getter and ownKeys exceptions", () => {
+    const getter = {
+      get outcome(): never {
+        throw new Error("getter refusal");
+      },
+    };
+    const keys = new Proxy(
+      { outcome: "absent" },
+      {
+        ownKeys(): never {
+          throw new Error("keys refusal");
+        },
+      },
+    );
+    expect(primitives.isWorkspaceFact(getter, isNumber)).toBe(false);
+    expect(primitives.isWorkspaceFact(keys, isNumber)).toBe(false);
   });
 });

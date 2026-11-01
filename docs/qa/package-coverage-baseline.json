@@ -42,7 +42,7 @@
       }
     },
     "keiko-contracts": {
-      "files": 254,
+      "files": 256,
       "uncoveredFiles": 5,
       "uncoveredLines": 1100,
       "totalLines": 15445,
@@ -198,7 +198,7 @@
       }
     },
     "keiko-model-gateway": {
-      "files": 59,
+      "files": 62,
       "uncoveredFiles": 0,
       "uncoveredLines": 210,
       "totalLines": 3802,
@@ -246,7 +246,7 @@
       }
     },
     "keiko-security": {
-      "files": 47,
+      "files": 48,
       "uncoveredFiles": 0,
       "uncoveredLines": 18,
       "totalLines": 887,

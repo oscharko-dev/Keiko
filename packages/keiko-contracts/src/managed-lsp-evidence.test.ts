@@ -128,3 +128,65 @@ describe("managed LSP content-free evidence", () => {
     expect(parseManagedLspEvidence(hostile).ok).toBe(false);
   });
 });
+
+import * as evidencePublic from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-evidence";
+
+describe.each([
+  ["source", parseManagedLspEvidence],
+  ["public", evidencePublic.parseManagedLspEvidence],
+] as const)("3918 managed evidence complete owner %s", (_surface, parseEvidence) => {
+  it("preserves healthy evidence references and closed incompatibility refusals", () => {
+    const value = evidence("lifecycle");
+    const parsed = parseEvidence(value);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("healthy evidence refused");
+    expect(parsed.value).toBe(value);
+    for (const change of [
+      { action: "activate" },
+      { reasonCode: "AVAILABLE" },
+      { policyResult: "denied" },
+    ]) {
+      expect(parseEvidence({ ...value, ...change })).toEqual({
+        ok: false,
+        errors: ["managed LSP evidence is invalid or contains unknown fields"],
+      });
+    }
+  });
+  it("preserves eager field observations and inspection refusal", () => {
+    const fields: string[] = [];
+    const value = new Proxy(evidence("lifecycle"), {
+      get(target, property, receiver): unknown {
+        if (typeof property === "string") fields.push(property);
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    expect(parseEvidence(value).ok).toBe(true);
+    expect(fields).toEqual([
+      "schemaVersion",
+      "kind",
+      "action",
+      "outcome",
+      "kind",
+      "action",
+      "actorClass",
+      "language",
+      "priorState",
+      "revision",
+      "timestampMs",
+      "language",
+      "revision",
+      "effectiveState",
+      "reasonCode",
+      "policyResult",
+    ]);
+    const throwing = new Proxy(evidence("lifecycle"), {
+      get(): never {
+        throw new TypeError("fixture inspection");
+      },
+    });
+    expect(parseEvidence(throwing)).toEqual({
+      ok: false,
+      errors: ["payload could not be inspected: TypeError"],
+    });
+  });
+});

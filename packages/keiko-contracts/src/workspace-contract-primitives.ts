@@ -87,7 +87,8 @@ export function hasOnlyWorkspaceKeys(value: UnknownRecord, allowed: readonly str
 // (isNonNegativeRevision, isRevision) and the control-character guard twice verbatim.
 
 export function isWorkspaceRevision(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+  const isSafeInteger = Number.isSafeInteger(value);
+  return typeof value === "number" && isSafeInteger && value >= 0;
 }
 
 export function hasWorkspaceControlCharacter(value: string): boolean {
@@ -162,10 +163,8 @@ function isWorkspaceFactUnsafe<Value>(
   if (value.outcome === "known") {
     return hasOnlyWorkspaceKeys(value, ["outcome", "value"]) && valueGuard(value.value);
   }
-  return (
-    NON_KNOWN_FACT_OUTCOMES.includes(value.outcome as (typeof NON_KNOWN_FACT_OUTCOMES)[number]) &&
-    hasOnlyWorkspaceKeys(value, ["outcome"])
-  );
+  const outcomes: readonly string[] = NON_KNOWN_FACT_OUTCOMES;
+  return outcomes.includes(value.outcome) && hasOnlyWorkspaceKeys(value, ["outcome"]);
 }
 
 export function isWorkspaceFact<Value>(

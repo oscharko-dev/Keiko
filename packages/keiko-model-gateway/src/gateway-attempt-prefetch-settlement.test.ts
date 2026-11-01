@@ -9,7 +9,7 @@ import {
   CallerAttemptAdmissionError,
   settleFailedCallerAttempt,
 } from "./gateway-attempt-admission.js";
-import type { ModelGatewayLogEvent } from "./observability.js";
+import type { ModelGatewayLogTransport } from "./observability.js";
 import type { ModelProviderConfig, NormalizedResponse, ProviderAdapter } from "./types.js";
 
 const MODEL = "prefetch-settlement-proof";
@@ -76,7 +76,9 @@ function fixture(
       ...(options.genericAdapter === true ? { adapter: { call: adapterCall } } : {}),
       spendBudget: { reserve },
       log: {
-        write(event: ModelGatewayLogEvent): void {
+        write(event: ModelGatewayLogTransport): void {
+          if (event.category === "diagnostic")
+            throw new TypeError("Expected normal fixture evidence");
           if (options.logFailure === true && event.op === "chat.request.dispatch") throw failure;
         },
       },

@@ -1,3 +1,4 @@
+import { validatePhysicalArrayEntries } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
@@ -23,7 +24,6 @@ import {
   invalid,
   isOneOf,
   isRecord,
-  result,
   sseEventKeys,
   validateSafeId,
   validateSseEventFields,
@@ -194,20 +194,36 @@ export function parseCodingWorkbenchPromptReferences(
 ): CodingWorkbenchValidationResult<readonly CodingWorkbenchPromptReference[]> {
   if (!Array.isArray(value)) return invalid("references must be an array");
   const errors: string[] = [];
+  const admitted = checkCodingWorkbenchPromptReferences(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchPromptReferences(
+  value: readonly unknown[],
+  errors: string[],
+): value is readonly CodingWorkbenchPromptReference[] {
   if (value.length === 0 || value.length > CODING_WORKBENCH_PROMPT_REFERENCES_MAX) {
     errors.push(
       `references must hold 1 to ${String(CODING_WORKBENCH_PROMPT_REFERENCES_MAX)} files`,
     );
   }
   const seen = new Set<string>();
-  value.forEach((entry: unknown, index) => {
-    errors.push(...referenceEntryErrors(entry, index, seen));
-  });
-  return result(value, errors);
+  validatePhysicalArrayEntries(
+    value,
+    "references",
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = referenceEntryErrors(entry, path, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
+  return errors.length === 0;
 }
 
-function referenceEntryErrors(entry: unknown, index: number, seen: Set<string>): string[] {
-  const path = `references[${String(index)}]`;
+function referenceEntryErrors(entry: unknown, path: string, seen: Set<string>): string[] {
   if (!isRecord(entry)) return [`${path} must be an object`];
   const errors = exactKeys(entry, ["path"], path);
   if (!isCodingWorkbenchPromptReferencePath(entry.path)) {
@@ -268,14 +284,21 @@ export function parseCodingWorkbenchCommandRequest(
 ): CodingWorkbenchValidationResult<CodingWorkbenchCommandRequest> {
   if (!isRecord(value)) return invalid("command must be an object");
   const errors = exactKeys(value, ["name"], "command");
+  const admitted = checkCodingWorkbenchCommandRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchCommandRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchCommandRequest {
   if (!isCodingWorkbenchCommandName(value.name)) {
     errors.push("command.name must be a bounded command name");
   }
-  return result(value, errors);
+  return errors.length === 0;
 }
 
-function commandEntryErrors(entry: unknown, index: number, seen: Set<string>): string[] {
-  const path = `commands[${String(index)}]`;
+function commandEntryErrors(entry: unknown, path: string, seen: Set<string>): string[] {
   if (!isRecord(entry)) return [`${path} must be an object`];
   const errors = exactKeys(entry, ["name", "description"], path);
   if (!isCodingWorkbenchCommandName(entry.name)) {
@@ -395,19 +418,27 @@ function mentionListErrors(
     errors.push(`${path} must hold 1 to ${String(CODING_WORKBENCH_PROMPT_MENTIONS_MAX)} entries`);
   }
   const seen = new Set<string>();
-  value.forEach((entry: unknown, index) => {
-    const at = `${path}[${String(index)}]`;
-    if (!isRecord(entry)) {
-      errors.push(`${at} must be an object`);
-      return;
-    }
-    errors.push(...exactKeys(entry, [field, "mention"], at));
-    const identity = entry[field];
-    if (!isCodingWorkbenchMentionName(identity)) errors.push(`${at}.${field} is invalid`);
-    else if (seen.has(identity)) errors.push(`${at}.${field} repeats an earlier mention`);
-    else seen.add(identity);
-    errors.push(...mentionSpanErrors(entry.mention, `${at}.mention`));
-  });
+  validatePhysicalArrayEntries(
+    value,
+    path,
+    errors,
+    false,
+    "must be an object",
+    (entry, at, issues): boolean => {
+      if (!isRecord(entry)) {
+        issues.push(`${at} must be an object`);
+        return false;
+      }
+      const before = issues.length;
+      issues.push(...exactKeys(entry, [field, "mention"], at));
+      const identity = entry[field];
+      if (!isCodingWorkbenchMentionName(identity)) issues.push(`${at}.${field} is invalid`);
+      else if (seen.has(identity)) issues.push(`${at}.${field} repeats an earlier mention`);
+      else seen.add(identity);
+      issues.push(...mentionSpanErrors(entry.mention, `${at}.mention`));
+      return issues.length === before;
+    },
+  );
   return errors;
 }
 
@@ -416,6 +447,14 @@ export function parseCodingWorkbenchPromptMentions(
 ): CodingWorkbenchValidationResult<CodingWorkbenchPromptMentions> {
   if (!isRecord(value)) return invalid("mentions must be an object");
   const errors = exactKeys(value, ["agents", "skills"], "mentions");
+  const admitted = checkCodingWorkbenchPromptMentions(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchPromptMentions(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchPromptMentions {
   if (value.agents === undefined && value.skills === undefined) {
     errors.push("mentions must name an agent or a skill");
   }
@@ -423,7 +462,7 @@ export function parseCodingWorkbenchPromptMentions(
     ...mentionListErrors(value.agents, "agents", "name"),
     ...mentionListErrors(value.skills, "skills", "id"),
   );
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 function mentionableErrors(
@@ -462,9 +501,18 @@ function mentionablesErrors(
     errors.push(`${key} must hold at most ${String(CODING_WORKBENCH_MENTIONABLES_MAX)} entries`);
   }
   const seen = new Set<string>();
-  value.forEach((entry: unknown, index) => {
-    errors.push(...mentionableErrors(entry, `${key}[${String(index)}]`, keys, seen));
-  });
+  validatePhysicalArrayEntries(
+    value,
+    key,
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = mentionableErrors(entry, path, keys, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
   return errors;
 }
 
@@ -508,6 +556,14 @@ export function validateCodingWorkbenchRuntimeCommandsChannelPayload(
     ["session", "commands", "agents", "primaryAgents", "skills"],
     "commandsChannelPayload",
   );
+  const admitted = checkCodingWorkbenchRuntimeCommandsChannelPayload(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeCommandsChannelPayload(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeCommandsChannelPayload {
   if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_COMMANDS_SESSION_STATES)) {
     errors.push("commandsChannelPayload.session is invalid");
   }
@@ -523,7 +579,7 @@ export function validateCodingWorkbenchRuntimeCommandsChannelPayload(
     ...mentionablesErrors(value.primaryAgents, "primaryAgents", ["name", "description"]),
     ...mentionablesErrors(value.skills, "skills", ["id", "name", "description"]),
   );
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 function commandListErrors(commands: unknown): string[] {
@@ -533,9 +589,18 @@ function commandListErrors(commands: unknown): string[] {
     errors.push(`commands must hold at most ${String(CODING_WORKBENCH_COMMANDS_MAX)} entries`);
   }
   const seen = new Set<string>();
-  commands.forEach((entry: unknown, index) => {
-    errors.push(...commandEntryErrors(entry, index, seen));
-  });
+  validatePhysicalArrayEntries(
+    commands,
+    "commands",
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = commandEntryErrors(entry, path, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
   return errors;
 }
 
@@ -867,6 +932,14 @@ export function validateCodingWorkbenchRuntimeRevertChannelPayload(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeRevertChannelPayload> {
   if (!isRecord(value)) return invalid("revert channel payload must be an object");
   const errors = exactKeys(value, ["session", "revert"], "revertChannelPayload");
+  const admitted = checkCodingWorkbenchRuntimeRevertChannelPayload(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeRevertChannelPayload(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeRevertChannelPayload {
   if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_REVERT_SESSION_STATES)) {
     errors.push("revertChannelPayload.session is invalid");
   }
@@ -874,7 +947,7 @@ export function validateCodingWorkbenchRuntimeRevertChannelPayload(
     errors.push("revertChannelPayload.revert must be absent when the session is unpaired");
   }
   if (value.revert !== undefined) validateRevertState(value.revert, errors);
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 /**
@@ -925,13 +998,19 @@ export function parseCodingWorkbenchRuntimeInboxRequest(
     ["requestId", "expectedRevision", "action", "itemId"],
     "inboxRequest",
   );
+  const admitted = checkCodingWorkbenchRuntimeInboxRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeInboxRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeInboxRequest {
   validateRequestId(value.requestId, errors);
-  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
-    errors.push("expectedRevision must be a non-negative safe integer");
-  }
+  validateExpectedRevision(value, errors);
   if (!isCodingWorkbenchRuntimeInboxAction(value.action)) errors.push("action is invalid");
   if (!isCodingWorkbenchRuntimeInboxItemId(value.itemId)) errors.push("itemId is invalid");
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 /**
@@ -969,8 +1048,7 @@ export function unpairedCodingWorkbenchRuntimeInboxChannelPayload(): CodingWorkb
   return { session: "unpaired" };
 }
 
-function inboxItemErrors(entry: unknown, index: number, seen: Set<string>): string[] {
-  const path = `items[${String(index)}]`;
+function inboxItemErrors(entry: unknown, path: string, seen: Set<string>): string[] {
   if (!isRecord(entry)) return [`${path} must be an object`];
   const errors = exactKeys(entry, ["itemId", "delivery", "preview"], path);
   if (!isCodingWorkbenchRuntimeInboxItemId(entry.itemId)) {
@@ -1000,9 +1078,18 @@ function inboxListErrors(items: unknown): string[] {
     );
   }
   const seen = new Set<string>();
-  items.forEach((entry: unknown, index) => {
-    errors.push(...inboxItemErrors(entry, index, seen));
-  });
+  validatePhysicalArrayEntries(
+    items,
+    "items",
+    errors,
+    false,
+    "must be an object",
+    (entry, path, issues): boolean => {
+      const memberErrors = inboxItemErrors(entry, path, seen);
+      issues.push(...memberErrors);
+      return memberErrors.length === 0;
+    },
+  );
   return errors;
 }
 
@@ -1012,6 +1099,14 @@ export function validateCodingWorkbenchRuntimeInboxChannelPayload(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeInboxChannelPayload> {
   if (!isRecord(value)) return invalid("inbox channel payload must be an object");
   const errors = exactKeys(value, ["session", "items"], "inboxChannelPayload");
+  const admitted = checkCodingWorkbenchRuntimeInboxChannelPayload(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeInboxChannelPayload(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeInboxChannelPayload {
   if (!isOneOf(value.session, CODING_WORKBENCH_RUNTIME_INBOX_SESSION_STATES)) {
     errors.push("inboxChannelPayload.session is invalid");
   }
@@ -1019,7 +1114,7 @@ export function validateCodingWorkbenchRuntimeInboxChannelPayload(
     errors.push("inboxChannelPayload.items must be absent when the session is unpaired");
   }
   if (value.items !== undefined) errors.push(...inboxListErrors(value.items));
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -1246,9 +1341,128 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly nativeRetry?: CodingWorkbenchNativeRetry | null | undefined;
     };
 
+function checkStartRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeStartRequest {
+  const request = validateRequestId(value.requestId, errors);
+  const intent = validateTaskIntent(value.taskIntent, errors, value.command !== undefined);
+  const conversation =
+    value.conversationId === undefined ||
+    validateSafeId(value.conversationId, "conversationId", errors, 128);
+  const mode = isOneOf(value.requestedMode, CODING_WORKBENCH_MODES);
+  if (!mode) errors.push("requestedMode is invalid");
+  const preference = validateRuntimePreference(value.runtimePreference, errors);
+  const model = validateRuntimeModelId(value.modelId, errors);
+  const reasoning = validateReasoningEffort(value.reasoningEffort, errors);
+  const issue = validateIssueRef(value.issueRef, errors);
+  const purpose = validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
+  const memory = validateProjectMemoryRequest(value.projectMemory, errors);
+  const promptBefore = errors.length;
+  validateStartAgent(value.agent, errors);
+  validateJiraPodId(value.jiraPodId, errors);
+  validateStartPromptInputs(value, errors);
+  const prompt = errors.length === promptBefore;
+  const digest = validateExpectedIssueDigest(value, errors);
+  return [
+    request,
+    intent,
+    conversation,
+    mode,
+    preference,
+    model,
+    reasoning,
+    issue,
+    purpose,
+    memory,
+    prompt,
+    digest,
+  ].every(Boolean);
+}
+
+function validateExpectedIssueDigest(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.expectedIssueBindingDigest === undefined) return true;
+  if (value.issueRef === undefined || typeof value.expectedIssueBindingDigest !== "string") {
+    errors.push("expectedIssueBindingDigest requires an issue reference and sha256 digest");
+    return false;
+  }
+  const digest: unknown = value.expectedIssueBindingDigest;
+  const admitted = typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest);
+  if (!admitted)
+    errors.push("expectedIssueBindingDigest requires an issue reference and sha256 digest");
+  return admitted;
+}
+
+function checkReadinessRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeReadinessRequest {
+  const admitted = isOneOf(value.requestedMode, CODING_WORKBENCH_MODES);
+  if (!admitted) errors.push("requestedMode is invalid");
+  return admitted;
+}
+
+function checkResumeRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeResumeRequest {
+  const request = validateRequestId(value.requestId, errors);
+  const mode =
+    value.requestedMode === undefined || isOneOf(value.requestedMode, CODING_WORKBENCH_MODES);
+  if (!mode) errors.push("requestedMode is invalid");
+  return request && mode;
+}
+
+function validateExpectedRevision(value: Record<string, unknown>, errors: string[]): boolean {
+  if (!Number.isSafeInteger(value.expectedRevision)) {
+    errors.push("expectedRevision must be a non-negative safe integer");
+    return false;
+  }
+  const revision: unknown = value.expectedRevision;
+  const admitted = typeof revision === "number" && Number.isSafeInteger(revision) && revision >= 0;
+  if (!admitted) errors.push("expectedRevision must be a non-negative safe integer");
+  return admitted;
+}
+
+function checkResearchRevokeRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeResearchRevokeRequest {
+  const request = validateRequestId(value.requestId, errors);
+  const revision = validateExpectedRevision(value, errors);
+  const grant = validateSafeId(
+    value.grantId,
+    "grantId",
+    errors,
+    CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  );
+  return request && revision && grant;
+}
+
+function checkRecoveryAcknowledgementRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeRecoveryAcknowledgementRequest {
+  const request = validateRequestId(value.requestId, errors);
+  const acknowledged = value.acknowledged === true;
+  if (!acknowledged) errors.push("acknowledged must be true");
+  return request && acknowledged;
+}
+
+function checkRequestIdOnly(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeStopRequest {
+  return validateRequestId(value.requestId, errors);
+}
+
 // The text of a request. A slash command takes its arguments from it, and a command such as
 // `/review` needs none, so only a request that names a command may carry an empty text.
-function validateTaskIntent(value: unknown, errors: string[], commandNamed = false): void {
+function validateTaskIntent(
+  value: unknown,
+  errors: string[],
+  commandNamed = false,
+): value is string {
   const minimum = commandNamed ? 0 : 1;
   if (typeof value !== "string" || value.length < minimum || value.length > 65_536) {
     errors.push(
@@ -1256,7 +1470,9 @@ function validateTaskIntent(value: unknown, errors: string[], commandNamed = fal
         ? "taskIntent must be a bounded string"
         : "taskIntent must be a bounded non-empty string",
     );
+    return false;
   }
+  return true;
 }
 
 // Mentions are supplementary like a command: an absent field adds no key.
@@ -1284,12 +1500,16 @@ function validateStartAgent(value: unknown, errors: string[]): void {
   if (value !== undefined && !isCodingWorkbenchBuiltInAgent(value)) errors.push("agent is invalid");
 }
 
-function validateRuntimePreference(value: unknown, errors: string[]): void {
+function validateRuntimePreference(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimePreference | undefined {
   if (value !== undefined && !isOneOf(value, CODING_WORKBENCH_RUNTIME_PREFERENCES)) {
     errors.push("runtimePreference is invalid");
+    return false;
   }
+  return true;
 }
-
 function containsControlCharacter(value: string): boolean {
   return Array.from(value).some((character) => {
     const code = character.codePointAt(0) ?? 0;
@@ -1297,8 +1517,8 @@ function containsControlCharacter(value: string): boolean {
   });
 }
 
-function validateRuntimeModelId(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateRuntimeModelId(value: unknown, errors: string[]): value is string | undefined {
+  if (value === undefined) return true;
   if (
     typeof value !== "string" ||
     value.trim().length === 0 ||
@@ -1306,20 +1526,25 @@ function validateRuntimeModelId(value: unknown, errors: string[]): void {
     containsControlCharacter(value)
   ) {
     errors.push("modelId must be bounded safe text");
+    return false;
   }
+  return true;
 }
-
-function validateReasoningEffort(value: unknown, errors: string[]): void {
+function validateReasoningEffort(
+  value: unknown,
+  errors: string[],
+): value is ModelReasoningEffort | undefined {
   if (value !== undefined && !isOneOf(value, MODEL_REASONING_EFFORTS)) {
     errors.push("reasoningEffort is invalid");
+    return false;
   }
+  return true;
 }
-
 // Transport shape only: one bounded, control-character-free string, sharing the parser's own
 // length bound so a reference the contract admits is never one the parser refuses for size. What
 // the text MEANS is decided by the server-side resolver against the active repository.
-function validateIssueRef(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateIssueRef(value: unknown, errors: string[]): value is string | undefined {
+  if (value === undefined) return true;
   if (
     typeof value !== "string" ||
     value.trim().length === 0 ||
@@ -1327,56 +1552,43 @@ function validateIssueRef(value: unknown, errors: string[]): void {
     containsControlCharacter(value)
   ) {
     errors.push("issueRef must be bounded safe text");
+    return false;
   }
+  return true;
 }
-
-function validateIssuePurpose(value: unknown, issueRef: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateIssuePurpose(
+  value: unknown,
+  issueRef: unknown,
+  errors: string[],
+): value is "context" | "delivery" | undefined {
+  if (value === undefined) return true;
   if (issueRef === undefined || (value !== "context" && value !== "delivery")) {
     errors.push("issuePurpose requires an issue reference and a supported purpose");
+    return false;
   }
+  return true;
 }
-
-function validateProjectMemoryRequest(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateProjectMemoryRequest(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeProjectMemoryRequest | undefined {
+  if (value === undefined) return true;
   if (!isRecord(value)) {
     errors.push("projectMemory must be an object");
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["enabled"], "projectMemory"));
-  if (typeof value.enabled !== "boolean") errors.push("projectMemory.enabled must be boolean");
+  const enabled = typeof value.enabled === "boolean";
+  if (!enabled) errors.push("projectMemory.enabled must be boolean");
+  return enabled;
 }
-
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
   if (!isRecord(value)) return invalid("start request must be an object");
   const errors = exactKeys(value, START_REQUEST_KEYS, "startRequest");
-  validateRequestId(value.requestId, errors);
-  validateTaskIntent(value.taskIntent, errors, value.command !== undefined);
-  if (value.conversationId !== undefined)
-    validateSafeId(value.conversationId, "conversationId", errors, 128);
-  if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
-    errors.push("requestedMode is invalid");
-  }
-  validateRuntimePreference(value.runtimePreference, errors);
-  validateRuntimeModelId(value.modelId, errors);
-  validateReasoningEffort(value.reasoningEffort, errors);
-  validateIssueRef(value.issueRef, errors);
-  validateIssuePurpose(value.issuePurpose, value.issueRef, errors);
-  validateProjectMemoryRequest(value.projectMemory, errors);
-  validateStartAgent(value.agent, errors);
-  validateJiraPodId(value.jiraPodId, errors);
-  validateStartPromptInputs(value, errors);
-  if (
-    value.expectedIssueBindingDigest !== undefined &&
-    (value.issueRef === undefined ||
-      typeof value.expectedIssueBindingDigest !== "string" ||
-      !/^[a-f0-9]{64}$/u.test(value.expectedIssueBindingDigest))
-  ) {
-    errors.push("expectedIssueBindingDigest requires an issue reference and sha256 digest");
-  }
-  return result(value, errors);
+  const admitted = checkStartRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
 
 const START_REQUEST_KEYS: readonly string[] = [
@@ -1462,10 +1674,16 @@ export function parseCodingWorkbenchRuntimeFollowUpRequest(
     ],
     "followUpRequest",
   );
+  const admitted = checkCodingWorkbenchRuntimeFollowUpRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkCodingWorkbenchRuntimeFollowUpRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeFollowUpRequest {
   validateRequestId(value.requestId, errors);
-  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
-    errors.push("expectedRevision must be a non-negative safe integer");
-  }
+  validateExpectedRevision(value, errors);
   validateTaskIntent(value.taskIntent, errors, value.command !== undefined);
   validateAgent(value.agent, errors);
   validatePromptDelivery(value, errors);
@@ -1475,7 +1693,7 @@ export function parseCodingWorkbenchRuntimeFollowUpRequest(
     const references = parseCodingWorkbenchPromptReferences(value.references);
     if (!references.ok) errors.push(...references.errors);
   }
-  return result(value, errors);
+  return errors.length === 0;
 }
 
 // A delivered message joins the turn that is running, so it cannot also switch that turn's agent.
@@ -1491,12 +1709,9 @@ export function parseCodingWorkbenchRuntimeReadinessRequest(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeReadinessRequest> {
   if (!isRecord(value)) return invalid("runtime readiness request must be an object");
   const errors = exactKeys(value, ["requestedMode"], "runtimeReadinessRequest");
-  if (!isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
-    errors.push("requestedMode is invalid");
-  }
-  return result(value, errors);
+  const admitted = checkReadinessRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
-
 export function parseCodingWorkbenchRuntimeStopRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStopRequest> {
@@ -1508,13 +1723,9 @@ export function parseCodingWorkbenchRuntimeResumeRequest(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResumeRequest> {
   if (!isRecord(value)) return invalid("runtime resume request must be an object");
   const errors = exactKeys(value, ["requestId", "requestedMode"], "runtimeResume");
-  validateRequestId(value.requestId, errors);
-  if (value.requestedMode !== undefined && !isOneOf(value.requestedMode, CODING_WORKBENCH_MODES)) {
-    errors.push("requestedMode is invalid");
-  }
-  return result(value, errors);
+  const admitted = checkResumeRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
-
 export function parseCodingWorkbenchRuntimeTakeoverRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeTakeoverRequest> {
@@ -1537,84 +1748,87 @@ export function parseCodingWorkbenchRuntimeApprovalDecisionRequest(
     ],
     "approvalDecision",
   );
-  validateRequestId(value.requestId, errors);
-  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
-    errors.push("expectedRevision must be a non-negative safe integer");
-  }
-  if (!isOneOf(value.decision, CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS)) {
-    errors.push("decision is invalid");
-  }
-  validateApprovalGrantFields(value, errors);
-  return result(value, errors);
+  const admitted = checkApprovalRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
 
-function validateApprovalGrantFields(value: Record<string, unknown>, errors: string[]): void {
-  if (
-    value.grantScope !== undefined &&
-    value.grantScope !== "once" &&
-    value.grantScope !== "task"
-  ) {
-    errors.push("grantScope is invalid");
-  }
-  if (value.commandTemplateId !== undefined) {
+function checkApprovalRequest(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeApprovalDecisionRequest {
+  const request = validateRequestId(value.requestId, errors);
+  const revision = validateExpectedRevision(value, errors);
+  const decision = isOneOf(value.decision, CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS);
+  if (!decision) errors.push("decision is invalid");
+  const grants = validateApprovalGrantFields(value, errors);
+  return request && revision && decision && grants;
+}
+
+function validateApprovalGrantFields(value: Record<string, unknown>, errors: string[]): boolean {
+  const scope =
+    value.grantScope === undefined || value.grantScope === "once" || value.grantScope === "task";
+  if (!scope) errors.push("grantScope is invalid");
+  const command =
+    value.commandTemplateId === undefined ||
     validateSafeId(
       value.commandTemplateId,
       "commandTemplateId",
       errors,
       CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
     );
-  }
-  validateSafeArgumentClasses(value.safeArgumentClasses, errors);
+  const args = validateSafeArgumentClasses(value.safeArgumentClasses, errors);
   if (
     value.decision !== "approved" &&
     (value.grantScope !== undefined ||
       value.commandTemplateId !== undefined ||
       value.safeArgumentClasses !== undefined)
-  ) {
+  )
     errors.push("denied decisions cannot carry grant fields");
-  }
+  return [scope, command, args].every(Boolean);
 }
-
-function validateSafeArgumentClasses(value: unknown, errors: string[]): void {
+function validateSafeArgumentClasses(
+  value: unknown,
+  errors: string[],
+): value is readonly string[] | undefined {
   if (!Array.isArray(value)) {
     if (value !== undefined) errors.push("safeArgumentClasses must be an array");
-  } else if (value.length > 16) {
-    errors.push("safeArgumentClasses exceeds 16 entries");
-  } else {
-    value.forEach((entry, index) => {
-      validateSafeId(
-        entry,
-        `safeArgumentClasses[${String(index)}]`,
-        errors,
-        CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
-      );
-    });
+    return value === undefined;
   }
+  if (value.length > 16) {
+    errors.push("safeArgumentClasses exceeds 16 entries");
+    return false;
+  }
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const entry: unknown = value[index];
+    const valid = validateSafeId(
+      entry,
+      `safeArgumentClasses[${String(index)}]`,
+      errors,
+      CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+    );
+    if (!(index in value)) return false;
+    admitted = valid && admitted;
+  }
+  return admitted;
 }
-
 export function parseCodingWorkbenchRuntimeResearchRevokeRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchRevokeRequest> {
   if (!isRecord(value)) return invalid("research revoke request must be an object");
   const errors = exactKeys(value, ["requestId", "expectedRevision", "grantId"], "researchRevoke");
-  validateRequestId(value.requestId, errors);
-  if (!Number.isSafeInteger(value.expectedRevision) || Number(value.expectedRevision) < 0) {
-    errors.push("expectedRevision must be a non-negative safe integer");
-  }
-  validateSafeId(value.grantId, "grantId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
-  return result(value, errors);
+  const admitted = checkResearchRevokeRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
-
 export function parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeRecoveryAcknowledgementRequest> {
   if (!isRecord(value)) return invalid("recovery acknowledgement must be an object");
   const errors = exactKeys(value, ["requestId", "acknowledged"], "recoveryAcknowledgement");
-  validateRequestId(value.requestId, errors);
-  if (value.acknowledged !== true) errors.push("acknowledged must be true");
-  return result(value, errors);
+  const admitted = checkRecoveryAcknowledgementRequest(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
-
 export function validateCodingWorkbenchRuntimeSnapshot(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSnapshot> {
@@ -1646,40 +1860,51 @@ export function validateCodingWorkbenchRuntimeSnapshot(
     ],
     "runtimeSnapshot",
   );
-  validateSnapshotFields(value, errors);
-  if (value.conversationId !== undefined)
+  const admitted = checkSnapshot(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkSnapshot(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeSnapshot {
+  const fields = validateSnapshotFields(value, errors);
+  const conversation =
+    value.conversationId === undefined ||
     validateSafeId(value.conversationId, "conversationId", errors, 128);
-  validateContextUsage(value.contextUsage, errors);
-  validateIssueBinding(value.issueBinding, errors);
-  validateSnapshotVerifiedCommit(value, errors);
-  validateSnapshotDraftDelivery(value, errors);
-  validateSnapshotCiReadiness(value, errors);
-  validateSnapshotDescriptionStatus(value, errors);
-  validateRuntimeResult(value.result, errors);
+  const context = validateContextUsage(value.contextUsage, errors);
+  const issue = validateIssueBinding(value.issueBinding, errors);
+  const verified = validateSnapshotVerifiedCommit(value, errors);
+  const delivery = validateSnapshotDraftDelivery(value, errors);
+  const ci = validateSnapshotCiReadiness(value, errors);
+  const description = validateSnapshotDescriptionStatus(value, errors);
+  const outcome = validateRuntimeResult(value.result, errors);
   if (
     value.result !== undefined &&
     !["succeeded", "failed", "cancelled", "taken-over"].includes(String(value.state))
-  ) {
+  )
     errors.push("result is permitted only on a terminal snapshot");
-  }
-  return result(value, errors);
+  return [fields, conversation, context, issue, verified, delivery, ci, description, outcome].every(
+    Boolean,
+  );
 }
 
-function validateContextUsage(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateContextUsage(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchContextUsage | undefined {
+  if (value === undefined) return true;
   if (!isRecord(value)) {
     errors.push("contextUsage must be an object");
-    return;
+    return false;
   }
   if (value.state === "unavailable") {
     errors.push(...exactKeys(value, ["state", "updatedAt"], "contextUsage"));
-    validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
-    return;
+    return validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
   }
-  validateAvailableContextUsage(value, errors);
+  return validateAvailableContextUsage(value, errors);
 }
-
-function validateAvailableContextUsage(value: Record<string, unknown>, errors: string[]): void {
+function validateAvailableContextUsage(value: Record<string, unknown>, errors: string[]): boolean {
   errors.push(
     ...exactKeys(
       value,
@@ -1699,17 +1924,22 @@ function validateAvailableContextUsage(value: Record<string, unknown>, errors: s
       "contextUsage",
     ),
   );
-  if (value.state !== "available") errors.push("contextUsage.state is invalid");
-  if (value.source !== "estimated" && value.source !== "provider-reported") {
-    errors.push("contextUsage.source is invalid");
-  }
-  validateContextCounts(value, errors);
-  validateContextBreakdown(value.breakdown, Number(value.usedInputTokens), errors);
-  validateContextCompaction(value.compaction, errors);
-  validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
+  const state = value.state === "available";
+  if (!state) errors.push("contextUsage.state is invalid");
+  const source = value.source === "estimated" || value.source === "provider-reported";
+  if (!source) errors.push("contextUsage.source is invalid");
+  const counts = validateContextCounts(value, errors);
+  const breakdownValue: unknown = value.breakdown;
+  const used: unknown = value.usedInputTokens;
+  const usedNumber = Number(used);
+  const breakdown = validateContextBreakdown(breakdownValue, usedNumber, errors);
+  const usedCount = validateObservedContextCount(used, "usedInputTokens", errors);
+  const compaction = validateContextCompaction(value.compaction, errors);
+  const updated = validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
+  return [state, source, counts, breakdown, usedCount, compaction, updated].every(Boolean);
 }
 
-function validateContextCounts(value: Record<string, unknown>, errors: string[]): void {
+function validateContextCounts(value: Record<string, unknown>, errors: string[]): boolean {
   const fields = [
     "capacityTokens",
     "usedInputTokens",
@@ -1717,32 +1947,104 @@ function validateContextCounts(value: Record<string, unknown>, errors: string[])
     "freeTokens",
     "cumulativePromptTokens",
   ] as const;
+  let admitted = true;
   for (const field of fields) {
-    if (!validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) {
+    const count = validBoundedCount(value[field], Number.MAX_SAFE_INTEGER);
+    if (!count) {
       errors.push(`contextUsage.${field} is invalid`);
     }
+    admitted = count && admitted;
   }
-  if (
-    fields.every((field) => validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) &&
-    Number(value.capacityTokens) !==
-      Number(value.usedInputTokens) + Number(value.reservedOutputTokens) + Number(value.freeTokens)
-  ) {
-    errors.push("contextUsage token geometry is inconsistent");
-  }
-  if (
-    value.runPromptBudgetTokens !== undefined &&
-    (!validBoundedCount(value.runPromptBudgetTokens, Number.MAX_SAFE_INTEGER) ||
-      Number(value.runPromptBudgetTokens) < Number(value.cumulativePromptTokens))
-  ) {
-    errors.push("contextUsage.runPromptBudgetTokens is invalid");
-  }
+  const geometryCounts = validateGeometryCounts(value, fields, errors);
+  const arithmetic = !geometryCounts || validateContextArithmetic(value, errors);
+  const budget = validateRunPromptBudget(value, errors);
+  return admitted && geometryCounts && arithmetic && budget;
 }
 
-function validateContextBreakdown(value: unknown, usedTokens: number, errors: string[]): void {
-  if (value === undefined) return;
+function validateGeometryCounts(
+  value: Record<string, unknown>,
+  fields: readonly string[],
+  errors: string[],
+): boolean {
+  for (const field of fields) {
+    if (!validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) {
+      const diagnostic = `contextUsage.${field} is invalid`;
+      if (!errors.includes(diagnostic)) errors.push(diagnostic);
+      return false;
+    }
+  }
+  return true;
+}
+
+function validateContextArithmetic(value: Record<string, unknown>, errors: string[]): boolean {
+  const capacity: unknown = value.capacityTokens;
+  const capacityNumber = Number(capacity);
+  const used: unknown = value.usedInputTokens;
+  const usedNumber = Number(used);
+  const reserved: unknown = value.reservedOutputTokens;
+  const reservedNumber = Number(reserved);
+  const free: unknown = value.freeTokens;
+  const freeNumber = Number(free);
+  if (capacityNumber !== usedNumber + reservedNumber + freeNumber) {
+    errors.push("contextUsage token geometry is inconsistent");
+  }
+  const operands: readonly (readonly [string, unknown])[] = [
+    ["capacityTokens", capacity],
+    ["usedInputTokens", used],
+    ["reservedOutputTokens", reserved],
+    ["freeTokens", free],
+  ];
+  let admitted = true;
+  for (const [field, observed] of operands) {
+    const valid = validBoundedCount(observed, Number.MAX_SAFE_INTEGER);
+    if (!valid) {
+      const diagnostic = `contextUsage.${field} is invalid`;
+      if (!errors.includes(diagnostic)) errors.push(diagnostic);
+    }
+    admitted = valid && admitted;
+  }
+  return admitted;
+}
+
+function validateRunPromptBudget(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.runPromptBudgetTokens === undefined) return true;
+  if (!validBoundedCount(value.runPromptBudgetTokens, Number.MAX_SAFE_INTEGER)) {
+    errors.push("contextUsage.runPromptBudgetTokens is invalid");
+    return false;
+  }
+  const budget: unknown = value.runPromptBudgetTokens;
+  const budgetNumber = Number(budget);
+  const cumulative: unknown = value.cumulativePromptTokens;
+  const cumulativeNumber = Number(cumulative);
+  const exceedsBudget = budgetNumber < cumulativeNumber;
+  const admitted = validBoundedCount(budget, Number.MAX_SAFE_INTEGER) && !exceedsBudget;
+  if (!admitted) errors.push("contextUsage.runPromptBudgetTokens is invalid");
+  const cumulativeCount = validateObservedContextCount(
+    cumulative,
+    "cumulativePromptTokens",
+    errors,
+  );
+  return admitted && cumulativeCount;
+}
+
+function validateObservedContextCount(value: unknown, field: string, errors: string[]): boolean {
+  const admitted = validBoundedCount(value, Number.MAX_SAFE_INTEGER);
+  if (!admitted) {
+    const diagnostic = `contextUsage.${field} is invalid`;
+    if (!errors.includes(diagnostic)) errors.push(diagnostic);
+  }
+  return admitted;
+}
+
+function validateContextBreakdown(
+  value: unknown,
+  usedTokens: number,
+  errors: string[],
+): value is CodingWorkbenchContextUsageBreakdown | undefined {
+  if (value === undefined) return true;
   if (!isRecord(value)) {
     errors.push("contextUsage.breakdown must be an object");
-    return;
+    return false;
   }
   const fields = [
     "conversationMessagesTokens",
@@ -1754,70 +2056,81 @@ function validateContextBreakdown(value: unknown, usedTokens: number, errors: st
   const reported: unknown[] = fields.flatMap((field) =>
     value[field] === undefined ? [] : [value[field]],
   );
-  if (!reported.every((count) => validBoundedCount(count, Number.MAX_SAFE_INTEGER))) {
+  const admitted = reported.every((count) => validBoundedCount(count, Number.MAX_SAFE_INTEGER));
+  if (!admitted) {
     errors.push("contextUsage.breakdown contains an invalid count");
-  } else if (reported.reduce<number>((sum, count) => sum + Number(count), 0) > usedTokens) {
+  } else if (reported.reduce<number>((sum, count) => sum + count, 0) > usedTokens) {
     errors.push("contextUsage.breakdown exceeds usedInputTokens");
   }
+  return admitted;
 }
-
-function validateContextCompaction(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateContextCompaction(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchContextCompaction | undefined {
+  if (value === undefined) return true;
   if (!isRecord(value)) {
     errors.push("contextUsage.compaction must be an object");
-    return;
+    return false;
   }
   errors.push(
     ...exactKeys(value, ["count", "lastCompactedAt", "thresholdTokens"], "contextUsage.compaction"),
   );
-  if (!validBoundedCount(value.count, Number.MAX_SAFE_INTEGER)) {
-    errors.push("contextUsage.compaction.count is invalid");
-  }
-  if (value.lastCompactedAt !== undefined) {
+  const count = validBoundedCount(value.count, Number.MAX_SAFE_INTEGER);
+  if (!count) errors.push("contextUsage.compaction.count is invalid");
+  const compacted =
+    value.lastCompactedAt === undefined ||
     validateStrictUtcInstant(
       value.lastCompactedAt,
       "contextUsage.compaction.lastCompactedAt",
       errors,
     );
-  }
-  if (
-    value.thresholdTokens !== undefined &&
-    !validBoundedCount(value.thresholdTokens, Number.MAX_SAFE_INTEGER)
-  ) {
-    errors.push("contextUsage.compaction.thresholdTokens is invalid");
-  }
+  const threshold =
+    value.thresholdTokens === undefined ||
+    validBoundedCount(value.thresholdTokens, Number.MAX_SAFE_INTEGER);
+  if (!threshold) errors.push("contextUsage.compaction.thresholdTokens is invalid");
+  return count && compacted && threshold;
 }
-
-function validateIssueBinding(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateIssueBinding(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchIssueBinding | undefined {
+  if (value === undefined) return true;
   const validated = validateCodingWorkbenchIssueBinding(value);
   if (!validated.ok) errors.push(...validated.errors);
+  return validated.ok;
 }
-
-function validateSnapshotVerifiedCommit(snapshot: Record<string, unknown>, errors: string[]): void {
+function validateSnapshotVerifiedCommit(
+  snapshot: Record<string, unknown>,
+  errors: string[],
+): boolean {
   const receipt = snapshot.verifiedCommitResult;
-  if (receipt === undefined) return;
+  if (receipt === undefined) return true;
   if (!isVerifiedCommitResult(receipt)) {
     errors.push("verifiedCommitResult must be a closed verified commit receipt");
-    return;
+    return false;
   }
   const issue = snapshot.issueBinding;
   const issueDigest = isRecord(issue) ? issue.bindingDigest : undefined;
   if (receipt.runId !== snapshot.runId || receipt.issueBindingDigest !== issueDigest) {
     errors.push("verifiedCommitResult must match the snapshot run and issue binding");
   }
+  return true;
 }
-
-function validateSnapshotDraftDelivery(snapshot: Record<string, unknown>, errors: string[]): void {
+function validateSnapshotDraftDelivery(
+  snapshot: Record<string, unknown>,
+  errors: string[],
+): boolean {
   const delivery = snapshot.draftDelivery;
-  if (delivery === undefined) return;
+  if (delivery === undefined) return true;
   if (!isDraftDeliveryRecord(delivery)) {
     errors.push("draftDelivery must be a closed durable delivery record");
-    return;
+    return false;
   }
   if (!draftDeliveryMatchesSnapshot(snapshot, delivery.binding)) {
     errors.push("draftDelivery must match the snapshot run and frozen issue binding");
   }
+  return true;
 }
 
 // An issue-bound record must agree with the run's frozen issue on every fact. An issue-free branch
@@ -1841,10 +2154,9 @@ function draftDeliveryMatchesSnapshot(
     ].every(Boolean)
   );
 }
-
-function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): void {
+function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: string[]): boolean {
   const readiness = snapshot.ciReadiness;
-  if (readiness === undefined) return;
+  if (readiness === undefined) return true;
   const draft = snapshot.draftDelivery;
   if (
     !isReadinessSnapshot(readiness) ||
@@ -1852,7 +2164,7 @@ function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: 
     !isIssueBoundDraftDeliveryRecord(draft)
   ) {
     errors.push("ciReadiness must be a closed observation of a confirmed delivery");
-    return;
+    return false;
   }
   if (
     ![
@@ -1866,8 +2178,8 @@ function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: 
     ].every(Boolean)
   )
     errors.push("ciReadiness must match the snapshot run and confirmed delivery target");
+  return true;
 }
-
 // The status can outlive the LATEST `verifiedCommitResult` shown on the snapshot (that field
 // reflects the most recent proposal attempt, which may be a later failed/blocked one, while the
 // description job binds the last SUCCESSFUL head — codingRuntimeVerifiedCommitAuthorityStore.ts /
@@ -1875,62 +2187,81 @@ function validateSnapshotCiReadiness(snapshot: Record<string, unknown>, errors: 
 function validateSnapshotDescriptionStatus(
   snapshot: Record<string, unknown>,
   errors: string[],
-): void {
+): boolean {
   const status = snapshot.descriptionStatus;
-  if (status === undefined) return;
+  if (status === undefined) return true;
   if (!isWorkbenchDescriptionStatus(status)) {
     errors.push("descriptionStatus must be a closed durable description status");
-    return;
+    return false;
   }
   if (status.runId !== snapshot.runId) {
     errors.push("descriptionStatus must match the snapshot run");
   }
+  return true;
 }
-
-function validateRuntimeResult(value: unknown, errors: string[]): void {
-  if (value === undefined) return;
+function validateRuntimeResult(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeResult | undefined {
+  if (value === undefined) return true;
   if (!isRecord(value)) {
     errors.push("result must be an object");
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["status", "exitCode", "output", "error"], "result"));
-  if (!["cancelled", "failed", "signalled", "succeeded"].includes(String(value.status))) {
-    errors.push("result.status is invalid");
-  }
-  if (
-    value.exitCode !== null &&
-    (!Number.isSafeInteger(value.exitCode) ||
-      Number(value.exitCode) < 0 ||
-      Number(value.exitCode) > 255)
-  ) {
+  const status = isOneOf(value.status, ["cancelled", "failed", "signalled", "succeeded"]);
+  if (!status) errors.push("result.status is invalid");
+  const exit = validateResultExitCode(value, errors);
+  const output = validateProcessSummary(value.output, "result.output", errors);
+  const error = validateProcessSummary(value.error, "result.error", errors);
+  return status && exit && output && error;
+}
+function validateResultExitCode(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.exitCode === null) return true;
+  if (!Number.isSafeInteger(value.exitCode)) {
     errors.push("result.exitCode is invalid");
+    return false;
   }
-  validateProcessSummary(value.output, "result.output", errors);
-  validateProcessSummary(value.error, "result.error", errors);
+  const lower: unknown = value.exitCode;
+  if (typeof lower !== "number" || !Number.isSafeInteger(lower) || lower < 0) {
+    errors.push("result.exitCode is invalid");
+    return false;
+  }
+  const upper: unknown = value.exitCode;
+  const admitted = validBoundedCount(upper, 255);
+  if (!admitted) errors.push("result.exitCode is invalid");
+  return admitted;
 }
 
-function validateProcessSummary(value: unknown, path: string, errors: string[]): void {
+function validateProcessSummary(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is CodingWorkbenchRuntimeProcessSummary {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object`);
-    return;
+    return false;
   }
   errors.push(...exactKeys(value, ["byteCount", "lineCount", "sha256", "truncated"], path));
-  if (!validBoundedCount(value.byteCount, 1_073_741_824)) {
-    errors.push(`${path}.byteCount is invalid`);
-  }
-  if (!validBoundedCount(value.lineCount, 1_000_000)) {
-    errors.push(`${path}.lineCount is invalid`);
-  }
-  if (typeof value.sha256 !== "string" || !/^[a-f0-9]{64}$/u.test(value.sha256)) {
-    errors.push(`${path}.sha256 is invalid`);
-  }
-  if (typeof value.truncated !== "boolean") errors.push(`${path}.truncated is invalid`);
+  const bytes = validBoundedCount(value.byteCount, 1_073_741_824);
+  if (!bytes) errors.push(`${path}.byteCount is invalid`);
+  const lines = validBoundedCount(value.lineCount, 1_000_000);
+  if (!lines) errors.push(`${path}.lineCount is invalid`);
+  const digest = validProcessSummaryDigest(value);
+  if (!digest) errors.push(`${path}.sha256 is invalid`);
+  const truncated = typeof value.truncated === "boolean";
+  if (!truncated) errors.push(`${path}.truncated is invalid`);
+  return bytes && lines && digest && truncated;
+}
+function validProcessSummaryDigest(value: Record<string, unknown>): boolean {
+  if (typeof value.sha256 !== "string") return false;
+  const digest: unknown = value.sha256;
+  return typeof digest === "string" && /^[a-f0-9]{64}$/u.test(digest);
 }
 
-function validBoundedCount(value: unknown, maximum: number): boolean {
-  return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= maximum;
+function validBoundedCount(value: unknown, maximum: number): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
 }
-
 // A status read validates the identical snapshot shape; the distinct name documents the read call
 // site's intent to readers without duplicating the validation logic.
 export function validateCodingWorkbenchRuntimeStatus(
@@ -1959,17 +2290,31 @@ export function validateCodingWorkbenchRuntimeReadiness(
     ],
     "runtimeReadiness",
   );
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
+  const admitted = checkRuntimeReadiness(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkRuntimeReadiness(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeReadiness {
+  const version = value.schemaVersion === CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
+  if (!version) {
     errors.push("schemaVersion is invalid");
   }
+  let modes = true;
   for (const field of ["requestedMode", "deploymentCeiling", "effectiveMode"] as const) {
-    if (!isOneOf(value[field], CODING_WORKBENCH_MODES)) errors.push(`${field} is invalid`);
+    const valid = isOneOf(value[field], CODING_WORKBENCH_MODES);
+    if (!valid) errors.push(`${field} is invalid`);
+    modes = valid && modes;
   }
-  validateRuntimeUnavailableReason(value, errors);
-  validateRuntimeEvidenceClass(value, errors);
+  const reason = validateRuntimeUnavailableReason(value, errors);
+  const evidence = validateRuntimeEvidenceClass(value, errors);
+  const capabilitiesBefore = errors.length;
   validateSelectableAgents(value, errors);
   validatePromptInputs(value.promptInputs, errors);
   validateRuntimeVersion(value, errors);
+  const capabilities = errors.length === capabilitiesBefore;
   // The server may confirm a NARROWER effective mode than the plain request/ceiling clamp (the
   // #2386 mode-change gate anchors it to the live run), but never a wider one: widening past the
   // clamp is the fail-closed contract boundary.
@@ -1984,8 +2329,9 @@ export function validateCodingWorkbenchRuntimeReadiness(
   ) {
     errors.push("effectiveMode must not widen past requestedMode and deploymentCeiling");
   }
-  if (typeof value.runtimeAvailable !== "boolean") errors.push("runtimeAvailable is invalid");
-  return result(value, errors);
+  const available = typeof value.runtimeAvailable === "boolean";
+  if (!available) errors.push("runtimeAvailable is invalid");
+  return [version, modes, reason, evidence, capabilities, available].every(Boolean);
 }
 
 /**
@@ -1993,11 +2339,14 @@ export function validateCodingWorkbenchRuntimeReadiness(
  * runtime must not carry a reason, and an unavailable runtime must name one — a bare `false`
  * would reintroduce the unexplained-unavailability posture this field exists to end.
  */
-function validateRuntimeUnavailableReason(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeUnavailableReason(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
   const reason = value.runtimeUnavailableReason;
   if (reason !== undefined && !isOneOf(reason, CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS)) {
     errors.push("runtimeUnavailableReason is invalid");
-    return;
+    return false;
   }
   if (value.runtimeAvailable === true && reason !== undefined) {
     errors.push("runtimeUnavailableReason must be absent when the runtime is available");
@@ -2005,21 +2354,21 @@ function validateRuntimeUnavailableReason(value: Record<string, unknown>, errors
   if (value.runtimeAvailable === false && reason === undefined) {
     errors.push("runtimeUnavailableReason is required when the runtime is unavailable");
   }
+  return true;
 }
-
 /**
  * The exact mirror of the unavailable reason, bound to the AVAILABLE branch. Requiring it there is
  * the load-bearing half: an optional field whose absence reads as "verified" would let an
  * unverified runtime render as plain green.
  */
-function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: string[]): void {
+function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: string[]): boolean {
   const evidenceClass = value.runtimeEvidenceClass;
   if (
     evidenceClass !== undefined &&
     !isOneOf(evidenceClass, CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES)
   ) {
     errors.push("runtimeEvidenceClass is invalid");
-    return;
+    return false;
   }
   if (value.runtimeAvailable === true && evidenceClass === undefined) {
     errors.push("runtimeEvidenceClass is required when the runtime is available");
@@ -2027,6 +2376,7 @@ function validateRuntimeEvidenceClass(value: Record<string, unknown>, errors: st
   if (value.runtimeAvailable === false && evidenceClass !== undefined) {
     errors.push("runtimeEvidenceClass must be absent when the runtime is unavailable");
   }
+  return true;
 }
 
 /**
@@ -2109,74 +2459,113 @@ export function validateCodingWorkbenchRuntimeSseEvent(
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSseEvent> {
   if (!isRecord(value)) return invalid("runtime SSE event must be an object");
   const errors = exactKeys(value, sseEventKeys(value.kind), "runtimeSseEvent");
-  validateSseEventFields(
+  const admitted = checkSseEvent(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkSseEvent(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingWorkbenchRuntimeSseEvent {
+  return validateSseEventFields(
     value,
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
     CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   );
-  return result(value, errors);
 }
 
-function parseRequestIdOnly<T>(value: unknown, path: string): CodingWorkbenchValidationResult<T> {
+function parseRequestIdOnly(
+  value: unknown,
+  path: string,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStopRequest> {
   if (!isRecord(value)) return invalid(`${path} must be an object`);
   const errors = exactKeys(value, ["requestId"], path);
-  validateRequestId(value.requestId, errors);
-  return result(value, errors);
+  const admitted = checkRequestIdOnly(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+function validateSnapshotFields(value: Record<string, unknown>, errors: string[]): boolean {
+  const version = value.schemaVersion === CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
+  if (!version) errors.push("schemaVersion is invalid");
+  const state = isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES);
+  if (!state) errors.push("state is invalid");
+  const revision = validateSnapshotRevision(value, errors);
+  const updated = validateStrictUtcInstant(value.updatedAt, "updatedAt", errors);
+  const optional = validateOptionalSnapshotFields(value, errors);
+  const failure = validateFailureCode(value.failureCode, errors);
+  const recovery = validateRecoveryAcknowledgement(value, errors);
+  const pending = validatePendingPermission(value, errors);
+  const pause = validatePauseReason(value, errors);
+  return [version, state, revision, updated, optional, failure, recovery, pending, pause].every(
+    Boolean,
+  );
 }
 
-function validateSnapshotFields(value: Record<string, unknown>, errors: string[]): void {
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
-  if (!Number.isSafeInteger(value.revision) || Number(value.revision) < 0) {
+function validateSnapshotRevision(value: Record<string, unknown>, errors: string[]): boolean {
+  if (!Number.isSafeInteger(value.revision)) {
     errors.push("revision must be a non-negative safe integer");
+    return false;
   }
-  validateStrictUtcInstant(value.updatedAt, "updatedAt", errors);
-  validateOptionalSnapshotFields(value, errors);
-  validateFailureCode(value.failureCode, errors);
-  validateRecoveryAcknowledgement(value, errors);
-  validatePendingPermission(value, errors);
-  validatePauseReason(value, errors);
+  const revision: unknown = value.revision;
+  const admitted = validBoundedCount(revision, Number.MAX_SAFE_INTEGER);
+  if (!admitted) errors.push("revision must be a non-negative safe integer");
+  return admitted;
 }
 
 // A pause reason outside `paused` would describe a state the run is not in. The converse is
 // deliberately permitted: an operator-initiated pause carries no reason, which is what `paused`
 // meant before a governed tool could ask for a decision.
-function validatePauseReason(value: Record<string, unknown>, errors: string[]): void {
-  if (value.pauseReason === undefined) return;
+function validatePauseReason(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.pauseReason === undefined) return true;
   if (!isOneOf(value.pauseReason, CODING_WORKBENCH_OPERATOR_DECISIONS)) {
     errors.push("pauseReason is invalid");
-    return;
+    return false;
   }
   if (value.state !== "paused") errors.push("pauseReason is only allowed when state is paused");
+  return true;
 }
-
-function validateRecoveryAcknowledgement(value: Record<string, unknown>, errors: string[]): void {
-  if (value.recoveryAcknowledged === undefined) return;
-  if (value.recoveryAcknowledged !== true) errors.push("recoveryAcknowledged must be true");
-  if (value.state !== "recovery-required") {
+function validateRecoveryAcknowledgement(
+  value: Record<string, unknown>,
+  errors: string[],
+): boolean {
+  if (value.recoveryAcknowledged === undefined) return true;
+  const acknowledged = value.recoveryAcknowledged === true;
+  if (!acknowledged) errors.push("recoveryAcknowledged must be true");
+  if (value.state !== "recovery-required")
     errors.push("recoveryAcknowledged is only allowed when state is recovery-required");
-  }
+  return acknowledged;
 }
-
-function validateOptionalSnapshotFields(value: Record<string, unknown>, errors: string[]): void {
-  if (value.runId !== undefined) {
+function validateOptionalSnapshotFields(value: Record<string, unknown>, errors: string[]): boolean {
+  const run =
+    value.runId === undefined ||
     validateSafeId(value.runId, "runId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
-  }
-  validateOptionalEnum(value.requestedMode, CODING_WORKBENCH_MODES, "requestedMode", errors);
-  validateOptionalEnum(value.effectiveMode, CODING_WORKBENCH_MODES, "effectiveMode", errors);
+  const requested = validateOptionalEnum(
+    value.requestedMode,
+    CODING_WORKBENCH_MODES,
+    "requestedMode",
+    errors,
+  );
+  const effective = validateOptionalEnum(
+    value.effectiveMode,
+    CODING_WORKBENCH_MODES,
+    "effectiveMode",
+    errors,
+  );
   validateSnapshotModeRelationship(value, errors);
-  validateOptionalEnum(
+  const runtime = validateOptionalEnum(
     value.runtimeSource,
     CODING_WORKBENCH_RUNTIME_SOURCES,
     "runtimeSource",
     errors,
   );
-  validateOptionalEnum(value.modelSource, CODING_WORKBENCH_MODEL_SOURCES, "modelSource", errors);
+  const model = validateOptionalEnum(
+    value.modelSource,
+    CODING_WORKBENCH_MODEL_SOURCES,
+    "modelSource",
+    errors,
+  );
+  return run && requested && effective && runtime && model;
 }
-
 function validateSnapshotModeRelationship(value: Record<string, unknown>, errors: string[]): void {
   const requested = value.requestedMode;
   const effective = value.effectiveMode;
@@ -2193,39 +2582,44 @@ function validateSnapshotModeRelationship(value: Record<string, unknown>, errors
   }
 }
 
-function validateOptionalEnum(
+function validateOptionalEnum<T extends string>(
   value: unknown,
-  allowed: readonly string[],
+  allowed: readonly T[],
   path: string,
   errors: string[],
-): void {
-  if (value !== undefined && !isOneOf(value, allowed)) errors.push(`${path} is invalid`);
+): value is T | undefined {
+  if (value !== undefined && !isOneOf(value, allowed)) {
+    errors.push(`${path} is invalid`);
+    return false;
+  }
+  return true;
 }
-
-function validatePendingPermission(value: Record<string, unknown>, errors: string[]): void {
+function validatePendingPermission(value: Record<string, unknown>, errors: string[]): boolean {
   const awaitingApproval = value.state === "awaiting-approval";
   if (awaitingApproval && value.pendingPermission === undefined) {
     errors.push("pendingPermission is required when state is awaiting-approval");
-    return;
+    return false;
   }
   if (!awaitingApproval && value.pendingPermission !== undefined) {
     errors.push("pendingPermission is only allowed when state is awaiting-approval");
-    return;
+    return false;
   }
-  if (value.pendingPermission === undefined) return;
-
+  if (value.pendingPermission === undefined) return true;
   const validation = validateCodingWorkbenchPermissionRequest(value.pendingPermission);
-  if (!validation.ok) {
+  if (!validation.ok)
     errors.push(...validation.errors.map((error) => `pendingPermission.${error}`));
-  }
+  return validation.ok;
 }
-
-function validateFailureCode(value: unknown, errors: string[]): void {
+function validateFailureCode(
+  value: unknown,
+  errors: string[],
+): value is CodingWorkbenchRuntimeFailureCode | undefined {
   if (value !== undefined && !isOneOf(value, CODING_WORKBENCH_RUNTIME_FAILURE_CODES)) {
     errors.push("failureCode is invalid");
+    return false;
   }
+  return true;
 }
-
-function validateRequestId(value: unknown, errors: string[]): void {
-  validateSafeId(value, "requestId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
+function validateRequestId(value: unknown, errors: string[]): value is string {
+  return validateSafeId(value, "requestId", errors, CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS);
 }

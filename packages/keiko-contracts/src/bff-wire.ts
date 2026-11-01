@@ -71,7 +71,6 @@ import type { PrDescriptionApplicationState } from "./pr-description-application
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
 import {
-  CONTEXT_LANE_IDS,
   type ContextAssemblyDiagnostics,
   type ContextBudgetPressure,
   type ContextLaneId,
@@ -418,7 +417,8 @@ export const CODING_TASK_EXPORT_FORMATS = ["json", "markdown"] as const;
 export type CodingTaskExportFormat = (typeof CODING_TASK_EXPORT_FORMATS)[number];
 
 export function isCodingTaskExportFormat(value: unknown): value is CodingTaskExportFormat {
-  return (CODING_TASK_EXPORT_FORMATS as readonly unknown[]).includes(value);
+  const formats: readonly unknown[] = CODING_TASK_EXPORT_FORMATS;
+  return formats.includes(value);
 }
 
 export const CODING_TASK_EXPORT_SCHEMA = "keiko-coding-task-export";
@@ -863,10 +863,8 @@ export type ConversationMemoryCaptureSurfaceWire =
 export function isConversationMemoryCaptureSurfaceWire(
   value: unknown,
 ): value is ConversationMemoryCaptureSurfaceWire {
-  return (
-    typeof value === "string" &&
-    (CONVERSATION_MEMORY_CAPTURE_SURFACES as readonly string[]).includes(value)
-  );
+  const surfaces: readonly string[] = CONVERSATION_MEMORY_CAPTURE_SURFACES;
+  return typeof value === "string" && surfaces.includes(value);
 }
 
 export interface ConversationMemoryRequestWire {
@@ -892,8 +890,8 @@ export interface UpdateMemoryAutonomyPolicyWire {
 export function parseUpdateMemoryAutonomyPolicyWire(
   value: unknown,
 ): UpdateMemoryAutonomyPolicyWire | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as Record<string, unknown>;
+  if (!isWireRecord(value)) return undefined;
+  const candidate = value;
   return isCodingWorkbenchMode(candidate.requestedMode) &&
     Number.isSafeInteger(candidate.expectedRevision) &&
     Number(candidate.expectedRevision) >= 0
@@ -956,8 +954,8 @@ function isBoundedRepositoryPath(value: unknown): value is string {
 export function parseUpdateGitHubIssueReaderAuthorizationWire(
   value: unknown,
 ): UpdateGitHubIssueReaderAuthorizationWire | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const candidate = value as Record<string, unknown>;
+  if (!isWireRecord(value)) return undefined;
+  const candidate = value;
   const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.has(key));
   if (extra.length > 0 || !isBoundedRepositoryPath(candidate.repositoryPath)) return undefined;
   return typeof candidate.authorized === "boolean" &&
@@ -1215,6 +1213,8 @@ function validReadGrantSubject(value: Record<string, unknown>): boolean {
 }
 export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGrantView {
   if (!isWireRecord(value)) return false;
+  // chat-tool-authority imports this module, so its exports are read at call time, never at load.
+  const states: readonly unknown[] = CHAT_TOOL_READ_GRANT_STATES;
   const keys = [
     ...CHAT_READ_VIEW_KEYS,
     ...(value.kind === "mcp-chat-read"
@@ -1230,8 +1230,7 @@ export function isChatToolReadGrantView(value: unknown): value is ChatToolReadGr
     ) &&
     [value.requestedAt, value.expiresAt].every((n) => Number.isSafeInteger(n) && Number(n) >= 0) &&
     Number(value.expiresAt) > Number(value.requestedAt) &&
-    typeof value.state === "string" &&
-    (CHAT_TOOL_READ_GRANT_STATES as readonly string[]).includes(value.state)
+    states.includes(value.state)
   );
 }
 
@@ -1281,9 +1280,8 @@ export function isDesktopChatStreamTerminalEvent(
 export function eventIsDesktopChatStreamTerminal(
   event: DesktopChatStreamEventType,
 ): event is DesktopChatStreamTerminalEventType {
-  return DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES.includes(
-    event as DesktopChatStreamTerminalEventType,
-  );
+  const events: readonly DesktopChatStreamEventType[] = DESKTOP_CHAT_STREAM_TERMINAL_EVENT_TYPES;
+  return events.includes(event);
 }
 
 // Issue #148 — Safe document context extraction for conversation inputs.
@@ -1683,10 +1681,8 @@ export type GroundedRerankerFailureKind = (typeof GROUNDED_RERANKER_FAILURE_KIND
 export function isGroundedRerankerFailureKind(
   value: unknown,
 ): value is GroundedRerankerFailureKind {
-  return (
-    typeof value === "string" &&
-    (GROUNDED_RERANKER_FAILURE_KINDS as readonly string[]).includes(value)
-  );
+  const kinds: readonly string[] = GROUNDED_RERANKER_FAILURE_KINDS;
+  return typeof value === "string" && kinds.includes(value);
 }
 
 export interface GroundedRerankerDiagnostics {
@@ -1864,10 +1860,16 @@ function buildContextSummary(
   for (const lane of diagnostics.lanes) {
     includedByLane.set(lane.laneId, lane.includedItems);
   }
-  const laneCounts = {} as Record<ContextLaneId, number>;
-  for (const laneId of CONTEXT_LANE_IDS) {
-    laneCounts[laneId] = includedByLane.get(laneId) ?? 0;
-  }
+  const laneCounts: Record<ContextLaneId, number> = {
+    "system-contract": includedByLane.get("system-contract") ?? 0,
+    "user-task": includedByLane.get("user-task") ?? 0,
+    "active-plan": includedByLane.get("active-plan") ?? 0,
+    "repo-evidence": includedByLane.get("repo-evidence") ?? 0,
+    "tool-observations": includedByLane.get("tool-observations") ?? 0,
+    "working-memory": includedByLane.get("working-memory") ?? 0,
+    "history-summary": includedByLane.get("history-summary") ?? 0,
+    "verification-evidence": includedByLane.get("verification-evidence") ?? 0,
+  };
   return {
     totalEstimatedTokens: diagnostics.totalEstimatedTokens,
     budgetPressure: diagnostics.budgetPressure,

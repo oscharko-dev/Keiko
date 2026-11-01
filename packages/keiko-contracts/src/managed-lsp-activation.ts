@@ -1,3 +1,4 @@
+import { hasOnlyKeys, isOneOf as memberOf, isRecord } from "./contract-validation-primitives.js";
 // Managed multi-language activation contracts (Issue #2271, Epic #2094, ADR-0132). This strict
 // contracts leaf owns only closed state, precedence, and content-free status vocabulary. Runtime
 // process supervision remains owned by ADR-0069 and keiko-server.
@@ -135,18 +136,6 @@ export type ManagedLspActivationParseResult<T> =
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
-function memberOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && values.includes(value as T);
-}
-
 function isRevision(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -212,7 +201,7 @@ const REASONS_BY_STATE: Readonly<
   restartRequired: frozenReasons("RESTART_REQUIRED"),
 });
 
-function isDeniedReason(reason: ManagedLspActivationReasonCode): boolean {
+function isDeniedReason(reason: unknown): boolean {
   return (
     reason === "PRODUCT_UNSUPPORTED" ||
     reason === "STATE_UNAVAILABLE" ||
@@ -223,37 +212,62 @@ function isDeniedReason(reason: ManagedLspActivationReasonCode): boolean {
 }
 
 function isConsistentStatus(value: UnknownRecord): boolean {
-  const state = value.state as ManagedLspEffectiveState;
-  const reason = value.reasonCode as ManagedLspActivationReasonCode;
-  const policyResult = value.policyResult as ManagedLspPolicyResult;
+  const state = value.state;
+  const reason = value.reasonCode;
+  const policyResult = value.policyResult;
+  if (!memberOf(state, MANAGED_LSP_EFFECTIVE_STATES)) {
+    throw new TypeError("activation state cannot be inspected");
+  }
+  const reasons: readonly unknown[] = REASONS_BY_STATE[state];
   return (
-    REASONS_BY_STATE[state].includes(reason) &&
+    reasons.includes(reason) &&
+    memberOf(policyResult, POLICY_RESULTS) &&
     (policyResult === "denied") === isDeniedReason(reason)
   );
 }
 
-function canonicalActivationInput(value: UnknownRecord): ManagedLspActivationInput {
-  return {
-    schemaVersion: MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
-    language: value.language as ManagedLspLanguage,
-    configurationRevision: value.configurationRevision as number,
-    productSupport: value.productSupport as ManagedLspProductSupport,
-    deploymentPolicy: value.deploymentPolicy as ManagedLspDeploymentPolicy,
-    provisioning: value.provisioning as ManagedLspProvisioning,
-    workspaceActivation: value.workspaceActivation as ManagedLspWorkspaceActivation,
-    legacyEnvironment: value.legacyEnvironment as ManagedLspLegacyEnvironment,
-    negotiation: value.negotiation as ManagedLspNegotiation,
-    runtimeHealth: value.runtimeHealth as ManagedLspRuntimeHealth,
-    restartRequired: value.restartRequired as boolean,
-    ...(value.workspaceTrust !== undefined
-      ? { workspaceTrust: value.workspaceTrust as WorkspaceTrustLevel }
-      : {}),
-    ...(value.canonicalState !== undefined
-      ? { canonicalState: value.canonicalState as ManagedLspCanonicalState }
-      : {}),
-  };
+function isCanonicalActivationInput(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspActivationInput {
+  return [
+    value.schemaVersion === MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
+    memberOf(value.language, MANAGED_LSP_LANGUAGES),
+    isRevision(value.configurationRevision),
+    memberOf(value.productSupport, PRODUCT_SUPPORT),
+    memberOf(value.deploymentPolicy, DEPLOYMENT_POLICIES),
+    memberOf(value.provisioning, PROVISIONING_STATES),
+    memberOf(value.workspaceActivation, WORKSPACE_ACTIVATIONS),
+    memberOf(value.legacyEnvironment, LEGACY_ENVIRONMENTS),
+    memberOf(value.negotiation, NEGOTIATION_STATES),
+    memberOf(value.runtimeHealth, RUNTIME_HEALTH_STATES),
+    typeof value.restartRequired === "boolean",
+    value.workspaceTrust === undefined || memberOf(value.workspaceTrust, ["trusted", "restricted"]),
+    !Object.hasOwn(value, "canonicalState") || memberOf(value.canonicalState, CANONICAL_STATES),
+  ].every(Boolean);
 }
 
+function canonicalActivationInput(
+  value: UnknownRecord,
+): ManagedLspActivationParseResult<ManagedLspActivationInput> {
+  const candidate = {
+    schemaVersion: MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
+    language: value.language,
+    configurationRevision: value.configurationRevision,
+    productSupport: value.productSupport,
+    deploymentPolicy: value.deploymentPolicy,
+    provisioning: value.provisioning,
+    workspaceActivation: value.workspaceActivation,
+    legacyEnvironment: value.legacyEnvironment,
+    negotiation: value.negotiation,
+    runtimeHealth: value.runtimeHealth,
+    restartRequired: value.restartRequired,
+    ...(value.workspaceTrust !== undefined ? { workspaceTrust: value.workspaceTrust } : {}),
+    ...(value.canonicalState !== undefined ? { canonicalState: value.canonicalState } : {}),
+  };
+  return isCanonicalActivationInput(candidate)
+    ? { ok: true, value: candidate }
+    : { ok: false, errors: ["activation input is invalid or contains unknown fields"] };
+}
 function parseActivationInputUnsafe(
   value: unknown,
 ): ManagedLspActivationParseResult<ManagedLspActivationInput> {
@@ -290,7 +304,7 @@ function parseActivationInputUnsafe(
     value.workspaceTrust === undefined || memberOf(value.workspaceTrust, ["trusted", "restricted"]),
   ].every(Boolean);
   return valid
-    ? { ok: true, value: canonicalActivationInput(value) }
+    ? canonicalActivationInput(value)
     : { ok: false, errors: ["activation input is invalid or contains unknown fields"] };
 }
 
@@ -420,11 +434,10 @@ export function resolveManagedLspActivation(value: unknown): ManagedLspActivatio
     : { ok: false, state: "disabled", reasonCode: "INVALID_INPUT", policyResult: "denied" };
 }
 
-function parseActivationStatusUnsafe(
-  value: unknown,
-): ManagedLspActivationParseResult<ManagedLspActivationStatus> {
-  if (!isRecord(value)) return { ok: false, errors: ["activation status must be an object"] };
-  const valid = [
+function isActivationStatus(
+  value: UnknownRecord,
+): value is UnknownRecord & ManagedLspActivationStatus {
+  return [
     hasOnlyKeys(value, [
       "ok",
       "schemaVersion",
@@ -443,8 +456,14 @@ function parseActivationStatusUnsafe(
     memberOf(value.policyResult, POLICY_RESULTS),
     isConsistentStatus(value),
   ].every(Boolean);
-  return valid
-    ? { ok: true, value: value as unknown as ManagedLspActivationStatus }
+}
+
+function parseActivationStatusUnsafe(
+  value: unknown,
+): ManagedLspActivationParseResult<ManagedLspActivationStatus> {
+  if (!isRecord(value)) return { ok: false, errors: ["activation status must be an object"] };
+  return isActivationStatus(value)
+    ? { ok: true, value }
     : { ok: false, errors: ["activation status is invalid or contains unknown fields"] };
 }
 

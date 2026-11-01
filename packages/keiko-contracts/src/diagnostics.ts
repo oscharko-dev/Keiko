@@ -31,6 +31,8 @@
 // `[redacted:key]` even though the value is already length-bounded here); the existing log-value
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
+import { CLIENT_ERROR_CLASSES } from "./error-classification.js";
+export { CLIENT_ERROR_CLASSES, clientErrorClass } from "./error-classification.js";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "./workspace-contract-primitives.js";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "./coding-workbench-runtime.js";
 import {
@@ -230,74 +232,6 @@ export const CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH = 200;
 // `MAX_LOG_STRING_LENGTH`). A longer note is redacted whole, so a producer that wants its note read
 // stays within it (review on PR #3452).
 export const CLIENT_NOTE_MAX_LENGTH = 160;
-
-// The only error classes a client note may name (review on PR #3452): the JavaScript built-ins, the
-// errors the browser platform raises, the classes Keiko's own browser code throws, and the `typeof`
-// of a thrown non-Error. A name is text the error chose, so any other name travels as "Error": a
-// hostile or accidental name can never carry content into the activity log.
-export const CLIENT_ERROR_CLASSES: ReadonlySet<string> = new Set([
-  "Error",
-  "AggregateError",
-  "EvalError",
-  "RangeError",
-  "ReferenceError",
-  "SyntaxError",
-  "TypeError",
-  "URIError",
-  "AbortError",
-  "ChunkLoadError",
-  "DataCloneError",
-  "InvalidStateError",
-  "NetworkError",
-  "NotAllowedError",
-  "NotFoundError",
-  "NotReadableError",
-  "NotSupportedError",
-  "OverconstrainedError",
-  "QuotaExceededError",
-  "SecurityError",
-  "TimeoutError",
-  "ChunkLoadError",
-  "ApiError",
-  "ChatLookupFailure",
-  "DebugRequestError",
-  "DictationRecorderError",
-  "EditorModelOwnershipError",
-  "OverlappingPatchEditError",
-  "PollAbortError",
-  "RelationshipApiError",
-  "StreamingUnavailableError",
-  "TaskWorkspaceProvisionError",
-  "TaskWorkspaceRepairOperatorRequiredError",
-  "TaskWorkspaceRestoreVerificationError",
-  "VoiceControlError",
-  "VoiceLiveDictationControlError",
-  "VoiceRtcError",
-  "WorkspaceShortcutConflictError",
-  "WorkspaceShortcutReservedError",
-  "bigint",
-  "boolean",
-  "function",
-  "number",
-  "object",
-  "string",
-  "symbol",
-  "undefined",
-]);
-
-/**
- * An error's class for a client note: its name when the closed vocabulary holds it, "Error" for
- * any other Error, and `typeof` for a thrown non-Error. Never the message, never the stack.
- */
-export function clientErrorClass(error: unknown): string {
-  if (
-    error instanceof Error ||
-    (typeof DOMException !== "undefined" && error instanceof DOMException)
-  ) {
-    return CLIENT_ERROR_CLASSES.has(error.name) ? error.name : "Error";
-  }
-  return typeof error;
-}
 
 const CORRELATION_ID_MAX_LENGTH = 128;
 const ISO_INSTANT_MAX_LENGTH = 40;
@@ -1500,7 +1434,8 @@ const CLIENT_BINDING_INGEST_REQUEST_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 function isOneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && (values as readonly string[]).includes(value);
+  const vocabulary: readonly string[] = values;
+  return typeof value === "string" && vocabulary.includes(value);
 }
 
 // Only a server-issued UUID (raw, found again through its fingerprint, or chosen by the person) can

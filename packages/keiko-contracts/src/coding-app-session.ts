@@ -12,7 +12,6 @@ import {
   exactKeys,
   invalid,
   isRecord,
-  result,
   validateUntrustedDisplayText,
 } from "./coding-workbench-runtime-api-validation.js";
 import {
@@ -140,13 +139,20 @@ export function codingAppSessionAcknowledgement(): CodingAppSessionAcknowledgeme
   return { schemaVersion: CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION };
 }
 
-function checkBoundedText(value: unknown, path: string, max: number, errors: string[]): void {
+function checkBoundedText(
+  value: unknown,
+  path: string,
+  max: number,
+  errors: string[],
+): value is string {
   if (typeof value !== "string" || value.length < 1 || value.length > max) {
     errors.push(`${path} must be a bounded non-empty string`);
+    return false;
   }
+  return true;
 }
 
-function serializedUtf8Bytes(value: object): number {
+function serializedUtf8Bytes(value: CodingAppSessionChannelSnapshot): number {
   try {
     return new TextEncoder().encode(JSON.stringify(value)).length;
   } catch {
@@ -154,23 +160,31 @@ function serializedUtf8Bytes(value: object): number {
   }
 }
 
-function checkChannelContent(value: unknown, path: string, errors: string[]): void {
+function checkChannelContent(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is CodingAppSessionChannelContent {
   if (!isRecord(value)) {
     errors.push(`${path} must be an object or null`);
-    return;
+    return false;
   }
   if (value.kind === "safe-activity") {
     errors.push(...exactKeys(value, ["kind", "feed"], path));
-    if (!validateCodingSafeActivityFeed(value.feed).ok) {
-      errors.push(`${path}.feed is invalid`);
-    }
-    return;
+    const admitted = validateCodingSafeActivityFeed(value.feed).ok;
+    if (!admitted) errors.push(`${path}.feed is invalid`);
+    return admitted;
   }
   errors.push(...exactKeys(value, ["kind", "body"], path));
-  checkBoundedText(value.kind, `${path}.kind`, CODING_APP_SESSION_CHANNEL_KIND_MAX_CHARS, errors);
-  if (!validateUntrustedDisplayText(value.body, CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS)) {
-    errors.push(`${path}.body must be bounded non-empty display text`);
-  }
+  const kind = checkBoundedText(
+    value.kind,
+    `${path}.kind`,
+    CODING_APP_SESSION_CHANNEL_KIND_MAX_CHARS,
+    errors,
+  );
+  const body = validateUntrustedDisplayText(value.body, CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS);
+  if (!body) errors.push(`${path}.body must be bounded non-empty display text`);
+  return kind && body;
 }
 
 /** Validate a single bounded content item in isolation (used before projecting it into a snapshot). */
@@ -179,8 +193,8 @@ export function validateCodingAppSessionChannelContent(
 ): CodingWorkbenchValidationResult<CodingAppSessionChannelContent> {
   if (!isRecord(value)) return invalid("channel content must be an object");
   const errors: string[] = [];
-  checkChannelContent(value, "channelContent", errors);
-  return result(value, errors);
+  const admitted = checkChannelContent(value, "channelContent", errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
 }
 
 /**
@@ -192,15 +206,24 @@ export function validateCodingAppSessionChannelSnapshot(
 ): CodingWorkbenchValidationResult<CodingAppSessionChannelSnapshot> {
   if (!isRecord(value)) return invalid("channel snapshot must be an object");
   const errors = exactKeys(value, ["schemaVersion", "content"], "channelSnapshot");
-  if (value.schemaVersion !== CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION) {
-    errors.push("channelSnapshot.schemaVersion is invalid");
-  }
-  if (value.content !== null) checkChannelContent(value.content, "channelSnapshot.content", errors);
+  const admitted = checkChannelSnapshot(value, errors);
   if (
+    admitted &&
     errors.length === 0 &&
     serializedUtf8Bytes(value) > CODING_APP_SESSION_CHANNEL_MAX_UTF8_BYTES
   ) {
     errors.push("channel snapshot exceeds the aggregate UTF-8 byte budget");
   }
-  return result(value, errors);
+  return admitted && errors.length === 0 ? { ok: true, value } : { ok: false, errors };
+}
+
+function checkChannelSnapshot(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & CodingAppSessionChannelSnapshot {
+  const version = value.schemaVersion === CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION;
+  if (!version) errors.push("channelSnapshot.schemaVersion is invalid");
+  const content =
+    value.content === null || checkChannelContent(value.content, "channelSnapshot.content", errors);
+  return version && content;
 }

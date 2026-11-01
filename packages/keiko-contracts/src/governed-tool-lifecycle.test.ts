@@ -44,6 +44,24 @@ describe("governed tool lifecycle wire vocabulary", () => {
     expect(() => captureToolInvocationReceipt(getter)).toThrow("Invalid tool invocation receipt");
     expect(reads).toBe(0);
   });
+  it("retains null-prototype receipts and refuses missing or symbol-substituted fields", () => {
+    const receipt = {
+      invocationId: "invocation-1",
+      reservationId: null,
+      settlementId: "settlement-1",
+      budgetDisposition: "not-reserved",
+      effectStarted: false,
+      status: "denied",
+    };
+    Object.setPrototypeOf(receipt, null);
+    expect(captureToolInvocationReceipt(receipt)).toEqual(receipt);
+    const { status, ...incomplete } = receipt;
+    expect(() => captureToolInvocationReceipt(incomplete)).toThrow(TypeError);
+    expect(() =>
+      captureToolInvocationReceipt({ ...incomplete, [Symbol("status")]: status }),
+    ).toThrow(TypeError);
+  });
+
   it("matches each generated #3412 producer declaration exactly", () => {
     const generated = JSON.parse(
       readFileSync(

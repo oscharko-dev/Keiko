@@ -1,5 +1,5 @@
-import { exactKeys, isRecord } from "./contract-validation-primitives.js";
-export { exactKeys, isRecord } from "./contract-validation-primitives.js";
+import { exactKeys, isOneOf, isRecord } from "./contract-validation-primitives.js";
+export { exactKeys, isOneOf, isRecord } from "./contract-validation-primitives.js";
 import {
   CODING_WORKBENCH_AUXILIARY_STATUSES,
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
@@ -21,16 +21,16 @@ import { stripUnsafeFormatChars } from "./text-safety.js";
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const STRICT_UTC_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 
-export function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
-}
-
-export function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {
-  return errors.length === 0 ? { ok: true, value: value as T } : { ok: false, errors };
-}
-
 export function invalid<T>(error: string): CodingWorkbenchValidationResult<T> {
   return { ok: false, errors: [error] };
+}
+
+export function validateWithAdmission<Value>(
+  value: unknown,
+  admit: (value: unknown, errors: string[]) => value is Value,
+): CodingWorkbenchValidationResult<Value> {
+  const errors: string[] = [];
+  return admit(value, errors) ? { ok: true, value } : { ok: false, errors };
 }
 
 export function validateSafeId(
@@ -38,10 +38,12 @@ export function validateSafeId(
   path: string,
   errors: string[],
   maxChars: number,
-): void {
+): value is string {
   if (typeof value !== "string" || value.length > maxChars || !SAFE_IDENTIFIER.test(value)) {
     errors.push(`${path} must be a bounded safe identifier`);
+    return false;
   }
+  return true;
 }
 
 export function validateUntrustedDisplayText(
@@ -58,7 +60,11 @@ export function validateUntrustedDisplayText(
   );
 }
 
-export function validateStrictUtcInstant(value: unknown, path: string, errors: string[]): void {
+export function validateStrictUtcInstant(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is string {
   if (
     typeof value !== "string" ||
     !STRICT_UTC_INSTANT.test(value) ||
@@ -66,7 +72,9 @@ export function validateStrictUtcInstant(value: unknown, path: string, errors: s
     new Date(value).toISOString() !== (value.includes(".") ? value : `${value.slice(0, -1)}.000Z`)
   ) {
     errors.push(`${path} must be a strict UTC instant`);
+    return false;
   }
+  return true;
 }
 
 export function sseEventKeys(kind: unknown): readonly string[] {
@@ -98,23 +106,37 @@ export function validateSseEventFields(
   errors: string[],
   idMaxChars: number,
   allowedEventKinds: readonly string[],
-): void {
-  if (value.schemaVersion !== CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION) {
-    errors.push("schemaVersion is invalid");
-  }
-  validateSafeId(value.cursor, "cursor", errors, idMaxChars);
-  validateNonNegativeSafeInteger(value.sequence, "sequence", errors);
-  validateStrictUtcInstant(value.occurredAt, "occurredAt", errors);
-  if (!isOneOf(value.kind, allowedEventKinds)) errors.push("kind is invalid");
-  validateSafeId(value.runId, "runId", errors, idMaxChars);
-  if (!isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES)) errors.push("state is invalid");
-  validateNonNegativeSafeInteger(value.revision, "revision", errors);
-  validateSseEventKind(value, errors);
-  validateSseOptionalEnums(value, errors);
-  validateSseVerificationSummary(value, errors);
-  validateSseNativeRetry(value, errors);
+): boolean {
+  const version = value.schemaVersion === CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION;
+  if (!version) errors.push("schemaVersion is invalid");
+  const cursor = validateSafeId(value.cursor, "cursor", errors, idMaxChars);
+  const sequence = validateNonNegativeSafeInteger(value.sequence, "sequence", errors);
+  const occurred = validateStrictUtcInstant(value.occurredAt, "occurredAt", errors);
+  const kind = isOneOf(value.kind, allowedEventKinds);
+  if (!kind) errors.push("kind is invalid");
+  const run = validateSafeId(value.runId, "runId", errors, idMaxChars);
+  const state = isOneOf(value.state, CODING_WORKBENCH_RUNTIME_STATE_NAMES);
+  if (!state) errors.push("state is invalid");
+  const revision = validateNonNegativeSafeInteger(value.revision, "revision", errors);
+  const event = validateSseEventKind(value, errors);
+  const optional = validateSseOptionalEnums(value, errors);
+  const verification = validateSseVerificationSummary(value, errors);
+  const retry = validateSseNativeRetry(value, errors);
+  return [
+    version,
+    cursor,
+    sequence,
+    occurred,
+    kind,
+    run,
+    state,
+    revision,
+    event,
+    optional,
+    verification,
+    retry,
+  ].every(Boolean);
 }
-
 export function isCodingWorkbenchVerificationSummary(
   value: unknown,
 ): value is CodingWorkbenchVerificationSummary {
@@ -134,46 +156,42 @@ export function isCodingWorkbenchVerificationSummary(
   );
 }
 
-function validateSseNativeRetry(value: Record<string, unknown>, errors: string[]): void {
+function validateSseNativeRetry(value: Record<string, unknown>, errors: string[]): boolean {
   if (value.kind === "runtime-event" && value.eventKind === "native-retry-changed") {
-    if (value.nativeRetry !== null && !isCodingWorkbenchNativeRetry(value.nativeRetry)) {
-      errors.push("nativeRetry must be canonical native retry facts or null");
-    }
-  } else if (value.nativeRetry !== undefined) {
-    errors.push("nativeRetry is only admissible on native-retry-changed");
+    const admitted = value.nativeRetry === null || isCodingWorkbenchNativeRetry(value.nativeRetry);
+    if (!admitted) errors.push("nativeRetry must be canonical native retry facts or null");
+    return admitted;
   }
+  const absent = value.nativeRetry === undefined;
+  if (!absent) errors.push("nativeRetry is only admissible on native-retry-changed");
+  return absent;
 }
-
-function validateSseVerificationSummary(value: Record<string, unknown>, errors: string[]): void {
-  if (value.verificationSummary === undefined) return;
-  if (
-    value.kind !== "runtime-event" ||
-    value.eventKind !== "verification-summarized" ||
-    !isCodingWorkbenchVerificationSummary(value.verificationSummary)
-  ) {
-    errors.push("verificationSummary is invalid or outside verification-summarized");
-  }
+function validateSseVerificationSummary(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.verificationSummary === undefined) return true;
+  const admitted =
+    value.kind === "runtime-event" &&
+    value.eventKind === "verification-summarized" &&
+    isCodingWorkbenchVerificationSummary(value.verificationSummary);
+  if (!admitted) errors.push("verificationSummary is invalid or outside verification-summarized");
+  return admitted;
 }
-
 // The `eventKind` of a runtime-event frame: an adapter event kind, or one of the SSE-only gateway
 // facts (#3873 review), which carry nothing else — no failure code, outcome or trust marker.
-function validateSseEventKind(value: Record<string, unknown>, errors: string[]): void {
-  if (value.kind !== "runtime-event") return;
+function validateSseEventKind(value: Record<string, unknown>, errors: string[]): boolean {
+  if (value.kind !== "runtime-event") return true;
   if (isOneOf(value.eventKind, CODING_WORKBENCH_GATEWAY_EVENT_KINDS)) {
     if (
       value.failureCode !== undefined ||
       value.auxiliaryOutcome !== undefined ||
       value.contentTrust !== undefined
-    ) {
+    )
       errors.push("a gateway fact carries no failureCode, auxiliaryOutcome or contentTrust");
-    }
-    return;
+    return true;
   }
-  if (!isOneOf(value.eventKind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS)) {
-    errors.push("eventKind is invalid");
-  }
+  const admitted = isOneOf(value.eventKind, CODING_WORKBENCH_RUNTIME_EVENT_KINDS);
+  if (!admitted) errors.push("eventKind is invalid");
+  return admitted;
 }
-
 // The redacted per-turn gateway causes. A Record over the union, so a new cause that is not listed
 // here fails the build instead of every frame that carries it failing validation (#3610).
 const TURN_FAILURE_CODES: Readonly<Record<CodingWorkbenchTurnFailureCode, true>> = {
@@ -185,53 +203,73 @@ const TURN_FAILURE_CODES: Readonly<Record<CodingWorkbenchTurnFailureCode, true>>
   "invalid-tool-call": true,
 };
 
-function isTurnFailureCode(value: unknown): boolean {
+function isTurnFailureCode(value: unknown): value is CodingWorkbenchTurnFailureCode {
   return typeof value === "string" && Object.hasOwn(TURN_FAILURE_CODES, value);
 }
 
 // The optional closed-vocabulary fields an SSE frame may carry. Split out of `validateSseEventFields`
 // so that function stays inside the repository complexity bound as the vocabulary grows.
-function validateSseOptionalEnums(value: Record<string, unknown>, errors: string[]): void {
-  if (
-    value.auxiliaryOutcome !== undefined &&
-    !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
-  ) {
-    errors.push("auxiliaryOutcome is invalid");
-  }
-  validateSseContentTrust(value, errors);
-  if (
-    value.failureCode !== undefined &&
-    !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES) &&
-    // Non-runtime frames cannot carry eventKind; exactKeys rejects them.
-    !(value.eventKind === "failure-redacted" && isTurnFailureCode(value.failureCode))
-  ) {
-    errors.push("failureCode is invalid");
-  }
+function validateSseOptionalEnums(value: Record<string, unknown>, errors: string[]): boolean {
+  const outcome =
+    value.auxiliaryOutcome === undefined ||
+    isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES);
+  if (!outcome) errors.push("auxiliaryOutcome is invalid");
+  const trust = validateSseContentTrust(value, errors);
+  const failure =
+    value.failureCode === undefined ||
+    isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES) ||
+    (value.eventKind === "failure-redacted" && isTurnFailureCode(value.failureCode));
+  if (!failure) errors.push("failureCode is invalid");
+  return outcome && trust && failure;
 }
-
 // #2637: the SSE boundary mirrors the runtime-event rule rather than merely type-checking the field.
 // An accepted `research-performed` frame MUST declare the marker, and no other frame may carry it —
 // otherwise the timeline could render a skill invocation or a denied fetch as though it had taken in
 // untrusted page content, or render an accepted research read without saying what it took in. Both
 // directions are a lie about provenance, so both fail closed.
-function validateSseContentTrust(value: Record<string, unknown>, errors: string[]): void {
+function validateSseContentTrust(value: Record<string, unknown>, errors: string[]): boolean {
   const isAcceptedResearch =
     value.kind === "runtime-event" &&
     value.eventKind === "research-performed" &&
     value.auxiliaryOutcome === "accepted";
   if (isAcceptedResearch) {
-    if (!isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES)) {
-      errors.push("contentTrust is required on an accepted research-performed frame");
-    }
-    return;
+    const admitted = isOneOf(value.contentTrust, CODING_WORKBENCH_CONTENT_TRUST_VALUES);
+    if (!admitted) errors.push("contentTrust is required on an accepted research-performed frame");
+    return admitted;
   }
-  if (value.contentTrust !== undefined) {
+  const absent = value.contentTrust === undefined;
+  if (!absent)
     errors.push("contentTrust is only admissible on an accepted research-performed frame");
+  return absent;
+}
+function validateNonNegativeSafeInteger(
+  value: unknown,
+  path: string,
+  errors: string[],
+): value is number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    errors.push(`${path} must be a non-negative safe integer`);
+    return false;
   }
+  return true;
 }
 
-function validateNonNegativeSafeInteger(value: unknown, path: string, errors: string[]): void {
-  if (!Number.isSafeInteger(value) || Number(value) < 0) {
-    errors.push(`${path} must be a non-negative safe integer`);
+export function validateCodingPhysicalMembers<Member>(
+  value: readonly unknown[],
+  path: string,
+  errors: string[],
+  validateMember: (value: unknown, path: string, errors: string[]) => value is Member,
+): value is readonly Member[] {
+  const count = value.length;
+  let admitted = true;
+  for (let index = 0; index < count; index += 1) {
+    const memberPath = `${path}[${String(index)}]`;
+    if (!(index in value)) {
+      errors.push(`${memberPath} must be an object`);
+      return false;
+    }
+    const member: unknown = value[index];
+    admitted = validateMember(member, memberPath, errors) && admitted;
   }
+  return admitted;
 }

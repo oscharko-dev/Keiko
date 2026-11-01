@@ -61,6 +61,14 @@ interface JsonShapeBudget {
   containers: number;
 }
 
+type CanonicalSupportJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly CanonicalSupportJsonValue[]
+  | { readonly [key: string]: CanonicalSupportJsonValue };
+
 function charge(budget: JsonShapeBudget, container: boolean): void {
   budget.values += 1;
   if (container) budget.containers += 1;
@@ -77,7 +85,26 @@ function isCanonicalScalar(value: unknown): value is string | number | boolean |
   );
 }
 
-function canonicalValue(value: unknown, depth: number, budget: JsonShapeBudget): unknown {
+function canonicalArray(
+  value: readonly unknown[],
+  depth: number,
+  budget: JsonShapeBudget,
+): CanonicalSupportJsonValue[] {
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > MAX_SUPPORT_REPORT_RECORDS)
+    throw budgetExceeded();
+  const output: CanonicalSupportJsonValue[] = [];
+  for (let index = 0; index < extent; index += 1) {
+    output[index] = canonicalValue(index in value ? value[index] : null, depth + 1, budget);
+  }
+  return output;
+}
+
+function canonicalValue(
+  value: unknown,
+  depth: number,
+  budget: JsonShapeBudget,
+): CanonicalSupportJsonValue {
   if (isCanonicalScalar(value)) {
     charge(budget, false);
     return typeof value === "string" ? safeString(value) : value;
@@ -85,10 +112,7 @@ function canonicalValue(value: unknown, depth: number, budget: JsonShapeBudget):
   // `depth` counts the enclosing containers; the root container is nesting level one.
   if (depth >= MAX_SUPPORT_REPORT_DEPTH) throw budgetExceeded();
   charge(budget, true);
-  if (Array.isArray(value)) {
-    if (value.length > MAX_SUPPORT_REPORT_RECORDS) throw budgetExceeded();
-    return value.map((entry: unknown) => canonicalValue(entry, depth + 1, budget));
-  }
+  if (Array.isArray(value)) return canonicalArray(value, depth, budget);
   return canonicalObject(value, depth, budget);
 }
 
@@ -96,12 +120,12 @@ function canonicalObject(
   value: unknown,
   depth: number,
   budget: JsonShapeBudget,
-): Record<string, unknown> {
+): Readonly<Record<string, CanonicalSupportJsonValue>> {
   if (!reportObject(value)) throw new SupportReportError("unsafe-report");
   const keys = Object.keys(value).sort(compareSupportKeys);
   if (keys.length > MAX_SUPPORT_REPORT_OBJECT_KEYS) throw budgetExceeded();
   return Object.fromEntries(
-    keys.map((key) => {
+    keys.map((key): readonly [string, CanonicalSupportJsonValue] => {
       charge(budget, false);
       return [safeString(key), canonicalValue(value[key], depth + 1, budget)];
     }),

@@ -2,6 +2,7 @@
 // Every string is a closed enum/literal. Raw paths, environment values, source, stderr, command
 // lines, endpoints, and credentials are unrepresentable by these interfaces.
 
+import { hasOnlyKeys, isOneOf, isRecord } from "./contract-validation-primitives.js";
 import {
   MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
   MANAGED_LSP_EFFECTIVE_STATES,
@@ -82,41 +83,24 @@ export type ManagedLspEvidenceParseResult =
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
-  return Object.keys(value).every((key) => allowed.includes(key));
-}
-
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isActorClass(value: unknown): value is ManagedLspEvidenceActorClass {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EVIDENCE_ACTOR_CLASSES.includes(value as ManagedLspEvidenceActorClass)
-  );
+  return isOneOf(value, MANAGED_LSP_EVIDENCE_ACTOR_CLASSES);
 }
 
 function isManagedLanguage(value: unknown): value is ManagedLspLanguage {
-  return typeof value === "string" && MANAGED_LSP_LANGUAGES.includes(value as ManagedLspLanguage);
+  return isOneOf(value, MANAGED_LSP_LANGUAGES);
 }
 
 function isAction(value: unknown): value is ManagedLspEvidenceAction {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EVIDENCE_ACTIONS.includes(value as ManagedLspEvidenceAction)
-  );
+  return isOneOf(value, MANAGED_LSP_EVIDENCE_ACTIONS);
 }
 
 function isOutcome(value: unknown): value is ManagedLspEvidenceOutcome {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EVIDENCE_OUTCOMES.includes(value as ManagedLspEvidenceOutcome)
-  );
+  return isOneOf(value, MANAGED_LSP_EVIDENCE_OUTCOMES);
 }
 
 function isKindActionConsistent(value: UnknownRecord): boolean {
@@ -126,10 +110,7 @@ function isKindActionConsistent(value: UnknownRecord): boolean {
 }
 
 function isEffectiveState(value: unknown): value is ManagedLspEffectiveState {
-  return (
-    typeof value === "string" &&
-    MANAGED_LSP_EFFECTIVE_STATES.includes(value as ManagedLspEffectiveState)
-  );
+  return isOneOf(value, MANAGED_LSP_EFFECTIVE_STATES);
 }
 
 function hasConsistentEffectiveStatus(value: UnknownRecord): boolean {
@@ -144,9 +125,12 @@ function hasConsistentEffectiveStatus(value: UnknownRecord): boolean {
   }).ok;
 }
 
-function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
-  if (!isRecord(value)) return { ok: false, errors: ["managed LSP evidence must be an object"] };
-  const valid = [
+function isEvidenceKind(value: unknown): value is ManagedLspEvidenceKind {
+  return value === "activationChange" || value === "lifecycle";
+}
+
+function isManagedEvidence(value: UnknownRecord): value is UnknownRecord & ManagedLspEvidence {
+  return [
     hasOnlyKeys(value, [
       "schemaVersion",
       "kind",
@@ -162,7 +146,7 @@ function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
       "policyResult",
     ]),
     value.schemaVersion === MANAGED_LSP_EVIDENCE_SCHEMA_VERSION,
-    ["activationChange", "lifecycle"].includes(value.kind as string),
+    isEvidenceKind(value.kind),
     isAction(value.action),
     isOutcome(value.outcome),
     isKindActionConsistent(value),
@@ -173,8 +157,12 @@ function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
     isNonNegativeInteger(value.timestampMs),
     hasConsistentEffectiveStatus(value),
   ].every(Boolean);
-  return valid
-    ? { ok: true, value: value as unknown as ManagedLspEvidence }
+}
+
+function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
+  if (!isRecord(value)) return { ok: false, errors: ["managed LSP evidence must be an object"] };
+  return isManagedEvidence(value)
+    ? { ok: true, value }
     : { ok: false, errors: ["managed LSP evidence is invalid or contains unknown fields"] };
 }
 

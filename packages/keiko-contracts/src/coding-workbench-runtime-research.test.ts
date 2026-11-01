@@ -1,4 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import type { CodingWorkbenchValidationResult } from "@oscharko-dev/keiko-contracts";
+import {
+  validateCodingWorkbenchRuntimeResearchChannelPayload as publicResearchChannel,
+  type CodingWorkbenchRuntimeResearchChannelPayload,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 
 import {
   CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
@@ -180,5 +185,139 @@ describe("coding workbench runtime research channel payload", () => {
     expect(
       validateCodingWorkbenchRuntimeResearchChannelPayload({ session: "active", pending: "x" }).ok,
     ).toBe(false);
+  });
+});
+
+describe("C2 owning research domain admission", () => {
+  it("refuses a numeric domain hidden by a caller-owned every", () => {
+    const domains: unknown[] = [3];
+    Object.defineProperty(domains, "every", { value: (): boolean => true });
+    expect(
+      validateCodingWorkbenchRuntimeResearchChannelPayload({
+        session: "active",
+        grant: grant({ domains }),
+      }).ok,
+    ).toBe(false);
+  });
+
+  it("retains the healthy grant and domain references", () => {
+    const value = { session: "active", grant: grant() };
+    const result = validateCodingWorkbenchRuntimeResearchChannelPayload(value);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(value);
+  });
+});
+
+type PublicResearchChannelParse =
+  CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchChannelPayload>;
+
+export function parsePublicRuntimeResearchChannel(
+  input: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeResearchChannelPayload> {
+  const result = publicResearchChannel(input);
+  return result;
+}
+
+describe("runtime research channel public parser (#3918)", () => {
+  it("retains checked pending and grant values and nested identity", () => {
+    const input = { session: "active", pending: pending(), grant: grant() };
+    const result = parsePublicRuntimeResearchChannel(input);
+    expect(result).toEqual({ ok: true, value: input });
+    if (!result.ok) throw new TypeError("healthy public research refused");
+    expect(result.value).toBe(input);
+    expect(result.value.pending).toBe(input.pending);
+    expect(result.value.grant).toBe(input.grant);
+    expect(result.value.grant?.domains).toBe(input.grant.domains);
+    expect(result.value.pending?.host).toBe("nodejs.org");
+  });
+
+  it("retains omitted versus own undefined optional state on active and unpaired payloads", () => {
+    for (const input of [
+      { session: "active" },
+      { session: "active", pending: undefined, grant: undefined },
+      { session: "unpaired" },
+      { session: "unpaired", pending: undefined, grant: undefined },
+    ]) {
+      const result = parsePublicRuntimeResearchChannel(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (!result.ok) throw new TypeError("healthy optional public research refused");
+      expect(result.value).toBe(input);
+      expect(Object.hasOwn(result.value, "pending")).toBe(Object.hasOwn(input, "pending"));
+      expect(Object.hasOwn(result.value, "grant")).toBe(Object.hasOwn(input, "grant"));
+    }
+  });
+
+  it("refuses malformed payloads with exact eager ordered diagnostics", () => {
+    for (const input of [null, [], "research", 1])
+      expect(parsePublicRuntimeResearchChannel(input)).toEqual({
+        ok: false,
+        errors: ["research channel payload must be an object"],
+      });
+    expect(
+      parsePublicRuntimeResearchChannel({
+        session: "guest",
+        extra: true,
+        pending: {
+          requestId: "!",
+          host: "localhost",
+          requestLine: 1,
+          expiresAt: "invalid",
+          extra: true,
+        },
+      }),
+    ).toEqual({
+      ok: false,
+      errors: [
+        "researchChannelPayload.extra is not allowed",
+        "researchChannelPayload.session is invalid",
+        "pendingResearch.extra is not allowed",
+        "pendingResearch.requestId must be a bounded safe identifier",
+        "pendingResearch.host must be a canonical public domain",
+        "pendingResearch.requestLine must be a bounded string",
+        "pendingResearch.expiresAt must be a strict UTC instant",
+      ],
+    });
+  });
+
+  it("refuses research state on the unpaired public channel", () => {
+    for (const input of [
+      { session: "unpaired", pending: pending() },
+      { session: "unpaired", grant: grant() },
+    ])
+      expect(parsePublicRuntimeResearchChannel(input)).toEqual({
+        ok: false,
+        errors: [
+          "researchChannelPayload research state must be absent when the session is unpaired",
+        ],
+      });
+  });
+
+  it("retains the second observed pending-field refusal", () => {
+    let reads = 0;
+    const input = {
+      session: "active",
+      get pending(): unknown {
+        return ++reads === 1 ? pending() : 1;
+      },
+    };
+    expect(parsePublicRuntimeResearchChannel(input)).toEqual({
+      ok: false,
+      errors: ["researchChannelPayload.pending must be an object"],
+    });
+    expect(reads).toBe(2);
+  });
+
+  it("pins source public and forwarding checked return types", () => {
+    expectTypeOf(
+      validateCodingWorkbenchRuntimeResearchChannelPayload,
+    ).returns.toEqualTypeOf<PublicResearchChannelParse>();
+    expectTypeOf(publicResearchChannel).returns.toEqualTypeOf<PublicResearchChannelParse>();
+    expectTypeOf(
+      parsePublicRuntimeResearchChannel,
+    ).returns.toEqualTypeOf<PublicResearchChannelParse>();
+    type Success = Extract<ReturnType<typeof publicResearchChannel>, { readonly ok: true }>;
+    expectTypeOf<Success["value"]>().toEqualTypeOf<CodingWorkbenchRuntimeResearchChannelPayload>();
+    type Failure = Extract<ReturnType<typeof publicResearchChannel>, { readonly ok: false }>;
+    expectTypeOf<Failure["errors"]>().toEqualTypeOf<readonly string[]>();
   });
 });

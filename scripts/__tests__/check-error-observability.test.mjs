@@ -5,6 +5,7 @@ import {
   SERVER_TOP_LEVEL_SITE_ID,
   SITE_PROBES,
   main,
+  unregisteredFailurePathViolations,
 } from "../check-error-observability.mjs";
 
 // FAILS BEFORE / PASSES AFTER (#2902 audit): before this widening the gate exercised and asserted
@@ -232,5 +233,43 @@ describe("check-error-observability gate — runProbe / runServerTopLevelSite / 
     } finally {
       process.exitCode = originalExitCode;
     }
+  });
+});
+
+describe("reviewed catches that may only return their fixed fallback (#3918)", () => {
+  const path = "packages/keiko-contracts/src/observability.ts";
+  const catchOf = (owner, body) =>
+    `function ${owner}(input) { try { return input.value; } catch { ${body} } }`;
+
+  it.each([
+    ["completeRegistrationShape", "return false;"],
+    ["rejectedActivityLogEventKind", 'return "registration-mismatch";'],
+  ])("admits exactly the reviewed fallback of %s", (owner, fallback) => {
+    expect(unregisteredFailurePathViolations(catchOf(owner, fallback), path)).toEqual([]);
+  });
+
+  it.each([
+    ["completeRegistrationShape", "return true;"],
+    ["completeRegistrationShape", "return input;"],
+    ["completeRegistrationShape", "input.seen = true; return false;"],
+    ["completeRegistrationShape", ""],
+    ["rejectedActivityLogEventKind", 'return "unknown";'],
+    ["rejectedActivityLogEventKind", "return false;"],
+    ["rejectedActivityLogEventKind", 'input.seen = true; return "registration-mismatch";'],
+  ])("refuses %s with any other catch body: %s", (owner, body) => {
+    expect(unregisteredFailurePathViolations(catchOf(owner, body), path)).toHaveLength(1);
+  });
+
+  it("does not extend the reviewed fallback to another owner or file", () => {
+    const fallback = catchOf("completeRegistrationShape", "return false;");
+    expect(
+      unregisteredFailurePathViolations(
+        fallback.replace("completeRegistrationShape", "other"),
+        path,
+      ),
+    ).toHaveLength(1);
+    expect(
+      unregisteredFailurePathViolations(fallback, "packages/keiko-contracts/src/other.ts"),
+    ).toHaveLength(1);
   });
 });

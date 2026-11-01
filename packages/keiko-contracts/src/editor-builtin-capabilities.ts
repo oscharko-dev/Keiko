@@ -146,7 +146,9 @@ export const EDITOR_BUILTIN_CAPABILITIES: readonly EditorBuiltinCapability[] = O
 // keys like `constructor`, `toString`, or `__proto__` return undefined rather than a prototype
 // method, keeping `editorBuiltinCapability(x)` faithful to its "unknown id → null" contract.
 function nullPrototypeCapabilityIndex(): Record<string, EditorBuiltinCapability> {
-  return Object.create(null) as Record<string, EditorBuiltinCapability>;
+  const record: Record<string, EditorBuiltinCapability> = {};
+  Object.setPrototypeOf(record, null);
+  return record;
 }
 
 export const EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE: Readonly<
