@@ -57,6 +57,7 @@ import type {
 import {
   prepareRuntimeGatewayProcessSandbox,
   recordRuntimeGatewayConfinementSpawned,
+  runtimeProfileAttestsGit,
 } from "./runtimeGatewayProcessSandbox.js";
 
 // macOS: the host's process table with kernel identities, read by `/usr/bin/perl` outside every
@@ -347,15 +348,11 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     });
   }
 
-  // Only the gateway profile admits Git through its process-exec allowlist, so only it needs the
-  // attested Git (ADR-0043 D16). The native profile has no exec allowlist: its shell runs the
-  // host's toolchains, Git included, from the system PATH. Attesting there only refused a run on
-  // a managed Mac whose Git is Xcode's in the admin-writable /Applications (customer, 1.3.4).
   private attestedGit(
     setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
     profile: RuntimeGatewayConfinement["profile"],
   ): AttestedDarwinGitExecutable | undefined {
-    if (profile === "keiko-native") return undefined;
+    if (!runtimeProfileAttestsGit(profile)) return undefined;
     setLaunchPhase("git-attestation");
     return platformGitExecutable(this.identity, this.resolveGitExecutable);
   }

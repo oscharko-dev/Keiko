@@ -291,6 +291,24 @@ it("re-checks a startup rejection on the next page load without a Settings or ch
   expect(fetch).toHaveBeenCalledTimes(2);
 });
 
+// Auditor round 2 (customer 1.3.4): an expired success is usable, as in Chat, so a page load does
+// not re-probe it; on a large gateway every reload after five idle minutes probed every model.
+it("does not re-check an expired success on a page load", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const gateway = { status: 200 };
+  const fetch = startingGateway(gateway);
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-startup-success");
+  await vi.waitFor(() => {
+    expect(chatModelReady(deps)).toBe(true);
+  });
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+  handleModels({ url: new URL("http://127.0.0.1/api/models?refresh=1") } as RouteContext, deps);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
 it("re-probes a conclusively failed model on the first conversation request after the cooldown", async () => {
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "info" }));

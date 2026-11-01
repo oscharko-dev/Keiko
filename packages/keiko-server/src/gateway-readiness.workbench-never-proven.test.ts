@@ -19,6 +19,7 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
   codingWorkbenchProbesSettledForTests,
+  WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
@@ -176,10 +177,10 @@ function stubGateway(toolAnswer: ToolAnswer, gate?: Promise<void>): StubbedGatew
   return gateway;
 }
 
-function profileContext(correlationId = PROFILE_CORRELATION): RouteContext {
+function profileContext(correlationId = PROFILE_CORRELATION, check = false): RouteContext {
   return {
     correlationId,
-    url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+    url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile${check ? "?check=1" : ""}`),
   } as RouteContext;
 }
 
@@ -266,7 +267,9 @@ describe("a never-proven chat model behind a plain gateway", () => {
     expect(workbenchRuns(events)).toHaveLength(1);
   });
 
-  it("is not probed again inside the short cooldown of a probe the gateway never answered", async () => {
+  // Customer 1.3.4: an unanswered probe is no verdict, and nothing runs until someone asks again. The
+  // Workbench neither claims a running check nor calls the model unable to use tools.
+  it("is not probed again by a passive read after a probe the gateway never answered", async () => {
     const gateway = stubGateway("calls");
     const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
     gateway.busy = true;
@@ -283,10 +286,35 @@ describe("a never-proven chat model behind a plain gateway", () => {
     expect(callsOfTheProbe).toBeGreaterThan(0);
     expect(gateway.calls).toHaveLength(callsOfTheProbe);
     expect(workbenchRuns(events)).toHaveLength(1);
-    // No verdict yet: the model is neither admitted nor called unable, and the Workbench re-reads.
-    expect(first.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
-    expect(second.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+    // No verdict: the model is neither admitted nor called unable, and no check is claimed.
+    expect(first.body).toEqual({ status: "unavailable", reason: "tool-calling-unverified" });
+    expect(second.body).toEqual({ status: "unavailable", reason: "tool-calling-unverified" });
     expect(storedChat(deps).toolCallingVerification).toBeUndefined();
+  });
+
+  it("checks an unanswered model again when the Workbench opens or a model is chosen", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const gateway = stubGateway("calls");
+      const { deps, events } = await observedDeps(plainConfig([neverProvenChat()]));
+      gateway.busy = true;
+      await handleCodingSidecarGatewayProfile(profileContext(), deps);
+      await codingWorkbenchProbesSettledForTests();
+      expect(workbenchRuns(events)).toHaveLength(1);
+
+      gateway.busy = false;
+      vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
+      await handleCodingSidecarGatewayProfile(profileContext("profile-read-passive"), deps);
+      await codingWorkbenchProbesSettledForTests();
+      expect(workbenchRuns(events)).toHaveLength(1);
+
+      await handleCodingSidecarGatewayProfile(profileContext("profile-read-check", true), deps);
+      await codingWorkbenchProbesSettledForTests();
+      expect(workbenchRuns(events)).toHaveLength(2);
+      expect(storedChat(deps).toolCallingVerification?.status).toBe("verified");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("never probes a model that is not a chat model, and probes the chat model next to it", async () => {

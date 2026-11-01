@@ -25,6 +25,7 @@ import {
   CODING_WORKBENCH_OBSERVATION_BATCH_MS,
   useCodingWorkbenchRuntimeEventStream,
 } from "./coding-workbench-event-retention";
+import { GATEWAY_MODEL_CATALOG_UPDATED_EVENT } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import {
   useCodingWorkbenchRuntime,
   type UseCodingWorkbenchRuntimeInput,
@@ -526,6 +527,20 @@ describe("useCodingWorkbenchRuntime", () => {
       expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenLastCalledWith(
         expect.any(String),
         "model-chosen",
+        true,
+      ),
+    );
+
+    // Customer 1.3.4: a re-read after a catalog update describes the choice but asks for no check,
+    // so an open Workbench probes nothing in the background.
+    act(() => {
+      window.dispatchEvent(new Event(GATEWAY_MODEL_CATALOG_UPDATED_EVENT));
+    });
+    await waitFor(() =>
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenLastCalledWith(
+        expect.any(String),
+        "model-chosen",
+        false,
       ),
     );
     view.unmount();

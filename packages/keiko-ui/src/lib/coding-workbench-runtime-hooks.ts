@@ -59,6 +59,7 @@ type RuntimeDispatch = Dispatch<CodingWorkbenchRuntimeStateAction>;
 type SourceRefresh = (
   catalogAlreadyCurrent?: boolean,
   parentCorrelationId?: string,
+  checkModel?: boolean,
 ) => Promise<void>;
 
 interface RefreshSequences {
@@ -71,10 +72,7 @@ interface RefreshSequences {
 
 export interface RuntimeResources {
   readonly refreshProfile: () => Promise<void>;
-  readonly refreshSource: (
-    catalogAlreadyCurrent?: boolean,
-    parentCorrelationId?: string,
-  ) => Promise<void>;
+  readonly refreshSource: SourceRefresh;
   readonly prepareCodexSetup: (method: CodingWorkbenchCodexAuthMethod) => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
@@ -177,7 +175,7 @@ async function refreshManagedGatewaySource(
   dispatch: RuntimeDispatch,
   scheduleReread: (sequence: number) => void,
   catalogAlreadyCurrent: boolean,
-  modelId: string | null,
+  model: { readonly id: string | null; readonly check: boolean },
   parentCorrelationId?: string,
 ): Promise<void> {
   const correlationId = newClientCorrelationId();
@@ -187,7 +185,8 @@ async function refreshManagedGatewaySource(
   try {
     const profile = await fetchCodingWorkbenchSidecarGatewayProfile(
       correlationId,
-      modelId ?? undefined,
+      model.id ?? undefined,
+      model.check,
     );
     if (sequenceRef.current !== sequence) {
       settleGatewayProfileRefresh(
@@ -269,7 +268,11 @@ function useSourceRefresh(
   const refreshRef = useRef<SourceRefresh>(() => Promise.resolve());
   const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
   refreshRef.current = useCallback(
-    async (catalogAlreadyCurrent = false, parentCorrelationId?: string): Promise<void> => {
+    async (
+      catalogAlreadyCurrent = false,
+      parentCorrelationId?: string,
+      checkModel = false,
+    ): Promise<void> => {
       const sequence = (sequenceRef.current += 1);
       const preference = stateRef.current.runtimePreference;
       dispatch({ kind: "resource-loading", resource: "source" });
@@ -281,7 +284,7 @@ function useSourceRefresh(
             dispatch,
             scheduleReread,
             catalogAlreadyCurrent,
-            stateRef.current.selectedModelId,
+            { id: stateRef.current.selectedModelId, check: checkModel },
             parentCorrelationId,
           );
           return;

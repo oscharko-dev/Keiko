@@ -580,9 +580,14 @@ host's toolchains from the launcher's allowlisted `PATH`
 (`childExecutablePolicy: "toolchain-inherited"`). Attesting a Git there protected nothing the native
 profile did not already permit, and it refused every native run on a managed Mac whose only Git is
 Xcode's under the admin-writable `/Applications` (root:admin 0775) and that has no Command Line
-Tools. `devLaneRuntimeProcessBackend.ts` therefore resolves and attests Git only for the gateway
-profile; a native run keeps the launcher's `PATH` unchanged and records no child-executable digest.
-The gateway profile still fails closed without an attested Git.
+Tools. One rule, `runtimeProfileAttestsGit` in `runtimeGatewayProcessSandbox.ts`, decides this for
+every confined launch: `devLaneRuntimeProcessBackend.ts` and the macOS native-helper fallthrough of
+`nativeRuntimeProcessBackend.ts` resolve and attest Git only for the gateway profile; a native run
+keeps the launcher's `PATH` unchanged and records no child-executable digest.
+The gateway profile still fails closed without an attested Git. The macOS native helper cannot carry
+the `keiko-native` profile today: its rendered launch packet exceeds the helper's 4 KiB argument
+bound, and the helper requires the Apple-signed monitor. The shared rule keeps that fallthrough
+consistent so a future helper launch inherits the same Git decision instead of a second copy.
 
 ## Addendum — dependency installation is host-executed network I/O with lifecycle scripts disabled (2026-09-10)
 

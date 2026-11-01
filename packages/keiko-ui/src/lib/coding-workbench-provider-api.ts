@@ -175,14 +175,23 @@ function readDeadlineSignal(): AbortSignal {
   return AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
 }
 
+function sidecarGatewayProfilePath(modelId: string | undefined, checkModel: boolean): string {
+  const query = new URLSearchParams();
+  if (modelId !== undefined) query.set("modelId", modelId);
+  if (checkModel) query.set("check", "1");
+  const search = query.toString();
+  return search.length === 0
+    ? "/api/coding-sidecar/gateway/profile"
+    : `/api/coding-sidecar/gateway/profile?${search}`;
+}
+
 async function readSidecarGatewayProfile(
   correlationId?: string,
   modelId?: string,
+  checkModel = false,
 ): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
-    modelId === undefined
-      ? "/api/coding-sidecar/gateway/profile"
-      : `/api/coding-sidecar/gateway/profile?modelId=${encodeURIComponent(modelId)}`,
+    sidecarGatewayProfilePath(modelId, checkModel),
     { cache: "no-store", signal: readDeadlineSignal() },
     {
       ...(correlationId === undefined ? {} : { correlationId }),
@@ -196,11 +205,13 @@ async function readSidecarGatewayProfile(
 export async function fetchCodingWorkbenchSidecarGatewayProfile(
   correlationId?: string,
   modelId?: string,
+  checkModel = false,
 ): Promise<CodingWorkbenchSidecarGatewayResult> {
   // The client starts no probe. The server verifies what the Workbench needs on this read itself
   // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173), for
-  // the model chosen in the picker; without one it judges the default the server elects.
-  return readSidecarGatewayProfile(correlationId, modelId);
+  // the model chosen in the picker; without one it judges the default the server elects. Only a
+  // read for a model just chosen asks it to check that model's chat readiness (`checkModel`).
+  return readSidecarGatewayProfile(correlationId, modelId, checkModel);
 }
 
 export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {

@@ -739,7 +739,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-verification-pending":
     "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
-    "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
+    "The latest chat check could not use this model. Open the Workbench again to check it once more, or choose another ready model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",

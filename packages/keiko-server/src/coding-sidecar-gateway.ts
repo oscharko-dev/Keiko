@@ -99,7 +99,10 @@ import {
   awaitInitializedConversationReadiness,
   ensureCodingWorkbenchContextWindows,
   isAnyCodingWorkbenchProbePending,
+  isAnyCodingWorkbenchProbeUnanswered,
   isCodingWorkbenchProbePending,
+  isCodingWorkbenchProbeUnanswered,
+  isConversationReadinessCheckRunning,
   renewConversationReadinessFromAnswer,
 } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
@@ -4506,7 +4509,7 @@ function configuredConversationSubset(
   };
 }
 
-/** New admissions and passive readiness share the original selector over fresh serving evidence. */
+/** A new run is admitted only on fresh serving evidence; its start checked the model just before. */
 function resolveFreshCodingProfile(
   config: GatewayConfig | undefined,
   holder: RuntimeGatewayConfig | undefined,
@@ -4532,18 +4535,71 @@ function resolveFreshCodingProfile(
   };
 }
 
+/**
+ * What the Workbench may claim before a run, judged as Chat judges its picker: an observed failure
+ * is not ready, and a model whose answer expired or that nobody checked yet is usable, because the
+ * start of its run checks it first (`awaitCodingRunModelReadiness`). A fresh-only projection turned
+ * every expired answer into "Keiko is still checking the model source" with no check running
+ * (customer, 1.3.4).
+ */
+function resolveUsableCodingProfile(
+  config: GatewayConfig | undefined,
+  holder: RuntimeGatewayConfig | undefined,
+  options: ResolveCodingSafeSidecarGatewayProfileOptions,
+): CodingWorkbenchSidecarGatewayResult {
+  const configured = resolveCodingSafeSidecarGatewayProfile(config, options);
+  if (configured.status !== "available" || config === undefined) return configured;
+  const usable = resolveCodingSafeSidecarGatewayProfile(
+    configuredConversationSubset(config, holder, false),
+    options,
+  );
+  if (usable.status === "available") return usable;
+  // Preserve a structural window refusal; an untested connection cannot repair that shortfall.
+  if (!codingContextFits(configured)) return configured;
+  return { status: "unavailable", reason: "conversation-not-ready" };
+}
+
+function usableCodingProfile(
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+): CodingWorkbenchSidecarGatewayResult {
+  return resolveUsableCodingProfile(currentGatewayConfig(deps), deps.gatewayConfig, {
+    deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
+    modelSource: currentModelSource(deps),
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+}
+
+// "Keiko is still checking" is said only while a check of that model actually runs; the Workbench
+// re-reads until it settles. Without a running check the projection names the model's own answer.
 function passiveCodingProfile(
   deps: UiHandlerDeps,
   modelId: string | undefined,
 ): CodingWorkbenchSidecarGatewayResult {
-  return withModelVerification(
-    deps,
-    resolveFreshCodingProfile(currentGatewayConfig(deps), deps.gatewayConfig, {
-      deploymentPolicyDisabled: sidecarPolicyDisabled(deps),
-      modelSource: currentModelSource(deps),
-      ...(modelId === undefined ? {} : { modelId }),
-    }),
-  );
+  const result = withModelVerification(deps, usableCodingProfile(deps, modelId));
+  return result.status === "available" &&
+    result.verification !== "verified" &&
+    isConversationReadinessCheckRunning(deps, result.modelAlias)
+    ? { status: "unavailable", reason: "model-verification-pending" }
+    : result;
+}
+
+/**
+ * The start of a coding run checks its model the way a Chat request does: a model that is not ready
+ * now (its answer expired, or it was never checked) is checked first, and the start waits for that
+ * check; a ready model adds nothing. Admission afterwards still requires a fresh success. Without
+ * this, a start after five idle minutes was refused as "still checking" and started no check
+ * (customer 1.3.4).
+ */
+export async function awaitCodingRunModelReadiness(
+  deps: UiHandlerDeps,
+  modelId: string | undefined,
+  correlationId: string | undefined,
+): Promise<void> {
+  const usable = usableCodingProfile(deps, modelId);
+  if (usable.status !== "available") return;
+  if (currentConversationReadinessObservation(deps, usable.modelAlias) === true) return;
+  await awaitInitializedConversationReadiness(deps, usable.modelAlias, correlationId);
 }
 
 // The Workbench's source is one model, so its readiness is that model's own current chat
@@ -4615,15 +4671,28 @@ function gatewayReadinessProjection(
   // #3591 (1.1.7): while the automatic probe is still running against a slow gateway the shortfall
   // is not a verdict. The profile says so, and the Workbench re-reads it instead of refusing.
   const pending = readinessProbePending(deps, result);
-  const reason: CodingWorkbenchReadinessShortfall = pending
-    ? "model-verification-pending"
-    : shortfall;
+  const reason = settledShortfallReason(deps, result, shortfall, pending);
   logReadinessShortfall(ctx, result, reason, pending, shortfall);
   // An open verification replaces the stored shortfall for an unavailable projection too (an
   // unverified tool-calling proof whose probe is still running), or the Workbench would stop
   // reading and keep the refusal until an unrelated refresh.
-  if (result.status === "available" || pending) return { status: "unavailable", reason };
+  if (result.status === "available" || reason !== shortfall)
+    return { status: "unavailable", reason };
   return result;
+}
+
+// A probe the gateway never answered refuted nothing (customer 1.3.4): a model nobody proved yet is
+// reported unverified, never as unable to call tools, and is checked again when someone asks.
+function settledShortfallReason(
+  deps: UiHandlerDeps,
+  result: CodingWorkbenchSidecarGatewayResult,
+  shortfall: "model-context-window-insufficient" | "no-tool-calling" | "tool-calling-unverified",
+  pending: boolean,
+): CodingWorkbenchReadinessShortfall {
+  if (pending) return "model-verification-pending";
+  return shortfall === "no-tool-calling" && readinessProbeUnanswered(deps, result)
+    ? "tool-calling-unverified"
+    : shortfall;
 }
 
 // One owner for the rule a coding run's prompt needs: the readiness projection of the default model
@@ -4724,6 +4793,17 @@ function readinessProbePending(
     : isAnyCodingWorkbenchProbePending(config);
 }
 
+function readinessProbeUnanswered(
+  deps: UiHandlerDeps,
+  result: CodingWorkbenchSidecarGatewayResult,
+): boolean {
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return false;
+  return result.status === "available"
+    ? isCodingWorkbenchProbeUnanswered(config, result.modelAlias)
+    : isAnyCodingWorkbenchProbeUnanswered(config);
+}
+
 function logReadinessShortfall(
   ctx: RouteContext,
   result: CodingWorkbenchSidecarGatewayResult,
@@ -4781,6 +4861,7 @@ export async function handleCodingSidecarGatewayProfile(
   // limits gets its context window proven here, before the projection judges it.
   const modelId = profileModelId(ctx, deps);
   const elected = resolveGatewayProfile(deps, modelId).result;
+  const checkRequested = profileCheckRequested(ctx);
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5). A probe can cure a
   // lapsed proof and a model nobody proved yet (#3578); the targets decide whether any model needs
@@ -4792,12 +4873,15 @@ export async function handleCodingSidecarGatewayProfile(
     // the Workbench read again — never leave the read hanging until the browser gives up.
     await Promise.race([
       Promise.all([
+        // Opening the Workbench or choosing a model asks: a probe the gateway never answered runs
+        // again. A passive re-read never retries one (customer 1.3.4).
         ensureCodingWorkbenchContextWindows(
           deps,
           elected.status === "available" ? elected.modelAlias : undefined,
           ctx.correlationId,
+          checkRequested,
         ),
-        electedConversationReadiness(ctx, deps, elected),
+        electedConversationReadiness(ctx, deps, elected, checkRequested),
       ]),
       boundedProfileWait(),
     ]);
@@ -4805,22 +4889,27 @@ export async function handleCodingSidecarGatewayProfile(
   return { status: 200, body: gatewayReadinessProjection(ctx, deps, modelId) };
 }
 
-// #3907 AC3: a model nobody used for a while lets its chat success expire, and the Workbench then
-// reads `model-verification-pending` every ten seconds. That projection promises a check the
-// Workbench waits for, so a read that finds no fresh success is the model's use: it joins the
-// running probe or starts the one on-demand check, exactly as a Chat request does. A fresh success
-// adds nothing, so a polling Workbench never keeps background renewal going on its own.
+// Choosing a model in the picker checks it (`check=1`), when it holds no fresh answer, exactly as a
+// Chat request would. Every other read only describes what is known: a re-read after a catalog
+// update, a configuration change or a running check never starts one, so an open Workbench probes
+// nothing in the background (customer 1.3.4).
 function electedConversationReadiness(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   elected: CodingWorkbenchSidecarGatewayResult,
+  checkRequested: boolean,
 ): Promise<void> {
   if (
+    !checkRequested ||
     elected.status !== "available" ||
     currentConversationReadinessObservation(deps, elected.modelAlias) === true
   )
     return Promise.resolve();
   return awaitInitializedConversationReadiness(deps, elected.modelAlias, ctx.correlationId);
+}
+
+function profileCheckRequested(ctx: RouteContext): boolean {
+  return ctx.url.searchParams.get("check") === "1";
 }
 
 // Under the browser's 15 s read deadline for this profile (keiko-ui `DEFAULT_READ_TIMEOUT_MS`).

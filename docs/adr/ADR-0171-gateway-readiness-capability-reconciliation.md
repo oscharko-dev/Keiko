@@ -67,14 +67,16 @@ A page load (the models read with `refresh=1`) is the person asking again: it ch
 configured chat model that is not ready now, outside its 30-second not-ready cooldown, in the
 background and independently of held catalog discovery; selected requests join that same work.
 Failed initialization remains visible. A failed startup check is not retried on a timer; the 30-second
-not-ready cooldown bounds every later check. The first conversation request, Workbench profile read
-or page load that needs the model after that cooldown starts one fresh
+not-ready cooldown bounds every later check of an observed failure. A model that holds no answer at
+all (its startup check never settled) and has no check running is checked by the first request that
+needs it, without a cooldown. The first conversation request, coding run start, Workbench model
+choice or page load that needs the model after that cooldown starts one fresh
 probe, dated by the probe that last settled rather than by a preserved feature-observation
 timestamp. Concurrent requests join that probe, a failed one refreshes the cooldown, and a
 malformed observation timestamp never lets a conversation request trigger it, so a dead gateway
 costs at most one bounded probe per model per cooldown. A gateway that is still starting when Keiko
-starts (the 1.1.13 incident) is therefore reached by the person's next page load, Workbench read or
-request, never by a background loop that keeps probing models nobody asked for (customer 1.3.4: a
+starts (the 1.1.13 incident) is therefore reached by the person's next page load, Workbench model
+choice, run start or request, never by a background loop that keeps probing models nobody asked for (customer 1.3.4: a
 probe every few seconds kept busy single-slot models occupied). Visible model consumers read the local catalog every five seconds
 through the initial two-minute window, including when cached models already look ready, then every
 minute for an unchanged catalog. Hidden tabs pause and catch up immediately on visibility or focus.
@@ -85,6 +87,13 @@ unwraps its `DOMException` reason before classification and diagnostics. Deadlin
 cancellation remain inconclusive, including on the native transport, and never become a conclusive
 capability rejection. The existing readiness completion event
 records the inconclusive-probe count without request or response bodies.
+The Coding Workbench's tool-calling and long-context probes follow the same rule (customer 1.3.4).
+A probe the gateway never answered is no verdict: it gets no six-hour cooldown, does not count as
+pending once it settled, and the profile reports `tool-calling-unverified`, never
+`no-tool-calling`. Neither a passive profile read nor a timer retries it; startup, a page load and
+a profile read that asks (`check=1`, sent when the Workbench opens or a model is chosen) retry it
+after a one-minute quiet. A proof that succeeded while the configuration changed under it is
+stale and runs again once, at once. The startup timer retries only an unreachable catalog.
 A busy provider is no verdict on a model already proved ready (#4115, 2026-10-28). When the chat
 probe only times out or receives a transient overload status, a same-generation positive basic-chat
 observation is kept with its fields and renewed at the probe's time, so a single-slot local model that
@@ -101,9 +110,19 @@ replaced configuration. A long run therefore no longer lets the model's success 
 probe competes with the run's turns.
 `coding-sidecar.gateway.outcome` records `readinessRenewal` (`renewed`, `not-renewable`) on accepted
 answers. The Workbench profile describes the model chosen in its picker (`modelId` query; an id
-the gateway does not configure falls back to the elected default), and choosing a model reads it
-again. A read that finds that model's success expired joins the running check or starts the one
-on-demand check, as a Chat request does; a fresh success adds no probe. The profile's
+the gateway does not configure falls back to the elected default). Choosing a model reads it with
+`check=1`, sent only by the picker's selection: when that model holds no fresh success, the read
+joins the running check or starts the one on-demand check, as a Chat request does. Every other read
+(after a catalog update or a configuration change, or while a check runs) only describes what is
+known and never starts a check, so an open Workbench probes nothing in the background (auditor
+blocker, customer 1.3.4: a catalog re-read every minute re-probed an idle model once its success
+expired, and Start flickered disabled meanwhile). The profile judges the model as Chat judges its
+picker: an observed failure is `conversation-not-ready`; `model-verification-pending` is answered
+exactly while a check of that model runs; an expired or never-settled answer is available with
+`verification: "unverified"`, and Start stays enabled. A coding run's start checks a model that is
+not ready now and waits for that check (`awaitCodingRunModelReadiness`, through the launch
+resolver's `prepare`) before the unchanged fresh-success admission, so a start after an idle while
+is never refused as still checking. The profile's
 `verification` is that model's own current basic-chat observation (`verified`, `failed`,
 `unverified`), never the gateway-wide state that the last probe of any model overwrites (customer
 1.3.4: a busy neighbour's failed probe kept the composer saying it was still checking the model
@@ -318,7 +337,8 @@ deployment now reported. A gateway declaration such as `supports_function_callin
   successful credential checks. Fresh success adds no interactive readiness request; a success
   expires after five minutes, so health is never cached indefinitely, and expired selected requests
   share one check. Nothing probes on a timer. Failed observations are re-probed at most once per
-  not-ready cooldown, and only when a request, a Workbench read or a page load needs the model.
+  not-ready cooldown, and only when a request, a coding run start, a Workbench model choice or a
+  page load needs the model.
 - A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out
   mid-run; a new run still needs a fresh proof.
 

@@ -16,7 +16,7 @@ import {
 } from "./gateway-setup.js";
 import { handleCodingSidecarGatewayProfile } from "./coding-sidecar-gateway.js";
 import {
-  isLiteLlmCodingReadinessPending,
+  isCodingWorkbenchProbePending,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   ensureCodingWorkbenchContextWindows,
   resetCodingWorkbenchContextWindowProbesForTests,
@@ -333,7 +333,7 @@ it("reports background verification as pending while a fresh model has not prove
   deps.gatewayConfig?.set(startupConfig(), true);
   try {
     await vi.waitFor(() => {
-      expect(isLiteLlmCodingReadinessPending(deps)).toBe(true);
+      expect(liteLlmCodingProbeRunning(deps)).toBe(true);
     });
     const result = await handleCodingSidecarGatewayProfile(
       {
@@ -471,11 +471,12 @@ it("reproves an unready LiteLLM model when its successful proof became stale", a
     true,
   );
   blocked.resolve(true);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  expect(isLiteLlmCodingReadinessPending(deps)).toBe(true);
-  await vi.advanceTimersByTimeAsync(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS + 1);
+  // The configuration change that made the proof stale is the trigger: the model is proved again at
+  // once, without waiting for a timer or a later read (customer 1.3.4).
+  await vi.advanceTimersByTimeAsync(0);
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
   expect(toolCalls).toBe(2);
+  expect(liteLlmCodingProbeRunning(deps)).toBe(false);
 });
 
 it("records the startup catalog disposition and counts under a child correlation", async () => {
@@ -1430,7 +1431,9 @@ it("starts a changed connection with its own first retry delay and parent", asyn
   });
 });
 
-it("bounds an inconclusive tool-only startup burst and allows explicit reload recovery", async () => {
+// Customer 1.3.4: an unanswered startup check is retried when someone asks (here a page load), never
+// on a timer, so a busy gateway is not probed in the background.
+it("checks an unanswered tool-only startup once and recovers on an explicit reload, not a timer", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   let toolCalls = 0;
   let recovered = false;
@@ -1464,11 +1467,11 @@ it("bounds an inconclusive tool-only startup burst and allows explicit reload re
   await vi.advanceTimersByTimeAsync(0);
   expect(toolCalls).toBe(1);
   await vi.advanceTimersByTimeAsync(3_600_000);
-  expect(toolCalls).toBe(3);
+  expect(toolCalls).toBe(1);
   recovered = true;
   deps.refreshGatewayCatalog?.("corr-explicit-reload");
   await vi.advanceTimersByTimeAsync(0);
-  expect(toolCalls).toBe(4);
+  expect(toolCalls).toBe(2);
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).toBe("verified");
 });
 
@@ -1869,6 +1872,18 @@ function stubToolProbe(gate?: Promise<boolean>): { readonly toolCalls: () => num
   return { toolCalls: (): number => toolCalls };
 }
 
+// Whether a LiteLLM model's Workbench verification is queued or in flight right now.
+function liteLlmCodingProbeRunning(deps: UiHandlerDeps): boolean {
+  const config = deps.gatewayConfig?.current();
+  return (
+    config?.providers.some(
+      (provider) =>
+        provider.tokenCounter === "litellm" &&
+        isCodingWorkbenchProbePending(config, provider.modelId),
+    ) ?? false
+  );
+}
+
 function onlyProvider(
   deps: UiHandlerDeps,
 ): ReturnType<typeof parseGatewayConfig>["providers"][number] {
@@ -1897,7 +1912,7 @@ it("withdraws a tool proof when the same alias is re-pointed to another deployme
     // The proof belonged to the previous deployment: until the new one proves itself it is withdrawn.
     expect(onlyProvider(deps).deploymentIdentitySha256).toBe(DEPLOYMENT_AFTER);
     expect(onlyModel(deps).toolCalling).toBe(false);
-    expect(isLiteLlmCodingReadinessPending(deps)).toBe(true);
+    expect(liteLlmCodingProbeRunning(deps)).toBe(true);
   } finally {
     gate.resolve(true);
   }
@@ -2072,7 +2087,7 @@ it("keeps a declared tool-calling model unproven when the live probe is refused"
     expect(toolRequests).toBeGreaterThanOrEqual(1);
   });
   await vi.waitFor(() => {
-    expect(isLiteLlmCodingReadinessPending(deps)).toBe(false);
+    expect(liteLlmCodingProbeRunning(deps)).toBe(false);
   });
   expect(startupModels(deps)[0]?.toolCalling).toBe(false);
   expect(startupModels(deps)[0]?.toolCallingVerification?.status).not.toBe("verified");

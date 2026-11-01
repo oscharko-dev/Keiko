@@ -4983,6 +4983,19 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     id: "model-b",
     reasoningEfforts: ["medium", "high"],
   };
+  // A choice the Workbench holds pending: its forced tool-call proof lapsed and the server renews it
+  // (#3905). An unknown chat answer no longer holds a choice; its start checks it (customer 1.3.4).
+  const HELD_B: ModelCapability = {
+    ...MODEL_B,
+    toolCalling: false,
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: "2000-01-01T00:00:00.000Z",
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "fingerprint-1",
+    },
+    toolCallingRenewalPending: true,
+  };
 
   it("elects the first freshly ready default while retaining unknown models as pending options", () => {
     chatCatalogMock.models = [
@@ -5057,7 +5070,10 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     }
   });
 
-  it("keeps a remembered unknown selection pending despite a healthy default and restores start after recovery", async () => {
+  // #3642 selection stability: a remembered choice whose chat answer is unknown is never replaced by
+  // a healthy default. Customer 1.3.4: it is usable as it is in Chat; its start checks the model on
+  // the server before admission, so Start no longer waits for a check nobody runs.
+  it("keeps a remembered unknown selection despite a healthy default and lets its start check it", async () => {
     chatCatalogMock.models = [
       { ...MODEL_A, conversationReady: true },
       { ...MODEL_B, conversationReady: undefined },
@@ -5071,33 +5087,44 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
     });
     runtimeHookMock.mockReturnValue({ state, actions: liveActions });
     const workspace = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1");
-    const tree = (
-      <ActiveWorkspaceProvider value={workspace}>
-        <CodingWorkbenchWindow selectedRoot={undefined} />
-      </ActiveWorkspaceProvider>
-    );
-    const view = render(tree);
-    await userEvent
-      .setup()
-      .type(screen.getByLabelText("Task instructions"), "Add a focused unit test");
-    expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(
-      "aria-disabled",
-      "true",
-    );
-    await userEvent.setup().click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).not.toHaveBeenCalled();
-    expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
-    chatCatalogMock.models = [
-      { ...MODEL_A, conversationReady: true },
-      { ...MODEL_B, conversationReady: true },
-    ];
-    view.rerender(
+    render(
       <ActiveWorkspaceProvider value={workspace}>
         <CodingWorkbenchWindow selectedRoot={undefined} />
       </ActiveWorkspaceProvider>,
     );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Task instructions"), "Add a focused unit test");
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(liveActions.start).toHaveBeenCalledOnce();
     expect(liveActions.setSelectedModel).not.toHaveBeenCalled();
+  });
+
+  it("withholds Start for a selection the server observed failing", async () => {
+    chatCatalogMock.models = [
+      { ...MODEL_A, conversationReady: true },
+      { ...MODEL_B, conversationReady: false },
+    ];
+    chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
+    taskSessionHookMock.mockReturnValue({ ...defaultTaskSession(), visibleRun: false });
+    const liveActions = actions();
+    runtimeHookMock.mockReturnValue({
+      state: liveState({
+        selectedModelId: "model-b",
+        run: { status: "ready", value: null, error: null },
+      }),
+      actions: liveActions,
+    });
+    const workspace = activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1");
+    render(
+      <ActiveWorkspaceProvider value={workspace}>
+        <CodingWorkbenchWindow selectedRoot={undefined} />
+      </ActiveWorkspaceProvider>,
+    );
+    const user = userEvent.setup();
+    await user.type(screen.getByLabelText("Task instructions"), "Add a focused unit test");
+    await user.click(screen.getByRole("button", { name: "Start coding run" }));
+    expect(liveActions.start).not.toHaveBeenCalled();
   });
 
   it("preserves the selected model and effort across a transient empty-catalog refresh", () => {
@@ -5316,7 +5343,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
   it("records actual Workbench catalog and held/restored selection without raw identifiers", () => {
     const diagnostic = vi.fn();
     setClientDiagnosticWriter(diagnostic);
-    const pending = { ...MODEL_B, conversationReady: undefined };
+    const pending = HELD_B;
     chatCatalogMock.models = [MODEL_A, pending];
     chatCatalogMock.configuredModelIds = [MODEL_A.id, MODEL_B.id];
     chatCatalogMock.modelCatalogRead = {
@@ -5416,7 +5443,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         state: liveState({ selectedModelId: MODEL_B.id }),
         actions: liveActions,
       });
-      observeCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }], "origin-held-123");
+      observeCatalog([MODEL_A, HELD_B], "origin-held-123");
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
       expectHeldOrigin(writer, false);
     });
@@ -5452,7 +5479,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
         state: liveState({ selectedModelId: MODEL_B.id }),
         actions: liveActions,
       });
-      observeCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }], "origin-held-123");
+      observeCatalog([MODEL_A, HELD_B], "origin-held-123");
       view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
       expectHeldOrigin(writer, false);
     });
@@ -5484,7 +5511,7 @@ describe("CodingWorkbenchWindow model selection stability (#3642)", () => {
           state: liveState({ selectedModelId: MODEL_B.id }),
           actions: liveActions,
         });
-        observeCatalog([MODEL_A, { ...MODEL_B, conversationReady: undefined }], "origin-held-123");
+        observeCatalog([MODEL_A, HELD_B], "origin-held-123");
         view.rerender(<CodingWorkbenchWindow selectedRoot="/repo" />);
         expectHeldOrigin(writer, true);
       },

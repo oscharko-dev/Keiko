@@ -74,9 +74,25 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
       fetchCodingWorkbenchSidecarGatewayProfile(undefined, "team/gpt coding&x=1"),
     ).resolves.toEqual(unavailable);
     expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
-      "/api/coding-sidecar/gateway/profile?modelId=team%2Fgpt%20coding%26x%3D1",
+      "/api/coding-sidecar/gateway/profile?modelId=team%2Fgpt+coding%26x%3D1",
       expect.objectContaining({ cache: "no-store" }),
     );
+  });
+
+  // Customer 1.3.4: only a read for a model just chosen asks the server to check it.
+  it("asks for a check only when the caller says the model was just chosen", async () => {
+    const unavailable = { status: "unavailable", reason: "conversation-not-ready" };
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(unavailable)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchCodingWorkbenchSidecarGatewayProfile(undefined, "model-a", true);
+    await fetchCodingWorkbenchSidecarGatewayProfile(undefined, undefined, true);
+    await fetchCodingWorkbenchSidecarGatewayProfile(undefined, "model-a");
+    expect(fetchMock.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual([
+      "/api/coding-sidecar/gateway/profile?modelId=model-a&check=1",
+      "/api/coding-sidecar/gateway/profile?check=1",
+      "/api/coding-sidecar/gateway/profile?modelId=model-a",
+    ]);
   });
 
   it("rejects malformed sidecar gateway profile responses", async () => {

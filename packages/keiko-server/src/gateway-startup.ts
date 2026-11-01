@@ -12,7 +12,6 @@ import {
   cancellableConversationProbeDeps,
   initializeConfiguredConversationReadiness,
   initializeLiteLlmCodingReadiness,
-  isLiteLlmCodingReadinessPending,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   withReadinessParentCorrelation,
 } from "./gateway-readiness.js";
@@ -194,7 +193,9 @@ class GatewayStartupChecks {
         correlationId,
       );
     if (!this.currentGeneration(generation)) return;
-    if (retryCatalog || (coding && isLiteLlmCodingReadinessPending(deps))) {
+    // Only an unreachable catalog is retried on a timer; a model that did not answer is checked
+    // again when someone asks (a page load, the Workbench opening, a model chosen; customer 1.3.4).
+    if (retryCatalog) {
       this.scheduleRetry(deps, correlationId, parentCorrelationId, generation);
     } else {
       this.retryAttempt = 0;

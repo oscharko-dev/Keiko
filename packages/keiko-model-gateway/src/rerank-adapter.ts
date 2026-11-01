@@ -9,6 +9,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import type { ModelGatewayLogContext, ModelGatewayLogSink } from "./observability.js";
 import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
@@ -27,6 +28,11 @@ export interface LiteLLMRerankRequest extends RerankRequest {
   readonly timeoutMs?: number;
   readonly fetchImpl?: typeof fetch;
   readonly egress?: OutboundHttpEgressConfig | undefined;
+  // Activity-log port (ADR-0019). Unset means the transport's failure and TLS-trust lines are
+  // lost and counted as `port-unwired`, so every production caller supplies it.
+  readonly log?: ModelGatewayLogSink | undefined;
+  // The enclosing operation's correlation id; every line this call writes carries it.
+  readonly logContext?: ModelGatewayLogContext | undefined;
 }
 
 export interface RerankResult {
@@ -151,9 +157,9 @@ async function discardBody(response: Response): Promise<void> {
 
 async function dispatch(
   built: BuiltRequest,
-  fetchImpl: typeof fetch | undefined,
-  egress: OutboundHttpEgressConfig | undefined,
+  request: LiteLLMRerankRequest,
 ): Promise<Response | RerankErrorKind> {
+  const { fetchImpl, egress, log, logContext } = request;
   try {
     return await gatewayFetch(built.url, {
       method: "POST",
@@ -162,6 +168,8 @@ async function dispatch(
       signal: built.signal,
       ...(fetchImpl !== undefined ? { fetchImpl } : {}),
       ...(egress !== undefined ? { egress } : {}),
+      ...(log !== undefined ? { log } : {}),
+      ...(logContext !== undefined ? { logContext } : {}),
     });
   } catch (error) {
     return classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
@@ -260,7 +268,7 @@ export async function requestLiteLLMRerank(request: LiteLLMRerankRequest): Promi
     return { ok: false, kind: "invalid-response" };
   }
   const built = buildRequest(request);
-  const dispatched = await dispatch(built, request.fetchImpl, request.egress);
+  const dispatched = await dispatch(built, request);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
   }
