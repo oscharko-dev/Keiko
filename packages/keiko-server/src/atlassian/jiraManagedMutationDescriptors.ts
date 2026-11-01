@@ -310,7 +310,7 @@ const DEFINITIONS: Readonly<
 > = {
   "jira.create": {
     description:
-      "Create one issue using numeric project and issue-type IDs and current required fields. Routing identities cannot be overridden inside fields. A child of an existing issue sets the relation field its create metadata names to that key; a parent that does not exist yet needs jira.draft.",
+      "Create one issue (for more, use jira.draft) with numeric project and issue-type IDs and current required fields. Fields cannot override routing identities. A child of an existing issue sets the relation field its create metadata names to that key; a parent that does not exist yet needs jira.draft.",
     input: object(
       {
         projectId: NUMERIC_ID,
@@ -384,7 +384,7 @@ const DEFINITIONS: Readonly<
   },
   "jira.draft": {
     description:
-      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and its children to any depth in one draft. Send up to " +
+      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and children to any depth. Send up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
       " items here; stage a larger draft of any size with jira.draft-stage, then pass its draftId and draftDigest here, so it is approved once. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     input: object(

@@ -158,6 +158,22 @@ describe("jira.report over a project of any size", () => {
     expect(h.activity.at(-1)).toMatchObject({ phase: "section", continued: false });
   });
 
+  it("names the report a section page belongs to, also for the comment of a new report (#4173)", async () => {
+    const h = harness({ issues });
+    const comment = await h.run({ projectKey: "REP", section: "comment" });
+    const identity = record(comment.data.report);
+    expect(Object.keys(identity).sort()).toEqual(["completeness", "digest", "generatedAt"]);
+    expect(record(identity.completeness)).toMatchObject({
+      complete: true,
+      issuesRead: issues.length,
+    });
+    expect(record(comment.data.section).text).toBeTypeOf("string");
+    const summary = reportOf(await h.run({ reportId: idOf(comment) }));
+    expect(identity.digest).toBe(summary.digest);
+    const page = await h.run({ reportId: idOf(comment), section: "statuses", maxResults: 100 });
+    expect(record(page.data.report).digest).toBe(summary.digest);
+  });
+
   it("computes progress per epic, uncovered epics and orphans from the hierarchy", async () => {
     const h = harness({ issues });
     const result = await h.run({ projectKey: "REP" });

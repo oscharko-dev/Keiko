@@ -20,6 +20,7 @@ import {
 import {
   JIRA_REPORT_EXPORTS_VIEW,
   jiraReportProgressView,
+  jiraReportIdentity,
   jiraReportSectionPage,
   jiraReportState,
   jiraReportSummary,
@@ -204,6 +205,7 @@ function sectionView(session: JiraReportSession, args: JiraReportPage): ManagedM
       outcome: "succeeded",
       status: jiraReportState(session),
       reportId: session.id,
+      report: jiraReportIdentity(report),
       section,
       ...(typeof section.nextStartAt === "number" ? { nextStartAt: section.nextStartAt } : {}),
     },

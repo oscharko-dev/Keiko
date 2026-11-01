@@ -42,7 +42,7 @@ const DESCRIPTION =
   "Scope: projectKey and/or jql. Keiko computes every number: quote report.figures verbatim, never recompute. " +
   "requirementsFromPods covers this Chat's Pod requirements. Estimate is seconds of original estimate unless estimateFieldId. " +
   "While status is reading, call again with only the reportId. " +
-  "Name a section on the first call to page its list (maxResults up to 100, then nextStartAt; deviations carry details). " +
+  "Name a section on the first call to page its list (maxResults up to 100, then nextStartAt; report every deviation). " +
   "For a Jira comment, get section comment and post its text verbatim. issuesWithoutTemplate: no template judged them. " +
   "A refusal names invalidArguments or a message.";
 

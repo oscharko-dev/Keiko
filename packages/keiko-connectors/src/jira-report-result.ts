@@ -127,22 +127,41 @@ function requirementsSummary(report: JiraReport): CatalogJsonValue {
   };
 }
 
+function completenessView(report: JiraReport): CatalogJsonObject {
+  const { completeness } = report;
+  return {
+    complete: completeness.complete,
+    ...(completeness.reason === undefined ? {} : { reason: completeness.reason }),
+    ...(completeness.failure === undefined ? {} : { failure: completeness.failure }),
+    issuesRead: completeness.issuesRead,
+    ...(completeness.issuesTotal === undefined ? {} : { issuesTotal: completeness.issuesTotal }),
+    pageCount: completeness.pageCount,
+  };
+}
+
+/**
+ * Which computed report a section page belongs to and how much of the scope it read (#4173). A
+ * model that names a section on its first call, such as the comment it is asked to post, never sees
+ * the summary; the page still says which report version it pages and whether that report is whole,
+ * so the posted text can be matched to the report and its exports.
+ */
+export function jiraReportIdentity(report: JiraReport): CatalogJsonObject {
+  return {
+    digest: report.digest,
+    generatedAt: report.generatedAt,
+    completeness: completenessView(report),
+  };
+}
+
 /** The bounded default view. Every figure is copied from the computed report. */
 export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
-  const { completeness, compliance, coverage } = report;
+  const { compliance, coverage } = report;
   return {
     digest: report.digest,
     generatedAt: report.generatedAt,
     figures: jiraReportFigures(report),
     scope: { ...report.scope },
-    completeness: {
-      complete: completeness.complete,
-      ...(completeness.reason === undefined ? {} : { reason: completeness.reason }),
-      ...(completeness.failure === undefined ? {} : { failure: completeness.failure }),
-      issuesRead: completeness.issuesRead,
-      ...(completeness.issuesTotal === undefined ? {} : { issuesTotal: completeness.issuesTotal }),
-      pageCount: completeness.pageCount,
-    },
+    completeness: completenessView(report),
     hierarchy: { ...report.hierarchy },
     progress: {
       project: progress(report.progress.project),

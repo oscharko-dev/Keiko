@@ -69,14 +69,51 @@ function fixture(attachmentSource?: JiraAttachmentSource): {
 }
 it.each(["project", "issuetype"])("rejects a caller routing override in fields.%s", async (id) => {
   const f = fixture();
+  // A routing override is refused before HTTP and named; it moved here from the malformed-argument
+  // table, which asserts refusals without detail.
+  for (const override of [
+    { id: "10002" },
+    { id: "999" },
+    { key: "OTHER" },
+    { id: "10000", key: "SYN" },
+    "10000",
+  ]) {
+    expect(
+      await f.run("jira.create", {
+        projectId: "10000",
+        issueTypeId: "10000",
+        fields: { summary: "Synthetic", customfield_10000: "Required", [id]: override },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: id, validation: "invalid-field" },
+    });
+  }
+  expect(f.http).not.toHaveBeenCalled();
+});
+it("creates once when fields only restate projectId and issueTypeId (Qwen, 2026-11-01)", async () => {
+  const f = fixture();
   expect(
     await f.run("jira.create", {
       projectId: "10000",
       issueTypeId: "10001",
-      fields: { summary: "Synthetic", customfield_10000: "Required", [id]: { id: "10002" } },
+      fields: {
+        summary: "Synthetic",
+        customfield_10000: "Required",
+        project: { id: "10000" },
+        issuetype: { id: "10001" },
+      },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
-  expect(f.http).not.toHaveBeenCalled();
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
+  const posted = f.http.mock.calls.filter(([request]) => request.method === "POST");
+  expect(posted).toHaveLength(1);
+  expect(JSON.parse(posted[0]?.[0].bodyJson ?? "null").fields).toEqual({
+    project: { id: "10000" },
+    issuetype: { id: "10001" },
+    summary: "Synthetic",
+    customfield_10000: "Required",
+  });
 });
 
 it.each(["summary", "customfield_10000"])(
@@ -334,7 +371,6 @@ it.each(["jira.create", "jira.transition"] as const)(
 );
 it.each([
   ["jira.create", { projectId: "10000/other", issueTypeId: "10001", fields: {} }],
-  ["jira.create", { projectId: "10000", issueTypeId: "10001", fields: { project: { id: "999" } } }],
   ["jira.edit", { issueKey: "SYN-1", fields: { project: { id: "999" } } }],
   ["jira.edit", { issueKey: "SYN-1", fields: {} }],
   ["jira.edit", { issueKey: "SYN-1", fields: { summary: "Allowed" }, credentials: "forbidden" }],

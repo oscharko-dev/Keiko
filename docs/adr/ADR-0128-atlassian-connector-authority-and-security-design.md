@@ -845,7 +845,12 @@ holds a parent chain of any depth in one call: an epic, a task whose `parent` na
 from create metadata; no field or application name is built in. A weaker local model must be able to
 do this in one turn, so three things were made explicit. (1) The tool descriptions say how to nest
 (`jira.draft`'s `parent`, `projectId` and `issueTypeId` name their sources; `jira.create` points a
-child of a not-yet-existing parent to `jira.draft`). (2) A draft refused before any request returns
+child of a not-yet-existing parent, and any second issue, to `jira.draft`). `jira.create` accepts a
+`project` or `issuetype` inside `fields` only when it repeats `projectId` or `issueTypeId`
+exactly (`{ "id": <same id> }`); it is then dropped, because it asks for the same issue (lab S07
+of epic #4173: Qwen repeated both and got four unexplained refusals). Any other value would
+override the routing, so it is refused before any request. The refusal names the field, is
+`invalid-field`, and says to send the change without it. (2) A draft refused before any request returns
 a fixed `guidance` sentence from a closed vocabulary (`JiraDraftProblem`: draft shape, missing items,
 a malformed item ref, id, fields, parent, link or requirement list, a duplicate,
 self or unknown ref, a cycle) with the 1-based item position where one item is at fault, ending in
@@ -1072,7 +1077,10 @@ list beyond 300 lines says how many it left out); the full lists are paged throu
 exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.
 A new report may name the `section` (with `startAt`/`maxResults`) it wants; once the report
 completes in that call the page is returned with the `reportId`, otherwise the call reports
-`reading` as before. An `invalid-input` refusal lists `invalidArguments`: the argument names to fix
+`reading` as before. Every section page also carries `report` with only the report's identity:
+`digest`, `generatedAt` and `completeness`. A model that asks for the comment on its first call
+never sees the summary (lab S13 of epic #4173, 2026-11-01), yet the posted text must still be
+traceable to one report version and its exports, and an incomplete report must remain visible. An `invalid-input` refusal lists `invalidArguments`: the argument names to fix
 (unknown or invalid ones, or `jql`/`projectKey` when a new report names no scope), never their
 values, so the model can correct the call instead of abandoning the report (lab S10/S11, #4181).
 Because a weaker model picks the wrong tool when its description is the only steering (lab S11/S12:

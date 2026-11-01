@@ -203,6 +203,48 @@ function createContextFields(fields: readonly JiraFieldMetadata[]): readonly Jir
       : field,
   );
 }
+/** A routing field inside `fields` that restates the call's own numeric identity, and nothing else. */
+function restatesRouting(value: unknown, id: unknown): boolean {
+  const record = asRecord(value);
+  return record !== undefined && Object.keys(record).length === 1 && record.id === id;
+}
+function routingOverride(fieldId: string): Extract<JiraMutationAttempt, { ok: false }> {
+  return {
+    ...INVALID,
+    detail: {
+      fieldId,
+      validation: "invalid-field",
+      messages: [
+        `${fieldId} is chosen by projectId and issueTypeId, so nothing was changed. Send the change again without ${fieldId} in fields.`,
+      ],
+    },
+  };
+}
+/**
+ * The create's `fields` without a routing field that only repeats `projectId` or `issueTypeId`: a
+ * model that writes `project: { id: projectId }` beside `projectId` asks for the same issue. A
+ * routing field naming anything else would override the routing and is refused by name.
+ */
+function withoutRestatedRouting(
+  args: CatalogJsonObject,
+): { readonly ok: true; readonly fields: unknown } | Extract<JiraMutationAttempt, { ok: false }> {
+  const fields = asRecord(args.fields);
+  if (fields === undefined) return { ok: true, fields: args.fields };
+  const routing: Readonly<Record<string, unknown>> = {
+    project: args.projectId,
+    issuetype: args.issueTypeId,
+  };
+  const overridden = Object.keys(routing).find(
+    (id) => Object.hasOwn(fields, id) && !restatesRouting(fields[id], routing[id]),
+  );
+  if (overridden !== undefined) return routingOverride(overridden);
+  return {
+    ok: true,
+    fields: Object.fromEntries(
+      Object.entries(fields).filter(([id]) => !Object.hasOwn(routing, id)),
+    ),
+  };
+}
 function createArgumentsValid(
   args: CatalogJsonObject,
   fields: Record<string, unknown> | undefined,
@@ -222,7 +264,9 @@ async function createIssue(
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   const { projectId, issueTypeId } = args;
-  const fields = fieldsInput(args.fields);
+  const routed = withoutRestatedRouting(args);
+  if (!routed.ok) return routed;
+  const fields = fieldsInput(routed.fields);
   const links = parseJiraIssueLinks(args.links);
   if (
     !createArgumentsValid(args, fields, links) ||
