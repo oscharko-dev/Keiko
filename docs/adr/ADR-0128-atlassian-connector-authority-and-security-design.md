@@ -628,10 +628,19 @@ whose text is clipped, absent or unreadable is refused. Because an extractor rea
 shows or the body parts a parser needs, the whole file is read as well: every part of a Word or Excel
 package (comments, headers, footers, properties, embedded media, any other entry) is inflated with
 the shared bounded OOXML reader and scanned as text or checked as an image, and a part that is
-neither refuses the file; a PDF's own bytes are scanned and every Flate stream (object streams,
-annotations, form values, metadata) is inflated and scanned, while a stream under any other filter
-except a well-formed JPEG (`DCTDecode`), an encrypted PDF and a PDF carrying an embedded file are
-refused. PNG and JPEG images, recognized by their signature, are allowed only when nothing hides in
+neither refuses the file, and the ZIP container's own bytes (archive and entry comments, names,
+extra fields) are scanned too. Text is scanned as written and as a reader recovers it: XML character
+and entity references decoded, tags, comments and processing instructions removed (quoted attribute
+values may hold `>`), CDATA unwrapped, so an escaped value or a text run that tags split is the
+credential it spells; a part that declares an entity is refused. A PDF is read as object syntax in
+one bounded pass, not by pattern: dictionary names are decoded (`/F#69lter` is `/Filter`), every
+string is decoded (hexadecimal, escaped literal, UTF-16 and UTF-8 text strings) and scanned, also
+inside inflated and unfiltered streams, and a stream's filter is read from its own dictionary. The
+file's own bytes are scanned and every Flate stream (object streams, annotations, form values,
+metadata) is inflated and scanned; a JPEG (`DCTDecode`), inflated first or not, gets the whole image
+admission below. A stream under any other filter, a filter stated unreadably (an indirect value), a
+`stream` keyword the reader did not take for a stream, syntax the reader cannot interpret, an
+encrypted PDF (`/Encrypt`, however spelled) and a PDF carrying an embedded file are refused. PNG and JPEG images, recognized by their signature, are allowed only when nothing hides in
 or behind them: their raw bytes are scanned like text, a PNG's chunks are walked from IHDR to a
 final IEND against a known set (a fixed-size Apple `iDOT` included) and its compressed text carriers
 (`zTXt`, compressed `iTXt`, `iCCP`) are inflated and scanned, and a JPEG's segments are walked from

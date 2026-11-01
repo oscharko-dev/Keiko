@@ -10,6 +10,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
+import { docxOf, withArchiveComment } from "../../../../tests/support/zip-fixture.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
@@ -304,6 +305,25 @@ describe("the credential floor on attached bytes", () => {
       refusal: "contains-credential",
     });
     expect(JSON.stringify(logs.events)).not.toContain(CONFIGURED_SECRET);
+  });
+  it("refuses a clean document whose ZIP archive comment holds a token, with no review", async () => {
+    const token = ["ghp", "abcdefghijklmnopqrstuvwxyz0123456789"].join("_");
+    writeFileSync(
+      join(root, "docs", "notes.docx"),
+      withArchiveComment(docxOf("Quarterly planning notes"), token),
+    );
+    connect({});
+    expect(
+      await previewJiraChatAttachment(deps(), chatId, ARGS("docs/notes.docx"), "c", LIMIT),
+    ).toBeUndefined();
+    expect(logs.events.at(-1)?.extra).toMatchObject({
+      stage: "review",
+      refusal: "contains-credential",
+    });
+    expect(
+      await source(() => ({ required: false }))({ ...REQUEST, path: "docs/notes.docx" }),
+    ).toMatchObject({ ok: false, reason: "permission-denied" });
+    expect(JSON.stringify(logs.events)).not.toContain(token);
   });
   it("refuses a kind of file it cannot scan, at both stages", async () => {
     writeFileSync(

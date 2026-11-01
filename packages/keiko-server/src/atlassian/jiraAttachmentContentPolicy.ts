@@ -6,6 +6,9 @@ import {
   readBoundedOoxmlPackage,
 } from "@oscharko-dev/keiko-local-knowledge";
 import { containsCredentialShape, redactCredentialShapes } from "@oscharko-dev/keiko-security";
+import { decodeXmlEntities } from "@oscharko-dev/keiko-workspace";
+import { markupText } from "./jiraAttachmentMarkupText.js";
+import { readPdfSyntax, type PdfSyntax } from "./jiraAttachmentPdfSyntax.js";
 
 /**
  * What may leave the machine as a Jira attachment (#4176). Secret exfiltration is a hard denial in
@@ -14,13 +17,17 @@ import { containsCredentialShape, redactCredentialShapes } from "@oscharko-dev/k
  *
  * - text (valid UTF-8, no NUL): the whole text is scanned;
  * - Word and Excel documents: their text is extracted with the Local Knowledge extractors and
- *   scanned, and then every part of the package (comments, headers, footers, properties, embedded
- *   media, any other entry) is inflated and scanned as text or checked as an image; a part that is
- *   neither, or a package that cannot be read whole, is not scannable;
- * - PDF documents: the page text is extracted and scanned, the file's own bytes are scanned, and
- *   every Flate stream (object streams, annotations, form values, metadata) is inflated and
- *   scanned; a stream under any other filter except a well-formed JPEG, an encrypted PDF and a PDF
- *   carrying an embedded file are not scannable;
+ *   scanned, then the ZIP container's own bytes (archive comment, names, extra fields) are scanned,
+ *   and every part of the package (comments, headers, footers, properties, embedded media, any other
+ *   entry) is inflated and scanned as text, as the markup reader recovers it (entities decoded, tags
+ *   removed) or checked as an image; a part that is neither, a part declaring an entity, or a
+ *   package that cannot be read whole, is not scannable;
+ * - PDF documents: the page text is extracted and scanned, the file's own bytes are scanned, the
+ *   object syntax is read in one bounded pass (names and strings decoded, filters read from the
+ *   stream's own dictionary), every decoded string is scanned, and every Flate stream (object
+ *   streams, annotations, form values, metadata) is inflated and scanned; a JPEG stream gets the
+ *   whole image admission; a stream under any other filter, a filter or structure the reader cannot
+ *   interpret, an encrypted PDF and a PDF carrying an embedded file are not scannable;
  * - PNG and JPEG images, recognized by their signature: their raw bytes are scanned like text,
  *   their structure is walked to its end, and every compressed text carrier (zTXt, compressed
  *   iTXt, iCCP) is inflated and scanned; a chunk or segment outside the known set, a malformed
@@ -221,9 +228,24 @@ function containsLiteral(bytes: Uint8Array, secrets: readonly string[]): boolean
   );
 }
 
-/** The shared credential floor: the same detectors the redaction layer applies to authorized content. */
-function textHoldsCredential(text: string, secrets: readonly string[]): boolean {
+function holdsCredential(text: string, secrets: readonly string[]): boolean {
   return containsCredentialShape(text) || redactCredentialShapes(text, secrets) !== text;
+}
+
+/**
+ * The shared credential floor: the same detectors the redaction layer applies to authorized content,
+ * over the text as written and over what a reader of the markup recovers. An XML-escaped value
+ * (`&amp;`, `&#x67;`) or a text run that tags split is not contiguous in the source, but it is the
+ * credential once the document is opened.
+ */
+function textHoldsCredential(text: string, secrets: readonly string[]): boolean {
+  if (holdsCredential(text, secrets)) return true;
+  if (text.includes("&") && holdsCredential(decodeXmlEntities(text), secrets)) return true;
+  return text.includes("<") && holdsCredential(markupText(text), secrets);
+}
+
+function latin1Of(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("latin1");
 }
 
 // Control characters other than tab, line breaks, form feed and escape (ANSI logs) mark binary data
@@ -274,6 +296,8 @@ function packagePartVerdict(
   budget: InflateBudget,
 ): AttachmentContentVerdict {
   const text = decodeText(part);
+  // A declared entity expands to text the scan cannot see in the source; OOXML has no use for one.
+  if (text?.includes("<!ENTITY") === true) return UNSCANNABLE;
   if (text !== undefined) return textHoldsCredential(text, secrets) ? CREDENTIAL : ALLOWED;
   return imageVerdict(part, secrets, budget) ?? UNSCANNABLE;
 }
@@ -294,6 +318,9 @@ async function packageVerdict(
     ...(signal === undefined ? {} : { signal }),
   });
   if (!read.ok) return UNSCANNABLE;
+  // The container carries text of its own (an archive comment, entry comments and names, extra
+  // fields, bytes between entries) that is not any part's content.
+  if (textHoldsCredential(latin1Of(bytes), secrets)) return CREDENTIAL;
   for (const part of read.parts.values()) {
     const verdict = packagePartVerdict(part, secrets, budget);
     if (!verdict.ok) return verdict;
@@ -301,20 +328,43 @@ async function packageVerdict(
   return ALLOWED;
 }
 
-const PDF_STREAM = /(?<!end)stream\r?\n/gu;
-const PDF_FILTER = /\/Filter\s*(\[[^\]]*\]|\/[A-Za-z0-9]+)/u;
-const PDF_NAME = /\/([A-Za-z0-9]+)/gu;
-// The one end-of-line marker a stream may carry before `endstream`.
-const PDF_STREAM_EOL = /(?:\r\n|\r|\n)$/u;
+// A `stream` keyword the reader did not take for the start of a stream is a disagreement between
+// this scan and a viewer that the scan cannot resolve.
+const PDF_STREAM_KEYWORD = /(?<!end)stream\r?\n/gu;
 
-/** The filter names of the stream whose dictionary ends where its `stream` keyword starts. */
-function pdfStreamFilters(raw: string, streamStart: number): readonly string[] {
-  const dictionary = raw.slice(Math.max(0, raw.lastIndexOf("obj", streamStart)), streamStart);
-  const filter = PDF_FILTER.exec(dictionary)?.[1] ?? "";
-  return [...filter.matchAll(PDF_NAME)].map((match) => match[1] ?? "");
+function stringsHoldCredential(syntax: PdfSyntax, secrets: readonly string[]): boolean {
+  const { stringText } = syntax;
+  // Strings that a content stream splits (a TJ array) read as one run.
+  return (
+    textHoldsCredential(stringText, secrets) ||
+    (stringText.includes("\n") && textHoldsCredential(stringText.replaceAll("\n", ""), secrets))
+  );
 }
 
-/** A Flate stream, optionally holding a JPEG: inflated and scanned, or checked as a whole JPEG. */
+/** A decoded stream: its text and the strings inside it, read as object syntax, are scanned. */
+function decodedStreamVerdict(
+  decoded: Uint8Array,
+  secrets: readonly string[],
+): AttachmentContentVerdict {
+  const text = latin1Of(decoded);
+  if (textHoldsCredential(text, secrets)) return CREDENTIAL;
+  const syntax = readPdfSyntax(text, "inflated");
+  if (syntax === undefined) return UNSCANNABLE;
+  return stringsHoldCredential(syntax, secrets) ? CREDENTIAL : ALLOWED;
+}
+
+/** A JPEG carrier gets the whole image admission, whether it was inflated first or not. */
+function jpegCarrierVerdict(
+  data: Uint8Array,
+  secrets: readonly string[],
+  budget: InflateBudget,
+): AttachmentContentVerdict {
+  return startsWith(data, JPEG)
+    ? (imageVerdict(data, secrets, budget) ?? UNSCANNABLE)
+    : UNSCANNABLE;
+}
+
+/** A Flate stream, optionally holding a JPEG: inflated and scanned, or admitted as a whole image. */
 function flateStreamVerdict(
   data: Uint8Array,
   inner: string | undefined,
@@ -324,42 +374,58 @@ function flateStreamVerdict(
   if (inner !== undefined && inner !== "DCTDecode") return UNSCANNABLE;
   const inflated = inflateBounded(data, budget);
   if (inflated === undefined) return UNSCANNABLE;
-  if (inner === "DCTDecode") return isWellFormedJpeg(inflated) ? ALLOWED : UNSCANNABLE;
-  return textHoldsCredential(inflated.toString("latin1"), secrets) ? CREDENTIAL : ALLOWED;
+  if (inner === "DCTDecode") return jpegCarrierVerdict(inflated, secrets, budget);
+  return decodedStreamVerdict(inflated, secrets);
 }
 
-/** One stream: no filter is covered by the raw scan, Flate is inflated, a JPEG must be whole. */
+/** One stream, by what its dictionary says: unfiltered and Flate are scanned, a JPEG admitted whole. */
 function pdfStreamVerdict(
   data: Uint8Array,
-  filters: readonly string[],
+  filters: readonly string[] | undefined,
   secrets: readonly string[],
   budget: InflateBudget,
 ): AttachmentContentVerdict {
+  // A dictionary that does not state its filters readably (an indirect value) cannot be trusted.
+  if (filters === undefined) return UNSCANNABLE;
   const [first, second, ...rest] = filters;
-  if (first === undefined) return ALLOWED;
+  if (first === undefined) return decodedStreamVerdict(data, secrets);
   if (rest.length > 0) return UNSCANNABLE;
   if (first === "FlateDecode") return flateStreamVerdict(data, second, secrets, budget);
-  return first === "DCTDecode" && second === undefined && isWellFormedJpeg(data)
-    ? ALLOWED
+  return first === "DCTDecode" && second === undefined
+    ? jpegCarrierVerdict(data, secrets, budget)
     : UNSCANNABLE;
 }
 
-/** The file's own bytes and every stream; an encrypted PDF or an embedded file is not scannable. */
+/** Whether every `stream` keyword in the file was read as the start of a stream. */
+function streamsAccountedFor(raw: string, syntax: PdfSyntax): boolean {
+  const spans = syntax.streams.map((stream) => [stream.keywordStart, stream.end] as const);
+  return [...raw.matchAll(PDF_STREAM_KEYWORD)].every((match) =>
+    spans.some(([from, to]) => match.index >= from && match.index <= to),
+  );
+}
+
+/** Names that make a PDF unscannable: encryption, and attached files with a payload of their own. */
+function hasUnscannableName(names: ReadonlySet<string>): boolean {
+  return [...names].some((name) => name === "Encrypt" || name.startsWith("EmbeddedFile"));
+}
+
+/** The file's own bytes, its decoded strings and every stream; an unreadable structure is refused. */
 function pdfBytesVerdict(
   bytes: Uint8Array,
   secrets: readonly string[],
   budget: InflateBudget,
 ): AttachmentContentVerdict {
-  const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("latin1");
+  const raw = latin1Of(bytes);
   if (textHoldsCredential(raw, secrets)) return CREDENTIAL;
+  const syntax = readPdfSyntax(raw, "file");
   if (raw.includes("/Encrypt") || raw.includes("/EmbeddedFile")) return UNSCANNABLE;
-  for (const match of raw.matchAll(PDF_STREAM)) {
-    const start = match.index + match[0].length;
-    const end = raw.indexOf("endstream", start);
-    if (end < 0) return UNSCANNABLE;
-    const body = raw.slice(start, end).replace(PDF_STREAM_EOL, "");
-    const data = bytes.subarray(start, start + body.length);
-    const verdict = pdfStreamVerdict(data, pdfStreamFilters(raw, match.index), secrets, budget);
+  // Names are compared decoded as well: `/Encr#79pt` is `/Encrypt`.
+  if (syntax === undefined || hasUnscannableName(syntax.names)) return UNSCANNABLE;
+  if (!streamsAccountedFor(raw, syntax)) return UNSCANNABLE;
+  if (stringsHoldCredential(syntax, secrets)) return CREDENTIAL;
+  for (const stream of syntax.streams) {
+    const data = bytes.subarray(stream.start, stream.end);
+    const verdict = pdfStreamVerdict(data, stream.filters, secrets, budget);
     if (!verdict.ok) return verdict;
   }
   return ALLOWED;
@@ -404,8 +470,7 @@ function imageVerdict(
 ): AttachmentContentVerdict | undefined {
   const png = startsWith(bytes, PNG);
   if (!png && !startsWith(bytes, JPEG)) return undefined;
-  const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length).toString("latin1");
-  if (textHoldsCredential(raw, secrets)) return CREDENTIAL;
+  if (textHoldsCredential(latin1Of(bytes), secrets)) return CREDENTIAL;
   if (!png) return isWellFormedJpeg(bytes) ? ALLOWED : UNSCANNABLE;
   const carriers = pngCarriers(bytes);
   return carriers === undefined ? UNSCANNABLE : inflatedCarriersVerdict(carriers, secrets, budget);

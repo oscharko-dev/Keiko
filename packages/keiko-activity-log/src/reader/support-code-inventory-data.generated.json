@@ -1099,6 +1099,8 @@
     "keiko-server/atlassian/httpPort",
     "keiko-server/atlassian/httpRequestLifecycle",
     "keiko-server/atlassian/jiraAttachmentContentPolicy",
+    "keiko-server/atlassian/jiraAttachmentMarkupText",
+    "keiko-server/atlassian/jiraAttachmentPdfSyntax",
     "keiko-server/atlassian/jiraChatAttachment",
     "keiko-server/atlassian/jiraChatAuthority",
     "keiko-server/atlassian/jiraChatBindingPatch",

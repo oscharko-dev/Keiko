@@ -1,7 +1,12 @@
 import { Buffer } from "node:buffer";
 import { deflateSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
-import { docxOf, pdfOf, zipTextEntries } from "../../../../tests/support/zip-fixture.js";
+import {
+  docxOf,
+  pdfOf,
+  withArchiveComment,
+  zipTextEntries,
+} from "../../../../tests/support/zip-fixture.js";
 import { admitAttachmentContent } from "./jiraAttachmentContentPolicy.js";
 
 const SECRET = ["configured", "provider", "literal", "0123456789"].join("-");
@@ -299,6 +304,196 @@ describe("compressed and unread carriers are scanned or refused", () => {
   });
   it("keeps a PDF whose Flate streams are clean", async () => {
     expect(await admit(pdfWithFlateStream(deflated("BT (fine) Tj ET")), "n.pdf")).toEqual({
+      ok: true,
+    });
+  });
+});
+
+// Independent review round 2 (#4182): a credential is the same credential after the document format
+// decodes it; the scan reads the decoded forms, or refuses what it cannot interpret.
+const AMP_SECRET = ["configured", "a&b", "literal", "0123456789"].join("-");
+const admitAmp = (bytes: Uint8Array, name: string): ReturnType<typeof admitAttachmentContent> =>
+  admitAttachmentContent({ bytes, name, secrets: [AMP_SECRET] });
+const CORE = "docProps/core.xml";
+
+describe("XML-decoded values are scanned in every OOXML part", () => {
+  it.each([
+    [
+      "an escaped configured literal in the core properties",
+      `<cp:coreProperties><dc:description>${AMP_SECRET.replace("&", "&amp;")}</dc:description></cp:coreProperties>`,
+    ],
+    [
+      "a numeric character reference in an attribute",
+      `<w:comment w:author="x" w:initials="${GHP.replace("g", "&#103;")}"/>`,
+    ],
+    [
+      "a token split across text runs",
+      `<w:p><w:r><w:t>${GHP.slice(0, 12)}</w:t></w:r><w:r><w:t>${GHP.slice(12)}</w:t></w:r></w:p>`,
+    ],
+    [
+      "a token split by a tag whose attribute holds a closing angle bracket",
+      `<w:t>${GHP.slice(0, 10)}<w:x a=">"/>${GHP.slice(10)}</w:t>`,
+    ],
+    ["a token split by a comment", `<w:t>${GHP.slice(0, 9)}<!-- > -->${GHP.slice(9)}</w:t>`],
+    ["a token in CDATA", `<w:t><![CDATA[${GHP}]]></w:t>`],
+  ])("refuses %s", async (_label, content) => {
+    const bytes = docxWith({ name: CORE, content });
+    expect(await admitAmp(bytes, "n.docx")).toEqual(CREDENTIAL);
+  });
+  it("refuses an entity declaration, which expands to text the source does not show", async () => {
+    const content = `<!DOCTYPE x [<!ENTITY a "${GHP.slice(0, 10)}"><!ENTITY b "${GHP.slice(10)}">]><x>&a;&b;</x>`;
+    expect(await admit(docxWith({ name: CORE, content }), "n.docx")).toEqual(UNSCANNABLE);
+  });
+  it("keeps clean markup, escaped text and a comparison in prose", async () => {
+    const content = `<cp:coreProperties><dc:title>Q&amp;A &lt;draft&gt; 1 &lt; 2</dc:title><!-- note --><x a="b>c"/></cp:coreProperties>`;
+    expect(await admitAmp(docxWith({ name: CORE, content }), "n.docx")).toEqual({ ok: true });
+  });
+});
+
+describe("the ZIP container's own metadata is scanned", () => {
+  it("refuses a recognized token in the archive comment of a clean document", async () => {
+    expect(await admit(withArchiveComment(docxOf("Quarterly notes"), GHP), "n.docx")).toEqual(
+      CREDENTIAL,
+    );
+  });
+  it("refuses a configured literal in the archive comment", async () => {
+    expect(
+      await admit(withArchiveComment(docxOf("Quarterly notes"), `x ${SECRET} y`), "n.docx"),
+    ).toEqual(CREDENTIAL);
+  });
+  it("keeps a document whose archive comment is clean", async () => {
+    const commented = withArchiveComment(docxOf("Quarterly notes"), "made by a tool");
+    expect(await admit(commented, "n.docx")).toEqual({ ok: true });
+  });
+});
+
+/** A text-layer PDF with more objects (source text) before its cross-reference table. */
+function pdfWithObjects(objects: readonly string[], trailerExtra = ""): Uint8Array {
+  const pdf = Buffer.from(pdfOf("Hello PDF")).toString("latin1");
+  const at = pdf.indexOf("xref");
+  const trailer = pdf.replace("/Size 6", `/Size 6 ${trailerExtra}`);
+  return Buffer.from(
+    `${trailer.slice(0, at)}${objects.join("\n")}\n${trailer.slice(at)}`,
+    "latin1",
+  );
+}
+const streamObject = (dictionary: string, data: Uint8Array): string =>
+  `6 0 obj << /Length ${String(data.length)} ${dictionary} >> stream\n${Buffer.from(data).toString("latin1")}\nendstream endobj`;
+const hex = (value: string): string => Buffer.from(value, "latin1").toString("hex");
+const utf16Hex = (value: string): string =>
+  `FEFF${Buffer.from(value, "utf16le").swap16().toString("hex")}`;
+
+describe("a PDF dictionary is read the way a viewer reads it", () => {
+  const carrier = deflated(`/Annot (${GHP})`);
+  it.each([
+    ["the plain spelling", "/Filter /FlateDecode"],
+    ["an escaped key", "/F#69lter /FlateDecode"],
+    ["an escaped value", "/Filter /Flate#44ecode"],
+    ["an array", "/Filter [/FlateDecode]"],
+    ["an escaped array element", "/Filter [/F#6Cate#44ecode]"],
+    ["a string that contains obj", "/Filter /FlateDecode /Note (obj)"],
+    ["a nested dictionary before it", "/DecodeParms << /Predictor 1 >> /Filter /FlateDecode"],
+  ])("refuses a deflated token behind %s", async (_label, dictionary) => {
+    const pdf = pdfWithObjects([streamObject(dictionary, carrier)]);
+    expect(await admit(pdf, "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("refuses a filter stated by an indirect reference, which it cannot read", async () => {
+    const pdf = pdfWithObjects([
+      streamObject("/Filter 7 0 R", carrier),
+      "7 0 obj /FlateDecode endobj",
+    ]);
+    expect(await admit(pdf, "n.pdf")).toEqual(UNSCANNABLE);
+  });
+  it("refuses an escaped Encrypt or EmbeddedFile name", async () => {
+    expect(await admit(pdfWithObjects([], "/Encr#79pt 9 0 R"), "n.pdf")).toEqual(UNSCANNABLE);
+    const embedded = pdfWithObjects(["7 0 obj << /Type /Embedded#46ile >> endobj"]);
+    expect(await admit(embedded, "n.pdf")).toEqual(UNSCANNABLE);
+  });
+  it("refuses a stream keyword it did not take for a stream", async () => {
+    const pdf = pdfWithObjects(["7 0 obj << /Note (a\nstream\nb) >> endobj"]);
+    expect(await admit(pdf, "n.pdf")).toEqual(UNSCANNABLE);
+  });
+  it("refuses a file whose syntax it cannot interpret", async () => {
+    expect(await admit(pdfWithObjects(["7 0 obj << /Title <zz> >> endobj"]), "n.pdf")).toEqual(
+      UNSCANNABLE,
+    );
+    expect(await admit(pdfWithObjects(["7 0 obj << /Title (open endobj"]), "n.pdf")).toEqual(
+      UNSCANNABLE,
+    );
+  });
+  it("keeps a PDF whose dictionaries and strings are clean", async () => {
+    const clean = pdfWithObjects(
+      [
+        "7 0 obj << /Title (Quarterly \\(draft\\) \\101) /Author <48656C6C6F> >> endobj",
+        streamObject("/Filter [/F#6Cate#44ecode]", deflated("BT (fine) Tj ET")),
+      ],
+      "/Info 7 0 R",
+    );
+    expect(await admit(clean, "n.pdf")).toEqual({ ok: true });
+  });
+});
+
+describe("decoded PDF strings are scanned", () => {
+  const objectOf = (title: string): string => `7 0 obj << /Title ${title} >> endobj`;
+  it.each([
+    ["a hexadecimal string", `<${hex(GHP)}>`],
+    ["a hexadecimal string with white space", `<${hex(GHP).replaceAll(/(..)/gu, "$1 ")}>`],
+    ["an escaped literal string", `(${GHP.replace("_", "\\137").replace("a", "\\141")})`],
+    ["a literal with a line continuation", `(${GHP.slice(0, 10)}\\\n${GHP.slice(10)})`],
+    ["a UTF-16 string", `<${utf16Hex(GHP)}>`],
+  ])("refuses %s in the document information", async (_label, title) => {
+    const pdf = pdfWithObjects([objectOf(title)], "/Info 7 0 R");
+    expect(await admit(pdf, "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("refuses a configured literal written as a hexadecimal string", async () => {
+    const pdf = pdfWithObjects([objectOf(`<${hex(SECRET)}>`)], "/Info 7 0 R");
+    expect(await admit(pdf, "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("refuses strings inside a deflated object stream and an unfiltered one", async () => {
+    const info = `<< /Title <${hex(GHP)}> >>`;
+    const flate = pdfWithObjects([streamObject("/Filter /FlateDecode", deflated(info))]);
+    expect(await admit(flate, "n.pdf")).toEqual(CREDENTIAL);
+    const plain = pdfWithObjects([streamObject("", text(info))]);
+    expect(await admit(plain, "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("refuses a token that a content stream splits across strings", async () => {
+    const content = `BT [(${GHP.slice(0, 8)}) -20 (${GHP.slice(8)})] TJ ET`;
+    const pdf = pdfWithObjects([streamObject("/Filter /FlateDecode", deflated(content))]);
+    expect(await admit(pdf, "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("keeps clean hexadecimal and UTF-16 document information", async () => {
+    const pdf = pdfWithObjects(
+      [`7 0 obj << /Title <${hex("Quarterly")}> /Subject <${utf16Hex("Planning")}> >> endobj`],
+      "/Info 7 0 R",
+    );
+    expect(await admit(pdf, "n.pdf")).toEqual({ ok: true });
+  });
+});
+
+describe("a JPEG inside a PDF stream gets the whole image admission", () => {
+  const comment = (value: string): Uint8Array => jpeg(jpegSegment(0xfe, text(value)));
+  const wrapped = (image: Uint8Array, filter: string, inflate = true): Uint8Array =>
+    pdfWithObjects([streamObject(filter, inflate ? deflateSync(image) : image)]);
+  const flateDct = "/Filter [/FlateDecode /DCTDecode]";
+  it("refuses a token in the COM segment of an inflated JPEG, as it does the bare image", async () => {
+    expect(await admit(comment(GHP), "a.jpg")).toEqual(CREDENTIAL);
+    expect(await admit(wrapped(comment(GHP), flateDct), "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("refuses a configured literal in the inflated JPEG", async () => {
+    expect(await admit(wrapped(comment(SECRET), flateDct), "n.pdf")).toEqual(CREDENTIAL);
+  });
+  it("refuses a JPEG with a token under DCTDecode alone", async () => {
+    expect(await admit(wrapped(comment(GHP), "/Filter /DCTDecode", false), "n.pdf")).toEqual(
+      CREDENTIAL,
+    );
+  });
+  it("refuses an inflated stream that is not a JPEG, or one that is malformed", async () => {
+    expect(await admit(wrapped(text("not an image"), flateDct), "n.pdf")).toEqual(UNSCANNABLE);
+    const trailing = Uint8Array.from([...jpeg(), 9, 9]);
+    expect(await admit(wrapped(trailing, flateDct), "n.pdf")).toEqual(UNSCANNABLE);
+  });
+  it("keeps a clean wrapped JPEG", async () => {
+    expect(await admit(wrapped(comment("a holiday photo"), flateDct), "n.pdf")).toEqual({
       ok: true,
     });
   });

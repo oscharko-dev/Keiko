@@ -22,6 +22,14 @@ export function docxOf(
   ]);
 }
 
+/** The archive with a comment appended to its end-of-central-directory record. */
+export function withArchiveComment(archive: Uint8Array, comment: string): Uint8Array {
+  const bytes = Buffer.from(archive);
+  const body = Buffer.from(comment, "latin1");
+  bytes.writeUInt16LE(body.length, bytes.length - 2);
+  return Uint8Array.from(Buffer.concat([bytes, body]));
+}
+
 /** A one-page PDF with a text layer holding `text`. */
 export function pdfOf(text: string, fontSize = 8): Uint8Array {
   const content = `BT /F1 ${String(fontSize)} Tf 10 72 Td (${text}) Tj ET`;
