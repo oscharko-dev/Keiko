@@ -110,6 +110,10 @@
     "./windows-local-volume": {
       "types": "./dist/windows-local-volume.d.ts",
       "import": "./dist/windows-local-volume.js"
+    },
+    "./windows-owner-private": {
+      "types": "./dist/windows-owner-private.d.ts",
+      "import": "./dist/windows-owner-private.js"
     }
   },
   "scripts": {

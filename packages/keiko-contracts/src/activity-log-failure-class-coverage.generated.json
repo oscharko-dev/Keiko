@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 386,
-  "completeClassCount": 386,
+  "supportedClassCount": 387,
+  "completeClassCount": 387,
   "completeness": "complete",
   "classes": [
     {
@@ -46953,6 +46953,62 @@
             "causeChain": false
           },
           "proofIds": ["security.windows-local-volume.refused.phase"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "windows-owner-private",
+      "requirementContract": "windows-owner-private",
+      "productSurfaces": ["keiko-security"],
+      "lifecycleTransitions": ["failure"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": [],
+        "end": [],
+        "failure": ["security.windows-owner-private.refused"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "security.windows-owner-private.refused",
+          "mode": "none"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": [],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "security.windows-owner-private.refused",
+          "owner": "keiko-security",
+          "category": "security",
+          "lifecycle": "failure",
+          "causal": "none",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "phase",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["security.windows-owner-private.refused.phase"],
           "replayReferences": [],
           "missingObligations": []
         }

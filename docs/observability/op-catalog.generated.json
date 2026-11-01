@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "77d504b9747ad36d038be4064edbf16e6dfbb25530cc32bee2d12cea9d7aa68a",
+    "catalogDigest": "e2635b96857b3d612d17a9190c83b3f5d26b609ea5e8dd667dceb348365dabc3",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -37596,6 +37596,49 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "security.windows-owner-private.refused",
+        "category": "security",
+        "owner": "keiko-security",
+        "emitter": "windows-owner-private.inspectWindowsOwnerPrivateFiles",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["input", "resolve", "inspect", "protect"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["windows-owner-private"],
+        "proofIds": ["security.windows-owner-private.refused.phase"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-security/src/windows-owner-private.ts:35",
+        "emitterSites": [
+          "packages/keiko-security/src/windows-owner-private.ts:284",
+          "packages/keiko-security/src/windows-owner-private.ts:354"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "category": "diagnostic",
         "owner": "keiko-cli",
         "emitter": "security-log.emitWindowsSystemBinaryMissing",
@@ -54189,6 +54232,32 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "windows-owner-private",
+        "requiredProductSurfaces": ["keiko-security"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": [],
+          "failure": ["security.windows-owner-private.refused"],
+          "loss": []
+        },
+        "requiredCausalOperations": [],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["security.windows-owner-private.refused"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "error-kind",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "windows-shortcut-system-binary",
         "requiredProductSurfaces": ["keiko-security"],
         "requiredLifecycleOperations": {
@@ -54576,8 +54645,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 386,
-      "completeClassCount": 386,
+      "supportedClassCount": 387,
+      "completeClassCount": 387,
       "completeness": "complete",
       "classes": [
         {
@@ -101895,6 +101964,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "windows-owner-private",
+          "requirementContract": "windows-owner-private",
+          "productSurfaces": ["keiko-security"],
+          "lifecycleTransitions": ["failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": [],
+            "failure": ["security.windows-owner-private.refused"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "security.windows-owner-private.refused",
+              "mode": "none"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "security.windows-owner-private.refused",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "failure",
+              "causal": "none",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.windows-owner-private.refused.phase"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "windows-shortcut-system-binary",
           "requirementContract": "windows-shortcut-system-binary",
           "productSurfaces": ["keiko-security"],
@@ -104737,6 +104862,12 @@
       "op": "security.windows-local-volume.refused",
       "category": "security",
       "site": "packages/keiko-security/src/windows-local-volume.ts:21",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.windows-owner-private.refused",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-owner-private.ts:38",
       "package": "keiko-security"
     },
     {
@@ -109699,6 +109830,7 @@
     "security.windows-lifecycle-opener.system-binary-missing",
     "security.windows-lifecycle-opener.system-root-refused",
     "security.windows-local-volume.refused",
+    "security.windows-owner-private.refused",
     "security.windows-portable-alert.system-binary-missing",
     "security.windows-portable-alert.system-root-refused",
     "security.windows-portable-legacy-launcher.system-binary-missing",

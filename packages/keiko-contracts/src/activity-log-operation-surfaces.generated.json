@@ -530,6 +530,7 @@
   "security.windows-lifecycle-opener.system-binary-missing": "runtime-packages",
   "security.windows-lifecycle-opener.system-root-refused": "runtime-packages",
   "security.windows-local-volume.refused": "runtime-packages",
+  "security.windows-owner-private.refused": "runtime-packages",
   "security.windows-portable-alert.system-binary-missing": "runtime-packages",
   "security.windows-portable-alert.system-root-refused": "runtime-packages",
   "security.windows-portable-legacy-launcher.system-binary-missing": "runtime-packages",

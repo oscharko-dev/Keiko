@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "77d504b9747ad36d038be4064edbf16e6dfbb25530cc32bee2d12cea9d7aa68a"
+    "catalogDigest": "e2635b96857b3d612d17a9190c83b3f5d26b609ea5e8dd667dceb348365dabc3"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 618,
-    "proofCount": 641,
-    "resolvedProofCount": 641,
-    "failureClassCount": 386,
+    "operationCount": 619,
+    "proofCount": 642,
+    "resolvedProofCount": 642,
+    "failureClassCount": 387,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -767,6 +767,7 @@
         "security.windows-lifecycle-opener.system-binary-missing",
         "security.windows-lifecycle-opener.system-root-refused",
         "security.windows-local-volume.refused",
+        "security.windows-owner-private.refused",
         "security.windows-portable-alert.system-binary-missing",
         "security.windows-portable-alert.system-root-refused",
         "security.windows-portable-legacy-launcher.system-binary-missing",
@@ -1179,6 +1180,7 @@
     "windows-alert-spawn": ["lifecycle-crash.dependency-failure"],
     "windows-authenticode-system-binary": ["runtime-packages.rejection"],
     "windows-local-volume": ["runtime-packages.rejection"],
+    "windows-owner-private": ["runtime-packages.rejection"],
     "windows-shortcut-system-binary": ["runtime-packages.dependency-failure"],
     "windows-shortcut-system-root": ["runtime-packages.rejection"],
     "windows-system-binary-unavailable": ["runtime-packages.dependency-failure"],
@@ -2803,6 +2805,9 @@
     ],
     "security.windows-local-volume.refused.phase": [
       "packages/keiko-security/src/windows-local-volume.test.ts"
+    ],
+    "security.windows-owner-private.refused.phase": [
+      "packages/keiko-security/src/windows-owner-private.test.ts"
     ],
     "security.windows-portable-alert.system-binary-missing.emitted-line": [
       "packages/keiko-cli/src/security-log.activity-log-proof.test.ts"
