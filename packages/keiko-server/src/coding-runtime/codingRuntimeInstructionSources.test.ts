@@ -187,12 +187,14 @@ describe("instruction discovery bounds", () => {
   });
 
   it("resolves the global configuration directory as the producer does", () => {
-    expect(globalOpenCodeConfigDirectory({}, "/Users/me")).toBe("/Users/me/.config/opencode");
+    expect(globalOpenCodeConfigDirectory({}, "/Users/me")).toBe(
+      join("/Users/me", ".config", "opencode"),
+    );
     expect(globalOpenCodeConfigDirectory({ XDG_CONFIG_HOME: "/x/config" }, "/Users/me")).toBe(
-      "/x/config/opencode",
+      join("/x/config", "opencode"),
     );
     expect(globalOpenCodeConfigDirectory({ XDG_CONFIG_HOME: "relative" }, "/Users/me")).toBe(
-      "/Users/me/.config/opencode",
+      join("/Users/me", ".config", "opencode"),
     );
   });
 

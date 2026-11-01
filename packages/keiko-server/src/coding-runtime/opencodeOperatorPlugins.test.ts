@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -101,7 +101,7 @@ function lineOf(records: readonly ServerLogEvent[]): Readonly<Record<string, unk
 }
 
 describe("the operator plugin registry (#3903 AC2)", () => {
-  const entry = { name: "audit", path: "/opt/keiko/plugins/audit.ts", sha256: DIGEST };
+  const entry = { name: "audit", path: resolve("/opt/keiko/plugins/audit.ts"), sha256: DIGEST };
 
   it("accepts the closed grammar with a workspace or an absolute source", () => {
     const workspace = { name: "lint", workspacePath: ".opencode/plugins/lint.js", sha256: DIGEST };
@@ -177,8 +177,16 @@ describe("the operator plugin registry (#3903 AC2)", () => {
       "plugin-invalid",
     ],
     [
+      "a backslash in a workspace path",
+      {
+        schemaVersion: 1,
+        plugins: [{ name: "lint", workspacePath: ".opencode\\plugins\\lint.js", sha256: DIGEST }],
+      },
+      "plugin-invalid",
+    ],
+    [
       "a non-module file",
-      { schemaVersion: 1, plugins: [{ ...entry, path: "/opt/keiko/audit.json" }] },
+      { schemaVersion: 1, plugins: [{ ...entry, path: resolve("/opt/keiko/audit.json") }] },
       "plugin-invalid",
     ],
     [
@@ -193,7 +201,7 @@ describe("the operator plugin registry (#3903 AC2)", () => {
   it("accepts a locally installed package with its entry module, and refuses an unsafe entry", () => {
     const entry = {
       name: "lint",
-      path: "/opt/keiko/plugins/lint",
+      path: resolve("/opt/keiko/plugins/lint"),
       entry: "node_modules/opencode-lint/dist/index.js",
       sha256: DIGEST,
     };
