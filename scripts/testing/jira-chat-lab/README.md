@@ -615,9 +615,13 @@ with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mj
 # Once per session: the empty work project REQ and the report project RPT with known ground truth
 node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session
 
-# Once per session, after the seed: a real estimate field for RPT (Story Points on the project's
-# screens, the seed's estimates on every Task, fieldIds.storyPoints and the Tasks' "estimate"
-# deviations in requirements-truth.json). Idempotent; without it S10 cannot grade estimate totals.
+# Once per session, after the seed: a real estimate for RPT. Story Points where Jira offers the
+# field on Task create and edit (found by schema, put on the project's screens); otherwise Jira's
+# time tracking (Original Estimate, one hour per seeded point, so time tracking must be enabled).
+# It writes the seed's estimates on every Task, then records fieldIds.storyPoints (the field the
+# oracle sums), estimate {fieldId, writeFieldId, unit, label} and the Tasks' "estimate" deviations
+# in requirements-truth.json. S10 asks for time-tracking totals in hours and grades them exactly
+# against the seconds Jira holds. Idempotent; without it S10 cannot grade estimate totals.
 node scripts/testing/jira-chat-lab/requirements/seed-estimates.mjs /absolute/private/session
 
 # Fast probes only (seconds, no model)

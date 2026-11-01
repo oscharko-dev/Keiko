@@ -4,7 +4,8 @@
 // The answer has to follow a strict line format the prompt itself asks for:
 //   ANZAHL;<type>;<status>;<count>        one line per type/status combination
 //   EPIC;<key>;<members>;<done members>   one line per epic
-//   SCHÄTZUNG;<total>;<done>;<remaining>  one line (only when the instance has an estimate field)
+//   SCHÄTZUNG;<total>;<done>;<remaining>  one line (only when the instance has an estimate field;
+//                                         a time-tracking estimate is asked for in hours)
 
 const DONE_CATEGORY = "done";
 const EPSILON = 1e-6;
@@ -62,22 +63,47 @@ function epicProgress(issues, epicLink) {
 
 const round6 = (value) => Math.round(value * 1e6) / 1e6;
 
-function estimateTotals(issues, field) {
+const SECONDS_PER_HOUR = 3600;
+
+/** The estimate the lab recorded in the truth: the field summed, its unit and its name. */
+export function estimateOf(truth) {
+  if (truth.estimate !== undefined) return truth.estimate;
+  const id = truth.fieldIds.storyPoints;
+  return id === undefined
+    ? undefined
+    : { fieldId: id, writeFieldId: id, unit: "points", label: "Story Points" };
+}
+
+/** The field ids a template and a compliance report name: the estimate by the id it is written with. */
+export function complianceFieldIds(truth) {
+  const estimate = estimateOf(truth);
+  return estimate === undefined
+    ? truth.fieldIds
+    : { ...truth.fieldIds, storyPoints: estimate.writeFieldId };
+}
+
+/** Sums are taken in the field's own unit; seconds convert to hours exactly, once, after summing. */
+function estimateTotals(issues, field, divisor) {
   const estimated = issues.filter((issue) => typeof issue.fields[field] === "number");
   if (estimated.length === 0) return undefined;
   const total = estimated.reduce((sum, issue) => sum + issue.fields[field], 0);
   const done = estimated
     .filter((issue) => isDone(issue))
     .reduce((sum, issue) => sum + issue.fields[field], 0);
-  return { total: round6(total), done: round6(done), remaining: round6(total - done) };
+  return {
+    total: round6(total / divisor),
+    done: round6(done / divisor),
+    remaining: round6((total - done) / divisor),
+  };
 }
 
 /**
  * The expected figures of a project from its issues. `issues` must carry issuetype, status (with
  * its status category), parent and the Epic Link and estimate fields of `fieldIds`. A figure whose
  * input the instance does not provide is `undefined`, and the journey then does not grade it.
+ * `estimate` (the truth's `estimate`) names the unit: seconds are reported in hours.
  */
-export function progressTruth(issues, fieldIds = {}) {
+export function progressTruth(issues, fieldIds = {}, estimate = undefined) {
   const categoriesKnown = issues.every((issue) => typeof categoryOf(issue) === "string");
   const { epicLink, storyPoints } = fieldIds;
   return {
@@ -86,7 +112,7 @@ export function progressTruth(issues, fieldIds = {}) {
     epics: categoriesKnown && epicLink !== undefined ? epicProgress(issues, epicLink) : undefined,
     estimate:
       categoriesKnown && storyPoints !== undefined
-        ? estimateTotals(issues, storyPoints)
+        ? estimateTotals(issues, storyPoints, estimate?.unit === "seconds" ? SECONDS_PER_HOUR : 1)
         : undefined,
   };
 }

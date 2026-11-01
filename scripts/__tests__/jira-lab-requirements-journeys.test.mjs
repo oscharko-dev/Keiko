@@ -8,7 +8,11 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCorpus, STRUCTURE_RULES } from "../testing/jira-chat-lab/requirements/corpus.mjs";
 import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.mjs";
-import { parseProgressAnswer } from "../testing/jira-chat-lab/requirements/progress-report.mjs";
+import {
+  complianceFieldIds,
+  parseProgressAnswer,
+  progressTruth,
+} from "../testing/jira-chat-lab/requirements/progress-report.mjs";
 import { parseCsv } from "../testing/jira-chat-lab/requirements/report-export.mjs";
 import {
   EPIC_SUMMARY_PATTERN,
@@ -192,6 +196,119 @@ describe("S10 progress of a project", () => {
 
   it("parses decimals with a comma", () => {
     expect(parseProgressAnswer("SCHÄTZUNG;1,5;1;0,5").estimate).toEqual([1.5, 1, 0.5]);
+  });
+});
+
+describe("S10 with a time-tracking estimate", () => {
+  const HOUR = 3600;
+  const ESTIMATE = {
+    fieldId: "timeoriginalestimate",
+    writeFieldId: "timetracking",
+    unit: "seconds",
+    label: "Original Estimate",
+  };
+  const truth = {
+    fieldIds: { ...FIELDS, storyPoints: "timeoriginalestimate" },
+    estimate: ESTIMATE,
+  };
+  const seconds = (hours) => ({ timeoriginalestimate: hours * HOUR });
+  const world = [
+    issue("RPT-1", "Epic", "To Do"),
+    issue("RPT-3", "Task", "Done", { [FIELDS.epicLink]: "RPT-1", ...seconds(3) }),
+    issue("RPT-4", "Task", "In Progress", { [FIELDS.epicLink]: "RPT-1", ...seconds(2) }),
+    issue("RPT-7", "Task", "Done", { ...seconds(5) }),
+  ];
+  const BASE = [
+    "ANZAHL;Epic;To Do;1",
+    "ANZAHL;Task;Done;2",
+    "ANZAHL;Task;In Progress;1",
+    "EPIC;RPT-1;2;1",
+  ];
+  const grade = (estimateLine, issues = world) =>
+    JOURNEYS.S10(
+      context({ issues, truth, act: () => ({ answer: [...BASE, estimateLine].join("\n") }) }),
+      CHAT,
+    );
+
+  it("is green for the exact hours and covers the estimate obligation", async () => {
+    const check = await grade("SCHÄTZUNG;10;8;2");
+    expect(check.status).toBe("green");
+    expect(check.covers).toContain("estimate-totals");
+  });
+
+  it.each([
+    ["the raw seconds", "SCHÄTZUNG;36000;28800;7200"],
+    ["a wrong total", "SCHÄTZUNG;11;8;3"],
+    ["swapped done and remaining", "SCHÄTZUNG;10;2;8"],
+  ])("is red for %s", async (_name, line) => {
+    expect((await grade(line)).status).toBe("red");
+  });
+
+  it("converts fractional hours exactly", async () => {
+    const half = [
+      issue("RPT-1", "Epic", "To Do"),
+      issue("RPT-3", "Task", "Done", { [FIELDS.epicLink]: "RPT-1", timeoriginalestimate: 5400 }),
+    ];
+    const answer = [
+      "ANZAHL;Epic;To Do;1",
+      "ANZAHL;Task;Done;1",
+      "EPIC;RPT-1;1;1",
+      "SCHÄTZUNG;1,5;1,5;0",
+    ].join("\n");
+    const check = await JOURNEYS.S10(
+      context({ issues: half, truth, act: () => ({ answer }) }),
+      CHAT,
+    );
+    expect(check.status).toBe("green");
+    expect(progressTruth(half, truth.fieldIds, ESTIMATE).estimate).toEqual({
+      total: 1.5,
+      done: 1.5,
+      remaining: 0,
+    });
+  });
+
+  it("names the estimate by the id it is written with in templates and compliance", () => {
+    expect(complianceFieldIds(truth).storyPoints).toBe("timetracking");
+    expect(complianceFieldIds({ fieldIds: FIELDS }).storyPoints).toBe(FIELDS.storyPoints);
+    expect(complianceFieldIds({ fieldIds: { epicLink: "x" } })).toEqual({ epicLink: "x" });
+  });
+
+  it("keeps story points untouched when no unit is recorded", () => {
+    const points = [issue("RPT-3", "Task", "Done", { [FIELDS.storyPoints]: 3 })];
+    expect(progressTruth(points, FIELDS).estimate.total).toBe(3);
+    expect(progressTruth(points, FIELDS, { unit: "points" }).estimate.total).toBe(3);
+  });
+
+  it("asks for hours of the Original Estimate and names the recorded field", async () => {
+    const prompts = [];
+    const ctx = context({ issues: world, truth });
+    const turn = ctx.turn;
+    ctx.turn = (chat, prompt) => {
+      prompts.push(prompt);
+      return turn(chat, prompt);
+    };
+    await JOURNEYS.S10(ctx, CHAT);
+    expect(prompts[0]).toContain("in Stunden");
+    expect(prompts[0]).toContain("Original Estimate");
+    expect(prompts[0]).not.toContain("Story Points");
+  });
+
+  it("names the recorded story-points field in the points prompt", async () => {
+    const prompts = [];
+    const ctx = context({
+      issues: [],
+      truth: {
+        estimate: { fieldId: "customfield_10002", unit: "points", label: "Aufwandspunkte" },
+      },
+    });
+    const turn = ctx.turn;
+    ctx.turn = (chat, prompt) => {
+      prompts.push(prompt);
+      return turn(chat, prompt);
+    };
+    await JOURNEYS.S10(ctx, CHAT);
+    expect(prompts[0]).toContain("Aufwandspunkte");
+    expect(prompts[0]).not.toContain("Stunden");
   });
 });
 

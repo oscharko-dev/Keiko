@@ -1,20 +1,50 @@
-// Lab setup for the estimate field of the report project (#4174, scenario S10).
-// A Jira Software instance only offers Story Points on a project's screens when the lab puts it
-// there; without it the report journeys cannot grade estimate totals and S10 stays partial. This
-// module finds the instance's estimate field by schema (never by id or name), puts it on the
-// project's issue screens, writes the seed's deterministic estimates onto the seeded Tasks and
-// brings the ground truth in line with what Jira holds afterwards. Every function takes a `jira`
-// port, so the logic is unit-tested without HTTP:
+// Lab setup for the estimate of the report project (#4174, scenario S10).
+// The report journeys can only grade estimate totals when the seeded Tasks carry an estimate. This
+// module picks the estimate the instance can really hold on a Task, puts it on the project's issue
+// screens, writes the seed's deterministic estimates onto the seeded Tasks and brings the ground
+// truth in line with what Jira holds afterwards:
+//   1. a story-points field, found by schema (never by id or name): the Jira Software story-points
+//      custom type, else the field the project's board estimates with. Used only when Jira offers
+//      it on the Task create and edit screens (its context may cover Epic and Story only);
+//   2. otherwise Jira's system time tracking (Original Estimate, read back in seconds).
+// Every function takes a `jira` port, so the logic is unit-tested without HTTP:
 //   jira.call(name, method, path, body?, expected?) -> JSON value, throws on an unexpected status
 //   jira.request(method, path, body?)               -> { status, value }, never throws
 // Lab-side code may know Jira Software's field schemas; product code may not.
 
 const JSW_STORY_POINTS = "com.pyxis.greenhopper.jira:jsw-story-points";
 const PAGE = 100;
+const SECONDS_PER_HOUR = 3600;
 
 /** The seed rule of seed-projects.mjs: points `(n % 5) + 1`, every 13th Task left unestimated. */
 export const pointsFor = (n) => (n % 5) + 1;
 export const isUnestimated = (n) => n % 13 === 0;
+
+/**
+ * What the oracle sums (`fieldId`, in `unit`) and what is written and placed on screens
+ * (`writeFieldId`). Time tracking keeps one hour per seeded point.
+ */
+export const TIME_TRACKING = {
+  fieldId: "timeoriginalestimate",
+  writeFieldId: "timetracking",
+  unit: "seconds",
+  label: "Original Estimate",
+};
+
+const pointsTarget = (field) => ({
+  fieldId: field.id,
+  writeFieldId: field.id,
+  unit: "points",
+  label: field.name ?? "Story Points",
+});
+
+const scaleOf = (target) => (target.unit === "seconds" ? SECONDS_PER_HOUR : 1);
+
+function writePayload(target, value) {
+  if (target.unit !== "seconds") return { [target.fieldId]: value };
+  const originalEstimate = value === null ? "" : `${String(value / SECONDS_PER_HOUR)}h`;
+  return { [target.writeFieldId]: { originalEstimate } };
+}
 
 const isNumber = (field) => field?.schema?.type === "number";
 const asList = (value) => (Array.isArray(value) ? value : (value?.values ?? []));
@@ -35,8 +65,8 @@ async function boardEstimationField(jira, projectKey) {
 }
 
 /**
- * The instance's estimate field: the Jira Software story-points custom type first, otherwise the
- * field the project's board estimates with. `undefined` when the instance has none.
+ * The instance's story-points field: the Jira Software story-points custom type first, otherwise
+ * the field the project's board estimates with. `undefined` when the instance has none.
  */
 export async function discoverEstimateField(jira, projectKey) {
   const numeric = (await jira.call("fields", "GET", "/rest/api/2/field")).filter(isNumber);
@@ -46,9 +76,9 @@ export async function discoverEstimateField(jira, projectKey) {
   const chosen = typed.length > 1 ? typed.filter((field) => field.id === board) : typed;
   if (typed.length > 1 && chosen.length !== 1)
     throw new TypeError("More than one story-points field; cannot choose");
-  if (chosen.length === 1) return { id: chosen[0].id, source: "custom-type" };
+  if (chosen.length === 1) return { ...chosen[0], source: "custom-type" };
   const viaBoard = numeric.find((field) => field.id === board);
-  return viaBoard === undefined ? undefined : { id: viaBoard.id, source: "board-estimation" };
+  return viaBoard === undefined ? undefined : { ...viaBoard, source: "board-estimation" };
 }
 
 /** Whether the create screen of each issue type and the edit screen of a Task offer the field. */
@@ -103,15 +133,15 @@ export async function ensureOnScreens(jira, projectKey, fieldId) {
   return outcome;
 }
 
-/** Per Task of the truth, the estimate the seed rule assigns (`null`: left unestimated). */
-export function expectedEstimates(truth) {
+/** Per Task of the truth, the estimate the seed rule assigns, in the target's unit (`null`: none). */
+export function expectedEstimates(truth, target) {
   const tasks = truth.issues.filter((issue) => issue.type === "Task");
   return new Map(
     tasks.map((task, index) => {
       const n = index + 1;
       if (task.points !== pointsFor(n))
         throw new TypeError(`Truth Task ${task.key} does not follow the seed estimate rule`);
-      return [task.key, isUnestimated(n) ? null : task.points];
+      return [task.key, isUnestimated(n) ? null : task.points * scaleOf(target)];
     }),
   );
 }
@@ -129,13 +159,13 @@ export async function readEstimates(jira, projectKey, fieldId) {
 }
 
 /** Writes the expected estimates that differ from what Jira holds; returns how many it wrote. */
-export async function writeEstimates(jira, fieldId, expected, current) {
+export async function writeEstimates(jira, target, expected, current) {
   let written = 0;
   for (const [key, value] of expected) {
     if (!current.has(key)) throw new TypeError(`Seeded Task ${key} is missing in Jira`);
     if (current.get(key) === value) continue;
     const result = await jira.request("PUT", `/rest/api/2/issue/${key}`, {
-      fields: { [fieldId]: value },
+      fields: writePayload(target, value),
     });
     if (result.status !== 204)
       throw new TypeError(`Estimate write for ${key} rejected: status ${String(result.status)}`);
@@ -145,59 +175,70 @@ export async function writeEstimates(jira, fieldId, expected, current) {
 }
 
 /**
- * The truth file after the estimates exist: `fieldIds.storyPoints` is recorded and each Task's
- * "estimate" deviation (the S11 compliance truth) follows what Jira holds, appended last as the
- * seed does. Nothing else changes.
+ * The truth file after the estimates exist: `fieldIds.storyPoints` names the field whose numeric
+ * value the oracle sums, `estimate` its unit and label, and each Task's "estimate" deviation (the
+ * S11 compliance truth) follows what Jira holds, appended last as the seed does. Nothing else
+ * changes.
  */
-export function syncTruth(truth, fieldId, actual) {
+export function syncTruth(truth, target, actual) {
   const issues = truth.issues.map((issue) => {
     if (issue.type !== "Task") return issue;
     const deviations = issue.deviations.filter((code) => code !== "estimate");
     if (actual.get(issue.key) === null) deviations.push("estimate");
     return { ...issue, deviations };
   });
-  return { ...truth, fieldIds: { ...truth.fieldIds, storyPoints: fieldId }, issues };
+  return {
+    ...truth,
+    fieldIds: { ...truth.fieldIds, storyPoints: target.fieldId },
+    estimate: { ...target },
+    issues,
+  };
 }
 
-async function findField(jira, truth) {
-  const found = await discoverEstimateField(jira, truth.projects.report);
-  if (found === undefined)
-    throw new TypeError(
-      "This Jira instance has no estimate field: no Jira Software story-points field and no board estimation field. Create Story Points first.",
-    );
-  const recorded = truth.fieldIds.storyPoints;
-  if (recorded !== undefined && recorded !== found.id)
-    throw new TypeError("The truth file records a different estimate field than the instance has");
-  return found;
-}
-
-async function makeOffered(jira, project, taskKey, fieldId) {
+/** Puts `fieldId` on the screens unless Jira already offers it; `undefined` if it still does not. */
+async function placeField(jira, project, taskKey, fieldId) {
   let offered = await offeredOn(jira, project, taskKey, fieldId);
   let screens = { added: 0, present: 0, viaDefault: false };
   if (!isOffered(offered)) {
     screens = await ensureOnScreens(jira, project, fieldId);
     offered = await offeredOn(jira, project, taskKey, fieldId);
   }
-  if (!isOffered(offered))
+  return isOffered(offered) ? { offered, screens } : undefined;
+}
+
+/** Story points where Jira offers them on Task, otherwise time tracking; fails if neither is. */
+async function chooseEstimate(jira, project, taskKey) {
+  const found = await discoverEstimateField(jira, project);
+  if (found !== undefined) {
+    const placed = await placeField(jira, project, taskKey, found.id);
+    if (placed !== undefined)
+      return { target: pointsTarget(found), source: found.source, ...placed };
+  }
+  const placed = await placeField(jira, project, taskKey, TIME_TRACKING.writeFieldId);
+  if (placed === undefined)
     throw new TypeError(
-      "The estimate field is not offered on the Task create and edit screens; check the field context and the project's screen scheme",
+      "Neither a story-points field nor time tracking is offered on the Task create and edit screens; enable time tracking in Jira or widen the story-points field context",
     );
-  return { offered, screens };
+  return { target: TIME_TRACKING, source: "time-tracking", ...placed };
 }
 
 /** The whole setup step; returns a body-free summary. `save` persists the new truth. */
 export async function seedEstimates(jira, truth, save) {
   const project = truth.projects.report;
-  const expected = expectedEstimates(truth);
-  const found = await findField(jira, truth);
-  const placement = await makeOffered(jira, project, expected.keys().next().value, found.id);
-  const current = await readEstimates(jira, project, found.id);
-  const written = await writeEstimates(jira, found.id, expected, current);
-  const actual = await readEstimates(jira, project, found.id);
+  const taskKey = truth.issues.find((issue) => issue.type === "Task")?.key;
+  if (taskKey === undefined) throw new TypeError("The truth file holds no Task");
+  const { target, ...placement } = await chooseEstimate(jira, project, taskKey);
+  const recorded = truth.fieldIds.storyPoints;
+  if (recorded !== undefined && recorded !== target.fieldId)
+    throw new TypeError("The truth file records a different estimate field than the instance has");
+  const expected = expectedEstimates(truth, target);
+  const current = await readEstimates(jira, project, target.fieldId);
+  const written = await writeEstimates(jira, target, expected, current);
+  const actual = await readEstimates(jira, project, target.fieldId);
   for (const [key, value] of expected)
     if (actual.get(key) !== value)
       throw new TypeError(`Jira does not hold the expected estimate for ${key}`);
-  save(syncTruth(truth, found.id, actual));
+  save(syncTruth(truth, target, actual));
   const unestimated = [...actual.values()].filter((value) => value === null).length;
-  return { source: found.source, ...placement, written, tasks: actual.size, unestimated };
+  return { ...placement, estimate: target, written, tasks: actual.size, unestimated };
 }

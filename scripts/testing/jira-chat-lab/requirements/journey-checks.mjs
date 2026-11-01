@@ -40,7 +40,12 @@ import { everyFormatUsable } from "./formats.mjs";
 import { bugWithRelationAndLink, subtasksUnderTask } from "./hierarchy.mjs";
 import { modesAndReadableApproval } from "./modes.mjs";
 import { rerunCreatesNoDuplicates } from "./rerun.mjs";
-import { gradeProgress, progressTruth } from "./progress-report.mjs";
+import {
+  complianceFieldIds,
+  estimateOf,
+  gradeProgress,
+  progressTruth,
+} from "./progress-report.mjs";
 import {
   computedCommentTexts,
   finishedReports,
@@ -216,22 +221,25 @@ const PROGRESS_FIELDS = (fieldIds) =>
     .filter((field) => field !== undefined)
     .join(",");
 
-const PROGRESS_PROMPT = (withEstimate) =>
+const estimateLine = (estimate) =>
+  estimate.unit === "seconds"
+    ? `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe der ursprünglichen Schätzung (${estimate.label}) in Stunden über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`
+    : `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe des Feldes ${estimate.label} über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`;
+
+/** The S10 prompt; `estimate` names the field the instance estimates with (none: no line asked). */
+export const PROGRESS_PROMPT = (estimate) =>
   [
     "Werte den Fortschritt des Jira-Projekts RPT aus. Antworte ausschließlich mit Zeilen in genau diesen Formaten, ohne weitere Zeilen:",
     "ANZAHL;<Vorgangstyp>;<Status>;<Anzahl> - eine Zeile je Kombination aus Vorgangstyp und Status, die im Projekt vorkommt (alle Vorgänge des Projekts, auch Epics).",
     "EPIC;<Epic-Schlüssel>;<Anzahl>;<davon erledigt> - eine Zeile je Epic des Projekts: die Anzahl aller dem Epic zugeordneten Vorgänge (Tasks, Bugs und deren Sub-Tasks, ohne das Epic selbst) und wie viele davon in der Statuskategorie Done sind.",
-    ...(withEstimate
-      ? [
-          "SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe des Feldes Story Points über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.",
-        ]
-      : []),
+    ...(estimate === undefined ? [] : [estimateLine(estimate)]),
   ].join("\n");
 
 async function projectProgress(ctx, chat) {
-  const turn = await ctx.turn(chat, PROGRESS_PROMPT(ctx.truth.fieldIds.storyPoints !== undefined));
+  const turn = await ctx.turn(chat, PROGRESS_PROMPT(estimateOf(ctx.truth)));
   const issues = await ctx.search("project = RPT", PROGRESS_FIELDS(ctx.truth.fieldIds));
-  const grade = gradeProgress(turn.answer, progressTruth(issues, ctx.truth.fieldIds));
+  const truth = progressTruth(issues, ctx.truth.fieldIds, ctx.truth.estimate);
+  const grade = gradeProgress(turn.answer, truth);
   const parts = [
     ["counts-by-type-status", grade.counts],
     ["per-epic-progress", grade.epics],
@@ -354,7 +362,12 @@ async function complianceReport(ctx, chat) {
       [],
     );
   }
-  const grade = gradeDeviationReport(turn.answer, ctx.truth.issues, structured, ctx.truth.fieldIds);
+  const grade = gradeDeviationReport(
+    turn.answer,
+    ctx.truth.issues,
+    structured,
+    complianceFieldIds(ctx.truth),
+  );
   return result(
     grade.keysOk && grade.detailOk ? "green" : "red",
     turn,
@@ -450,7 +463,7 @@ export const JOURNEYS = {
   S10: (ctx, chat) => projectProgress(ctx, chat),
   S11: (ctx, chat) =>
     // AC1 before AC3: the lead's templates for RPT are the structure the compliance check applies.
-    withTemplates(ctx.http, complianceTemplates("RPT", ctx.truth.fieldIds), () =>
+    withTemplates(ctx.http, complianceTemplates("RPT", complianceFieldIds(ctx.truth)), () =>
       complianceReport(ctx, chat),
     ),
   S12: (ctx, chat) => coverageMatrix(ctx, chat),
