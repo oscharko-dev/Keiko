@@ -615,10 +615,17 @@ it("names Keiko's closed reason on the settled line of a write refused before di
 
   expect(f.writes()).toBe(0);
   const line = settledMutationLine(f.logs);
-  expect(line).toMatchObject({ outcome: "rejected", refusalReason: "field-validation" });
-  expect(line).not.toHaveProperty("fieldValidation");
+  // The refusal now names its argument (#4173); the line keeps only the closed class, never the
+  // argument's name or the sentence the model reads.
+  expect(line).toMatchObject({
+    outcome: "rejected",
+    refusalReason: "field-validation",
+    fieldValidation: "required-field",
+  });
   expect(line).not.toHaveProperty("rejection");
-  expect(f.logs.lines().join()).not.toMatch(/synthetic-user|SYN-1/u);
+  expect(f.logs.lines().join()).not.toMatch(
+    /synthetic-user|SYN-1|assigneeName|Nothing was changed/u,
+  );
 });
 it("names the closed field-validation class of a field Keiko refused before dispatch", async () => {
   const f = await fixture();
