@@ -1,12 +1,13 @@
 import { observedFailureQuery } from "../../../../tests/support/observed-failure-query.js";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, linkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, linkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { nodeWorkspaceFs, type WorkspaceDirEntry } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, type TestContext } from "vitest";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { plantDirectoryRedirect, plantSymlinkOrSkip } from "../symlinkFixture.test-support.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { formatServerLogLine } from "@oscharko-dev/keiko-activity-log";
 import {
@@ -267,7 +268,8 @@ describe("production coding repository handler composition", () => {
       fs: {
         ...nodeWorkspaceFs,
         realPath: (path): string => {
-          if (path.endsWith("/dist/vanished.ts")) {
+          // Host separators: a Windows listing reaches this hook with backslashes.
+          if (path.replaceAll("\\", "/").endsWith("/dist/vanished.ts")) {
             disappeared += 1;
             rmSync(path, { force: true });
           }
@@ -514,16 +516,32 @@ describe("production coding repository handler composition", () => {
     });
     expect(events.filter((event) => event.op.endsWith("settled"))).toHaveLength(1);
   });
-  it.each([".env", "src/link.ts", "src/hard.ts"])(
+  // Each case plants only its own alias, so a Windows host without symlink privilege skips the file
+  // symlink case alone; the junction case exercises the same escape without that privilege.
+  const plantAlias: Readonly<
+    Record<string, (context: TestContext, root: string, outside: string) => void>
+  > = {
+    ".env": (_context, root) => {
+      writeFileSync(join(root, ".env"), "PRIVATE_KEY=external-value");
+    },
+    "src/link.ts": (context, root, outside) => {
+      plantSymlinkOrSkip(context, join(outside, "private.ts"), join(root, "src/link.ts"));
+    },
+    "src/hard.ts": (_context, root, outside) => {
+      linkSync(join(outside, "private.ts"), join(root, "src/hard.ts"));
+    },
+    "src/junction/private.ts": (_context, root, outside) => {
+      plantDirectoryRedirect(outside, join(root, "src/junction"));
+    },
+  };
+  it.for(Object.keys(plantAlias))(
     "rejects protected or aliased ranged reads: %s",
-    async (path) => {
+    async (path, testContext) => {
       const { root, handler } = fixture();
       const outside = mkdtempSync(join(tmpdir(), "keiko-h1-outside-"));
       roots.push(outside);
       writeFileSync(join(outside, "private.ts"), "private external body");
-      writeFileSync(join(root, ".env"), "PRIVATE_KEY=external-value");
-      symlinkSync(join(outside, "private.ts"), join(root, "src/link.ts"));
-      linkSync(join(outside, "private.ts"), join(root, "src/hard.ts"));
+      plantAlias[path]?.(testContext, root, outside);
       expect(
         await handler.invoke(
           { kind: "read", path, startLine: 1, endLine: 1, maxBytes: 512 },

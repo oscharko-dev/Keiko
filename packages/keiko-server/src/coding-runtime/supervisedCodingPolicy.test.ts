@@ -3,6 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+  WINDOWS_HOST,
+} from "../symlinkFixture.test-support.js";
+
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateCodingWorkbenchEvidenceRecord } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-evidence";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
@@ -59,8 +65,16 @@ function workspaceFixture(): { readonly root: string; readonly outside: string }
   mkdirSync(join(root, "src"), { recursive: true });
   writeFileSync(join(root, "src", "allowed.ts"), "export const allowed = true;\n", "utf8");
   writeFileSync(join(outside, "secret.ts"), "export const secret = true;\n", "utf8");
-  symlinkSync(join(outside, "secret.ts"), join(root, "src", "escape.ts"));
   return { root, outside };
+}
+
+/** `src/escape.ts` -> a file outside the workspace; only the tests that need the link plant it. */
+function plantEscapingFileLink(
+  context: Parameters<typeof plantSymlinkOrSkip>[0],
+  root: string,
+  outside: string,
+): void {
+  plantSymlinkOrSkip(context, join(outside, "secret.ts"), join(root, "src", "escape.ts"));
 }
 
 function fileRequest(root: string, targetPath: string): SupervisedCodingFileEditRequest {
@@ -210,17 +224,35 @@ describe("supervised coding policy", () => {
     expect(result).toMatchObject({ status: "denied", reason: "out-of-scope-file-edit" });
   });
 
-  it("fails closed for file edits outside the worktree, scope, or through escaping symlinks", () => {
+  function expectOutOfScope(root: string, targetPath: string): void {
+    const result = decideSupervisedFileEdit(fileRequest(root, targetPath));
+    expect(result.status).toBe("denied");
+    expect(result.reason).toBe("out-of-scope-file-edit");
+    expect(result.evidence.safeSummary).toBe("out-of-scope-file-edit");
+  }
+
+  it("fails closed for file edits outside the worktree or scope", () => {
     const { root, outside } = workspaceFixture();
 
-    const cases = ["../outside.ts", join(outside, "secret.ts"), "src/escape.ts", "package.json"];
-
-    for (const targetPath of cases) {
-      const result = decideSupervisedFileEdit(fileRequest(root, targetPath));
-      expect(result.status).toBe("denied");
-      expect(result.reason).toBe("out-of-scope-file-edit");
-      expect(result.evidence.safeSummary).toBe("out-of-scope-file-edit");
+    for (const targetPath of ["../outside.ts", join(outside, "secret.ts"), "package.json"]) {
+      expectOutOfScope(root, targetPath);
     }
+  });
+
+  it("fails closed for file edits through an escaping file symlink", (context) => {
+    const { root, outside } = workspaceFixture();
+    plantEscapingFileLink(context, root, outside);
+
+    expectOutOfScope(root, "src/escape.ts");
+  });
+
+  // The directory form of the same escape: a junction on Windows (no privilege), a symlink elsewhere.
+  it("fails closed for file edits through an escaping directory redirection", () => {
+    const { root, outside } = workspaceFixture();
+    plantDirectoryRedirect(outside, join(root, "src", "escape-dir"));
+
+    expectOutOfScope(root, "src/escape-dir/secret.ts");
+    expectOutOfScope(root, "src/escape-dir/new.ts");
   });
 
   it("rejects malformed or overlong absolute edit targets before filesystem fallback", () => {
@@ -425,8 +457,10 @@ describe("resolveEditTargetRealPath create-through-symlink (#2906 round 2)", () 
     const root = tempDir("keiko-supervised-create-root-");
     mkdirSync(join(root, "src"), { recursive: true });
     // "src/link" lexically reads like an ordinary nested directory; it actually resolves to the
-    // workspace root itself.
-    symlinkSync("..", join(root, "src", "link"));
+    // workspace root itself. Windows plants the same redirection as a junction, which needs an
+    // absolute target but no symlink privilege.
+    if (WINDOWS_HOST) plantDirectoryRedirect(root, join(root, "src", "link"));
+    else symlinkSync("..", join(root, "src", "link"));
 
     // "src/link/.env" does not exist yet -- a pure create target for a file that, once written,
     // would really land at the workspace root's OWN ".env", not anywhere under "src/".
@@ -439,11 +473,12 @@ describe("resolveEditTargetRealPath create-through-symlink (#2906 round 2)", () 
     expect(isDenied(result.realRelative ?? "")).toBe(true);
   });
 
-  it("still resolves an existing target's real path unchanged (no regression on the non-create case)", () => {
-    const { root } = workspaceFixture();
+  it("still resolves an existing target's real path unchanged (no regression on the non-create case)", (context) => {
+    const { root, outside } = workspaceFixture();
+    plantEscapingFileLink(context, root, outside);
 
-    // "src/escape.ts" (from workspaceFixture) is a symlink to a file OUTSIDE the workspace, so it
-    // is EXISTING (not a create target) and must still be rejected as escaping containment.
+    // "src/escape.ts" is a symlink to a file OUTSIDE the workspace, so it is EXISTING (not a
+    // create target) and must still be rejected as escaping containment.
     const result = resolveEditTargetRealPath(root, "src/escape.ts");
 
     expect(result.contained).toBe(false);
