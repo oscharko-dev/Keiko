@@ -58,8 +58,6 @@ function DraftValue({ value }: { readonly value: JiraDraftValue }): ReactNode {
       return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.cleared")}</span>;
     case "empty":
       return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.empty")}</span>;
-    case "hidden":
-      return <span className={styles.cmpDraftNote}>{t("chat.jira.draft.valueNotShown")}</span>;
     case "group":
       return (
         <DraftFields

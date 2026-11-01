@@ -13,16 +13,15 @@ interface JiraDraftTreeLink {
 }
 /**
  * A field value as the human reads it, never as JSON: text, a list, a named group of members (every
- * member stays visible), an explicit clearing, an empty collection, or - only past the nesting
- * bound - a value the page cannot lay out, which is named as not shown instead of dumped.
+ * member stays visible), an explicit clearing or an empty collection. Past the nesting bound the
+ * remaining subtree is flattened into dotted-path members, so no approved leaf is ever unseen.
  */
 export type JiraDraftValue =
   | { readonly kind: "text"; readonly text: string }
   | { readonly kind: "list"; readonly items: readonly JiraDraftListEntry[] }
   | { readonly kind: "group"; readonly members: readonly JiraDraftMember[] }
   | { readonly kind: "cleared" }
-  | { readonly kind: "empty" }
-  | { readonly kind: "hidden" };
+  | { readonly kind: "empty" };
 /** A named member of a group value, in request order. */
 interface JiraDraftMember {
   readonly name: string;
@@ -118,8 +117,39 @@ const IDENTIFYING_MEMBERS: ReadonlySet<string> = new Set([
   "accountId",
   "id",
 ]);
-// Deeper than any Jira field value; the bound only protects the page from a hostile request.
+// Deeper than any Jira field value; past it the subtree is laid out flat, one dotted path per leaf.
 const VALUE_DEPTH_MAX = 6;
+function scalarOf(value: unknown): JiraDraftValue | undefined {
+  if (typeof value === "string") return { kind: "text", text: value };
+  if (value === null || value === undefined) return { kind: "cleared" };
+  if (typeof value === "number" || typeof value === "boolean")
+    return { kind: "text", text: String(value) };
+  return undefined;
+}
+/** Children of a collection in request order, each under its dotted path (lists by 1-based place). */
+function childrenOf(path: string, value: unknown): readonly [string, unknown][] {
+  const children: readonly [string, unknown][] = Array.isArray(value)
+    ? value.map((entry, index): [string, unknown] => [`${path}.${index + 1}`, entry])
+    : Object.entries(record(value) ?? {}).map(([name, entry]): [string, unknown] => [
+        `${path}.${name}`,
+        entry,
+      ]);
+  return children;
+}
+/** Every leaf under a value as a dotted-path member; iterative, so a hostile depth cannot overflow. */
+function flattened(value: unknown): readonly JiraDraftMember[] {
+  const members: JiraDraftMember[] = [];
+  const pending: [string, unknown][] = childrenOf("", value).toReversed();
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const [path, entry] = next;
+    const scalar = scalarOf(entry);
+    const children = scalar === undefined ? childrenOf(path, entry) : [];
+    if (scalar !== undefined) members.push({ name: path.slice(1), value: scalar });
+    else if (children.length === 0) members.push({ name: path.slice(1), value: { kind: "empty" } });
+    else pending.push(...children.toReversed());
+  }
+  return members;
+}
 function identifying(value: unknown): string | undefined {
   const entries = Object.entries(record(value) ?? {});
   const [only] = entries;
@@ -150,11 +180,10 @@ function collectionOf(value: unknown, depth: number): JiraDraftValue {
       };
 }
 function valueAt(value: unknown, depth: number): JiraDraftValue {
-  if (typeof value === "string") return { kind: "text", text: value };
-  if (value === null || value === undefined) return { kind: "cleared" };
-  if (typeof value === "number" || typeof value === "boolean")
-    return { kind: "text", text: String(value) };
-  if (typeof value !== "object" || depth > VALUE_DEPTH_MAX) return { kind: "hidden" };
+  const scalar = scalarOf(value);
+  if (scalar !== undefined) return scalar;
+  if (typeof value !== "object") return { kind: "empty" };
+  if (depth > VALUE_DEPTH_MAX) return { kind: "group", members: flattened(value) };
   const name = identifying(value);
   return name === undefined ? collectionOf(value, depth) : { kind: "text", text: name };
 }

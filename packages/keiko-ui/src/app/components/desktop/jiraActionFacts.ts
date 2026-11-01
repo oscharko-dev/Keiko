@@ -2,7 +2,8 @@
 // The exact arguments of the call are read into named facts - issue, project, issue type, field
 // values, labels, links, comment text, transition - and never shown as JSON. A name the page has
 // no wording for stays its own (a Jira field id or an MCP argument name); a value it cannot lay out
-// is named as not shown by the renderer. The server verifies the action digest, not this model.
+// is flattened into dotted-path rows by the renderer, so no leaf goes unseen. The server verifies
+// the action digest, not this model.
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { jiraDraftValueOf, type JiraDraftField, type JiraDraftValue } from "./jiraDraftTree";
 

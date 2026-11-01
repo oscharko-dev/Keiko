@@ -166,16 +166,20 @@ describe("Jira write approvals never show the request as JSON (#4178)", () => {
     expectNoJson(review);
   });
 
-  it("names a value it cannot lay out instead of dumping it", async () => {
+  it("shows every leaf of a deeply nested value as a dotted path, never hiding one", async () => {
     let deep: unknown = { leaf: 1, other: 2 };
-    for (let level = 0; level < 9; level += 1) deep = { inner: deep, sibling: "x" };
+    for (let level = 0; level < 9; level += 1) deep = { inner: deep, sibling: `s${level}` };
     const review = await reviewed("jira.create", {
       projectId: "10000",
       issueTypeId: "10002",
       fields: { summary: "Synthetic", customfield_10500: deep },
     });
     expect(review.text).toContain("customfield_10500");
-    expect(review.text).toContain("Value not shown");
+    expect(review.text).not.toContain("not shown");
+    expect(review.text).toContain("inner.inner.leaf");
+    for (let level = 0; level < 9; level += 1) expect(review.text).toContain(`s${level}`);
+    expect(review.text).toContain("1");
+    expect(review.text).toContain("2");
     expectNoJson(review);
   });
 

@@ -139,10 +139,38 @@ describe("field values of a draft item (#4178)", () => {
     );
   });
 
-  it("names a value nested past the bound as not shown instead of dumping it", () => {
-    let deep: unknown = { leaf: { deeper: 1 } };
-    for (let level = 0; level < 8; level += 1) deep = { [`level${level}`]: deep, other: "x" };
-    expect(JSON.stringify(fieldsOf({ deep }))).toContain('"kind":"hidden"');
+  it("flattens a value nested past the bound into dotted paths, so every leaf stays visible", () => {
+    let deep: unknown = { leaf: { deeper: 1 }, list: ["a", { b: null }], none: [] };
+    for (let level = 0; level < 8; level += 1)
+      deep = { [`level${level}`]: deep, other: `x${level}` };
+    const leaves = (value: unknown): string[] => {
+      const found: string[] = [];
+      const walk = (entry: unknown, path: string): void => {
+        const shown = entry as { kind: string; members?: { name: string; value: unknown }[] };
+        if (shown.kind === "group")
+          for (const member of shown.members ?? [])
+            walk(member.value, `${path}${path === "" ? "" : "."}${member.name}`);
+        else found.push(`${path}=${JSON.stringify(shown)}`);
+      };
+      walk(value, "");
+      return found;
+    };
+    const [field] = fieldsOf({ deep }) as { id: string; value: unknown }[];
+    const shown = leaves(field?.value);
+    expect(shown).toContain(
+      'level7.level6.level5.level4.level3.level2.level1.level0.leaf.deeper={"kind":"text","text":"1"}',
+    );
+    expect(shown).toContain(
+      'level7.level6.level5.level4.level3.level2.level1.level0.list.2.b={"kind":"cleared"}',
+    );
+    expect(shown).toContain(
+      'level7.level6.level5.level4.level3.level2.level1.level0.none={"kind":"empty"}',
+    );
+    for (let level = 0; level < 8; level += 1)
+      expect(
+        shown.some((entry) => entry.endsWith(`other={"kind":"text","text":"x${level}"}`)),
+      ).toBe(true);
+    expect(JSON.stringify(field?.value)).not.toContain("hidden");
   });
 
   it("carries the requirement references an item names", () => {

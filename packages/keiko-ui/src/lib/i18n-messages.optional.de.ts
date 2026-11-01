@@ -57,7 +57,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.draft.showLess": "Weniger anzeigen",
   "chat.jira.draft.empty": "(leer)",
   "chat.jira.draft.cleared": "Geleert",
-  "chat.jira.draft.valueNotShown": "Wert wird nicht angezeigt",
   "chat.jira.draft.requirements": "Anforderungen: {ids}",
   "chat.jira.draft.unreadable":
     "Dieser Entwurf lässt sich nicht als Vorgangsliste darstellen; seine Details werden Feld für Feld angezeigt.",
