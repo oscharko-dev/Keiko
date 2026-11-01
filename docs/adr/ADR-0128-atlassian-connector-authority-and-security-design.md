@@ -813,6 +813,26 @@ approval (`phase=submitted`) and each refusal with its closed reason (`invalid-i
 `template-violation`, `draft-changed`, `draft-invalid`) at warn. It never carries an item, a
 summary, a ref, a key or the draft id.
 
+**Nested drafts and refusals that say how to correct (S09 of epic #4173, 2026-11-01).** A draft
+holds a parent chain of any depth in one call: an epic, a task whose `parent` names the epic by
+`ref` and `fieldId` (the relation field the task's create metadata names), and sub-tasks whose
+`parent` names the task, each created once its parent has a key. The relation field always comes
+from create metadata; no field or application name is built in. A weaker local model must be able to
+do this in one turn, so three things were made explicit. (1) The tool descriptions say how to nest
+(`jira.draft`'s `parent`, `projectId` and `issueTypeId` name their sources; `jira.create` points a
+child of a not-yet-existing parent to `jira.draft`). (2) A draft refused before any request returns
+a fixed `guidance` sentence from a closed vocabulary (`JiraDraftProblem`: draft shape, missing items,
+a malformed item ref, id, fields, parent, link or requirement list, a duplicate,
+self or unknown ref, a cycle) with the 1-based item position where one item is at fault, ending in
+"Nothing was changed"; it never echoes the model's own text, so the refusal is no longer the opaque
+`field-validation` with an empty item list. (3) A `skipped` item names `blockedBy`, the refs it
+waited for that have no key, so the model sees which parent failed rather than a bare state. The
+Chat tool turn also asks the gateway for its one steered answer repair on every round
+(`answerRepair: "steered"`, ADR-0003): the S09 turn ended `model-failure` because Qwen ended a
+round after reasoning, with three metadata reads settled and no write; the repair is bounded by the
+turn's own model-call envelope and logs as `gateway.retry.scheduled` with
+`reason=empty-answer-repair`.
+
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
 before every Jira write, so a Markdown skill's advice the model may ignore is no longer the only

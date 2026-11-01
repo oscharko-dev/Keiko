@@ -4,6 +4,7 @@ import {
   JIRA_DRAFT_IDENTITY_PREFIX,
   JIRA_DRAFT_SEARCH_PAGES_MAX,
   JIRA_DRAFT_SEARCH_PAGE_SIZE,
+  checkJiraDraft,
   excludedJiraDraftRefs,
   jiraDraftIdentity,
   parseJiraDraft,
@@ -89,6 +90,99 @@ describe("parseJiraDraft", () => {
     ["no items", []],
   ])("refuses %s", (_name, items) => {
     expect(parseJiraDraft({ items })).toBeUndefined();
+  });
+
+  // The refusal names why, and which item, so the model can correct the draft in the same turn.
+  it.each([
+    ["no items", { items: [] }, "items-missing", undefined],
+    ["a top-level key", { items: [item("a")], extra: 1 }, "draft-shape", undefined],
+    ["an unknown item key", { items: [item("a"), { ...item("b"), x: 1 }] }, "item-shape", 2],
+    ["an invalid ref", { items: [item("1abc")] }, "item-ref", 1],
+    ["a non-numeric project", { items: [{ ...item("a"), projectId: "SYN" }] }, "item-ids", 1],
+    [
+      "a missing summary",
+      { items: [item("a"), item("b"), { ...item("c"), fields: { description: "x" } }] },
+      "item-fields",
+      3,
+    ],
+    [
+      "a parent field also written directly",
+      {
+        items: [
+          {
+            ...item("a", { parent: { fieldId: "parent", issueKey: "SYN-9" } }),
+            fields: { summary: "x", parent: "SYN-1" },
+          },
+        ],
+      },
+      "item-fields",
+      1,
+    ],
+    [
+      "a parent without a target",
+      { items: [item("a", { parent: { fieldId: "parent" } })] },
+      "item-parent",
+      1,
+    ],
+    [
+      "a link without a target",
+      { items: [item("a", { links: [{ type: "Relates", direction: "outward" }] })] },
+      "item-links",
+      1,
+    ],
+    [
+      "empty requirement ids",
+      { items: [item("a", { requirementIds: [] })] },
+      "item-requirements",
+      1,
+    ],
+    ["a duplicate reference", { items: [item("a"), item("a")] }, "ref-duplicate", undefined],
+    [
+      "a self-reference",
+      { items: [item("a"), item("b", { parent: { fieldId: "parent", ref: "b" } })] },
+      "ref-self",
+      2,
+    ],
+    [
+      "an unknown reference",
+      { items: [item("a", { parent: { fieldId: "parent", ref: "missing" } })] },
+      "ref-unknown",
+      1,
+    ],
+    [
+      "a cycle",
+      {
+        items: [
+          item("a", { parent: { fieldId: "parent", ref: "b" } }),
+          item("b", { parent: { fieldId: "parent", ref: "a" } }),
+        ],
+      },
+      "ref-cycle",
+      undefined,
+    ],
+  ])("names the problem of %s", (_name, args, problem, position) => {
+    expect(checkJiraDraft(args)).toEqual({
+      ok: false,
+      problem,
+      ...(position === undefined ? {} : { item: position }),
+    });
+  });
+
+  it("accepts a chain of any depth: an epic, its task and the task's sub-tasks", () => {
+    const checked = checkJiraDraft({
+      items: [
+        item("sub2", { parent: { fieldId: "parent", ref: "task" } }),
+        item("sub1", { parent: { fieldId: "parent", ref: "task" } }),
+        item("task", { parent: { fieldId: "customfield_10100", ref: "epic" } }),
+        item("epic"),
+      ],
+    });
+    expect(checked.ok && checked.draft.items.map((entry) => entry.ref)).toEqual([
+      "epic",
+      "task",
+      "sub2",
+      "sub1",
+    ]);
   });
 
   it("has no item-count limit, and refuses unknown top-level keys", () => {

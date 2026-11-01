@@ -1,4 +1,5 @@
 import {
+  checkJiraDraft,
   excludedJiraDraftRefs,
   executeJiraDraftItem,
   findJiraDraftItem,
@@ -9,6 +10,7 @@ import {
   type JiraDraft,
   type JiraDraftActivity,
   type JiraDraftItem,
+  type JiraDraftProblem,
   type JiraManagedConnection,
   type JiraTraceOutcome,
 } from "@oscharko-dev/keiko-connectors";
@@ -340,6 +342,23 @@ function reportRun(
   });
 }
 
+/** An item that waits for others: the refs among them that have no key, so the model sees why. */
+function skippedItem(item: JiraDraftItem, keys: ReadonlyMap<string, string>): DraftItemResult {
+  const blockedBy = jiraDraftDependencies(item).filter((ref) => !keys.has(ref));
+  return {
+    ref: item.ref,
+    state: "skipped",
+    ...(blockedBy.length === 0 ? {} : { detail: { blockedBy } }),
+  };
+}
+function blockedItem(
+  item: JiraDraftItem,
+  state: JiraDraftItemState,
+  keys: ReadonlyMap<string, string>,
+): DraftItemResult {
+  return state === "skipped" ? skippedItem(item, keys) : { ref: item.ref, state };
+}
+
 async function runDraft(
   input: JiraChatDraftExecution,
   draft: JiraDraft,
@@ -365,7 +384,7 @@ async function runDraft(
     const settled: DraftItemResult =
       blocked === undefined
         ? await runItem(input, item, run.keys, traces.get(item.ref), tally) // NOSONAR typescript:S9382 -- dependency order
-        : { ref: item.ref, state: blocked };
+        : blockedItem(item, blocked, run.keys);
     noteSettled(run, settled, now);
     results.push(settled);
     if (blocked === undefined) run.attempted++;
@@ -578,15 +597,56 @@ function refusedDraft(
   };
 }
 
+/**
+ * What the model is told when a draft is refused before anything is sent: fixed sentences from a
+ * closed vocabulary, never the model's own text. An item-level sentence continues "Item N ".
+ */
+const PROBLEM_GUIDANCE: Readonly<Record<JiraDraftProblem, string>> = {
+  "draft-shape":
+    "The draft takes an items array, or the draftId and draftDigest of a staged draft.",
+  "items-missing": "The draft needs items: a non-empty array of draft items.",
+  "item-shape":
+    "is not an object with only ref, projectId, issueTypeId, fields, parent, links and requirementIds.",
+  "item-ref":
+    "needs a ref: a short name that starts with a letter and holds only letters, digits, - or _. Other items name this item by it.",
+  "item-ids":
+    "needs projectId and issueTypeId as numeric id strings from the project and issue-type reads, not keys or names.",
+  "item-fields":
+    "needs fields with a non-empty summary, without project, issuetype or the field its parent relation writes. A parent goes only in the item's parent.",
+  "item-parent":
+    "has a malformed parent. Nest an item by giving it parent { fieldId, ref } for an item of this draft, or { fieldId, issueKey } for an existing issue, with fieldId the relation field named in the child's create fields.",
+  "item-links":
+    "has a malformed link. A link needs type, direction and exactly one of ref (an item of this draft) or issueKey (an existing issue).",
+  "item-requirements":
+    "has malformed requirementIds: a short non-empty list of plain requirement references.",
+  "ref-duplicate": "Two items share a ref. Give every item its own ref.",
+  "ref-self": "names itself as its parent or link target.",
+  "ref-unknown":
+    "names a ref that no item of this draft has. Add that item to this draft, or name an existing issue with issueKey.",
+  "ref-cycle":
+    "The parent and link relations form a cycle. A parent must be an item that does not depend on its child.",
+};
+const DRAFT_REFUSED = "Nothing was changed. Correct the draft and send it once.";
+function problemGuidance(problem: JiraDraftProblem, item: number | undefined): string {
+  const sentence = PROBLEM_GUIDANCE[problem];
+  return `${item === undefined ? sentence : `Item ${String(item)} ${sentence}`} ${DRAFT_REFUSED}`;
+}
+
 export async function executeJiraChatDraft(
   input: JiraChatDraftExecution,
 ): Promise<ManagedMcpToolResult> {
-  const draft = parseJiraDraft(input.arguments);
-  if (draft === undefined)
+  const checked = checkJiraDraft(input.arguments);
+  if (!checked.ok)
     return {
-      data: { outcome: "rejected", reason: "field-validation", items: [] },
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        guidance: problemGuidance(checked.problem, checked.item),
+        items: [],
+      },
       isError: true,
     };
+  const { draft } = checked;
   const session = input.openTrace?.();
   const tally = newTally();
   try {

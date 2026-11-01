@@ -54,6 +54,8 @@ const REQUIREMENT_REFUSAL = {
   enum: ["no-knowledge-pod", "unavailable", "references"],
 };
 const NUMERIC_ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
+const PROJECT_ID = { ...NUMERIC_ID, description: "Numeric id from the project read." };
+const ISSUE_TYPE_ID = { ...NUMERIC_ID, description: "Numeric id from the issue-type read." };
 const FIELDS = {
   ...object({}),
   additionalProperties: true,
@@ -114,8 +116,8 @@ const DRAFT_LINKS = {
 const JIRA_DRAFT_ITEM_SCHEMA = object(
   {
     ref: DRAFT_REF,
-    projectId: NUMERIC_ID,
-    issueTypeId: NUMERIC_ID,
+    projectId: PROJECT_ID,
+    issueTypeId: ISSUE_TYPE_ID,
     fields: {
       ...FIELDS,
       description:
@@ -131,7 +133,7 @@ const JIRA_DRAFT_ITEM_SCHEMA = object(
         ["fieldId"],
       ),
       description:
-        "The field holding this item's parent (parent for a sub-task, the Epic Link field for an epic's issue, as create metadata names it) and its target: exactly one of ref or issueKey.",
+        "Nests this item. fieldId is the relation field the child's create metadata names (parent for a sub-task, the Epic Link field for an epic's issue); the target is exactly one of ref (an item of this draft, created first) or issueKey (an existing issue).",
     },
     links: DRAFT_LINKS,
     requirementIds: REQUIREMENT_IDS,
@@ -218,6 +220,13 @@ const DRAFT_RESULT_SCHEMA = object(
           ...LINK_RESULT,
           violations: JIRA_VIOLATIONS_SCHEMA,
           trace: TRACE_RESULT,
+          // A skipped item: the refs of the items it waits for that were not created.
+          blockedBy: {
+            type: "array",
+            // The item's parent and its links.
+            maxItems: JIRA_ISSUE_LINKS_MAX + 1,
+            items: text(32),
+          },
         },
         ["ref", "state"],
       ),
@@ -288,7 +297,7 @@ const DEFINITIONS: Readonly<
 > = {
   "jira.create": {
     description:
-      "Create one issue using numeric project and issue-type IDs and current required fields. Routing identities cannot be overridden inside fields.",
+      "Create one issue using numeric project and issue-type IDs and current required fields. Routing identities cannot be overridden inside fields. A child of an existing issue sets the relation field its create metadata names to that key; a parent that does not exist yet needs jira.draft.",
     input: object(
       {
         projectId: NUMERIC_ID,
@@ -362,7 +371,7 @@ const DEFINITIONS: Readonly<
   },
   "jira.draft": {
     description:
-      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped, and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created. Send up to " +
+      "Propose a backlog of related issues (epics, stories, tasks, bugs, sub-tasks) as one draft the human approves once. Items name each other by ref and are created in dependency order; an item whose parent or linked item was not created is skipped (blockedBy), and an existing issue is reconciled, not created again. Use it whenever more than one issue is to be created, a parent and its children to any depth in one draft. Send up to " +
       String(JIRA_DRAFT_PAGE_ITEMS_MAX) +
       " items here; stage a larger draft of any size with jira.draft-stage, then pass its draftId and draftDigest here, so it is approved once. Never split one backlog into several approvals. Items left pending continue with the same draftId and draftDigest, nothing created twice.",
     input: object(

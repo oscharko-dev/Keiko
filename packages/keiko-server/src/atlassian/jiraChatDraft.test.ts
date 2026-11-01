@@ -264,7 +264,7 @@ describe("executeJiraChatDraft (#4178)", () => {
     const result = await executeJiraChatDraft(execution(jira, args));
     expect(itemsOf(result)).toEqual([
       expect.objectContaining({ ref: "epic", state: "failed", reason: "field-validation" }),
-      { ref: "story", state: "skipped" },
+      { ref: "story", state: "skipped", blockedBy: ["epic"] },
       expect.objectContaining({ ref: "loose", state: "created" }),
     ]);
     expect(result).toMatchObject({
@@ -284,8 +284,8 @@ describe("executeJiraChatDraft (#4178)", () => {
         state: "failed",
         fieldErrors: [{ fieldId: "summary", fieldName: "summary", message: "Synthetic refusal" }],
       }),
-      { ref: "story", state: "skipped" },
-      { ref: "task", state: "skipped" },
+      { ref: "story", state: "skipped", blockedBy: ["epic"] },
+      { ref: "task", state: "skipped", blockedBy: ["story"] },
       expect.objectContaining({ ref: "loose", state: "created" }),
     ]);
     expect(result).toMatchObject({
@@ -314,8 +314,9 @@ describe("executeJiraChatDraft (#4178)", () => {
       const result = await executeJiraChatDraft(execution(jira));
       expect(itemsOf(result)).toEqual([
         expect.objectContaining({ ref: "epic", state: "uncertain" }),
-        { ref: "story", state: "skipped" },
-        { ref: "task", state: "skipped" },
+        { ref: "story", state: "skipped", blockedBy: ["epic"] },
+        { ref: "task", state: "skipped", blockedBy: ["story"] },
+        // Nothing is tried after an uncertain item; this one waits for no other item.
         { ref: "loose", state: "skipped" },
       ]);
       expect(result).toMatchObject({
@@ -603,9 +604,60 @@ describe("executeJiraChatDraft (#4178)", () => {
       execution(jira, { items: [item("a", { parent: { fieldId: "parent", ref: "a" } })] } as never),
     );
     expect(result).toEqual({
-      data: { outcome: "rejected", reason: "field-validation", items: [] },
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        guidance:
+          "Item 1 names itself as its parent or link target. Nothing was changed. Correct the draft and send it once.",
+        items: [],
+      },
       isError: true,
     });
+    expect(jira.fetch).not.toHaveBeenCalled();
+  });
+
+  // Each refusal says what to change, so a model that sent a malformed draft corrects it in the
+  // same turn instead of giving up (S09 of epic #4173).
+  it.each([
+    [{ items: [] }, "The draft needs items"],
+    [
+      { items: [item("a")], extra: 1 },
+      "The draft takes an items array, or the draftId and draftDigest of a staged draft.",
+    ],
+    [{ items: [{ ...item("a"), parent: { fieldId: "parent" } }] }, "Item 1 has a malformed parent"],
+    [
+      { items: [item("a"), { ...item("b"), fields: { description: "no summary" } }] },
+      "Item 2 needs fields with a non-empty summary",
+    ],
+    [{ items: [item("a"), item("a")] }, "Two items share a ref."],
+    [
+      { items: [item("sub", { parent: { fieldId: "parent", ref: "missing" } })] },
+      "Item 1 names a ref that no item of this draft has.",
+    ],
+    [
+      {
+        items: [
+          item("a", { parent: { fieldId: "parent", ref: "b" } }),
+          item("b", { parent: { fieldId: "parent", ref: "a" } }),
+        ],
+      },
+      "The parent and link relations form a cycle.",
+    ],
+  ])("tells the model how to correct a refused draft (%#)", async (args, sentence) => {
+    const jira = syntheticJira();
+    const result = await executeJiraChatDraft(execution(jira, args as never));
+    expect(result.isError).toBe(true);
+    expect(result.data).toMatchObject({
+      outcome: "rejected",
+      reason: "field-validation",
+      items: [],
+    });
+    const guidance = result.data.guidance;
+    expect(typeof guidance === "string" && guidance.includes(sentence)).toBe(true);
+    expect(
+      typeof guidance === "string" &&
+        guidance.endsWith("Nothing was changed. Correct the draft and send it once."),
+    ).toBe(true);
     expect(jira.fetch).not.toHaveBeenCalled();
   });
 

@@ -152,30 +152,53 @@ interface ItemRelations {
   readonly requirementIds: readonly string[] | null;
 }
 
-function parseRelations(raw: Record<string, unknown>): ItemRelations | undefined {
-  const parent = parseParent(raw.parent);
-  const links = parseLinks(raw.links);
-  const requirementIds = parseRequirementIds(raw.requirementIds);
-  return parent === undefined || links === undefined || requirementIds === undefined
-    ? undefined
-    : { parent, links, requirementIds };
+/** Why a draft was refused; the server turns each into one fixed instruction for the model. */
+export type JiraDraftProblem =
+  | "draft-shape"
+  | "items-missing"
+  | "item-shape"
+  | "item-ref"
+  | "item-ids"
+  | "item-fields"
+  | "item-parent"
+  | "item-links"
+  | "item-requirements"
+  | "ref-duplicate"
+  | "ref-self"
+  | "ref-unknown"
+  | "ref-cycle";
+/** `item` is the 1-based position of the offending item, when one item is at fault. */
+export interface JiraDraftRefusal {
+  readonly ok: false;
+  readonly problem: JiraDraftProblem;
+  readonly item?: number;
+}
+export type JiraDraftCheck = { readonly ok: true; readonly draft: JiraDraft } | JiraDraftRefusal;
+type Checked<Value> = { readonly ok: true; readonly value: Value } | JiraDraftRefusal;
+function refuse(problem: JiraDraftProblem, index?: number): JiraDraftRefusal {
+  return { ok: false, problem, ...(index === undefined ? {} : { item: index + 1 }) };
 }
 
-function parseItem(value: unknown): ParsedJiraDraftItem | undefined {
+function parseRelations(raw: Record<string, unknown>): ItemRelations | JiraDraftProblem {
+  const parent = parseParent(raw.parent);
+  if (parent === undefined) return "item-parent";
+  const links = parseLinks(raw.links);
+  if (links === undefined) return "item-links";
+  const requirementIds = parseRequirementIds(raw.requirementIds);
+  return requirementIds === undefined ? "item-requirements" : { parent, links, requirementIds };
+}
+
+function parseItem(value: unknown): ParsedJiraDraftItem | JiraDraftProblem {
   const raw = asRecord(value);
-  if (raw === undefined || !onlyKeys(raw, ITEM_KEYS)) return undefined;
+  if (raw === undefined || !onlyKeys(raw, ITEM_KEYS)) return "item-shape";
   const { ref, projectId, issueTypeId } = raw;
+  if (!isJiraDraftRef(ref)) return "item-ref";
+  if (!numericId(projectId) || !numericId(issueTypeId)) return "item-ids";
   const relations = parseRelations(raw);
-  if (
-    relations === undefined ||
-    !isJiraDraftRef(ref) ||
-    !numericId(projectId) ||
-    !numericId(issueTypeId)
-  )
-    return undefined;
+  if (typeof relations === "string") return relations;
   const { parent, links, requirementIds } = relations;
   const fields = itemFields(raw.fields, parent);
-  if (fields === undefined) return undefined;
+  if (fields === undefined) return "item-fields";
   return {
     ref,
     projectId,
@@ -189,11 +212,13 @@ function parseItem(value: unknown): ParsedJiraDraftItem | undefined {
 
 /** Whether one value is a well-formed draft item; relations to other items are judged later. */
 export function isJiraDraftItem(value: unknown): boolean {
-  return parseItem(value) !== undefined;
+  return typeof parseItem(value) !== "string";
 }
 /** Refs that staged items name as parent or link target but no staged item carries yet. */
 export function unresolvedJiraDraftRefs(items: readonly unknown[]): readonly string[] {
-  const parsed = items.map(parseItem).filter((item) => item !== undefined);
+  const parsed = items
+    .map((item) => parseItem(item))
+    .filter((item): item is ParsedJiraDraftItem => typeof item !== "string");
   const known = new Set(parsed.map((item) => item.ref));
   const wanted = parsed.flatMap((item) => jiraDraftDependencies(item));
   return [...new Set(wanted.filter((ref) => !known.has(ref)))].sort(compareByCodeUnit);
@@ -205,15 +230,24 @@ export function jiraDraftDependencies(
   const refs = [item.parent?.ref, ...item.links.map((link) => link.ref)];
   return [...new Set(refs.filter((ref): ref is string => ref !== undefined))];
 }
-/** Stable dependency order (Kahn); undefined for an unknown reference, a self-reference or a cycle. */
+/** The first item whose relation names itself or an item the draft does not contain. */
+function brokenRelation(items: readonly ParsedJiraDraftItem[]): JiraDraftRefusal | undefined {
+  const refs = new Set(items.map((item) => item.ref));
+  for (const [index, item] of items.entries()) {
+    const dependencies = jiraDraftDependencies(item);
+    if (dependencies.includes(item.ref)) return refuse("ref-self", index);
+    if (dependencies.some((dependency) => !refs.has(dependency)))
+      return refuse("ref-unknown", index);
+  }
+  return undefined;
+}
+/** Stable dependency order (Kahn); a refusal for an unknown reference, a self-reference or a cycle. */
 function dependencyOrder(
   items: readonly ParsedJiraDraftItem[],
-): readonly ParsedJiraDraftItem[] | undefined {
-  const refs = new Set(items.map((item) => item.ref));
+): Checked<readonly ParsedJiraDraftItem[]> {
+  const broken = brokenRelation(items);
+  if (broken !== undefined) return broken;
   const pending = new Map(items.map((item) => [item.ref, jiraDraftDependencies(item)]));
-  for (const [ref, dependencies] of pending)
-    if (dependencies.some((dependency) => dependency === ref || !refs.has(dependency)))
-      return undefined;
   const ordered: ParsedJiraDraftItem[] = [];
   const placed = new Set<string>();
   while (ordered.length < items.length) {
@@ -221,23 +255,40 @@ function dependencyOrder(
       (item) =>
         !placed.has(item.ref) && (pending.get(item.ref) ?? []).every((ref) => placed.has(ref)),
     );
-    if (next === undefined) return undefined;
+    if (next === undefined) return refuse("ref-cycle");
     placed.add(next.ref);
     ordered.push(next);
   }
-  return ordered;
+  return { ok: true, value: ordered };
 }
 
+/** The draft's items parsed in input order, or the first item that is malformed. */
+function parseItems(input: readonly unknown[]): Checked<readonly ParsedJiraDraftItem[]> {
+  const items: ParsedJiraDraftItem[] = [];
+  for (const [index, value] of input.entries()) {
+    const item = parseItem(value);
+    if (typeof item === "string") return refuse(item, index);
+    items.push(item);
+  }
+  return new Set(items.map((item) => item.ref)).size === items.length
+    ? { ok: true, value: items }
+    : refuse("ref-duplicate");
+}
+
+/** The validated draft in dependency order, or the closed reason it was refused. */
+export function checkJiraDraft(args: Readonly<Record<string, unknown>>): JiraDraftCheck {
+  if (!onlyKeys(args, new Set(["items"]))) return refuse("draft-shape");
+  const input = asArray(args.items);
+  if (input === undefined || input.length === 0) return refuse("items-missing");
+  const parsed = parseItems(input);
+  if (!parsed.ok) return parsed;
+  const ordered = dependencyOrder(parsed.value);
+  return ordered.ok ? { ok: true, draft: { items: withIdentities(ordered.value) } } : ordered;
+}
 /** Validated draft in dependency order, or undefined for any malformed or cyclic input. */
 export function parseJiraDraft(args: Readonly<Record<string, unknown>>): JiraDraft | undefined {
-  if (!onlyKeys(args, new Set(["items"]))) return undefined;
-  const input = asArray(args.items);
-  if (input === undefined || input.length === 0) return undefined;
-  const items = input.map(parseItem);
-  if (!items.every((item) => item !== undefined)) return undefined;
-  if (new Set(items.map((item) => item.ref)).size !== items.length) return undefined;
-  const ordered = dependencyOrder(items);
-  return ordered === undefined ? undefined : { items: withIdentities(ordered) };
+  const checked = checkJiraDraft(args);
+  return checked.ok ? checked.draft : undefined;
 }
 
 /** The human's deselection, extended to every item that depends on a deselected one. */
