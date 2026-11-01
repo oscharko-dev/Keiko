@@ -498,6 +498,9 @@ describe("S13 report export and Jira comment", () => {
       requiredFieldRules: "applied",
       checker: "none",
       issuesChecked: keys.length,
+      // Without a template checker no template judged any issue (#4181).
+      issuesWithoutTemplate: keys.length,
+      withoutTemplateByType: keys.length === 0 ? [] : [{ typeName: "Task", count: keys.length }],
       issuesWithDeviations: 0,
       deviationCount: 0,
       byRule: [],
