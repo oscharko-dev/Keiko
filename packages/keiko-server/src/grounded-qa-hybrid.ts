@@ -1396,6 +1396,7 @@ function buildHybridRetrievalActivity(
   knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[],
   reranker: GroundedRerankerDiagnostics,
   diagnostics: UiHandlerDeps["diagnostics"],
+  correlationId: string | undefined,
 ): HybridGroundedAnswer["retrievalActivity"] {
   return tryBuildKnowledgePodRetrievalActivity({
     store,
@@ -1409,6 +1410,7 @@ function buildHybridRetrievalActivity(
     })),
     skipped: selectedConnectorSkips(skipped),
     diagnostics,
+    correlationId,
   });
 }
 
@@ -2156,6 +2158,7 @@ function projectHybridAnswer(
     knowledgeCitations,
     reranker,
     ctx.deps.diagnostics,
+    ctx.correlationId,
   );
   return {
     cited,
