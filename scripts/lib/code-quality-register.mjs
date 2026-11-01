@@ -138,9 +138,131 @@ export function compareRegister(register, current, scannedPaths) {
   };
 }
 
-/** Returns the lowered register; it refuses when any count would rise. */
-export function pruneRegister(register, current, scannedPaths) {
+// The reviewed increase ledger (#4145). The register only shrinks, except where a reviewed entry
+// names one exact raise of one (path, rule) count. Entries are history: later changes may add
+// entries but never remove or change one.
+export const REGISTER_INCREASES_PATH = "scripts/code-quality-register-increases.json";
+const INCREASE_KEYS = ["path", "rule", "from", "to", "reason", "issue"];
+const INCREASE_REASONS = new Set([
+  "qualified-boundary",
+  "pending-boundary-migration",
+  "test-witness",
+  "proof-fixture",
+]);
+
+function validIncreaseIdentity(entry) {
+  return (
+    isPlainRecord(entry) &&
+    Object.keys(entry).join("\0") === INCREASE_KEYS.join("\0") &&
+    // String(value) === value accepts only primitive strings, never an array that would coerce.
+    String(entry.path) === entry.path &&
+    validRegisterPath(entry.path) &&
+    String(entry.rule) === entry.rule &&
+    validRule(entry.rule)
+  );
+}
+
+function validIncrease(entry) {
+  return (
+    validIncreaseIdentity(entry) &&
+    Number.isSafeInteger(entry.from) &&
+    entry.from >= 0 &&
+    Number.isSafeInteger(entry.to) &&
+    entry.to > entry.from &&
+    INCREASE_REASONS.has(entry.reason) &&
+    Number.isSafeInteger(entry.issue) &&
+    entry.issue > 0
+  );
+}
+
+function increaseKey(entry) {
+  return JSON.stringify(INCREASE_KEYS.map((key) => entry[key]));
+}
+
+function compareIncreases(left, right) {
+  return (
+    compareText(left.path, right.path) ||
+    compareText(left.rule, right.rule) ||
+    left.from - right.from ||
+    left.to - right.to ||
+    left.issue - right.issue ||
+    compareText(left.reason, right.reason)
+  );
+}
+
+/** Serializes ledger entries in their one canonical, sorted form. */
+export function serializeIncreases(entries) {
+  const increases = [...entries]
+    .sort(compareIncreases)
+    .map((entry) => Object.fromEntries(INCREASE_KEYS.map((key) => [key, entry[key]])));
+  return `${JSON.stringify({ version: REGISTER_VERSION, increases }, null, 2)}\n`;
+}
+
+/** Parses the committed ledger; malformed, duplicated or non-canonical text fails closed. */
+export function parseIncreases(text) {
+  let document;
+  try {
+    document = JSON.parse(text);
+  } catch {
+    throw new TypeError("invalid-code-quality-register-increases");
+  }
+  if (
+    !isPlainRecord(document) ||
+    Object.keys(document).join("\0") !== "version\0increases" ||
+    document.version !== REGISTER_VERSION ||
+    !Array.isArray(document.increases) ||
+    !document.increases.every(validIncrease) ||
+    new Set(document.increases.map(increaseKey)).size !== document.increases.length
+  )
+    throw new TypeError("invalid-code-quality-register-increases");
+  if (serializeIncreases(document.increases) !== text)
+    throw new TypeError("noncanonical-code-quality-register-increases");
+  return document.increases;
+}
+
+function matchesRaise(entry, raise) {
+  return (
+    entry.path === raise.path &&
+    entry.rule === raise.rule &&
+    entry.from === raise.before &&
+    entry.to === raise.after
+  );
+}
+
+/**
+ * Returns the current counts as the new register. A count may fall freely; it may rise only to
+ * exactly the `to` of a ledger entry with the same path, rule and `from`.
+ */
+export function pruneRegister(register, current, scannedPaths, increases = []) {
   const comparison = compareRegister(register, current, scannedPaths);
-  if (comparison.increases.length > 0) throw new TypeError("code-quality-register-increase");
+  if (!comparison.increases.every((raise) => increases.some((entry) => matchesRaise(entry, raise))))
+    throw new TypeError("code-quality-register-increase");
   return current;
+}
+
+/**
+ * Reviews the committed register against the register of the change's base. Every raised count
+ * needs one ledger entry this change adds, with the same path, rule, `from` and `to`. An added
+ * entry that matches no raise is stale; a removed or changed base entry rewrites history.
+ */
+export function reviewRegisterRaises({ baseRegister, register, baseIncreases, increases }) {
+  const raises = compareRegister(baseRegister, register, new Set(register.keys())).increases;
+  // A ledger holds no duplicate entry, so set membership identifies added and removed entries.
+  const baseKeys = new Set(baseIncreases.map(increaseKey));
+  const keys = new Set(increases.map(increaseKey));
+  const added = increases.filter((entry) => !baseKeys.has(increaseKey(entry)));
+  const rewritten = baseIncreases.filter((entry) => !keys.has(increaseKey(entry)));
+  const unreviewed = [];
+  for (const raise of raises) {
+    const index = added.findIndex((entry) => matchesRaise(entry, raise));
+    if (index === -1) unreviewed.push(raise);
+    else added.splice(index, 1);
+  }
+  return {
+    raises,
+    unreviewed,
+    stale: added,
+    rewritten,
+    outcome: unreviewed.length + added.length + rewritten.length === 0 ? "passed" : "failed",
+  };
 }

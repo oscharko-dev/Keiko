@@ -28,13 +28,17 @@ findings per (file, rule). It compares those counts with the committed register
 | A (file, rule) count is lower than the register       | Fails until the register is pruned                |
 | A register entry names a deleted or renamed file      | Fails as stale until the register is pruned       |
 | An inline `oxlint-disable` directive or nested config | Rejected by the engine; it cannot hide a finding  |
+| A register count is higher than at the base commit    | Fails unless a new ledger entry names that raise  |
+| A new ledger entry matches no raised count            | Fails as a stale increase                         |
+| An older ledger entry was removed or changed          | Fails as rewritten history                        |
 
 The second output line reports the total before and after, for example `register: 46598 → 45320 (-1278)`.
 
 **How to fix a failure.**
 
 - _New finding:_ fix the code. Do not add a register entry or raise a count; the register is not a
-  waiver mechanism. If you believe a rule is wrong for a site, raise it on #3914 instead.
+  waiver mechanism. If you believe a rule is wrong for a site, raise it on #3914 instead. The only
+  exception is a reviewed increase, described below.
 - _Fewer findings, or a stale entry after a delete or rename:_ shrink the register and commit it
   with your change:
 
@@ -45,6 +49,59 @@ The second output line reports the total before and after, for example `register
   Pruning only lowers counts and removes entries. It refuses to widen the register, so it cannot
   absorb a new finding. A renamed file with findings therefore needs those findings fixed, not
   re-registered.
+
+**Reviewed increases.** The owner allows a count to rise in four cases, and only through a
+reviewed entry in `scripts/code-quality-register-increases.json`:
+
+| `reason`                     | Use it for                                                                        |
+| ---------------------------- | --------------------------------------------------------------------------------- |
+| `qualified-boundary`         | A validator that a responsibility record adapts                                   |
+| `pending-boundary-migration` | A boundary check that a later reviewed migration moves (see below)                |
+| `test-witness`               | A test or test fixture that exercises hostile input, or a binder-mandated witness |
+| `proof-fixture`              | A proof fixture                                                                   |
+
+`pending-boundary-migration` covers findings of the four boundary rules (no-runtime-typeof,
+no-unknown-parameters, no-unsafe-dictionary-type and no-known-value-widening) while those rules are
+not yet active for the file's package. No responsibility record adapts these checks yet, so
+`qualified-boundary` would be untrue for them.
+
+Each entry has exactly these fields, in this order:
+
+```json
+{
+  "path": "packages/keiko-contracts/src/example.ts",
+  "rule": "anti-slop/example-rule",
+  "from": 2,
+  "to": 5,
+  "reason": "qualified-boundary",
+  "issue": 3918
+}
+```
+
+`from` is the register count before the change (0 for a new file or rule), `to` is the count after
+it, and `to` must be larger than `from`. `issue` is the issue that reviewed the raise. The ledger is
+sorted, holds no duplicate entry and has one canonical JSON form, like the register; any other form
+fails. To raise a count:
+
+1. Add the entry to the ledger.
+2. Run `npm run check:code-quality-policy -- --prune-register`. It raises the count only to exactly
+   the `to` of an entry with the same path, rule and `from`, and it still refuses every other
+   increase.
+3. Commit the register and the ledger together.
+
+In CI the ratchet reads `KEIKO_CODE_QUALITY_BASE_SHA`, the pull request's base commit (on a push, the
+previous tip). It compares the committed register with the register at that commit. Every raised
+count needs one entry that this change adds, with the same path, rule, `from` and `to`. An entry
+that the base already holds cannot approve a new raise. An added entry that matches no raise fails
+as stale. Entries are history: a change may add entries but never remove or change one. A CI run
+without a base fails closed, and CI still refuses to write the register. To run the same review
+locally, set the variable to a full commit id:
+
+```bash
+KEIKO_CODE_QUALITY_BASE_SHA="$(git rev-parse origin/dev)" npm run check:code-quality-policy -- --mode ratchet
+```
+
+The ledger started empty on `dev`; #4145 adds no entry.
 
 **Limits.**
 

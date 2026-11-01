@@ -151,6 +151,28 @@ Known limitation: counts are per file and rule, so fixing one finding and adding
 rule in the same file nets out. This is accepted for the bridge period and closes when #3991
 removes the register.
 
+Reviewed increases (owner decision, 2026-11-01). The epic's delivery slices add findings that the
+epic qualifies elsewhere or migrates later: validators adapted by responsibility records, boundary
+checks that HELPER-COMPONENT-MIGRATION-008 on #3918 moves later, tests and fixtures that exercise
+hostile input, and proof fixtures. The ratchet does not run those qualifications, so a
+strictly shrink-only register would refuse every slice. The owner chose a reviewed increase list
+over counting only enforceable findings and over landing the slices before #4145:
+
+- `scripts/code-quality-register-increases.json` (version 1) lists entries of `path`, `rule`,
+  `from`, `to`, `reason` and `issue`. `reason` is `qualified-boundary`,
+  `pending-boundary-migration`, `test-witness` or `proof-fixture`. The second covers a check under
+  the four boundary rules (no-runtime-typeof, no-unknown-parameters, no-unsafe-dictionary-type,
+  no-known-value-widening) that a later reviewed migration moves while those rules are inactive for
+  its package. `from` is less than `to`, and `issue` is a positive issue number. Malformed,
+  duplicated or non-canonical ledgers fail closed.
+- `--prune-register` raises a count only to exactly the `to` of an entry with the same path, rule
+  and `from`. Every other increase still fails with `code-quality-register-increase`.
+- The CI ratchet compares the committed register with the base commit's register. Each raised count
+  needs one entry that the change adds; an entry the base already holds cannot approve a new raise.
+  An added entry that matches no raise is stale, and a removed or changed base entry is rewritten
+  history. Both fail. A CI comparison without a base fails, and CI still refuses register writes.
+- The ledger started empty on `dev`. Entries accumulate as reviewed history in later slice PRs.
+
 ## Consequences
 
 - A stopped review subscription can no longer deadlock or falsely satisfy Keiko's core quality bar.

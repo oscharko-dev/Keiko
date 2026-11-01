@@ -7,7 +7,9 @@ import {
   collectPolicyInventory,
   collectPolicySubject,
   policyDigest,
+  readPolicyFileAt,
   readPreviousPolicies,
+  resolvePolicyBaseCommit,
   selectPolicyScope,
 } from "./lib/code-quality-inventory.mjs";
 import { collectPolicyPackages } from "./lib/code-quality-packages.mjs";
@@ -25,10 +27,13 @@ import {
 import {
   compareRegister,
   countRegisterFindings,
+  parseIncreases,
   parseRegister,
   pruneRegister,
+  REGISTER_INCREASES_PATH,
   REGISTER_PATH,
   registerTotal,
+  reviewRegisterRaises,
   serializeRegister,
 } from "./lib/code-quality-register.mjs";
 import { runnerIdentity, runNativePolicy } from "./lib/code-quality-runner.mjs";
@@ -105,14 +110,22 @@ const FAILURE_REASONS = new Set([
   "code-quality-register-exists",
   "code-quality-register-increase",
   "register-write-in-ci",
+  "missing-code-quality-register-increases",
+  "invalid-code-quality-register-increases",
+  "noncanonical-code-quality-register-increases",
+  "missing-code-quality-base",
+  "invalid-code-quality-base",
 ]);
+
+// The CI ratchet reviews register raises against the pull request's base commit (#4145).
+const REGISTER_BASE_VARIABLE = "KEIKO_CODE_QUALITY_BASE_SHA";
 
 const REGISTER_ACTIONS = new Map([
   ["--prune-register", "prune"],
   ["--initialize-register", "initialize"],
 ]);
 
-export function parsePolicyArguments(args, ci = process.env.CI === "true") {
+export function parsePolicyArguments(args, ci, env) {
   const options = { mode: "enforce", scope: "repository", json: false };
   const supplied = new Set();
   for (let index = 0; index < args.length; index++) {
@@ -129,7 +142,16 @@ export function parsePolicyArguments(args, ci = process.env.CI === "true") {
   }
   if (options.registerAction !== undefined && !supplied.has("--mode")) options.mode = "ratchet";
   validatePolicyOptions(options, ci);
+  applyRegisterBase(options, ci, env);
   return options;
+}
+
+// Only the comparing ratchet reviews raises; a CI comparison without a base fails closed.
+function applyRegisterBase(options, ci, env) {
+  if (options.mode !== "ratchet" || options.registerAction !== undefined) return;
+  const base = env?.[REGISTER_BASE_VARIABLE];
+  if (base !== undefined && base !== "") options.registerBase = base;
+  else if (ci) throw new TypeError("missing-code-quality-base");
 }
 
 function validateRegisterOptions(options, ci) {
@@ -262,6 +284,30 @@ function readPolicyRegister(path) {
   return parseRegister(readFileSync(path, "utf8"));
 }
 
+function readPolicyIncreases(path) {
+  if (!existsSync(path)) throw new TypeError("missing-code-quality-register-increases");
+  return parseIncreases(readFileSync(path, "utf8"));
+}
+
+// A base without a register predates the ratchet: nothing there can be raised, so every ledger
+// entry is stale.
+export function reviewRegisterAgainstBase(repositoryRoot, base, register, increases) {
+  const commit = resolvePolicyBaseCommit(repositoryRoot, base);
+  const baseRegister = readPolicyFileAt(repositoryRoot, commit, REGISTER_PATH);
+  if (baseRegister === undefined) {
+    const outcome = increases.length === 0 ? "passed" : "failed";
+    return { status: "base-register-absent", base: commit, stale: increases, outcome };
+  }
+  const baseIncreases = readPolicyFileAt(repositoryRoot, commit, REGISTER_INCREASES_PATH);
+  const review = reviewRegisterRaises({
+    baseRegister: parseRegister(baseRegister),
+    register,
+    baseIncreases: baseIncreases === undefined ? [] : parseIncreases(baseIncreases),
+    increases,
+  });
+  return { status: "compared", base: commit, ...review };
+}
+
 function registerFindingLines(diagnostics, { path, rule }) {
   return diagnostics
     .filter((entry) => entry.path === path && entry.rule === rule)
@@ -281,8 +327,9 @@ function applyPolicyRegister(options, repositoryRoot, diagnostics, files) {
     return { action: "initialize", ...compareRegister(current, current, scanned), before: 0 };
   }
   const committed = readPolicyRegister(path);
+  const ledger = readPolicyIncreases(resolve(repositoryRoot, REGISTER_INCREASES_PATH));
   if (options.registerAction === "prune") {
-    writeFileSync(path, serializeRegister(pruneRegister(committed, current, scanned)));
+    writeFileSync(path, serializeRegister(pruneRegister(committed, current, scanned, ledger)));
     const pruned = compareRegister(current, current, scanned);
     return { action: "prune", ...pruned, before: registerTotal(committed) };
   }
@@ -291,7 +338,12 @@ function applyPolicyRegister(options, repositoryRoot, diagnostics, files) {
     ...entry,
     lines: registerFindingLines(diagnostics, entry),
   }));
-  return { action: "compare", ...comparison, increases };
+  const review =
+    options.registerBase === undefined
+      ? { status: "not-requested", outcome: "passed" }
+      : reviewRegisterAgainstBase(repositoryRoot, options.registerBase, committed, ledger);
+  const outcome = comparison.outcome === "passed" ? review.outcome : "failed";
+  return { action: "compare", ...comparison, increases, review, outcome };
 }
 
 function policySubjectApplicability(policy, subject) {
@@ -487,11 +539,25 @@ function printRegisterReport(report) {
     console.log(`decrease: ${entry.path} ${entry.rule} ${entry.before} → ${entry.after}`);
   for (const path of register.stale) console.log(`stale: ${path}`);
   if (register.decreases.length + register.stale.length > 0) console.log(`register: ${PRUNE_HINT}`);
+  if (register.review) printRegisterReview(register.review);
+}
+
+const ledgerEntry = (entry) => `${entry.path} ${entry.rule} ${entry.from} → ${entry.to}`;
+
+function printRegisterReview(review) {
+  if (review.status === "not-requested") return;
+  const reviewed = review.raises === undefined ? "" : `; ${review.raises.length} raises`;
+  console.log(`review: ${review.status} against ${review.base}${reviewed}`);
+  for (const raise of review.unreviewed ?? [])
+    console.log(`unreviewed raise: ${raise.path} ${raise.rule} ${raise.before} → ${raise.after}`);
+  for (const entry of review.stale) console.log(`stale increase: ${ledgerEntry(entry)}`);
+  for (const entry of review.rewritten ?? [])
+    console.log(`rewritten increase: ${ledgerEntry(entry)}`);
 }
 
 export async function codeQualityPolicyMain(args = process.argv.slice(2), repositoryRoot = root) {
   try {
-    const options = parsePolicyArguments(args);
+    const options = parsePolicyArguments(args, process.env.CI === "true", process.env);
     const progress = createPolicyProgress(options);
     const report = await executeCodeQualityPolicy(options, repositoryRoot, progress);
     if (options.json) {

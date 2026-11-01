@@ -329,6 +329,29 @@ export async function collectPolicyInventory(root) {
   return (await collectPolicySubject(root)).inventory;
 }
 
+// The ratchet reviews register raises against the change's base commit (#4145). A push that
+// creates a branch reports an all-zero previous tip; that push compares with HEAD's first parent.
+const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
+const ZERO_OBJECT_ID = /^0+$/u;
+
+/** Resolves a full object id to a commit in this checkout; anything else fails closed. */
+export function resolvePolicyBaseCommit(root, base) {
+  if (!OBJECT_ID.test(base)) throw new TypeError("invalid-code-quality-base");
+  const revision = ZERO_OBJECT_ID.test(base) ? "HEAD^1" : base;
+  try {
+    return policyGit(root, ["rev-parse", "--verify", "--quiet", `${revision}^{commit}`]).trim();
+  } catch {
+    throw new TypeError("invalid-code-quality-base");
+  }
+}
+
+/** Reads one file at a commit, or returns undefined when that commit has no such file. */
+export function readPolicyFileAt(root, commit, path) {
+  if (policyGit(root, ["ls-tree", "--name-only", commit, "--", path]).trim() !== path)
+    return undefined;
+  return policyGit(root, ["show", `${commit}:${path}`]);
+}
+
 export function readPreviousPolicies(root) {
   if (policyGit(root, ["rev-parse", "--is-shallow-repository"]).trim() !== "false") {
     throw new TypeError("incomplete-policy-history");

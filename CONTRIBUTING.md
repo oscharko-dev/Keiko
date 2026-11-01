@@ -801,6 +801,13 @@ for deleted or renamed files fail as stale. The register may only shrink: the pr
 to widen it, and inline `oxlint-disable` directives are rejected. Run the ratchet locally before you
 push (about 30 seconds). Details: [`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md).
 
+The owner allows one exception. A qualified boundary, a boundary awaiting its reviewed migration, a
+test witness or a proof fixture may raise a count when the same change adds a reviewed entry to
+`scripts/code-quality-register-increases.json`. The entry names the path, rule, old count, new
+count, reason and issue. The prune command then raises that count to exactly the new count. In CI
+the ratchet compares the register with the pull request's base. It fails a raised count without a
+new entry, a new entry that matches no raise, and a removed or changed older entry.
+
 ## Troubleshooting documentation
 
 Operator-facing failure modes live in [`docs/troubleshooting/README.md`](docs/troubleshooting/README.md).

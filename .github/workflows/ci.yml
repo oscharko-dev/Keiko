@@ -437,9 +437,13 @@ jobs:
       - name: Anti-slop code-quality ratchet (#4145)
         # Runs after `npm run typecheck` (which builds packages): the engine imports the compiled
         # keiko-server dist. Fails on any per-file, per-rule increase over the committed register
-        # scripts/code-quality-register.json, and on any stale register entry.
+        # scripts/code-quality-register.json, and on any stale register entry. It also compares the
+        # register with the base commit: each raised count needs a ledger entry this change adds to
+        # scripts/code-quality-register-increases.json. The merge-candidate step proves that a pull
+        # request's base sha is the first parent of the checked-out merge commit.
         env:
           NODE_OPTIONS: --max-old-space-size=12288
+          KEIKO_CODE_QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: npm run check:code-quality-policy -- --mode ratchet
       - run: npm run format:check
       - name: UI i18n guard

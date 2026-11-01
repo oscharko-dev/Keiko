@@ -215,7 +215,12 @@ The ratchet fails on any new code-quality finding and on any register entry left
 code; after removing findings, run `npm run check:code-quality-policy -- --prune-register` and
 commit the smaller `scripts/code-quality-register.json`. The register may only shrink; never add
 an entry or raise a count, and inline `oxlint-disable` directives are rejected
-([`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md), ADR-0167 D6).
+([`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md), ADR-0167 D6). The one
+exception is an owner-approved raise for a qualified boundary, a boundary awaiting its reviewed
+migration, a test witness or a proof fixture. The change then adds an entry to
+`scripts/code-quality-register-increases.json` that names the exact path, rule, old and new count,
+reason and issue. CI compares the register with the pull request's base and checks that every raised
+count has such an entry. Never add one for ordinary code.
 
 There is a convenience aggregate that chains the core of the above:
 
