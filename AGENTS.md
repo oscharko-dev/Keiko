@@ -1135,8 +1135,8 @@ accounting. A chat probe that only times out or meets a transient overload statu
 a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
 diagnostic), so a busy single-slot model stays selectable (#4115). An accepted coding-sidecar answer
 that finished serving renews that same-generation success too (`readinessRenewal` on
-`coding-sidecar.gateway.outcome`; #3907). Each chat model is checked once per configuration
-generation at startup; nothing renews or recovers a model on a timer. A conversation request, a
+`coding-sidecar.gateway.outcome`; #3907). Each chat model is checked once per connection
+at startup; nothing renews or recovers a model on a timer. A conversation request, a
 coding run start, a Workbench model choice (`check=1`) or a page load checks a model that is not
 ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
 never start a check. The Workbench profile describes the model chosen in its picker (`modelId`):

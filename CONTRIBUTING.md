@@ -159,7 +159,7 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. Each chat model is checked once per configuration generation at startup; nothing
+accounting. Each chat model is checked once per connection at startup; nothing
 renews or recovers a model on a timer. A conversation request, a coding run start, a Workbench
 model choice (`check=1`) or a page load checks a model that is not ready now; only an observed
 failure waits out the 30 s not-ready cooldown. Other Workbench reads never start a check. The

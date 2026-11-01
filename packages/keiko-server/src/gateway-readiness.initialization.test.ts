@@ -651,3 +651,30 @@ it("retains the rotated connection result when an older chat failure finally arr
   expect(holder.verifiedCapability("chat-model")).toEqual(observation);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
+
+// Customer 1.3.4: every proof another model's check persisted advanced the configuration
+// generation, and startup checked a busy model again for each one, a burst of probes nobody asked
+// for. A model is checked once per connection; a page load still asks again.
+it("does not repeat a startup check when only the generation advanced", async () => {
+  const deps = composition();
+  vi.useFakeTimers();
+  const fetch = vi.fn(() => Promise.resolve(new Response("", { status: 503 })));
+  vi.stubGlobal("fetch", fetch);
+  configure(deps, "corr-busy-startup");
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const holder = deps.gatewayConfig;
+  const config = holder?.current();
+  if (config === undefined || holder === undefined) throw new TypeError("Expected gateway owner.");
+  const generation = holder.generation();
+  holder.set({ ...config }, true, "corr-proof-persisted");
+  expect(holder.generation()).toBe(generation + 1);
+  await vi.advanceTimersByTimeAsync(NOT_READY_REPROBE_COOLDOWN_MS);
+  expect(fetch).toHaveBeenCalledOnce();
+  initializeConfiguredConversationReadiness(deps, "corr-page-load", true);
+  await vi.waitFor(() => {
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+});

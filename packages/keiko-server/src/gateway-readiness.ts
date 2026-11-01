@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
@@ -2416,10 +2417,11 @@ function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTa
 }
 
 // Keyed by the deployment's identity, not the configuration generation: every conclusion this
-// persists bumps the generation, which would otherwise lift the cooldown of every other model.
+// persists bumps the generation, which would otherwise lift the cooldown of every other model and
+// repeat the startup check of every model that did not answer (customer 1.3.4).
 // The configured timeout is part of the key (#3591): an operator who raises it after a timed-out
 // probe has changed what the probe can prove and gets a fresh attempt at once.
-function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
+function deploymentProbeKey(config: GatewayConfig, modelId: string): string {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   return provider === undefined
     ? modelId
@@ -2434,7 +2436,7 @@ function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
 export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: string): boolean {
   const model = listConfiguredCapabilities(config).find((candidate) => candidate.id === modelId);
   if (model === undefined || model.toolCallingVerification?.status === "unsupported") return false;
-  const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
+  const entry = workbenchProbes.get(deploymentProbeKey(config, modelId));
   return entry !== undefined && !entry.settled;
 }
 
@@ -2463,7 +2465,7 @@ export function isToolCallingRenewalPending(config: GatewayConfig, modelId: stri
  * refuted, and it is checked again when someone asks.
  */
 export function isCodingWorkbenchProbeUnanswered(config: GatewayConfig, modelId: string): boolean {
-  const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
+  const entry = workbenchProbes.get(deploymentProbeKey(config, modelId));
   return entry?.settled === true && entry.outcome === "inconclusive";
 }
 
@@ -2572,7 +2574,7 @@ function enqueueWorkbenchProbe(
   request: WorkbenchProbeRequest = {},
 ): Promise<void> {
   const prioritized = request.prioritized ?? false;
-  const key = workbenchProbeKey(config, target.modelId);
+  const key = deploymentProbeKey(config, target.modelId);
   const known = workbenchProbes.get(key);
   if (known !== undefined && !workbenchProbeDue(known, request.retryUnanswered ?? false)) {
     known.prioritized ||= prioritized;
@@ -2760,6 +2762,10 @@ interface ConversationInitializationQueue {
   // older feature-observation timestamp (`preserveUnexecutedCapabilityObservation`), so the
   // cooldown a conversation request honours is dated by the probe, never by that timestamp.
   readonly probeSettledAt: Map<string, number>;
+  // The deployment each model's latest check ran against, recorded when it starts to run (a probe
+  // a replacement skipped never ran). It survives a generation change, because a proof another
+  // model's check persisted bumps the generation without changing this model.
+  readonly startupChecked: Map<string, string>;
 }
 const conversationQueues = new WeakMap<
   NonNullable<UiHandlerDeps["gatewayConfig"]>,
@@ -2778,6 +2784,7 @@ function conversationQueue(
       initializedGeneration: -1,
       pending: [],
       probeSettledAt: new Map(),
+      startupChecked: new Map(),
     };
     conversationQueues.set(holder, queue);
   }
@@ -2933,13 +2940,15 @@ export function isConversationReadinessCheckRunning(deps: UiHandlerDeps, modelId
   );
 }
 
-// Startup checks a model this configuration generation has not answered for yet (ready or not).
+// Startup checks a model this configuration generation has not answered for yet (ready or not),
+// once per deployment: a generation that only persisted another model's proof repeats no check.
 // A user-driven refresh (a page load) checks again every model that did not answer ready, within
 // the not-ready cooldown. A success that only expired stays usable, as in Chat, and is checked by
 // the request that uses it; nothing re-checks a model on a timer (customer 1.3.4).
 function initializeConversationModel(
   deps: UiHandlerDeps,
   holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  config: GatewayConfig,
   modelId: string,
   correlationId: string | undefined,
   recheck: boolean,
@@ -2948,7 +2957,18 @@ function initializeConversationModel(
   if (readinessProbesFor(holder).has(`${String(generation)}:${modelId}`)) return;
   const answer = answerThisGeneration(holder, modelId);
   if (recheck ? answer === true : answer !== undefined) return;
+  const checked = conversationQueue(holder).startupChecked.get(modelId);
+  if (!recheck && checked === conversationConnectionKey(config, modelId)) return;
   checkConversationModelOnce(deps, modelId, generation, correlationId);
+}
+
+// Everything a chat check depends on: the provider's connection, credential included. Measured
+// capability (a persisted proof) lives beside it and changes nothing here. A digest, in memory only.
+function conversationConnectionKey(config: GatewayConfig, modelId: string): string {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return provider === undefined
+    ? modelId
+    : createHash("sha256").update(JSON.stringify(provider)).digest("hex");
 }
 
 function answerThisGeneration(
@@ -2962,7 +2982,7 @@ function answerThisGeneration(
 }
 
 /**
- * Each configured chat model is checked once per configuration generation, at startup; `recheck`
+ * Each configured chat model is checked once per connection, at startup; `recheck`
  * (a user-driven refresh) checks again the models that are not ready now.
  */
 export function initializeConfiguredConversationReadiness(
@@ -2979,7 +2999,7 @@ export function initializeConfiguredConversationReadiness(
   if (config === undefined) return;
   for (const model of listConfiguredCapabilities(config)) {
     if (model.kind === "chat")
-      initializeConversationModel(deps, holder, model.id, correlationId, recheck);
+      initializeConversationModel(deps, holder, config, model.id, correlationId, recheck);
   }
 }
 
@@ -3217,6 +3237,12 @@ async function runOnDemandReadinessProbe(
 ): Promise<void> {
   const generation = holder.generation();
   const probeCorrelationId = correlationId ?? newCorrelationId();
+  const config = holder.current();
+  if (config !== undefined)
+    conversationQueue(holder).startupChecked.set(
+      modelId,
+      conversationConnectionKey(config, modelId),
+    );
   logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId, backgroundAttempt);
   await observeOnDemandProbe(deps, modelId, probeCorrelationId);
   if (holder.generation() === generation) {

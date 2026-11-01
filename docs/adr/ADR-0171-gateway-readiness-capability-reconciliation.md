@@ -3,7 +3,7 @@
 ## Status
 
 Accepted (Issue #2885, 2026-08-02). Amended by PR #3452 (2026-09-11): D5. Amended 2026-11-01
-(customer 1.3.4, owner decision): D2 checks each model once per generation and on demand, with no
+(customer 1.3.4, owner decision): D2 checks each model once per connection and on demand, with no
 background renewal or recovery; D4 scopes the Workbench profile's verification to its chosen model.
 
 ## Context
@@ -54,8 +54,10 @@ create, send, streaming send, regeneration, or grounded question may join an alr
 initialization. A fresh successful observation adds no per-question readiness request. A success
 expires at the exact five-minute boundary; malformed or future successful timestamps are unknown.
 Nothing re-checks a model on a timer (owner decision 2026-11-01, customer 1.3.4): configuration
-initialization checks each configured chat model once per generation, through the same
-generation/model in-flight map and two slots. Automatic and on-demand probes share the interactive
+initialization checks each configured chat model once per connection, through the same
+generation/model in-flight map and two slots. A connection is the provider entry with its
+credential; a proof another model's check persists advances the generation without changing it, so
+it repeats no check (the customer's busy models were checked once per persisted proof). Automatic and on-demand probes share the interactive
 gateway's five-minute silence floor (#4038), preserving larger configured timeouts: a two-minute
 probe must not declare a model unavailable while an ordinary three-minute answer is still within
 its supported wait. The five-minute freshness interval remains unchanged. A check that outlives
