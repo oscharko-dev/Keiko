@@ -33,7 +33,10 @@ import type {
   MemoryUserId,
   WorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts";
-import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+  JIRA_MANAGED_ACTION_TYPES,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
@@ -3829,13 +3832,16 @@ it("shares one lazy Jira catalog per graph and closes it on disposal (#4089)", a
     if (runtime === undefined) throw new Error("Expected graph-owned managed catalog");
     const [first, second] = await Promise.all([runtime.get(), runtime.get()]);
     expect(second).toBe(first);
+    // Every canonical Jira tool, read or write, is one handler (#4178 added `jira.draft`), beside
+    // the one local `knowledge.requirements` read the same catalog hosts (#4179).
+    const toolCount = Object.keys(JIRA_MANAGED_ACTION_TYPES).length + 1;
     expect(
       activityLog.events.filter((event) => event.op === "mcp.managed.lifecycle"),
     ).toMatchObject([
-      { extra: { phase: "listed", toolCount: 14, reason: "none" } },
-      { extra: { phase: "admitted", toolCount: 14, reason: "none" } },
+      { extra: { phase: "listed", toolCount, reason: "none" } },
+      { extra: { phase: "admitted", toolCount, reason: "none" } },
     ]);
-    expect(first.handlerBindings).toHaveLength(14);
+    expect(first.handlerBindings).toHaveLength(toolCount);
     expect(first.handlerBindings.every((handler) => handler.readiness() === "ready")).toBe(true);
     await deps.dispose?.();
     await expect(runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });

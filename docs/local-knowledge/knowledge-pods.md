@@ -208,14 +208,46 @@ evidence (ADR-0144). The operator sets the policy in `keiko.config.json`:
 anyway is dropped. Any other value fails the configuration load. The Activity Log records each answer's outcome on `search.answer.assessed`
 (sizes only, never the text).
 
+## Project document formats
+
+A pod indexes the text layer of Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`) and PDF
+files, with the source location a citation points at: the paragraph or sheet row, the slide
+(`Slide N: <title>`, including table rows and speaker notes) or the page. Images, charts and
+embedded objects are not read, and scanned documents are not recognized (no OCR).
+
+A file that cannot be indexed is named by a closed reason and never contributes partial text:
+
+| Condition                                               | Diagnostic code      |
+| ------------------------------------------------------- | -------------------- |
+| Password-protected Word, Excel or PowerPoint file       | `ENCRYPTED_DOCUMENT` |
+| Password-protected PDF                                  | `ENCRYPTED_PDF`      |
+| Corrupt, truncated or empty file; unsupported structure | `MALFORMED_INPUT`    |
+| File larger than the parser byte limit                  | `OVERSIZED_FILE`     |
+| PDF without a text layer (scan)                         | `UNSUPPORTED_FORMAT` |
+
+A password-protected Office file is not a ZIP package: Office wraps it in an OLE2 compound file
+(signature `D0 CF 11 E0 A1 B1 1A E1`), which the shared OOXML reader recognizes before it opens
+the archive. Remove the password and reindex the file. The diagnostic message is fixed text; it
+never carries the file name, path or content.
+
 ## Model-use policy
 
 Knowledge Pods carry an additive `modelUsePolicy` contract that resolves to a
-body-free operation matrix. New UI-created pods now choose an explicit policy in the
-create dialog and default to `sealed-local`; users must deliberately select `standard`
-when they want external model-use operations. Legacy persisted rows without an explicit
-policy also resolve as `sealed-local`, which fails closed for operations that would
-release pod content to external model providers.
+body-free operation matrix. The create dialog asks for the policy in plain words, under
+"Model use", and submits it explicitly:
+
+- **Use configured models** (`standard`, the default) — the pod is searchable and citable
+  as soon as it is indexed. Excerpts and questions go to the embedding and answer models
+  configured for this installation, so no later settings step is needed.
+- **Sealed local** (`sealed-local`) — content is never sent to an external model (embedding or
+  reranking), never used to write answers and never released as raw text. Only local, on-device
+  embedding and reranking are permitted by the policy. A sealed pod stays out of search and
+  answers until its policy is changed.
+
+A create request that omits the policy (an API caller, the manual and connector pod
+flows) also receives `standard`. Legacy persisted rows without an explicit policy resolve
+as `sealed-local`, which fails closed for operations that would release pod content to
+external model providers.
 
 The sealed-local default denies:
 

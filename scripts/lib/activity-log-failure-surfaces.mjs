@@ -75,6 +75,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "support-report-evidence", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-activity", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-scope-update-log", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "chat-tool-turn-ending", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-compaction-model-summary", surface: "bff" },
   {
     owner: "keiko-server",
@@ -142,6 +143,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gitProcessActivity", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "grounded-citation-log", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "knowledge-prompt-window", surface: "memory-knowledge" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "requirement-inventory-activity",
+    surface: "memory-knowledge",
+  },
   {
     owner: "keiko-server",
     emitterPrefix: "grounded-entailment-stage",

@@ -526,6 +526,78 @@ describe("createGatewayAtlassianHttpBodyPort — write channel (Issue #2244)", (
   });
 });
 
+describe("createGatewayAtlassianHttpBodyPort — governed upload (#4176)", () => {
+  const upload = {
+    contentType: "multipart/form-data; boundary=keiko-0123456789abcdef",
+    bytes: new TextEncoder().encode(
+      "--keiko-0123456789abcdef\r\nbody\r\n--keiko-0123456789abcdef--",
+    ),
+  };
+  const request: AtlassianHttpBodyRequest = {
+    method: "POST",
+    url: "https://acme.example/rest/api/2/issue/PROJ-9/attachments",
+    timeoutMs: 30_000,
+    maxBodyBytes: 1_000,
+    upload,
+  };
+  function recordingFetch(): {
+    readonly fetchImpl: typeof fetch;
+    readonly seen: { headers: Headers; body: unknown; method: string | undefined }[];
+  } {
+    const seen: { headers: Headers; body: unknown; method: string | undefined }[] = [];
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      seen.push({ headers: new Headers(init?.headers), body: init?.body, method: init?.method });
+      return Promise.resolve(new Response("[]", { status: 200 }));
+    }) as typeof fetch;
+    return { fetchImpl, seen };
+  }
+  it("sends the exact bytes as multipart with Jira's XSRF opt-out and no JSON content type", async () => {
+    const { fetchImpl, seen } = recordingFetch();
+    const result = await bodyPort(fetchImpl, resolver())(request);
+    expect(result).toMatchObject({ kind: "response", status: 200 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.method).toBe("POST");
+    expect(seen[0]?.headers.get("content-type")).toBe(upload.contentType);
+    expect(seen[0]?.headers.get("x-atlassian-token")).toBe("no-check");
+    expect(Buffer.from(seen[0]?.body as Uint8Array).equals(Buffer.from(upload.bytes))).toBe(true);
+  });
+  it("never adds the opt-out header to an ordinary JSON write", async () => {
+    const { fetchImpl, seen } = recordingFetch();
+    await bodyPort(fetchImpl, resolver())({ ...request, upload: undefined, bodyJson: "{}" });
+    expect(seen[0]?.headers.get("x-atlassian-token")).toBeNull();
+    expect(seen[0]?.headers.get("content-type")).toBe("application/json");
+  });
+  it.each([
+    ["a PUT", { method: "PUT" as const }],
+    ["a GET", { method: "GET" as const }],
+    ["a JSON body beside it", { bodyJson: "{}" }],
+    ["a content type that is not multipart", { upload: { ...upload, contentType: "text/html" } }],
+    [
+      "a boundary with header-breaking characters",
+      { upload: { ...upload, contentType: "multipart/form-data; boundary=a\r\nX: y" } },
+    ],
+  ])("fails closed on an upload with %s before any outbound call", async (_label, override) => {
+    const { fetchImpl, seen } = recordingFetch();
+    await expect(
+      bodyPort(fetchImpl, resolver())({ ...request, ...override }),
+    ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
+    expect(seen).toHaveLength(0);
+  });
+  it("fails closed on an upload past the transport ceiling", async () => {
+    const { fetchImpl, seen } = recordingFetch();
+    await expect(
+      bodyPort(
+        fetchImpl,
+        resolver(),
+      )({
+        ...request,
+        upload: { ...upload, bytes: new Uint8Array(24 * 1024 * 1024 + 1) },
+      }),
+    ).rejects.toBeInstanceOf(AtlassianCredentialCustodyError);
+    expect(seen).toHaveLength(0);
+  });
+});
+
 // ─── Connector egress posture (KEIKO-0316, #3156) ────────────────────────────
 // The connector lane must never inherit the model gateway's private-network opt-ins. Those
 // flags exist for an operator's own approved, customer-hosted MODEL provider; an Atlassian

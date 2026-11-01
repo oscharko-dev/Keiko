@@ -4,7 +4,10 @@ import type {
   EditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
-import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type {
+  JiraAttachmentPreview,
+  JiraMutationOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { recordChatAuthorityResult } from "../editor/chatAuthorityActivity.js";
 import { sameReadGrantAuthority, sameReadGrantSubject } from "./chatReadGrantState.js";
@@ -16,12 +19,19 @@ export interface ChatToolWriteActionIdentity {
 }
 export interface JiraChatWriteActionIdentity extends ChatToolWriteActionIdentity {
   readonly operation: JiraMutationOperation;
+  /** The reviewed file of a `jira.attach` approval; never part of the action's identity (#4176). */
+  readonly attachment?: JiraAttachmentPreview;
 }
 export interface ChatWriteApprovalEntry {
   readonly approval: ChatToolWriteApprovalView;
   readonly subject: ChatToolAuthoritySubject;
   readonly authority: EditorAgentGovernedAuthorityReference;
   readonly approvalProofDigest: string | null;
+  /**
+   * Item refs of the reviewed backlog draft. Server-side only: it is never projected to the
+   * client and lets the registry validate a human deselection before any state changes (#4178).
+   */
+  readonly draftItemRefs?: readonly string[];
 }
 export interface ChatWriteApprovalClaim {
   readonly approvalId: string;
@@ -102,8 +112,34 @@ export function snapshotWriteApproval(
         envelopeDigest: entry.authority.envelopeDigest,
       }),
       approvalProofDigest: entry.approvalProofDigest,
+      ...(entry.draftItemRefs === undefined
+        ? {}
+        : { draftItemRefs: Object.freeze([...entry.draftItemRefs]) }),
     }),
   });
+}
+
+/**
+ * The deselection is empty, or a unique subset of the refs of the draft that was reviewed. Only a
+ * backlog draft that recorded its refs can be partially approved; anything else fails closed.
+ */
+export function admitsWriteDeselection(
+  entry: ChatWriteApprovalEntry,
+  excludedItemRefs: readonly string[],
+): boolean {
+  if (excludedItemRefs.length === 0) return true;
+  const { approval, draftItemRefs } = entry;
+  if (
+    approval.kind !== "jira-chat-write" ||
+    approval.operation !== "jira.draft" ||
+    draftItemRefs === undefined
+  )
+    return false;
+  const refs = new Set(draftItemRefs);
+  return (
+    new Set(excludedItemRefs).size === excludedItemRefs.length &&
+    excludedItemRefs.every((ref) => refs.has(ref))
+  );
 }
 
 const DENIAL = {

@@ -10,7 +10,7 @@ import {
   type GatewayCallRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { DEFAULT_LIMITS, type ModelPort } from "@oscharko-dev/keiko-harness";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
@@ -47,7 +47,15 @@ interface Options {
   readonly batchSize?: number;
   readonly promptTokens?: number;
   readonly beforeMcpWriteResult?: () => Promise<void>;
+  readonly budget?: NonNullable<UiHandlerDeps["chatToolTurnBudget"]>;
 }
+// A narrow composed envelope budget keeps the shared-bound pins exact and fast (#4175).
+const NARROW_BUDGET = {
+  maxRuntimeMs: 300_000,
+  maxToolCalls: 30,
+  maxPromptTokens: 100_000,
+  maxPatchBytes: 0,
+} as const;
 function context(body: Record<string, unknown>, params: Record<string, string> = {}): RouteContext {
   return {
     req: mockRequest({ body: JSON.stringify(body) }),
@@ -232,10 +240,16 @@ function fixture(options: Options = {}): Fixture {
     serve: () => Promise.resolve(new Response(null, { status: 404 })),
     close: () => Promise.resolve(),
   };
-  const deps = installMcpChatCatalogRuntime(Object.assign(base, { mcpConnections: connections }), {
-    primary: createBufferedServerLogSink(),
-    diagnostics: { record: (): void => undefined },
-  });
+  const deps = installMcpChatCatalogRuntime(
+    Object.assign(base, {
+      mcpConnections: connections,
+      ...(options.budget === undefined ? {} : { chatToolTurnBudget: options.budget }),
+    }),
+    {
+      primary: createBufferedServerLogSink(),
+      diagnostics: { record: (): void => undefined },
+    },
+  );
   cleanup.push(async () => {
     await deps.dispose?.();
     rmSync(root, { recursive: true, force: true });
@@ -475,19 +489,20 @@ it.each(["jira", "mcp"] as const)(
     ).not.toBe(200);
   },
 );
-it("shares the physical tool limit across alternating Jira and MCP calls", async () => {
-  const f = fixture({ repeat: true, batchSize: DEFAULT_LIMITS.maxToolCalls });
+it("shares the envelope's physical tool limit across alternating Jira and MCP calls", async () => {
+  const f = fixture({ repeat: true, batchSize: NARROW_BUDGET.maxToolCalls, budget: NARROW_BUDGET });
   const pending = send(f);
   void pending.catch(() => undefined);
   await approveRead(f, "mcp-chat-read");
   await approveRead(f, "jira-chat-read");
   await pending;
-  expect(f.effects).toHaveLength(DEFAULT_LIMITS.maxToolCalls);
+  expect(f.effects).toHaveLength(NARROW_BUDGET.maxToolCalls);
   expect(new Set(f.effects)).toEqual(new Set(["mcp-read", "jira-read"]));
-  expect(f.calls).toHaveLength(2);
+  // No further model round is requested once the shared tool-call budget is spent.
+  expect(f.calls).toHaveLength(1);
 });
 it("keeps the prompt allowance shared when source execution changes", async () => {
-  const f = fixture({ repeat: true, promptTokens: 60_000 });
+  const f = fixture({ repeat: true, promptTokens: 60_000, budget: NARROW_BUDGET });
   const pending = send(f);
   void pending.catch(() => undefined);
   await approveRead(f, "mcp-chat-read");

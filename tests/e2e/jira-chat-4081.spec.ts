@@ -27,9 +27,9 @@ test("ordinary Chat requires read consent and exact write approval through real 
   await send(region, "JIRA_E2E_COMMENT: add the synthetic approval fixture comment.");
   const approval = region.getByRole("button", { name: "Approve this action", exact: true });
   await expect(approval).toBeEnabled();
-  await expect(region.getByLabel("Proposed action details")).toHaveValue(
-    /Synthetic browser approval fixture/u,
-  );
+  const details = region.getByRole("group", { name: "Proposed action details" });
+  await expect(details).toContainText("Synthetic browser approval fixture");
+  await expect(details).not.toContainText(/[{}]/u);
   expect(counts().writes).toBe(before.writes);
   await approval.click();
   await expect(region.getByText("Jira change confirmed", { exact: true })).toBeVisible();

@@ -205,6 +205,9 @@ the credential the human chose; a replaced token, re-verification, deletion, unf
 work or another owner ends the binding (the relay capability is revoked, later calls perform no
 request). Writes pass the relay's existing durable mutation permit before dispatch; a write that
 does not complete is an uncertain mutation, and the run enters the existing recovery.
+The relayed connection may carry server-owned `instructions`, which the relay announces on
+`initialize`; the Jira Pod connection uses it for the shared Jira tool rules (ADR-0128 D4, #4178).
+An external server's own instructions are untrusted metadata and never fill that field.
 
 Evidence is `coding-runtime.jira-pod` under the run's correlation: the binding decision at start
 (`bound` or `refused` with the closed reason) and one line per call or refusal with the closed Jira
@@ -310,10 +313,15 @@ and execution paths remain valid.
 
 Mixed Chat turns create that same accepted-turn authority before continuity, memory and
 retrieval preparation. Existing grounding owners assemble their evidence packs before
-productive Jira orchestration. Every gateway attempt retains its cumulative token and
-time charge. Only the exact, fully observed tool-call response releases its provisional
-synthesis slot; discarded, failed or ambiguous attempts retain theirs. The final answer
-and citation repair share the existing two-attempt synthesis ceiling. Jira results stay
+productive Jira orchestration. Every gateway attempt retains its time charge and its
+reported usage. Only the exact, fully observed tool-call response releases its provisional
+synthesis slot and leaves the synthesis token grant (#4175, amended 2026-10-31): that tool
+round is charged to and bounded by the accepted turn's Authority Envelope (its cumulative
+prompt tokens, tool-call and model-call ceilings and deadline), which the envelope is the
+turn's only bound for. Discarded, failed or ambiguous attempts retain their slot and grant
+charge. The final answer and citation repair share the existing two-attempt synthesis
+ceiling and the original token grant. A long Jira turn therefore no longer fails because
+earlier tool rounds spent the answer's grant. Jira results stay
 in the tool transcript and are attributed separately from connected-evidence citations.
 `chat.grounded-tool-round.completed` records that phase and remaining synthesis count
 without source content. Data-only preparation and synthesis keep their existing path.
@@ -351,6 +359,10 @@ history reads project the decision only onto the exact originating canonical mes
 matching grant identity, generations, disclosure and expiry. The projection never changes
 the stored transcript or resumes its turn. Existing read-grant observation events retain
 the grant proof and a message-hash correlation without exposing private subject details.
+Because the projection is not persisted, each (grant, state) observation is recorded once per
+process and database from bounded, insertion-ordered memory; repeated history reads stay silent.
+The same rule applies to `chat.tool-mutation.projected`: one message's projected set of journal
+outcomes is recorded once, and a later change of that set is recorded again.
 
 ## Verification
 

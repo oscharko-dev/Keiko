@@ -101,6 +101,8 @@ export interface ExternalMcpTool {
 export interface ExternalMcpConnection {
   /** Aborts on connection closure or schema drift; it never authorizes reconnect/replay. */
   readonly signal: AbortSignal;
+  /** Server-owned guidance for the relayed server; an external server's own text never fills it. */
+  readonly instructions?: string;
   readonly tools: readonly ExternalMcpTool[];
   readonly call: (
     name: string,

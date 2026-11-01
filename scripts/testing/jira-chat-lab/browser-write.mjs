@@ -71,8 +71,11 @@ async function decideWrite(chat, intent, beforeDecision) {
   if (intent.mode === "autonomous-delivery") return 0;
   const review = chat.getByRole("region", { name: "Review Jira action", exact: true });
   await review.waitFor({ timeout: 120000 });
-  const preview = await review.getByLabel("Proposed action details", { exact: true }).inputValue();
-  assert.deepEqual(JSON.parse(preview), { issueKey: intent.key, body: intent.marker });
+  const preview = await review
+    .getByRole("group", { name: "Proposed action details", exact: true })
+    .innerText();
+  assert.ok(preview.includes(intent.key) && preview.includes(intent.marker));
+  assert.doesNotMatch(preview, /[{}]/u);
   await beforeDecision();
   await review.getByRole("button", { name: "Approve this action", exact: true }).click();
   stage("write-approved");

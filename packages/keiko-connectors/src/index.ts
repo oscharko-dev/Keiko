@@ -27,6 +27,8 @@ export {
 } from "./atlassian-credential-custody.js";
 export {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
+  type AtlassianHttpUpload,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
@@ -189,3 +191,110 @@ export {
   type JiraManagedMutationExecutor,
 } from "./jira-managed-tools.js";
 export { JIRA_METADATA_MAX_UPDATES } from "./jira-field-metadata.js";
+export {
+  JIRA_ISSUE_LINKS_MAX,
+  JIRA_ISSUE_LINKS_PER_REQUEST_MAX,
+  isJiraIssueLinkWrite,
+} from "./jira-issue-links.js";
+export {
+  parseJiraAttachmentArguments,
+  type JiraAttachmentContent,
+  type JiraAttachmentSource,
+  type JiraAttachmentSourceRequest,
+  type JiraAttachmentSourceResult,
+  type JiraAttachmentArguments,
+} from "./jira-attachments.js";
+export {
+  JIRA_DRAFT_IDENTITY_PREFIX,
+  JIRA_REQUIREMENT_IDS_MAX,
+  parseRequirementIds,
+  excludedJiraDraftRefs,
+  jiraDraftDependencies,
+  jiraDraftIdentity,
+  checkJiraDraft,
+  parseJiraDraft,
+  type JiraDraft,
+  type JiraDraftCheck,
+  type JiraDraftProblem,
+  type JiraDraftItem,
+  type JiraDraftLink,
+  type JiraDraftParent,
+} from "./jira-draft.js";
+export {
+  descriptionWithFooter,
+  type JiraTraceOutcome,
+  type JiraTraceRequest,
+} from "./jira-requirement-trace.js";
+export {
+  executeJiraDraftItem,
+  findJiraDraftItem,
+  readJiraAttachmentLimit,
+} from "./jira-managed-mutations.js";
+export { jiraBrowseUrl } from "./jira-browse-url.js";
+export {
+  JIRA_TEMPLATE_FINDING_CODES,
+  checkJiraIssueTemplate,
+  checkJiraIssueTemplates,
+  jiraTemplateValuePresent,
+  jiraTemplateValueText,
+  matchingJiraIssueTemplates,
+  resolveJiraTemplateFieldIds,
+  validateJiraIssueTemplateAgainstInstance,
+  type JiraFieldCatalogEntry,
+  type JiraTemplateFinding,
+  type JiraTemplateFindingCode,
+  type JiraTemplateInstanceMetadata,
+  type JiraTemplateSubject,
+} from "./jira-issue-template-check.js";
+export {
+  gateJiraMutationByTemplates,
+  type JiraIssueTemplateSet,
+  type JiraIssueTemplateSource,
+  type JiraTemplateGateInput,
+  type JiraTemplateGateResult,
+} from "./jira-managed-template-gate.js";
+export {
+  checkJiraManagedMutationTemplates,
+  requestFor as createJiraReadRequest,
+} from "./jira-managed-mutations.js";
+export {
+  deriveJiraTemplateSections,
+  proposeJiraIssueTemplates,
+  readJiraTemplateInstanceMetadata,
+  renderProposedJiraIssueTemplate,
+  type JiraTemplateInstanceRead,
+  type JiraTemplateProposal,
+  type JiraTemplateProposalInput,
+} from "./jira-issue-template-instance.js";
+export { createJiraReportTemplateChecker } from "./jira-report-template-checker.js";
+export { createJiraReportStore, type JiraReportStore } from "./jira-report-store.js";
+export {
+  createJiraDraftStore,
+  type JiraDraftStore,
+  type StagedJiraDraft,
+} from "./jira-draft-store.js";
+export {
+  firstJiraDraftTemplateRefusal,
+  parseJiraDraftReference,
+  resolveJiraDraftArguments,
+  type JiraDraftActivity,
+  type JiraDraftTemplateRefusal,
+  type JiraDraftRefusal,
+  type JiraDraftResolution,
+  type JiraDraftToolDeps,
+} from "./jira-draft-stage-tool.js";
+export { exportJiraReport, jiraReportCommentText } from "./jira-report-export.js";
+export type {
+  JiraReportActivity,
+  JiraReportRequirementIds,
+  JiraReportToolDeps,
+} from "./jira-report-tool.js";
+export type {
+  JiraReport,
+  JiraReportCheckerBinder,
+  JiraReportCheckerPort,
+  JiraReportComplianceChecker,
+  JiraReportFieldCatalogEntry,
+  JiraReportDeviation,
+  JiraReportIssueFacts,
+} from "./jira-report-types.js";

@@ -52,6 +52,14 @@ import {
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 
 const MODEL = "mixed-chat-proof";
+// The former fixed coding-harness caps (30 calls, 300 s), now supplied as the turn's Authority
+// Envelope budget (#4175). These pins keep their invariants against an explicit envelope.
+const THIRTY_CALL_BUDGET = {
+  maxRuntimeMs: 300_000,
+  maxToolCalls: 30,
+  maxPromptTokens: 100_000,
+  maxPatchBytes: 0,
+} as const;
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const CITED =
   "Feature returns true [src/Feature.ts:1].\n\nJira tool result: project SYN is visible.";
@@ -744,7 +752,8 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   if (step === "uncited") return "Feature returns true.";
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
-type ProviderStep = "tool" | "write" | "malformed" | "answer" | "uncited" | "overflow";
+type ProviderStep =
+  "tool" | "write" | "malformed" | "answer" | "uncited" | "overflow" | "exhausted";
 interface ProviderOptions {
   readonly toolCount?: number;
   readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
@@ -754,6 +763,34 @@ function reportedProviderUsage(
   usage = { prompt_tokens: 1, completion_tokens: 1 },
 ): Readonly<Record<string, number>> {
   return { ...usage, total_tokens: usage.prompt_tokens + usage.completion_tokens };
+}
+// A reasoning model that spent its whole output budget on reasoning: no text, no tool call.
+function exhaustedOutputResponse(): Response {
+  return Response.json({
+    id: "mixed-response",
+    model: MODEL,
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: "", reasoning_content: "thinking at length" },
+        finish_reason: "length",
+      },
+    ],
+    usage: reportedProviderUsage({ prompt_tokens: 1, completion_tokens: 4096 }),
+  });
+}
+function failedStepResponse(step: ProviderStep): Response | undefined {
+  if (step === "exhausted") return exhaustedOutputResponse();
+  if (step !== "overflow") return undefined;
+  return Response.json(
+    {
+      error: {
+        message: "max_tokens=1000000000 cannot be greater than max_model_len=8192.",
+        code: "400",
+      },
+    },
+    { status: 400 },
+  );
 }
 function provider(
   steps: readonly ProviderStep[] = ["tool", "answer"],
@@ -772,18 +809,8 @@ function provider(
         requests.push(body);
         options.onRequest?.(body, requests.length);
       }
-      if (step === "overflow")
-        return Promise.resolve(
-          Response.json(
-            {
-              error: {
-                message: "max_tokens=1000000000 cannot be greater than max_model_len=8192.",
-                code: "400",
-              },
-            },
-            { status: 400 },
-          ),
-        );
+      const failure = failedStepResponse(step);
+      if (failure !== undefined) return Promise.resolve(failure);
       const tools = isToolStep(body, step);
       return Promise.resolve(
         Response.json({
@@ -820,41 +847,68 @@ function provider(
   return requests;
 }
 
+// #4175: a confirmed Jira tool round is charged to and bounded by the turn's Authority Envelope,
+// so it no longer spends the grounded answer's own token grant; the envelope still ends the turn.
+function fullWindowToolRound(
+  f: ReturnType<typeof runtime>,
+  dimension: "input" | "output",
+): string[] {
+  const budget = modelWindowAwareBudget(f.deps, MODEL);
+  return provider(["tool", "answer"], undefined, undefined, {
+    usage: {
+      prompt_tokens: dimension === "input" ? budget.modelInputTokensMax : 1,
+      completion_tokens: dimension === "output" ? budget.modelOutputTokensMax : 1,
+    },
+  });
+}
+function askFeatureAndProjects(f: ReturnType<typeof runtime>): Promise<RouteResult> {
+  return handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      modelId: MODEL,
+      content: "Explain src/Feature.ts and list the Jira projects.",
+    }),
+    f.deps,
+  );
+}
+
 it.each(["input", "output"] as const)(
-  "does not replenish the original mixed %s token allowance after a successful Jira observation",
+  "charges a successful Jira observation's %s tokens to the turn envelope, not the answer's grant",
   async (dimension) => {
     const f = runtime();
-    const budget = modelWindowAwareBudget(f.deps, MODEL);
-    const requests = provider(["tool", "answer"], undefined, undefined, {
-      usage: {
-        prompt_tokens: dimension === "input" ? budget.modelInputTokensMax : 1,
-        completion_tokens: dimension === "output" ? budget.modelOutputTokensMax : 1,
-      },
-    });
-    const result = await handleGroundedAsk(
-      context({
-        chatId: f.chatId,
-        modelId: MODEL,
-        content: "Explain src/Feature.ts and list the Jira projects.",
-      }),
-      f.deps,
-    );
-    expect(requests).toHaveLength(1);
+    const requests = fullWindowToolRound(f, dimension);
+    const result = await askFeatureAndProjects(f);
+    expect(requests).toHaveLength(2);
     expect(requests[0]).toContain("File: src/Feature.ts");
     expect(f.jiraRequests).toEqual(["GET"]);
-    expect(result).toMatchObject({
-      status: 403,
-      body: { error: { code: "GATEWAY_ATTEMPT_ADMISSION_DENIED" } },
-    });
-    expect(result.body).not.toMatchObject({ content: CITED });
+    expect(result.status).toBe(200);
     expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
       { result: { status: "completed" } },
     ]);
   },
 );
 
-it("retains the thirty-call Jira allowance across mixed model rounds and rejects the next batch", async () => {
+it("answers from the transcript when tool rounds spend the envelope's prompt budget", async () => {
   const f = runtime();
+  const budget = modelWindowAwareBudget(f.deps, MODEL);
+  Object.assign(f.deps, {
+    chatToolTurnBudget: { ...THIRTY_CALL_BUDGET, maxPromptTokens: budget.modelInputTokensMax + 10 },
+  });
+  const requests = fullWindowToolRound(f, "input");
+  const result = await askFeatureAndProjects(f);
+  // The envelope refuses the next model round itself; no further provider or Jira work happens.
+  expect(requests).toHaveLength(1);
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect(result.status).toBe(200);
+  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+    { result: { status: "completed" } },
+  ]);
+});
+
+it("retains the thirty-call envelope Jira allowance across mixed model rounds and rejects the next batch", async () => {
+  const f = runtime();
+  Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
   configure(f.deps, 0, 131072);
   const requests = provider(
     Array.from({ length: 8 }, () => "tool"),
@@ -872,10 +926,13 @@ it("retains the thirty-call Jira allowance across mixed model rounds and rejects
     }),
     f.deps,
   );
-  expect(requests).toHaveLength(7);
+  // Six rounds of five calls exhaust the envelope; the turn stops before a seventh model round
+  // that could no longer act (#4175), so no further batch is even requested.
+  expect(requests).toHaveLength(6);
   expect(f.jiraRequests).toHaveLength(30);
   expect(f.jiraRequests.every((method) => method === "GET")).toBe(true);
   expect(result.status).toBe(200);
+  expect(JSON.stringify(result.body)).toContain("used up its tool-call or prompt budget");
   const exchanges = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges;
   expect(exchanges).toHaveLength(30);
   expect(exchanges?.every((exchange) => exchange.result?.status === "completed")).toBe(true);
@@ -937,7 +994,12 @@ it("keeps physical retrieval and its exhausted excerpt allowance through mixed t
   );
 });
 
-it("cancels mixed synthesis at the accepted turn deadline after time spent awaiting read consent", async () => {
+async function startDeadlineMixedTurn(): Promise<{
+  readonly f: ReturnType<typeof runtime>;
+  readonly requests: string[];
+  readonly pending: Promise<RouteResult>;
+  readonly startedAt: number;
+}> {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.spyOn(AbortSignal, "timeout").mockImplementation((milliseconds) => {
     const controller = new AbortController();
@@ -947,6 +1009,7 @@ it("cancels mixed synthesis at the accepted turn deadline after time spent await
     return controller.signal;
   });
   const f = runtime();
+  Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
   const startedAt = Date.now();
   const registry = approvalOwner(f.deps);
   const waitForRead = vi.spyOn(registry, "waitForChatReadGrant");
@@ -987,28 +1050,57 @@ it("cancels mixed synthesis at the accepted turn deadline after time spent await
     f.deps,
   );
   void pending.catch(() => undefined);
+  await vi.waitFor(
+    () => {
+      expect(requests).toHaveLength(2);
+    },
+    { interval: 1 },
+  );
+  expect(Date.now() - startedAt).toBeLessThan(300000);
+  // The narrower per-tool timeout has already expired; Data synthesis may still run in
+  // the original turn's last milliseconds. That phase must not receive a fresh deadline.
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
+    { result: { status: "timeout" } },
+  ]);
+  return { f, requests, pending, startedAt };
+}
+
+it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent awaiting read consent", async () => {
+  const { f, requests, pending, startedAt } = await startDeadlineMixedTurn();
   try {
-    await vi.waitFor(
-      () => {
-        expect(requests).toHaveLength(2);
-      },
-      { interval: 1 },
-    );
-    expect(Date.now() - startedAt).toBeLessThan(300000);
-    // The narrower per-tool timeout has already expired; Data synthesis may still run in
-    // the original turn's last milliseconds. That phase must not receive a fresh deadline.
-    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges).toMatchObject([
-      { result: { status: "timeout" } },
-    ]);
     await vi.advanceTimersByTimeAsync(1001);
+    const result = await pending;
+    // #4175 relocates this pin's terminal expectation: the exchange above settled, so the
+    // deadline ends the turn with its deterministic transcript answer on the grounded path
+    // instead of a 499. Every no-further-work assertion below is unchanged.
+    expect(result.status).toBe(200);
+    expect(JSON.stringify(result.body)).toContain("this turn reached its time limit");
+    expect(requests).toHaveLength(2);
+    expect(f.jiraRequests).toEqual([]);
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
+  } finally {
+    interruptChatGenerations(f.deps, f.chatId);
+    await pending;
+  }
+});
+
+it("keeps a human stop during mixed synthesis a cancellation although an exchange settled", async () => {
+  const { f, requests, pending } = await startDeadlineMixedTurn();
+  try {
+    interruptChatGenerations(f.deps, f.chatId);
     const result = await pending;
     expect(result).toMatchObject({ status: 499, body: { error: { code: "CANCELLED" } } });
     expect(requests).toHaveLength(2);
     expect(f.jiraRequests).toEqual([]);
-    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300000);
-    expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+    // The serialized turn answers the stop at once; the in-flight turn settles its state after.
+    await vi.waitFor(
+      () => {
+        expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+      },
+      { interval: 1 },
+    );
   } finally {
-    interruptChatGenerations(f.deps, f.chatId);
     await pending;
   }
 });
@@ -1030,7 +1122,10 @@ it("repairs one invalid native model call before normal Chat dispatches any Jira
   expect(effectCounts).toEqual([0, 0, 1]);
   expect(requests[1]).toContain("rejected before execution");
   expect(requests[1]).toContain("maxResults");
-  expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
+  // The rejected call is corrected orchestration and the corrected call a confirmed tool round, so
+  // neither shrinks the answer's output cap; their usage stays charged (pinned in
+  // grounded-synthesis-call-budget.test.ts, "announced correction").
+  expect(outputCap(requests[2] ?? "{}")).toBe(outputCap(requests[0] ?? "{}"));
   expect(f.jiraRequests).toEqual(["GET"]);
   expect(ownedExchange(f, f.chatId)).toMatchObject({
     call: { id: "mixed-call-2" },
@@ -1119,9 +1214,127 @@ it("keeps tool orchestration outside the one answer plus one repair synthesis ce
   expect(requests).toHaveLength(4);
   const caps = requests.map(outputCap);
   expect(caps.every((cap) => cap > 0)).toBe(true);
-  expect(caps.slice(1).every((cap, index) => cap < (caps[index] ?? 0))).toBe(true);
+  // Confirmed tool rounds are charged to the turn's Authority Envelope (#4175), so they leave the
+  // answer's output grant intact; the uncited answer itself still narrows its repair.
+  expect(caps[1]).toBe(caps[0]);
+  expect(caps[2]).toBe(caps[1]);
+  expect(caps[3]).toBeLessThan(caps[2] ?? 0);
   expect(f.jiraRequests).toEqual(["GET", "GET"]);
   expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
+});
+
+it("dispatches the one steered repair of a tool round that exhausted its output budget", async () => {
+  const f = runtime();
+  const requests = provider(["tool", "exhausted", "tool", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  // tool round, the exhausted round, its ONE steered repair (a tool call), then the answer.
+  expect(requests).toHaveLength(4);
+  expect(requests[2]).toContain("output budget");
+  expect(f.jiraRequests).toEqual(["GET", "GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
+});
+
+it("grants a tool round only one steered repair and fails closed when the repair is exhausted too", async () => {
+  const f = runtime();
+  const requests = provider(["tool", "exhausted", "exhausted", "tool", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+  expect((response.body as GroundedAnswer).content).toContain("ran out of output budget");
+  // tool round, the exhausted round and its ONE repair; no third attempt for that round.
+  expect(requests).toHaveLength(3);
+  expect(f.jiraRequests).toEqual(["GET"]);
+});
+
+// #4173 lab (Qwen, 17:13): a tool call the catalog rejects before execution is as unusable as an
+// exhausted round. Its schema correction must not count it against the synthesis grant, or the
+// second correction of one turn is refused (and was logged as a context-window denial).
+it("admits every schema correction of a tool turn that carries connected sources", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "malformed", "tool", "malformed", "tool", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests, JSON.stringify(response.body).slice(0, 600)).toHaveLength(6);
+  expect(requests[2]).toContain("rejected before execution");
+  expect(requests[4]).toContain("rejected before execution");
+  expect(f.jiraRequests).toEqual(["GET", "GET", "GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
+});
+
+it("continues a tool turn whose call the gateway rejected again after its own correction", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider([
+    "tool",
+    "malformed",
+    "malformed",
+    "tool",
+    "malformed",
+    "malformed",
+    "tool",
+    "answer",
+  ]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests).toHaveLength(8);
+  // The gateway corrects each rejected call once; the turn's own round carries the correction
+  // again, and a dispatched call between the two streaks restores that allowance.
+  for (const index of [2, 3, 5, 6]) expect(requests[index]).toContain("rejected before execution");
+  expect(requests[4]).not.toContain("rejected before execution");
+  expect(f.jiraRequests).toEqual(["GET", "GET", "GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
+});
+
+it("ends a tool turn whose corrected round is rejected again without progress", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "malformed", "malformed", "malformed", "malformed", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  // Five tool-turn attempts: the gateway corrects each streak once and the turn carries one
+  // correction round; the sixth is the grounded answer's own later synthesis pass, which must not
+  // inherit the ended turn's correction.
+  expect(requests).toHaveLength(6);
+  expect(requests[3]).toContain("rejected before execution");
+  expect(requests[5]).not.toContain("rejected before execution");
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("the model request failed");
 });
 
 it("charges physical overflow before a tool response and denies a third synthesis attempt", async () => {
@@ -1147,7 +1360,8 @@ function assertPreservedWriteContinuation(requests: readonly string[]): void {
     expect(request).toContain('"tool_call_id":"mixed-call-1"');
     expect(request).toContain('"role":"tool"');
   }
-  expect(outputCap(requests[1] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
+  // The confirmed write round is the envelope's; the overflow attempt stays charged to the grant.
+  expect(outputCap(requests[1] ?? "{}")).toBe(outputCap(requests[0] ?? "{}"));
   expect(outputCap(requests[2] ?? "{}")).toBeLessThanOrEqual(outputCap(requests[1] ?? "{}"));
 }
 

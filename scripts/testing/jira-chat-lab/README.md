@@ -578,3 +578,77 @@ Reconcile the retained identity before any cleanup. If the process itself is kil
 outage, the retained intent identifies the one container that must be restored before another
 laboratory group. Completed receipts contain only the closed scenario outcomes; preparation and
 unit tests do not establish native live acceptance.
+
+## Requirements scenario scorecard (epic #4173)
+
+`requirements/` holds the lab of epic #4173: the scenario catalog S01–S20, a model-free probe
+layer, end-to-end Chat journeys and the scorecard that combines them. Every check is graded by an
+independent oracle (Jira REST/JQL reads or the generated ground truth), never by the model's own
+answer. `catalog.mjs` lists each scenario's obligations; a check names the obligations it covers
+(`covers`) and `coverage.mjs` awards green only when every obligation is covered by a passing
+check, one of them an end-to-end journey. A journey that verifies only part of the contract leaves
+the scenario `partial` (a check grades only the parts the instance gives input for: S10 credits
+per-epic progress and estimate totals only when the seeded project has the Epic Link and Story Points
+fields),
+and an obligation nobody covers keeps it from ever turning green. Creation journeys (S05, S07,
+S17) read the matching Jira issue keys before the turn and grade only the keys that appeared
+during it, so earlier journeys, reruns and the Jira actor's timezone cannot leak into the verdict.
+S05 additionally requires exactly one write approval for its batch, S04 requires title, priority
+and chapter per requirement, S11 each seeded deviation twice over (the structured `jira.report` result of the turn names it for
+that issue, and the answer attributes it to that issue without denying it; an answer such as
+"Keine Abweichung" or "vollständig und korrekt" leaves it undescribed, and a turn without a
+completed `jira.report` deviation list credits nothing and leaves S11 partial), and S17 a one-to-one mapping of the new
+epics onto the Muss requirements plus every created key in the answer. S10 asks for three strict line formats
+(`ANZAHL;type;status;n`, `EPIC;key;members;done`, `SCHÄTZUNG;total;done;remaining`) and grades them
+against the issues Jira holds. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
+that name each requirement (tokenised like the product) and requires the complete `jira.report`
+result of the turn to state the same. S13 exports the finished report through the report card's
+route (CSV must list exactly the issues Jira holds, both files must carry the tool's digest) and
+requires exactly one new Jira comment that is the tool's computed comment text verbatim. S01, S02
+and S06 drive the skill-library template routes (`/api/skills`, `/api/skills/jira-templates`) with
+the template the structure rules describe (`templates.mjs`); the template is deleted again when the
+journey ends, because the library activates every valid template for every later write. S06 stays
+`unverified` unless the product actually refused a violating write in the turn. S20 (#4176 AC4)
+plans a task into the work project's lab sprint by name and id (`field-correction.mjs` creates the
+sprint once through Jira Software's board API). Keiko forwards the sprint field as opaque JSON, and
+Jira accepts it only as one numeric id while its metadata declares an array of strings, so Jira's
+own error decides the value. S20 is green only when a write result carried Jira's sprint error
+(never Keiko's own validation) and a later write put exactly one new task into that sprint; a
+correct task without any Jira rejection leaves it `unverified`. The oracles are unit-tested
+with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mjs`.
+
+```sh
+# Once per session: the empty work project REQ and the report project RPT with known ground truth
+node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session
+
+# Once per session, after the seed: a real estimate for RPT. Story Points where Jira offers the
+# field on Task create and edit (found by schema, put on the project's screens); otherwise Jira's
+# time tracking (Original Estimate, one hour per seeded point, so time tracking must be enabled).
+# It writes the seed's estimates on every Task, then records fieldIds.storyPoints (the field the
+# oracle sums), estimate {fieldId, writeFieldId, unit, label} and the Tasks' "estimate" deviations
+# in requirements-truth.json. S10 asks for time-tracking totals in hours and grades them exactly
+# against the seconds Jira holds. Idempotent; without it S10 cannot grade estimate totals.
+node scripts/testing/jira-chat-lab/requirements/seed-estimates.mjs /absolute/private/session
+
+# Fast probes only (seconds, no model)
+node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session --project REQ
+
+# Probes plus Chat journeys through any configured Gateway model, for example local LiteLLM
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session \
+  --project REQ --model <chat-model-id> --embedding-model <embedding-model-id> [--only S04,S05]
+```
+
+The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
+the private session. Before a group it checks the remaining license time: the published test
+license counts from Jira's start, so `requirements/license-window.mjs` stops and starts the
+session's containers (volumes retained) when the window runs low. It never changes clocks,
+licensing code or license data.
+
+The synthetic corpus (`requirements/corpus.mjs`) is a fictional requirements specification in two
+versions with seeded quality defects. Its truth records each requirement completely (id, title,
+priority, chapter, text, acceptance criteria), and every rendering (Markdown, Word, Excel,
+PowerPoint, PDF) carries all of it; `jira-lab-corpus-documents.test.mjs` extracts the records back
+out of each format and compares them, including the v1 to v2 changes, with the truth; `STRUCTURE_RULES` is the lab's stand-in for the issue
+templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
+truth; the product under test may not.

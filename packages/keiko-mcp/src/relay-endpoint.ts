@@ -108,6 +108,7 @@ function relayServer(
         "2025-06-18",
         "2025-03-26",
       ],
+      ...(connection.instructions === undefined ? {} : { instructions: connection.instructions }),
     },
   );
   for (const tool of connection.tools.filter((tool) => allowed.has(tool.name))) {

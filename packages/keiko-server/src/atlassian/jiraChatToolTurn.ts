@@ -1,11 +1,20 @@
 import { reserveChatToolPrompt } from "../chat-tool-approvals.js";
+import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ChatMessage } from "../store/index.js";
 import {
   JIRA_MUTATION_OPERATIONS,
+  type JiraAttachmentPreview,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { parseJiraAttachmentArguments, parseJiraDraft } from "@oscharko-dev/keiko-connectors";
+import { chatDraftArguments } from "./jiraChatDraftArguments.js";
+import {
+  jiraChatAttachmentLimit,
+  previewJiraChatAttachment,
+  type JiraChatAttachmentDeps,
+} from "./jiraChatAttachment.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { ConversationModelNotReadyError } from "../conversation-readiness-admission.js";
@@ -24,8 +33,13 @@ import {
 } from "./jiraChatCatalogConsumer.js";
 import type { ManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
+import { createJiraChatTemplatePreflight } from "./jiraChatTemplatePreflight.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { observedJiraDraftOutcome } from "./jiraChatDraft.js";
+import type {
+  CatalogJsonObject,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   ChatToolTurn,
   bindChatToolCatalog,
@@ -33,9 +47,16 @@ import {
 } from "../chat-tool-turn.js";
 export { chatModelSupportsTools as jiraChatModelSupportsTools } from "../chat-tool-turn.js";
 type TurnDeps = JiraChatAuthorityDeps &
+  JiraChatAttachmentDeps &
   Pick<
     UiHandlerDeps,
-    "jiraChatCatalog" | "gatewayConfig" | "atlassianActionApprovalRegistry" | "diagnostics"
+    | "jiraChatCatalog"
+    | "gatewayConfig"
+    | "atlassianActionApprovalRegistry"
+    | "diagnostics"
+    | "atlassianConnectorCredentials"
+    | "jiraDraftStore"
+    | "activityLog"
   >;
 type Accepted = Extract<ReturnType<typeof mintAcceptedJiraChatAuthority>, { ok: true }>;
 export interface JiraChatTurnOptions {
@@ -67,6 +88,8 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
       managed,
       context,
       correlationId,
+      budget: authority.envelope.budget,
+      guidance: JIRA_TOOL_GUIDANCE,
       bind: (current, budgetPort) =>
         bindChatToolCatalog<JiraChatCatalogConsumer>({
           deps,
@@ -79,10 +102,66 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
             context: () => current,
             now: Date.now,
             ...this.consentPorts(),
+            preflightWrite: createJiraChatTemplatePreflight({
+              deps,
+              writeArguments: (action) => this.proposedWriteArguments(action),
+              readAllowed: () => !current.signal.aborted,
+            }),
+            attachmentPreview: (action) => this.reviewedAttachment(action),
           }),
         }),
     });
   }
+  /** The model's proposed arguments for a write, only while they match the approval digest. */
+  private proposedWriteArguments(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): CatalogJsonObject | undefined {
+    const exchange = this.writeExchange(action.actionId);
+    const args: unknown = exchange?.call.arguments;
+    return exchange !== undefined &&
+      typeof args === "object" &&
+      args !== null &&
+      !Array.isArray(args) &&
+      sha256Hex(canonicalise(args)) === action.argumentsDigest
+      ? (args as CatalogJsonObject)
+      : undefined;
+  }
+
+  /** Refs of the draft the human reviews: the staged draft the call names, or its own items. */
+  protected override draftItemRefs(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): readonly string[] | undefined {
+    const exchange = this.writeExchange(action.actionId);
+    if (exchange === undefined || !this.reviewableWrite(action)) return undefined;
+    const { deps, message } = this.jiraOptions;
+    const draft = chatDraftArguments(deps.jiraDraftStore, message.chatId, exchange.call.arguments);
+    return draft.ok ? parseJiraDraft(draft.arguments)?.items.map((item) => item.ref) : undefined;
+  }
+
+  /** The file the model proposes to attach, read now for the human's review (#4176). */
+  private async reviewedAttachment(action: {
+    readonly actionId: string;
+    readonly argumentsDigest: string;
+  }): Promise<JiraAttachmentPreview | undefined> {
+    const { deps, message, correlationId, authority, signal } = this.jiraOptions;
+    const args: unknown = this.writeExchange(action.actionId)?.call.arguments;
+    const parsed =
+      this.reviewableWrite(action) && typeof args === "object" && args !== null
+        ? parseJiraAttachmentArguments(args as CatalogJsonObject)
+        : undefined;
+    if (parsed === undefined) return undefined;
+    // The instance's own limit bounds the review exactly as it bounds the send.
+    const maxBytes = await jiraChatAttachmentLimit(deps, {
+      chatId: message.chatId,
+      authorityReference: authority.reference,
+      signal,
+      correlationId,
+    });
+    return previewJiraChatAttachment(deps, message.chatId, parsed, correlationId, maxBytes);
+  }
+
   protected override reserveAuthorityPrompt(promptTokens: number): boolean {
     return reserveChatToolPrompt(this.jiraOptions, reserveCurrentJiraChatAuthority, promptTokens);
   }
@@ -119,6 +198,14 @@ export function observeJiraChatMutation(
     },
     correlationId,
   );
+  if (operation === "jira.draft") {
+    // A draft is never dispatched itself; its items' journal records are its outcome (#4178).
+    const draft = chatDraftArguments(deps.jiraDraftStore, message.chatId, call.arguments);
+    const observed = draft.ok
+      ? observedJiraDraftOutcome(deps.store.chatToolMutations, expected, draft.arguments)
+      : undefined;
+    return observed ?? (result.effectStarted ? undefined : "not-dispatched");
+  }
   return jiraChatMutationOutcome({
     result,
     expected,

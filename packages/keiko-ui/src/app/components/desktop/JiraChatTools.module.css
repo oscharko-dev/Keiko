@@ -46,3 +46,143 @@
   outline: var(--focus-width, 2px) solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+/* Backlog draft review (#4178): the proposed issues as a parent tree with item checkboxes. */
+.cmpDraft {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  min-width: 0;
+}
+.cmpDraft legend {
+  padding-inline: 4px;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
+.cmpDraftTree {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-inline-start: 0;
+  list-style: none;
+}
+.cmpDraftTree .cmpDraftTree {
+  margin-block-start: 4px;
+  padding-inline-start: 24px;
+}
+.cmpDraftItem {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  min-width: 0;
+}
+.cmpDraftItem input {
+  margin-block-start: 3px;
+  flex: none;
+}
+.cmpDraftItem input:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmpDraftSummary {
+  display: block;
+  color: var(--text-primary);
+}
+.cmpFactsGroup {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-inline-size: 0;
+}
+.cmpDraftNote {
+  display: block;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
+.cmpDraftBody {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.cmpDraftFields {
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  font-size: var(--text-body-sm);
+}
+/* A label and its value share a row only while both fit: nested groups (and opaque dotted
+   paths) would otherwise accumulate non-shrinking labels past the panel edge (#4182). The value
+   wraps below its label instead, so every approved value stays inside the visible panel. */
+.cmpDraftFields > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 8px;
+  align-items: baseline;
+  min-width: 0;
+}
+.cmpDraftFields dt {
+  flex: none;
+  max-inline-size: 100%;
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.cmpDraftFields dd {
+  flex: 1 1 12ch;
+  margin: 0;
+  min-width: 0;
+  color: var(--text-primary);
+}
+.cmpDraftFields .cmpDraftFields {
+  margin: 0;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid var(--border-subtle, var(--border-strong));
+}
+.cmpDraftValue {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cmpDraftList {
+  margin: 0;
+  padding-inline-start: 16px;
+}
+/* The design system's component minimum is 24 x 24 px (accessibility.html, visual-qa-matrix §3). */
+.cmpDraftMore {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-block-size: 24px;
+  min-inline-size: 24px;
+  margin-inline-start: 6px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  color: var(--accent-text);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cmpDraftMore:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* Jira report (#4181): the computed figures as a compact definition list. */
+.cmpFigures {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  margin: 0;
+}
+.cmpFigures div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.cmpFigures dt {
+  color: var(--text-secondary);
+}
+.cmpFigures dd {
+  margin: 0;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}

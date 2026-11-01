@@ -25,11 +25,16 @@ import {
 } from "react";
 import type {
   KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
   CapsuleSetId,
   CapsuleLifecycleState,
   ManualRefreshChangeSummary,
   ManualRefreshReasonCode,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { Icons } from "@/app/components/desktop/Icons";
 import { isPrimaryActivationPointer } from "@/app/components/desktop/interactionGuards";
 import { useDialogTabTrap } from "@/app/components/desktop/hooks/useDialogTabTrap";
@@ -137,16 +142,37 @@ function useConfirmDialogEscape(
 }
 
 type CreateCapsuleAccessMode = "local" | "shareable";
+type CreateCapsulePolicyMode = "standard" | "sealed-local";
 
-interface CreateCapsuleAccessOption {
-  readonly mode: CreateCapsuleAccessMode;
+interface CreateCapsuleChoice<Mode extends string = string> {
+  readonly mode: Mode;
   readonly labelKey: LocalKnowledgeMessageKey;
   readonly descriptionKey: LocalKnowledgeMessageKey;
   readonly disabled?: true;
   readonly disabledTooltipKey?: LocalKnowledgeMessageKey;
 }
 
-const CREATE_CAPSULE_ACCESS_OPTIONS: readonly CreateCapsuleAccessOption[] = [
+// What a new pod may do with its content. `standard` is the default so a pod used with the
+// installation's configured models is searchable without a later settings step; `sealed-local`
+// stays one explicit choice away and keeps every operation that releases content denied.
+const CREATE_CAPSULE_POLICY_OPTIONS: readonly CreateCapsuleChoice<CreateCapsulePolicyMode>[] = [
+  {
+    mode: "standard",
+    labelKey: "localKnowledge.create.policy.standard",
+    descriptionKey: "localKnowledge.create.policy.standardDescription",
+  },
+  {
+    mode: "sealed-local",
+    labelKey: "localKnowledge.create.policy.sealedLocal",
+    descriptionKey: "localKnowledge.create.policy.sealedLocalDescription",
+  },
+];
+
+function modelUsePolicyForMode(mode: CreateCapsulePolicyMode): KnowledgePodModelUsePolicy {
+  return mode === "standard" ? standardPodModelUsePolicy() : sealedLocalPodModelUsePolicy();
+}
+
+const CREATE_CAPSULE_ACCESS_OPTIONS: readonly CreateCapsuleChoice<CreateCapsuleAccessMode>[] = [
   {
     mode: "local",
     labelKey: "localKnowledge.create.access.local",
@@ -271,7 +297,7 @@ function CreateAccessOptionCopy({
 }: {
   readonly labelId: string;
   readonly descriptionId: string;
-  readonly option: CreateCapsuleAccessOption;
+  readonly option: CreateCapsuleChoice;
   readonly showComingSoon: boolean;
 }): ReactNode {
   const t = useTranslate();
@@ -298,7 +324,7 @@ function CreateDisabledAccessOption({
   name,
 }: {
   readonly busy: boolean;
-  readonly option: CreateCapsuleAccessOption;
+  readonly option: CreateCapsuleChoice;
   readonly name: string;
 }): ReactNode {
   const t = useTranslate();
@@ -353,7 +379,7 @@ function CreateDisabledAccessOption({
   );
 }
 
-function CreateAccessOption({
+function CreateAccessOption<Mode extends string>({
   busy,
   checked,
   name,
@@ -363,8 +389,8 @@ function CreateAccessOption({
   readonly busy: boolean;
   readonly checked: boolean;
   readonly name: string;
-  readonly option: CreateCapsuleAccessOption;
-  readonly onChange: (mode: CreateCapsuleAccessMode) => void;
+  readonly option: CreateCapsuleChoice<Mode>;
+  readonly onChange: (mode: Mode) => void;
 }): ReactNode {
   const inputId = useId();
   const labelId = useId();
@@ -439,6 +465,47 @@ function CreateAccessChooser({
   );
 }
 
+function CreatePolicyChooser({
+  busy,
+  policyMode,
+  onPolicyModeChange,
+}: {
+  readonly busy: boolean;
+  readonly policyMode: CreateCapsulePolicyMode;
+  readonly onPolicyModeChange: (mode: CreateCapsulePolicyMode) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const legendId = useId();
+  return (
+    <fieldset className={`mc-dialog-field ${createDialogStyles.accessField}`} disabled={busy}>
+      <legend id={legendId} className="mc-dialog-label">
+        {t("localKnowledge.create.policy.legend")}
+      </legend>
+      <div className={createDialogStyles.accessHeading}>
+        <span className={createDialogStyles.accessHint}>
+          {t("localKnowledge.create.policy.hint")}
+        </span>
+      </div>
+      <div
+        role="radiogroup"
+        aria-labelledby={legendId}
+        className={createDialogStyles.accessOptions}
+      >
+        {CREATE_CAPSULE_POLICY_OPTIONS.map((option) => (
+          <CreateAccessOption
+            key={option.mode}
+            busy={busy}
+            checked={policyMode === option.mode}
+            name="knowledge-pod-model-use"
+            option={option}
+            onChange={onPolicyModeChange}
+          />
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function CreateCapsuleDialog({
   busy,
   error,
@@ -448,7 +515,7 @@ function CreateCapsuleDialog({
   readonly busy: boolean;
   readonly error: string | null;
   readonly onCancel: () => void;
-  readonly onSubmit: (name: string) => Promise<void>;
+  readonly onSubmit: (name: string, modelUsePolicy: KnowledgePodModelUsePolicy) => Promise<void>;
 }): ReactNode {
   const titleId = useId();
   const descriptionId = useId();
@@ -458,6 +525,7 @@ function CreateCapsuleDialog({
   const inputRef = useRef<HTMLInputElement>(null);
   const [name, setName] = useState("");
   const [accessMode, setAccessMode] = useState<CreateCapsuleAccessMode>("local");
+  const [policyMode, setPolicyMode] = useState<CreateCapsulePolicyMode>("standard");
   const [validationError, setValidationError] = useState<string | null>(null);
   const t = useTranslate();
   useDialogTabTrap(dialogRef);
@@ -501,7 +569,7 @@ function CreateCapsuleDialog({
       return;
     }
     setValidationError(null);
-    await onSubmit(trimmed);
+    await onSubmit(trimmed, modelUsePolicyForMode(policyMode));
   }
 
   const dialogError = validationError ?? error;
@@ -548,6 +616,11 @@ function CreateCapsuleDialog({
             busy={busy}
             accessMode={accessMode}
             onAccessModeChange={setAccessMode}
+          />
+          <CreatePolicyChooser
+            busy={busy}
+            policyMode={policyMode}
+            onPolicyModeChange={setPolicyMode}
           />
           {/* role=alert + field link, matching the Compose dialog (uiux-fix F032, C103). */}
           {dialogError !== null ? (
@@ -1738,9 +1811,12 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
   // as disconnect (AUDIT-E1821-003).
   const [deleteSetTarget, setDeleteSetTarget] = useState<CapsuleSetListEntry | null>(null);
 
-  async function submitCreateCapsule(name: string): Promise<void> {
+  async function submitCreateCapsule(
+    name: string,
+    modelUsePolicy: KnowledgePodModelUsePolicy,
+  ): Promise<void> {
     try {
-      await handleCreateCapsule(name);
+      await handleCreateCapsule(name, modelUsePolicy);
       setCreateDialogOpen(false);
     } catch {
       // The state hook surfaces the error message; keep the dialog open for correction/retry.

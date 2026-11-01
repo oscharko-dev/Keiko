@@ -22,6 +22,7 @@ import {
   activityErrorFields,
   activityStateLevel,
   definedActivityFields,
+  type ActivityActionLine,
 } from "../activity-line-fields.js";
 
 /**
@@ -37,12 +38,20 @@ export const CODING_JIRA_SERVER_NAME = "jira";
 
 export type CodingJiraTool =
   (typeof JIRA_MANAGED_READ_TOOLS)[number] | (typeof JIRA_MUTATION_OPERATIONS)[number];
+/**
+ * A backlog draft (#4178) is reviewed as a tree in Chat; Coding runs create issues one by one. An
+ * attachment (#4176) reads a file the Chat's connected folders govern; a Coding run's files are
+ * governed by its own workspace authority, which that source does not (yet) consult.
+ */
+const CODING_JIRA_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
+  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+);
 
 /** Reads are the human's grant; writes keep following the run's autonomy mode. */
 export const CODING_JIRA_TOOL_RISKS: Readonly<Record<string, McpToolRisk>> = Object.freeze(
   Object.fromEntries([
     ...JIRA_MANAGED_READ_TOOLS.map((tool): [string, McpToolRisk] => [tool, "read"]),
-    ...JIRA_MUTATION_OPERATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
+    ...CODING_JIRA_MUTATIONS.map((tool): [string, McpToolRisk] => [tool, "write"]),
   ]),
 );
 
@@ -212,6 +221,8 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
         "jira.comments",
         "jira.transitions",
         "jira.assignable-users",
+        "jira.report",
+        "jira.draft-stage",
         "jira.create",
         "jira.edit",
         "jira.assign",
@@ -221,6 +232,10 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
     },
     risk: { type: "string", dataClass: "closed-enum", required: false, values: ["read", "write"] },
     toolCount: { type: "integer", dataClass: "count", required: false },
+    // Issue links a Jira write asked for (#4176): counts of requested, present and missing links.
+    linkRequestedCount: { type: "integer", dataClass: "count", required: false },
+    linkCreatedCount: { type: "integer", dataClass: "count", required: false },
+    linkFailedCount: { type: "integer", dataClass: "count", required: false },
     durationMs: { type: "integer", dataClass: "duration", required: false },
     frames: {
       type: "string-array",
@@ -240,21 +255,26 @@ const CODING_JIRA_POD_OPERATION = defineActivityLogOperation({
   causal: "correlation",
   lifecycle: "state",
   analyzerProjection: "timeline",
-  diagnosticWhen: [{ field: "outcome", values: ["refused", "failed"] }],
+  diagnosticWhen: [
+    { field: "outcome", values: ["refused", "failed"] },
+    { field: "linkFailedCount", positive: true },
+  ],
   failureClasses: ["coding-runtime-jira-pod"],
   proofIds: ["coding-runtime.jira-pod.emitted-line"],
   releaseImpact: "minor",
 });
 
-export interface CodingJiraPodLine {
-  readonly action: (typeof JIRA_POD_ACTIONS)[number];
-  readonly outcome: (typeof JIRA_POD_OUTCOMES)[number];
-  readonly reason?: (typeof JIRA_POD_REASONS)[number] | undefined;
+export interface CodingJiraPodLine extends ActivityActionLine<
+  (typeof JIRA_POD_ACTIONS)[number],
+  (typeof JIRA_POD_OUTCOMES)[number],
+  (typeof JIRA_POD_REASONS)[number]
+> {
   readonly tool?: CodingJiraTool | undefined;
   readonly risk?: McpToolRisk | undefined;
   readonly toolCount?: number | undefined;
-  readonly durationMs?: number | undefined;
-  readonly error?: unknown;
+  readonly linkRequestedCount?: number | undefined;
+  readonly linkCreatedCount?: number | undefined;
+  readonly linkFailedCount?: number | undefined;
 }
 
 /** Closed values and counts only: never a Pod id or name, a URL, an issue key or any text. */
@@ -278,6 +298,9 @@ export function recordCodingJiraPod(
           "tool",
           "risk",
           "toolCount",
+          "linkRequestedCount",
+          "linkCreatedCount",
+          "linkFailedCount",
           "durationMs",
         ] as const),
         ...activityErrorFields(line),

@@ -356,14 +356,23 @@ possible dispatch before the caller may send HTTP. Nested transactions are refus
 released savepoint is not a durable commit. A synchronous final guard may redeem existing approval
 state in the same transaction; a denied guard rolls its changes back. One action digest per canonical
 turn prevents a new model call ID from repeating that action. Writes within a turn are serialized,
-with at most 32 retained intents. Unknown effects and acknowledged-but-unconfirmed outcomes block
-further writes in that turn, including already prepared actions. A new explicitly admitted user turn
-has its own scope.
+with at most 32 retained single-write intents. The items of one approved backlog draft (ADR-0128,
+#4178) are not single writes: schema 58 adds a nullable `batch_digest` (the digest of the approved
+draft action) to the intent, and a batch has no count bound: the approved draft authorizes exactly
+its own items, so an approved draft of any size is never cut by the per-turn bound, and the batch
+does not use the single writes' allowance up. Admission reads only the turn's barrier rows (unknown
+or in-flight writes) and, for single writes, their count, so it stays cheap for thousands of items. Unknown effects and acknowledged-but-unconfirmed outcomes
+block further writes in that turn — batch items included — and so do in-flight writes, including
+already prepared actions. A new explicitly admitted user turn has its own scope.
 
 Response acknowledgement is stored separately from body parsing and later confirmation. Known
 local rejection before dispatch, success, success without confirmation, unknown effect and no
-dispatch are distinct. Every non-2xx response after possible dispatch remains unknown: a status code
-alone cannot prove that no mutation occurred, including 400/401/403/429 and proxy-generated replies.
+dispatch are distinct. A non-2xx response after possible dispatch remains unknown: a status code
+alone cannot prove that no mutation occurred, including proxy-generated replies. The one exception
+(amended 2026-11-01, #4176) is a Jira client error other than 408, 409 and 429 that carries Jira's
+own parsable error document: the composing caller proves it when settling, the write is `rejected`
+and does not block the turn so the model can correct and retry (ADR-0128). 429, every 5xx and any
+4xx without that document stay unknown.
 The transport's diagnostic reason (such as permission denied or rate limited) remains separate
 from this effect classification. Schema 48 repairs the earlier journal's retained post-dispatch
 rejections to unknown before work resumes. An observed 2xx cannot be downgraded to unknown/rejected;

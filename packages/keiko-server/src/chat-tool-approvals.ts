@@ -303,6 +303,7 @@ interface ChatWriteApprovalOwnerConfiguration<
     authority: EditorAgentGovernedAuthorityReference,
     action: Action,
     now: number,
+    draftItemRefs?: readonly string[],
   ) => ChatWriteApprovalEntry;
 }
 interface ChatWriteApprovalOwner<Deps, Action extends ChatToolWriteActionIdentity> {
@@ -319,6 +320,7 @@ interface ChatWriteApprovalOwner<Deps, Action extends ChatToolWriteActionIdentit
     action: Action,
     nowIso: string,
     correlationId: string,
+    draftItemRefs?: readonly string[],
   ) => ChatToolWriteApprovalAdmission;
 }
 
@@ -382,12 +384,13 @@ export function createChatWriteApprovalOwner<
       action,
       nowIso,
       correlationId,
+      draftItemRefs,
     ): ChatToolWriteApprovalAdmission => {
       const facts = factsFor(deps, chatId, authority, nowIso, correlationId);
       const registry = deps.atlassianActionApprovalRegistry;
       if (facts === undefined || registry === undefined)
         return denyChatToolWriteApproval("authority-denied", chatId, correlationId);
-      const entry = owner.pending(facts, authority, action, Date.parse(nowIso));
+      const entry = owner.pending(facts, authority, action, Date.parse(nowIso), draftItemRefs);
       return requestRetainedChatWriteApproval(
         registry,
         entry,

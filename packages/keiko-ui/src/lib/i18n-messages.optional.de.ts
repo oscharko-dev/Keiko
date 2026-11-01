@@ -47,6 +47,37 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
   "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
   "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+  "chat.jira.draft.legend": "Anzulegende Vorgänge ({selected} von {total} ausgewählt)",
+  "chat.jira.draft.dependent": "Ausgelassen, weil ein Vorgang, von dem er abhängt, ausgelassen ist",
+  "chat.jira.draft.parent": "Übergeordnet ({fieldId}): {target}",
+  "chat.jira.draft.target": "Projekt {projectId} · Vorgangstyp {issueTypeId}",
+  "chat.jira.draft.linkOutward": "{type} → {target}",
+  "chat.jira.draft.linkInward": "{target} → {type} diesen Vorgang",
+  "chat.jira.draft.showMore": "Mehr anzeigen",
+  "chat.jira.draft.showLess": "Weniger anzeigen",
+  "chat.jira.draft.empty": "(leer)",
+  "chat.jira.draft.cleared": "Geleert",
+  "chat.jira.draft.requirements": "Anforderungen: {ids}",
+  "chat.jira.draft.unreadable":
+    "Dieser Entwurf lässt sich nicht als Vorgangsliste darstellen; seine Details werden Feld für Feld angezeigt.",
+  "chat.jira.draft.loading":
+    "Der Entwurf wird geladen, damit du jeden Vorgang vor der Freigabe prüfen kannst…",
+  "chat.jira.draft.unavailable":
+    "Dieser Entwurf ist nicht mehr verfügbar und kann deshalb nicht freigegeben werden. Bitte Keiko, ihn erneut vorzubereiten.",
+  "chat.jira.fact.issue": "Vorgang",
+  "chat.jira.fact.project": "Projekt",
+  "chat.jira.fact.issueType": "Vorgangstyp",
+  "chat.jira.fact.transition": "Statusübergang",
+  "chat.jira.fact.comment": "Kommentar",
+  "chat.jira.fact.assignee": "Bearbeiter",
+  "chat.jira.fact.assigneeCleared": "Geleert (nicht zugewiesen)",
+  "chat.jira.fact.file": "Datei",
+  "chat.jira.fact.fileName": "Dateiname",
+  "chat.jira.fact.requirements": "Anforderungen",
+  "chat.jira.fact.links": "Verknüpfungen",
+  "chat.jira.fact.updates": "Änderungen",
+  "chat.jira.fact.updateAdd": "Zu {fieldId} hinzufügen: {value}",
+  "chat.jira.fact.updateRemove": "Aus {fieldId} entfernen: {value}",
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
@@ -246,6 +277,45 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.author.draft": "Skill-Entwurf (Markdown)",
   "chat.skills.author.save": "Geprüften Skill speichern",
 
+  "chat.skills.jira.title": "Jira-Vorlagen",
+  "chat.skills.jira.description":
+    "Eine Vorlage ist ein Skill mit Jira-Front-Matter. Keiko prüft jedes Anlegen, Bearbeiten und gewählte Workflow-Übergänge dagegen, bevor etwas an Jira gesendet wird, in jedem Modus.",
+  "chat.skills.jira.pod": "Jira-Pod",
+  "chat.skills.jira.podRequired":
+    "Verbinde einen bereiten Jira-Pod, um eine Vorlage zu prüfen oder vorzuschlagen.",
+  "chat.skills.jira.empty":
+    "Noch keine Jira-Vorlagen. Lade einen Markdown-Skill mit Jira-Vorlagen-Front-Matter hoch oder schlage unten eine aus einem Projekt vor.",
+  "chat.skills.jira.invalid": "Muss korrigiert werden",
+  "chat.skills.jira.validate": "Gegen Jira prüfen",
+  "chat.skills.jira.validating": "Wird geprüft…",
+  "chat.skills.jira.valid": "Die Vorlage passt zur Jira-Instanz.",
+  "chat.skills.jira.partial":
+    "Nicht vollständig geprüft: Jira hat {checks} nicht geliefert, daher wurde die Vorlage nicht damit abgeglichen. Schreibaktionen, die sie steuert, können trotzdem abgelehnt werden.",
+  "chat.skills.jira.check.project": "Projektangaben",
+  "chat.skills.jira.check.fields": "Felder",
+  "chat.skills.jira.check.linkTypes": "Verknüpfungstypen",
+  "chat.skills.jira.check.transitions": "Workflow-Status",
+  "chat.skills.jira.syntax":
+    "Die Vorlage ist fehlerhaft ({codes}). Korrigiere sie und lade sie erneut hoch.",
+  "chat.skills.jira.finding.unknown-project":
+    "Das Projekt {subject} existiert nicht oder ist nicht sichtbar.",
+  "chat.skills.jira.finding.unknown-issue-type":
+    "Der Vorgangstyp {subject} existiert im Projekt nicht.",
+  "chat.skills.jira.finding.unknown-field":
+    "Das Feld {subject} existiert nicht. Davon betroffene Schreibvorgänge werden abgelehnt.",
+  "chat.skills.jira.finding.ambiguous-field":
+    "Mehrere Felder heißen {subject}. Verwende die Feld-ID, um eindeutig zu sein.",
+  "chat.skills.jira.finding.unknown-link-type": "Der Verknüpfungstyp {subject} existiert nicht.",
+  "chat.skills.jira.finding.unknown-transition-target":
+    "{subject} ist kein Status des Projekts. Ein Übergangsname oder eine ID lässt sich hier nicht prüfen.",
+  "chat.skills.jira.projectKey": "Projektschlüssel",
+  "chat.skills.jira.propose": "Aus Projekt vorschlagen",
+  "chat.skills.jira.proposing": "Projekt wird gelesen…",
+  "chat.skills.jira.proposalNone": "Aus diesem Projekt ließ sich keine Vorlage ableiten.",
+  "chat.skills.jira.proposalTitle": "Vorschlag für {issueType} ({count} Vorgänge geprüft)",
+  "chat.skills.jira.save": "Als Skill speichern",
+  "chat.skills.jira.error":
+    "Jira oder die Vorlagenbibliothek konnte nicht gelesen werden, die Einhaltung wurde nicht geprüft. Prüfe den Pod und versuche es erneut.",
   "chat.skills.title": "Skills",
   "chat.skills.sessionRequired":
     "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",
@@ -2909,6 +2979,36 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.action.jira.comments": "Jira-Kommentare lesen",
   "atlassianConnectors.action.jira.transitions": "Jira-Statusübergänge lesen",
   "atlassianConnectors.action.jira.assignable-users": "Zuweisbare Jira-Benutzer suchen",
+  "atlassianConnectors.action.jira.report":
+    "Jira-Fortschritts-, Konformitäts- und Abdeckungsbericht berechnen",
+  "atlassianConnectors.action.jira.draft-stage": "Teil eines Jira-Backlog-Entwurfs vorbereiten",
+  "chat.jira.report.title": "Jira-Bericht",
+  "chat.jira.report.figures":
+    "Die Zahlen berechnet Keiko aus den gelesenen Jira-Daten, nicht das Modell.",
+  "chat.jira.report.reading": "Jira wird gelesen: {read} von {total} Vorgängen",
+  "chat.jira.report.readingUnknown": "Jira wird gelesen: {read} Vorgänge",
+  "chat.jira.report.complete": "Vollständig: {read} Vorgänge gelesen",
+  "chat.jira.report.incomplete":
+    "Unvollständig ({reason}): {read} von {total} Vorgängen gelesen. Die Zahlen beschreiben nur die gelesenen Vorgänge.",
+  "chat.jira.report.reason.read-failed": "Jira konnte nicht weiter gelesen werden",
+  "chat.jira.report.reason.scope-changed": "die Vorgänge haben sich während des Lesens geändert",
+  "chat.jira.report.reason.memory-budget": "Speichergrenze erreicht",
+  "chat.jira.report.reason.template-unreadable":
+    "die Vorlagenbibliothek konnte nicht gelesen werden",
+  "chat.jira.report.reason.issue-too-large": "ein Vorgang ist zu groß zum Lesen",
+  "chat.jira.report.issues": "Vorgänge",
+  "chat.jira.report.todo": "Offen",
+  "chat.jira.report.inProgress": "In Arbeit",
+  "chat.jira.report.done": "Erledigt",
+  "chat.jira.report.donePercent": "{percent} % erledigt",
+  "chat.jira.report.compliance":
+    "{issues} von {checked} Vorgängen weichen ab ({count} Abweichungen)",
+  "chat.jira.report.coverage":
+    "{epics} Epics ohne Inhalt, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
+  "chat.jira.report.exportMarkdown": "Markdown exportieren",
+  "chat.jira.report.exportCsv": "CSV exportieren",
+  "chat.jira.report.exportFailed":
+    "Der Bericht konnte nicht exportiert werden. Führe ihn erneut aus, um ihn zu exportieren.",
   "atlassianConnectors.action.assign-issue": "Jira-Vorgang zuweisen",
   "atlassianConnectors.action.sync-project": "Jira-Projekt synchronisieren",
   "atlassianConnectors.action.search-issues-live": "Jira-Livesuche",

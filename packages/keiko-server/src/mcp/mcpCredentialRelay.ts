@@ -19,6 +19,7 @@ import {
   activityErrorFields,
   activityStateLevel,
   definedActivityFields,
+  type ActivityActionLine,
 } from "../activity-line-fields.js";
 
 /**
@@ -250,10 +251,11 @@ const MCP_RELAY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-export interface McpRelayLine {
-  readonly action: "bind" | "request";
-  readonly outcome: (typeof OUTCOMES)[number];
-  readonly reason?: RelayReason | undefined;
+export interface McpRelayLine extends ActivityActionLine<
+  "bind" | "request",
+  (typeof OUTCOMES)[number],
+  RelayReason
+> {
   readonly method?: McpRelayMethod | undefined;
   readonly status?: number | undefined;
   readonly relayedServerCount?: number | undefined;
@@ -261,8 +263,6 @@ export interface McpRelayLine {
   readonly requestBytes?: number | undefined;
   readonly responseBytes?: number | undefined;
   readonly redactedCount?: number | undefined;
-  readonly durationMs?: number | undefined;
-  readonly error?: unknown;
 }
 
 /** Counts and closed values only; never a credential, a URL or a server name. */

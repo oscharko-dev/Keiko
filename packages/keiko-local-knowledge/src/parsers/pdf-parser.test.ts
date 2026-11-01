@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { buildParserOptions } from "./registry.js";
-import { PDF_MAGIC, PDF_TEXT_LAYER, selectionFromBytes } from "./parser-test-fixtures.js";
+import {
+  PDF_MAGIC,
+  PDF_TEXT_LAYER,
+  buildTextPdf,
+  selectionFromBytes,
+} from "./parser-test-fixtures.js";
 import {
   extractPages,
   pdfParser,
@@ -79,6 +84,103 @@ describe("pdfParser", () => {
     },
     PDF_TEXT_LAYER_PARSE_TIMEOUT_MS,
   );
+
+  describe("real documents", () => {
+    const PDF_INPUT = { extension: "pdf", mediaType: "application/pdf" } as const;
+    const parsePdf = (
+      bytes: Uint8Array,
+      overrides: Parameters<typeof buildParserOptions>[0] = {},
+    ): ReturnType<typeof pdfParser.parseAsync> =>
+      pdfParser.parseAsync(selectionFromBytes(bytes, PDF_INPUT), buildParserOptions(overrides));
+
+    const textOf = (result: Awaited<ReturnType<typeof parsePdf>>): string =>
+      "normalizedText" in result && typeof result.normalizedText === "string"
+        ? result.normalizedText
+        : "";
+
+    it(
+      "extracts every page of a multi-page text PDF in page order with page provenance",
+      async () => {
+        const pages = ["Alpha clause one", "Bravo (clause) two", "Charlie clause three"];
+        const result = await parsePdf(buildTextPdf(pages));
+        const text = textOf(result);
+
+        expect(result.diagnostics).toEqual([]);
+        expect(result.pages.map((page) => page.pageNumber)).toEqual([1, 2, 3]);
+        expect(result.units.map((unit) => unit.kind)).toEqual(["page", "page", "page"]);
+        expect(text).toBe(pages.join("\n\n"));
+        for (const [index, page] of result.pages.entries()) {
+          expect(text.slice(page.characterStart, page.characterEnd)).toBe(pages[index]);
+        }
+      },
+      PDF_TEXT_LAYER_PARSE_TIMEOUT_MS,
+    );
+
+    it(
+      "keeps provenance for a blank page between text pages",
+      async () => {
+        const result = await parsePdf(buildTextPdf(["First", "", "Third"]));
+        const text = textOf(result);
+
+        expect(result.pages.map((page) => page.pageNumber)).toEqual([1, 2, 3]);
+        expect(text).toBe("First\n\nThird");
+        expect(result.pages[1]?.characterEnd).toBe(result.pages[1]?.characterStart);
+        expect(result.diagnostics).toEqual([]);
+      },
+      PDF_TEXT_LAYER_PARSE_TIMEOUT_MS,
+    );
+
+    it(
+      "stops a multi-page PDF at maxUnitsPerDocument and discloses the truncation",
+      async () => {
+        const result = await parsePdf(buildTextPdf(["One", "Two", "Three", "Four"]), {
+          maxUnitsPerDocument: 2,
+        });
+        const text = textOf(result);
+
+        expect(result.pages.map((page) => page.pageNumber)).toEqual([1, 2]);
+        expect(text).not.toContain("Three");
+        expect(result.diagnostics.map((entry) => entry.code)).toContain("UNIT_LIMIT_REACHED");
+      },
+      PDF_TEXT_LAYER_PARSE_TIMEOUT_MS,
+    );
+
+    it(
+      "refuses a password-protected PDF with the closed encrypted code and no text",
+      async () => {
+        const result = await parsePdf(buildTextPdf(["Secret clause"], { encrypted: true }));
+
+        expect(result.diagnostics).toEqual([
+          {
+            code: "ENCRYPTED_PDF",
+            message: "pdf parser rejected encrypted document",
+            documentId: result.documentId,
+            severity: "error",
+          },
+        ]);
+        expect(result.pages).toEqual([]);
+        expect(result.units).toEqual([]);
+        expect("normalizedText" in result).toBe(false);
+        expect(JSON.stringify(result)).not.toContain("Secret clause");
+      },
+      PDF_TEXT_LAYER_PARSE_TIMEOUT_MS,
+    );
+
+    it("refuses an oversized PDF before opening it", async () => {
+      const bytes = buildTextPdf(["Within the file"]);
+      const result = await parsePdf(bytes, { maxBytes: bytes.byteLength - 1 });
+
+      expect(result.diagnostics.map((entry) => entry.code)).toEqual(["OVERSIZED_FILE"]);
+      expect(result.pages).toEqual([]);
+    });
+
+    it("rejects an empty file as malformed", async () => {
+      const result = await parsePdf(new Uint8Array());
+
+      expect(result.diagnostics.map((entry) => entry.code)).toEqual(["MALFORMED_INPUT"]);
+      expect(result.units).toEqual([]);
+    });
+  });
 
   it("reports malformed PDF bytes safely", async () => {
     const result = await pdfParser.parseAsync(

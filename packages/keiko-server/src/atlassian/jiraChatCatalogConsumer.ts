@@ -1,6 +1,7 @@
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { KNOWLEDGE_CHAT_TOOLS, type KnowledgeChatToolName } from "../requirementsToolName.js";
 import { createChatToolAuthorityPort, reserveChatToolInvocation } from "../chat-tool-approvals.js";
-import { requireDispatch } from "../tool-catalog/catalogToolErrors.js";
+import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
@@ -10,6 +11,7 @@ import {
   JIRA_MANAGED_READ_TOOLS,
   JIRA_MUTATION_OPERATIONS,
   JIRA_MANAGED_ACTION_TYPES,
+  type JiraAttachmentPreview,
   type JiraManagedReadToolName,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -56,7 +58,7 @@ export interface JiraChatCatalogContext extends ToolConsumerContext {
   readonly userMessageId?: string;
 }
 export interface JiraChatCatalogAction extends ToolConsumerActionIdentity {
-  readonly tool: JiraManagedReadToolName | JiraMutationOperation;
+  readonly tool: JiraManagedReadToolName | JiraMutationOperation | KnowledgeChatToolName;
   readonly argumentsDigest: string;
 }
 export interface JiraChatCatalogConsumer extends CatalogConsumer {
@@ -69,14 +71,25 @@ export interface JiraChatCatalogConsumer extends CatalogConsumer {
     };
   };
 }
-const READ_TOOLS: ReadonlySet<string> = new Set(JIRA_MANAGED_READ_TOOLS);
+const READ_TOOLS: ReadonlySet<string> = new Set([
+  ...JIRA_MANAGED_READ_TOOLS,
+  ...KNOWLEDGE_CHAT_TOOLS,
+]);
 export const JIRA_CHAT_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
-const CHAT_TOOLS = new Set(JIRA_CHAT_TOOLS);
+/** Every tool the Chat catalog hosts: the Jira tools and the local Knowledge reads (#4179). */
+export const CHAT_CATALOG_TOOLS: readonly JiraChatCatalogAction["tool"][] = [
+  ...JIRA_CHAT_TOOLS,
+  ...KNOWLEDGE_CHAT_TOOLS,
+];
+const CHAT_TOOLS: ReadonlySet<string> = new Set(CHAT_CATALOG_TOOLS);
+function isKnowledgeTool(tool: string): tool is KnowledgeChatToolName {
+  return (KNOWLEDGE_CHAT_TOOLS as readonly string[]).includes(tool);
+}
 
 function captureAction(value: CatalogJsonValue): JiraChatCatalogAction | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const action = value as CatalogJsonObject;
-  const tool = JIRA_CHAT_TOOLS.find((name) => name === action.tool);
+  const tool = CHAT_CATALOG_TOOLS.find((name) => name === action.tool);
   if (
     Object.keys(action).sort(compareStrings).join() !==
       "actionId,argumentsDigest,idempotencyKey,tool" ||
@@ -112,12 +125,16 @@ export const jiraChatCatalogConsumerPort: CatalogConsumerPort<JiraChatCatalogCon
 };
 
 /** Use with the application-owned managed catalog; this creates no MCP host or transport. */
+function hasNextPage(data: CatalogJsonObject): boolean {
+  return typeof data.nextStartAt === "number" || typeof data.nextCursor === "string";
+}
+
 export function jiraChatReadCatalogRoutes(): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
   return jiraChatCatalogRoutes(JIRA_MANAGED_READ_TOOLS);
 }
 
 export function jiraChatCatalogRoutes(
-  tools: readonly JiraChatCatalogAction["tool"][] = JIRA_CHAT_TOOLS,
+  tools: readonly JiraChatCatalogAction["tool"][] = CHAT_CATALOG_TOOLS,
 ): readonly ManagedCatalogRoute<JiraChatCatalogConsumer>[] {
   return tools.map((tool) => ({
     name: tool,
@@ -138,8 +155,8 @@ export function jiraChatCatalogRoutes(
       return {
         data,
         page: {
-          truncated: typeof data.nextStartAt === "number",
-          reason: typeof data.nextStartAt === "number" ? "result-cap" : "none",
+          truncated: hasNextPage(data),
+          reason: hasNextPage(data) ? "result-cap" : "none",
           cursor: null,
         },
         resultCount: Array.isArray(data.items) ? data.items.length : 0,
@@ -162,6 +179,20 @@ export interface JiraChatAdmissionOptions {
     signal: AbortSignal,
   ) => Promise<void>;
   readonly reviewableWrite?: (action: JiraChatCatalogAction) => boolean;
+  /** Item refs of the persisted backlog draft preview; the registry validates a deselection. */
+  readonly draftItemRefs?: (action: JiraChatCatalogAction) => readonly string[] | undefined;
+  /**
+   * Runs before a human is asked to approve a write. A returned object is the structured refusal
+   * the model receives instead (issue-template violations, #4177); the approval is never created.
+   */
+  readonly preflightWrite?: (
+    action: JiraChatCatalogAction,
+    context: JiraChatCatalogContext,
+  ) => Promise<CatalogJsonObject | undefined>;
+  /** The file a `jira.attach` approval shows the human; absent when it cannot be reviewed (#4176). */
+  readonly attachmentPreview?: (
+    action: JiraChatCatalogAction,
+  ) => Promise<JiraAttachmentPreview | undefined>;
 }
 type AdmissionPorts = Pick<
   CatalogToolBinderInput<JiraChatCatalogConsumer>,
@@ -191,6 +222,9 @@ function readPermission(
     context.authorityExpiresAt !== current.envelope.expiresAt
   )
     return DENIED;
+  // A Knowledge Pod the human attached to this Chat is read like a grounded answer reads it: the
+  // current Chat authority admits it, no Jira consent is involved (#4179).
+  if (isKnowledgeTool(action.tool)) return ALLOWED;
   const policy = decideAtlassianEnvelopeAction(
     JIRA_MANAGED_ACTION_TYPES[action.tool],
     current.envelope,
@@ -256,6 +290,19 @@ function reviewableAction(
   return READ_TOOLS.has(action.tool) || options.reviewableWrite?.(action) === true;
 }
 
+/** The template dry run first: a violating draft is refused before any human is asked. */
+async function requestWriteStage(
+  options: JiraChatAdmissionOptions,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+): Promise<void> {
+  const refusal = await options.preflightWrite?.(action, context);
+  if (refusal !== undefined) {
+    throw new CatalogDispatchFault("failed", "provider-reported-error", undefined, refusal);
+  }
+  await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+}
+
 async function requestConsent(
   options: JiraChatAdmissionOptions,
   action: JiraChatCatalogAction,
@@ -280,8 +327,7 @@ async function requestConsent(
   if (request.kind === "review-required")
     await options.requestReadConsent(request.grant, context.signal);
   if (!readPermission(options, action).ok) return undefined;
-  if (!READ_TOOLS.has(action.tool))
-    await requestCatalogWriteApproval({ ...options, context: () => context }, action);
+  if (!READ_TOOLS.has(action.tool)) await requestWriteStage(options, action, context);
   return preview(options, context.authority, action).ok ? action : undefined;
 }
 
@@ -321,6 +367,8 @@ function mutationGuard(
           action,
           beforeMutation: (): boolean => {
             if (!check()) return false;
+            // One approval covers one action; a backlog draft dispatches its items under it (#4178).
+            if (claim !== undefined) return true;
             const result = claimJiraChatWrite(options, action);
             if (!result.ok) return false;
             claim = result.claim;

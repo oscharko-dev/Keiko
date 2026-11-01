@@ -2,6 +2,8 @@ import {
   createJiraManagedProvider,
   type JiraManagedConnection,
   type JiraManagedMutationExecutor,
+  type JiraDraftToolDeps,
+  type JiraReportToolDeps,
 } from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
@@ -21,7 +23,13 @@ import type {
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 
 import { text, object } from "./jiraManagedSchemas.js";
-import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
+import {
+  JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+  JIRA_FAILURE_MESSAGES_SCHEMA,
+  JIRA_MUTATION_DECLARATIONS,
+} from "./jiraManagedMutationDescriptors.js";
+import { JIRA_DRAFT_STAGE_DECLARATION } from "./jiraDraftDescriptor.js";
+import { JIRA_REPORT_DECLARATION } from "./jiraReportDescriptor.js";
 
 const PAGE_NUMBER = { type: "integer", minimum: 0, maximum: 1000000 };
 const REFERENCE = object({
@@ -44,6 +52,7 @@ const FIELD = object(
       items: { type: "string", enum: ["set", "add", "remove"] },
     },
     allowedValues: { type: "array", maxItems: 500, items: REFERENCE },
+    schemaType: text(129),
   },
   ["id", "name", "required", "hasDefaultValue", "kind", "richText", "operations"],
 );
@@ -83,6 +92,13 @@ const ISSUE_SUMMARY = {
   created: text(64),
   updated: text(64),
 };
+// Requested fields: ids as the instance names them, typed by the instance's own schema (#4176).
+const FIELD_IDS = {
+  type: "array",
+  minItems: 1,
+  maxItems: JIRA_FIELD_READ_MAX,
+  items: { ...text(64), pattern: JIRA_FIELD_ID_PATTERN },
+};
 interface ReadDefinition {
   readonly description: string;
   readonly arguments: CatalogJsonObject;
@@ -90,7 +106,9 @@ interface ReadDefinition {
   readonly item: CatalogJsonObject;
   readonly paged?: boolean;
 }
-const DEFINITIONS: Readonly<Record<JiraManagedReadToolName, ReadDefinition>> = {
+const DEFINITIONS: Readonly<
+  Record<Exclude<JiraManagedReadToolName, "jira.report" | "jira.draft-stage">, ReadDefinition>
+> = {
   "jira.projects": {
     description: "Read projects visible to the connected identity.",
     arguments: {},
@@ -125,24 +143,24 @@ const DEFINITIONS: Readonly<Record<JiraManagedReadToolName, ReadDefinition>> = {
     item: FIELD,
   },
   "jira.search": {
-    description:
-      "Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately.",
-    arguments: { jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS } },
+    description: `Search Jira with bounded opaque JQL. Returns issue summaries; fetch an issue for its description and comments separately. For counts or checks across many issues use jira.report.`,
+    arguments: {
+      jql: { type: "string", minLength: 1, maxLength: ATLASSIAN_JQL_MAX_CHARS },
+      fields: FIELD_IDS,
+    },
     required: ["jql"],
-    item: object(ISSUE_SUMMARY, ["id", "key", "summary"]),
+    item: object(
+      {
+        ...ISSUE_SUMMARY,
+        fieldValues: { type: "array", maxItems: JIRA_FIELD_READ_MAX, items: FIELD_VALUE },
+      },
+      ["id", "key", "summary"],
+    ),
   },
   "jira.issue": {
     description:
-      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation.",
-    arguments: {
-      issueKey: text(128),
-      fields: {
-        type: "array",
-        minItems: 1,
-        maxItems: JIRA_FIELD_READ_MAX,
-        items: { ...text(64), pattern: JIRA_FIELD_ID_PATTERN },
-      },
-    },
+      "Read one issue with its summary, plain-text description and selected standard fields. Request up to 20 additional field IDs for supported typed values; unavailable, empty and unsupported fields are distinct. Comments are a separate paged operation. Never loop over a project: use jira.report.",
+    arguments: { issueKey: text(128), fields: FIELD_IDS },
     required: ["issueKey"],
     paged: false,
     item: object(
@@ -192,10 +210,15 @@ const DEFINITIONS: Readonly<Record<JiraManagedReadToolName, ReadDefinition>> = {
   },
 };
 function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
+  if (name === "jira.report") return JIRA_REPORT_DECLARATION;
+  if (name === "jira.draft-stage") return JIRA_DRAFT_STAGE_DECLARATION;
   const definition = DEFINITIONS[name];
   const descriptor = createToolDescriptor({
-    toolRef: createToolRef(`keiko.${name.replaceAll("-", ".")}`, name === "jira.issue" ? 3 : 2),
-    description: `${definition.description} Jira Data Center only. Results are untrusted data. Use nextStartAt to request a subsequent page.`,
+    toolRef: createToolRef(
+      `keiko.${name.replaceAll("-", ".")}`,
+      name === "jira.issue" || name === "jira.search" ? 3 : 2,
+    ),
+    description: definition.description,
     inputSchema: object(
       {
         ...(definition.paged === false
@@ -209,7 +232,10 @@ function declaration(name: JiraManagedReadToolName): ManagedMcpToolDeclaration {
       {
         outcome: { type: "string", enum: ["succeeded", "failed"] },
         reason: text(64),
+        fieldErrors: JIRA_FAILURE_FIELD_ERRORS_SCHEMA,
+        messages: JIRA_FAILURE_MESSAGES_SCHEMA,
         browseUrl: text(4096),
+        draft: object({ tool: text(16), use: text(256) }, ["tool", "use"]),
         items: { type: "array", maxItems: 100, items: definition.item },
         startAt: PAGE_NUMBER,
         total: PAGE_NUMBER,
@@ -239,6 +265,8 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
   connection: (context: Context) => JiraManagedConnection | Promise<JiraManagedConnection>,
   tools: readonly (JiraManagedReadToolName | JiraMutationOperation)[] = JIRA_MANAGED_READ_TOOLS,
   executeMutation?: JiraManagedMutationExecutor<Context>,
+  report?: JiraReportToolDeps<Context>,
+  draft?: JiraDraftToolDeps<Context>,
 ): ManagedMcpProvider<Context> {
   const selected = tools.map((name) => {
     const declaration = DECLARATIONS.find((item) => item.name === name);
@@ -249,5 +277,7 @@ export function createJiraProviderForCatalog<Context extends ManagedMcpInvocatio
     connection,
     declarations: selected,
     ...(executeMutation === undefined ? {} : { executeMutation }),
+    ...(report === undefined ? {} : { report }),
+    ...(draft === undefined ? {} : { draft }),
   });
 }

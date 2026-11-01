@@ -159,7 +159,7 @@ describe("factory-owned physical synthesis allowance", () => {
   });
 });
 
-it("retains cumulative usage while classifying only the confirmed tool-call attempt as orchestration", () => {
+it("retains cumulative reported usage while only the confirmed tool-call attempt leaves the synthesis grant", () => {
   const budget = createGroundedSynthesisCallBudget();
   const tracker = createGroundedSynthesisAttemptAdmission(budget, {
     inputTokensMax: 1000,
@@ -173,7 +173,8 @@ it("retains cumulative usage while classifying only the confirmed tool-call atte
     ?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
   tracker.confirmToolRound();
   expect(budget.remaining()).toBe(1);
-  expect(budget.pendingUsage()).toEqual({ promptTokens: 200, completionTokens: 10 });
+  // The unconfirmed attempt stays charged to the grant; the confirmed tool round is the turn's.
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 100, completionTokens: 5 });
   expect(() => {
     tracker.confirmToolRound();
   }).toThrow();
@@ -182,6 +183,8 @@ it("retains cumulative usage while classifying only the confirmed tool-call atte
     ?.settle({ promptTokens: 100, completionTokens: 5 }, true, "observed");
   expect(budget.remaining()).toBe(0);
   expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+  // Reported usage never hides a physical attempt.
+  expect(budget.takeUsage()).toEqual({ promptTokens: 300, completionTokens: 15 });
 });
 
 it.each(["pending", "undispatched", "unknown"] as const)(
@@ -202,7 +205,7 @@ it.each(["pending", "undispatched", "unknown"] as const)(
   },
 );
 
-it("never replenishes token or deadline grants when complete tool rounds release synthesis slots", () => {
+it("never replenishes the deadline or the final answer's token grant when tool rounds release slots", () => {
   const budget = createGroundedSynthesisCallBudget();
   let now = 1;
   const tracker = createGroundedSynthesisAttemptAdmission(budget, {
@@ -218,9 +221,62 @@ it("never replenishes token or deadline grants when complete tool rounds release
     tracker.confirmToolRound();
   }
   expect(budget.remaining()).toBe(2);
-  expect(budget.pendingUsage()).toEqual({ promptTokens: 200, completionTokens: 10 });
-  expect(tracker.admission({ promptTokens: 21, maxOutputTokens: 80 })).toBeUndefined();
-  expect(tracker.admission({ promptTokens: 20, maxOutputTokens: 80 })?.maxOutputTokens).toBe(70);
+  // Tool rounds are charged and bounded by the Chat tool turn's Authority Envelope (#4175); the
+  // synthesis answer itself still cannot exceed its own grant.
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 0, completionTokens: 0 });
+  expect(tracker.admission({ promptTokens: 221, maxOutputTokens: 80 })).toBeUndefined();
+  const answer = tracker.admission({ promptTokens: 220, maxOutputTokens: 90 });
+  expect(answer?.maxOutputTokens).toBe(80);
+  answer?.settle({ promptTokens: 220, completionTokens: 80 }, true, "observed");
+  expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
   now = 100;
   expect(() => tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toThrow();
+});
+
+it("lets only an announced correction move a settled unusable attempt out of the synthesis grant", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 220,
+    outputTokensMax: 80,
+  });
+  tracker
+    .admission({ promptTokens: 100, maxOutputTokens: 80 })
+    ?.settle({ promptTokens: 41, completionTokens: 7 }, true, "observed");
+  // The rejected attempt is turn orchestration once the gateway announces its correction: the
+  // correction gets the original output cap and both slots stay available to the answer.
+  const correction = tracker.admission({
+    promptTokens: 100,
+    maxOutputTokens: 80,
+    correctsUnusableAttempt: true,
+  });
+  expect(correction?.maxOutputTokens).toBe(80);
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 0, completionTokens: 0 });
+  correction?.settle({ promptTokens: 50, completionTokens: 9 }, true, "observed");
+  // A second announcement cannot release the same attempt again, and an ordinary retry after the
+  // settled correction still shrinks to the remaining output grant.
+  const retry = tracker.admission({ promptTokens: 100, maxOutputTokens: 80 });
+  expect(retry?.maxOutputTokens).toBe(71);
+  expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+  retry?.settle({ promptTokens: 60, completionTokens: 3 }, true, "observed");
+  // Reported usage never hides a physical attempt, corrected or not.
+  expect(budget.takeUsage()).toEqual({ promptTokens: 300, completionTokens: 19 });
+});
+
+it("never releases an unsettled attempt for an announced correction", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 220,
+    outputTokensMax: 80,
+  });
+  tracker.admission({ promptTokens: 100, maxOutputTokens: 80 });
+  const correction = tracker.admission({
+    promptTokens: 100,
+    maxOutputTokens: 80,
+    correctsUnusableAttempt: true,
+  });
+  expect(correction?.maxOutputTokens).toBe(80);
+  expect(budget.remaining()).toBe(0);
+  expect(
+    tracker.admission({ promptTokens: 1, maxOutputTokens: 1, correctsUnusableAttempt: true }),
+  ).toBeUndefined();
 });

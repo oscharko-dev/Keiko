@@ -538,6 +538,68 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  it("keeps an admitted conversation generation across a capability-only update (#4175)", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-generation-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-generation-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig?.replaceCatalog === undefined) throw new Error("expected catalog owner");
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "model/turn",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          capability: { kind: "chat", contextWindow: 8_192, toolCalling: false },
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    const admitted = gatewayConfig.generation();
+    gatewayConfig.recordVerifiedCapability(
+      "model/turn",
+      { conversationReady: true, toolCalling: true },
+      "2026-10-31T14:34:43.000Z",
+      admitted,
+    );
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "model%2Fturn" } },
+      deps,
+    );
+
+    // A readiness probe that only refines capability metadata of an unchanged connection must not
+    // invalidate a conversation turn admitted against that same connection.
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/turn").toolCalling).toBe(true);
+    expect(gatewayConfig.generation()).toBe(admitted);
+    expect(gatewayConfig.verifiedCapability("model/turn")).toMatchObject({
+      fields: { conversationReady: true },
+      generation: admitted,
+    });
+    const current = requiredGatewayConfig(deps);
+    expect(
+      gatewayConfig.replaceCatalog(
+        {
+          ...current,
+          providers: current.providers.map((provider) => ({
+            ...provider,
+            baseUrl: "https://replacement.example.invalid/v1",
+          })),
+        },
+        admitted,
+      ),
+    ).toBe(true);
+    expect(gatewayConfig.generation()).toBe(admitted + 1);
+    expect(gatewayConfig.verifiedCapability("model/turn")).toBeUndefined();
+    deps.store.close();
+  });
+
   it("reconciles readiness tool-calling proof into the durable capability", async () => {
     const uiDir = await tempDir("keiko-gw-readiness-proof-ui-");
     const readinessFetch = vi

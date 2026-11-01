@@ -127,6 +127,12 @@ export interface AnswerGenerator {
    * given reference was sent.
    */
   readonly promptReferences?: () => readonly RetrievalReference[];
+  /**
+   * Whether a citation-repair call can still be admitted. A generator with a bounded number of
+   * model calls answers false once they are spent; the completed answer is then kept as it is
+   * instead of failing the turn on an optional repair. Absent means the repair may run.
+   */
+  readonly repairAvailable?: () => boolean;
 }
 
 // Optional pre-answer reranker port. The BFF owns provider configuration; this package only sees

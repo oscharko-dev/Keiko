@@ -319,6 +319,12 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "A failed fsync is returned as the closed durability-uncertain deferral of the batch.",
     "packages/keiko-server/src/coding-runtime/opencodeRipgrepLaunch.ts:isFile":
       "A metadata probe failure other than a missing path is the fail-closed true result of this ripgrep-provider predicate: the entry leaves the degraded PATH. coding-runtime.ripgrep.resolved records the launch outcome without paths.",
+    "packages/keiko-local-knowledge/src/bounded-ooxml-package.ts:readBoundedOoxmlPackage":
+      "The catch returns the closed classifyOoxmlZipError reason (cancelled, budget or malformed) as the read result; the Jira attachment owner refuses the file as unscannable and records it on jira.attachment.source with refusal=unscannable (#4176).",
+    "packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy.ts:inflateBounded":
+      "zlib rejects data that is not one bounded zlib stream; the catch returns undefined, the content policy refuses the file as unscannable, and jira.attachment.source records refusal=unscannable under the request correlation (#4176).",
+    "packages/keiko-local-knowledge/src/parsers/pptx-parser.ts:asyncParse":
+      "The catch returns the closed classifyOoxmlZipError parser diagnostic (cancelled, budget, inflate bound or malformed archive) as the parser result; the indexing owner records it on indexing.document.extraction-failed with its failureKind. This is the same parser boundary docx and xlsx hold in the legacy register (#4180).",
   }),
 );
 

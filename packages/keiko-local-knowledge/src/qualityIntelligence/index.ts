@@ -14,3 +14,19 @@ export {
   listCapsuleSetDocumentTexts,
   type CapsuleDocumentText,
 } from "./capsuleCorpus.js";
+
+// Complete, bounded document read of an already-resolved scope (#4179).
+export {
+  SCOPE_DOCUMENT_CHARS_MAX,
+  SCOPE_DOCUMENTS_MAX,
+  SCOPE_TOTAL_CHARS_MAX,
+  readScopeDocuments,
+  referenceForSpan,
+  unionSections,
+  type ScopeDocument,
+  type ScopeDocumentLimits,
+  type ScopeDocumentRead,
+  type ScopeDocumentScope,
+  type ScopeDocumentSection,
+  type ScopeSpan,
+} from "./scopeDocuments.js";

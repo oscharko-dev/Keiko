@@ -22,7 +22,8 @@ interface VersionRollback {
 // both compose from this ONE list — neither restates a migration's DDL of its own, and a future
 // migration is covered the moment its own rollback fragment is appended here.
 //
-// V48 only conservatively repairs mutation outcomes; no structural rollback applies.
+// V48 only conservatively repairs mutation outcomes; no structural rollback applies. V57 only
+// widens the journal operation CHECK (no column added), so a rewind keeps the wider table.
 // V20/V30/V33/V37/V40 have no fragments: they only widen a `failure_code` CHECK on
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.

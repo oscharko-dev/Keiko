@@ -79,6 +79,8 @@ const D4: Readonly<
     "jira.comments": "review-required",
     "jira.transitions": "review-required",
     "jira.assignable-users": "review-required",
+    "jira.report": "review-required",
+    "jira.draft-stage": "review-required",
     "assign-issue": "review-required",
     "sync-space": "review-required",
     "sync-project": "review-required",
@@ -102,6 +104,8 @@ const D4: Readonly<
     "jira.comments": "review-required",
     "jira.transitions": "review-required",
     "jira.assignable-users": "review-required",
+    "jira.report": "review-required",
+    "jira.draft-stage": "review-required",
     "assign-issue": "review-required",
     "sync-space": "review-required",
     "sync-project": "review-required",
@@ -124,6 +128,8 @@ const D4: Readonly<
     "jira.comments": "allowed",
     "jira.transitions": "allowed",
     "jira.assignable-users": "allowed",
+    "jira.report": "allowed",
+    "jira.draft-stage": "allowed",
     "assign-issue": "allowed",
     "sync-space": "allowed",
     "sync-project": "allowed",
@@ -149,6 +155,8 @@ const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string
   "jira.comments": "connector-access-denied",
   "jira.transitions": "connector-access-denied",
   "jira.assignable-users": "connector-access-denied",
+  "jira.report": "connector-access-denied",
+  "jira.draft-stage": "connector-access-denied",
   "assign-issue": "connector-write-denied",
   "sync-space": "connector-access-denied",
   "sync-project": "connector-access-denied",
@@ -395,9 +403,9 @@ describe("legacy routes and managed admission — D4 matrix, scope present (Scop
     },
   );
 
-  it("covers all twenty action types in every mode", () => {
+  it("covers all twenty-two action types in every mode", () => {
     expect(PRESENT_MATRIX).toHaveLength(MODES.length * ATLASSIAN_CONNECTOR_ACTION_TYPES.length);
-    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toHaveLength(20);
+    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toHaveLength(22);
   });
 });
 

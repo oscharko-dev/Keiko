@@ -11,3 +11,20 @@ export function compareStrings(left: string, right: string): number {
   if (left > right) return 1;
   return 0;
 }
+
+/**
+ * Issue keys order by project (code-unit order), then numerically, so `REQ-2` precedes `REQ-10`.
+ * A key without a numeric suffix orders by its whole text before any numbered key of that text.
+ */
+export function compareIssueKeys(left: string, right: string): number {
+  const split = (key: string): readonly [string, number] => {
+    const at = key.lastIndexOf("-");
+    const number = Number(key.slice(at + 1));
+    return at < 0 || !Number.isFinite(number) ? [key, 0] : [key.slice(0, at), number];
+  };
+  const [leftProject, leftNumber] = split(left);
+  const [rightProject, rightNumber] = split(right);
+  return leftProject === rightProject
+    ? leftNumber - rightNumber
+    : compareStrings(leftProject, rightProject);
+}

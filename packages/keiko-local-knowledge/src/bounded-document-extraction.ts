@@ -154,21 +154,6 @@ function resolveFormat(extension: string, mediaType: string): FormatBinding | un
   return match === undefined ? undefined : { format: match.format, parser: match.parser };
 }
 
-// Office files protected with a password are not OOXML ZIP packages; they are wrapped in a
-// Compound File Binary (CFB / OLE2) container whose 8-byte signature is D0 CF 11 E0 A1 B1 1A E1.
-// Detecting that signature lets us report `encrypted` instead of a generic `malformed` for the
-// common "password-protected Word/Excel" case. PDF /Encrypt detection is intentionally not
-// attempted here; an unopenable encrypted PDF degrades to `malformed`, which the caller still
-// surfaces as a stable skipped-document diagnostic.
-const CFB_SIGNATURE: readonly number[] = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
-
-function looksEncryptedOfficeContainer(bytes: Uint8Array): boolean {
-  if (bytes.length < CFB_SIGNATURE.length) {
-    return false;
-  }
-  return CFB_SIGNATURE.every((byte, index) => bytes[index] === byte);
-}
-
 // ─── UTF-8-safe output clamp ─────────────────────────────────────────────────────
 
 const TEXT_ENCODER = new TextEncoder();
@@ -201,6 +186,10 @@ function hasDiagnostic(result: InternalParserResult, code: string): boolean {
   return result.diagnostics.some((diagnostic) => diagnostic.code === code);
 }
 
+function hasEncryptedDiagnostic(result: InternalParserResult): boolean {
+  return hasDiagnostic(result, "ENCRYPTED_PDF") || hasDiagnostic(result, "ENCRYPTED_DOCUMENT");
+}
+
 function hasNoTextLayerUnit(result: InternalParserResult): boolean {
   return result.units.some(
     (unit) =>
@@ -217,7 +206,7 @@ function classifyParsedOutcome(
   if (hasDiagnostic(result, "PARSER_TIMEOUT") || hasDiagnostic(result, "PARSER_CANCELLED")) {
     return "timed-out";
   }
-  if (hasDiagnostic(result, "ENCRYPTED_PDF")) {
+  if (hasEncryptedDiagnostic(result)) {
     return "encrypted";
   }
   if (hasDiagnostic(result, "MALFORMED_INPUT")) {
@@ -303,12 +292,6 @@ function preflightFailure(
 ): BoundedDocumentExtractionResult | undefined {
   if (input.bytes.byteLength > options.maxInputBytes) {
     return failure("oversized", binding.format);
-  }
-  if (
-    (binding.format === "docx" || binding.format === "xlsx") &&
-    looksEncryptedOfficeContainer(input.bytes)
-  ) {
-    return failure("encrypted", binding.format);
   }
   return undefined;
 }

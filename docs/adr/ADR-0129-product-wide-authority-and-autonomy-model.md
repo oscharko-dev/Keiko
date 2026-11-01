@@ -252,8 +252,34 @@ lifecycle must still prove that it does not revoke the issuing authority at each
 Accepted-turn authority minting reads the persisted human user message and current owned,
 verified Chat binding. It derives mode/ceiling and acceptance evidence server-side, retains
 the existing authority registry and grants no read consent or concrete write approval. The
-same turn deadline bounds `expiresAt` and runtime; the initial limits are five minutes,
-30 tool calls and 100,000 cumulative prompt tokens. A deterministic identity derived from the stored Chat/message pair makes duplicate minting
+same turn deadline bounds `expiresAt` and runtime. The envelope budget is the turn's only bound
+(#4175, owner decision 2026-10-31): the shared Chat tool loop derives its iteration and model-call
+ceilings from it rather than from the coding-harness defaults, and the stored tool transcript holds
+one exchange per admitted tool call. The default (`CHAT_TOOL_TURN_BUDGET`) is sized for backlog
+work — 60 minutes, 250 tool calls and 5,000,000 cumulative prompt tokens — and a composition may
+narrow it; a request cannot. A composed value above the default is clamped to it field by field,
+because the default is also the stored transcript's exchange bound. Jira and MCP sources of one turn
+share it. A round past the tool-call budget is refused before any model call. Before a call starts,
+the turn reserves its worst-case transcript bytes (arguments, the descriptor's result bound, the
+result binding and a fixed envelope share); a call that would exceed the transcript's 16 MiB bound
+ends the turn as `budget-exhausted` instead of starting work whose result could not be persisted. When a turn that already settled tool calls ends early
+(budget, deadline, authority change, unsettled tool call, output exhaustion, context overflow or
+another model failure), its answer is built from the stored transcript, not from the model: it lists
+the acknowledged writes with their issue keys, unconfirmed writes separately, calls that started
+but never settled (one may have reached Jira before bookkeeping failed), and the counts of reads and
+refused calls; a human stop is not replaced. `chat.tool-turn.ended` records the closed reason, those
+counts (including `unsettledCount`) and the envelope bounds. A backlog draft contributes each
+item's key and state. An attempt refusal by the turn's own envelope (for example its cumulative
+prompt tokens) ends the turn as `budget-exhausted` with that answer; a cap the caller supplied keeps
+its nonretryable 403. A deadline answer is delivered on the streamed and the grounded path too: it is already built
+from the stored transcript and admits no further tool or model work. The grounded route cancels on a human stop or an
+authority revocation at once, and on the deadline only while no exchange has settled; once one has, the deadline stops
+provider dispatch through the turn's own signal and the synthesis grants but the grounded route returns the transcript
+answer (200, persisted, turn completed) instead of a 499. Older tool results in the copy sent to the model are
+compacted, oldest first and never the newest, to a closed record (status, reason, mutation outcome,
+issue key, and each draft item's key and state) when the continuation would exceed its share of the model window;
+`chat.tool-turn.context-fitted` records the count. The stored transcript is unchanged. A dispatch
+fault on the grounded route maps to the same closed response as the desktop route. A deterministic identity derived from the stored Chat/message pair makes duplicate minting
 idempotent, with the registry refusing any changed envelope under that identity. The stored human
 message must still be the latest accepted pending turn (or the current legacy user message); its
 stored timestamp fixes the deadline. The caller retains this registration across tool, model and

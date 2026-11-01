@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -13,6 +13,8 @@ import {
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   AtlassianCredentialMetadata,
+  AtlassianHttpBodyPort,
+  JiraAttachmentSource,
   JiraManagedMutationExecutor,
 } from "@oscharko-dev/keiko-connectors";
 import {
@@ -42,6 +44,8 @@ import {
 } from "../tool-catalog/__fixtures__/conversationConsumer.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { executeJiraChatDraft, jiraDraftChildIntent } from "./jiraChatDraft.js";
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import type { JiraChatToolMutationIntent as ChatToolMutationIntent } from "../store/chatToolMutationTypes.js";
@@ -51,6 +55,21 @@ const cleanup: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
+/** Single-issue mutations; a backlog draft dispatches its items as journaled creates (#4178). */
+type SingleMutation = Exclude<JiraMutationOperation, "jira.draft">;
+const SINGLE_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
+  (operation): operation is SingleMutation => operation !== "jira.draft",
+);
+const DRAFT: CatalogJsonObject = {
+  items: [
+    {
+      ref: "one",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Changed", customfield_10000: "Required" },
+    },
+  ],
+};
 const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
   "jira.create": {
     projectId: "10000",
@@ -65,8 +84,14 @@ const ARGUMENTS: Readonly<Record<JiraMutationOperation, CatalogJsonObject>> = {
     transitionId: "31",
     fields: { customfield_10000: "Screen value" },
   },
+  "jira.draft": DRAFT,
+  "jira.attach": {
+    issueKey: "SYN-1",
+    source: { kind: "connected-file", path: "docs/report.txt" },
+  },
 };
-const REMOTE_STATE: Readonly<Record<JiraMutationOperation, object>> = {
+const ATTACHED = new TextEncoder().encode("synthetic attachment body");
+const REMOTE_STATE: Readonly<Record<SingleMutation, object>> = {
   "jira.create": {
     fields: {
       summary: "Changed",
@@ -79,6 +104,7 @@ const REMOTE_STATE: Readonly<Record<JiraMutationOperation, object>> = {
   "jira.assign": { fields: { assignee: { name: "synthetic-user" } } },
   "jira.comment": { comment: "Synthetic comment" },
   "jira.transition": { fields: { status: { id: "3" }, customfield_10000: "Screen value" } },
+  "jira.attach": { fields: { attachment: [{ id: "10300", size: ATTACHED.length }] } },
 };
 function database(): {
   journal: ReturnType<typeof createChatToolMutationStore>;
@@ -117,7 +143,36 @@ function database(): {
     logs,
   };
 }
-type RemoteMode = "confirmed" | "readback-denied" | "lost-response";
+type RemoteMode =
+  | "confirmed"
+  | "readback-denied"
+  | "lost-response"
+  | "jira-error-document"
+  | "html-error-page"
+  | "server-error";
+/** The value this synthetic Jira refuses, as Data Center does for a bad option. */
+const REJECTED_VALUE = "Rot";
+const JIRA_FIELD_ERROR = "Option 'Rot' is not valid.";
+const JIRA_ERROR_DOCUMENT = JSON.stringify({
+  errorMessages: [],
+  errors: { customfield_10000: JIRA_FIELD_ERROR },
+});
+const REFUSALS: Readonly<Record<string, { readonly status: number; readonly body: string }>> = {
+  // Jira validated the whole request and said why (#4176): nothing was applied.
+  "jira-error-document": { status: 400, body: JIRA_ERROR_DOCUMENT },
+  // A proxy's page is no Jira error document: whether the write was applied is unknown.
+  "html-error-page": { status: 400, body: "<html><body>Bad Request</body></html>" },
+  "server-error": { status: 503, body: JIRA_ERROR_DOCUMENT },
+};
+async function scriptedRefusal(mode: RemoteMode, request: Request): Promise<Response | undefined> {
+  const refusal = REFUSALS[mode];
+  if (refusal === undefined || !(await request.clone().text()).includes(REJECTED_VALUE))
+    return undefined;
+  return new Response(refusal.body, {
+    status: refusal.status,
+    headers: { "content-type": "application/json" },
+  });
+}
 function remote(
   mode: RemoteMode,
   beforeWrite: () => void,
@@ -147,12 +202,14 @@ function remote(
         beforeWrite();
         writes += 1;
       }
+      const refusal = await scriptedRefusal(mode, request);
+      if (refusal !== undefined) return refusal;
       const result =
         request.method === "GET"
           ? mode === "readback-denied" && writes > 0
             ? response({}, 403)
             : fixtureRead(path, state)
-          : fixtureWrite(path, await request.text(), state);
+          : await fixtureWriteResult(request, path, state);
       if (request.method !== "GET" && mode === "lost-response")
         throw new TypeError("Synthetic connection loss after commit");
       if (result.kind !== "response") throw new Error("Expected synthetic HTTP response");
@@ -162,6 +219,20 @@ function remote(
       });
     },
   };
+}
+/** A governed upload reaches Jira as one multipart POST that carries the XSRF opt-out header. */
+async function fixtureWriteResult(
+  request: Request,
+  path: string,
+  state: SyntheticJira,
+): Promise<ReturnType<typeof fixtureWrite>> {
+  if (!request.headers.get("content-type")?.startsWith("multipart/form-data; boundary=keiko-"))
+    return fixtureWrite(path, await request.text(), state);
+  expect(request.headers.get("x-atlassian-token")).toBe("no-check");
+  expect(request.method).toBe("POST");
+  return fixtureWrite(path, undefined, state, {
+    bytes: new Uint8Array(await request.arrayBuffer()),
+  });
 }
 function mutationCredentials(fetchImpl: typeof fetch): {
   credentials: AtlassianConnectorCredentialDeps;
@@ -232,10 +303,10 @@ async function fixture(
       operation,
       correlationId: context.correlationId,
     });
-    return executeJiraChatMutation({
+    const shared = {
       journal: db.journal,
       intent: activeIntent,
-      httpPortFactory: (lifecycle) =>
+      httpPortFactory: (lifecycle: AtlassianHttpLifecycleOptions): AtlassianHttpBodyPort =>
         credentials.httpBodyPortFactory(metadata, context.correlationId, {
           ...lifecycle,
           onResponse: (request, status): boolean => {
@@ -246,7 +317,16 @@ async function fixture(
         }),
       beforeEffect: context.beforeEffect,
       beforeMutation: context.beforeEffect,
-      execute,
+    };
+    if (operation !== "jira.draft") return executeJiraChatMutation({ ...shared, execute });
+    // The draft itself is never journaled; its one synthetic item is what reaches Jira.
+    activeInvocation = jiraDraftChildIntent(activeIntent, "one").invocationId;
+    return executeJiraChatDraft({
+      ...shared,
+      arguments: args,
+      deselected: [],
+      context,
+      connection: { deployment: "data-center", baseUrl: "https://jira.example.invalid/context" },
     });
   };
   const provider = createJiraProviderForCatalog<CatalogHandlerContext<ConversationConsumer>>(
@@ -256,6 +336,13 @@ async function fixture(
       http: vi.fn(() => {
         throw new Error("Mutation must use the journal-owned HTTP port");
       }),
+      attachmentSource: (): ReturnType<JiraAttachmentSource> => {
+        const sha256 = createHash("sha256").update(ATTACHED).digest("hex");
+        return Promise.resolve({
+          ok: true,
+          content: { name: "report.txt", bytes: ATTACHED, sha256 },
+        });
+      },
     }),
     JIRA_MUTATION_OPERATIONS,
     executeMutation,
@@ -352,7 +439,7 @@ it.each(["binding-revoked", "cancelled"] as const)(
   },
 );
 
-it.each(JIRA_MUTATION_OPERATIONS)(
+it.each(SINGLE_MUTATIONS)(
   "executes %s through the real gateway/binder/SDK and durable journal",
   async (operation) => {
     const f = await fixture();
@@ -382,7 +469,7 @@ it.each(JIRA_MUTATION_OPERATIONS)(
     );
   },
 );
-it.each(JIRA_MUTATION_OPERATIONS)(
+it.each(SINGLE_MUTATIONS)(
   "keeps %s unconfirmed when readback is denied and blocks further writes",
   async (operation) => {
     const f = await fixture("readback-denied");
@@ -403,7 +490,7 @@ it.each(JIRA_MUTATION_OPERATIONS)(
     expect(f.writes()).toBe(1);
   },
 );
-it.each(JIRA_MUTATION_OPERATIONS)(
+it.each(SINGLE_MUTATIONS)(
   "never repeats %s after losing the response to an applied mutation",
   async (operation) => {
     const f = await fixture("lost-response");
@@ -419,6 +506,68 @@ it.each(JIRA_MUTATION_OPERATIONS)(
     expect(f.state).toMatchObject(REMOTE_STATE[operation]);
   },
 );
+function create(value: string): CatalogJsonObject {
+  return {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Changed", customfield_10000: value },
+  };
+}
+it("returns Jira's field error and lets the corrected retry succeed in the same turn (#4176)", async () => {
+  const f = await fixture("jira-error-document");
+
+  const refused = await f.invoke("jira.create", create(REJECTED_VALUE));
+
+  // Data Center validates a whole request before applying anything: its error document is a
+  // definitive rejection, so the outcome is `rejected` and Jira's field id and message reach the model.
+  expect(refused).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "failed",
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        fieldErrors: [{ fieldId: "customfield_10000", message: JIRA_FIELD_ERROR }],
+      },
+    },
+  });
+  expect(f.writes()).toBe(1);
+  expect(f.state.fields).not.toMatchObject({ customfield_10000: REJECTED_VALUE });
+  expect(f.journal.find(f.intent().invocationId)).toMatchObject({
+    phase: "settled",
+    outcome: "rejected",
+    httpStatus: 400,
+  });
+
+  const corrected = await f.invoke("jira.create", create("Required"));
+
+  expect(corrected).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded", issueKey: "SYN-1" } },
+  });
+  expect(f.writes()).toBe(2);
+  expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
+  expect(f.logs.lines().join()).not.toContain(JIRA_FIELD_ERROR);
+});
+it.each(["html-error-page", "server-error"] as const)(
+  "keeps the turn blocked after %s: the write may have been applied (#2953)",
+  async (mode) => {
+    const f = await fixture(mode);
+
+    const refused = await f.invoke("jira.create", create(REJECTED_VALUE));
+
+    expect(refused).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "unknown" } },
+    });
+    expect(await f.invoke("jira.create", create("Required"))).toMatchObject({
+      kind: "settled",
+      result: { data: { outcome: "not-dispatched", reason: "conflict" } },
+    });
+    expect(f.writes()).toBe(1);
+  },
+);
+
 it("requires explicit clearing and rejects ambiguous assignment through the SDK path", async () => {
   const f = await fixture();
   expect(
@@ -437,6 +586,134 @@ it("requires explicit clearing and rejects ambiguous assignment through the SDK 
     result: { data: { outcome: "succeeded" } },
   });
   expect(f.state.fields.assignee).toBeNull();
+  expect(f.writes()).toBe(1);
+});
+
+/** The registered settled line of the one mutation a fixture ran. */
+function settledMutationLine(
+  logs: ReturnType<typeof createBufferedServerLogSink>,
+): Record<string, unknown> {
+  const settled = logs.events.filter(
+    (event) => event.op === "chat.tool-mutation" && event.extra?.event === "settled",
+  );
+  expect(settled).toHaveLength(1);
+  return expectRegisteredActivityLogLine(
+    "chat.tool-mutation",
+    formatActivityLogProofLine(settled[0] ?? {}),
+  );
+}
+// #4173: a write Keiko refuses before dispatch settles `rejected` with no HTTP status. Its settled
+// line must name Keiko's closed reason, or the log cannot say why the model's write failed.
+it("names Keiko's closed reason on the settled line of a write refused before dispatch", async () => {
+  const f = await fixture();
+
+  await f.invoke("jira.assign", {
+    issueKey: "SYN-1",
+    assigneeName: "synthetic-user",
+    clearAssignee: true,
+  });
+
+  expect(f.writes()).toBe(0);
+  const line = settledMutationLine(f.logs);
+  // The refusal now names its argument (#4173); the line keeps only the closed class, never the
+  // argument's name or the sentence the model reads.
+  expect(line).toMatchObject({
+    outcome: "rejected",
+    refusalReason: "field-validation",
+    fieldValidation: "required-field",
+  });
+  expect(line).not.toHaveProperty("rejection");
+  expect(f.logs.lines().join()).not.toMatch(
+    /synthetic-user|SYN-1|assigneeName|Nothing was changed/u,
+  );
+});
+it("names the closed field-validation class of a field Keiko refused before dispatch", async () => {
+  const f = await fixture();
+
+  await f.invoke("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Changed", customfield_99999: "synthetic-value" },
+  });
+
+  expect(f.writes()).toBe(0);
+  expect(settledMutationLine(f.logs)).toMatchObject({
+    outcome: "rejected",
+    refusalReason: "field-validation",
+    fieldValidation: "invalid-field",
+  });
+  expect(f.logs.lines().join()).not.toMatch(/customfield_99999|synthetic-value/u);
+});
+it("records no local refusal reason once Jira itself answered the write", async () => {
+  const f = await fixture("jira-error-document");
+
+  await f.invoke("jira.create", create(REJECTED_VALUE));
+
+  const line = settledMutationLine(f.logs);
+  expect(line).toMatchObject({ outcome: "rejected", rejection: "jira-error-document" });
+  expect(line).not.toHaveProperty("refusalReason");
+  expect(line).not.toHaveProperty("fieldValidation");
+});
+it("runs a backlog draft through the real gateway/binder/SDK as journaled item creates (#4178)", async () => {
+  const f = await fixture();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "completed",
+      data: {
+        outcome: "succeeded",
+        createdCount: 1,
+        items: [
+          {
+            ref: "one",
+            state: "created",
+            issueKey: "SYN-1",
+            browseUrl: "https://jira.example.invalid/context/browse/SYN-1",
+          },
+        ],
+      },
+    },
+  });
+  expect(f.writes()).toBe(1);
+  expect(f.state).toMatchObject(REMOTE_STATE["jira.create"]);
+  const child = jiraDraftChildIntent(f.intent(), "one");
+  expect(f.journal.find(child.invocationId)).toMatchObject({
+    operation: "jira.create",
+    outcome: "succeeded",
+  });
+  expect(f.journal.find(f.intent().invocationId)).toBeUndefined();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: { data: { outcome: "succeeded", items: [{ ref: "one", state: "created" }] } },
+  });
+  expect(f.writes()).toBe(1);
+  expect(f.logs.lines().join()).not.toMatch(/synthetic-test-pat|jira\.example|SYN-1/u);
+});
+
+it("treats a draft whose items all exist already as a completed no-op, not a tool error (#4178)", async () => {
+  const f = await fixture();
+  expect(await f.invoke("jira.draft")).toMatchObject({
+    kind: "settled",
+    result: { status: "completed", data: { outcome: "succeeded", createdCount: 1 } },
+  });
+  expect(f.writes()).toBe(1);
+  // The same backlog under another local reference is a new draft action with a fresh journal:
+  // its one item is reconciled to the issue that exists, so Jira receives nothing.
+  const [first] = DRAFT.items as readonly Record<string, unknown>[];
+  const rerun = { items: [{ ...first, ref: "uno" }] } as unknown as CatalogJsonObject;
+  expect(await f.invoke("jira.draft", rerun)).toMatchObject({
+    kind: "settled",
+    result: {
+      status: "completed",
+      data: {
+        outcome: "not-dispatched",
+        existingCount: 1,
+        createdCount: 0,
+        failedCount: 0,
+        items: [{ ref: "uno", state: "existing", issueKey: "SYN-1" }],
+      },
+    },
+  });
   expect(f.writes()).toBe(1);
 });
 

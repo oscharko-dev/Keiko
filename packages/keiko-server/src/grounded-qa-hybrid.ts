@@ -226,6 +226,7 @@ import {
   withConversationReadinessAdmission,
   type ConversationReadinessAdmission,
 } from "./conversation-readiness-admission.js";
+import { awaitInitializedConversationReadiness } from "./gateway-readiness.js";
 
 // ─── Canonical connector reader ───────────────────────────────────────────────
 
@@ -1396,6 +1397,7 @@ function buildHybridRetrievalActivity(
   knowledgeCitations: readonly LocalKnowledgeEvidenceCitation[],
   reranker: GroundedRerankerDiagnostics,
   diagnostics: UiHandlerDeps["diagnostics"],
+  correlationId: string | undefined,
 ): HybridGroundedAnswer["retrievalActivity"] {
   return tryBuildKnowledgePodRetrievalActivity({
     store,
@@ -1409,6 +1411,7 @@ function buildHybridRetrievalActivity(
     })),
     skipped: selectedConnectorSkips(skipped),
     diagnostics,
+    correlationId,
   });
 }
 
@@ -2156,6 +2159,7 @@ function projectHybridAnswer(
     knowledgeCitations,
     reranker,
     ctx.deps.diagnostics,
+    ctx.correlationId,
   );
   return {
     cited,
@@ -2329,6 +2333,7 @@ function resolveHybridAnswerer(ctx: HybridGroundedAskCtx): ResolvedAnswerer | Ro
     ctx.modelId,
     readinessAdmission,
     ctx.deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(ctx.deps, id, correlationId),
   );
   return {
     answer: createHybridAnswerer(

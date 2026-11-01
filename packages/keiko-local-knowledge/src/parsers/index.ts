@@ -40,6 +40,7 @@ export { htmlParser } from "./html-parser.js";
 export { pdfParser } from "./pdf-parser.js";
 export { docxParser } from "./docx-parser.js";
 export { xlsxParser } from "./xlsx-parser.js";
+export { pptxParser } from "./pptx-parser.js";
 
 // Convenience: a registry pre-populated with every shipped adapter. OCR is opt-in because it
 // depends on a runtime engine; text registers last because its `matches` predicate is the most
@@ -50,6 +51,7 @@ import { docxParser } from "./docx-parser.js";
 import { htmlParser } from "./html-parser.js";
 import { jsonParser } from "./json-parser.js";
 import { pdfParser } from "./pdf-parser.js";
+import { pptxParser } from "./pptx-parser.js";
 import { createParserRegistry, registerParser } from "./registry.js";
 import { textParser } from "./text-parser.js";
 import type { ParserRegistry } from "./types.js";
@@ -71,6 +73,7 @@ export function createDefaultParserRegistry(
   registry = registerParser(registry, pdfParser);
   registry = registerParser(registry, docxParser);
   registry = registerParser(registry, xlsxParser);
+  registry = registerParser(registry, pptxParser);
   if (options.ocrAdapter !== undefined) {
     registry = registerParser(registry, createOcrPipelineParser(options.ocrAdapter));
   }

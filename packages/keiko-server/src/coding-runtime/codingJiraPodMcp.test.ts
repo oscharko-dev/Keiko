@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
@@ -27,7 +28,10 @@ import {
   type CodingJiraPodDeps,
   type CodingJiraPods,
 } from "./codingJiraPodMcp.js";
+import { buildUiStoreOverDatabase } from "../store/index.js";
+import { runMigrations } from "../store/schema.js";
 import { CODING_JIRA_TOOL_RISKS, type CodingJiraPodBinding } from "./codingJiraPodBinding.js";
+import { JIRA_TOOL_GUIDANCE } from "../atlassian/jiraToolGuidance.js";
 
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const PRINCIPAL = "operator-principal";
@@ -99,7 +103,37 @@ afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
 });
 
-function harness(options: { readonly attach?: boolean } = {}): Harness {
+const EDIT_TEMPLATE = [
+  "---",
+  "keiko: jira-issue-template",
+  "version: 1",
+  "project: SYN",
+  "issueType: Story",
+  "activateOn: [edit]",
+  "summaryMinLength: 40",
+  "---",
+  "# Story",
+].join("\n");
+
+function templateStore(template: string | undefined): CodingJiraPodDeps["store"] {
+  const db = new DatabaseSync(":memory:");
+  db.exec("PRAGMA foreign_keys = ON");
+  runMigrations(db);
+  const store = buildUiStoreOverDatabase(db);
+  cleanup.push(() => {
+    store.close();
+    return Promise.resolve();
+  });
+  if (template !== undefined) {
+    store.markdownSkills.import({
+      fileName: "story-template.md",
+      contentBase64: Buffer.from(template).toString("base64"),
+    });
+  }
+  return store;
+}
+
+function harness(options: { readonly attach?: boolean; readonly template?: string } = {}): Harness {
   const pod: PodState = {
     generation: 3,
     revision: 1,
@@ -110,6 +144,8 @@ function harness(options: { readonly attach?: boolean } = {}): Harness {
   const state: SyntheticJira = {
     fields: {
       summary: "Fix it",
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
       assignee: { name: "previous-user" },
       status: { id: "1" },
       labels: [],
@@ -129,6 +165,7 @@ function harness(options: { readonly attach?: boolean } = {}): Harness {
   const log: ServerLogSink = { write: (event) => void records.push(event) };
   const pods = createCodingJiraPods(log);
   const deps: CodingJiraPodDeps = {
+    store: templateStore(options.template),
     serverPrincipal: () => PRINCIPAL,
     atlassianConnectorCredentials: {
       custody: {
@@ -175,10 +212,13 @@ interface RpcResult {
   readonly content?: readonly { readonly text?: string }[];
   readonly structuredContent?: Readonly<Record<string, unknown>>;
   readonly isError?: boolean;
-  readonly tools?: readonly { readonly name: string }[];
+  readonly tools?: readonly { readonly name: string; readonly description?: string }[];
+  readonly instructions?: string;
 }
 interface Client {
+  readonly initialize: () => Promise<RpcResult>;
   readonly list: () => Promise<readonly string[]>;
+  readonly descriptions: () => Promise<readonly string[]>;
   readonly call: (name: string, args: Record<string, unknown>) => Promise<RpcResult>;
 }
 
@@ -211,7 +251,15 @@ function connect(h: Harness, connections: CodingJiraConnections): Client {
     return parsed.result;
   };
   return {
+    initialize: () =>
+      rpc("initialize", {
+        protocolVersion: "2025-03-26",
+        capabilities: {},
+        clientInfo: { name: "coding-jira-test", version: "1" },
+      }),
     list: async () => (await rpc("tools/list", {})).tools?.map((tool) => tool.name) ?? [],
+    descriptions: async () =>
+      (await rpc("tools/list", {})).tools?.map((tool) => tool.description ?? "") ?? [],
     call: (name, args) => rpc("tools/call", { name, arguments: args }),
   };
 }
@@ -303,11 +351,40 @@ describe("serving the bound Pod through the relay", () => {
     ).rejects.toBeInstanceOf(ManagedMcpError);
   });
 
+  // Pin (#4178): the rules every Jira tool shares reach the runtime once, as the server's MCP
+  // instructions, instead of in each tool description of the list it receives on every round.
+  it("gives the shared Jira rules once as server instructions, not in each tool", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    expect((await client.initialize()).instructions).toBe(JIRA_TOOL_GUIDANCE);
+    const descriptions = await client.descriptions();
+    expect(descriptions).toHaveLength(Object.keys(CODING_JIRA_TOOL_RISKS).length);
+    for (const description of descriptions)
+      expect(description).not.toMatch(/untrusted data|Data Center only|Never retry/u);
+  });
+
   it("offers exactly the Jira tools, reads and writes, with their declared risks", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h)));
     expect([...(await client.list())].sort()).toEqual(Object.keys(CODING_JIRA_TOOL_RISKS).sort());
     expect(h.http).not.toHaveBeenCalled();
+  });
+
+  // #4176: an attachment reads Chat-connected files, which a Coding run has no authority over, so
+  // the tool is neither offered nor defaulted to a risk; a call to it never reaches Jira.
+  it("neither offers nor accepts jira.attach and never touches Jira for it", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    expect(await client.list()).not.toContain("jira.attach");
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty("jira.attach");
+    await expect(
+      client.call("jira.attach", {
+        issueKey: "SYN-1",
+        source: { kind: "connected-file", path: "docs/report.txt" },
+      }),
+    ).resolves.toMatchObject({ isError: true });
+    expect(h.http).not.toHaveBeenCalled();
+    expect(h.begun).toEqual([]);
   });
 
   it("reads an issue as untrusted data through the Pod's own transport and logs the call", async () => {
@@ -333,6 +410,26 @@ describe("serving the bound Pod through the relay", () => {
     expect(JSON.stringify(lines)).not.toMatch(/SYN-1|jira\.example|Fix it/u);
   });
 
+  it("binds a report to the Pod and logs it on the run's correlation (jira.report)", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const first = await client.call("jira.report", { jql: "project = SYN" });
+    const id = first.structuredContent?.reportId;
+    expect(typeof id).toBe("string");
+    const second = await client.call("jira.report", { reportId: id });
+    expect(second.structuredContent).toMatchObject({ outcome: "succeeded", reportId: id });
+    const lines = h.records.filter((record) => record.op === "atlassian.jira-report");
+    expect(lines).toHaveLength(2);
+    for (const record of lines) {
+      const line = expectActivityLogProof(
+        "atlassian.jira-report.line",
+        formatActivityLogProofLine(record),
+      );
+      expect(line).toMatchObject({ correlationId: "run-jira-1", phase: "read", scopeKind: "jql" });
+      expect(JSON.stringify(line)).not.toMatch(/SYN|jira\.example/u);
+    }
+  });
+
   it("comments on the ticket after the relay's durable mutation permit, and reports the receipt", async () => {
     const h = harness();
     const client = connect(h, h.pods.connections(undefined, bound(h)));
@@ -350,6 +447,65 @@ describe("serving the bound Pod through the relay", () => {
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ tool: "jira.comment", risk: "write", outcome: "completed" }),
     ]);
+  });
+
+  const THREE_LINKS = ["SYN-7", "SYN-8", "SYN-9"].map((issueKey) => ({
+    type: "Relates",
+    direction: "outward",
+    issueKey,
+  }));
+  it("links several issues through separate calls and counts them on its one line (#4176)", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", { issueKey: "SYN-1", links: THREE_LINKS });
+    expect(result).toMatchObject({
+      structuredContent: { outcome: "succeeded", issueKey: "SYN-1", linksRequested: 3 },
+    });
+    const writes = h.http.mock.calls
+      .filter(([request]) => request.method !== "GET")
+      .map(([request]) => new URL(request.url).pathname.replace(/^.*\/api\/2\//u, ""));
+    expect(writes).toEqual(["issue/SYN-1", "issueLink", "issueLink"]);
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({
+        tool: "jira.edit",
+        outcome: "completed",
+        linkRequestedCount: 3,
+        linkCreatedCount: 3,
+        linkFailedCount: 0,
+      }),
+    ]);
+  });
+
+  it("treats a partial link effect as an uncertain mutation and counts it, never retrying (#4176)", async () => {
+    const h = harness();
+    const dispatch = h.http.getMockImplementation();
+    h.http.mockImplementation((request) =>
+      request.url.endsWith("/issueLink")
+        ? Promise.resolve(response({ errorMessages: ["No permission"], errors: {} }, 403))
+        : (dispatch?.(request) ?? Promise.resolve(response({}, 404))),
+    );
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", { issueKey: "SYN-1", links: THREE_LINKS });
+    // A failed write is not delivered as data in a Coding run: the relay marks the permit failed
+    // and hands the run to the existing uncertain-mutation recovery.
+    expect(result).toMatchObject({ isError: true });
+    expect(h.recover).toHaveBeenCalledOnce();
+    const writes = h.http.mock.calls.filter(([request]) => request.method !== "GET");
+    expect(writes.map(([request]) => new URL(request.url).pathname.split("/").at(-1))).toEqual([
+      "SYN-1",
+      "issueLink",
+    ]);
+    expect(proofLines(h)).toEqual([
+      expect.objectContaining({
+        outcome: "failed",
+        reason: "tool-failed",
+        linkRequestedCount: 3,
+        linkCreatedCount: 1,
+        linkFailedCount: 2,
+        level: "warn",
+      }),
+    ]);
+    expect(JSON.stringify(proofLines(h))).not.toMatch(/SYN-/u);
   });
 
   it("transitions the ticket", async () => {
@@ -374,6 +530,55 @@ describe("serving the bound Pod through the relay", () => {
     expect(proofLines(h)).toEqual([
       expect.objectContaining({ outcome: "failed", reason: "tool-failed", level: "warn" }),
     ]);
+  });
+});
+
+describe("the customer's issue templates bind a Coding run's Jira writes (#4177)", () => {
+  const writes = (h: Harness): number =>
+    h.http.mock.calls.filter(([request]) => request.method !== "GET").length;
+
+  it("refuses an edit that leaves the issue violating its template, before any PUT", async () => {
+    const h = harness({ template: EDIT_TEMPLATE });
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const result = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "Too short" },
+    });
+    // The relay hands the model a generic tool error for any refused write; the point here is
+    // that the gate held: the same edit without a template (below) is sent.
+    expect(result.isError).toBe(true);
+    expect(writes(h)).toBe(0);
+  });
+
+  it("lets the same edit through when no template governs it", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Too short" } });
+    expect(writes(h)).toBe(1);
+  });
+
+  it("refuses requirement references a Coding run cannot trace, and still writes without them", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const refused = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "Traced" },
+      requirementIds: ["UNKNOWN-999"],
+    });
+    // The relay hands the model a generic tool error for any refused write; the point is that
+    // the reference is not silently dropped and nothing is sent.
+    expect(refused.isError).toBe(true);
+    expect(writes(h)).toBe(0);
+    await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Untraced" } });
+    expect(writes(h)).toBe(1);
+  });
+
+  it("cannot be attached without the skill library that holds the templates", () => {
+    const pods = createCodingJiraPods(undefined);
+    // @ts-expect-error `store` is required: a Pod wired without it would write unchecked.
+    const deps: CodingJiraPodDeps = { serverPrincipal: () => PRINCIPAL };
+    expect(deps.store).toBeUndefined();
+    expect(pods.resolve(POD)).toEqual({ ok: false, reason: "unavailable" });
   });
 });
 

@@ -45,6 +45,7 @@ import {
 import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { OWN_ASSESSMENT_PROMPT_RULE } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
+import { isKnowledgePodRetrievalActivitySafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
 import {
   applyReferenceRerankResults,
   buildKnowledgePodRetrievalActivity,
@@ -3234,6 +3235,100 @@ describe("local-knowledge retrieval activity", () => {
         errorClass: "Error",
         message: "server-operation-failed",
       });
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("keeps the activity when a UUID pod or source id is PII-shaped and its opaque replacement must stay safe (#4179)", async () => {
+    // Real Pod and source ids are UUIDs. About one in four UUIDs carries a digit run the PII scan
+    // reads as a phone number, so the builder swaps it for an opaque id; that replacement used to
+    // be a bare hash prefix and failed the same scan for roughly one in eleven inputs. These two
+    // ids are such cases, so on a large grounded turn the whole activity was dropped.
+    const podUuid = "9589a1dd-2370-4853-848c-f2c3e9a43d3e" as KnowledgeCapsuleId;
+    const sourceUuid = "93598338-82bb-43aa-81f3-ec7573ab185d" as KnowledgeSourceId;
+    expect(isKnowledgePodRetrievalActivitySafeText(podUuid)).toBe(false);
+    expect(isKnowledgePodRetrievalActivitySafeText(sourceUuid)).toBe(false);
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Requirements Pod",
+        capsuleId: podUuid,
+        sourceId: sourceUuid,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, podUuid);
+      const records: ServerDiagnosticRecord[] = [];
+      const input = {
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(podUuid, sourceUuid)],
+              citationCounts: new Map([[String(podUuid), 1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            records.push(record);
+          },
+        },
+      } as const;
+
+      const activity = tryBuildKnowledgePodRetrievalActivity(input);
+
+      expect(records).toEqual([]);
+      expect(activity?.pods[0]?.podId).toMatch(/^pod-[a-f0-9]{16}$/u);
+      expect(activity?.pods[0]?.sourceIds[0]).toMatch(/^source-[a-f0-9]{16}$/u);
+      expect(isKnowledgePodRetrievalActivitySafeText(activity?.pods[0]?.podId)).toBe(true);
+      expect(isKnowledgePodRetrievalActivitySafeText(activity?.pods[0]?.sourceIds[0])).toBe(true);
+      expect(JSON.stringify(activity)).not.toContain(podUuid);
+      expect(JSON.stringify(activity)).not.toContain(sourceUuid);
+    } finally {
+      knowledgeStore.close();
+    }
+  });
+
+  it("joins the fail-closed diagnostic to the request correlation id when one is available", async () => {
+    const sourceId = "src-diagnostic-correlated" as KnowledgeSourceId;
+    const knowledgeStore = openKnowledgeStore({
+      dbPath: resolveKnowledgeStorePath({ runtimeStateDir: rescueTmp }),
+    });
+    try {
+      const seeded = await seedCapsuleWithVectors(knowledgeStore, {
+        displayName: "Correlated Capsule",
+        capsuleId: "cap-diagnostic-correlated",
+        sourceId,
+      });
+      const capsuleValue = requireCapsule(knowledgeStore, seeded.capsuleId);
+      const records: ServerDiagnosticRecord[] = [];
+      const activity = tryBuildKnowledgePodRetrievalActivity({
+        store: knowledgeStore,
+        sources: [
+          {
+            selected: selectedActivityScope(capsuleValue),
+            result: {
+              references: [retrievalActivityReference(seeded.capsuleId, sourceId)],
+              citationCounts: new Map([[String(seeded.capsuleId), -1]]),
+              noEvidence: false,
+            },
+          },
+        ],
+        diagnostics: {
+          record: (record: ServerDiagnosticRecord): void => {
+            records.push(record);
+          },
+        },
+        correlationId: "req-4179-correlated",
+      });
+
+      expect(activity).toBeUndefined();
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({ correlationId: "req-4179-correlated" });
     } finally {
       knowledgeStore.close();
     }

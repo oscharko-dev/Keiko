@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { compareStrings } from "./comparators.js";
+import { compareIssueKeys, compareStrings } from "./comparators.js";
 import { compareStrings as compareStringsFromEntrypoint } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 describe("compareStrings", () => {
@@ -61,5 +61,21 @@ describe("compareStrings (public entrypoint)", () => {
     ] as const) {
       expect(compareStringsFromEntrypoint(left, right)).toBe(compareStrings(left, right));
     }
+  });
+});
+
+describe("compareIssueKeys", () => {
+  it("orders by project, then numerically", () => {
+    expect(["REQ-10", "REQ-2", "ABC-7", "REQ-1"].sort(compareIssueKeys)).toEqual([
+      "ABC-7",
+      "REQ-1",
+      "REQ-2",
+      "REQ-10",
+    ]);
+  });
+
+  it("keeps a key without a number by its text and equal keys equal", () => {
+    expect(compareIssueKeys("REQ-3", "REQ-3")).toBe(0);
+    expect(compareIssueKeys("PLAIN", "PLAIN-1")).toBeLessThan(0);
   });
 });

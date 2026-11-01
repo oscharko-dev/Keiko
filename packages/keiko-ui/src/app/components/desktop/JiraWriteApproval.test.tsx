@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -54,15 +54,16 @@ describe("Jira Chat write approvals", () => {
     );
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
     await ready();
-    expect(screen.getByLabelText("Proposed action details")).toHaveValue(
-      JSON.stringify(call.arguments, null, 2),
-    );
+    const details = screen.getByRole("group", { name: "Proposed action details" });
+    expect(details).toHaveTextContent("Issue");
+    expect(details).toHaveTextContent("LAB-1");
+    expect(details).toHaveTextContent("summary");
+    expect(details).toHaveTextContent("Reviewed change");
     expect(observe).toHaveBeenCalledExactlyOnceWith(view.approvalId);
     expect(decide).not.toHaveBeenCalled();
     const user = userEvent.setup();
     await user.tab();
-    expect(screen.getByLabelText("Proposed action details")).toHaveFocus();
-    await user.tab();
+    expect(screen.getByRole("button", { name: "Approve this action" })).toHaveFocus();
     await user.keyboard("{Enter}");
     expect(await screen.findByText("Approved for this action")).toBeVisible();
     expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve");
@@ -329,11 +330,266 @@ it("reviews a configured MCP action and its arguments through the existing appro
   await ready();
   expect(screen.getByRole("region", { name: "Approve MCP action" })).toBeVisible();
   expect(screen.getByText("mcp_fixture_create_note")).toBeVisible();
-  expect(screen.getByLabelText("Proposed action details")).toHaveValue(
-    JSON.stringify({ text: "Synthetic note" }, null, 2),
-  );
+  const details = screen.getByRole("group", { name: "Proposed action details" });
+  expect(details).toHaveTextContent("text");
+  expect(details).toHaveTextContent("Synthetic note");
+  expect(details.textContent).not.toMatch(/[{}"]/u);
   await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
   expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve");
   expect(await screen.findByText("Approved for this action")).toBeVisible();
   expect(await axe(container)).toHaveNoViolations();
+});
+
+describe("Jira backlog draft approval (#4178)", () => {
+  const draftCall = {
+    id: "draft-call",
+    name: "jira_draft",
+    arguments: {
+      items: [
+        { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic A" } },
+        {
+          ref: "story",
+          projectId: "10000",
+          issueTypeId: "10002",
+          fields: { summary: "Story B", description: "Synthetic" },
+          parent: { fieldId: "customfield_10100", ref: "epic" },
+        },
+        {
+          ref: "bug",
+          projectId: "10000",
+          issueTypeId: "10003",
+          fields: { summary: "Bug C" },
+          links: [{ type: "Blocks", direction: "outward", ref: "story" }],
+        },
+        { ref: "loose", projectId: "10000", issueTypeId: "10002", fields: { summary: "Task D" } },
+      ],
+    },
+  };
+  function draftApproval(): ChatToolWriteApprovalView {
+    return { ...approval("draft-approval"), operation: "jira.draft" };
+  }
+
+  it("shows the draft as a tree, carries a deselection with its dependents, and sends only the choice", async () => {
+    const view = draftApproval();
+    const decide = vi.fn().mockResolvedValue({
+      ...view,
+      state: "approved",
+      excludedItemRefs: ["story"],
+    });
+    const { container } = render(
+      <JiraWriteApproval
+        approval={view}
+        call={draftCall}
+        turnState="pending"
+        observe={vi.fn().mockResolvedValue(view)}
+        decide={decide}
+      />,
+    );
+    await ready();
+    expect(screen.getByRole("group", { name: "Issues to create (4 of 4 selected)" })).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /Story B/u })).toBeChecked();
+    expect(screen.getByText("Blocks → story")).toBeVisible();
+    expect(screen.getByText("description")).toBeVisible();
+    expect(screen.getByText("Synthetic")).toBeVisible();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Story B/u }));
+    expect(screen.getByRole("group", { name: "Issues to create (2 of 4 selected)" })).toBeVisible();
+    const bug = screen.getByRole("checkbox", { name: /Bug C/u });
+    expect(bug).not.toBeChecked();
+    expect(bug).toBeDisabled();
+    expect(screen.getByText("Left out because an issue it depends on is left out")).toBeVisible();
+    expect(await axe(container)).toHaveNoViolations();
+    await userEvent.click(screen.getByRole("button", { name: "Approve this action" }));
+    expect(decide).toHaveBeenCalledExactlyOnceWith(view, "approve", ["story"]);
+    expect(await screen.findByText("Approved for this action")).toBeVisible();
+    expect(screen.getByRole("checkbox", { name: /Epic A/u })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /Bug C/u })).not.toBeChecked();
+  });
+
+  it("cannot approve a draft with every item left out, but can still decline it", async () => {
+    const view = draftApproval();
+    render(
+      <JiraWriteApproval
+        approval={view}
+        call={draftCall}
+        turnState="pending"
+        observe={vi.fn().mockResolvedValue(view)}
+        decide={vi.fn()}
+      />,
+    );
+    await ready();
+    await userEvent.click(screen.getByRole("checkbox", { name: /Epic A/u }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Task D/u }));
+    await userEvent.click(screen.getByRole("checkbox", { name: /Bug C/u }));
+    expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Decline this action" })).toBeEnabled();
+  });
+
+  describe("shows what the exact request would create", () => {
+    const base = {
+      ref: "task",
+      projectId: "10000",
+      issueTypeId: "10002",
+      fields: { summary: "Same summary", description: "Same description" },
+      parent: { fieldId: "parent", issueKey: "SYN-7" },
+    };
+    function review(item: Record<string, unknown>): string {
+      const view = draftApproval();
+      const { container, unmount } = render(
+        <JiraWriteApproval
+          approval={view}
+          call={{ ...draftCall, arguments: { items: [item] } }}
+          turnState="pending"
+          observe={vi.fn().mockResolvedValue(view)}
+          decide={vi.fn()}
+        />,
+      );
+      const shown = container.querySelector("fieldset")?.textContent ?? "";
+      unmount();
+      return shown;
+    }
+
+    it.each([
+      ["target project", { projectId: "10001" }, "Project 10001"],
+      ["issue type", { issueTypeId: "10003" }, "Issue type 10003"],
+      [
+        "relation field",
+        { parent: { fieldId: "customfield_10100", issueKey: "SYN-7" } },
+        "customfield_10100",
+      ],
+      ["relation target", { parent: { fieldId: "parent", issueKey: "SYN-8" } }, "SYN-8"],
+      [
+        "field value",
+        { fields: { summary: "Same summary", description: "Another description" } },
+        "Another description",
+      ],
+      [
+        "assignee",
+        {
+          fields: {
+            summary: "Same summary",
+            description: "Same description",
+            assignee: { name: "jdoe" },
+          },
+        },
+        "jdoe",
+      ],
+    ])("renders drafts that differ only in the %s differently", (_name, change, shown) => {
+      const original = review(base);
+      const changed = review({ ...base, ...change });
+      expect(original).toContain("Project 10000 · Issue type 10002");
+      expect(original).toContain("Parent (parent): SYN-7");
+      expect(original).toContain("Same description");
+      expect(changed).not.toBe(original);
+      expect(changed).toContain(shown);
+    });
+
+    it("lists arrays, reads users and options by name and expands long text in place", async () => {
+      const long = `${"Long description. ".repeat(20)}End of text`;
+      const view = draftApproval();
+      const { container } = render(
+        <JiraWriteApproval
+          approval={view}
+          call={{
+            ...draftCall,
+            arguments: {
+              items: [
+                {
+                  ...base,
+                  fields: {
+                    summary: "Same summary",
+                    description: long,
+                    labels: ["alpha", "beta"],
+                    assignee: { name: "jdoe" },
+                    priority: { value: "High" },
+                    custom: { a: 1, b: 2 },
+                  },
+                },
+              ],
+            },
+          }}
+          turnState="pending"
+          observe={vi.fn().mockResolvedValue(view)}
+          decide={vi.fn()}
+        />,
+      );
+      await ready();
+      expect(screen.getByText("alpha")).toBeVisible();
+      expect(screen.getByText("beta")).toBeVisible();
+      expect(screen.getByText("jdoe")).toBeVisible();
+      expect(screen.getByText("High")).toBeVisible();
+      expect(screen.getByText("custom")).toBeVisible();
+      expect(screen.getByText("a")).toBeVisible();
+      expect(screen.getByText("2")).toBeVisible();
+      expect(
+        within(screen.getByRole("group", { name: /Issues to create/u })).queryByText(
+          /End of text/u,
+        ),
+      ).toBeNull();
+      const more = screen.getByRole("button", { name: "Show more" });
+      expect(more).toHaveAttribute("aria-expanded", "false");
+      await userEvent.click(more);
+      expect(
+        within(screen.getByRole("group", { name: /Issues to create/u })).getByText(/End of text/u),
+      ).toBeVisible();
+      expect(screen.getByRole("button", { name: "Show less" })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(await axe(container)).toHaveNoViolations();
+    });
+  });
+});
+
+it("shows an attachment approval's file by name, size and digest, never its content (#4176)", async () => {
+  const view: ChatToolWriteApprovalView = {
+    kind: "jira-chat-write",
+    approvalId: "approval-attach",
+    chatId: "chat-1",
+    podId: "11111111-1111-4111-8111-111111111111",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    invocationId: "action-attach",
+    actionDigest: "a".repeat(64),
+    requestedAt: Date.now(),
+    expiresAt: Date.now() + 60000,
+    state: "pending",
+    operation: "jira.attach",
+    attachment: { name: "report.txt", sizeBytes: 12345, sha256: "b".repeat(64) },
+  };
+  const observe = vi.fn().mockResolvedValue(view);
+  const { container } = render(
+    <JiraWriteApproval
+      approval={view}
+      call={{
+        id: "call-2",
+        name: "jira_attach",
+        arguments: {
+          issueKey: "LAB-1",
+          source: { kind: "connected-file", path: "docs/report.txt" },
+        },
+      }}
+      turnState="pending"
+      observe={observe}
+      decide={vi.fn()}
+    />,
+  );
+  await ready();
+  const facts = screen.getByRole("list", { name: "Proposed action details" });
+  expect(facts).toHaveTextContent("report.txt");
+  expect(facts).toHaveTextContent(`${new Intl.NumberFormat().format(12345)} B`);
+  expect(facts).toHaveTextContent(`sha256 ${"b".repeat(64)}`);
+  expect(await axe(container)).toHaveNoViolations();
+});
+it("renders no file facts for an approval that carries no attachment", async () => {
+  render(
+    <JiraWriteApproval
+      approval={approval()}
+      call={call}
+      turnState="pending"
+      observe={vi.fn().mockResolvedValue(approval())}
+      decide={vi.fn()}
+    />,
+  );
+  await ready();
+  expect(screen.queryByRole("list")).toBeNull();
 });

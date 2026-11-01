@@ -282,6 +282,38 @@ it.each([
   },
 );
 
+it("hands the model Jira's own explanation of a refused search, bounded", async () => {
+  const f = fixture({});
+  f.http.mockResolvedValue(
+    response(
+      {
+        errorMessages: [
+          "Error in the JQL Query: The character '[' is a reserved JQL character.",
+          "x".repeat(400),
+        ],
+        errors: { jql: "The JQL query is not valid." },
+        privateDetail: "omit-me",
+      },
+      400,
+    ),
+  );
+  const result = await f.run("jira.search", { jql: 'summary ~ "[LH-002]"' });
+  expect(result).toEqual({
+    data: {
+      outcome: "failed",
+      reason: "field-validation",
+      fieldErrors: [{ fieldId: "jql", message: "The JQL query is not valid." }],
+      messages: [
+        "Error in the JQL Query: The character '[' is a reserved JQL character.",
+        expect.stringMatching(/^x+/u),
+      ],
+    },
+    isError: true,
+  });
+  expect(JSON.stringify(result)).not.toContain("omit-me");
+  expect(JSON.stringify(result).length).toBeLessThan(800);
+});
+
 it.each(["timeout", "network-error"] as const)(
   "classifies %s without pretending to observe a project",
   async (kind) => {
@@ -391,6 +423,29 @@ it("keeps legacy metadata paging distinct from issue paging", async () => {
     ).data,
   ).toMatchObject({ startAt: 1, nextStartAt: 2, items: [{ id: "summary", required: true }] });
 });
+it("points create fields at jira.draft for several issues, and only create fields", async () => {
+  // S05 of epic #4173: a model read create fields, then created three epics one by one and the
+  // human approved three times where one draft asks once.
+  const created = await fixture({ ...REMOTE_PAGE, values: [META] }).run("jira.create-fields", {
+    projectKey: "SYN",
+    issueTypeId: "1",
+  });
+  expect(created.data.draft).toEqual({
+    tool: "jira.draft",
+    use: "To create several issues, put them all in one jira.draft: the human approves the whole draft once. jira.create asks once per issue.",
+  });
+  const types = await fixture({
+    ...REMOTE_PAGE,
+    values: [{ id: "1", name: "Task", subtask: false }],
+  }).run("jira.issue-types", { projectKey: "SYN" });
+  expect(types.data).not.toHaveProperty("draft");
+  const refused = await fixture({ ...REMOTE_PAGE, values: [{}] }).run("jira.create-fields", {
+    projectKey: "SYN",
+    issueTypeId: "1",
+  });
+  expect(refused.data).toMatchObject({ outcome: "failed" });
+  expect(refused.data).not.toHaveProperty("draft");
+});
 it("retains transition metadata availability and safely omits malformed targets", async () => {
   const f = fixture({
     transitions: [
@@ -440,6 +495,121 @@ it("projects selected custom fields from their observed schema without publishin
   expect(url.searchParams.get("fields")).toContain("customfield_1");
   expect(url.searchParams.get("expand")).toBe("names,schema");
   expect(JSON.stringify(result)).not.toContain("omit-me");
+});
+describe("jira.search with requested fields (#4176)", () => {
+  const SCHEMAS = {
+    customfield_1: {
+      type: "string",
+      custom: "com.atlassian.jira.plugin.system.customfieldtypes:textfield",
+    },
+    customfield_2: { type: "array", items: "string", custom: "vendor.plugin:tags" },
+    parent: { type: "issuelink", system: "parent" },
+  };
+  const search = (issues: readonly unknown[], maxResults = 25): unknown => ({
+    startAt: 0,
+    maxResults,
+    total: issues.length,
+    issues,
+    names: { customfield_1: "Synthetic", customfield_2: "Tags", parent: "Parent" },
+    schema: SCHEMAS,
+  });
+  const hit = (key: string, extra: Record<string, unknown>): unknown => ({
+    ...ISSUE,
+    id: key.replace("SYN-", "100"),
+    key,
+    fields: { ...ISSUE.fields, ...extra },
+  });
+  it("asks Jira for the standard summary fields plus the requested ones and the instance's own names and types", async () => {
+    const f = fixture(search([hit("SYN-1", { customfield_1: "Selected", customfield_2: ["a"] })]));
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["customfield_1", "parent", "customfield_2"],
+    });
+    const url = new URL(f.http.mock.calls[0]?.[0].url ?? "");
+    expect(url.searchParams.get("fields")).toContain("summary");
+    expect(url.searchParams.get("fields")).toContain("customfield_2");
+    expect(url.searchParams.get("expand")).toBe("names,schema");
+    expect(result.data.items).toMatchObject([
+      {
+        key: "SYN-1",
+        fieldValues: [
+          { id: "customfield_1", state: "value", text: "Selected" },
+          { id: "parent", kind: "issue", state: "unavailable" },
+          { id: "customfield_2", kind: "opaque", state: "value", text: '["a"]' },
+        ],
+      },
+    ]);
+  });
+  it("reads each result's own value and distinguishes empty, absent and unknown fields", async () => {
+    const f = fixture(
+      search([
+        hit("SYN-1", { parent: { key: "SYN-9", id: "10009" }, customfield_1: null }),
+        hit("SYN-2", {}),
+      ]),
+    );
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["parent", "customfield_1", "customfield_404"],
+    });
+    expect(result.data.items).toMatchObject([
+      {
+        key: "SYN-1",
+        fieldValues: [
+          { id: "parent", state: "value", text: "SYN-9" },
+          { id: "customfield_1", state: "empty" },
+          { id: "customfield_404", kind: "unsupported", state: "unavailable" },
+        ],
+      },
+      {
+        key: "SYN-2",
+        fieldValues: [
+          { id: "parent", state: "unavailable" },
+          { id: "customfield_1", state: "unavailable" },
+          { id: "customfield_404", kind: "unsupported", state: "unavailable" },
+        ],
+      },
+    ]);
+  });
+  it("keeps the summary-only shape when no fields are requested", async () => {
+    const f = fixture(search([hit("SYN-1", {})]));
+    const result = await f.run("jira.search", { jql: "project=SYN" });
+    const url = new URL(f.http.mock.calls[0]?.[0].url ?? "");
+    expect(url.searchParams.get("expand")).toBeNull();
+    expect(JSON.stringify(result.data.items)).not.toContain("fieldValues");
+  });
+  it.each([
+    [[]],
+    [Array.from({ length: 21 }, (_, index) => `customfield_${String(index + 1)}`)],
+    [["customfield_1", "customfield_1"]],
+    [["not a field id"]],
+    [["__proto__"]],
+    ["customfield_1"],
+  ])("refuses an invalid field selection without contacting Jira %#", async (fields) => {
+    const f = fixture(search([]));
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: fields as unknown as CatalogJsonObject[string],
+    });
+    expect(result.isError).toBe(true);
+    expect(f.http).not.toHaveBeenCalled();
+  });
+  it("bounds a page of field-heavy results and resumes at the first unreturned issue", async () => {
+    const big = "x".repeat(3000);
+    const issues = Array.from({ length: 100 }, (_, index) =>
+      hit(`SYN-${String(index + 1)}`, { customfield_2: [big] }),
+    );
+    const f = fixture(search(issues, 100));
+    const result = await f.run("jira.search", {
+      jql: "project=SYN",
+      fields: ["customfield_2"],
+      maxResults: 100,
+    });
+    const count = Array.isArray(result.data.items) ? result.data.items.length : 0;
+    expect(count).toBeGreaterThan(0);
+    expect(count).toBeLessThan(100);
+    expect(result.data.nextStartAt).toBe(count);
+    expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(262144);
+  });
 });
 it("bounds a near-cap comment page with a continuation at the first unpublished comment", async () => {
   const comments = Array.from({ length: 30 }, (_, index) => ({

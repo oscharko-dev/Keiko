@@ -11,6 +11,13 @@ export const JIRA_FIELD_KINDS = [
   "strings",
   "users",
   "options",
+  /** A single issue reference (`{ key }` or `{ id }`), e.g. the system `parent` field (#4176). */
+  "issue",
+  /** A field whose value shape Jira's metadata does not describe beyond its schema type; a bounded
+   * JSON value is forwarded and Jira's own validation is authoritative (#4176). */
+  "opaque",
+  /** The system `issuelinks` field: links are added through a create/edit `links` argument. */
+  "links",
   "unsupported",
 ] as const;
 export type JiraFieldKind = (typeof JIRA_FIELD_KINDS)[number];
@@ -24,6 +31,9 @@ export const JIRA_MANAGED_READ_TOOLS = [
   "jira.comments",
   "jira.transitions",
   "jira.assignable-users",
+  "jira.report",
+  /** Appends a page of items to a server-held backlog draft; it changes nothing in Jira. */
+  "jira.draft-stage",
 ] as const;
 export type JiraManagedReadToolName = (typeof JIRA_MANAGED_READ_TOOLS)[number];
 export type JiraFieldOperation = "set" | "add" | "remove";
@@ -43,6 +53,9 @@ export interface JiraFieldMetadata {
   readonly richText: boolean;
   readonly operations: readonly JiraFieldOperation[];
   readonly allowedValues?: readonly JiraFieldReference[];
+  /** Jira's declared schema type (`string`, `array:string`, `any`, …) so a caller can shape an
+   * opaque value; metadata only, never a mutation identity. */
+  readonly schemaType?: string;
 }
 export interface JiraFieldUpdate {
   readonly fieldId: string;

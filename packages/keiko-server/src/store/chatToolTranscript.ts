@@ -7,14 +7,16 @@ import {
 import type {
   ChatToolReadGrantView,
   ChatToolWriteApprovalView,
-  ChatToolWriteApprovalState,
 } from "@oscharko-dev/keiko-contracts";
 import {
   JIRA_MUTATION_OUTCOMES,
   JIRA_MUTATION_OPERATIONS,
   type JiraMutationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ToolDescriptor,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { canonicalise, deepRedactStrings, sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   captureCatalogJson,
@@ -27,6 +29,8 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
+import { admitsApprovalTransition, admitsFirstApproval } from "./chatToolApprovalTransition.js";
 import { invalidRequest, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
 
@@ -51,8 +55,30 @@ interface StoredExchange extends ChatToolExchange {
 interface StoredTranscript extends ChatToolTranscript {
   readonly exchanges: readonly StoredExchange[];
 }
-const MAX_EXCHANGES = 30;
-const MAX_TRANSCRIPT_BYTES = 4_194_304;
+// One exchange per tool call the turn's Authority Envelope admits (#4175).
+const MAX_EXCHANGES = CHAT_TOOL_TURN_BUDGET.maxToolCalls;
+const MAX_TRANSCRIPT_BYTES = 16_777_216;
+// The envelope, approval view, mutation outcome and grant share one exchange adds beside its
+// call, bounded result and descriptor binding; generous so the reservation is an upper bound.
+const EXCHANGE_OVERHEAD_BYTES = 16_384;
+/**
+ * The stored transcript's byte bound, and the share its schema and read grants hold (#4175). A
+ * turn reserves each exchange's worst case before it starts, so it ends as budget-exhausted
+ * instead of starting a call whose result could not be persisted.
+ */
+export const CHAT_TOOL_TRANSCRIPT_MAX_BYTES = MAX_TRANSCRIPT_BYTES;
+export const CHAT_TOOL_TRANSCRIPT_BASE_BYTES = 65_536;
+export function chatToolExchangeReservation(
+  call: ChatToolExchange["call"],
+  descriptor: ToolDescriptor,
+): number {
+  return (
+    Buffer.byteLength(JSON.stringify(call)) +
+    descriptor.bounds.maxResultBytes +
+    Buffer.byteLength(JSON.stringify(descriptor)) +
+    EXCHANGE_OVERHEAD_BYTES
+  );
+}
 const UPDATE = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -108,16 +134,6 @@ const MUTATION_ALIASES = new Map<string, string>(
     `keiko.${operation}`,
   ]),
 );
-const APPROVAL_STATES: Readonly<
-  Record<ChatToolWriteApprovalState, ReadonlySet<ChatToolWriteApprovalState>>
-> = {
-  pending: new Set(["pending", "approved", "claimed", "rejected", "expired", "revoked"]),
-  approved: new Set(["approved", "claimed", "expired", "revoked"]),
-  claimed: new Set(["claimed", "expired", "revoked"]),
-  rejected: new Set(["rejected"]),
-  expired: new Set(["expired"]),
-  revoked: new Set(["revoked"]),
-};
 function matchesApprovalCall(
   approval: ChatToolWriteApprovalView,
   call: ChatToolExchange["call"],
@@ -272,6 +288,23 @@ export function decodeChatToolTranscript(
         })),
       };
 }
+// Fingerprints of stored transcripts this process already verified under the same identity. The
+// verdict is a pure function of the stored text and its identity, and every read of a message
+// decodes its whole transcript: re-verifying each exchange's descriptor and result envelope on every
+// read made a turn quadratic in its tool calls (35 reads took 15 s under coverage in CI). A hit
+// still parses the text afresh, so no caller shares a decoded object; any byte change misses.
+const VERIFIED_TRANSCRIPTS_MAX = 1024;
+const verifiedTranscripts = new Set<string>();
+function verifiedFingerprint(json: string, identity: TranscriptIdentity | undefined): string {
+  return sha256Hex(`${identity?.chatId ?? ""}\u0000${identity?.messageId ?? ""}\u0000${json}`);
+}
+function rememberVerified(fingerprint: string): void {
+  if (verifiedTranscripts.size >= VERIFIED_TRANSCRIPTS_MAX) {
+    const oldest = verifiedTranscripts.values().next();
+    if (oldest.done !== true) verifiedTranscripts.delete(oldest.value);
+  }
+  verifiedTranscripts.add(fingerprint);
+}
 function decodeStoredTranscript(
   json: string | null,
   identity: TranscriptIdentity | undefined,
@@ -280,8 +313,13 @@ function decodeStoredTranscript(
   try {
     if (Buffer.byteLength(json) > MAX_TRANSCRIPT_BYTES)
       throw new TypeError("Chat tool transcript exceeds its byte limit");
+    const fingerprint = verifiedFingerprint(json, identity);
+    if (verifiedTranscripts.has(fingerprint)) return JSON.parse(json) as StoredTranscript;
     const parsed: unknown = JSON.parse(json);
-    if (validTranscript(parsed, identity)) return parsed;
+    if (validTranscript(parsed, identity)) {
+      rememberVerified(fingerprint);
+      return parsed;
+    }
   } catch {
     // Preserve the body-free failure for the existing store/route error boundary.
     throw invalidTranscript();
@@ -363,13 +401,11 @@ function applyApproval(
     !matchesApprovalCall(approval, exchange.call, { messageId, chatId })
   )
     throw invalidRequest("Tool approval identity conflict.");
-  if (
-    exchange.approval !== undefined &&
-    (canonicalise({ ...exchange.approval, state: "pending" }) !==
-      canonicalise({ ...approval, state: "pending" }) ||
-      !APPROVAL_STATES[exchange.approval.state].has(approval.state))
-  )
-    throw invalidRequest("Tool approval identity conflict.");
+  const admitted =
+    exchange.approval === undefined
+      ? admitsFirstApproval(approval)
+      : admitsApprovalTransition(exchange.approval, approval, exchange.call);
+  if (!admitted) throw invalidRequest("Tool approval identity conflict.");
   return {
     ...current,
     exchanges: current.exchanges.map((entry) =>

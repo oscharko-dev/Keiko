@@ -5,7 +5,13 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { buildUiStoreOverDatabase, type UiStore } from "./index.js";
+import {
+  CHAT_TOOL_TRANSCRIPT_BASE_BYTES,
+  CHAT_TOOL_TRANSCRIPT_MAX_BYTES,
+  chatToolExchangeReservation,
+} from "./chatToolTranscript.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { CHAT_TOOL_TURN_BUDGET } from "../chat-tool-turn-budget.js";
 import { runMigrations } from "./schema.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import {
@@ -13,7 +19,10 @@ import {
   expectActivityLogProof,
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
-import type { ToolResultEnvelope } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ToolDescriptor,
+  ToolResultEnvelope,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 const disposals: (() => void)[] = [];
 afterEach(() => {
@@ -153,7 +162,9 @@ describe("ordinary Chat structured tool transcript", () => {
   });
   it("bounds the transcript and refuses writes after canonical turn termination", () => {
     const { store, db, id } = fixture();
-    for (let index = 0; index < 30; index++)
+    // The bound is one exchange per tool call the largest turn envelope admits (#4175).
+    const bound = CHAT_TOOL_TURN_BUDGET.maxToolCalls;
+    for (let index = 0; index < bound; index++)
       store.updateChatToolTranscript(
         id,
         { kind: "started", call: { ...call, id: `call-${String(index)}` } },
@@ -166,7 +177,7 @@ describe("ordinary Chat structured tool transcript", () => {
         "bounded",
       );
     }).toThrow();
-    expect(store.findMessageById(id)?.toolTranscript?.exchanges).toHaveLength(30);
+    expect(store.findMessageById(id)?.toolTranscript?.exchanges).toHaveLength(bound);
     db.prepare("UPDATE chat_messages SET client_turn_state = 'failed' WHERE id = ?").run(id);
     expect(() => {
       store.updateChatToolTranscript(id, { kind: "started", call }, "terminated");
@@ -398,6 +409,24 @@ describe("durable Chat mutation projections", () => {
       .run(JSON.stringify({ schemaVersion: 1, exchanges: [row] }), f.id);
     expect(() => f.store.findMessageById(f.id)).toThrow("Stored Chat tool transcript is invalid");
   });
+  it("fails closed on a tampered row after the same message was read and verified", () => {
+    const f = fixture();
+    const view = startWrite(f);
+    const valid = f.db
+      .prepare("SELECT tool_transcript_json AS json FROM chat_messages WHERE id = ?")
+      .get(f.id) as { json: string };
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeDefined();
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeDefined();
+    const row = { call: mutationCall, approval: { ...view, chatId: "another-chat" } };
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(JSON.stringify({ schemaVersion: 1, exchanges: [row] }), f.id);
+    expect(() => f.store.findMessageById(f.id)).toThrow("Stored Chat tool transcript is invalid");
+    f.db
+      .prepare("UPDATE chat_messages SET tool_transcript_json = ? WHERE id = ?")
+      .run(valid.json, f.id);
+    expect(f.store.findMessageById(f.id)?.toolTranscript).toBeDefined();
+  });
 
   it("keeps a cancelled envelope and observed mutation outcome independently readable", () => {
     const f = fixture();
@@ -424,6 +453,145 @@ describe("durable Chat mutation projections", () => {
       result: { status: "cancelled", data: null },
       mutationOutcome: "succeeded-unconfirmed",
     });
+  });
+});
+
+const draftCall = {
+  id: "draft-call",
+  name: "jira_draft",
+  arguments: {
+    items: [
+      { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+      {
+        ref: "task",
+        projectId: "10000",
+        issueTypeId: "10002",
+        fields: { summary: "Task" },
+        parent: { fieldId: "parent", ref: "epic" },
+      },
+    ],
+  },
+};
+function draftApproval(f: ReturnType<typeof fixture>): ChatToolWriteApprovalView {
+  return {
+    ...approval(f),
+    invocationId: sha256Hex(canonicalise({ messageId: f.id, callId: draftCall.id })),
+    operation: "jira.draft",
+    actionDigest: sha256Hex(
+      canonicalise({
+        operation: "jira.draft",
+        argumentsDigest: sha256Hex(canonicalise(draftCall.arguments)),
+      }),
+    ),
+  };
+}
+function saveDraftApproval(f: ReturnType<typeof fixture>, view: ChatToolWriteApprovalView): void {
+  f.store.updateChatToolTranscript(
+    f.id,
+    { kind: "write-approval", callId: draftCall.id, approval: view },
+    "draft-transcript",
+  );
+}
+function startDraft(f: ReturnType<typeof fixture>): ChatToolWriteApprovalView {
+  const view = draftApproval(f);
+  f.store.updateChatToolTranscript(f.id, { kind: "started", call: draftCall }, "draft-transcript");
+  saveDraftApproval(f, view);
+  return view;
+}
+function storedDraftApproval(f: ReturnType<typeof fixture>): unknown {
+  return f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.approval;
+}
+
+describe("a backlog draft's deselection is part of the one approval (#4178)", () => {
+  it("admits the approving transition's deselection and pins it through every later state", () => {
+    const f = fixture();
+    const view = startDraft(f);
+    const approved = { ...view, state: "approved", excludedItemRefs: ["task"] } as const;
+    saveDraftApproval(f, approved);
+    saveDraftApproval(f, approved);
+    saveDraftApproval(f, { ...approved, state: "claimed" });
+    expect(storedDraftApproval(f)).toMatchObject({ state: "claimed", excludedItemRefs: ["task"] });
+    saveDraftApproval(f, { ...approved, state: "revoked" });
+    expect(storedDraftApproval(f)).toMatchObject({ state: "revoked", excludedItemRefs: ["task"] });
+  });
+
+  it.each([
+    ["dropped when claimed", "claimed", undefined],
+    ["changed when claimed", "claimed", ["epic"]],
+    ["extended when claimed", "claimed", ["task", "epic"]],
+    ["dropped when expired", "expired", undefined],
+  ] as const)("refuses an approved deselection %s", (_name, state, excluded) => {
+    const f = fixture();
+    const view = startDraft(f);
+    saveDraftApproval(f, { ...view, state: "approved", excludedItemRefs: ["task"] });
+    expect(() => {
+      saveDraftApproval(f, {
+        ...view,
+        state,
+        ...(excluded === undefined ? {} : { excludedItemRefs: excluded }),
+      });
+    }).toThrow("identity conflict");
+    expect(storedDraftApproval(f)).toMatchObject({ state: "approved", excludedItemRefs: ["task"] });
+  });
+
+  it.each(["pending", "claimed", "rejected", "expired", "revoked"] as const)(
+    "refuses a deselection added when the approval becomes %s",
+    (state) => {
+      const f = fixture();
+      const view = startDraft(f);
+      expect(() => {
+        saveDraftApproval(f, { ...view, state, excludedItemRefs: ["task"] });
+      }).toThrow("identity conflict");
+      expect(storedDraftApproval(f)).toMatchObject({ state: "pending" });
+    },
+  );
+
+  it("refuses a deselection added after the approval was already recorded without one", () => {
+    const f = fixture();
+    const view = startDraft(f);
+    saveDraftApproval(f, { ...view, state: "approved" });
+    expect(() => {
+      saveDraftApproval(f, { ...view, state: "claimed", excludedItemRefs: ["task"] });
+    }).toThrow("identity conflict");
+  });
+
+  it.each([
+    ["an unknown ref", ["ghost"]],
+    ["a repeated ref", ["task", "task"]],
+  ] as const)("refuses an approving deselection with %s", (_name, excluded) => {
+    const f = fixture();
+    const view = startDraft(f);
+    expect(() => {
+      saveDraftApproval(f, { ...view, state: "approved", excludedItemRefs: excluded });
+    }).toThrow();
+    expect(storedDraftApproval(f)).toMatchObject({ state: "pending" });
+  });
+
+  it("refuses a deselection on a first save and any other difference alongside it", () => {
+    const f = fixture();
+    f.store.updateChatToolTranscript(f.id, { kind: "started", call: draftCall }, "draft-first");
+    const view = draftApproval(f);
+    expect(() => {
+      saveDraftApproval(f, { ...view, state: "approved", excludedItemRefs: ["task"] });
+    }).toThrow("identity conflict");
+    saveDraftApproval(f, view);
+    expect(() => {
+      saveDraftApproval(f, {
+        ...view,
+        state: "approved",
+        excludedItemRefs: ["task"],
+        expiresAt: 2001,
+      });
+    }).toThrow("identity conflict");
+    expect(storedDraftApproval(f)).toMatchObject({ state: "pending" });
+  });
+
+  it("refuses a deselection on an operation that is not a backlog draft", () => {
+    const f = fixture();
+    const view = startWrite(f);
+    expect(() => {
+      saveApproval(f, { ...view, state: "approved", excludedItemRefs: ["task"] });
+    }).toThrow();
   });
 });
 
@@ -498,6 +666,28 @@ describe("authoritative late mutation history", () => {
       },
     ]);
   });
+  // The projection is never persisted, so a polling client re-derives it on every read; the
+  // observation is evidence once, not once per poll.
+  it("records a projected outcome once however often the message is read", () => {
+    const f = observedMutationFixture();
+    const journal = f.store.chatToolMutations;
+    if (journal === undefined) throw new Error("Missing mutation owner");
+    expect(journal.beginDispatch(f.intent.invocationId, () => true)).toBe(true);
+    journal.acknowledge(f.intent.invocationId, 201);
+    for (let read = 0; read < 25; read++)
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe(
+        "succeeded-unconfirmed",
+      );
+    const projected = (): number =>
+      f.logs.events.filter((entry) => entry.op === "chat.tool-mutation.projected").length;
+    expect(projected()).toBe(1);
+    journal.settle(f.intent.invocationId, "succeeded");
+    for (let read = 0; read < 25; read++)
+      expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe(
+        "succeeded",
+      );
+    expect(projected()).toBe(2);
+  });
   it.each([
     ["action_digest", "d".repeat(64)],
     ["invocation_id", "other-invocation"],
@@ -553,4 +743,37 @@ it("retains both source disclosures and upgrades a legacy single disclosure with
   const transcript = store.findMessageById(id)?.toolTranscript;
   expect(transcript?.readGrants).toEqual([jira, granted]);
   expect(transcript?.readGrant).toEqual(granted);
+});
+
+describe("transcript byte reservation (#4175)", () => {
+  it("reserves at least a worst-case stored exchange", () => {
+    const maxResultBytes = 262_144;
+    const descriptor = {
+      toolRef: { canonicalId: "keiko.jira.search", contractVersion: 1 },
+      bounds: { maxArgumentBytes: 262_144, maxResultBytes, maxResultCount: 1, maxDurationMs: 1 },
+      inputSchema: { description: "s".repeat(8_192) },
+    } as unknown as ToolDescriptor;
+    const largeCall = { ...call, arguments: { jql: '"'.repeat(100_000) } };
+    const stored = {
+      call: largeCall,
+      result: { ...result(), data: { text: "x".repeat(maxResultBytes - 16) } },
+      resultBinding: { descriptor, projectionDigest: "c".repeat(64) },
+      approval: {
+        ...approval({ id: "m", chatId: "c" } as ReturnType<typeof fixture>),
+        excludedItemRefs: Array.from({ length: 32 }, (_, index) => `ref-${String(index)}`),
+      },
+      mutationOutcome: "unknown",
+    };
+    expect(Buffer.byteLength(JSON.stringify(stored))).toBeLessThanOrEqual(
+      chatToolExchangeReservation(largeCall, descriptor),
+    );
+    // Reads at the full result bound fit far fewer than the 250 admitted calls, so the turn ends
+    // as budget-exhausted before persistence could refuse a started call.
+    const fitting = Math.floor(
+      (CHAT_TOOL_TRANSCRIPT_MAX_BYTES - CHAT_TOOL_TRANSCRIPT_BASE_BYTES) /
+        chatToolExchangeReservation(call, descriptor),
+    );
+    expect(fitting).toBeGreaterThan(0);
+    expect(fitting).toBeLessThan(CHAT_TOOL_TURN_BUDGET.maxToolCalls);
+  });
 });

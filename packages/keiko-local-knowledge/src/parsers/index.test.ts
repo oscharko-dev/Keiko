@@ -23,6 +23,7 @@ describe("parsers barrel", () => {
     expect(parsers.pdfParser).toBeDefined();
     expect(parsers.docxParser).toBeDefined();
     expect(parsers.xlsxParser).toBeDefined();
+    expect(parsers.pptxParser).toBeDefined();
     expect(parsers.unsupportedParser).toBeDefined();
   });
 
@@ -130,6 +131,26 @@ describe("createDefaultParserRegistry", () => {
     expect(resolution.kind).toBe("matched");
     if (resolution.kind !== "matched") throw new Error("unreachable");
     expect(resolution.adapter.capability.parserId).toBe("xlsx");
+  });
+
+  it("routes PPTX to the PPTX parser and keeps legacy PPT unsupported", () => {
+    const registry = parsers.createDefaultParserRegistry();
+    const pptx = registry.resolve(
+      selectionFromBytes(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), {
+        extension: "pptx",
+        mediaType: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      }),
+    );
+    expect(pptx.kind).toBe("matched");
+    if (pptx.kind !== "matched") throw new Error("unreachable");
+    expect(pptx.adapter.capability.parserId).toBe("pptx");
+
+    const legacy = registry.resolve(
+      selectionFromBytes(new Uint8Array([0xd0, 0xcf, 0x11, 0xe0]), { extension: "ppt" }),
+    );
+    expect(legacy.kind === "matched" ? legacy.adapter.capability.parserId : "none").not.toBe(
+      "pptx",
+    );
   });
 
   it("registers OCR only when an adapter is provided", () => {

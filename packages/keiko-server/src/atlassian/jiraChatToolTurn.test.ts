@@ -6,7 +6,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,7 +23,10 @@ import type {
   DesktopChatSendResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
+import type {
+  ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
@@ -34,13 +37,39 @@ import type {
   AtlassianHttpBodyPort,
 } from "@oscharko-dev/keiko-connectors";
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
+import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
+import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
 import { handleDecideChatReadConsent } from "./chatReadConsentRoutes.js";
+import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import {
+  SYNTHETIC_JIRA_BASE_URL,
+  syntheticJira,
+} from "../../../../tests/support/jira-synthetic-draft-remote.js";
+import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
+import { omittedReportFindingKeys, unsupportedIssueKeys } from "../chat-tool-report-coverage.js";
+import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
+
+// Pass-through spies: the turn's completeness check and its log line run as in production unless a
+// test scripts the detection (the detection itself is proven in chat-tool-report-coverage.test.ts).
+vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-tool-report-coverage.js")>();
+  return {
+    ...actual,
+    omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys),
+    unsupportedIssueKeys: vi.fn(actual.unsupportedIssueKeys),
+  };
+});
+vi.mock("../chat-tool-turn-ending.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../chat-tool-turn-ending.js")>();
+  return { ...actual, recordChatToolTurnCorrected: vi.fn(actual.recordChatToolTurnCorrected) };
+});
 
 type ToolProof = boolean | "missing" | "stale" | "unsupported" | "mismatched";
 const MODEL = "synthetic-jira-chat";
 const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  draftToSend = DRAFT_ARGUMENTS;
   for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.restoreAllMocks();
 });
@@ -122,10 +151,84 @@ function metadata(deps: UiHandlerDeps): AtlassianCredentialMetadata {
     },
   };
 }
+// A backlog of three items: Story depends on Epic; Loose stands alone (#4178).
+const DRAFT_ARGUMENTS = {
+  items: [
+    { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+    {
+      ref: "story",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Story" },
+      parent: { fieldId: "parent", ref: "epic" },
+    },
+    { ref: "loose", projectId: "10000", issueTypeId: "10001", fields: { summary: "Loose" } },
+  ],
+};
+// S09 of epic #4173: an epic, a task under it and two sub-tasks under that task, as ONE draft.
+const NESTED_DRAFT_ARGUMENTS = {
+  items: [
+    { ref: "epic", projectId: "10000", issueTypeId: "10001", fields: { summary: "Epic" } },
+    {
+      ref: "task",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Task" },
+      parent: { fieldId: "parent", ref: "epic" },
+    },
+    {
+      ref: "sub1",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Sub-task one" },
+      parent: { fieldId: "parent", ref: "task" },
+    },
+    {
+      ref: "sub2",
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Sub-task two" },
+      parent: { fieldId: "parent", ref: "task" },
+    },
+  ],
+};
+/** The arguments the scripted model sends as its backlog draft. */
+let draftToSend: Record<string, unknown> = DRAFT_ARGUMENTS;
+/** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
+type Mutation = boolean | { readonly attach: string; beforeCall?: () => void };
+/** A backlog draft call: the fixed three-item draft, or arguments produced when the model calls. */
+type DraftCall = boolean | (() => Record<string, unknown>);
+function offeredTool(mutation: Mutation, draft: DraftCall): string {
+  if (draft) return "keiko.jira.draft";
+  if (typeof mutation === "object") return "keiko.jira.attach";
+  return mutation ? "keiko.jira.comment" : "keiko.jira.projects";
+}
+/** A model that corrects its comment between rounds, and the answer Jira gives the first write. */
+interface CorrectionScript {
+  readonly bodies: readonly string[];
+  readonly refusal: { readonly status: number; readonly bodyText: string };
+}
+function toolArguments(
+  mutation: Mutation,
+  draft: DraftCall,
+  body = "Synthetic approved comment",
+): Record<string, unknown> {
+  if (draft) return typeof draft === "function" ? draft() : draftToSend;
+  if (typeof mutation === "object")
+    return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
+  return mutation ? { issueKey: "KEIKO-1", body } : {};
+}
+/** `true` keeps requesting a tool; a number requests that many rounds, then answers. */
+function endsTurn(repeatTools: boolean | number, round: number): boolean {
+  if (typeof repeatTools === "number") return round > repeatTools;
+  return !repeatTools && round % 2 === 0;
+}
 function syntheticModel(
   calls: GatewayCallRequest[],
-  mutation: boolean,
-  repeatTools: boolean,
+  mutation: Mutation,
+  repeatTools: boolean | number,
+  draft: DraftCall,
+  bodies?: readonly string[],
 ): ModelPort {
   const respond = (request: GatewayCallRequest): NormalizedResponse => {
     calls.push(request);
@@ -145,15 +248,14 @@ function syntheticModel(
       },
     };
     reservation?.settle(base.usage, true, "observed");
-    if (request.toolCatalog?.kind !== "bound" || (!repeatTools && calls.length % 2 === 0))
-      return base;
+    if (request.toolCatalog?.kind !== "bound" || endsTurn(repeatTools, calls.length)) return base;
     expect(reservation).toBeDefined();
     const bridge = createGatewayToolCatalogBridge({ ...request, stream: false }, Date.now);
     const tool = request.toolCatalog.projection.tools.find(
-      (entry) =>
-        entry.toolRef.canonicalId === (mutation ? "keiko.jira.comment" : "keiko.jira.projects"),
+      (entry) => entry.toolRef.canonicalId === offeredTool(mutation, draft),
     );
     if (tool === undefined) throw new Error("Missing offered Jira projects tool");
+    if (typeof mutation === "object") mutation.beforeCall?.();
     return {
       ...base,
       content: "",
@@ -162,7 +264,7 @@ function syntheticModel(
         bridge.bind({
           id: `call-${String(calls.length)}`,
           name: tool.alias,
-          arguments: mutation ? { issueKey: "KEIKO-1", body: "Synthetic approved comment" } : {},
+          arguments: toolArguments(mutation, draft, bodies?.[calls.length - 1]),
         }),
       ],
     };
@@ -179,10 +281,12 @@ async function* syntheticStream(
   yield { type: "done", response: resolved };
 }
 function fixture(
-  mutation = false,
+  mutation: Mutation = false,
   writeResponse?: Promise<void>,
   acknowledgeWrite = true,
-  repeatTools = false,
+  repeatTools: boolean | number = false,
+  draft: DraftCall = false,
+  script?: CorrectionScript,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -191,10 +295,12 @@ function fixture(
   model: ModelPort;
   requests: () => number;
   writes: () => number;
+  jira: ReturnType<typeof syntheticJira>;
+  uploads: readonly number[];
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
-  const model = syntheticModel(calls, mutation, repeatTools);
+  const model = syntheticModel(calls, mutation, repeatTools, draft, script?.bodies);
   const deps = buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
@@ -219,9 +325,22 @@ function fixture(
   vi.spyOn(credentials.custody, "list").mockImplementation(() => [metadata(deps)]);
   let requests = 0;
   let writes = 0;
+  const jira = syntheticJira();
+  const uploads: number[] = [];
   vi.spyOn(credentials, "httpBodyPortFactory").mockImplementation(
-    (_metadata, _correlationId, lifecycle) =>
-      async (request): ReturnType<AtlassianHttpBodyPort> => {
+    (_metadata, correlationId, lifecycle) => {
+      if (draft)
+        return createGatewayAtlassianHttpBodyPort({
+          ...lifecycle,
+          correlationId,
+          baseUrl: SYNTHETIC_JIRA_BASE_URL,
+          authRef: "synthetic-ref",
+          credentials: {
+            resolveForExecution: () => ({ scheme: "bearer-pat", apiToken: "synthetic-test-pat" }),
+          },
+          fetchImpl: jira.fetch,
+        });
+      return async (request): ReturnType<AtlassianHttpBodyPort> => {
         if (lifecycle?.beforeDispatch?.(request) !== true)
           throw new Error("Expected dispatch admission");
         requests++;
@@ -230,12 +349,11 @@ function fixture(
           writes++;
           await writeResponse;
         }
-        const status = write ? 201 : 200;
         if (write && !acknowledgeWrite) return { kind: "network-error" };
+        if (write && request.upload !== undefined)
+          uploads.push(multipartFileSize(request.upload.bytes));
+        const { status, bodyText } = replyFor(mutation, request, uploads, script, writes);
         lifecycle.onResponse?.(request, status);
-        const bodyText = mutation
-          ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" })
-          : "[]";
         return Promise.resolve({
           kind: "response",
           status,
@@ -243,7 +361,8 @@ function fixture(
           bodyBytes: Buffer.byteLength(bodyText),
           truncated: false,
         });
-      },
+      };
+    },
   );
   return {
     deps,
@@ -251,9 +370,137 @@ function fixture(
     root,
     calls,
     model,
-    requests: () => requests,
-    writes: () => writes,
+    requests: () => (draft ? jira.fetch.mock.calls.length : requests),
+    writes: () => (draft ? jira.posts().length : writes),
+    jira,
+    uploads,
   };
+}
+// #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
+// the buffered and the streamed path; the deadline admits no further model or tool work.
+function stallAfterFirstRound(f: ReturnType<typeof fixture>): void {
+  const original = f.model.callStream;
+  if (original === undefined) throw new Error("Missing stream port");
+  let rounds = 0;
+  const stalled = (signal: AbortSignal): AsyncIterable<GatewayStreamChunk> => ({
+    async *[Symbol.asyncIterator](): AsyncIterator<GatewayStreamChunk> {
+      await new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+        });
+      });
+      yield* [];
+    },
+  });
+  const callStream: NonNullable<ModelPort["callStream"]> = (request, signal) => {
+    rounds++;
+    return rounds === 1 ? original(request, signal) : stalled(signal);
+  };
+  Object.assign(f.model, {
+    callStream,
+    call: async (request: GatewayCallRequest, signal: AbortSignal): Promise<NormalizedResponse> => {
+      for await (const chunk of callStream(request, signal))
+        if (chunk.type === "done") return chunk.response;
+      throw new Error("Missing done chunk");
+    },
+  });
+}
+it.each([false, true])(
+  "delivers the transcript answer when the turn reaches its deadline (stream=%s)",
+  async (stream) => {
+    const f = fixture(false, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 1_500 } });
+    stallAfterFirstRound(f);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `deadline-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    const result = await pending;
+    expect(f.requests()).toBe(1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges).toHaveLength(1);
+    expect(assistant?.content).toContain("this turn reached its time limit");
+    expect(assistant?.content).toContain("Reads completed: 1.");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
+  },
+);
+
+// #4175 acceptance: "A stopped or exhausted turn lists exactly the issue keys Jira shows as created."
+// A backlog draft runs, then the turn reaches its deadline before the model answers: the answer is
+// written from the transcript and names every key the synthetic Jira holds, and no other.
+it.each([false, true])(
+  "names exactly the keys Jira created when the turn reaches its deadline after a draft (stream=%s)",
+  async (stream) => {
+    const f = fixture(true, undefined, true, false, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxRuntimeMs: 3_000 } });
+    stallAfterFirstRound(f);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `deadline-draft-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    await pending;
+    const inJira = f.jira.issues.map((issue) => issue.key).sort();
+    expect(inJira.length).toBeGreaterThan(0);
+    const [, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(assistant?.content).toContain("this turn reached its time limit");
+    const named = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
+    expect(named).toEqual(inJira);
+  },
+);
+
+function replyFor(
+  mutation: Mutation,
+  request: Parameters<AtlassianHttpBodyPort>[0],
+  uploads: readonly number[],
+  script: CorrectionScript | undefined,
+  writes: number,
+): { readonly status: number; readonly bodyText: string } {
+  return script === undefined
+    ? syntheticReply(mutation, request, uploads)
+    : scriptedReply(script, request.method !== "GET", writes);
+}
+/** The first write is refused as scripted; a later one is acknowledged with the corrected comment. */
+function scriptedReply(
+  script: CorrectionScript,
+  write: boolean,
+  writes: number,
+): { readonly status: number; readonly bodyText: string } {
+  if (write && writes === 1) return script.refusal;
+  return {
+    status: write ? 201 : 200,
+    bodyText: JSON.stringify({ id: "10001", body: script.bodies.at(-1) }),
+  };
+}
+function syntheticReply(
+  mutation: Mutation,
+  request: Parameters<AtlassianHttpBodyPort>[0],
+  uploads: readonly number[],
+): { readonly status: number; readonly bodyText: string } {
+  const write = request.method !== "GET";
+  if (typeof mutation === "object")
+    return {
+      status: 200,
+      bodyText: attachmentBody(request.method, new URL(request.url).pathname, uploads),
+    };
+  return {
+    status: write ? 201 : 200,
+    bodyText: mutation ? JSON.stringify({ id: "10001", body: "Synthetic approved comment" }) : "[]",
+  };
+}
+/** Jira's attachment endpoints for the synthetic issue: the switch, the upload and the readback. */
+function attachmentBody(method: string, path: string, uploads: readonly number[]): string {
+  const stored = uploads.map((size) => ({ id: "10300", filename: "report.txt", size }));
+  if (path.endsWith("/attachment/meta")) return JSON.stringify({ enabled: true, uploadLimit: 1e6 });
+  if (method === "POST") return JSON.stringify(stored);
+  return JSON.stringify({ id: "10001", key: "KEIKO-1", fields: { attachment: stored } });
 }
 function send(
   f: ReturnType<typeof fixture>,
@@ -286,6 +533,18 @@ function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
   expect(second.projection).toEqual(first.projection);
   expect(second.offered.toolRefs).toEqual(first.offered.toolRefs);
 }
+
+// The Jira rules every tool shares reach the model once per round, in the system instruction.
+function expectSharedGuidanceOncePerRound(calls: readonly GatewayCallRequest[]): void {
+  for (const call of calls.filter((request) => request.toolCatalog?.kind === "bound")) {
+    const shared = call.messages.filter(
+      (message) =>
+        typeof message.content === "string" && message.content.includes(JIRA_TOOL_GUIDANCE),
+    );
+    expect(shared).toEqual([expect.objectContaining({ role: "system" })]);
+  }
+}
+
 describe("normal buffered Chat through the owned Jira catalog", () => {
   it("keeps hostile Jira metadata outside catalog, binding, credential and consent controls", async () => {
     const f = fixture();
@@ -430,6 +689,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     expect(completed.status).toBe(200);
     expect((completed.body as DesktopChatSendResponse).messages[0]?.turnState).toBe("completed");
     expect(f.requests()).toBe(1);
+    expectSharedGuidanceOncePerRound(f.calls);
     expect(
       f.calls[1]?.messages.some(
         (message) => message.role === "tool" && message.toolCallId === "call-1",
@@ -551,6 +811,19 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
   });
 });
 
+// Pin (#4178): the shared Jira rules live once in the turn's system instruction. Repeating them in
+// every tool description pushed the catalog past a small model's window on each round.
+it("keeps the shared Jira rules out of every Jira tool description", async () => {
+  const f = fixture();
+  const managed = await f.deps.jiraChatCatalog?.get();
+  const descriptions = managed?.catalog.descriptors.map((entry) => entry.description) ?? [];
+  expect(descriptions.length).toBeGreaterThan(10);
+  for (const description of descriptions) {
+    expect(description).not.toMatch(
+      /untrusted data|Data Center only|Never retry|nextStartAt\.$|issue template refused/u,
+    );
+  }
+});
 it("discovers the five governed mutations through the ordinary Chat-owned MCP catalog", async () => {
   const f = fixture();
   const managed = await f.deps.jiraChatCatalog?.get();
@@ -583,10 +856,42 @@ async function approveReadForWrite(f: ReturnType<typeof fixture>): Promise<void>
   );
 }
 
+// S09 of epic #4173: Qwen read the field metadata of three issue types, then ended its next round
+// after reasoning without a tool call or an answer, and the whole turn ended with no write. Every
+// round of a tool turn now asks the gateway for its ONE steered repair of such an answer, so the
+// model is told once to call the next tool instead of the turn ending (bounded by the turn's own
+// model-call envelope; the gateway's repair mechanics are pinned in gateway.output-repair.test.ts).
 it.each([false, true])(
-  "stops the actual Jira Chat loop after ten productive rounds (stream=%s)",
+  "asks the gateway for the one steered repair of an unusable answer on every round (stream=%s)",
+  async (stream) => {
+    const f = fixture();
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `steered-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(f.calls.length).toBeGreaterThanOrEqual(2);
+    expect(f.calls.map((call) => call.answerRepair)).toEqual(f.calls.map(() => "steered"));
+  },
+);
+
+// Pin (#4175 relocates the former fixed ten-round cap): the loop is bounded by the accepted
+// Authority Envelope's tool-call budget, dispatches nothing past it, and the turn that reaches it
+// answers from its own transcript instead of failing with every completed read discarded.
+const TEN_CALL_BUDGET = {
+  maxRuntimeMs: 300_000,
+  maxToolCalls: 10,
+  maxPromptTokens: 100_000,
+  maxPatchBytes: 0,
+} as const;
+it.each([false, true])(
+  "stops the actual Jira Chat loop at its envelope tool-call budget and answers from the transcript (stream=%s)",
   async (stream) => {
     const f = fixture(false, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: TEN_CALL_BUDGET });
     const response = mockResponse({ captureBody: true });
     const ctx = { ...sendContext(f, "ten-jira-rounds"), res: response.res };
     const pending = stream
@@ -598,26 +903,290 @@ it.each([false, true])(
     expect(f.calls).toHaveLength(10);
     expect(f.requests()).toBe(10);
     expect(f.writes()).toBe(0);
-    const message = f.deps.store.listMessages(f.chatId)[0];
-    expect(message?.turnState).toBe("failed");
-    expect(message?.toolTranscript?.exchanges).toHaveLength(10);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges).toHaveLength(10);
     expect(
-      message?.toolTranscript?.exchanges.every(
-        (exchange) => exchange.result?.status === "completed",
-      ),
+      user?.toolTranscript?.exchanges.every((exchange) => exchange.result?.status === "completed"),
     ).toBe(true);
     expect(f.calls.at(-1)?.messages.filter((message) => message.role === "tool")).toHaveLength(9);
-    if (stream) {
-      expect(response.body()).toContain("event: error");
-      expect(response.body()).not.toContain("event: done");
-    } else expect(result).toMatchObject({ status: 403, body: { error: { code: "FORBIDDEN" } } });
+    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+    expect(assistant?.content).toContain("Reads completed: 10.");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
   },
 );
 
-async function decidePendingWrite(
+// #4175 acceptance: "A request that needs more tool calls than the former fixed cap completes within
+// the envelope." The former cap was 30 tool calls (the coding
+// harness DEFAULT_LIMITS the loop used before 006abd71a); 35 productive reads exceed it.
+const FORMER_FIXED_CAP = 30;
+const READS_PAST_FORMER_CAP = FORMER_FIXED_CAP + 5;
+describe.each([false, true])("a turn past the former fixed tool-call cap (stream=%s)", (stream) => {
+  async function runReads(
+    budget: UiHandlerDeps["chatToolTurnBudget"],
+  ): Promise<{ f: ReturnType<typeof fixture>; body: string }> {
+    const f = fixture(false, undefined, true, READS_PAST_FORMER_CAP);
+    if (budget !== undefined) Object.assign(f.deps, { chatToolTurnBudget: budget });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, "past-former-cap"), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    return { f, body: response.body() };
+  }
+
+  it("completes under the default envelope and answers after the last read", async () => {
+    expect(READS_PAST_FORMER_CAP).toBeGreaterThan(FORMER_FIXED_CAP);
+
+    const { f, body } = await runReads(undefined);
+
+    expect(f.requests()).toBe(READS_PAST_FORMER_CAP);
+    expect(f.calls).toHaveLength(READS_PAST_FORMER_CAP + 1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.turnState).toBe("completed");
+    expect(user?.toolTranscript?.exchanges).toHaveLength(READS_PAST_FORMER_CAP);
+    expect(
+      user?.toolTranscript?.exchanges.every((exchange) => exchange.result?.status === "completed"),
+    ).toBe(true);
+    expect(assistant?.content).toBe("No Jira projects are visible.");
+    expect(assistant?.content).not.toContain("budget");
+    if (stream) expect(body).toContain("event: done");
+  });
+
+  it("is cut at the former cap when the envelope is that narrow (control for the scenario)", async () => {
+    const { f } = await runReads({
+      maxRuntimeMs: 300_000,
+      maxToolCalls: FORMER_FIXED_CAP,
+      maxPromptTokens: 100_000,
+      maxPatchBytes: 0,
+    });
+
+    expect(f.requests()).toBe(FORMER_FIXED_CAP);
+    const [, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(assistant?.content).toContain("this turn used up its tool-call or prompt budget");
+  });
+});
+
+// S11 of epic #4173: Gemma's compliance answer left out the seven estimate deviations the report
+// listed. An answer that omits listed findings gets ONE further round naming them; the model writes
+// the final answer, and a second incomplete answer stands.
+describe.each([false, true])(
+  "an answer that leaves out listed report findings (stream=%s)",
+  (stream) => {
+    it("gets one round naming the omitted keys, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      // The second answer is not checked again: one correction per turn.
+      vi.mocked(omittedReportFindingKeys).mockReturnValueOnce(["RPT-50", "RPT-63"]);
+      const f = fixture();
+      const response = mockResponse({ captureBody: true });
+      const ctx = { ...sendContext(f, `report-omission-${String(stream)}`), res: response.res };
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+
+      // tool round, the incomplete answer, the correction round (a tool call), the final answer.
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("leaves out 2 issue(s)");
+      expect(correction(f.calls[2])).toContain("RPT-50, RPT-63");
+      expect(JSON.stringify(f.calls[2]?.messages)).toContain("No Jira projects are visible.");
+      expect(correction(f.calls[3])).not.toContain("leaves out");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "report-omission",
+        omittedFindingCount: 2,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toContain(
+        "RPT-",
+      );
+    });
+
+    it("asks nothing more of an answer that names every listed finding", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      const f = fixture();
+      const ctx = sendContext(f, `report-complete-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+      expect(f.calls).toHaveLength(2);
+      expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+    });
+  },
+);
+
+// S01 of epic #4173: after three refused creates Qwen answered "successfully created … REQ-42". An
+// answer naming issue keys no tool result shows gets ONE further round naming them; the model
+// writes the final answer, and the keys never reach the Activity Log.
+describe.each([false, true])(
+  "an answer that names keys no tool result shows (stream=%s)",
+  (stream) => {
+    it("gets one round naming the unsupported keys, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(unsupportedIssueKeys).mockReturnValueOnce(["SYN-42"]);
+      const f = fixture();
+      const ctx = sendContext(f, `unsupported-key-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("names 1 issue key(s)");
+      expect(correction(f.calls[2])).toContain("SYN-42");
+      expect(correction(f.calls[3])).not.toContain("issue key(s)");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "unsupported-issue-key",
+        unsupportedKeyCount: 1,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toContain(
+        "SYN-42",
+      );
+    });
+
+    it("checks the real answer against the turn's own results and asks nothing more", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      const f = fixture();
+      const ctx = sendContext(f, `supported-keys-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+      expect(f.calls).toHaveLength(2);
+      expect(vi.mocked(unsupportedIssueKeys)).toHaveBeenCalled();
+      expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+    });
+  },
+);
+
+// #4176 AC4: Jira validates a whole request before applying it, so a client error with Jira's own
+// error document is a definitive rejection and the model's corrected retry runs in the same turn.
+// Anything that may have been applied (a 4xx without an error document, a 5xx) blocks the turn.
+const BAD_COMMENT = ["Bad comment", "Corrected comment"] as const;
+describe.each([false, true])("a refused write inside one Chat turn (stream=%s)", (stream) => {
+  async function runCorrection(refusal: CorrectionScript["refusal"]): Promise<{
+    f: ReturnType<typeof fixture>;
+    body: string;
+  }> {
+    const f = fixture(true, undefined, true, BAD_COMMENT.length, false, {
+      bodies: BAD_COMMENT,
+      refusal,
+    });
+    f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `correction-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    return { f, body: response.body() };
+  }
+  const outcomes = (f: ReturnType<typeof fixture>): (string | undefined)[] =>
+    f.deps.store
+      .listMessages(f.chatId)[0]
+      ?.toolTranscript?.exchanges.map((exchange) => exchange.mutationOutcome) ?? [];
+
+  it("lets the model correct and retry after Jira's error document", async () => {
+    const { f, body } = await runCorrection({
+      status: 400,
+      bodyText: JSON.stringify({ errorMessages: ["Comment is invalid."], errors: {} }),
+    });
+
+    expect(outcomes(f)).toEqual(["rejected", "succeeded"]);
+    expect(f.writes()).toBe(2);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(JSON.stringify(user?.toolTranscript?.exchanges[0]?.result)).toContain(
+      "Comment is invalid.",
+    );
+    expect(assistant?.content).toBe("No Jira projects are visible.");
+    if (stream) expect(body).toContain("event: done");
+    // What the model saw before it corrected: Jira's message and an instruction it can act on.
+    const refusal = JSON.stringify(
+      f.calls[1]?.messages.filter((message) => message.role === "tool"),
+    );
+    expect(refusal).toContain("Comment is invalid.");
+    expect(refusal).toContain(JIRA_REJECTED_GUIDANCE);
+  });
+
+  it.each([
+    ["a 400 that is no Jira error document", 400, "<html>Bad Request</html>"],
+    ["a 503", 503, JSON.stringify({ errorMessages: ["Unavailable"], errors: {} })],
+    ["a 409", 409, JSON.stringify({ errorMessages: ["Conflict"], errors: {} })],
+  ])(
+    "keeps the turn blocked after %s and still ends with an answer",
+    async (_name, status, bodyText) => {
+      const { f, body } = await runCorrection({ status, bodyText });
+
+      expect(outcomes(f)[0]).toBe("unknown");
+      const retry = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[1]?.result;
+      expect(retry?.data).toMatchObject({ outcome: "not-dispatched", reason: "conflict" });
+      expect(f.writes()).toBe(1);
+      // Fail closed, but never a stall: the model is told, in fixed words, to stop and tell the user
+      // in plain language what happened, and the turn settles with that final answer.
+      const sentToModel = f.calls.at(-1)?.messages.filter((message) => message.role === "tool");
+      expect(JSON.stringify(sentToModel)).toContain(JIRA_UNCERTAIN_GUIDANCE);
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      if (stream) expect(body).toContain("event: done");
+    },
+  );
+});
+
+it.each([false, true])(
+  "answers an exhausted turn with exactly the write Jira acknowledged (stream=%s, #4175)",
+  async (stream) => {
+    const f = fixture(true, undefined, true, true);
+    Object.assign(f.deps, { chatToolTurnBudget: { ...TEN_CALL_BUDGET, maxToolCalls: 1 } });
+    f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `exhausted-write-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    const result = await pending;
+    expect(f.writes()).toBe(1);
+    expect(f.calls).toHaveLength(1);
+    const [user, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(user?.toolTranscript?.exchanges.map((exchange) => exchange.mutationOutcome)).toEqual([
+      "succeeded",
+    ]);
+    expect(assistant?.content).toMatch(/Completed in this turn:\n- \S+ KEIKO-1\n/u);
+    expect(assistant?.content).not.toContain("not confirmed");
+    if (stream) expect(response.body()).toContain("event: done");
+    else expect(result).toMatchObject({ status: 200 });
+  },
+);
+
+async function pendingWriteApproval(
   f: ReturnType<typeof fixture>,
-  decision: "approve" | "reject",
-): Promise<void> {
+): Promise<ChatToolWriteApprovalView> {
   await vi.waitFor(() => {
     expect(
       f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
@@ -626,17 +1195,36 @@ async function decidePendingWrite(
   expect(f.writes()).toBe(0);
   const approval = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval;
   if (approval === undefined) throw new Error("Missing exact write approval");
-  expect(
-    (
-      await handleDecideChatWriteApproval(
-        context(
-          { decision, actionDigest: approval.actionDigest },
-          { approvalId: approval.approvalId },
-        ),
-        f.deps,
-      )
-    ).status,
-  ).toBe(200);
+  return approval;
+}
+
+async function postWriteDecision(
+  f: ReturnType<typeof fixture>,
+  approval: ChatToolWriteApprovalView,
+  decision: "approve" | "reject",
+  excludedItemRefs?: readonly string[],
+): Promise<number> {
+  const result = await handleDecideChatWriteApproval(
+    context(
+      {
+        decision,
+        actionDigest: approval.actionDigest,
+        ...(excludedItemRefs === undefined ? {} : { excludedItemRefs }),
+      },
+      { approvalId: approval.approvalId },
+    ),
+    f.deps,
+  );
+  return result.status;
+}
+
+async function decidePendingWrite(
+  f: ReturnType<typeof fixture>,
+  decision: "approve" | "reject",
+  excludedItemRefs?: readonly string[],
+): Promise<void> {
+  const approval = await pendingWriteApproval(f);
+  expect(await postWriteDecision(f, approval, decision, excludedItemRefs)).toBe(200);
 }
 
 function assertObservedWrite(f: ReturnType<typeof fixture>): void {
@@ -688,6 +1276,188 @@ describe("normal Chat write approval and durable outcome", () => {
       expect(f.writes()).toBe(1);
     },
   );
+});
+
+// #4178: the human's deselection is part of the one approval. Saving the approved view with it
+// must not conflict with the pending view, or the persisted approval stays pending and no item runs.
+it("executes only the selected backlog items and persists the deselection through every state", async () => {
+  const f = fixture(true, undefined, true, false, true);
+  const saved: { state: string; excluded: readonly string[] | undefined }[] = [];
+  const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+  vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+    (id, change, correlationId) => {
+      if (change.kind === "write-approval" && change.approval.kind === "jira-chat-write")
+        saved.push({ state: change.approval.state, excluded: change.approval.excludedItemRefs });
+      update(id, change, correlationId);
+    },
+  );
+  const pending = handleSendDesktopChat(sendContext(f, "deselected-draft"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  await decidePendingWrite(f, "approve", ["epic"]);
+  expect((await pending).status).toBe(200);
+  // The Epic is deselected and the Story that depends on it follows; only the Loose item is sent.
+  expect(f.jira.posts().map((post) => post.fields)).toMatchObject([{ summary: "Loose" }]);
+  expect(saved.map((entry) => entry.state)).toEqual(["pending", "approved", "claimed"]);
+  expect(saved.map((entry) => entry.excluded)).toEqual([undefined, ["epic"], ["epic"]]);
+  const exchange = firstToolExchange(f);
+  expect(exchange.approval).toMatchObject({
+    operation: "jira.draft",
+    state: "claimed",
+    excludedItemRefs: ["epic"],
+  });
+  expect(exchange.result?.status).toBe("completed");
+  expect(exchange.mutationOutcome).toBe("succeeded");
+  expect(JSON.stringify(exchange.result?.data)).toContain('"excludedCount":2');
+});
+
+// #4178 / Epic #4173 AC "A draft of any size is approved once": a backlog written in pages is staged
+// server-side, approved as a whole once, and every item runs although a turn admits only 32 single
+// writes and a deselection may name far more than 32 refs.
+describe("a staged backlog draft of any size is approved once (#4178)", () => {
+  const EPICS = 5;
+  const STORIES = 65;
+  const LARGE = { epics: 12, stories: 1188 };
+  function backlog(epics: number, stories: number): Record<string, unknown>[] {
+    const item = (ref: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+      ref,
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: `Synthetic ${ref}` },
+      ...extra,
+    });
+    return [
+      ...Array.from({ length: epics }, (_, index) => item(`e${String(index)}`)),
+      ...Array.from({ length: stories }, (_, index) =>
+        item(`s${String(index)}`, {
+          parent: { fieldId: "parent", ref: `e${String(index % epics)}` },
+        }),
+      ),
+    ];
+  }
+  function staged(
+    f: ReturnType<typeof fixture>,
+    size: { epics: number; stories: number },
+  ): Record<string, unknown> {
+    const store = f.deps.jiraDraftStore;
+    if (store === undefined) throw new Error("Missing draft store");
+    const items = backlog(size.epics, size.stories);
+    let draftId: string | undefined;
+    for (let from = 0; from < items.length; from += 50) {
+      const appended = store.append(f.chatId, draftId, "fingerprint", items.slice(from, from + 50));
+      if (!appended.ok) throw new Error("Expected the page to stage");
+      draftId = appended.draft.id;
+    }
+    const draft = draftId === undefined ? undefined : store.peek(draftId, f.chatId);
+    if (draft === undefined) throw new Error("Expected a staged draft");
+    return { draftId: draft.id, draftDigest: draft.digest };
+  }
+  function stagedFixture(size = { epics: EPICS, stories: STORIES }): {
+    f: ReturnType<typeof fixture>;
+    reference: Record<string, unknown>;
+  } {
+    const holder: { reference: Record<string, unknown> } = { reference: {} };
+    const f = fixture(true, undefined, true, false, () => holder.reference);
+    holder.reference = staged(f, size);
+    return { f, reference: holder.reference };
+  }
+
+  it("creates all 1,200 items behind one approval, past any count the old bounds allowed", async () => {
+    const { f } = stagedFixture(LARGE);
+    const approvals: string[] = [];
+    const update = f.deps.store.updateChatToolTranscript.bind(f.deps.store);
+    vi.spyOn(f.deps.store, "updateChatToolTranscript").mockImplementation(
+      (id, change, correlationId) => {
+        if (change.kind === "write-approval") approvals.push(change.approval.state);
+        update(id, change, correlationId);
+      },
+    );
+    const pending = handleSendDesktopChat(sendContext(f, "staged-draft"), f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    expect(f.jira.issues).toHaveLength(LARGE.epics + LARGE.stories);
+    expect(approvals).toEqual(["pending", "approved", "claimed"]);
+    const exchange = firstToolExchange(f);
+    expect(exchange.mutationOutcome).toBe("succeeded");
+    expect(exchange.approval).toMatchObject({ operation: "jira.draft", state: "claimed" });
+    expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":1200');
+    expect(JSON.stringify(exchange.result?.data)).toContain('"compact":true');
+  }, 180_000);
+
+  it("carries a deselection of more than 32 items and leaves them out", async () => {
+    const { f } = stagedFixture();
+    const left = Array.from({ length: 40 }, (_, index) => `s${String(index)}`);
+    const pending = handleSendDesktopChat(sendContext(f, "staged-deselection"), f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve", left);
+    expect((await pending).status).toBe(200);
+    expect(f.jira.issues).toHaveLength(EPICS + STORIES - left.length);
+    expect(firstToolExchange(f).approval).toMatchObject({ excludedItemRefs: left });
+    expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain('"excludedCount":40');
+  });
+
+  it("refuses a draft extended after its digest was read before anyone is asked", async () => {
+    const { f, reference } = stagedFixture();
+    const store = f.deps.jiraDraftStore;
+    const draftId = typeof reference.draftId === "string" ? reference.draftId : "";
+    store?.append(f.chatId, draftId, "fingerprint", [
+      { ref: "late", projectId: "10000", issueTypeId: "10001", fields: { summary: "Late" } },
+    ]);
+    const pending = handleSendDesktopChat(sendContext(f, "stale-draft"), f.deps);
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(f.jira.posts()).toHaveLength(0);
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(JSON.stringify(firstToolExchange(f).result?.data)).toContain("draft-changed");
+  });
+});
+
+// S09 of epic #4173 through the whole Chat turn: one approval creates the epic, the task under it
+// and both sub-tasks under that task, each child carrying the key its parent received.
+it("creates an epic, its task and two sub-tasks under that task from one approved draft", async () => {
+  draftToSend = NESTED_DRAFT_ARGUMENTS;
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "nested-draft"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  await decidePendingWrite(f, "approve");
+  expect((await pending).status).toBe(200);
+  expect(f.jira.posts().map((post) => post.fields)).toMatchObject([
+    { summary: "Epic" },
+    { summary: "Task", parent: { key: "SYN-1" } },
+    { summary: "Sub-task one", parent: { key: "SYN-2" } },
+    { summary: "Sub-task two", parent: { key: "SYN-2" } },
+  ]);
+  const exchange = firstToolExchange(f);
+  expect(exchange.mutationOutcome).toBe("succeeded");
+  expect(JSON.stringify(exchange.result?.data)).toContain('"createdCount":4');
+});
+
+// #4178: a hostile client names refs the reviewed draft does not contain. The decision route
+// refuses before any state changes, so the registry and the transcript cannot diverge.
+it("refuses a deselection outside the reviewed draft and leaves registry and transcript pending", async () => {
+  const f = fixture(true, undefined, true, false, true);
+  const pending = handleSendDesktopChat(sendContext(f, "foreign-deselection"), f.deps);
+  void pending.catch(() => undefined);
+  await approveReadForWrite(f);
+  const approval = await pendingWriteApproval(f);
+  expect(await postWriteDecision(f, approval, "approve", ["not-in-the-draft"])).toBe(409);
+  expect(await postWriteDecision(f, approval, "approve", ["epic", "epic"])).toBe(400);
+  expect(f.jira.posts()).toHaveLength(0);
+  expect(f.writes()).toBe(0);
+  const retained = f.deps.atlassianActionApprovalRegistry?.getChatWriteApproval(
+    approval.approvalId,
+  );
+  expect(retained?.approval.state).toBe("pending");
+  expect(retained?.approval).not.toHaveProperty("excludedItemRefs");
+  expect(firstToolExchange(f).approval).toEqual(approval);
+  await decidePendingWrite(f, "reject");
+  await pending;
+  expect(f.writes()).toBe(0);
 });
 
 it("keeps a rejected normal Chat write free of remote effects", async () => {
@@ -1019,5 +1789,99 @@ describe.each([false, true])("Jira preparation failure settlement (stream=%s)", 
         expect(JSON.stringify([result, record.mock.calls])).not.toContain("fixture-secret");
       },
     );
+  });
+});
+
+describe("attaching a connected file through the ordinary Chat turn (#4176)", () => {
+  const BODY = "synthetic report body";
+  function attachFixture(path = "docs/report.txt"): ReturnType<typeof fixture> & {
+    readonly folder: string;
+  } {
+    // The connected folder lives beside, never inside, Keiko's own state directory.
+    const folder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-attach-folder-")));
+    cleanups.push(() => {
+      rmSync(folder, { recursive: true, force: true });
+      return Promise.resolve();
+    });
+    mkdirSync(join(folder, "docs"));
+    writeFileSync(join(folder, "docs", "report.txt"), BODY);
+    let connect = (): void => undefined;
+    const f = fixture({
+      attach: path,
+      beforeCall: () => {
+        connect();
+      },
+    });
+    // A Chat with connected sources answers through the grounded path; the folder is connected
+    // as the model calls, so the ordinary tool loop is what this proves.
+    connect = (): void => {
+      f.deps.store.updateChat(f.chatId, {
+        connectedScopes: [
+          { kind: "workspace-root", root: folder, relativePaths: [], connectedAtMs: 1 },
+        ],
+      });
+    };
+    return { ...f, folder };
+  }
+  it("shows the human the file's name, size and digest and uploads exactly that file once approved", async () => {
+    const f = attachFixture();
+    const pending = send(f, "attach-approved");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    const exchange = firstToolExchange(f);
+    expect(exchange.approval).toMatchObject({
+      operation: "jira.attach",
+      attachment: { name: "report.txt", sizeBytes: BODY.length, sha256: sha256Hex(BODY) },
+    });
+    expect(JSON.stringify(exchange.call.arguments)).not.toContain(BODY);
+    expect(f.uploads).toEqual([BODY.length]);
+    expect(f.writes()).toBe(1);
+    expect(exchange.mutationOutcome).toBe("succeeded");
+    expect(exchange.result?.data).toMatchObject({ outcome: "succeeded", attachmentId: "10300" });
+  });
+  it("sends nothing when the file changed after the human reviewed it", async () => {
+    const f = attachFixture();
+    const pending = send(f, "attach-drift");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await vi.waitFor(() => {
+      expect(firstToolExchange(f).approval?.state).toBe("pending");
+    });
+    writeFileSync(join(f.folder, "docs", "report.txt"), "changed after the human looked");
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    expect(f.uploads).toEqual([]);
+    expect(f.writes()).toBe(0);
+    expect(firstToolExchange(f).result?.data).toMatchObject({
+      outcome: "rejected",
+      reason: "conflict",
+      messages: [expect.stringContaining("changed after it was reviewed")],
+    });
+  });
+  it("offers no approval for a file that holds a credential, so the human never approves it", async () => {
+    const f = attachFixture("docs/secret.yml");
+    writeFileSync(
+      join(f.folder, "docs", "secret.yml"),
+      "key: |\n  -----BEGIN PRIVATE KEY-----\n  MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n  -----END PRIVATE KEY-----\n",
+    );
+    const pending = send(f, "attach-credential");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(f.uploads).toEqual([]);
+    expect(f.writes()).toBe(0);
+  });
+  it("offers no approval for a file outside the connected folders and reads nothing", async () => {
+    const f = attachFixture("../escape.txt");
+    const pending = send(f, "attach-outside");
+    void pending.catch(() => undefined);
+    await approveReadForWrite(f);
+    await pending;
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(f.uploads).toEqual([]);
+    expect(f.writes()).toBe(0);
   });
 });

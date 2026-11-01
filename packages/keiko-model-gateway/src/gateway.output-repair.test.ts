@@ -307,6 +307,62 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
     });
   });
 
+  // A caller that keeps a synthesis grant learns which admission is the repair's, so the unusable
+  // attempt before it can leave that grant (the Chat tool turn with sources, S14 of epic #4173).
+  it("announces the steered repair to the caller admission once, on the repaired attempt only", async () => {
+    const announced: (true | undefined)[] = [];
+    const scripted = bufferedAdapter([
+      new ProviderOutputExhaustedError(MODEL),
+      new TransportError("connection reset"),
+      toolCallAnswer(),
+    ]);
+
+    const result = await gatewayFor(scripted, []).chat({
+      ...REQUEST,
+      attemptAdmission: (input) => {
+        announced.push(input.correctsUnusableAttempt);
+        return { settle: (): void => undefined };
+      },
+    });
+
+    expect(result.outputRepair).toBe("recovered");
+    // The first attempt and the provider retry of the repaired attempt are ordinary attempts.
+    expect(announced).toEqual([undefined, true, undefined]);
+  });
+
+  it("announces the steered repair to the streamed caller admission on the repaired attempt only", async () => {
+    const announced: (true | undefined)[] = [];
+    const scripted = streamingAdapter([new ProviderOutputExhaustedError(MODEL), toolCallAnswer()]);
+
+    await drain(
+      gatewayFor(scripted, [], config(provider(), true)).chatStream({
+        ...REQUEST,
+        attemptAdmission: (input) => {
+          announced.push(input.correctsUnusableAttempt);
+          return { settle: (): void => undefined };
+        },
+      }),
+    );
+
+    expect(announced).toEqual([undefined, true]);
+  });
+
+  it("never announces a repair on a call that did not ask for one", async () => {
+    const announced: (true | undefined)[] = [];
+    const scripted = bufferedAdapter([new TransportError("connection reset"), toolCallAnswer()]);
+    const { answerRepair: _asked, ...plain } = REQUEST;
+
+    await gatewayFor(scripted, []).chat({
+      ...plain,
+      attemptAdmission: (input) => {
+        announced.push(input.correctsUnusableAttempt);
+        return { settle: (): void => undefined };
+      },
+    });
+
+    expect(announced).toEqual([undefined, undefined]);
+  });
+
   it("steers one repaired streamed attempt and carries the outcome on the done chunk", async () => {
     const events: ModelGatewayLogEvent[] = [];
     const scripted = streamingAdapter([new ProviderOutputExhaustedError(MODEL), toolCallAnswer()]);

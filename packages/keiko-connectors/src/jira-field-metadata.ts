@@ -1,4 +1,7 @@
-import { JIRA_FIELD_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_FIELD_ID_PATTERN,
+  readJiraDescriptionSections,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 // Capability validation only: HTTP, authority, custody and audit remain with their existing owners.
 import type {
   AtlassianConnectorDeployment,
@@ -46,6 +49,44 @@ const CUSTOM: Readonly<Record<string, JiraFieldKind>> = {
   userpicker: "user",
   multiuserpicker: "users",
 };
+// An unmapped system custom type keeps the kind of its declared schema type only when that type
+// fully states the value shape (a plain scalar). A type that names a choice or a user says nothing
+// about the composite shape behind it, so it stays opaque (#4176).
+const SCHEMA_TYPE: Readonly<Record<string, JiraFieldKind>> = {
+  string: "text",
+  number: "number",
+  date: "date",
+  datetime: "datetime",
+};
+const CASCADING_CUSTOM = `${CUSTOM_PREFIX}cascadingselect`;
+/** The schema type Jira states for a cascading select: a parent option with an optional child. */
+export const JIRA_CASCADING_SCHEMA_TYPE = "option-with-child";
+// Written through their own tools or fixed by the create call; never a plain field write.
+const DEDICATED_SYSTEM_FIELDS: ReadonlySet<string> = new Set([
+  "attachment",
+  "comment",
+  "issuekey",
+  "project",
+  "issuetype",
+  "status",
+  "resolution",
+  "created",
+  "updated",
+  "creator",
+  "votes",
+  "watches",
+  "worklog",
+  "thumbnail",
+  "subtasks",
+  "lastViewed",
+  "aggregateprogress",
+  "progress",
+  "workratio",
+  "timespent",
+  "aggregatetimespent",
+]);
+const OPAQUE_MAX_BYTES = 16_384;
+const OPAQUE_MAX_DEPTH = 4;
 const OPERATIONS: ReadonlySet<string> = new Set(["set", "add", "remove"]);
 const ARRAY_ITEM: Readonly<Record<string, string>> = {
   strings: "string",
@@ -63,25 +104,60 @@ function boundedText(value: unknown, max = 255): value is string {
 export function isJiraFieldId(value: unknown): value is string {
   return boundedText(value, 64) && FIELD_ID.test(value) && !FORBIDDEN.has(value);
 }
+function systemKind(id: string, schema: Record<string, unknown>): JiraFieldKind | undefined {
+  if (schema.system !== id) return undefined;
+  if (Object.hasOwn(STANDARD, id)) return STANDARD[id];
+  if (id === "parent") return "issue";
+  if (id === "issuelinks") return "links";
+  return DEDICATED_SYSTEM_FIELDS.has(id) ? undefined : "opaque";
+}
 function declaredKind(id: string, schema: Record<string, unknown>): JiraFieldKind | undefined {
-  if (schema.custom === undefined)
-    return schema.system === id && Object.hasOwn(STANDARD, id) ? STANDARD[id] : undefined;
-  if (
-    typeof schema.custom !== "string" ||
-    !schema.custom.startsWith(CUSTOM_PREFIX) ||
-    !id.startsWith("customfield_")
-  )
-    return undefined;
+  if (schema.custom === undefined) return systemKind(id, schema);
+  if (typeof schema.custom !== "string" || !id.startsWith("customfield_")) return undefined;
+  // A plugin field's meaning is never guessed from a familiar base type: its value is opaque and
+  // Jira's own validation decides (#4176). Only Jira's system custom types carry known semantics.
+  if (!schema.custom.startsWith(CUSTOM_PREFIX)) return "opaque";
   const custom = schema.custom.slice(CUSTOM_PREFIX.length);
-  return Object.hasOwn(CUSTOM, custom) ? CUSTOM[custom] : undefined;
+  if (Object.hasOwn(CUSTOM, custom)) return CUSTOM[custom];
+  const type = schema.type;
+  return typeof type === "string" && Object.hasOwn(SCHEMA_TYPE, type)
+    ? SCHEMA_TYPE[type]
+    : "opaque";
 }
 function expectedItem(id: string, item: string): string {
   if (id === "components") return "component";
   return id === "versions" || id === "fixVersions" ? "version" : item;
 }
+// Kinds whose shape is fixed by one Jira schema type (and item type).
+const STRUCTURAL: Readonly<Partial<Record<JiraFieldKind, readonly [string, unknown]>>> = {
+  issue: ["issuelink", undefined],
+  links: ["array", "issuelinks"],
+};
+function isCascading(schema: Record<string, unknown>): boolean {
+  return schema.custom === CASCADING_CUSTOM;
+}
+/** Whether a field takes the parent-and-child value of Jira's cascading select. */
+export function isJiraCascadingField(field: JiraFieldMetadata): boolean {
+  return field.kind === "option" && field.schemaType === JIRA_CASCADING_SCHEMA_TYPE;
+}
 function fieldKind(id: string, schema: Record<string, unknown>): JiraFieldKind {
+  if (isCascading(schema))
+    return schema.type === JIRA_CASCADING_SCHEMA_TYPE || schema.type === "option"
+      ? "option"
+      : "opaque";
   const kind = declaredKind(id, schema);
   if (kind === undefined) return "unsupported";
+  if (kind === "opaque") return kind;
+  const structural = STRUCTURAL[kind];
+  if (structural !== undefined)
+    return schema.type === structural[0] && schema.items === structural[1] ? kind : "unsupported";
+  return typedKind(id, kind, schema);
+}
+function typedKind(
+  id: string,
+  kind: JiraFieldKind,
+  schema: Record<string, unknown>,
+): JiraFieldKind {
   const item = ARRAY_ITEM[kind];
   if (item !== undefined)
     return schema.type === "array" && schema.items === expectedItem(id, item)
@@ -122,7 +198,8 @@ function boundedReferences(
   kind: JiraFieldKind,
   value: unknown,
 ): Pick<JiraFieldMetadata, "kind" | "allowedValues"> | undefined {
-  if (kind === "unsupported" || value === undefined) return { kind };
+  // Plugin-specific choice structures are never parsed; an opaque value is Jira's to validate.
+  if (kind === "unsupported" || kind === "opaque" || value === undefined) return { kind };
   const values = asArray(value);
   if (values === undefined) return undefined;
   if (values.length > 500) return { kind: "unsupported" };
@@ -135,6 +212,7 @@ function supportedOperations(
   operations: readonly JiraFieldOperation[],
 ): readonly JiraFieldOperation[] {
   if (kind === "unsupported") return [];
+  if (kind === "links") return operations.includes("add") ? ["add"] : [];
   return [
     ...new Set(
       operations.filter(
@@ -173,16 +251,28 @@ function metadataFieldDetails(
   if (schema === undefined || operations === undefined) return undefined;
   const definition = boundedReferences(fieldKind(id, schema), raw.allowedValues);
   if (definition === undefined) return undefined;
+  const schemaType =
+    definition.kind === "option" && isCascading(schema)
+      ? JIRA_CASCADING_SCHEMA_TYPE
+      : declaredSchemaType(schema);
   return {
     id,
     name,
     required,
     hasDefaultValue: raw.hasDefaultValue === true,
     ...definition,
+    ...(schemaType === undefined ? {} : { schemaType }),
     richText:
       id === "description" || id === "environment" || schema.custom === `${CUSTOM_PREFIX}textarea`,
     operations: supportedOperations(id, definition.kind, operations),
   };
+}
+
+function declaredSchemaType(schema: Record<string, unknown>): string | undefined {
+  const type = schema.type;
+  if (!boundedText(type, 64)) return undefined;
+  const items = schema.items;
+  return type === "array" && boundedText(items, 64) ? `array:${items}` : type;
 }
 
 export type JiraMetadataResult =
@@ -221,14 +311,61 @@ export type JiraFieldValidationResult =
         | "invalid-operation"
         | "bounds-exceeded";
       readonly fieldId?: string;
+      /** One fixed sentence for the model; never a value from the request or from Jira. */
+      readonly message?: string;
     };
 
-type ValueResult = { readonly ok: true; readonly value: unknown } | { readonly ok: false };
+/** A refusal may carry one fixed sentence that tells the model how to correct the value. */
+type ValueResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message?: string };
 const INVALID: ValueResult = { ok: false };
+function invalidWith(message: string): ValueResult {
+  return { ok: false, message };
+}
 function calendarDate(value: string): boolean {
   if (!/^\d{4}-\d{2}-\d{2}$/u.test(value) || value.startsWith("0000")) return false;
   const date = new Date(`${value}T00:00:00.000Z`);
   return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+function referenceOf(
+  value: unknown,
+  key: "id" | "name" | "accountId",
+  allowed: readonly JiraFieldReference[] | undefined,
+): ValueResult {
+  const raw = asRecord(value);
+  if (raw === undefined || Object.keys(raw).length !== 1 || !boundedText(raw[key], 256))
+    return INVALID;
+  const ref = raw[key];
+  if (allowed !== undefined && !allowed.some((entry) => entry[key] === ref)) return INVALID;
+  return { ok: true, value: { [key]: ref } };
+}
+const AMBIGUOUS_OPTION =
+  "The value matches more than one offered choice; use the choice's id ({ id }) instead.";
+const UNKNOWN_OPTION = "The value matches none of the offered choices; use an offered id or value.";
+/**
+ * A bare option string names a choice by its id or by its exact value or name. It is accepted only
+ * when exactly one offered choice carries that spelling: a string that is one choice's id and
+ * another's name is ambiguous, and is refused rather than resolved by a silent preference.
+ */
+function bareOption(field: JiraFieldMetadata, value: string): ValueResult {
+  const allowed = field.allowedValues;
+  if (allowed === undefined)
+    return /^\d{1,32}$/u.test(value) ? { ok: true, value: { id: value } } : INVALID;
+  const matches = allowed.filter(
+    (entry) => entry.id === value || entry.name === value || entry.label === value,
+  );
+  if (matches.length > 1) return invalidWith(AMBIGUOUS_OPTION);
+  const id = matches[0]?.id;
+  return id === undefined ? invalidWith(UNKNOWN_OPTION) : { ok: true, value: { id } };
+}
+/** A bare user string is the deployment's user key; the allowed users, when listed, still bind it. */
+function bareUser(field: JiraFieldMetadata, value: string, key: "accountId" | "name"): ValueResult {
+  if (!boundedText(value, 256) || value.trim() !== value) return INVALID;
+  const listed = field.allowedValues;
+  return listed === undefined || listed.some((entry) => entry[key] === value)
+    ? { ok: true, value: { [key]: value } }
+    : INVALID;
 }
 function reference(
   field: JiraFieldMetadata,
@@ -236,15 +373,52 @@ function reference(
   user: boolean,
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
-  const raw = asRecord(value);
   const userKey = deployment === "cloud" ? "accountId" : "name";
-  const key = user ? userKey : "id";
-  if (raw === undefined || Object.keys(raw).length !== 1 || !boundedText(raw[key], 256))
-    return INVALID;
-  const ref = raw[key];
-  if (field.allowedValues !== undefined && !field.allowedValues.some((entry) => entry[key] === ref))
-    return INVALID;
-  return { ok: true, value: { [key]: ref } };
+  if (typeof value === "string")
+    return user ? bareUser(field, value, userKey) : bareOption(field, value);
+  return referenceOf(value, user ? userKey : "id", field.allowedValues);
+}
+/**
+ * A cascading select: the parent option by `id`, checked against the allowed parents, with an
+ * optional `child` option by `id` and nothing else. A grandchild, another key or a non-object child
+ * is refused; Jira's own validation decides whether the child belongs to the parent.
+ */
+function cascadingValue(field: JiraFieldMetadata, value: unknown): ValueResult {
+  const raw = asRecord(value);
+  if (raw === undefined) return INVALID;
+  const { child, ...parentPart } = raw;
+  const parent = referenceOf(parentPart, "id", field.allowedValues);
+  if (!parent.ok || !Object.hasOwn(raw, "child")) return parent;
+  const selected = referenceOf(child, "id", undefined);
+  return selected.ok
+    ? { ok: true, value: { ...(parent.value as Record<string, unknown>), child: selected.value } }
+    : INVALID;
+}
+function optionValue(
+  field: JiraFieldMetadata,
+  value: unknown,
+  deployment: AtlassianConnectorDeployment,
+): ValueResult {
+  return isJiraCascadingField(field)
+    ? cascadingValue(field, value)
+    : reference(field, value, false, deployment);
+}
+const ESCAPED_LINE_BREAKS = String.raw`The text contains escaped line breaks (\n) and no real line break; send real line breaks instead.`;
+const LIST_LINE = /^[ \t]*(?:[*+-]|\d{1,3}\.)[ \t]+\S/mu;
+/**
+ * Multi-line document structure whose every line break arrived as the two characters `\n` (#4178).
+ * Some models escape line breaks twice inside tool arguments; Jira would then store the escape
+ * sequences as visible text and collapse the document into one line, and a template section would
+ * never be found. Two escapes alone prove nothing: prose may describe a pattern such as `/\n\n/`.
+ * The evidence is what the escapes would have produced, a heading or a list item at the start of a
+ * line, so only text that reads as an encoded document is refused, and the model resends the value
+ * it means. One literal escape, escapes beside real line breaks, and escapes in prose stay accepted.
+ * This judges what is written to Jira only; reading a stored description never applies it.
+ */
+function encodedDocumentStructure(value: string): boolean {
+  if (/[\r\n]/u.test(value) || (value.match(/\\n/gu)?.length ?? 0) < 2) return false;
+  const decoded = value.replaceAll(String.raw`\n`, "\n");
+  return readJiraDescriptionSections(decoded).length > 0 || LIST_LINE.test(decoded);
 }
 function textValue(
   field: JiraFieldMetadata,
@@ -299,10 +473,53 @@ function scalar(
     case "user":
       return reference(field, value, true, deployment);
     case "option":
-      return reference(field, value, false, deployment);
+      return optionValue(field, value, deployment);
+    case "issue":
+      return issueValue(value);
+    case "opaque":
+      return opaqueValue(value);
     default:
       return INVALID;
   }
+}
+const ISSUE_KEY = /^[A-Za-z]\w{0,254}-[1-9]\d{0,17}$/u;
+/** `{ key }`, `{ id }` or a bare issue key; the result is always one canonical reference. */
+function issueValue(value: unknown): ValueResult {
+  if (typeof value === "string")
+    return ISSUE_KEY.test(value) ? { ok: true, value: { key: value } } : INVALID;
+  const raw = asRecord(value);
+  if (raw === undefined || Object.keys(raw).length !== 1) return INVALID;
+  if (typeof raw.key === "string" && ISSUE_KEY.test(raw.key))
+    return { ok: true, value: { key: raw.key } };
+  return typeof raw.id === "string" && /^\d{1,32}$/u.test(raw.id)
+    ? { ok: true, value: { id: raw.id } }
+    : INVALID;
+}
+function opaqueScalar(value: unknown): boolean | undefined {
+  if (value === null || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (typeof value === "string") return value.length <= 4096 && !CONTROL.test(value);
+  return undefined;
+}
+function opaqueShape(value: unknown, depth: number): boolean {
+  const scalar = opaqueScalar(value);
+  if (scalar !== undefined) return scalar;
+  if (depth >= OPAQUE_MAX_DEPTH) return false;
+  if (Array.isArray(value))
+    return value.length <= MAX_VALUES && value.every((item) => opaqueShape(item, depth + 1));
+  const raw = asRecord(value);
+  if (raw === undefined || Object.keys(raw).length > 50) return false;
+  return Object.entries(raw).every(
+    ([key, item]) => boundedText(key, 64) && !FORBIDDEN.has(key) && opaqueShape(item, depth + 1),
+  );
+}
+/** Bounded plain JSON, forwarded as given; Jira's validation decides what it means. */
+function opaqueValue(value: unknown): ValueResult {
+  if (!opaqueShape(value, 0)) return INVALID;
+  const serialized = JSON.stringify(value);
+  return new TextEncoder().encode(serialized).byteLength <= OPAQUE_MAX_BYTES
+    ? { ok: true, value: JSON.parse(serialized) as unknown }
+    : INVALID;
 }
 function dateValue(value: unknown): ValueResult {
   return typeof value === "string" && calendarDate(value) ? { ok: true, value } : INVALID;
@@ -330,7 +547,7 @@ function arrayValue(
   const result: unknown[] = [];
   for (const entry of input) {
     const item = arrayItem(field, entry, deployment);
-    if (!item.ok) return INVALID;
+    if (!item.ok) return item;
     result.push(item.value);
   }
   return { ok: true, value: result };
@@ -359,6 +576,14 @@ function requiredEmpty(field: JiraFieldMetadata, value: unknown): boolean {
   if (!field.required) return false;
   return value === null || value === "" || (Array.isArray(value) && value.length === 0);
 }
+function isEncodedRichText(field: JiraFieldMetadata, value: unknown): boolean {
+  return (
+    field.kind === "text" &&
+    field.richText &&
+    typeof value === "string" &&
+    encodedDocumentStructure(value)
+  );
+}
 function setValue(
   field: JiraFieldMetadata | undefined,
   value: unknown,
@@ -368,6 +593,7 @@ function setValue(
   if (field.kind === "unsupported") return { ok: false, reason: "unsupported-field" };
   if (!field.operations.includes("set")) return { ok: false, reason: "invalid-operation" };
   if (requiredEmpty(field, value)) return { ok: false, reason: "required-field" };
+  if (isEncodedRichText(field, value)) return invalidWith(ESCAPED_LINE_BREAKS);
   return validateJiraFieldValue(field, value, deployment);
 }
 function validateSets(
@@ -384,10 +610,19 @@ function validateSets(
         ok: false,
         reason: "reason" in result ? result.reason : "invalid-field",
         fieldId: id,
+        ...(result.message === undefined ? {} : { message: result.message }),
       };
     fields[id] = result.value;
   }
   return { ok: true, fields };
+}
+/**
+ * Jira sets the reporter of a new issue to the authenticated caller when the field is absent, even
+ * though create metadata lists it as required without a default. This is the one field Keiko does
+ * not insist on; a supplied reporter is still validated like any other user.
+ */
+function jiraAssignsOnCreate(field: JiraFieldMetadata): boolean {
+  return field.id === "reporter";
 }
 function missingRequired(
   metadata: readonly JiraFieldMetadata[],
@@ -398,7 +633,7 @@ function missingRequired(
   for (const field of metadata) {
     if (
       !field.required ||
-      (purpose === "create" && field.hasDefaultValue) ||
+      (purpose === "create" && (field.hasDefaultValue || jiraAssignsOnCreate(field))) ||
       Object.hasOwn(fields, field.id)
     )
       continue;

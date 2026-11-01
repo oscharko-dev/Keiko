@@ -74,7 +74,11 @@ function grantReadForChat(
   ).toBe(true);
 }
 
-function pendingForChat(actionDigest = "a".repeat(64)): ChatWriteApprovalEntry {
+function pendingForChat(
+  actionDigest = "a".repeat(64),
+  operation: "jira.comment" | "jira.draft" = "jira.comment",
+  draftItemRefs?: readonly string[],
+): ChatWriteApprovalEntry {
   const created = deps.store.createChat(root, "Approval", "synthetic-model");
   const chat = deps.store.updateChat(
     created.id,
@@ -103,13 +107,29 @@ function pendingForChat(actionDigest = "a".repeat(64)): ChatWriteApprovalEntry {
   );
   if (registered?.ok !== true) throw new Error("Missing authority");
   grantReadForChat(chat.id, registered.authorityRef, now);
-  const write = requestJiraChatWriteApproval(
-    deps,
+  return retainedWriteApproval(
     chat.id,
     registered.authorityRef,
-    { invocationId: `invocation-${chat.id}`, operation: "jira.comment", actionDigest },
+    now,
+    { invocationId: `invocation-${chat.id}`, operation, actionDigest },
+    draftItemRefs,
+  );
+}
+function retainedWriteApproval(
+  chatId: string,
+  authority: EditorAgentGovernedAuthorityReference,
+  now: string,
+  action: Parameters<typeof requestJiraChatWriteApproval>[3],
+  draftItemRefs?: readonly string[],
+): ChatWriteApprovalEntry {
+  const write = requestJiraChatWriteApproval(
+    deps,
+    chatId,
+    authority,
+    action,
     now,
     "route-write",
+    draftItemRefs,
   );
   if (write.kind === "denied" || write.kind === "allowed")
     throw new Error("Missing write approval");
@@ -274,6 +294,72 @@ describe("authenticated Chat exact-action write approval routes", () => {
     expect(registry.getChatWriteApproval(pending.approval.approvalId)?.approval.state).toBe(
       "pending",
     );
+  });
+
+  it("records the human's deselection only on a backlog draft approval (#4178)", async () => {
+    const draft = pendingForChat("e".repeat(64), "jira.draft", ["epic", "story", "task"]);
+    const excludedItemRefs = ["story", "task"];
+    const approved = await decide(
+      { decision: "approve", actionDigest: draft.approval.actionDigest, excludedItemRefs },
+      HEADERS,
+      draft,
+    );
+    expect(approved.status).toBe(200);
+    expect(await approved.json()).toMatchObject({
+      approval: { state: "approved", operation: "jira.draft", excludedItemRefs },
+    });
+    expect(registry.getChatWriteApproval(draft.approval.approvalId)?.approval).toMatchObject({
+      excludedItemRefs,
+    });
+    expect((await decide({ ...decision(), excludedItemRefs: ["story"] })).status).toBe(409);
+    expect(registry.getChatWriteApproval(pending.approval.approvalId)?.approval).toEqual(
+      pending.approval,
+    );
+    expect(
+      (await decide({ ...decision("reject"), excludedItemRefs: ["story"] }, HEADERS, draft)).status,
+    ).toBe(400);
+  });
+
+  // A repeated ref never reaches the registry: the wire validator already answers 400, and the
+  // registry refuses it too (see the registry tests), so no layer admits it.
+  it.each([
+    ["an unknown ref", ["story", "elsewhere"], 409],
+    ["a repeated ref", ["story", "story"], 400],
+  ])(
+    "refuses a draft deselection with %s and leaves the approval pending (#4178)",
+    async (_, refs, status) => {
+      const draft = pendingForChat("e".repeat(64), "jira.draft", ["epic", "story", "task"]);
+      const refused = await decide(
+        { decision: "approve", actionDigest: draft.approval.actionDigest, excludedItemRefs: refs },
+        HEADERS,
+        draft,
+      );
+      expect(refused.status).toBe(status);
+      expect(registry.getChatWriteApproval(draft.approval.approvalId)?.approval).toEqual(
+        draft.approval,
+      );
+      expect(deps.atlassianConnectorCredentials?.httpBodyPortFactory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses a deselection on a draft approval that recorded no draft refs (#4178)", async () => {
+    const draft = pendingForChat("e".repeat(64), "jira.draft");
+    const body = { decision: "approve", actionDigest: draft.approval.actionDigest };
+    const refused = await decide({ ...body, excludedItemRefs: ["a"] }, HEADERS, draft);
+    expect(refused.status).toBe(409);
+    expect(registry.getChatWriteApproval(draft.approval.approvalId)?.approval.state).toBe(
+      "pending",
+    );
+    expect((await decide(body, HEADERS, draft)).status).toBe(200);
+  });
+
+  it("never projects the recorded draft refs to the client (#4178)", async () => {
+    const draft = pendingForChat("e".repeat(64), "jira.draft", ["epic", "story"]);
+    const observed = await fetch(`${baseUrl}${path(draft)}`);
+    expect(JSON.stringify(await observed.json())).not.toContain("epic");
+    expect(registry.getChatWriteApproval(draft.approval.approvalId)).toMatchObject({
+      draftItemRefs: ["epic", "story"],
+    });
   });
 
   it("bounds the decision body to 4 KiB", async () => {

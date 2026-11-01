@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0cc9554096a922587c600cd7cf818ce6688df56291530e9e2f6880b7aca59a02"
+    "catalogDigest": "046cd5ac4d32e5c872a97867bfeddf06153f54d8fa37b66ac48e34169aff5f15"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 618,
-    "proofCount": 641,
-    "resolvedProofCount": 641,
-    "failureClassCount": 386,
+    "operationCount": 627,
+    "proofCount": 650,
+    "resolvedProofCount": 650,
+    "failureClassCount": 387,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -105,6 +105,8 @@
         "atlassian.credential.listed",
         "atlassian.credential.rejected",
         "atlassian.credential.updated",
+        "atlassian.jira-draft",
+        "atlassian.jira-report",
         "chat.compaction.facts.classified",
         "chat.compaction.summary.work",
         "chat.context.failed",
@@ -125,6 +127,9 @@
         "chat.tool-mutation",
         "chat.tool-mutation.projected",
         "chat.tool-transcript.updated",
+        "chat.tool-turn.context-fitted",
+        "chat.tool-turn.corrected",
+        "chat.tool-turn.ended",
         "chat.turn.started",
         "git-change.chat.apply",
         "git-change.chat.description-target.denied",
@@ -132,6 +137,8 @@
         "http.request.body.failed",
         "http.request.body.received",
         "http.request.body.rejected",
+        "jira.attachment.source",
+        "jira.template.admission",
         "pr-description.chat.turn.admitted",
         "pr-description.chat.turn.denied",
         "project.workspace.reconnect",
@@ -541,6 +548,8 @@
         "indexing.start.accepted",
         "indexing.start.refused",
         "knowledge.log.sink-failed",
+        "knowledge.requirement-trace.applied",
+        "knowledge.requirements.read",
         "knowledge.store.encryption-rejected",
         "knowledge.store.quarantined",
         "memory-vault.log.sink-failed",
@@ -1070,6 +1079,7 @@
     "knowledge-prompt-window": ["memory-knowledge.dependency-failure"],
     "knowledge-citation-reconciliation": ["memory-knowledge.dependency-failure"],
     "grounded-entailment-verdict": ["memory-knowledge.dependency-failure"],
+    "requirement-inventory": ["memory-knowledge.dependency-failure"],
     "knowledge-store-corruption": ["memory-knowledge.dependency-failure"],
     "knowledge-store-encryption": ["memory-knowledge.rejection"],
     "knowledge-store-reopen": ["memory-knowledge.dependency-failure"],
@@ -1262,6 +1272,11 @@
     "atlassian.credential.updated.line": [
       "packages/keiko-server/src/atlassian/credentialRoutes.test.ts"
     ],
+    "atlassian.jira-draft.line": ["packages/keiko-server/src/atlassian/jiraDraftRoutes.test.ts"],
+    "atlassian.jira-report.line": [
+      "packages/keiko-server/src/atlassian/jiraReportRoutes.test.ts",
+      "packages/keiko-server/src/coding-runtime/codingJiraPodMcp.test.ts"
+    ],
     "chat.compaction.facts.classified.line": [
       "packages/keiko-server/src/chat-compaction-model-summary.test.ts"
     ],
@@ -1354,6 +1369,11 @@
     "chat.tool-transcript.updated.line": [
       "packages/keiko-server/src/store/chatToolTranscript.test.ts"
     ],
+    "chat.tool-turn.context-fitted.line": [
+      "packages/keiko-server/src/chat-tool-turn-ending.test.ts"
+    ],
+    "chat.tool-turn.corrected.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
+    "chat.tool-turn.ended.line": ["packages/keiko-server/src/chat-tool-turn-ending.test.ts"],
     "chat.turn.started.shape": ["packages/keiko-server/src/chat-activity.test.ts"],
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.failed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
@@ -2490,9 +2510,20 @@
     "indexing.start.refused.line": [
       "packages/keiko-server/src/local-knowledge-handlers.logging.test.ts"
     ],
+    "jira.attachment.source.line": [
+      "packages/keiko-server/src/atlassian/jiraChatAttachment.test.ts"
+    ],
+    "jira.template.admission.line": [
+      "packages/keiko-server/src/atlassian/jiraTemplateEnforcement.test.ts"
+    ],
     "knowledge.log.sink-failed.body-free": [
       "packages/keiko-local-knowledge/src/knowledge-log.test.ts"
     ],
+    "knowledge.requirement-trace.applied.line": [
+      "packages/keiko-server/src/atlassian/jiraChatTracedMutation.test.ts",
+      "packages/keiko-server/src/requirement-trace.test.ts"
+    ],
+    "knowledge.requirements.read.line": ["packages/keiko-server/src/requirementsTool.test.ts"],
     "knowledge.store.encryption-rejected.mode": [
       "packages/keiko-local-knowledge/src/store.log-sink-safety.test.ts"
     ],

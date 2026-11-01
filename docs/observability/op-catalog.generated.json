@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "0cc9554096a922587c600cd7cf818ce6688df56291530e9e2f6880b7aca59a02",
+    "catalogDigest": "046cd5ac4d32e5c872a97867bfeddf06153f54d8fa37b66ac48e34169aff5f15",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -906,6 +906,8 @@
               "jira.comments",
               "jira.transitions",
               "jira.assignable-users",
+              "jira.report",
+              "jira.draft-stage",
               "assign-issue"
             ]
           },
@@ -960,7 +962,7 @@
         "proofIds": ["atlassian.action.outcome.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:17",
-        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:143"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:145"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1177,6 +1179,279 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/atlassian/credentialActivity.ts:202",
         "emitterSites": ["packages/keiko-server/src/atlassian/credentialActivity.ts:236"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "atlassian.jira-draft",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraDraftActivity.recordJiraDraftActivity",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["staged", "submitted", "refused", "progress", "executed"]
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "invalid-input",
+              "unsupported-deployment",
+              "draft-not-found",
+              "connection-changed",
+              "duplicate-ref",
+              "too-large",
+              "template-violation",
+              "draft-changed",
+              "draft-invalid"
+            ]
+          },
+          "newDraft": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "pageItemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "itemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "pageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "byteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unresolvedRefCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "violationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "settledCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "pendingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["atlassian.jira-draft.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:16",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraDraftActivity.ts:92"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "atlassian.jira-report",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraReportActivity.recordJiraReportActivity",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["read", "section", "refused", "export"]
+          },
+          "status": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["reading", "complete", "incomplete"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "read-failed",
+              "scope-changed",
+              "memory-budget",
+              "issue-too-large",
+              "template-unreadable"
+            ]
+          },
+          "failure": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "invalid-jql",
+              "auth",
+              "permission",
+              "not-found",
+              "rate-limited",
+              "timeout",
+              "unavailable",
+              "malformed-payload",
+              "bounds-exceeded"
+            ]
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "invalid-input",
+              "unsupported-deployment",
+              "report-not-found",
+              "report-busy",
+              "connection-changed",
+              "requirements-unavailable",
+              "invalid-format",
+              "export-unavailable"
+            ]
+          },
+          "scopeKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["project", "jql", "project-jql", "report"]
+          },
+          "continued": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "format": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["markdown", "csv"]
+          },
+          "issuesRead": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "issuesTotal": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "pageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "issuesWithDeviations": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "deviationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "requirementCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "hierarchyDiscovery": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["complete", "unavailable"]
+          },
+          "hierarchyFieldCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "hierarchyObservedFieldCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "hierarchyRejectedFieldCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "byteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "invalidArgumentCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "ruleIds": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 64,
+            "maxItems": 64
+          },
+          "durationMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["atlassian.jira-report.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:26",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:264"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2122,6 +2397,16 @@
             "type": "integer",
             "dataClass": "count",
             "required": true
+          },
+          "requirementUnitCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "excerptRequirementCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
@@ -2131,7 +2416,7 @@
         "proofIds": ["chat.grounded-tool-round.completed.schedule"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/chat-activity.ts:656",
-        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:687"]
+        "emitterSites": ["packages/keiko-server/src/chat-activity.ts:690"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2723,6 +3008,8 @@
               "jira.comments",
               "jira.transitions",
               "jira.assignable-users",
+              "jira.report",
+              "jira.draft-stage",
               "assign-issue"
             ]
           },
@@ -2852,7 +3139,7 @@
         ],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/editor/chatAuthorityActivity.ts:48",
-        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:242"]
+        "emitterSites": ["packages/keiko-server/src/editor/chatAuthorityActivity.ts:244"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2914,16 +3201,73 @@
               "succeeded-unconfirmed",
               "unknown"
             ]
+          },
+          "rejection": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["jira-error-document"]
+          },
+          "refusalReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "auth-failed",
+              "permission-denied",
+              "not-found",
+              "rate-limited",
+              "timeout",
+              "unavailable",
+              "malformed-payload",
+              "bounds-exceeded",
+              "conflict",
+              "invalid-transition",
+              "field-validation"
+            ]
+          },
+          "fieldValidation": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "required-field",
+              "unsupported-field",
+              "invalid-field",
+              "invalid-operation",
+              "bounds-exceeded"
+            ]
+          },
+          "linkRequestedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkCreatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkFailedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
           }
         },
         "causal": "correlation",
         "lifecycle": "state",
         "analyzerProjection": "timeline",
+        "diagnosticWhen": [
+          {
+            "field": "linkFailedCount",
+            "positive": true
+          }
+        ],
         "failureClasses": ["chat-tool-mutation"],
         "proofIds": ["chat.tool-mutation.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:9",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:62"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolMutationActivity.ts:35",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationActivity.ts:141"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2962,7 +3306,7 @@
         "proofIds": ["chat.tool-mutation.projected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolMutationProjection.ts:22",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationProjection.ts:111"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationProjection.ts:113"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3006,8 +3350,195 @@
         "failureClasses": ["chat-tool-transcript"],
         "proofIds": ["chat.tool-transcript.updated.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:56",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:455"]
+        "registrationSite": "packages/keiko-server/src/store/chatToolTranscript.ts:82",
+        "emitterSites": ["packages/keiko-server/src/store/chatToolTranscript.ts:491"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "chat.tool-turn.context-fitted",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "chat-tool-turn-ending.recordChatToolTurnContextFitted",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "messageDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "elidedResultCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "continuationMessageCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["chat-tool-transcript"],
+        "proofIds": ["chat.tool-turn.context-fitted.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:233",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:267"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "chat.tool-turn.corrected",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "chat-tool-turn-ending.recordChatToolTurnCorrected",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "messageDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "settledExchangeCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "correctionKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["tool-schema", "report-omission", "unsupported-issue-key"]
+          },
+          "omittedFindingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unsupportedKeyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["chat-tool-transcript"],
+        "proofIds": ["chat.tool-turn.corrected.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:284",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:333"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "chat.tool-turn.ended",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "chat-tool-turn-ending.recordChatToolTurnEnded",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "messageDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "budget-exhausted",
+              "deadline",
+              "authority-invalid",
+              "tool-failure",
+              "output-exhausted",
+              "context-overflow",
+              "model-failure"
+            ]
+          },
+          "exchangeCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "succeededWriteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unconfirmedWriteCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unsettledCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "readCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "refusedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "maxToolCalls": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "maxRuntimeMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["chat-tool-transcript"],
+        "proofIds": ["chat.tool-turn.ended.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:166",
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:209"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -9856,6 +10387,8 @@
               "jira.comments",
               "jira.transitions",
               "jira.assignable-users",
+              "jira.report",
+              "jira.draft-stage",
               "jira.create",
               "jira.edit",
               "jira.assign",
@@ -9870,6 +10403,21 @@
             "values": ["read", "write"]
           },
           "toolCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkRequestedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkCreatedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "linkFailedCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -9901,13 +10449,17 @@
           {
             "field": "outcome",
             "values": ["refused", "failed"]
+          },
+          {
+            "field": "linkFailedCount",
+            "positive": true
           }
         ],
         "failureClasses": ["coding-runtime-jira-pod"],
         "proofIds": ["coding-runtime.jira-pod.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:174",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:267"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:183",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:287"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -10296,7 +10848,7 @@
         "failureClasses": ["coding-runtime-mcp-relay"],
         "proofIds": ["coding-runtime.mcp-relay.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:203",
+        "registrationSite": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:204",
         "emitterSites": ["packages/keiko-server/src/mcp/mcpCredentialRelay.ts:275"]
       },
       {
@@ -20560,8 +21112,8 @@
         "failureClasses": ["gateway-chat-call"],
         "proofIds": ["gateway.chat.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:603",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2015"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:617",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2011"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20610,8 +21162,8 @@
         "failureClasses": ["gateway-chat-call"],
         "proofIds": ["gateway.chat.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:463",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1900"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:477",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1896"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -20693,8 +21245,8 @@
         },
         "failureClasses": ["gateway-chat-call"],
         "proofIds": ["gateway.chat.started.emitted-line"],
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:435",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1885"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:449",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1881"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -21000,8 +21552,8 @@
         "failureClasses": ["gateway-configuration"],
         "proofIds": ["gateway.config.resolved.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:305",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1387"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:319",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1376"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22684,8 +23236,8 @@
         "failureClasses": ["gateway-route-rejection"],
         "proofIds": ["gateway.route.rejected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:671",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2579"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:685",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2608"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23105,8 +23657,8 @@
         "failureClasses": ["gateway-stream-call"],
         "proofIds": ["gateway.stream.abandoned.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:528",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1957"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:542",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1953"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23151,8 +23703,8 @@
         "failureClasses": ["gateway-stream-call"],
         "proofIds": ["gateway.stream.buffered-fallback.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:646",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2249"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:660",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:2246"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23233,8 +23785,8 @@
         "failureClasses": ["gateway-stream-call"],
         "proofIds": ["gateway.stream.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:498",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1930"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:512",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1926"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23293,8 +23845,8 @@
         "failureClasses": ["gateway-stream-call"],
         "proofIds": ["gateway.stream.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:566",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1980"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:580",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1976"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23366,8 +23918,8 @@
         },
         "failureClasses": ["gateway-stream-call"],
         "proofIds": ["gateway.stream.started.emitted-line"],
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:452",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1876"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:466",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1872"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23495,8 +24047,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.call-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:166",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:605"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:168",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:633"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23539,10 +24091,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.native-passthrough.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:145",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:147",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:566",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:591"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:594",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:619"
         ]
       },
       {
@@ -23592,10 +24144,10 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.projected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:185",
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:187",
         "emitterSites": [
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:759",
-          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:772"
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:787",
+          "packages/keiko-model-gateway/src/toolCatalogBridge.ts:800"
         ]
       },
       {
@@ -23728,8 +24280,8 @@
         "failureClasses": ["gateway-tool-catalog"],
         "proofIds": ["gateway.tool-catalog.rejected.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:43",
-        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:507"]
+        "registrationSite": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:45",
+        "emitterSites": ["packages/keiko-model-gateway/src/toolCatalogBridge.ts:535"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -23759,7 +24311,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["context-window-exceeded", "invalid-shape"]
+            "values": ["context-window-exceeded", "attempt-admission-denied", "invalid-shape"]
           },
           "toolCallId": {
             "type": "string",
@@ -23836,8 +24388,8 @@
         "failureClasses": ["gateway-tool-schema-rejection"],
         "proofIds": ["gateway.tool-catalog.repair.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:329",
-        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1609"]
+        "registrationSite": "packages/keiko-model-gateway/src/gateway.ts:343",
+        "emitterSites": ["packages/keiko-model-gateway/src/gateway.ts:1605"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -30749,6 +31301,139 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "jira.attachment.source",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraChatAttachment.recordJiraAttachmentSource",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["review", "send"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["read", "refused"]
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "no-connected-folder",
+              "outside-connected-scope",
+              "not-found",
+              "denied",
+              "not-a-file",
+              "too-large",
+              "empty",
+              "invalid-name",
+              "changed-after-review",
+              "unreviewed",
+              "unstable",
+              "contains-credential",
+              "unscannable",
+              "limit-unavailable",
+              "failed",
+              "none"
+            ]
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-action-execution"],
+        "proofIds": ["jira.attachment.source.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:68",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraChatAttachment.ts:110"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "jira.template.admission",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "atlassian.jiraTemplateLog.recordJiraTemplateRefusal",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "operation": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["jira.create", "jira.edit", "jira.transition", "jira.assign"]
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["pre-approval", "dispatch"]
+          },
+          "violationCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "ruleIds": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "summary-too-short",
+              "summary-too-long",
+              "summary-pattern",
+              "section-missing",
+              "section-empty",
+              "field-missing",
+              "field-unavailable",
+              "label-missing",
+              "label-pattern",
+              "label-count",
+              "parent-missing",
+              "template-unreadable"
+            ],
+            "maxItems": 25
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["markdown-skill-library"],
+        "proofIds": ["jira.template.admission.line"],
+        "releaseImpact": "minor",
+        "registrationSite": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:32",
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraTemplateLog.ts:110"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "knowledge.log.sink-failed",
         "category": "diagnostic",
         "owner": "keiko-local-knowledge",
@@ -30785,6 +31470,248 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-local-knowledge/src/knowledge-log.ts:157",
         "emitterSites": ["packages/keiko-local-knowledge/src/knowledge-log.ts:210"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "knowledge.requirement-trace.applied",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "requirement-inventory-activity.logRequirementTrace",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "operation": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["create", "edit", "draft"]
+          },
+          "tracedItemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "refusedItemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "referenceProblemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "labelsAppliedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "footerAppliedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "droppedLabelCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unavailable": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "diagnosticWhen": [
+          {
+            "field": "unavailable",
+            "values": [true]
+          },
+          {
+            "field": "refusedItemCount",
+            "positive": true
+          },
+          {
+            "field": "droppedLabelCount",
+            "positive": true
+          }
+        ],
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["requirement-inventory"],
+        "proofIds": ["knowledge.requirement-trace.applied.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:149",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:190"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "knowledge.requirements.read",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "requirement-inventory-activity.logRequirementRead",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "view": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["units", "documents", "change-queries", "changes"]
+          },
+          "disposition": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["served", "refused", "cursor-stale", "unavailable"]
+          },
+          "cursorUsed": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "detectedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "matchedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "returnedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "documentsScanned": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "documentsNotExtracted": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "documentsOmitted": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "unitsOmitted": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "resultBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "hasNextPage": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["report-required", "report-reading", "report-not-found"]
+          },
+          "baselineSource": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["explicit", "turn"]
+          },
+          "changedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "removedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "untracedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unchangedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "affectedIssueCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "baselineIssueCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "baselineComplete": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          }
+        },
+        "diagnosticWhen": [
+          {
+            "field": "disposition",
+            "values": ["unavailable", "cursor-stale"]
+          },
+          {
+            "field": "refusal",
+            "values": ["report-required", "report-reading", "report-not-found"]
+          },
+          {
+            "field": "baselineComplete",
+            "values": [false]
+          },
+          {
+            "field": "unitsOmitted",
+            "positive": true
+          },
+          {
+            "field": "documentsOmitted",
+            "positive": true
+          }
+        ],
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["requirement-inventory"],
+        "proofIds": ["knowledge.requirements.read.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/requirement-inventory-activity.ts:51",
+        "emitterSites": ["packages/keiko-server/src/requirement-inventory-activity.ts:123"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38470,7 +39397,10 @@
               "export",
               "generate",
               "selection-read",
-              "selection-change"
+              "selection-change",
+              "jira-template-list",
+              "jira-template-validate",
+              "jira-template-propose"
             ]
           },
           "phase": {
@@ -38492,7 +39422,7 @@
         "proofIds": ["skills.library.operation.lifecycle"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:8",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:68"]
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:74"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -38559,8 +39489,8 @@
         "failureClasses": ["markdown-skill-library"],
         "proofIds": ["skills.workflow.attached.line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:76",
-        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:131"]
+        "registrationSite": "packages/keiko-server/src/markdown-skill-log.ts:82",
+        "emitterSites": ["packages/keiko-server/src/markdown-skill-log.ts:137"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -43578,27 +44508,46 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
+          "state": [
+            "chat.tool-mutation.projected",
+            "chat.tool-transcript.updated",
+            "chat.tool-turn.context-fitted",
+            "chat.tool-turn.corrected",
+            "chat.tool-turn.ended"
+          ],
           "end": [],
           "failure": [],
           "loss": []
         },
         "requiredCausalOperations": [
           "chat.tool-mutation.projected",
-          "chat.tool-transcript.updated"
+          "chat.tool-transcript.updated",
+          "chat.tool-turn.context-fitted",
+          "chat.tool-turn.corrected",
+          "chat.tool-turn.ended"
         ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
+        "requiredProofOperations": [
+          "chat.tool-mutation.projected",
+          "chat.tool-transcript.updated",
+          "chat.tool-turn.context-fitted",
+          "chat.tool-turn.corrected",
+          "chat.tool-turn.ended"
+        ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "chat.tool-mutation.projected",
-          "chat.tool-transcript.updated"
+          "chat.tool-transcript.updated",
+          "chat.tool-turn.context-fitted",
+          "chat.tool-turn.corrected",
+          "chat.tool-turn.ended"
         ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
           "count",
           "digest",
+          "duration",
           "loss-state"
         ],
         "requiredFrameOperations": [],
@@ -43651,6 +44600,7 @@
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
+          "count",
           "digest",
           "loss-state",
           "opaque-id"
@@ -43665,17 +44615,39 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": [],
+          "state": ["atlassian.jira-draft", "atlassian.jira-report", "jira.attachment.source"],
           "end": ["atlassian.action.outcome"],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["atlassian.action.outcome"],
+        "requiredCausalOperations": [
+          "atlassian.action.outcome",
+          "atlassian.jira-draft",
+          "atlassian.jira-report",
+          "jira.attachment.source"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["atlassian.action.outcome"],
+        "requiredProofOperations": [
+          "atlassian.action.outcome",
+          "atlassian.jira-draft",
+          "atlassian.jira-report",
+          "jira.attachment.source"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["atlassian.action.outcome"],
-        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredResourceOperations": [
+          "atlassian.action.outcome",
+          "atlassian.jira-draft",
+          "atlassian.jira-report",
+          "jira.attachment.source"
+        ],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "count",
+          "duration",
+          "loss-state",
+          "opaque-id"
+        ],
         "requiredFrameOperations": [],
         "requiredCauseOperations": []
       },
@@ -43756,16 +44728,32 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": ["skills.library.operation", "skills.workflow.attached"],
+          "state": [
+            "jira.template.admission",
+            "skills.library.operation",
+            "skills.workflow.attached"
+          ],
           "end": [],
           "failure": [],
           "loss": []
         },
-        "requiredCausalOperations": ["skills.library.operation", "skills.workflow.attached"],
+        "requiredCausalOperations": [
+          "jira.template.admission",
+          "skills.library.operation",
+          "skills.workflow.attached"
+        ],
         "requiredLossOperations": [],
-        "requiredProofOperations": ["skills.library.operation", "skills.workflow.attached"],
+        "requiredProofOperations": [
+          "jira.template.admission",
+          "skills.library.operation",
+          "skills.workflow.attached"
+        ],
         "requiredReplayProofIds": [],
-        "requiredResourceOperations": ["skills.library.operation", "skills.workflow.attached"],
+        "requiredResourceOperations": [
+          "jira.template.admission",
+          "skills.library.operation",
+          "skills.workflow.attached"
+        ],
         "requiredEvidenceClasses": [
           "closed-enum",
           "completeness-state",
@@ -51267,6 +52255,36 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "requirement-inventory",
+        "requiredProductSurfaces": ["keiko-server"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+          "failure": [],
+          "loss": []
+        },
+        "requiredCausalOperations": [
+          "knowledge.requirement-trace.applied",
+          "knowledge.requirements.read"
+        ],
+        "requiredLossOperations": [],
+        "requiredProofOperations": [
+          "knowledge.requirement-trace.applied",
+          "knowledge.requirements.read"
+        ],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [
+          "knowledge.requirement-trace.applied",
+          "knowledge.requirements.read"
+        ],
+        "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "knowledge-store-corruption",
         "requiredProductSurfaces": ["keiko-local-knowledge"],
         "requiredLifecycleOperations": {
@@ -54576,8 +55594,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 386,
-      "completeClassCount": 386,
+      "supportedClassCount": 387,
+      "completeClassCount": 387,
       "completeness": "complete",
       "classes": [
         {
@@ -56107,10 +57125,10 @@
           "failureClass": "atlassian-action-execution",
           "requirementContract": "atlassian-action-execution",
           "productSurfaces": ["keiko-server"],
-          "lifecycleTransitions": ["end"],
+          "lifecycleTransitions": ["end", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": [],
+            "state": ["atlassian.jira-draft", "atlassian.jira-report", "jira.attachment.source"],
             "end": ["atlassian.action.outcome"],
             "failure": [],
             "loss": []
@@ -56119,10 +57137,27 @@
             {
               "op": "atlassian.action.outcome",
               "mode": "correlation"
+            },
+            {
+              "op": "atlassian.jira-draft",
+              "mode": "correlation"
+            },
+            {
+              "op": "atlassian.jira-report",
+              "mode": "correlation"
+            },
+            {
+              "op": "jira.attachment.source",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["atlassian.action.outcome"],
+          "resourceSignals": [
+            "atlassian.action.outcome",
+            "atlassian.jira-draft",
+            "atlassian.jira-report",
+            "jira.attachment.source"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -56182,6 +57217,301 @@
                 "causeChain": false
               },
               "proofIds": ["atlassian.action.outcome.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "atlassian.jira-draft",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "byteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "itemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "newDraft",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "pageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "pageItemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "pendingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "settledCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "unresolvedRefCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "violationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["atlassian.jira-draft.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "atlassian.jira-report",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "byteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "continued",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "deviationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "durationMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": false
+                },
+                {
+                  "name": "failure",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "format",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "hierarchyDiscovery",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "hierarchyFieldCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "hierarchyObservedFieldCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "hierarchyRejectedFieldCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "invalidArgumentCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "issuesRead",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "issuesTotal",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "issuesWithDeviations",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "pageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "requirementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "ruleIds",
+                  "type": "string-array",
+                  "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "scopeKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "status",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "duration",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["atlassian.jira-report.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "jira.attachment.source",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "sizeBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.attachment.source.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -57698,10 +59028,34 @@
                   "required": true
                 },
                 {
+                  "name": "fieldValidation",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
                   "name": "invocationId",
                   "type": "string",
                   "dataClass": "opaque-id",
                   "required": true
+                },
+                {
+                  "name": "linkCreatedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkFailedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkRequestedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "outcome",
@@ -57714,11 +59068,24 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "refusalReason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "rejection",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": [
                 "closed-enum",
                 "completeness-state",
+                "count",
                 "digest",
                 "loss-state",
                 "opaque-id"
@@ -57742,7 +59109,13 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
+            "state": [
+              "chat.tool-mutation.projected",
+              "chat.tool-transcript.updated",
+              "chat.tool-turn.context-fitted",
+              "chat.tool-turn.corrected",
+              "chat.tool-turn.ended"
+            ],
             "end": [],
             "failure": [],
             "loss": []
@@ -57755,10 +59128,28 @@
             {
               "op": "chat.tool-transcript.updated",
               "mode": "correlation"
+            },
+            {
+              "op": "chat.tool-turn.context-fitted",
+              "mode": "correlation"
+            },
+            {
+              "op": "chat.tool-turn.corrected",
+              "mode": "correlation"
+            },
+            {
+              "op": "chat.tool-turn.ended",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["chat.tool-mutation.projected", "chat.tool-transcript.updated"],
+          "resourceSignals": [
+            "chat.tool-mutation.projected",
+            "chat.tool-transcript.updated",
+            "chat.tool-turn.context-fitted",
+            "chat.tool-turn.corrected",
+            "chat.tool-turn.ended"
+          ],
           "replayReferences": [],
           "operations": [
             {
@@ -57830,6 +59221,181 @@
                 "causeChain": false
               },
               "proofIds": ["chat.tool-transcript.updated.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "chat.tool-turn.context-fitted",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "continuationMessageCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "elidedResultCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "messageDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["completeness-state", "count", "digest", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["chat.tool-turn.context-fitted.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "chat.tool-turn.corrected",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "correctionKind",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "messageDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "omittedFindingCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "settledExchangeCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unsupportedKeyCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["chat.tool-turn.corrected.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "chat.tool-turn.ended",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "exchangeCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "maxRuntimeMs",
+                  "type": "integer",
+                  "dataClass": "duration",
+                  "required": true
+                },
+                {
+                  "name": "maxToolCalls",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "messageDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "readCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "refusedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "succeededWriteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unconfirmedWriteCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unsettledCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "duration",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["chat.tool-turn.ended.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -58010,6 +59576,12 @@
               "analyzerProjection": "timeline",
               "safeContextFields": [
                 {
+                  "name": "excerptRequirementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "phase",
                   "type": "string",
                   "dataClass": "closed-enum",
@@ -58020,6 +59592,12 @@
                   "type": "integer",
                   "dataClass": "count",
                   "required": true
+                },
+                {
+                  "name": "requirementUnitCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "toolCallCount",
@@ -64875,6 +66453,24 @@
                   "name": "frames",
                   "type": "string-array",
                   "dataClass": "opaque-id",
+                  "required": false
+                },
+                {
+                  "name": "linkCreatedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkFailedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "linkRequestedCount",
+                  "type": "integer",
+                  "dataClass": "count",
                   "required": false
                 },
                 {
@@ -90371,12 +91967,20 @@
           "lifecycleTransitions": ["state"],
           "lifecycleOperations": {
             "start": [],
-            "state": ["skills.library.operation", "skills.workflow.attached"],
+            "state": [
+              "jira.template.admission",
+              "skills.library.operation",
+              "skills.workflow.attached"
+            ],
             "end": [],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
+            {
+              "op": "jira.template.admission",
+              "mode": "correlation"
+            },
             {
               "op": "skills.library.operation",
               "mode": "correlation"
@@ -90387,9 +91991,55 @@
             }
           ],
           "lossSignals": [],
-          "resourceSignals": ["skills.library.operation", "skills.workflow.attached"],
+          "resourceSignals": [
+            "jira.template.admission",
+            "skills.library.operation",
+            "skills.workflow.attached"
+          ],
           "replayReferences": [],
           "operations": [
+            {
+              "op": "jira.template.admission",
+              "owner": "keiko-server",
+              "category": "process",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "operation",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "ruleIds",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "stage",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "violationCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["jira.template.admission.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
             {
               "op": "skills.library.operation",
               "owner": "keiko-server",
@@ -94136,6 +95786,246 @@
                 "causeChain": false
               },
               "proofIds": ["repository.fingerprint-diff.completed.counts"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "requirement-inventory",
+          "requirementContract": "requirement-inventory",
+          "productSurfaces": ["keiko-server"],
+          "lifecycleTransitions": ["end"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+            "failure": [],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "knowledge.requirement-trace.applied",
+              "mode": "correlation"
+            },
+            {
+              "op": "knowledge.requirements.read",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": ["knowledge.requirement-trace.applied", "knowledge.requirements.read"],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "knowledge.requirement-trace.applied",
+              "owner": "keiko-server",
+              "category": "search",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "droppedLabelCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "footerAppliedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "labelsAppliedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "operation",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "referenceProblemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "refusedItemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "tracedItemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unavailable",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["knowledge.requirement-trace.applied.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "knowledge.requirements.read",
+              "owner": "keiko-server",
+              "category": "search",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "affectedIssueCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "baselineComplete",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "baselineIssueCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "baselineSource",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "changedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "cursorUsed",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "detectedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "disposition",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "documentsNotExtracted",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "documentsOmitted",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "documentsScanned",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "hasNextPage",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "matchedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "refusal",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "removedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "resultBytes",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "returnedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "unchangedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "unitsOmitted",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "untracedCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "view",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["knowledge.requirements.read.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -102905,7 +104795,7 @@
   },
   "legacyDiscovery": {
     "dynamicCount": 92,
-    "unknownCategoryCount": 75,
+    "unknownCategoryCount": 84,
     "authoritative": false
   },
   "entries": [
@@ -103552,15 +105442,69 @@
       "package": "keiko-contracts"
     },
     {
+      "op": "assert",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:319",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "jump",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:338",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "jump",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:352",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "match",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:294",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "match",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:373",
+      "package": "keiko-contracts"
+    },
+    {
       "op": "server-log.write-failed",
       "category": "diagnostic",
       "site": "packages/keiko-contracts/src/observability.ts:1325",
       "package": "keiko-contracts"
     },
     {
+      "op": "split",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:335",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "split",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:349",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "split",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:358",
+      "package": "keiko-contracts"
+    },
+    {
       "op": "unattributed",
       "category": "unknown",
       "site": "packages/keiko-contracts/src/support-incident.ts:313",
+      "package": "keiko-contracts"
+    },
+    {
+      "op": "unit",
+      "category": "unknown",
+      "site": "packages/keiko-contracts/src/jira-template-pattern.ts:316",
       "package": "keiko-contracts"
     },
     {
@@ -104334,19 +106278,19 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:606",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:620",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:466",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:480",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:437",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:451",
       "package": "keiko-model-gateway"
     },
     {
@@ -104382,7 +106326,7 @@
     {
       "op": "gateway.config.resolved",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:308",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:322",
       "package": "keiko-model-gateway"
     },
     {
@@ -104460,37 +106404,37 @@
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:674",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:688",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:531",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:545",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:649",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:663",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:501",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:515",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:569",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:583",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:454",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:468",
       "package": "keiko-model-gateway"
     },
     {
@@ -104502,31 +106446,31 @@
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:169",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:171",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:148",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:150",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:188",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:190",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:46",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:48",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.repair",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:332",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:346",
       "package": "keiko-model-gateway"
     },
     {
@@ -104760,28 +106704,28 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:105",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:119",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:131",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:170",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:137",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:196",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:89",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:202",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104893,7 +106837,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/files.ts:3177",
+      "site": "packages/keiko-server/src/files.ts:3218",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -104968,14 +106912,14 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:314",
+      "site": "packages/keiko-server/src/grounded-qa.ts:320",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3281",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3295",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105227,7 +107171,7 @@
     {
       "op": "atlassian.action.log-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:168",
+      "site": "packages/keiko-server/src/atlassian/actionOutcomeActivity.ts:170",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -105307,6 +107251,18 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/atlassian/httpRequestLifecycle.ts:38",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.jira-draft",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraDraftActivity.ts:19",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.jira-report",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:29",
       "package": "keiko-server"
     },
     {
@@ -105475,7 +107431,7 @@
     {
       "op": "chat.tool-mutation",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:12",
+      "site": "packages/keiko-server/src/store/chatToolMutationActivity.ts:38",
       "package": "keiko-server"
     },
     {
@@ -105487,7 +107443,25 @@
     {
       "op": "chat.tool-transcript.updated",
       "category": "process",
-      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:59",
+      "site": "packages/keiko-server/src/store/chatToolTranscript.ts:85",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.tool-turn.context-fitted",
+      "category": "process",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:236",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.tool-turn.corrected",
+      "category": "process",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:287",
+      "package": "keiko-server"
+    },
+    {
+      "op": "chat.tool-turn.ended",
+      "category": "process",
+      "site": "packages/keiko-server/src/chat-tool-turn-ending.ts:169",
       "package": "keiko-server"
     },
     {
@@ -106103,7 +108077,7 @@
     {
       "op": "coding-runtime.jira-pod",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:177",
+      "site": "packages/keiko-server/src/coding-runtime/codingJiraPodBinding.ts:186",
       "package": "keiko-server"
     },
     {
@@ -106127,7 +108101,7 @@
     {
       "op": "coding-runtime.mcp-relay",
       "category": "security",
-      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:206",
+      "site": "packages/keiko-server/src/mcp/mcpCredentialRelay.ts:207",
       "package": "keiko-server"
     },
     {
@@ -107105,7 +109079,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1644",
+      "site": "packages/keiko-server/src/deps.ts:1659",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107766,7 +109740,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3678",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3689",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -107849,10 +109823,83 @@
       "package": "keiko-server"
     },
     {
+      "op": "jira.attachment.source",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:71",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.attachment.source-log-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:129",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.attachment.source-read-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatAttachment.ts:249",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "jira.mutation-execution-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:45",
+      "site": "packages/keiko-server/src/atlassian/jiraChatDraft.ts:284",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.mutation-execution-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatMutation.ts:52",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.template-preflight-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:87",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "jira.template.admission",
+      "category": "process",
+      "site": "packages/keiko-server/src/atlassian/jiraTemplateLog.ts:35",
+      "package": "keiko-server"
+    },
+    {
+      "op": "knowledge.requirement-coverage",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/requirement-coverage-note.ts:56",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "knowledge.requirement-trace",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/requirement-trace.ts:133",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "knowledge.requirement-trace.applied",
+      "category": "search",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:152",
+      "package": "keiko-server"
+    },
+    {
+      "op": "knowledge.requirements-read",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/requirementsTool.ts:540",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "knowledge.requirements.read",
+      "category": "search",
+      "site": "packages/keiko-server/src/requirement-inventory-activity.ts:54",
       "package": "keiko-server"
     },
     {
@@ -107908,7 +109955,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2411",
+      "site": "packages/keiko-server/src/deps.ts:2450",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108243,7 +110290,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2297",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2340",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108425,7 +110472,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4683",
+      "site": "packages/keiko-server/src/deps.ts:4722",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108463,7 +110510,7 @@
     {
       "op": "skills.workflow.attached",
       "category": "gateway",
-      "site": "packages/keiko-server/src/markdown-skill-log.ts:79",
+      "site": "packages/keiko-server/src/markdown-skill-log.ts:85",
       "package": "keiko-server"
     },
     {
@@ -108585,7 +110632,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3268",
+      "site": "packages/keiko-server/src/deps.ts:3307",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109101,6 +111148,7 @@
     "activity-log.segment.recovered",
     "activity-log.segment.sealed",
     "activity-log.writer-rejected",
+    "assert",
     "atlassian.action.log-failed",
     "atlassian.action.outcome",
     "atlassian.connection.checked",
@@ -109109,6 +111157,8 @@
     "atlassian.credential.rejected",
     "atlassian.credential.updated",
     "atlassian.http-observation-failed",
+    "atlassian.jira-draft",
+    "atlassian.jira-report",
     "atlassian.sync-job",
     "chat.compaction.checkpoint",
     "chat.compaction.evidence",
@@ -109141,6 +111191,9 @@
     "chat.tool-mutation",
     "chat.tool-mutation.projected",
     "chat.tool-transcript.updated",
+    "chat.tool-turn.context-fitted",
+    "chat.tool-turn.corrected",
+    "chat.tool-turn.ended",
     "chat.turn.started",
     "cli.audit.completed",
     "cli.audit.failed",
@@ -109580,8 +111633,19 @@
     "indexing.start.accepted",
     "indexing.start.refused",
     "invalidation-failed",
+    "jira.attachment.source",
+    "jira.attachment.source-log-failed",
+    "jira.attachment.source-read-failed",
     "jira.mutation-execution-failed",
+    "jira.template-preflight-failed",
+    "jira.template.admission",
+    "jump",
     "knowledge.log.sink-failed",
+    "knowledge.requirement-coverage",
+    "knowledge.requirement-trace",
+    "knowledge.requirement-trace.applied",
+    "knowledge.requirements-read",
+    "knowledge.requirements.read",
     "knowledge.store.encryption-rejected",
     "knowledge.store.quarantined",
     "local-knowledge.indexing",
@@ -109594,6 +111658,7 @@
     "managed-lsp.evidence.project",
     "managed-lsp.trust.restrict",
     "manual-pod.job",
+    "match",
     "mcp.authorization.state",
     "mcp.connection",
     "mcp.managed.lifecycle",
@@ -109723,6 +111788,7 @@
     "speech.tts.request.completed",
     "speech.tts.request.dispatch",
     "speech.tts.stream.peek.failed",
+    "split",
     "sqlite.state-path.refused",
     "sse.run-events.resume",
     "sse.stream.closed",
@@ -109772,6 +111838,7 @@
     "tool-catalog.provider-result-invalid",
     "tool-catalog.settlement-emit-failed",
     "unattributed",
+    "unit",
     "update-session.lock-quarantine-prune",
     "update.candidate.activity-log",
     "update.candidate.consumed",

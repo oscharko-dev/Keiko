@@ -8,6 +8,12 @@ import {
   type MarkdownSkillReference,
   type MarkdownSkillSelection,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  isJiraIssueTemplateDocument,
+  JIRA_ISSUE_TEMPLATE_MARKER,
+  parseJiraIssueTemplate,
+  type JiraIssueTemplate,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { UiStoreError, notFound } from "./errors.js";
 import { withImmediateTransaction } from "./transaction.js";
 import {
@@ -22,7 +28,15 @@ import {
   type ValidatedMarkdownSkill,
 } from "./markdownSkillValidation.js";
 
+/** A skill that declares itself a Jira issue template; `template` is absent if it no longer parses. */
+export interface JiraTemplateSkill {
+  readonly skill: MarkdownSkillMetadata;
+  readonly template: JiraIssueTemplate | undefined;
+}
+
 export interface MarkdownSkillStore {
+  /** Current revisions that are Jira issue templates, newest first (#4177). */
+  readonly jiraTemplates: () => readonly JiraTemplateSkill[];
   readonly selection: (chatId: string) => MarkdownSkillSelection;
   readonly select: (
     chatId: string,
@@ -66,6 +80,41 @@ function readSkill(
     throw new UiStoreError("INTERNAL", "Stored skill integrity check failed.", 500);
   }
   return { ...row };
+}
+
+// Only a superset of `isJiraIssueTemplateDocument` (which tolerates spacing and quotes around the
+// value), so the one predicate below decides what is listed and enforced.
+const TEMPLATE_MARKER_SQL = JIRA_ISSUE_TEMPLATE_MARKER;
+const TEMPLATE_CACHE_MAX = 256;
+const templateCache = new Map<string, JiraIssueTemplate | undefined>();
+
+/** Parsing is a pure function of the body, so the immutable digest is a safe cache key. */
+function parsedTemplate(digest: string, body: string): JiraIssueTemplate | undefined {
+  if (templateCache.has(digest)) return templateCache.get(digest);
+  const parsed = parseJiraIssueTemplate(body);
+  const template = parsed.ok ? parsed.template : undefined;
+  if (templateCache.size >= TEMPLATE_CACHE_MAX) templateCache.clear();
+  templateCache.set(digest, template);
+  return template;
+}
+
+function readJiraTemplates(db: DatabaseSync): readonly JiraTemplateSkill[] {
+  const rows = db
+    .prepare(
+      `SELECT ${METADATA_COLUMNS}, r.body FROM ${LIVE_REVISIONS}
+      WHERE r.revision = s.revision AND instr(r.body, ?) > 0
+      ORDER BY r.created_at DESC, s.id`,
+    )
+    .all(TEMPLATE_MARKER_SQL) as unknown as MarkdownSkillDocument[];
+  return rows.flatMap(({ body, ...skill }): readonly JiraTemplateSkill[] => {
+    if (markdownSkillDigest(body) !== skill.digest) {
+      throw new UiStoreError("INTERNAL", "Stored skill integrity check failed.", 500);
+    }
+    // The marker may sit in an ordinary skill's text; only a front matter declaration counts.
+    return isJiraIssueTemplateDocument(body)
+      ? [{ skill, template: parsedTemplate(skill.digest, body) }]
+      : [];
+  });
 }
 
 function assertCapacity(db: DatabaseSync, byteCount: number, creating: boolean): void {
@@ -171,6 +220,7 @@ export function createMarkdownSkillStore(db: DatabaseSync, now: () => number): M
     return skill;
   };
   return {
+    jiraTemplates: () => readJiraTemplates(db),
     selection: (chatId) => readMarkdownSkillSelection(db, chatId),
     select: (chatId, skill, revision) => selectMarkdownSkill(db, resolve, chatId, skill, revision),
     resolve,

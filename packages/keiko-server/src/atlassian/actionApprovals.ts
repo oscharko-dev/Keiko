@@ -22,6 +22,7 @@ import {
 } from "./chatReadGrantState.js";
 export type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import {
+  admitsWriteDeselection,
   invalidWriteApproval,
   recordWriteApproval,
   sameWriteAction,
@@ -334,18 +335,28 @@ export class AtlassianActionApprovalRegistry {
     action: ChatToolWriteActionIdentity,
     proofDigest: string,
     correlationId?: string,
+    excludedItemRefs: readonly string[] = [],
   ): ChatWriteApprovalResult {
     const entry = this.currentWriteApproval(approvalId, subject, authority, action, correlationId);
     if (entry === undefined || !/^[a-f0-9]{64}$/u.test(proofDigest))
       return invalidWriteApproval(correlationId);
     if (entry.approval.state === "approved") return { ok: true, approval: entry.approval };
-    if (entry.approval.state !== "pending") return invalidWriteApproval(correlationId);
+    // Only a backlog draft has items a human can leave out, and only items of that very draft:
+    // a deselection the transcript would refuse is refused here, before any state changes (#4178).
+    if (entry.approval.state !== "pending" || !admitsWriteDeselection(entry, excludedItemRefs))
+      return invalidWriteApproval(correlationId);
     return {
       ok: true,
       approval: this.retainWriteApproval(
         {
           ...entry,
-          approval: { ...entry.approval, state: "approved" },
+          approval: {
+            ...entry.approval,
+            state: "approved",
+            ...(excludedItemRefs.length === 0
+              ? {}
+              : { excludedItemRefs: Object.freeze([...excludedItemRefs]) }),
+          },
           approvalProofDigest: proofDigest,
         },
         correlationId,
