@@ -27,6 +27,7 @@ import {
   verifiedJiraAttachmentContent,
 } from "./jira-attachments.js";
 import {
+  jiraIssueLinkAccount,
   jiraIssueLinkAdds,
   jiraIssueLinksOffered,
   parseJiraIssueLinks,
@@ -79,6 +80,22 @@ interface MutationPolicy {
 const CHECKED: JiraMutationAttempt = { ok: true, receipt: {} };
 const INVALID = { ok: false, reason: "field-validation" } as const;
 const MALFORMED = { ok: false, reason: "malformed-payload" } as const;
+/**
+ * `requirementIds` mean a trace: the owner validates them against its Knowledge Pods and hands the
+ * connector the resulting `trace`. A consumer with no resolver (a Coding run) passes none, so a
+ * reference there would be accepted and silently untraced; it is refused instead, naming the field.
+ */
+const UNTRACED_REFERENCES: Extract<JiraMutationAttempt, { ok: false }> = {
+  ok: false,
+  reason: "field-validation",
+  detail: {
+    fieldId: "requirementIds",
+    validation: "unsupported-field",
+    messages: [
+      "Requirement references cannot be traced in this session, so nothing was changed. Send the change again without requirementIds.",
+    ],
+  },
+};
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
 /** Keiko's own pre-dispatch refusal names the field and the closed reason. */
@@ -257,13 +274,15 @@ async function createWithMetadata(
   });
   if (!gate.ok) return gate;
   if (policy.check) return CHECKED;
-  const plan = planJiraIssueLinks(create.links);
+  // The link a template requires rides on the create itself, never on a later call.
+  const links = gate.links ?? create.links;
+  const plan = planJiraIssueLinks(links);
   const response = await request("issue", "POST", {
     fields: validated.fields,
     update: linkedUpdate(validated, plan),
   });
   if (!response.ok) return dispatchFailure(response, metadata);
-  return confirmCreatedIssue(request, response, metadata, withLinks(validated, create.links), plan);
+  return confirmCreatedIssue(request, response, metadata, withLinks(validated, links), plan);
 }
 function confirmCreatedIssue(
   request: JiraMutationRequest,
@@ -337,14 +356,16 @@ interface FieldTarget {
     readonly targetStatusName?: string;
   };
 }
-/** The template gate in front of an edit or transition; `undefined` means the write may proceed. */
+/** The template gate in front of an edit or transition: the attempt that stops it, or the links to send. */
+type FieldAdmission =
+  { readonly stop: JiraMutationAttempt } | { readonly links: readonly JiraIssueLinkRequest[] };
 async function admitFieldMutation(
   request: JiraMutationRequest,
   metadata: readonly JiraFieldMetadata[],
   linked: Extract<LinkedFieldChanges, { ok: true }>,
   { purpose, issueKey, transition }: FieldTarget,
   policy: MutationPolicy,
-): Promise<JiraMutationAttempt | undefined> {
+): Promise<FieldAdmission> {
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
@@ -355,8 +376,8 @@ async function admitFieldMutation(
     target: { issueKey },
     ...(transition === undefined ? {} : { transition }),
   });
-  if (!gate.ok) return gate;
-  return policy.check ? CHECKED : undefined;
+  if (!gate.ok) return { stop: gate };
+  return policy.check ? { stop: CHECKED } : { links: gate.links ?? linked.links };
 }
 async function fieldMutation(
   request: JiraMutationRequest,
@@ -370,9 +391,9 @@ async function fieldMutation(
   const linked = linkedFieldChanges(metadata.fields, args, purpose);
   if (!linked.ok) return linked;
   const { validated } = linked;
-  const values = withLinks(validated, linked.links);
   const admitted = await admitFieldMutation(request, metadata.fields, linked, fieldTarget, policy);
-  if (admitted !== undefined) return admitted;
+  if ("stop" in admitted) return admitted.stop;
+  const values = withLinks(validated, admitted.links);
   const transitionId = purpose === "transition" ? transitionArgument(args) : undefined;
   const target = fieldMutationTarget(issueKey, transitionId);
   const prior = await readJiraMutationIssue(
@@ -382,7 +403,7 @@ async function fieldMutation(
   );
   if (!prior.ok) return prior;
   // Jira does not de-duplicate links: one already on the issue is not written again.
-  const plan = planJiraIssueLinks(linked.links, prior.fields.issuelinks);
+  const plan = planJiraIssueLinks(admitted.links, prior.fields.issuelinks);
   const acknowledged = await statusMutation(
     request,
     target.path,
@@ -515,15 +536,38 @@ function assignmentName(args: CatalogJsonObject): string | null | undefined {
     ? args.assigneeName
     : undefined;
 }
+/**
+ * An assignment changes the `assignee` field, so it is an edit for the issue templates (#4177): the
+ * state after it is judged by the same gate as `jira.edit`, and a refusal sends nothing.
+ */
+async function admitAssignment(
+  request: JiraMutationRequest,
+  issueKey: string,
+  name: string | null,
+  policy: MutationPolicy,
+): Promise<JiraTemplateGateResult> {
+  return gateJiraMutationByTemplates({
+    request,
+    source: policy.templates,
+    operation: "edit",
+    metadata: [],
+    validated: { fields: { assignee: name === null ? null : { name } }, update: {} },
+    target: { issueKey },
+  });
+}
 async function assignIssue(
   request: JiraMutationRequest,
   args: CatalogJsonObject,
   issueKey: string,
+  policy: MutationPolicy,
 ): Promise<JiraMutationAttempt> {
   const name = assignmentName(args);
   if (name === undefined) return INVALID;
   const allowed = await checkAssignee(request, issueKey, name);
   if (!allowed.ok) return allowed;
+  const gate = await admitAssignment(request, issueKey, name, policy);
+  if (!gate.ok) return gate;
+  if (policy.check) return CHECKED;
   const prior = await readJiraMutationIssue(request, issueKey, ["assignee"]);
   if (!prior.ok) return prior;
   const acknowledged = await statusMutation(
@@ -603,6 +647,55 @@ async function attachFile(
   });
 }
 
+const EXISTING_LINKS_MISSING =
+  "This issue already exists from this draft, but not every requested link is on it. Nothing was sent again; add only the missing links with jira.edit.";
+/**
+ * An item reconciled to an issue it already created is complete only when that issue also carries
+ * the relations the item asks for: a create followed by a failed further link leaves an issue the
+ * identity alone would pass off as done. The relations are read back, never written again; a
+ * missing or unreadable one is a refusal that names the issue and the links still missing.
+ */
+async function existingItemWithLinks(
+  request: JiraMutationRequest,
+  existing: JiraMutationAttempt,
+  links: readonly JiraIssueLinkRequest[],
+): Promise<JiraMutationAttempt> {
+  const issueKey = existing.ok ? existing.receipt.issueKey : undefined;
+  if (!existing.ok || issueKey === undefined || links.length === 0) return existing;
+  const current = await readJiraMutationIssue(request, issueKey, ["issuelinks"]);
+  const entries = current.ok ? asArray(current.fields.issuelinks ?? []) : undefined;
+  const account = jiraIssueLinkAccount(links, entries, 0);
+  if (account.missing.length === 0) return { ...existing, links: account };
+  return {
+    ok: false,
+    reason: current.ok ? "conflict" : current.reason,
+    detail: { messages: [EXISTING_LINKS_MISSING] },
+    receipt: existing.receipt,
+    links: account,
+  };
+}
+
+type DraftItemInput =
+  | {
+      readonly ok: true;
+      readonly links: readonly JiraIssueLinkRequest[];
+      readonly fields: Record<string, unknown>;
+    }
+  | Extract<JiraMutationAttempt, { ok: false }>;
+/** The item's relations resolved to keys and its fields, or the refusal of an item that cannot run. */
+function draftItemInput(
+  item: JiraDraftItem,
+  keys: ReadonlyMap<string, string>,
+  trace: JiraTraceRequest | undefined,
+): DraftItemInput {
+  const resolved = resolveJiraDraftItem(item, keys);
+  const links = parseJiraIssueLinks(resolved?.links);
+  const fields = fieldsInput(resolved?.fields);
+  if (resolved === undefined || links === undefined || fields === undefined) return INVALID;
+  if (trace === undefined && item.requirementIds !== undefined) return UNTRACED_REFERENCES;
+  return { ok: true, links, fields };
+}
+
 /**
  * One backlog-draft item (#4178): its relations resolved to the keys earlier items received, then
  * reconciled against the issue its draft identity already names before anything is created.
@@ -616,10 +709,9 @@ export async function executeJiraDraftItem(
   trace?: JiraTraceRequest,
 ): Promise<JiraMutationAttempt> {
   if (connection.deployment !== "data-center") return { ok: false, reason: "unavailable" };
-  const resolved = resolveJiraDraftItem(item, keys);
-  const links = parseJiraIssueLinks(resolved?.links);
-  const fields = fieldsInput(resolved?.fields);
-  if (resolved === undefined || links === undefined || fields === undefined) return INVALID;
+  const input = draftItemInput(item, keys, trace);
+  if (!input.ok) return input;
+  const { links, fields } = input;
   const request = requestFor(connection, context);
   const metadata = await jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId);
   if (!metadata.ok) return metadata;
@@ -629,6 +721,7 @@ export async function executeJiraDraftItem(
     metadata.fields,
     jiraDraftParentKey(item, keys),
   );
+  if (found.kind === "existing") return existingItemWithLinks(request, found.attempt, links);
   if (found.kind !== "absent") return found.attempt;
   const identified = withJiraDraftIdentity(fields, metadata.fields, jiraDraftIdentity(item));
   const traced =
@@ -679,7 +772,7 @@ function dispatchMutation(
     case "jira.edit":
       return editIssue(request, args, issueKey, policy, trace);
     case "jira.assign":
-      return assignIssue(request, args, issueKey);
+      return assignIssue(request, args, issueKey, policy);
     case "jira.comment":
       return addComment(request, args, issueKey);
     case "jira.transition":
@@ -687,6 +780,18 @@ function dispatchMutation(
     default:
       return Promise.resolve(INVALID);
   }
+}
+
+function untracedReferences(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  trace: JiraTraceRequest | undefined,
+): boolean {
+  return (
+    trace === undefined &&
+    source.requirementIds !== undefined &&
+    (operation === "jira.create" || operation === "jira.edit")
+  );
 }
 
 /** Fresh capability metadata and one mutation request. Durability/authority remain server-owned. */
@@ -702,6 +807,7 @@ export function executeJiraManagedMutation(
   // An attachment changes no field a template describes: it takes no template check.
   if (operation === "jira.attach")
     return attachFile(requestFor(connection, context), structuredClone(source), connection);
+  if (untracedReferences(operation, source, trace)) return Promise.resolve(UNTRACED_REFERENCES);
   return dispatchMutation(
     operation,
     structuredClone(source),
@@ -711,6 +817,12 @@ export function executeJiraManagedMutation(
   );
 }
 
+const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
+  "jira.create",
+  "jira.edit",
+  "jira.transition",
+  "jira.assign",
+]);
 /**
  * The same admission pipeline without the write: Chat runs it before asking a human to approve, so
  * a draft that violates an active template is refused instead of being put in front of a person.
@@ -722,11 +834,8 @@ export async function checkJiraManagedMutationTemplates(
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
-  // Assignment and comments carry no field state; the check mode must never reach their write.
-  if (
-    connection.deployment !== "data-center" ||
-    !(operation === "jira.create" || operation === "jira.edit" || operation === "jira.transition")
-  )
+  // Comments carry no field state; the check mode must never reach any write.
+  if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
     return { ok: true };
   const attempt = await dispatchMutation(
     operation,

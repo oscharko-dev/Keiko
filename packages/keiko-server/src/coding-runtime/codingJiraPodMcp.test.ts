@@ -557,6 +557,22 @@ describe("the customer's issue templates bind a Coding run's Jira writes (#4177)
     expect(writes(h)).toBe(1);
   });
 
+  it("refuses requirement references a Coding run cannot trace, and still writes without them", async () => {
+    const h = harness();
+    const client = connect(h, h.pods.connections(undefined, bound(h)));
+    const refused = await client.call("jira.edit", {
+      issueKey: "SYN-1",
+      fields: { summary: "Traced" },
+      requirementIds: ["UNKNOWN-999"],
+    });
+    // The relay hands the model a generic tool error for any refused write; the point is that
+    // the reference is not silently dropped and nothing is sent.
+    expect(refused.isError).toBe(true);
+    expect(writes(h)).toBe(0);
+    await client.call("jira.edit", { issueKey: "SYN-1", fields: { summary: "Untraced" } });
+    expect(writes(h)).toBe(1);
+  });
+
   it("cannot be attached without the skill library that holds the templates", () => {
     const pods = createCodingJiraPods(undefined);
     // @ts-expect-error `store` is required: a Pod wired without it would write unchecked.

@@ -455,6 +455,103 @@ function nearMatches(count: number): StoredIssue[] {
   );
 }
 
+describe("a reconciled item is complete only with its requested links (review)", () => {
+  const LINK = (issueKey: string): Record<string, unknown> => ({
+    type: "Relates",
+    direction: "outward",
+    issueKey,
+  });
+  const ON_ISSUE = (issueKey: string): Record<string, unknown> => ({
+    type: { name: "Relates", inward: "relates to", outward: "relates to" },
+    outwardIssue: { key: issueKey },
+  });
+  const existing = (issuelinks: unknown): StoredIssue => ({
+    key: "SYN-1",
+    id: "10001",
+    fields: { summary: "Item a", issuelinks },
+  });
+  const linked = item("a", { links: [LINK("SYN-7"), LINK("SYN-8"), LINK("SYN-9")] });
+
+  it("names the issue and the links still missing, and sends nothing, on a new turn after a failed further link", async () => {
+    const jira = syntheticJira({
+      labels: false,
+      existing: [existing([ON_ISSUE("SYN-7")])],
+    });
+    const result = await runItem(jira, draft([linked]), 0);
+    expect(result).toEqual({
+      ok: false,
+      reason: "conflict",
+      detail: { messages: [expect.stringContaining("jira.edit")] },
+      receipt: { issueKey: "SYN-1", issueId: "10001" },
+      links: {
+        requested: 3,
+        created: 1,
+        unconfirmed: false,
+        missing: [LINK("SYN-8"), LINK("SYN-9")],
+      },
+    });
+    expect(writes(jira)).toBe(0);
+  });
+
+  it("completes the item as existing when every requested link is on the issue", async () => {
+    const jira = syntheticJira({
+      labels: false,
+      existing: [existing(["SYN-7", "SYN-8", "SYN-9"].map(ON_ISSUE))],
+    });
+    await expect(runItem(jira, draft([linked]), 0)).resolves.toMatchObject({
+      ok: true,
+      receipt: { issueKey: "SYN-1", issueId: "10001" },
+      links: { requested: 3, created: 3, missing: [], unconfirmed: false },
+    });
+    expect(writes(jira)).toBe(0);
+  });
+
+  it("reads nothing more for an item that asks for no links", async () => {
+    const jira = syntheticJira({ labels: false, existing: [existing([])] });
+    await expect(runItem(jira, draft([item("a")]), 0)).resolves.toEqual({
+      ok: true,
+      receipt: { issueKey: "SYN-1", issueId: "10001" },
+    });
+    expect(jira.http.mock.calls.some(([request]) => request.url.endsWith("/issue/SYN-1"))).toBe(
+      false,
+    );
+  });
+
+  it("cannot confirm the links of an unreadable issue and says so instead of completing", async () => {
+    const jira = syntheticJira({ labels: false, existing: [existing([])] });
+    jira.http.mockImplementation((request) => {
+      const url = new URL(request.url);
+      if (request.method === "GET" && url.pathname.endsWith("/issue/SYN-1"))
+        return Promise.resolve(response({}, 404));
+      return Promise.resolve(
+        response(
+          url.pathname.endsWith("/search")
+            ? {
+                startAt: 0,
+                maxResults: 50,
+                total: 1,
+                issues: [{ key: "SYN-1", id: "10001", fields: { summary: "Item a" } }],
+              }
+            : {
+                values: BASE_FIELDS,
+                start: 0,
+                size: BASE_FIELDS.length,
+                last: true,
+                total: BASE_FIELDS.length,
+              },
+        ),
+      );
+    });
+    const result = await runItem(jira, draft([linked]), 0);
+    expect(result).toMatchObject({
+      ok: false,
+      receipt: { issueKey: "SYN-1" },
+      links: { requested: 3, created: 0, unconfirmed: true },
+    });
+    expect(writes(jira)).toBe(0);
+  });
+});
+
 describe("a draft item's identity binds its relation scope", () => {
   const sibling = (ref: string, parentKey: string): Record<string, unknown> => ({
     ...item(ref),

@@ -35,6 +35,7 @@ const CREATE_FIELDS = [
 ];
 const EDIT_FIELDS = {
   summary: named("summary", "string", "Summary"),
+  assignee: named("assignee", "user", "Assignee"),
   description: {
     ...named("description", "string", "Description"),
     schema: { type: "string", system: "description" },
@@ -75,6 +76,7 @@ function readRoutes(remote: Remote): readonly ReadRoute[] {
       body: { values: CREATE_FIELDS, start: 0, size: 100, last: true, total: CREATE_FIELDS.length },
     },
     { suffix: "editmeta", body: { fields: EDIT_FIELDS } },
+    { suffix: "assignable/search", body: [{ name: "alice", active: true }] },
     {
       suffix: "/transitions",
       body: {
@@ -491,5 +493,147 @@ describe("operations without field state", () => {
     const f = fixture(SET(template(ALL_POINTS)));
     await f.run("jira.comment", { issueKey: "SYN-1", body: "hello" });
     expect(f.paths().some((line) => line.includes("/project/"))).toBe(false);
+  });
+});
+
+describe("assignment is an edit of the assignee field (#4177, review)", () => {
+  const ASSIGNED: Remote = {
+    issue: {
+      project: { key: "SYN" },
+      issuetype: { id: "10001", name: "Story" },
+      status: { id: "1", name: "To Do" },
+      summary: "Original summary",
+      description: FULL_DESCRIPTION,
+      labels: [],
+      issuelinks: [],
+      assignee: { name: "bob" },
+    },
+    fieldCatalog: true,
+  };
+  const REQUIRES_ASSIGNEE = SET(template(["activateOn: [edit]", "requiredFields: [assignee]"]));
+
+  it("refuses clearing a required assignee through jira.assign exactly as jira.edit does", async () => {
+    const f = fixture(REQUIRES_ASSIGNEE, ASSIGNED);
+    const violation = [{ ruleId: "field-missing", subject: "assignee", template: "SYN/Story" }];
+    const edit = await f.run("jira.edit", { issueKey: "SYN-1", fields: { assignee: null } });
+    expect(edit).toMatchObject({ ok: false, reason: "field-validation", violations: violation });
+    const assign = await f.run("jira.assign", { issueKey: "SYN-1", clearAssignee: true });
+    expect(assign).toMatchObject({ ok: false, reason: "field-validation", violations: violation });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("lets a reassignment through and writes it once", async () => {
+    const f = fixture(REQUIRES_ASSIGNEE, ASSIGNED);
+    await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "alice" });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1/assignee"]);
+  });
+
+  it("dry-runs an assignment before approval without writing", async () => {
+    const f = fixture(REQUIRES_ASSIGNEE, ASSIGNED);
+    const refused = await f.check("jira.assign", { issueKey: "SYN-1", clearAssignee: true });
+    expect(refused).toMatchObject({ ok: false, violations: [{ ruleId: "field-missing" }] });
+    expect(await f.check("jira.assign", { issueKey: "SYN-1", assigneeName: "alice" })).toEqual({
+      ok: true,
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("changes nothing without a governing template", async () => {
+    const f = fixture(SET(template(["activateOn: [create]"])), ASSIGNED);
+    await f.run("jira.assign", { issueKey: "SYN-1", clearAssignee: true });
+    expect(f.writes()).toEqual(["PUT /context/rest/api/2/issue/SYN-1/assignee"]);
+  });
+});
+
+describe("a brace-count summary pattern is enforced as written (#4177, review)", () => {
+  const PATTERN = SET(template(["activateOn: [create]", "summaryPattern: ^REQ-[0-9]{1,1000}$"]));
+
+  it("admits the conforming summary and refuses the one that only mimics the braces", async () => {
+    const f = fixture(PATTERN);
+    await f.run("jira.create", { ...CREATE, fields: { ...CREATE.fields, summary: "REQ-123" } });
+    expect(f.writes()).toEqual(["POST /context/rest/api/2/issue"]);
+    const refused = await fixture(PATTERN).run("jira.create", {
+      ...CREATE,
+      fields: { ...CREATE.fields, summary: "REQ-1{1,1000}" },
+    });
+    expect(refused).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "summary-pattern" }],
+    });
+  });
+
+  it("does not accept a template whose count is beyond the supported bound", () => {
+    const parsed = parseJiraIssueTemplate(
+      [
+        "---",
+        "keiko: jira-issue-template",
+        "version: 1",
+        "project: SYN",
+        "issueType: Story",
+        "activateOn: [create]",
+        "summaryPattern: ^REQ-[0-9]{1,100000}$",
+        "---",
+        SECTIONS,
+      ].join("\n"),
+    );
+    expect(parsed.ok).toBe(false);
+  });
+});
+
+describe("a required link rides on the primary write (#4177, review)", () => {
+  const BLOCKS = SET(template(["activateOn: [create]", "parentLink: Blocks"]));
+  const links = (...types: string[]): CatalogJsonObject[] =>
+    types.map((type, index) => ({
+      type,
+      direction: "outward",
+      issueKey: `SYN-${String(index + 2)}`,
+    }));
+  const createBody = (f: ReturnType<typeof fixture>): { update: { issuelinks: unknown[] } } => {
+    const call = f.http.mock.calls.find(([request]) => request.url.endsWith("/rest/api/2/issue"));
+    return JSON.parse(call?.[0].bodyJson ?? "null") as { update: { issuelinks: unknown[] } };
+  };
+
+  it("sends the mandatory relation inline even when an optional link is listed first", async () => {
+    const f = fixture(BLOCKS);
+    await f.run("jira.create", { ...CREATE, links: links("Relates", "Blocks") });
+    expect(createBody(f).update.issuelinks).toEqual([
+      { add: { type: { name: "Blocks" }, outwardIssue: { key: "SYN-3" } } },
+    ]);
+    expect(f.writes()).toEqual([
+      "POST /context/rest/api/2/issue",
+      "POST /context/rest/api/2/issueLink",
+    ]);
+  });
+
+  it("sends the mandatory relation inline on an edit as well", async () => {
+    const f = fixture(SET(template(["activateOn: [edit]", "parentLink: Blocks"])));
+    await f.run("jira.edit", { issueKey: "SYN-1", links: links("Relates", "Blocks") });
+    const put = f.http.mock.calls.find(([request]) => request.method === "PUT");
+    const body = JSON.parse(put?.[0].bodyJson ?? "null") as { update: { issuelinks: unknown[] } };
+    expect(body.update.issuelinks).toEqual([
+      { add: { type: { name: "Blocks" }, outwardIssue: { key: "SYN-3" } } },
+    ]);
+  });
+
+  it("refuses before any write when only a later link would satisfy the rule", async () => {
+    const f = fixture(BLOCKS);
+    const refused = await f.run("jira.create", { ...CREATE, links: links("Relates") });
+    expect(refused).toMatchObject({
+      ok: false,
+      violations: [{ ruleId: "parent-missing", subject: "Blocks" }],
+    });
+    expect(f.writes()).toEqual([]);
+  });
+
+  it("refuses two different required relations, which one request cannot both carry", async () => {
+    const f = fixture(
+      SET(
+        template(["activateOn: [create]", "parentLink: Blocks"]),
+        template(["activateOn: [create]", "parentLink: Relates"]),
+      ),
+    );
+    const refused = await f.run("jira.create", { ...CREATE, links: links("Blocks", "Relates") });
+    expect(refused).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.writes()).toEqual([]);
   });
 });

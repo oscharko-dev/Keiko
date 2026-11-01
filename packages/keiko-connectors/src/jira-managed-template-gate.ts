@@ -14,6 +14,7 @@ import {
   type JiraFieldCatalogEntry,
   type JiraTemplateSubject,
 } from "./jira-issue-template-check.js";
+import { planJiraIssueLinks, type JiraIssueLinkRequest } from "./jira-issue-links.js";
 import type { JiraMutationRequest } from "./jira-managed-mutation-metadata.js";
 import { readJiraMutationIssue } from "./jira-mutation-confirmation.js";
 
@@ -43,8 +44,12 @@ export interface JiraTemplateGateInput {
     readonly fields: Readonly<Record<string, unknown>>;
     readonly update: Readonly<Record<string, readonly Record<string, string>[]>>;
   };
-  /** Links the write adds; their type names count toward a `parentLink` rule. */
-  readonly links?: readonly { readonly type: string }[];
+  /**
+   * Links the write asks for. Jira takes one `issuelinks` operation per request, so only the link
+   * that rides on the create or edit itself is evidence for a `parentLink` rule; a link written
+   * afterwards never is. The result names the order that puts a required link first.
+   */
+  readonly links?: readonly JiraIssueLinkRequest[];
   readonly target: {
     readonly projectId?: string;
     readonly issueTypeId?: string;
@@ -57,7 +62,11 @@ export interface JiraTemplateGateInput {
   };
 }
 export type JiraTemplateGateResult =
-  | { readonly ok: true }
+  | {
+      readonly ok: true;
+      /** The requested links in the order the write must send them, when templates reordered them. */
+      readonly links?: readonly JiraIssueLinkRequest[];
+    }
   | {
       readonly ok: false;
       readonly reason: AtlassianConnectorWriteFailureReason;
@@ -190,7 +199,11 @@ export function jiraIssueLinkTypeNames(
   return names;
 }
 
-function subjectOf(input: JiraTemplateGateInput, identity: Identity): JiraTemplateSubject {
+function subjectOf(
+  input: JiraTemplateGateInput,
+  identity: Identity,
+  primaryLinks: readonly JiraIssueLinkRequest[] = [],
+): JiraTemplateSubject {
   const fields: Record<string, unknown> = { ...identity.prior, ...input.validated.fields };
   if (input.operation !== "create" || input.validated.update.labels !== undefined) {
     fields.labels = appliedLabels(fields.labels, input.validated.update);
@@ -203,7 +216,7 @@ function subjectOf(input: JiraTemplateGateInput, identity: Identity): JiraTempla
     fields,
     linkTypes: [
       ...(input.operation === "create" ? [] : jiraIssueLinkTypeNames(identity.prior)),
-      ...(input.links ?? []).map((link) => link.type),
+      ...primaryLinks.map((link) => link.type),
     ],
   };
 }
@@ -285,6 +298,22 @@ export async function gateJiraMutationByTemplates(
   return "ok" in first ? first : checkCandidates(input, candidates, first);
 }
 
+function sameType(left: string, right: string): boolean {
+  return left.trim().toLowerCase() === right.trim().toLowerCase();
+}
+/** Links of a type a governing template requires go first, so they ride on the primary write. */
+function requiredLinksFirst(
+  links: readonly JiraIssueLinkRequest[],
+  templates: readonly JiraIssueTemplate[],
+): readonly JiraIssueLinkRequest[] {
+  const required = templates.flatMap((template) =>
+    template.parent.link === undefined ? [] : [template.parent.link],
+  );
+  const wanted = (link: JiraIssueLinkRequest): boolean =>
+    required.some((type) => sameType(type, link.type));
+  return [...links.filter(wanted), ...links.filter((link) => !wanted(link))];
+}
+
 /** The templates that activate on this operation, judged against the write's state. */
 async function checkCandidates(
   input: JiraTemplateGateInput,
@@ -301,6 +330,14 @@ async function checkCandidates(
   const catalog = await completeCatalog(input, matching);
   const identity = await completeIdentity(input, first, catalog, matching);
   if ("ok" in identity) return identity;
-  const violations = checkJiraIssueTemplates(matching, subjectOf(input, identity), catalog);
-  return violations.length === 0 ? OK : { ok: false, reason: "field-validation", violations };
+  const ordered = requiredLinksFirst(input.links ?? [], matching);
+  // Only the link that rides on the request itself exists in the state this write leaves.
+  const primary = planJiraIssueLinks(ordered, identity.prior.issuelinks).inline;
+  const violations = checkJiraIssueTemplates(
+    matching,
+    subjectOf(input, identity, primary),
+    catalog,
+  );
+  if (violations.length > 0) return { ok: false, reason: "field-validation", violations };
+  return ordered.length === 0 ? OK : { ok: true, links: ordered };
 }

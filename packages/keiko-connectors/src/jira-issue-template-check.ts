@@ -58,9 +58,27 @@ export function jiraTemplateValueText(value: unknown): string {
   return VALUE_KEYS.map((key) => scalarText(record[key])).find((text) => text !== "") ?? "";
 }
 
-export function jiraTemplateValuePresent(value: unknown): boolean {
+/** Nesting beyond this is a value, not an empty one: Jira's own composite values are shallow. */
+const PRESENCE_DEPTH_MAX = 8;
+/**
+ * Whether a field holds a value, which is not the same as having a displayable identity: a time
+ * tracking value (`{ originalEstimate: "1h" }`) or any other composite Jira value has content
+ * although it carries no name, key or id. Empty text, null, an empty array and an object with no
+ * present member are the empty values.
+ */
+function presentAt(value: unknown, depth: number): boolean {
   if (typeof value === "number") return Number.isFinite(value);
-  return jiraTemplateValueText(value).trim().length > 0;
+  if (typeof value === "boolean") return true;
+  if (typeof value === "string") return value.trim().length > 0;
+  if (typeof value !== "object" || value === null) return false;
+  if (depth >= PRESENCE_DEPTH_MAX) return true;
+  const members: readonly unknown[] = Array.isArray(value)
+    ? (value as readonly unknown[])
+    : Object.values(value);
+  return members.some((member) => presentAt(member, depth + 1));
+}
+export function jiraTemplateValuePresent(value: unknown): boolean {
+  return presentAt(value, 0);
 }
 
 function activationMatches(

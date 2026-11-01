@@ -355,6 +355,38 @@ describe("value helpers", () => {
     expect(jiraTemplateValuePresent(undefined)).toBe(false);
     expect(jiraTemplateValuePresent([{ name: "a" }])).toBe(true);
   });
+
+  it("decides presence of composite and opaque values by content, not by a displayable identity", () => {
+    expect(jiraTemplateValuePresent({ originalEstimate: "1h" })).toBe(true);
+    expect(jiraTemplateValuePresent({ remainingEstimateSeconds: 0 })).toBe(true);
+    expect(jiraTemplateValuePresent({ originalEstimate: "", remainingEstimate: " " })).toBe(false);
+    expect(jiraTemplateValuePresent({})).toBe(false);
+    expect(jiraTemplateValuePresent([])).toBe(false);
+    expect(jiraTemplateValuePresent([{}, null, ""])).toBe(false);
+    expect(jiraTemplateValuePresent(null)).toBe(false);
+    expect(jiraTemplateValuePresent({ name: "core" })).toBe(true);
+    expect(jiraTemplateValuePresent("x")).toBe(true);
+    expect(jiraTemplateValuePresent(false)).toBe(true);
+  });
+
+  it("does not refuse an issue whose required time tracking holds a value", () => {
+    const tracked = parsed(["requiredFields: [Time Tracking]"], "## Context");
+    const catalog = [{ id: "timetracking", name: "Time Tracking" }];
+    const present = checkJiraIssueTemplate(
+      tracked,
+      subject({ timetracking: { originalEstimate: "1h" } }, { operation: "edit" }),
+      catalog,
+    );
+    expect(present.map((violation) => violation.ruleId)).not.toContain("field-missing");
+    for (const empty of [null, {}, { originalEstimate: "" }]) {
+      const missing = checkJiraIssueTemplate(
+        tracked,
+        subject({ timetracking: empty }, { operation: "edit" }),
+        catalog,
+      );
+      expect(missing.map((violation) => violation.ruleId)).toContain("field-missing");
+    }
+  });
 });
 
 describe("validateJiraIssueTemplateAgainstInstance", () => {

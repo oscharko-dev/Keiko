@@ -274,9 +274,11 @@ export {
   type StagedJiraDraft,
 } from "./jira-draft-store.js";
 export {
+  firstJiraDraftTemplateRefusal,
   parseJiraDraftReference,
   resolveJiraDraftArguments,
   type JiraDraftActivity,
+  type JiraDraftTemplateRefusal,
   type JiraDraftRefusal,
   type JiraDraftResolution,
   type JiraDraftToolDeps,

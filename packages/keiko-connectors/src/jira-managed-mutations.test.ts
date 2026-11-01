@@ -1224,6 +1224,31 @@ it.each([
   });
   expect(f.http).not.toHaveBeenCalled();
 });
+it.each([
+  ["jira.create", { projectId: "10000", issueTypeId: "10001", fields: { summary: "S" } }],
+  ["jira.edit", { issueKey: "SYN-1", fields: { summary: "S" } }],
+] as const)(
+  "refuses requirementIds on %s when the consumer supplies no trace resolver (review)",
+  async (operation, args) => {
+    const f = fixture();
+    expect(await f.run(operation, { ...args, requirementIds: ["UNKNOWN-999"] })).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: "requirementIds", messages: [expect.stringContaining("requirementIds")] },
+    });
+    expect(f.http).not.toHaveBeenCalled();
+  },
+);
+it("still writes an ordinary untraced create without requirementIds (review)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+    }),
+  ).toMatchObject({ ok: true });
+});
 it("does not confirm an edit whose requested link is missing on readback (#4176)", async () => {
   const f = fixture();
   f.http.mockImplementation((request) => {

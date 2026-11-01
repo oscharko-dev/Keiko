@@ -152,6 +152,19 @@ function failureDetail(data: CatalogJsonObject): CatalogJsonObject {
 function keyOf(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
+/**
+ * A refusal that names an issue (an existing item still missing links) keeps its key: the issue
+ * exists, so its dependents proceed and the model repairs it instead of creating it again.
+ */
+function failedItem(ref: string, result: ManagedMcpToolResult): DraftItemResult {
+  const issueKey = keyOf(result.data.issueKey);
+  return {
+    ref,
+    state: "failed",
+    ...(issueKey === undefined ? {} : { issueKey }),
+    detail: failureDetail(result.data),
+  };
+}
 /** Journal outcome first; the attempt only names the key a reconciliation found. */
 function settledItem(
   ref: string,
@@ -167,8 +180,7 @@ function settledItem(
     const issueKey = keyOf(attempt.receipt.issueKey);
     return { ref, state: "existing", ...(issueKey === undefined ? {} : { issueKey }) };
   }
-  if (outcome === "rejected" || outcome === "not-dispatched")
-    return { ref, state: "failed", detail: failureDetail(result.data) };
+  if (outcome === "rejected" || outcome === "not-dispatched") return failedItem(ref, result);
   // A partial effect names the issue it did create, so it is never created again.
   const partialKey = keyOf(result.data.issueKey);
   return {
@@ -364,11 +376,12 @@ async function runDraft(
   draft: JiraDraft,
   traces: ReadonlyMap<string, ItemTrace>,
   tally: TraceTally,
+  excluded: ReadonlySet<string>,
 ): Promise<readonly DraftItemResult[]> {
   const now = input.now ?? Date.now;
   const clock = { now, startedAt: now(), budget: input.budget ?? JIRA_DRAFT_RUN_BUDGET };
   const run: RunState = {
-    excluded: excludedJiraDraftRefs(draft, input.deselected),
+    excluded,
     keys: new Map<string, string>(),
     pending: new Set<string>(),
     halted: false,
@@ -564,16 +577,21 @@ interface ResolvedTraces {
   readonly refused: ReadonlyMap<string, Extract<TraceResolution, { ok: false }>>;
 }
 
-/** Every item's explicit references, validated up front: nothing is created for a refused draft. */
+/**
+ * The explicit references of every item that can still run, validated up front: nothing is created
+ * for a refused draft. An item the human deselected, or that hangs from one, never runs, so a
+ * reference it names cannot refuse the items that do.
+ */
 function resolveItemTraces(
   session: TraceSession | undefined,
   draft: JiraDraft,
   tally: TraceTally,
+  excluded: ReadonlySet<string>,
 ): ResolvedTraces {
   const traces = new Map<string, ItemTrace>();
   const refused = new Map<string, Extract<TraceResolution, { ok: false }>>();
   for (const item of draft.items) {
-    if (item.requirementIds === undefined) continue;
+    if (item.requirementIds === undefined || excluded.has(item.ref)) continue;
     const resolution: TraceResolution =
       session === undefined
         ? { ok: false, reason: "unavailable", problems: [] }
@@ -661,12 +679,13 @@ export async function executeJiraChatDraft(
   const session = input.openTrace?.();
   const tally = newTally();
   try {
-    const resolved = resolveItemTraces(session, draft, tally);
+    const excluded = excludedJiraDraftRefs(draft, input.deselected);
+    const resolved = resolveItemTraces(session, draft, tally, excluded);
     if (resolved.refused.size > 0) {
       logTrace(input.intent.correlationId, "draft", tally);
       return refusedDraft(resolved.refused);
     }
-    const items = await runDraft(input, draft, resolved.traces, tally);
+    const items = await runDraft(input, draft, resolved.traces, tally, excluded);
     logTrace(input.intent.correlationId, "draft", tally);
     return draftResult(input.connection.baseUrl, items);
   } finally {

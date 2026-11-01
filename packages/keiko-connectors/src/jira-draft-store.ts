@@ -87,6 +87,16 @@ function trimBytes(drafts: Drafts, limit: number): void {
 function refsOf(items: readonly StagedJiraDraftItem[]): ReadonlySet<string> {
   return new Set(items.map((item) => item.ref).filter((ref) => typeof ref === "string"));
 }
+/** A ref repeated within the page itself, or one the draft already holds. */
+function repeatsRef(held: ReadonlySet<string>, page: readonly StagedJiraDraftItem[]): boolean {
+  const seen = new Set(held);
+  return page.some((item) => {
+    const ref = String(item.ref);
+    const repeated = seen.has(ref);
+    seen.add(ref);
+    return repeated;
+  });
+}
 
 type AppendRefusal = Extract<JiraDraftAppend, { readonly ok: false }>["refusal"];
 
@@ -99,9 +109,7 @@ function appendRefusal(
   maxDraftBytes: number,
 ): AppendRefusal | undefined {
   if (current !== undefined && current.fingerprint !== fingerprint) return "connection-changed";
-  const held = current?.items ?? [];
-  const refs = refsOf(held);
-  if (page.some((item) => refs.has(String(item.ref)))) return "duplicate-ref";
+  if (repeatsRef(refsOf(current?.items ?? []), page)) return "duplicate-ref";
   return bytes > maxDraftBytes ? "too-large" : undefined;
 }
 function extendedDraft(

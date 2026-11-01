@@ -93,45 +93,67 @@ function parseStageArgs(raw: CatalogJsonObject): StageArgs | undefined {
   return { draftId, items: page as readonly StagedJiraDraftItem[] };
 }
 
-/** The create the item stands for; a parent held by another draft item gets a stand-in key. */
-function createSource(item: StagedJiraDraftItem): CatalogJsonObject {
+/** The key a relation to another draft item stands for until that item exists. */
+const STAND_IN_KEY = "DRAFT-1";
+function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
+  const links: unknown = item.links;
+  if (!Array.isArray(links)) return [];
+  return (links as readonly Record<string, unknown>[]).map(
+    (link) =>
+      ({
+        type: link.type,
+        direction: link.direction,
+        issueKey: typeof link.issueKey === "string" ? link.issueKey : STAND_IN_KEY,
+      }) as CatalogJsonObject,
+  );
+}
+/**
+ * The create the item stands for. A parent or link target held by another draft item gets a
+ * stand-in key; the relations themselves are kept, because a template may require one (a
+ * `parentLink`) and the item that will be created carries exactly these.
+ */
+export function jiraDraftTemplateSource(item: StagedJiraDraftItem): CatalogJsonObject {
   const fields = (item.fields ?? {}) as Record<string, unknown>;
   const parent = item.parent as { readonly fieldId?: unknown } | undefined;
   const parentFieldId = typeof parent?.fieldId === "string" ? parent.fieldId : undefined;
+  const links = standInLinks(item);
   return {
     projectId: item.projectId,
     issueTypeId: item.issueTypeId,
-    fields: { ...fields, ...(parentFieldId === undefined ? {} : { [parentFieldId]: "DRAFT-1" }) },
+    fields: {
+      ...fields,
+      ...(parentFieldId === undefined ? {} : { [parentFieldId]: STAND_IN_KEY }),
+    },
+    ...(links.length === 0 ? {} : { links }),
   } as CatalogJsonObject;
 }
 
-interface TemplateRefusal {
+export interface JiraDraftTemplateRefusal {
   readonly ref: string;
   readonly violations: readonly JiraTemplateViolation[];
 }
 /**
- * Every appended item passes the template check a create passes, now, so the model corrects an
- * item while it is being written instead of after the human has been asked. A page with a
- * violating item is refused whole; nothing of it is staged. Items are read one after another
+ * Every item passes the template check a create passes, now, so the model corrects an item while it
+ * is being written instead of after the human has been asked. Items are read one after another
  * because each check reads Jira's metadata through the same bounded connection.
  */
-async function firstTemplateRefusal(
-  page: readonly StagedJiraDraftItem[],
+export async function firstJiraDraftTemplateRefusal(
+  items: readonly StagedJiraDraftItem[],
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
   index = 0,
-): Promise<TemplateRefusal | undefined> {
-  const item = page[index];
+): Promise<JiraDraftTemplateRefusal | undefined> {
+  const item = items[index];
   if (item === undefined) return undefined;
   const result = await checkJiraManagedMutationTemplates(
     "jira.create",
-    createSource(item),
+    jiraDraftTemplateSource(item),
     context,
     connection,
   );
   if (!result.ok && result.violations !== undefined)
     return { ref: String(item.ref), violations: result.violations };
-  return firstTemplateRefusal(page, context, connection, index + 1);
+  return firstJiraDraftTemplateRefusal(items, context, connection, index + 1);
 }
 
 function stagedView(draft: StagedJiraDraft, newDraft: boolean): ManagedMcpToolResult {
@@ -206,7 +228,7 @@ function refuseStage<Context extends ManagedMcpInvocationContext>(
   const failure = jiraReadFailure(refusal);
   return { ...failure, data: { ...failure.data, ...guidanceOf(refusal) } };
 }
-function templateRefusalResult(refusal: TemplateRefusal): ManagedMcpToolResult {
+function templateRefusalResult(refusal: JiraDraftTemplateRefusal): ManagedMcpToolResult {
   return {
     isError: true,
     data: {
@@ -234,7 +256,7 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
     return { ...refused, data: { ...refused.data, guidance: invalidPageGuidance(rawArgs) } };
   }
   if (connection.deployment !== "data-center") return refuseStage(run, "unsupported-deployment", 0);
-  const template = await firstTemplateRefusal(args.items, context, connection);
+  const template = await firstJiraDraftTemplateRefusal(args.items, context, connection);
   if (template !== undefined) {
     refuseStage(run, "template-violation", args.items.length, {
       violationCount: template.violations.length,

@@ -6,7 +6,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { field, response } from "../../../tests/support/jira-managed-remote.js";
+import { field, LINKS_FIELD, response } from "../../../tests/support/jira-managed-remote.js";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { parseJiraDraft } from "./jira-draft.js";
 import { createJiraDraftStore, type JiraDraftStoreOptions } from "./jira-draft-store.js";
@@ -34,8 +34,9 @@ const CREATE_FIELDS = [
     name: "Description",
     schema: { type: "string", system: "description" },
   },
+  LINKS_FIELD,
 ];
-function template(): JiraIssueTemplate {
+function template(...frontMatter: readonly string[]): JiraIssueTemplate {
   const result = parseJiraIssueTemplate(
     [
       "---",
@@ -44,6 +45,7 @@ function template(): JiraIssueTemplate {
       "project: SYN",
       "issueType: Story",
       "activateOn: [create]",
+      ...frontMatter,
       "---",
       "## Acceptance criteria\n",
     ].join("\n"),
@@ -233,6 +235,53 @@ describe("jira.draft-stage (#4178)", () => {
     });
   });
 
+  describe("a template that requires a link (parentLink)", () => {
+    const blocks = (): JiraIssueTemplateSet => ({
+      templates: [template("parentLink: Blocks")],
+      unreadable: 0,
+    });
+    const blocking = (to: Record<string, unknown>): Record<string, unknown> => ({
+      links: [{ type: "Blocks", direction: "outward", ...to }],
+    });
+
+    it("stages an item whose proposed link satisfies the rule", async () => {
+      const h = harness(blocks());
+      const staged = await h.stage({
+        items: [item("a", blocking({ issueKey: "SYN-90" }))] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 1 });
+    });
+
+    it("stages an item whose required link targets a later staged item", async () => {
+      const h = harness(blocks());
+      const staged = await h.stage({
+        items: [
+          item("a", blocking({ ref: "b" })),
+          item("b", blocking({ issueKey: "SYN-90" })),
+        ] as CatalogJsonObject[],
+      });
+      expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 2 });
+    });
+
+    it("refuses an item that proposes no such link, naming the link type to add", async () => {
+      const h = harness(blocks());
+      const refused = await h.stage({
+        items: [
+          item("a"),
+          item("b", { links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }] }),
+        ] as CatalogJsonObject[],
+      });
+      expect(refused).toMatchObject({
+        isError: true,
+        data: {
+          ref: "a",
+          violations: [{ ruleId: "parent-missing", subject: "Blocks", template: "SYN/Story" }],
+        },
+      });
+      expect(h.deps.store.size()).toBe(0);
+    });
+  });
+
   it.each([
     ["an empty page", { items: [] }],
     ["an unknown argument", { items: [item("a")], extra: true }],
@@ -275,6 +324,40 @@ describe("jira.draft-stage (#4178)", () => {
     const repeated = await h.stage({ draftId, items: [item("a") as CatalogJsonObject] });
     expect(repeated.data).toMatchObject({ reason: "duplicate-ref" });
     expect(h.deps.store.peek(draftId, "chat-1")?.items).toHaveLength(1);
+  });
+});
+
+describe("refs repeated inside one staged page (review)", () => {
+  it("refuses a first page that repeats a ref and stages nothing", async () => {
+    const h = harness();
+    const refused = await h.stage({ items: [item("first"), item("first")] as CatalogJsonObject[] });
+    expect(refused).toMatchObject({ isError: true, data: { reason: "duplicate-ref" } });
+    expect(h.deps.store.size()).toBe(0);
+  });
+
+  it("refuses a later page that repeats a ref and keeps the last valid draft and digest", async () => {
+    const h = harness();
+    const first = await h.stage({ items: [item("a")] as CatalogJsonObject[] });
+    const draftId = text(first.data.draftId);
+    const refused = await h.stage({
+      draftId,
+      items: [item("b"), item("b")] as CatalogJsonObject[],
+    });
+    expect(refused.data).toMatchObject({ reason: "duplicate-ref" });
+    const held = h.deps.store.peek(draftId, "chat-1");
+    expect(held?.items).toHaveLength(1);
+    expect(held?.digest).toBe(first.data.draftDigest);
+  });
+
+  it("stages a page of distinct refs and its digest resolves to a parsable draft", async () => {
+    const h = harness();
+    const staged = await h.stage({ items: [item("x"), item("y")] as CatalogJsonObject[] });
+    expect(staged.data).toMatchObject({ outcome: "succeeded", itemCount: 2 });
+    const resolved = resolveJiraDraftArguments(
+      { draftId: text(staged.data.draftId), draftDigest: text(staged.data.draftDigest) },
+      (id) => h.deps.store.get(id, "chat-1"),
+    );
+    expect(resolved?.ok === true && parseJiraDraft(resolved.arguments)).toBeTruthy();
   });
 });
 

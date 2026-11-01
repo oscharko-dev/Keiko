@@ -713,6 +713,25 @@ describe("escaped line breaks in rich text (#4178)", () => {
     expect(check(`Regex:\n${String.raw`split on \n and \n again`}`)).toMatchObject({ ok: true });
   });
 
+  it.each([
+    String.raw`Split paragraphs with /\n\n/; preserve that regular expression literally.`,
+    String.raw`Replace \n with a space, then \n again at the end.`,
+    String.raw`Use "\n\n" as the separator and "\n" inside a record.`,
+  ])("keeps intentional backslash text with several escapes (%s)", (description) => {
+    for (const deployment of ["data-center", "cloud"] as const)
+      expect(check(description, deployment)).toMatchObject({ ok: true });
+  });
+
+  it("still refuses an encoded document with headings or list items, whatever the escapes between", () => {
+    for (const encoded of [
+      String.raw`## Context\nWhy\n## Acceptance criteria\n* works`,
+      String.raw`h2. Context\nWhy\nh2. Done\nTested`,
+      String.raw`Steps\n- build\n- test`,
+      String.raw`Intro\n\n1. First\n2. Second`,
+    ])
+      expect(check(encoded), encoded).toMatchObject({ ok: false, reason: "invalid-field" });
+  });
+
   it("leaves single-line text fields alone", () => {
     expect(
       validateJiraFieldChanges(fields(), { summary: String.raw`a\nb\nc` }, "edit", "data-center"),

@@ -226,6 +226,28 @@ describe("executeJiraChatDraft (#4178)", () => {
     expect(jira.issues).toHaveLength(4);
   });
 
+  it("does not complete the item as existing on a new turn while its further link is still missing (review)", async () => {
+    const jira = syntheticJira();
+    jira.refuseLinks.add("SYN-3");
+    await executeJiraChatDraft(execution(jira, HUB));
+    const posts = jira.posts().length;
+    // A fresh journal is a later turn: the identity matches the issue the first run created.
+    const rerun = await executeJiraChatDraft(execution(jira, HUB));
+    expect(itemsOf(rerun)[3]).toMatchObject({
+      ref: "hub",
+      state: "failed",
+      issueKey: "SYN-4",
+      reason: "conflict",
+      linksRequested: 3,
+      linksCreated: 2,
+      linksMissing: [{ type: "Relates", direction: "outward", issueKey: "SYN-3" }],
+    });
+    expect(rerun.isError).toBe(true);
+    expect(rerun.data).toMatchObject({ existingCount: 3, failedCount: 1 });
+    expect(jira.posts()).toHaveLength(posts);
+    expect(jira.issues).toHaveLength(4);
+  });
+
   it("never sends a replayed item again and still hands its key to later items", async () => {
     const jira = syntheticJira();
     const input = execution(jira);
@@ -765,6 +787,47 @@ describe("source traceability of a draft (#4179)", () => {
     });
     expect(jira.posts()).toHaveLength(0);
     expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let an unresolvable reference of a deselected item refuse the selected backlog", async () => {
+    const jira = syntheticJira();
+    const draft = {
+      items: [
+        item("good", { requirementIds: ["aaaaaaaa:LH-001"] }),
+        item("removed", { requirementIds: ["LH-999"] }),
+        item("child", {
+          parent: { fieldId: "parent", ref: "removed" },
+          requirementIds: ["LH-998"],
+        }),
+      ],
+    } as unknown as CatalogJsonObject;
+
+    const result = await executeJiraChatDraft({
+      ...execution(jira, draft, ["removed"]),
+      openTrace: () => session(vi.fn()),
+    });
+
+    expect(result.data, JSON.stringify(result.data)).toMatchObject({
+      outcome: "succeeded",
+      createdCount: 1,
+      excludedCount: 2,
+    });
+    expect(jira.posts()).toHaveLength(1);
+  });
+
+  it("still refuses when an item that can run names an unknown reference", async () => {
+    const jira = syntheticJira();
+    const draft = {
+      items: [item("removed"), item("kept", { requirementIds: ["LH-999"] })],
+    } as unknown as CatalogJsonObject;
+
+    const result = await executeJiraChatDraft({
+      ...execution(jira, draft, ["removed"]),
+      openTrace: () => session(vi.fn()),
+    });
+
+    expect(result.data).toMatchObject({ outcome: "rejected", requirementRefusal: "references" });
+    expect(jira.posts()).toHaveLength(0);
   });
 
   it("refuses an item with references when the Knowledge Pods cannot be read", async () => {

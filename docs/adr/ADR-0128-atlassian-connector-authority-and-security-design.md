@@ -382,7 +382,10 @@ already shows (Jira does not de-duplicate links). A failure stops the sequence, 
 and the issue is read back: if it was created or edited, the result is `succeeded-unconfirmed`,
 names the issue and lists the requested links that are missing (`linksMissing`; `linksUnconfirmed`
 when the links could not be read back), so the model repairs the links instead of creating the
-issue again. A replayed invocation returns its journal outcome and sends nothing. Jira validates the
+issue again. That result is declared within the encoded worst case of what it can carry (twenty
+missing links whose type names are 255 UTF-16 units of any script, beside the usual result), so a
+non-ASCII link type cannot make the catalog reject the receipt after the issue was created. A
+replayed invocation returns its journal outcome and sends nothing. Jira validates the
 link type and the target; read-back confirms every requested link in its requested direction (a
 symmetric link type, whose inward and outward names are equal, has none), existing links are kept,
 and a link read returns `{ type, direction, issueKey }` JSON text only for the complete set:
@@ -422,12 +425,14 @@ default (lab S17, #4176). A supplied reporter is validated like any user; every 
 field still blocks the create, and edit and transition are unaffected. Add/remove is
 limited to labels; replacement and additive changes cannot target the same field in one action.
 Cloud rich text uses the existing ADF composer; Data Center uses plain text, and user references
-respect each deployment's identity scheme. A rich-text value without any real line break but with
-at least two escaped ones (the two characters `\n`) is refused with one fixed sentence for the
-model, on both deployments (lab S07, #4178): some models escape line breaks twice inside tool
-arguments, and Jira would store the escapes as visible text and collapse the document's sections
-into one line. Keiko never rewrites the value; one literal escape, or escapes beside real line
-breaks, remain ordinary prose and are accepted, and single-line text fields are unaffected. Fresh metadata, authority and dispatch remain separate
+respect each deployment's identity scheme. A rich-text value written to Jira without any real line break, with at
+least two escaped ones (the two characters `\n`) that would produce a heading or a list item at the
+start of a line, is refused with one fixed sentence for the model, on both deployments (lab S07,
+#4178): some models escape line breaks twice inside tool arguments, and Jira would store the escapes
+as visible text and collapse the document's sections into one line. Keiko never rewrites the value;
+one literal escape, escapes beside real line breaks, and escapes in prose (a description of the
+pattern `/\n\n/`) remain ordinary text and are accepted, and single-line text fields are unaffected.
+The rule judges what is written only: a stored description is projected by a read exactly as stored. Fresh metadata, authority and dispatch remain separate
 provider obligations; the pure validator grants no execution authority.
 
 Issue reads may select at most 20 additional field IDs. Their `names`/`schema` expansion is
@@ -798,7 +803,9 @@ two issues). When the create screen offers no labels, the exact summary plus the
 is the identity; links and order of occurrence are invisible to that search, so items of one draft
 that share project, issue type, summary and parent are refused as a `conflict` before any request
 instead of being merged into one issue. The search reads every candidate page (50 per page, at most 10 pages): one match is
-reconciled without a write, several are refused as a conflict, and a candidate set that cannot be
+reconciled without a write, but only complete when the issue also carries the item's requested
+links, read back and never written again (a missing one is a refusal that names the issue and the
+links still missing, so a rerun after a failed further link cannot pass as done), several are refused as a conflict, and a candidate set that cannot be
 read completely is refused as `bounds-exceeded` instead of creating a possible duplicate. A draft
 whose items all exist (or were deselected, at least one existing) writes nothing and reports
 `not-dispatched`; its result then carries `JIRA_DRAFT_EXISTING_GUIDANCE`, which tells the model that
@@ -869,7 +876,8 @@ the approval.
   `runtime/atlassian-connectors`): flat front matter with `project`, `issueType` (name or numeric id),
   `activateOn` (`create`, `edit`, `transition`, or `transition:<transition name, id or target
   status>` for a definition of ready), `summaryMinLength`/`summaryMaxLength`/`summaryPattern`,
-  `requiredFields` (instance field ids or names), `requiredLabels`/`labelPattern`/`minLabels`,
+  `requiredFields` (instance field ids or names; a field is present when its value has any content,
+  not only a name, key or id: a time-tracking estimate counts), `requiredLabels`/`labelPattern`/`minLabels`,
   `parentField` (an instance field) and `parentLink` (a link type), `optionalSections`. The
   level-2 headings of the template body (`## Title`, or a setext title underlined with `---`) are
   the required description sections, each of which must be present and carry content. One reader
@@ -880,7 +888,8 @@ the approval.
   section, so a section made only of subsections has content; a section ends at the next heading of
   the same or a shallower level. Patterns use a closed regular-expression subset (literals,
   classes, `. ^ $ \b \B`, `\d \w \s` and their negations, escapes, alternation, groups, greedy
-  and lazy quantifiers; no lookaround, back-reference, named group, quantified assertion, or
+  and lazy quantifiers, brace counts `{n}`, `{n,}` and `{n,m}` of any width up to the program
+  bound, a larger count being refused instead of read as literal text; no lookaround, back-reference, named group, quantified assertion, or
   quantified group holding a quantifier or alternation). They are never handed to `RegExp`: the one
   parser validates a pattern and compiles it to an automaton program (bounded to 4096
   instructions) that is simulated in time proportional to input times program, so no pattern can
@@ -902,12 +911,18 @@ the approval.
   `reason: field-validation` and the bounded `violations` list, with tool guidance to correct
   exactly those violations. A source that throws propagates to the executor's correlated
   diagnostic, so the write is still not sent. When no template governs the write, no request is
-  added. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
+  added. Jira takes one `issuelinks` operation per request, so a `parentLink` rule is judged on the
+  link that rides on the create or edit itself, never on one written afterwards: the gate puts a link
+  of a required type first, and a state that the primary write cannot make conforming is refused
+  before any request. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
   dry run (`checkJiraManagedMutationTemplates`) after read consent and before the write approval
   is created, so a human is never asked to approve a draft that would be refused. A failed dry run
-  is recorded and falls through to the gate. The backlog draft is dry-run per item when each item
-  is staged (`jira.draft-stage`); an inline draft has no dry run, and every item is also refused
-  individually at the gate and reports its violations per item.
+  is recorded and falls through to the gate. Every item of a backlog draft is dry-run when it is
+  staged (`jira.draft-stage`) and again before the draft's approval, staged or inline, with the
+  relations the item proposes (a link to another draft item stands in as a placeholder key): a draft
+  with a violating item is refused with that item's ref and violations before a human is asked, and
+  the gate still refuses each item individually at dispatch. Assignment (`jira.assign`) changes the
+  `assignee` field and is dry-run and gated as an edit of that field.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
@@ -920,7 +935,8 @@ the approval.
   never records a field name, section title, label or value; `ruleIds` is a closed vocabulary and
   the registration is pinned to the contract's `JIRA_TEMPLATE_RULE_IDS` by a test. The skill
   library lines gain the actions `jira-template-list`, `-validate` and `-propose`.
-- **Scope.** Assignment and comments carry no field state and are not governed. Organization-wide
+- **Scope.** Comments carry no field state and are not governed; an assignment is an edit of the
+  `assignee` field and is. Organization-wide
   distribution is the skill library's import and export. No fixed hierarchy or issue model is
   built in.
 
@@ -1104,7 +1120,8 @@ keeps the completed answer instead of failing the turn.
   scope; the last definition never wins. An identifier one document defines twice with different
   content has no single definition: a reference to it is refused as ambiguous, scoped or not.
   `jira.create`, `jira.edit` and each `jira.draft` item take
-  an explicit `requirementIds` list (at most 8). The server validates every reference before
+  an explicit `requirementIds` list (at most 8); a consumer with no resolver for it (a Coding run)
+  has the connector refuse the list with the field named, instead of writing the issue untraced. The server validates every reference before
   anything is sent; an unknown, ambiguous or malformed reference, or unreadable Pods, refuses the
   call (the whole draft) with the closed reason and the offending references. Nothing is read from
   summaries, labels or descriptions. A valid reference adds the labels `keiko-requirement`,

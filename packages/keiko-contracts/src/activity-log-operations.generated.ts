@@ -29991,7 +29991,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["jira.create", "jira.edit", "jira.transition"],
+        values: ["jira.create", "jira.edit", "jira.transition", "jira.assign"],
       },
       stage: {
         type: "string",

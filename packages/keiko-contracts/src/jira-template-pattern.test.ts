@@ -66,6 +66,40 @@ describe("assertions cannot be quantified, so every accepted pattern is matchabl
   });
 });
 
+describe("a brace quantifier is never read as literal text (review)", () => {
+  const range = "^REQ-[0-9]{1,1000}$";
+
+  it("compiles a count above three digits, with the meaning RegExp gives it", () => {
+    expect(jiraTemplatePatternIssue(range)).toBeUndefined();
+    const matcher = compileJiraTemplatePattern(range);
+    const native = new RegExp(range, "u");
+    for (const text of ["REQ-123", "REQ-1{1,1000}", "REQ-", "REQ-" + "9".repeat(1000)]) {
+      expect(matcher.test(text), text).toBe(native.test(text));
+    }
+    expect(matcher.test("REQ-123")).toBe(true);
+    expect(matcher.test("REQ-1{1,1000}")).toBe(false);
+  });
+
+  it("honours open and exact counts of any width", () => {
+    expect(compileJiraTemplatePattern("^a{1000,}$").test("a".repeat(1000))).toBe(true);
+    expect(compileJiraTemplatePattern("^a{1000,}$").test("a".repeat(999))).toBe(false);
+    expect(compileJiraTemplatePattern("^a{0010}$").test("a".repeat(10))).toBe(true);
+  });
+
+  it.each(["a{5000}", "a{1,5000}", "a{99999999999999999999}", "a{5000,}", "^[0-9]{1,100000}$"])(
+    "refuses the count beyond the program bound in %s instead of matching its text",
+    (pattern) => {
+      expect(jiraTemplatePatternIssue(pattern)).toBeDefined();
+      expect(() => compileJiraTemplatePattern(pattern)).toThrow(TypeError);
+    },
+  );
+
+  it("keeps a brace that is not a quantifier literal, as RegExp does without the u flag", () => {
+    expect(compileJiraTemplatePattern("x{a}").test("x{a}")).toBe(true);
+    expect(compileJiraTemplatePattern("a{,3}").test("a{,3}")).toBe(true);
+  });
+});
+
 describe("characters are code points", () => {
   it("treats an astral character as one character, for a dot and for a literal", () => {
     expect(compileJiraTemplatePattern("^.$").test("\u{1F600}")).toBe(true);

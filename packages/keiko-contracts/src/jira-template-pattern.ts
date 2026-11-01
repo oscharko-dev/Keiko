@@ -64,7 +64,11 @@ interface Quantifier {
   readonly min: number;
   readonly max: number;
 }
-const BRACE = /^\{(\d{1,3})(?:(,)(\d{0,3}))?\}/u;
+// A brace that reads as a quantifier is one, however large its count: `{1,1000}` must never
+// degrade to literal text, which would invert the rule the lead wrote. A count beyond the program
+// bound could not be compiled anyway, so it is refused (an inverted range, see `term`).
+const BRACE = /^\{(\d+)(?:(,)(\d*))?\}/u;
+const REFUSED_COUNT = { min: 1, max: 0 } as const;
 
 /** The code point at `index`, or -1 past the end. */
 function codeAt(chars: readonly string[], index: number): number {
@@ -76,15 +80,26 @@ function braceMax(brace: RegExpExecArray, min: number): number {
   return brace[3] === "" ? Infinity : Number(brace[3]);
 }
 
+function braceQuantifier(brace: RegExpExecArray): Quantifier {
+  const min = Number(brace[1]);
+  const max = braceMax(brace, min);
+  const counts = max === Infinity ? [min] : [min, max];
+  return {
+    width: brace[0].length,
+    ...(counts.some((count) => count > PROGRAM_MAX) ? REFUSED_COUNT : { min, max }),
+  };
+}
+
 function quantifierAt(chars: readonly string[], index: number): Quantifier | undefined {
   const character = chars[index];
   if (character === "*") return { width: 1, min: 0, max: Infinity };
   if (character === "+") return { width: 1, min: 1, max: Infinity };
   if (character === "?") return { width: 1, min: 0, max: 1 };
-  const brace = character === "{" ? BRACE.exec(chars.slice(index, index + 10).join("")) : null;
-  if (brace === null) return undefined;
-  const min = Number(brace[1]);
-  return { width: brace[0].length, min, max: braceMax(brace, min) };
+  const brace =
+    character === "{"
+      ? BRACE.exec(chars.slice(index, index + JIRA_TEMPLATE_PATTERN_CHARS_MAX).join(""))
+      : null;
+  return brace === null ? undefined : braceQuantifier(brace);
 }
 
 function holdsRepeatOrAlternation(node: PatternNode): boolean {

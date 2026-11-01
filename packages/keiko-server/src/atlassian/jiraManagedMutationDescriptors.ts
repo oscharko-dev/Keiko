@@ -180,8 +180,21 @@ const LINK_RESULT = {
   },
   linksUnconfirmed: { type: "boolean" },
 };
-// Up to 20 missing links, each with a link type name of up to 255 characters, beside the usual result.
-const LINKED_RESULT_BOUNDS = { maxResultBytes: 16384, maxDurationMs: 90000, maxResultCount: 1 };
+// The partial-effect result of a create or edit lists every requested link as missing, after the
+// issue was already created: a result the catalog rejects would lose the receipt and the repair
+// details exactly then. The bound is the worst case of what the producer can emit, in encoded
+// bytes: a link type name of up to 255 UTF-16 units (a lone surrogate is escaped to 6 JSON bytes,
+// CJK text takes 3 and an emoji 4), an issue key of up to 128 characters and the JSON around them,
+// for each of the most links a request may carry, beside the usual result.
+const LINK_TYPE_UNITS_MAX = 255;
+const JSON_BYTES_PER_UNIT_MAX = 6;
+const LINK_REF_BYTES_MAX = LINK_TYPE_UNITS_MAX * JSON_BYTES_PER_UNIT_MAX + 128 + 64;
+const USUAL_RESULT_BYTES_MAX = 12288;
+const LINKED_RESULT_BOUNDS = {
+  maxResultBytes: USUAL_RESULT_BYTES_MAX + JIRA_ISSUE_LINKS_MAX * LINK_REF_BYTES_MAX,
+  maxDurationMs: 90000,
+  maxResultCount: 1,
+};
 
 export const JIRA_VIOLATIONS_SCHEMA = {
   type: "array",

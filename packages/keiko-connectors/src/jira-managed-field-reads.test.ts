@@ -213,3 +213,22 @@ describe("a cascading select and the issue links read (#4176)", () => {
     expect(links(null)).toMatchObject({ state: "empty" });
   });
 });
+
+describe("a stored description is read as it is stored (review)", () => {
+  const read = (description: string): unknown =>
+    jiraSelectedFieldValues(
+      {
+        fields: { description },
+        names: { description: "Description" },
+        schema: { description: { type: "string", system: "description" } },
+      },
+      ["description"],
+    )?.[0];
+
+  it.each([
+    String.raw`Split paragraphs with /\n\n/; preserve that regular expression literally.`,
+    String.raw`## Context\nWhy\n## Acceptance criteria\n* works`,
+  ])("projects text with escaped line breaks as a value (%s)", (description) => {
+    expect(read(description)).toMatchObject({ state: "value", text: description });
+  });
+});

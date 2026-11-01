@@ -295,6 +295,7 @@ describe("the dry run before approval", () => {
   function preflight(
     templateText: string,
     args: Record<string, unknown> | undefined,
+    tool: "jira.create" | "jira.draft" = "jira.create",
   ): {
     run: () => Promise<unknown>;
     http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
@@ -336,15 +337,12 @@ describe("the dry run before approval", () => {
     return {
       http,
       run: () =>
-        preflight(
-          { tool: "jira.create", actionId: "a", idempotencyKey: "a", argumentsDigest: "d" },
-          {
-            chatId: "chat",
-            correlationId: "preflight-1",
-            authorityReference: {},
-            signal: new AbortController().signal,
-          } as never,
-        ),
+        preflight({ tool, actionId: "a", idempotencyKey: "a", argumentsDigest: "d" }, {
+          chatId: "chat",
+          correlationId: "preflight-1",
+          authorityReference: {},
+          signal: new AbortController().signal,
+        } as never),
     };
   }
   const CREATE = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
@@ -378,5 +376,62 @@ describe("the dry run before approval", () => {
     expect(await f.run()).toBeUndefined();
     const paths = f.http.mock.calls.map(([request]) => new URL(request.url).pathname);
     expect(paths.some((path) => /\/(project|issuetype)\//u.test(path))).toBe(false);
+  });
+
+  describe("a backlog draft (#4178)", () => {
+    const item = (ref: string, description: string): Record<string, unknown> => ({
+      ref,
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: `Item ${ref}`, description },
+    });
+    const GOOD = "## Acceptance criteria\n* works";
+
+    it("refuses an invalid item that follows a valid one, before any approval, and never writes", async () => {
+      const sink = logs();
+      const f = preflight(
+        TEMPLATE,
+        { items: [item("epic", GOOD), item("story", "nothing")] },
+        "jira.draft",
+      );
+      expect(await f.run()).toEqual({
+        outcome: "rejected",
+        reason: "field-validation",
+        items: [
+          {
+            ref: "story",
+            state: "failed",
+            reason: "field-validation",
+            violations: [
+              { ruleId: "section-missing", subject: "Acceptance criteria", template: "SYN/Story" },
+            ],
+          },
+        ],
+      });
+      expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+      const events = sink.events.filter((event) => event.op === "jira.template.admission");
+      expect(events.map((event) => event.extra?.stage)).toEqual(["pre-approval"]);
+      const drafts = sink.events.filter((event) => event.op === "atlassian.jira-draft");
+      expect(drafts.at(-1)?.extra).toMatchObject({
+        phase: "refused",
+        refusal: "template-violation",
+        violationCount: 1,
+      });
+    });
+
+    it("lets a conforming draft through to the human's approval", async () => {
+      const f = preflight(
+        TEMPLATE,
+        { items: [item("epic", GOOD), item("story", GOOD)] },
+        "jira.draft",
+      );
+      expect(await f.run()).toBeUndefined();
+    });
+
+    it("reads nothing from Jira when no template governs a create", async () => {
+      const f = preflight("# Ordinary skill\n", { items: [item("epic", "nothing")] }, "jira.draft");
+      expect(await f.run()).toBeUndefined();
+      expect(f.http).not.toHaveBeenCalled();
+    });
   });
 });

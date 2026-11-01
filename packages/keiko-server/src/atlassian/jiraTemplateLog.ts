@@ -41,7 +41,7 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["jira.create", "jira.edit", "jira.transition"],
+      values: ["jira.create", "jira.edit", "jira.transition", "jira.assign"],
     },
     // `pre-approval` is the dry run before a human is asked; `dispatch` is the gate in front of
     // the Jira request, which holds in every autonomy mode.
@@ -84,10 +84,13 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
-export type JiraTemplateOperation = "jira.create" | "jira.edit" | "jira.transition";
+export type JiraTemplateOperation = "jira.create" | "jira.edit" | "jira.transition" | "jira.assign";
 
 function templateOperation(value: string): JiraTemplateOperation | undefined {
-  return value === "jira.create" || value === "jira.edit" || value === "jira.transition"
+  return value === "jira.create" ||
+    value === "jira.edit" ||
+    value === "jira.transition" ||
+    value === "jira.assign"
     ? value
     : undefined;
 }

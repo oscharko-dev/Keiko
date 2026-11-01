@@ -1,4 +1,7 @@
-import { JIRA_FIELD_ID_PATTERN } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  JIRA_FIELD_ID_PATTERN,
+  readJiraDescriptionSections,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 // Capability validation only: HTTP, authority, custody and audit remain with their existing owners.
 import type {
   AtlassianConnectorDeployment,
@@ -401,15 +404,21 @@ function optionValue(
     : reference(field, value, false, deployment);
 }
 const ESCAPED_LINE_BREAKS = String.raw`The text contains escaped line breaks (\n) and no real line break; send real line breaks instead.`;
+const LIST_LINE = /^[ \t]*(?:[*+-]|\d{1,3}\.)[ \t]+\S/mu;
 /**
- * Multi-line text whose every line break arrived as the two characters `\n` (#4178). Some models
- * escape line breaks twice inside tool arguments; Jira would then store the escape sequences as
- * visible text and collapse the document into one line. Keiko refuses rather than rewrites it, so
- * the model resends the value it means. One literal escape, or escapes beside real line breaks,
- * is ordinary prose about `\n` and stays accepted.
+ * Multi-line document structure whose every line break arrived as the two characters `\n` (#4178).
+ * Some models escape line breaks twice inside tool arguments; Jira would then store the escape
+ * sequences as visible text and collapse the document into one line, and a template section would
+ * never be found. Two escapes alone prove nothing: prose may describe a pattern such as `/\n\n/`.
+ * The evidence is what the escapes would have produced, a heading or a list item at the start of a
+ * line, so only text that reads as an encoded document is refused, and the model resends the value
+ * it means. One literal escape, escapes beside real line breaks, and escapes in prose stay accepted.
+ * This judges what is written to Jira only; reading a stored description never applies it.
  */
-function escapedLineBreaksOnly(value: string): boolean {
-  return !/[\r\n]/u.test(value) && (value.match(/\\n/gu)?.length ?? 0) >= 2;
+function encodedDocumentStructure(value: string): boolean {
+  if (/[\r\n]/u.test(value) || (value.match(/\\n/gu)?.length ?? 0) < 2) return false;
+  const decoded = value.replaceAll(String.raw`\n`, "\n");
+  return readJiraDescriptionSections(decoded).length > 0 || LIST_LINE.test(decoded);
 }
 function textValue(
   field: JiraFieldMetadata,
@@ -417,7 +426,6 @@ function textValue(
   deployment: AtlassianConnectorDeployment,
 ): ValueResult {
   if (typeof value !== "string" || !validFieldText(field, value)) return INVALID;
-  if (field.richText && escapedLineBreaksOnly(value)) return invalidWith(ESCAPED_LINE_BREAKS);
   if (deployment !== "cloud" || !field.richText) return { ok: true, value };
   const result = composePlainTextToAdf(value);
   return result.ok ? { ok: true, value: result.doc } : INVALID;
@@ -568,6 +576,14 @@ function requiredEmpty(field: JiraFieldMetadata, value: unknown): boolean {
   if (!field.required) return false;
   return value === null || value === "" || (Array.isArray(value) && value.length === 0);
 }
+function isEncodedRichText(field: JiraFieldMetadata, value: unknown): boolean {
+  return (
+    field.kind === "text" &&
+    field.richText &&
+    typeof value === "string" &&
+    encodedDocumentStructure(value)
+  );
+}
 function setValue(
   field: JiraFieldMetadata | undefined,
   value: unknown,
@@ -577,6 +593,7 @@ function setValue(
   if (field.kind === "unsupported") return { ok: false, reason: "unsupported-field" };
   if (!field.operations.includes("set")) return { ok: false, reason: "invalid-operation" };
   if (requiredEmpty(field, value)) return { ok: false, reason: "required-field" };
+  if (isEncodedRichText(field, value)) return invalidWith(ESCAPED_LINE_BREAKS);
   return validateJiraFieldValue(field, value, deployment);
 }
 function validateSets(
