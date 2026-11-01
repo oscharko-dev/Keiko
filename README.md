@@ -100,6 +100,14 @@ Connected folders do not need Git metadata or a `package.json`. Run `npx keiko i
 - The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
 - Keiko serves loopback only: `npx keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `npx keiko start --port <n>` sets the Port to bind (default: 1983).
 
+## What's new in 1.3.4
+
+- **More resilient Chat continuity.** Private checkpoints survive restarts independently of audit logging, and indexed original messages help recover older identifiers and conversation details. Long-term quality across repeated compactions remains under qualification.
+- **Governed Coding delivery.** Create a task branch, open a draft PR without an issue and select a Jira Pod for a run. Native commits, readiness after runs and stopped-run tool history are more reliable; protected integration still requires its checks.
+- **Shipped dependency fixes.** Reviewed glob and minimatch updates address the shipped advisories.
+
+Chat's local database upgrades automatically and retains original messages. Back up state before downgrading; older versions may refuse the upgraded database. Existing updater-bootstrap requirements for 1.2.6 and earlier remain in effect.
+
 ## What's new in 1.3.2
 
 - **Live feeds no longer stop on a long message.** Chat answers, task timelines and the other live feeds used to close when a single update was large. They now wait for your browser to catch up, and only a browser that reads nothing for 30 seconds is disconnected.

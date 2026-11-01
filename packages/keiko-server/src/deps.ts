@@ -209,6 +209,7 @@ import {
   processServerLogSinkFor,
 } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
+import { stopChatCompactionWork } from "./chat-compaction-model-call.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { closeFileServerLogSinks, resolveRuntimeStateDir } from "@oscharko-dev/keiko-activity-log";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
@@ -5057,6 +5058,7 @@ export function installConversationReadinessInitialization(deps: UiHandlerDeps):
     refreshGatewayCatalog: startup.refresh,
     dispose: async (): Promise<void> => {
       unsubscribe?.();
+      await stopChatCompactionWork(deps);
       const conversationShutdown = stopConfiguredConversationReadiness(deps);
       await startup.stop();
       await conversationShutdown;

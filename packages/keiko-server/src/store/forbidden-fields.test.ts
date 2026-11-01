@@ -197,6 +197,17 @@ const EXPECTED_TABLES = new Set([
   "browser_approvals",
   "browser_approval_installation",
   "chat_creation_intents",
+  "chat_continuity_checkpoints",
+  "chat_history_words",
+  "chat_history_words_data",
+  "chat_history_words_idx",
+  "chat_history_words_docsize",
+  "chat_history_words_config",
+  "chat_history_fragments",
+  "chat_history_fragments_data",
+  "chat_history_fragments_idx",
+  "chat_history_fragments_docsize",
+  "chat_history_fragments_config",
   "chat_tool_mutations",
   "chat_tool_read_grants",
   "chat_drafts",
@@ -245,6 +256,26 @@ describe("forbidden-fields — browser public identity approval (#4043)", () => 
     const inspector = openMigratedSchema(join(tmpDir, "browser-approval-inventory.db"));
     try {
       expect(new Set(columnNames(inspector, table))).toEqual(new Set(columns));
+    } finally {
+      inspector.close();
+    }
+  });
+});
+
+describe("forbidden-fields — private chat continuity metadata", () => {
+  it("stores only the scoped bounded continuity record and its revision/generation bindings", () => {
+    const inspector = openMigratedSchema(join(tmpDir, "chat-continuity-inventory.db"));
+    try {
+      expect(new Set(columnNames(inspector, "chat_continuity_checkpoints"))).toEqual(
+        new Set([
+          "chat_id",
+          "generation",
+          "history_revision",
+          "through_message_id",
+          "record_json",
+          "record_digest",
+        ]),
+      );
     } finally {
       inspector.close();
     }
@@ -763,6 +794,20 @@ describe("forbidden-fields — durable chat mutation metadata", () => {
     }
   });
 });
+
+it.each(["chat_history_words", "chat_history_fragments"])(
+  "keeps %s an external index of canonical content",
+  (table) => {
+    const inspector = openMigratedSchema(join(tmpDir, "chat-index-inventory.db"));
+    try {
+      expect(columnNames(inspector, table)).toEqual(["content"]);
+      const schema = inspector.prepare("SELECT sql FROM sqlite_master WHERE name = ?").get(table);
+      expect(schema?.sql).toContain("content='chat_messages'");
+    } finally {
+      inspector.close();
+    }
+  },
+);
 
 describe("forbidden-fields — every table in the migrated store (AC#5 / ADR-0013 D8)", () => {
   it("creates exactly the expected tables, so a new table is reviewed before it ships", () => {
