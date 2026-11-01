@@ -861,13 +861,18 @@ When the turn also carries connected sources (Pod or folder evidence with Jira t
 grounded synthesis grant (two attempt slots, one input and output token grant) used to charge the
 exhausted round to that grant and then refused the repair before any HTTP dispatch
 (`GATEWAY_ATTEMPT_ADMISSION_DENIED`, `authority-denied`, HTTP 502; S14 of epic #4173). The gateway
-now announces the repair to the caller admission (`attemptAdmission` input `steeredRepair: true`,
-once per repair, never on a provider retry of it, never on a call that did not ask for one). The
-grounded attempt tracker then moves the preceding unusable attempt out of the synthesis grant into
-tool-round orchestration, exactly as a confirmed tool round: its usage stays in the reported total and
-the turn's Authority Envelope (`maxModelCalls`, prompt budget) still bounds and counts the repair.
-The repair itself is admitted against the grant like any attempt, so there is still exactly one
-repair per call and a second exhaustion fails closed.
+now announces every correction to the caller admission (`attemptAdmission` input
+`correctsUnusableAttempt: true`, once per steered repair or tool-schema correction, never on a
+provider retry of it, never on a call that did not ask for one). The grounded attempt tracker then
+moves the preceding unusable attempt (an exhausted round, or a tool call rejected before execution)
+out of the synthesis grant into tool-round orchestration, exactly as a confirmed tool round: its usage
+stays in the reported total and the turn's Authority Envelope (`maxModelCalls`, prompt budget) still
+bounds and counts the correction. The correction itself is admitted against the grant like any
+attempt, so there is still exactly one steered repair per call, the gateway's schema-repair allowance
+is unchanged, and a further unusable answer fails closed. Schema corrections joined this path on
+2026-11-01: the lab showed a Pod-sourced turn whose second schema correction was refused
+(`GATEWAY_ATTEMPT_ADMISSION_DENIED`) and logged as `invalid-shape`; a refused correction now logs
+its actual cause.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically

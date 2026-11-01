@@ -320,7 +320,7 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
     const result = await gatewayFor(scripted, []).chat({
       ...REQUEST,
       attemptAdmission: (input) => {
-        announced.push(input.steeredRepair);
+        announced.push(input.correctsUnusableAttempt);
         return { settle: (): void => undefined };
       },
     });
@@ -338,7 +338,7 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
       gatewayFor(scripted, [], config(provider(), true)).chatStream({
         ...REQUEST,
         attemptAdmission: (input) => {
-          announced.push(input.steeredRepair);
+          announced.push(input.correctsUnusableAttempt);
           return { settle: (): void => undefined };
         },
       }),
@@ -355,7 +355,7 @@ describe("Gateway output-exhausted repair (#3873 F17)", () => {
     await gatewayFor(scripted, []).chat({
       ...plain,
       attemptAdmission: (input) => {
-        announced.push(input.steeredRepair);
+        announced.push(input.correctsUnusableAttempt);
         return { settle: (): void => undefined };
       },
     });

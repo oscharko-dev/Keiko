@@ -136,11 +136,12 @@ export function createGroundedSynthesisAttemptAdmission(
   const admission: NonNullable<GatewayCallRequest["attemptAdmission"]> = (input) => {
     gatewayOwned = true;
     assertSynthesisAttemptActive(options);
-    // The gateway's one steered repair follows an attempt that produced neither a tool call nor an
-    // answer. That attempt is turn orchestration, bounded by the Chat tool turn's own envelope like
-    // a confirmed tool round, so it stops counting against the synthesis grant before the repair
+    // A gateway correction (the one steered repair, or a schema correction) follows an attempt the
+    // turn could not use: no tool call and no answer, or a tool call rejected before execution.
+    // That attempt is turn orchestration, bounded by the Chat tool turn's own envelope like a
+    // confirmed tool round, so it stops counting against the synthesis grant before the correction
     // is admitted; its physical usage stays in the reported total.
-    if (input.steeredRepair === true) latest?.releaseUnusableAttempt();
+    if (input.correctsUnusableAttempt === true) latest?.releaseUnusableAttempt();
     const pending = budget.pendingUsage();
     if (
       input.promptTokens > options.inputTokensMax - pending.promptTokens ||

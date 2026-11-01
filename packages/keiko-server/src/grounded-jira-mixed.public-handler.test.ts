@@ -1122,7 +1122,10 @@ it("repairs one invalid native model call before normal Chat dispatches any Jira
   expect(effectCounts).toEqual([0, 0, 1]);
   expect(requests[1]).toContain("rejected before execution");
   expect(requests[1]).toContain("maxResults");
-  expect(outputCap(requests[2] ?? "{}")).toBeLessThan(outputCap(requests[0] ?? "{}"));
+  // The rejected call is corrected orchestration and the corrected call a confirmed tool round, so
+  // neither shrinks the answer's output cap; their usage stays charged (pinned in
+  // grounded-synthesis-call-budget.test.ts, "announced correction").
+  expect(outputCap(requests[2] ?? "{}")).toBe(outputCap(requests[0] ?? "{}"));
   expect(f.jiraRequests).toEqual(["GET"]);
   expect(ownedExchange(f, f.chatId)).toMatchObject({
     call: { id: "mixed-call-2" },
@@ -1255,6 +1258,29 @@ it("grants a tool round only one steered repair and fails closed when the repair
   // tool round, the exhausted round and its ONE repair; no third attempt for that round.
   expect(requests).toHaveLength(3);
   expect(f.jiraRequests).toEqual(["GET"]);
+});
+
+// #4173 lab (Qwen, 17:13): a tool call the catalog rejects before execution is as unusable as an
+// exhausted round. Its schema correction must not count it against the synthesis grant, or the
+// second correction of one turn is refused (and was logged as a context-window denial).
+it("admits every schema correction of a tool turn that carries connected sources", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "malformed", "tool", "malformed", "tool", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests, JSON.stringify(response.body).slice(0, 600)).toHaveLength(6);
+  expect(requests[2]).toContain("rejected before execution");
+  expect(requests[4]).toContain("rejected before execution");
+  expect(f.jiraRequests).toEqual(["GET", "GET", "GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
 });
 
 it("charges physical overflow before a tool response and denies a third synthesis attempt", async () => {

@@ -232,3 +232,51 @@ it("never replenishes the deadline or the final answer's token grant when tool r
   now = 100;
   expect(() => tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toThrow();
 });
+
+it("lets only an announced correction move a settled unusable attempt out of the synthesis grant", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 220,
+    outputTokensMax: 80,
+  });
+  tracker
+    .admission({ promptTokens: 100, maxOutputTokens: 80 })
+    ?.settle({ promptTokens: 41, completionTokens: 7 }, true, "observed");
+  // The rejected attempt is turn orchestration once the gateway announces its correction: the
+  // correction gets the original output cap and both slots stay available to the answer.
+  const correction = tracker.admission({
+    promptTokens: 100,
+    maxOutputTokens: 80,
+    correctsUnusableAttempt: true,
+  });
+  expect(correction?.maxOutputTokens).toBe(80);
+  expect(budget.pendingUsage()).toEqual({ promptTokens: 0, completionTokens: 0 });
+  correction?.settle({ promptTokens: 50, completionTokens: 9 }, true, "observed");
+  // A second announcement cannot release the same attempt again, and an ordinary retry after the
+  // settled correction still shrinks to the remaining output grant.
+  const retry = tracker.admission({ promptTokens: 100, maxOutputTokens: 80 });
+  expect(retry?.maxOutputTokens).toBe(71);
+  expect(tracker.admission({ promptTokens: 1, maxOutputTokens: 1 })).toBeUndefined();
+  retry?.settle({ promptTokens: 60, completionTokens: 3 }, true, "observed");
+  // Reported usage never hides a physical attempt, corrected or not.
+  expect(budget.takeUsage()).toEqual({ promptTokens: 300, completionTokens: 19 });
+});
+
+it("never releases an unsettled attempt for an announced correction", () => {
+  const budget = createGroundedSynthesisCallBudget();
+  const tracker = createGroundedSynthesisAttemptAdmission(budget, {
+    inputTokensMax: 220,
+    outputTokensMax: 80,
+  });
+  tracker.admission({ promptTokens: 100, maxOutputTokens: 80 });
+  const correction = tracker.admission({
+    promptTokens: 100,
+    maxOutputTokens: 80,
+    correctsUnusableAttempt: true,
+  });
+  expect(correction?.maxOutputTokens).toBe(80);
+  expect(budget.remaining()).toBe(0);
+  expect(
+    tracker.admission({ promptTokens: 1, maxOutputTokens: 1, correctsUnusableAttempt: true }),
+  ).toBeUndefined();
+});

@@ -23225,7 +23225,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["context-window-exceeded", "invalid-shape"],
+        values: ["context-window-exceeded", "attempt-admission-denied", "invalid-shape"],
       },
       toolCallId: {
         type: "string",

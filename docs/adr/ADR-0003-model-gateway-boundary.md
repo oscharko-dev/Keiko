@@ -732,10 +732,14 @@ and the turn ended; a multi-round task with settled work behind it must not die 
 round, and the repair counts against the turn's own model-call envelope), so every other call — the
 commit draft and plain interactive chat included — still surfaces such an answer at once and never
 makes a hidden second generation (#3873 review). The caller's `attemptAdmission` is told which
-admission is that repair's (`steeredRepair: true` on its input, once per repair, never on a provider
-retry of it, never on a call that did not ask for a repair), so a caller that keeps a synthesis grant
-can stop charging the unusable attempt before it to that grant while its own envelope still bounds the
-repair (S14 of epic #4173). On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
+admission corrects an unusable attempt (`correctsUnusableAttempt: true` on its input, once per steered
+repair or tool-schema correction, never on a provider retry of it, never on a call that did not ask
+for a repair or offer tools), so a caller that keeps a synthesis grant can stop charging the unusable
+attempt before it to that grant while its own envelope still bounds the correction (S14 of epic
+#4173; schema corrections added 2026-11-01 after the lab refused the second correction of a
+Pod-sourced Jira turn with `GATEWAY_ATTEMPT_ADMISSION_DENIED`). A correction the caller refuses
+logs `gateway.tool-catalog.repair` as `denied` with the actual cause (`attempt-admission-denied` or
+`context-window-exceeded`), never as the original `invalid-shape`. On such a call the retry loop (`RetryConfig.repair`, `resilience.ts`)
 grants exactly one further attempt per call, at once, which the gateway sends as the ORIGINAL request
 plus one fixed system message (`OUTPUT_EXHAUSTED_REPAIR_MESSAGE`, `gateway.ts`): the model is told
 that its previous answer used the whole budget without a tool call or a final answer and asked to

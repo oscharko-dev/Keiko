@@ -186,13 +186,15 @@ export interface GatewayCallRequest extends GatewayRequest {
         readonly promptTokens: number;
         readonly maxOutputTokens: number;
         /**
-         * True only for the attempt of the gateway's ONE steered repair (`answerRepair: "steered"`),
-         * announced once per repair even when the transport dispatches several HTTP requests. The
-         * attempt it follows produced neither a tool call nor an answer, so a caller that keeps a
-         * synthesis grant may stop charging that unusable attempt to the grant; the caller's own
-         * envelope still bounds the repair.
+         * True only for the attempt that corrects the call's previous, unusable attempt: the
+         * gateway's ONE steered repair (`answerRepair: "steered"`, after an answer with neither a
+         * tool call nor text) or a schema correction (after a tool call the catalog rejected before
+         * execution). Announced once per correction even when the transport dispatches several HTTP
+         * requests, and never on a provider retry. A caller that keeps a synthesis grant may stop
+         * charging that unusable attempt to the grant; the caller's own envelope still bounds the
+         * correction.
          */
-        readonly steeredRepair?: true | undefined;
+        readonly correctsUnusableAttempt?: true | undefined;
       }) =>
         | {
             readonly maxOutputTokens?: number | undefined;
@@ -356,7 +358,7 @@ const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["context-window-exceeded", "invalid-shape"],
+      values: ["context-window-exceeded", "attempt-admission-denied", "invalid-shape"],
     },
     toolCallId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
     offeredAlias: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
@@ -809,7 +811,7 @@ interface PreparedStream {
 // What a streamed call carries from one attempt to the next, across every loop it resumes
 // (#3873 review): how many attempts it made, the request the next provider retry resends, the
 // schema correction the current attempt carries, and the usage of the attempts it discarded.
-interface StreamAttemptState {
+interface StreamAttemptState extends CorrectionAdmission {
   count: number;
   request: GatewayCallRequest;
   schemaRepair?: GatewayToolCatalogError["repair"] | undefined;
@@ -948,14 +950,18 @@ function streamStartupRetryConfig(
 interface SteeredRepair {
   readonly reason: RetryRepairReason;
   readonly failure: Error;
-  // Set once the caller was told its admission is the repair's; a provider retry of the repaired
-  // attempt is an ordinary attempt again.
-  admissionAnnounced?: boolean;
 }
 
-function claimRepairAdmission(steered: SteeredRepair | undefined): boolean {
-  if (steered === undefined || steered.admissionAnnounced === true) return false;
-  steered.admissionAnnounced = true;
+// Whether the attempt about to dispatch corrects an unusable one (a steered repair or a schema
+// correction). Set when the retry loop prepares that attempt; the first admission claims it, so a
+// provider retry of the corrected attempt is an ordinary attempt again.
+interface CorrectionAdmission {
+  correctionPending?: boolean;
+}
+
+function claimCorrectionAdmission(state: CorrectionAdmission): boolean {
+  if (state.correctionPending !== true) return false;
+  state.correctionPending = false;
   return true;
 }
 
@@ -974,12 +980,13 @@ interface BufferedChatAttempt {
   // The call's conversation with its observer (#3873 review), shared by every attempt's admission
   // and by the retry loop; absent for a call that set no `retryObserver`.
   readonly announcer: RetryAnnouncer | undefined;
-  readonly state: OutputRepairState & {
-    request: GatewayCallRequest;
-    attemptNumber: number;
-    repair?: GatewayToolCatalogError["repair"];
-    readonly discarded: DiscardedUsageTally;
-  };
+  readonly state: OutputRepairState &
+    CorrectionAdmission & {
+      request: GatewayCallRequest;
+      attemptNumber: number;
+      repair?: GatewayToolCatalogError["repair"];
+      readonly discarded: DiscardedUsageTally;
+    };
 }
 
 /**
@@ -1167,6 +1174,14 @@ async function readAnswer(
     if (chunk.type === "done") return chunk.response;
   }
   throw new TransportError(`provider stream for '${provider.modelId}' ended without an answer`);
+}
+
+// A correction's repair line: scheduled, or denied with its actual cause (#4173: a caller refusal was
+// recorded as a context-window denial at a third of the window).
+type RepairLogState = "scheduled" | "context-window-exceeded" | "attempt-admission-denied";
+function repairDenial(error: unknown): RepairLogState | undefined {
+  if (error instanceof ContextOverflowError) return "context-window-exceeded";
+  return error instanceof CallerAttemptAdmissionError ? "attempt-admission-denied" : undefined;
 }
 
 interface RepairPromptBudget {
@@ -1515,14 +1530,17 @@ export class Gateway {
   // runs after a rejection carries the correction for THAT rejection.
   private prepareBufferedAttempt(attempt: BufferedChatAttempt, previousError?: Error): void {
     attempt.state.repair = undefined;
+    attempt.state.correctionPending = false;
     const granted = grantedRepair(attempt.originalRequest, previousError);
     if (granted !== undefined) {
       attempt.state.request = steeredRepairRequest(attempt.originalRequest, granted.reason);
       attempt.state.steered = granted;
+      attempt.state.correctionPending = true;
       return;
     }
     if (previousError instanceof GatewayToolCatalogError && previousError.repair !== undefined) {
       attempt.state.repair = previousError.repair;
+      attempt.state.correctionPending = true;
       attempt.state.request = this.requestAfterToolSchemaRejection(
         attempt.originalRequest,
         attempt.state.request,
@@ -1541,16 +1559,19 @@ export class Gateway {
     const { attempts } = state;
     attempts.count += 1;
     attempts.schemaRepair = undefined;
+    attempts.correctionPending = false;
     tallyDiscardedAttempt(attempts.discarded, previousError);
     const granted = grantedRepair(state.prepared, previousError);
     if (granted !== undefined) {
       state.outputRepair.steered = granted;
       attempts.request = steeredRepairRequest(state.prepared, granted.reason);
+      attempts.correctionPending = true;
     } else if (
       previousError instanceof GatewayToolCatalogError &&
       previousError.repair !== undefined
     ) {
       attempts.schemaRepair = previousError.repair;
+      attempts.correctionPending = true;
       attempts.request = this.requestAfterToolSchemaRejection(
         state.prepared,
         attempts.request,
@@ -1577,7 +1598,7 @@ export class Gateway {
     return this.prepareRequest(candidate, capability);
   }
 
-  private logAttemptRepair(attempt: BufferedChatAttempt, state: "scheduled" | "denied"): void {
+  private logAttemptRepair(attempt: BufferedChatAttempt, state: RepairLogState): void {
     this.logRequestRepair(
       attempt.route.capability,
       attempt.correlationId,
@@ -1588,14 +1609,15 @@ export class Gateway {
   }
 
   // `gateway.tool-catalog.repair` for the attempt that carries a schema correction, buffered or
-  // streamed: `scheduled` once the corrected prompt was admitted, `denied` when it no longer fits
-  // the model's window. Nothing for an attempt without a correction.
+  // streamed: `scheduled` once the corrected prompt was admitted, `denied` with the actual cause
+  // when it no longer fits the model's window or the caller refused the attempt. Nothing for an
+  // attempt without a correction.
   private logRequestRepair(
     capability: ModelCapability,
     correlationId: string,
     repair: GatewayToolCatalogError["repair"],
     request: GatewayCallRequest,
-    state: "scheduled" | "denied",
+    state: RepairLogState,
   ): void {
     if (repair === undefined) return;
     const profile = deriveContextProfileFromCapability(capability);
@@ -1622,7 +1644,7 @@ export class Gateway {
   private logToolSchemaRepair(
     correlationId: string,
     repair: GatewayToolCatalogError["repair"],
-    state: "denied" | "scheduled",
+    state: RepairLogState,
     budget: RepairPromptBudget,
   ): void {
     if (repair === undefined) return;
@@ -1631,8 +1653,8 @@ export class Gateway {
         GATEWAY_TOOL_CATALOG_REPAIR_OPERATION,
         { level: "warn", correlationId },
         {
-          state,
-          reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
+          state: state === "scheduled" ? "scheduled" : "denied",
+          reason: state === "scheduled" ? "invalid-shape" : state,
           toolCallId: loggedToolCallId(repair.toolCallId),
           offeredAlias: repair.offeredAlias,
           ...(repair.transport === undefined ? {} : { transport: repair.transport }),
@@ -2199,8 +2221,8 @@ export class Gateway {
       if (!received) throw new TransportError("provider stream ended without an answer");
       admission.settle("success");
     } catch (error) {
-      if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError)
-        logRepair("denied");
+      const denied = repairDenial(error);
+      if (denied !== undefined) logRepair(denied);
       usage = measuredCatalogFailureUsage(error, route.capability, ids.correlationId);
       settleFailedCallerAttempt(callerReservation, error, admitted);
       recordProviderFailure(admission, error, observedProviderDispatch(dispatchObserved, admitted));
@@ -2231,7 +2253,7 @@ export class Gateway {
         request,
         state.route.capability,
         state.ids.correlationId,
-        claimRepairAdmission(state.outputRepair.steered),
+        claimCorrectionAdmission(state.attempts),
       ),
     };
   }
@@ -2239,7 +2261,7 @@ export class Gateway {
   private streamRepairLogger(
     state: PreparedStream,
     request: GatewayCallRequest,
-  ): (repairState: "scheduled" | "denied") => void {
+  ): (repairState: RepairLogState) => void {
     return (repairState): void => {
       this.logRequestRepair(
         state.route.capability,
@@ -2369,8 +2391,8 @@ export class Gateway {
       admission.settle("success");
       return response;
     } catch (error) {
-      if (error instanceof ContextOverflowError || error instanceof CallerAttemptAdmissionError)
-        this.logAttemptRepair(attempt, "denied");
+      const denied = repairDenial(error);
+      if (denied !== undefined) this.logAttemptRepair(attempt, denied);
       usage = measuredCatalogFailureUsage(error, capability, correlationId);
       settleFailedCallerAttempt(callerReservation, error, admitted);
       // A client-initiated cancel is not a provider fault — skip the breaker.
@@ -2402,7 +2424,7 @@ export class Gateway {
         attempt.state.request,
         attempt.route.capability,
         attempt.correlationId,
-        claimRepairAdmission(attempt.state.steered),
+        claimCorrectionAdmission(attempt.state),
       ),
     };
   }
@@ -2431,7 +2453,7 @@ export class Gateway {
   private callerAttemptReservation(
     request: GatewayCallRequest,
     capability: ModelCapability,
-    steeredRepair = false,
+    correctsUnusableAttempt = false,
   ): ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>> {
     const admit = request.attemptAdmission;
     if (admit === undefined) return undefined;
@@ -2441,7 +2463,7 @@ export class Gateway {
         contextWindow: profile.maxInputTokens,
       }),
       maxOutputTokens: request.maxOutputTokens ?? profile.reservedOutputTokens,
-      ...(steeredRepair ? { steeredRepair: true as const } : {}),
+      ...(correctsUnusableAttempt ? { correctsUnusableAttempt: true as const } : {}),
     });
     if (reservation === undefined)
       throw new CallerAttemptAdmissionError(
@@ -2455,7 +2477,7 @@ export class Gateway {
     request: GatewayCallRequest,
     capability: ModelCapability,
     correlationId: string,
-    steeredRepair = false,
+    correctsUnusableAttempt = false,
   ): {
     request: GatewayCallRequest;
     callerReservation: ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>;
@@ -2463,8 +2485,17 @@ export class Gateway {
     dispatchObserved?: () => boolean;
   } {
     if (adapter.attemptAdmissionBoundary === "transport")
-      return this.transportBoundaryAttempt(request, capability, correlationId, steeredRepair);
-    const callerReservation = this.callerAttemptReservation(request, capability, steeredRepair);
+      return this.transportBoundaryAttempt(
+        request,
+        capability,
+        correlationId,
+        correctsUnusableAttempt,
+      );
+    const callerReservation = this.callerAttemptReservation(
+      request,
+      capability,
+      correctsUnusableAttempt,
+    );
     try {
       request = callerAdmittedRequest(request, callerReservation);
       return {
@@ -2485,10 +2516,10 @@ export class Gateway {
     request: GatewayCallRequest,
     capability: ModelCapability,
     correlationId: string,
-    steeredRepair: boolean,
+    correctsUnusableAttempt: boolean,
   ): ReturnType<Gateway["reserveAdapterAttempt"]> {
     let dispatched = false;
-    let announceRepair = steeredRepair;
+    let announceRepair = correctsUnusableAttempt;
     return {
       request: {
         ...request,
@@ -2522,9 +2553,9 @@ export class Gateway {
     capability: ModelCapability,
     correlationId: string,
     observeDispatch: (dispatched: boolean) => void,
-    steeredRepair: boolean,
+    correctsUnusableAttempt: boolean,
   ): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
-    const caller = this.callerAttemptReservation(request, capability, steeredRepair);
+    const caller = this.callerAttemptReservation(request, capability, correctsUnusableAttempt);
     let spend: GatewaySpendReservation | undefined;
     try {
       request = callerAdmittedRequest(request, caller);
