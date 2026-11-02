@@ -152,6 +152,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private correctionAdmissionPending = false;
   /** The answer that left out listed report findings; it stands if the corrected round fails. */
   private uncorrectedAnswer: NormalizedResponse | undefined;
+  /** Transcript exchanges when that answer was given; any later exchange makes it stale. */
+  private uncorrectedExchangeCount = 0;
   protected constructor(private readonly options: ChatToolTurnOptions<Context>) {
     this.instruction =
       options.guidance === undefined
@@ -515,13 +517,21 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     }
   }
 
+  private transcriptExchangeCount(): number {
+    const { deps, message } = this.options;
+    return deps.store.findMessageById(message.id)?.toolTranscript?.exchanges.length ?? 0;
+  }
+
   /**
-   * The model's own answer stands when only its completeness correction failed: it is a better answer
-   * than the transcript. A human stop is not replaced.
+   * The model's own answer stands when only its completeness correction failed and that round
+   * dispatched nothing: it is a better answer than the transcript. After a further dispatch the
+   * transcript answer names every effect. A human stop is not replaced.
    */
   private answerBeforeCorrection(signal: AbortSignal): NormalizedResponse | undefined {
     const answer = this.uncorrectedAnswer;
-    if (answer === undefined) return undefined;
+    // The answer no longer describes the turn once the correction round dispatched another call.
+    if (answer === undefined || this.transcriptExchangeCount() !== this.uncorrectedExchangeCount)
+      return undefined;
     const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
     this.endedAnswer = answer;
@@ -696,6 +706,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const correction = this.answerCorrection(answer, request);
     if (correction === undefined) return false;
     this.uncorrectedAnswer = answer;
+    this.uncorrectedExchangeCount = this.transcriptExchangeCount();
     this.continuation.push({ role: "assistant", content: answer.content });
     this.correction = { role: "system", content: correction.content };
     recordChatToolTurnCorrected(processServerLogSink(), {

@@ -15,6 +15,7 @@ import {
   createGatewayToolCatalogBridge,
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
+  TransportError,
   type GatewayCallRequest,
   type GatewayStreamChunk,
   type NormalizedResponse,
@@ -72,6 +73,7 @@ const POD = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   draftToSend = DRAFT_ARGUMENTS;
+  commentKeysByRound = [];
   for (const cleanup of cleanups.splice(0)) await cleanup();
   vi.restoreAllMocks();
 });
@@ -194,6 +196,8 @@ const NESTED_DRAFT_ARGUMENTS = {
     },
   ],
 };
+/** The issue a comment call names in each model round (index = round - 1); KEIKO-1 when absent. */
+let commentKeysByRound: readonly string[] = [];
 /** The arguments the scripted model sends as its backlog draft. */
 let draftToSend: Record<string, unknown> = DRAFT_ARGUMENTS;
 /** An attachment call names a connected file; `beforeCall` connects the folder as the model calls. */
@@ -214,11 +218,12 @@ function toolArguments(
   mutation: Mutation,
   draft: DraftCall,
   body = "Synthetic approved comment",
+  issueKey = "KEIKO-1",
 ): Record<string, unknown> {
   if (draft) return typeof draft === "function" ? draft() : draftToSend;
   if (typeof mutation === "object")
     return { issueKey: "KEIKO-1", source: { kind: "connected-file", path: mutation.attach } };
-  return mutation ? { issueKey: "KEIKO-1", body } : {};
+  return mutation ? { issueKey, body } : {};
 }
 /** `true` keeps requesting a tool; a number requests that many rounds, then answers. */
 function endsTurn(repeatTools: boolean | number, round: number): boolean {
@@ -266,7 +271,12 @@ function syntheticModel(
         bridge.bind({
           id: `call-${String(calls.length)}`,
           name: tool.alias,
-          arguments: toolArguments(mutation, draft, bodies?.[calls.length - 1]),
+          arguments: toolArguments(
+            mutation,
+            draft,
+            bodies?.[calls.length - 1],
+            commentKeysByRound[calls.length - 1],
+          ),
         }),
       ],
     };
@@ -1119,6 +1129,69 @@ describe.each([false, true])(
       expect(f.calls).toHaveLength(2);
       expect(vi.mocked(unsupportedIssueKeys)).toHaveBeenCalled();
       expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+    });
+  },
+);
+
+/** Fails the model's call number `round` (1-based) with a provider fault, on both transports. */
+function failModelRound(f: ReturnType<typeof fixture>, round: number): void {
+  const original = f.model.callStream;
+  if (original === undefined) throw new Error("Missing stream port");
+  let rounds = 0;
+  const callStream: NonNullable<ModelPort["callStream"]> = (request, signal) => {
+    rounds++;
+    if (rounds === round) throw new TransportError("synthetic provider failure");
+    return original(request, signal);
+  };
+  Object.assign(f.model, {
+    callStream,
+    call: async (request: GatewayCallRequest, signal: AbortSignal): Promise<NormalizedResponse> => {
+      for await (const chunk of callStream(request, signal))
+        if (chunk.type === "done") return chunk.response;
+      throw new Error("Missing done chunk");
+    },
+  });
+}
+
+// #4175: a report-omission correction that then performs another write and meets a provider failure
+// answers from the transcript, so the second Jira effect is reported; a correction round that fails
+// before any further effect keeps the model's own first answer.
+describe.each([false, true])(
+  "a report correction round that ends in a provider failure (stream=%s)",
+  (stream) => {
+    async function runFailedCorrection(failingRound: number): Promise<{
+      f: ReturnType<typeof fixture>;
+      content: string;
+    }> {
+      vi.mocked(omittedReportFindingKeys).mockReturnValueOnce(["RPT-50"]);
+      commentKeysByRound = ["KEIKO-1", "KEIKO-1", "KEIKO-2"];
+      const f = fixture(true);
+      f.deps.store.updateChat(f.chatId, { toolMode: "autonomous-delivery" });
+      failModelRound(f, failingRound);
+      const response = mockResponse({ captureBody: true });
+      const ctx = { ...sendContext(f, `corrected-failure-${String(stream)}`), res: response.res };
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await pending;
+      return { f, content: f.deps.store.listMessages(f.chatId)[1]?.content ?? "" };
+    }
+
+    it("reports the write the correction round performed before the provider failed", async () => {
+      const { f, content } = await runFailedCorrection(4);
+
+      expect(f.writes()).toBe(2);
+      expect(content).toContain("KEIKO-1");
+      expect(content).toContain("KEIKO-2");
+      expect(content).toContain("the model request failed");
+    });
+
+    it("keeps the model's own answer when the correction round fails before any further effect", async () => {
+      const { f, content } = await runFailedCorrection(3);
+
+      expect(f.writes()).toBe(1);
+      expect(content).toBe("No Jira projects are visible.");
     });
   },
 );
