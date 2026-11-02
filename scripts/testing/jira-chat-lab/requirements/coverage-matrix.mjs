@@ -160,6 +160,13 @@ export function gradeCoverageMatrix(answer, truth, structured) {
     covered: covered.length,
     open: open.length,
     wrong: ids.filter((id) => !right(id)),
+    // Which side is wrong tells a model's answer apart from a defect of the report tool.
+    answerWrong: ids.filter(
+      (id) => parsed.conflicts.has(id) || !states(parsed.lines.get(id), truth.get(id)),
+    ),
+    toolWrong: ids.filter(
+      (id) => structured.conflicts.has(id) || !states(structured.entries.get(id), truth.get(id)),
+    ),
     unreported: ids.filter((id) => !structured.entries.has(id)),
     invented,
   };

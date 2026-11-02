@@ -295,7 +295,7 @@ async function coverageMatrix(ctx, chat) {
   return result(
     grade.matrixOk && grade.openOk ? "green" : "red",
     turn,
-    `${grade.covered} covered and ${grade.open} open requirements expected; ${grade.wrong.length} requirements wrong in the answer or the tool result, ${grade.unreported.length} not reported by the tool, ${grade.invented.length} invented`,
+    `${grade.covered} covered and ${grade.open} open requirements expected; ${grade.wrong.length} requirements wrong (${grade.answerWrong.length} in the answer, ${grade.toolWrong.length} in the tool result), ${grade.unreported.length} not reported by the tool, ${grade.invented.length} invented`,
     ["coverage-matrix", "uncovered-requirements"],
   );
 }
