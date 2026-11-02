@@ -224,7 +224,7 @@ function complianceSection(report: JiraReport): string {
   return [
     "## Compliance\n",
     `Required-field rules: ${compliance.requiredFieldRules}. Template checker: ${compliance.checker}.\n`,
-    `${String(compliance.issuesChecked)} issues checked, ${String(compliance.issuesWithDeviations)} with deviations, ${String(compliance.deviationCount)} deviations.\n`,
+    `${String(compliance.issuesJudged)} issues judged, ${String(compliance.issuesWithDeviations)} with deviations, ${String(compliance.deviationCount)} deviations.\n`,
     ...(compliance.issuesWithoutTemplate === 0
       ? []
       : [
@@ -255,10 +255,13 @@ function listOf(items: readonly string[]): string {
 }
 const UNOBSERVED_ROLES_NOTE =
   "_Not determinable: no issue in this scope holds work, so empty containers cannot be told from standalone issues._\n";
+const INFERRED_PARENT_NOTE =
+  "_Not verified: the parent relation comes from a custom field whose role Jira does not state; name it in parentFieldIds to confirm it._\n";
 function coverageSection(report: JiraReport): string {
   const { coverage } = report;
   const lines = [
     "## Coverage\n",
+    ...(report.hierarchy.inferredFieldCount > 0 ? [INFERRED_PARENT_NOTE] : []),
     "### Epics without members\n",
     ...(coverage.containerRoles === "unobserved" ? [UNOBSERVED_ROLES_NOTE] : []),
     listOf(coverage.uncoveredEpics),
@@ -356,13 +359,16 @@ export function jiraReportCommentText(report: JiraReport): string {
     `Progress: ${String(project.total)} issues, ${String(project.new)} to do, ${String(project.indeterminate)} in progress, ${String(project.done)} done (${String(project.donePercent)}%), ${String(project.noCategory)} without category`,
     `Estimate (${estimateUnitText(report)}): ${String(project.estimate.total)} total, ${String(project.estimate.done)} done, ${String(project.estimate.remaining)} remaining`,
     `Open and unassigned: ${String(unassigned)}; open and overdue: ${String(overdue)}`,
-    `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesChecked)} issues deviate (${String(compliance.deviationCount)} deviations)`,
+    `Compliance: ${String(compliance.issuesWithDeviations)} of ${String(compliance.issuesJudged)} issues deviate (${String(compliance.deviationCount)} deviations)`,
     ...(compliance.issuesWithoutTemplate === 0
       ? []
       : [
           `Not judged by any template: ${String(compliance.issuesWithoutTemplate)} issues of ${String(compliance.withoutTemplateByType.length)} issue types`,
         ]),
     ...compliance.byRule.map((item) => `Rule ${item.ruleId}: ${String(item.count)} issues`),
+    ...(report.hierarchy.inferredFieldCount > 0
+      ? ["Parent relation: not verified, inferred from a custom field of unstated role"]
+      : []),
     ...(coverage.containerRoles === "unobserved"
       ? ["Epics without members: not determinable, no issue in this scope holds work"]
       : [keyList("Epics without members", coverage.uncoveredEpics)]),

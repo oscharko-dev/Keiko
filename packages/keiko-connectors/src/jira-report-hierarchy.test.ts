@@ -24,6 +24,7 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
       fieldCount: 3,
       observedFieldCount: 1,
       rejectedFieldCount: 2,
+      inferredFieldCount: 1,
     });
     expect(foreign.epics).toEqual(known.epics);
     expect(foreign.coverage).toEqual(known.coverage);
@@ -52,6 +53,7 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
       observedFieldCount: 1,
       // The two decoys and the thirty extra fields holding free text, shown by value.
       rejectedFieldCount: 32,
+      inferredFieldCount: 1,
     });
     for (const section of ["progress", "epics", "coverage", "compliance"] as const)
       expect(crowded[section]).toEqual(known[section]);

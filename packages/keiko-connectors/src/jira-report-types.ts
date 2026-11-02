@@ -39,6 +39,11 @@ export interface JiraReportIssue {
    * missing deviation never reads as compliance.
    */
   readonly templateJudged: boolean;
+  /**
+   * Whether the instance's required-field rules judged this issue: the create metadata of its
+   * issue type was read. `false` when the rules were not requested or unavailable for its type.
+   */
+  readonly requiredJudged: boolean;
   /** Declared requirement ids this issue names in its summary, labels or description. */
   readonly requirementIds: readonly string[];
   /** The issue's labels, bounded; the trace a write left on the issue is read back from them. */
@@ -193,6 +198,12 @@ export interface JiraReport {
     readonly observedFieldCount: number;
     /** Discovered fields shown not to hold a parent, so later pages stopped asking for them. */
     readonly rejectedFieldCount: number;
+    /**
+     * Discovered fields, not named by the caller, whose issue-key values supplied a parent. Jira
+     * states no role for an app's field, so these relations rest on the value shape alone: the
+     * report discloses them as not verified; naming the field in `parentFieldIds` confirms it.
+     */
+    readonly inferredFieldCount: number;
   };
   readonly progress: {
     readonly project: JiraReportProgress;
@@ -214,6 +225,12 @@ export interface JiraReport {
      * required-field rules (`requiredFieldRules`) could have judged.
      */
     readonly issuesChecked: number;
+    /**
+     * Issues at least one contributing rule judged: the template-covered ones and those whose type
+     * the required-field rules read. It is the denominator of every deviation count, because the
+     * deviations come from both rule families; `issuesChecked` stays the template's own coverage.
+     */
+    readonly issuesJudged: number;
     /**
      * Issues no template judged. With `applied`: those whose project and issue type no template
      * covers. With `none`: every issue, as there is no template. With `unavailable`: 0, as

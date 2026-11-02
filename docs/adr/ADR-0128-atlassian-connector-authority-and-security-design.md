@@ -1185,7 +1185,7 @@ CSV neutralizes spreadsheet formulas. Evidence is `atlassian.jira-report` (phase
 reason, scope kind, counts including `invalidArgumentCount` on a refusal, how the parent relation
 was found — `hierarchyDiscovery` `complete|unavailable`, `hierarchyFieldCount` candidates and
 `hierarchyObservedFieldCount` fields that held a parent, `hierarchyRejectedFieldCount` fields shown
-to hold none — and rule ids; never scope text, keys, summaries or report content) beside
+to hold none, `hierarchyInferredFieldCount` observed fields the caller did not name — and rule ids; never scope text, keys, summaries or report content) beside
 the existing `atlassian.action.outcome` line for the call.
 
 **Template coverage and list continuation (#4181, 2026-11-01).** "No deviation" only describes an

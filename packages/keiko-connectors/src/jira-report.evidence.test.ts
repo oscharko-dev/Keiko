@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  JIRA_REPORT_RESULT_BYTES_MAX,
   parseJiraIssueTemplate,
   type JiraIssueTemplate,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { AtlassianHttpBodyPort } from "./atlassian-http-port.js";
 import { CONTEXT, NOW, idOf, record, reportOf } from "./jira-report.harness.js";
@@ -484,6 +488,24 @@ describe("an issue key in a business field is no parent without role evidence (D
     expect(orphans).toContain("REP-9");
   });
 
+  it("discloses a field holding one issue key and nothing else as unverified, not as a parent", async () => {
+    const { result, report } = await run({ issues }, { rewrite: mention(() => false) });
+    // The Epic link field and the business field both rest on the value shape alone.
+    expect(record(reportOf(result).hierarchy)).toMatchObject({ inferredFieldCount: 2 });
+    expect(report === undefined ? "" : exportJiraReport(report, "markdown").content).toContain(
+      "Not verified",
+    );
+    expect(report === undefined ? "" : jiraReportCommentText(report)).toContain("not verified");
+  });
+
+  it("does not count a caller-named field as inferred", async () => {
+    const { result } = await run(
+      { issues },
+      { rewrite: mention(() => false), args: { parentFieldIds: [DECOY_BLOB] } },
+    );
+    expect(record(reportOf(result).hierarchy)).toMatchObject({ inferredFieldCount: 1 });
+  });
+
   it("honours the field when the caller names it", async () => {
     const { result } = await run(
       { issues },
@@ -491,5 +513,79 @@ describe("an issue key in a business field is no parent without role evidence (D
     );
     const orphans = orphanKeys(result);
     expect(orphans).not.toContain("REP-9");
+  });
+});
+
+describe("the figures fit the catalog's scalar bound in encoded bytes (D10)", () => {
+  const issues = syntheticProject(300);
+  const named = (type: string, status: string): Rewrite => {
+    return (path, body) => {
+      if (path !== "search") return body;
+      issuesOf(body).forEach((issue, index) => {
+        const number = Number(String(issue.key).slice(4));
+        const fields = fieldsOf(issue);
+        const issuetype = fields.issuetype as Body;
+        issuetype.name = `${type.repeat(48 - 4)}${String(1000 + number)}`;
+        (fields.status as Body).name = `${status.repeat(53 - 4)}${String(1000 + index)}`;
+      });
+      return body;
+    };
+  };
+  const bytesOf = (result: ManagedMcpToolResult): number =>
+    Buffer.byteLength(String(reportOf(result).figures));
+
+  it("control: 300 ASCII pairs are shown whole", async () => {
+    const { result } = await run({ issues }, { rewrite: named("t", "s") });
+    expect(bytesOf(result)).toBeLessThanOrEqual(TOOL_CATALOG_LIMITS.maxStringBytes);
+    expect(String(reportOf(result).figures)).not.toContain("more not shown");
+  });
+
+  it("cuts multibyte pairs by encoded size and says how many it left out", async () => {
+    const { result } = await run({ issues }, { rewrite: named("\u6f22", "\u72b6") });
+    expect(result.data.status).toBe("complete");
+    const figures = String(reportOf(result).figures);
+    expect(bytesOf(result)).toBeLessThanOrEqual(TOOL_CATALOG_LIMITS.maxStringBytes);
+    expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThanOrEqual(
+      JIRA_REPORT_RESULT_BYTES_MAX,
+    );
+    const shown = figures.split("\n").filter((entry) => entry.includes("\u72b6")).length;
+    expect(shown).toBeLessThan(300);
+    expect(figures).toContain(`(${String(300 - shown)} more not shown; page section statuses)`);
+  });
+});
+
+describe("one denominator counts every issue a contributing rule judged (D11)", () => {
+  const issues = syntheticProject(60);
+  const epicTemplate = (): JiraIssueTemplateSet => {
+    const parsed = parseJiraIssueTemplate(
+      "---\nkeiko: jira-issue-template\nversion: 1\nproject: REP\nissueType: Epic\nactivateOn: [edit]\nsummaryMinLength: 1\n---\n## Context\n",
+    );
+    if (!parsed.ok) throw new Error("fixture template must parse");
+    return { templates: [parsed.template], unreadable: 0 };
+  };
+  const completed = (report: JiraReport | undefined): JiraReport => {
+    if (report === undefined) throw new Error("the report must be complete");
+    return report;
+  };
+
+  it("control: without a template the required-field rules judge all sixty", async () => {
+    const { report } = await run({ issues });
+    expect(completed(report).compliance).toMatchObject({
+      issuesJudged: 60,
+      issuesWithDeviations: 6,
+    });
+  });
+
+  it("keeps the Stories judged by required fields in the denominator beside an Epic template", async () => {
+    const { report } = await run({ issues }, { templates: epicTemplate() });
+    const compliance = completed(report).compliance;
+    expect(compliance).toMatchObject({ checker: "applied", issuesChecked: 4, issuesJudged: 60 });
+    expect(compliance.issuesWithDeviations).toBeLessThanOrEqual(compliance.issuesJudged);
+    const deviating = String(compliance.issuesWithDeviations);
+    expect(compliance.issuesWithDeviations).toBeGreaterThanOrEqual(6);
+    expect(jiraReportCommentText(completed(report))).toContain(`${deviating} of 60 issues deviate`);
+    expect(exportJiraReport(completed(report), "markdown").content).toContain(
+      `60 issues judged, ${deviating} with deviations`,
+    );
   });
 });

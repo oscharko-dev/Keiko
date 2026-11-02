@@ -265,7 +265,7 @@ function containerOf(graph: Graph, key: string): JiraReportContainer {
   };
 }
 
-/** Issues something judged: with a checker, those a template covers; otherwise the issues read. */
+/** Issues a template judged: with a checker, those a template covers; otherwise the issues read. */
 function judgedCount(
   issues: readonly JiraReportIssue[],
   checker: JiraReport["compliance"]["checker"],
@@ -273,6 +273,10 @@ function judgedCount(
   return checker === "applied"
     ? issues.filter((issue) => issue.templateJudged).length
     : issues.length;
+}
+/** Issues at least one contributing rule judged, whichever family: templates or required fields. */
+function ruleJudgedCount(issues: readonly JiraReportIssue[]): number {
+  return issues.filter((issue) => issue.templateJudged || issue.requiredJudged).length;
 }
 /** Issues no template judged, per type: all of them with `none`, unknowable with `unavailable`. */
 function withoutTemplateOf(
@@ -328,6 +332,7 @@ function complianceOf(
     requiredFieldRules: input.requiredFieldRules,
     checker: input.checker,
     issuesChecked: judgedCount(issues, input.checker),
+    issuesJudged: ruleJudgedCount(issues),
     ...withoutTemplateOf(issues, input.checker),
     issuesWithDeviations: deviations.length,
     deviationCount,

@@ -1780,6 +1780,12 @@
               "required": false
             },
             {
+              "name": "hierarchyInferredFieldCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "hierarchyObservedFieldCount",
               "type": "integer",
               "dataClass": "count",

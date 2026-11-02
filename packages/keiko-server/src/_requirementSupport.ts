@@ -219,6 +219,7 @@ function rowsOf(issues: readonly ReportedIssue[]): JiraReport["rows"] {
       estimate: undefined,
       deviations: [],
       templateJudged: false,
+      requiredJudged: false,
       requirementIds: [],
       labels: issue.labels,
     },
@@ -253,6 +254,21 @@ export interface ReportOptions {
   readonly projectKey?: string;
 }
 
+function noCompliance(): JiraReport["compliance"] {
+  return {
+    requiredFieldRules: "not-requested",
+    checker: "none",
+    issuesChecked: 0,
+    issuesJudged: 0,
+    issuesWithoutTemplate: 0,
+    withoutTemplateByType: [],
+    issuesWithDeviations: 0,
+    deviationCount: 0,
+    byRule: [],
+    deviations: [],
+  };
+}
+
 function reportOf(
   issues: readonly ReportedIssue[],
   complete: boolean,
@@ -280,20 +296,11 @@ function reportOf(
       fieldCount: 1,
       observedFieldCount: 1,
       rejectedFieldCount: 0,
+      inferredFieldCount: 0,
     },
     progress: progressOf(issues.length),
     epics: [],
-    compliance: {
-      requiredFieldRules: "not-requested",
-      checker: "none",
-      issuesChecked: 0,
-      issuesWithoutTemplate: 0,
-      withoutTemplateByType: [],
-      issuesWithDeviations: 0,
-      deviationCount: 0,
-      byRule: [],
-      deviations: [],
-    },
+    compliance: noCompliance(),
     coverage: {
       containerRoles: "observed",
       uncoveredEpics: [],

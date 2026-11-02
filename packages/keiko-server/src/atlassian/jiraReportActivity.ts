@@ -114,6 +114,7 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     hierarchyFieldCount: { type: "integer", dataClass: "count", required: false },
     hierarchyObservedFieldCount: { type: "integer", dataClass: "count", required: false },
     hierarchyRejectedFieldCount: { type: "integer", dataClass: "count", required: false },
+    hierarchyInferredFieldCount: { type: "integer", dataClass: "count", required: false },
     byteCount: { type: "integer", dataClass: "count", required: false },
     invalidArgumentCount: { type: "integer", dataClass: "count", required: false },
     sectionItemCount: { type: "integer", dataClass: "count", required: false },
@@ -191,6 +192,7 @@ interface JiraReportLine {
   readonly hierarchyFieldCount?: number;
   readonly hierarchyObservedFieldCount?: number;
   readonly hierarchyRejectedFieldCount?: number;
+  readonly hierarchyInferredFieldCount?: number;
   readonly byteCount?: number;
   readonly invalidArgumentCount?: number;
   readonly sectionItemCount?: number;
@@ -208,6 +210,7 @@ function hierarchyOf(
   | "hierarchyFieldCount"
   | "hierarchyObservedFieldCount"
   | "hierarchyRejectedFieldCount"
+  | "hierarchyInferredFieldCount"
 > {
   const { hierarchy } = input;
   return hierarchy === undefined
@@ -217,6 +220,7 @@ function hierarchyOf(
         hierarchyFieldCount: hierarchy.fieldCount,
         hierarchyObservedFieldCount: hierarchy.observedFieldCount,
         hierarchyRejectedFieldCount: hierarchy.rejectedFieldCount,
+        hierarchyInferredFieldCount: hierarchy.inferredFieldCount,
       };
 }
 

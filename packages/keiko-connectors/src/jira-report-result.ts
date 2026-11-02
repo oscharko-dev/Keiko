@@ -177,6 +177,7 @@ export function jiraReportSummary(report: JiraReport): CatalogJsonObject {
       requiredFieldRules: compliance.requiredFieldRules,
       checker: compliance.checker,
       issuesChecked: compliance.issuesChecked,
+      issuesJudged: compliance.issuesJudged,
       issuesWithoutTemplate: compliance.issuesWithoutTemplate,
       withoutTemplateByType: compliance.withoutTemplateByType
         .slice(0, SUMMARY_TYPE_MAX)

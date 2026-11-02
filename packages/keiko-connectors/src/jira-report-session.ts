@@ -64,6 +64,11 @@ export interface JiraReportSession {
   report: JiraReport | undefined;
 }
 
+function inferredFieldCount(plan: JiraReportSession["plan"]): number {
+  if (plan === undefined) return 0;
+  return [...plan.parentFieldsSeen].filter((id) => !plan.namedParentFieldIds.has(id)).length;
+}
+
 /** How the parent relation was found so far: counts and one closed word, never a field id. */
 export function jiraReportHierarchyOf(session: JiraReportSession): JiraReport["hierarchy"] {
   const plan = session.plan;
@@ -72,6 +77,7 @@ export function jiraReportHierarchyOf(session: JiraReportSession): JiraReport["h
     fieldCount: plan?.parentFieldIds.length ?? 0,
     observedFieldCount: plan?.parentFieldsSeen.size ?? 0,
     rejectedFieldCount: plan?.parentFieldsRejected.size ?? 0,
+    inferredFieldCount: inferredFieldCount(plan),
   };
 }
 

@@ -42,6 +42,7 @@ function seeded(): JiraReportStore {
       fieldCount: 1,
       observedFieldCount: 1,
       rejectedFieldCount: 0,
+      inferredFieldCount: 0,
     },
     progress: {
       project: {
@@ -63,6 +64,7 @@ function seeded(): JiraReportStore {
       requiredFieldRules: "applied",
       checker: "none",
       issuesChecked: 1,
+      issuesJudged: 1,
       issuesWithoutTemplate: 1,
       withoutTemplateByType: [{ typeName: "Task", count: 1 }],
       issuesWithDeviations: 0,
@@ -92,6 +94,7 @@ function seeded(): JiraReportStore {
           estimate: undefined,
           deviations: [],
           templateJudged: false,
+          requiredJudged: false,
           requirementIds: [],
           labels: [],
         },
@@ -237,6 +240,7 @@ describe("Jira report activity", () => {
         fieldCount: 3,
         observedFieldCount: 1,
         rejectedFieldCount: 2,
+        inferredFieldCount: 1,
       },
       durationMs: 2,
     });
@@ -245,6 +249,7 @@ describe("Jira report activity", () => {
       hierarchyFieldCount: 3,
       hierarchyObservedFieldCount: 1,
       hierarchyRejectedFieldCount: 2,
+      hierarchyInferredFieldCount: 1,
     });
   });
 
