@@ -203,7 +203,7 @@ lint would reject. "Tests pass" is **not** "the change is green." You must run `
 
 ```bash
 npm run typecheck        # builds packages, checks the package graph, then tsc --noEmit (strict)
-npm run lint             # eslint . --max-warnings=0  AND  the keiko-ui workspace lint
+npm run lint             # eslint --max-warnings=0 per package + root (scripts/lint-repository.mjs) AND keiko-ui lint
 npm run format:check     # prettier --check (CI runs this; format:check failing = red)
 npm test                 # build:packages then vitest run
 npm run arch:check       # dependency-cruiser + import-policy + contract-boundaries
