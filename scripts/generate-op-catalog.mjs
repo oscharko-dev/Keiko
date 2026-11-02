@@ -1876,16 +1876,16 @@ function fieldDescriptorArguments(name, descriptor) {
 // line and paragraph separators unescaped; escape them too, so no registry value can change the
 // meaning of the generated source.
 const UNSAFE_CODE_CHARACTERS = Object.freeze({
-  "<": "\\u003C",
-  ">": "\\u003E",
-  "\b": "\\b",
-  "\f": "\\f",
-  "\n": "\\n",
-  "\r": "\\r",
-  "\t": "\\t",
-  "\0": "\\0",
-  "\u2028": "\\u2028",
-  "\u2029": "\\u2029",
+  "<": String.raw`\u003C`,
+  ">": String.raw`\u003E`,
+  "\b": String.raw`\b`,
+  "\f": String.raw`\f`,
+  "\n": String.raw`\n`,
+  "\r": String.raw`\r`,
+  "\t": String.raw`\t`,
+  "\0": String.raw`\0`,
+  "\u2028": String.raw`\u2028`,
+  "\u2029": String.raw`\u2029`,
 });
 
 function codeLiteral(value) {
