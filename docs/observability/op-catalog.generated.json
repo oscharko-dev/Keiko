@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2e4c5ac394afb17475f573e43041ea4dcd780b003052f9d0edc1e6777e34ede8",
+    "catalogDigest": "735632d83d43c37b18050195704414066f35ef90bd38493c6798fa63e98fa57c",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4855,7 +4855,8 @@
               "git-read",
               "widget-locale",
               "browser-approval",
-              "update-startup"
+              "update-startup",
+              "command-runner"
             ]
           },
           "renderFailure": {

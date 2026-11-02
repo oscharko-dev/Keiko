@@ -480,6 +480,7 @@ export const CLIENT_MODULE_LOAD_FAILURES = [
   "widget-locale",
   "browser-approval",
   "update-startup",
+  "command-runner",
 ] as const;
 export type ClientModuleLoadFailure = (typeof CLIENT_MODULE_LOAD_FAILURES)[number];
 const CLIENT_MODULE_LOAD_FAILURE_SET: ReadonlySet<unknown> = new Set(CLIENT_MODULE_LOAD_FAILURES);

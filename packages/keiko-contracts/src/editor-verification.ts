@@ -93,7 +93,7 @@ export interface EditorVerificationRun {
 // A content-free projection of the detected scripts for a project root (Issue #2211's catalog route,
 // consumed by Issue #2212's run affordances). Per kind: whether it is runnable and its server-owned
 // trust state. Script-backed kinds carry the workspace-trust decision; targeted-test is exempt.
-// This reuses (not redeclares) `CommandTaskTrustState` (command-runner.ts, Issue #1387): both model
+// This reuses (not redeclares) `CommandTaskTrustState` (command-task-trust.ts, Issue #1387): both model
 // the identical "server-owned trust decision for a discovered, executable script" concept, and an
 // alias keeps the two forced to stay in sync instead of able to drift independently (ADR-0126 D1).
 export type EditorVerificationTrustState = CommandTaskTrustState;

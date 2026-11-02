@@ -2393,6 +2393,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = /*#__PURE__*/ (() =>
           "widget-locale",
           "browser-approval",
           "update-startup",
+          "command-runner",
         ]),
         renderFailure: activityLogStringEnumField(false, ["shell", "window-body"]),
         clientNoteDigest: fieldContracts.activityLogBoundedStringField(true, "digest", 64),
