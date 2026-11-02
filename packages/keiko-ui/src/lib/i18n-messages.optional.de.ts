@@ -2987,6 +2987,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "{issues} von {checked} Vorgängen weichen ab ({count} Abweichungen)",
   "chat.jira.report.coverage":
     "{epics} Epics ohne Inhalt, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
+  "chat.jira.report.coverageUnobserved":
+    "Epics ohne Inhalt lassen sich für diesen Umfang nicht bestimmen, {orphans} Vorgänge ohne Epic oder übergeordneten Vorgang",
+  "chat.jira.report.parentUnverified":
+    "Die Epic-Zugehörigkeit stammt aus einem benutzerdefinierten Feld, dessen Rolle Jira nicht angibt.",
   "chat.jira.report.exportMarkdown": "Markdown exportieren",
   "chat.jira.report.exportCsv": "CSV exportieren",
   "chat.jira.report.exportFailed":

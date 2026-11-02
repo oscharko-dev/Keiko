@@ -54,6 +54,7 @@ interface Run {
   readonly result: ManagedMcpToolResult;
   readonly report: JiraReport | undefined;
   readonly again: () => Promise<ManagedMcpToolResult>;
+  readonly call: (args: CatalogJsonObject) => Promise<ManagedMcpToolResult>;
 }
 async function run(
   options: FixtureOptions,
@@ -86,7 +87,7 @@ async function run(
   const result = await call({ projectKey: "REP", ...extra.args });
   const id = idOf(result);
   const again = (): Promise<ManagedMcpToolResult> => call({ reportId: id });
-  return { result, report: store.peek(id, "chat-1")?.report, again };
+  return { result, report: store.peek(id, "chat-1")?.report, again, call };
 }
 async function finished(started: Run): Promise<Run> {
   if (started.result.data.status !== "reading") return started;
@@ -587,5 +588,44 @@ describe("one denominator counts every issue a contributing rule judged (D11)", 
     expect(exportJiraReport(completed(report), "markdown").content).toContain(
       `60 issues judged, ${deviating} with deviations`,
     );
+  });
+});
+
+describe("a section page keeps the envelope the report card reads (D12)", () => {
+  const issues = syntheticProject(40);
+  const unreadable: JiraIssueTemplateSet = { templates: [], unreadable: 1 };
+
+  it("carries progress and exports on a first call that names a section", async () => {
+    const summary = await run({ issues });
+    const { result } = await run({ issues }, { args: { section: "comment" } });
+    expect(record(result.data.progress)).toEqual(record(summary.result.data.progress));
+    expect(result.data.exports).toEqual(summary.result.data.exports);
+  });
+
+  it("carries them on an incomplete report, whose reason the page still states", async () => {
+    const { result } = await run(
+      { issues },
+      { args: { section: "orphans" }, templates: unreadable },
+    );
+    expect(result.data.status).toBe("incomplete");
+    expect(record(result.data.progress)).toMatchObject({ issuesRead: 40 });
+    expect(result.data.exports).toEqual(["markdown", "csv"]);
+    expect(completenessOf(result)).toMatchObject({
+      complete: false,
+      reason: "template-unreadable",
+    });
+  });
+
+  it("carries them on a continued section page", async () => {
+    const started = await run({ issues }, { args: { section: "deviations", maxResults: 2 } });
+    const next = await started.call({
+      reportId: idOf(started.result),
+      section: "deviations",
+      startAt: 2,
+      maxResults: 2,
+    });
+    expect(record(next.data.progress)).toMatchObject({ issuesRead: 40 });
+    expect(next.data.exports).toEqual(["markdown", "csv"]);
+    expect(record(next.data.section)).toMatchObject({ name: "deviations", startAt: 2 });
   });
 });

@@ -1079,7 +1079,10 @@ takes back the parents it proposed, because a parent field holds issue keys ever
 and an app's business field that mentions an issue is no hierarchy; the field metadata cannot state
 a field's role without naming an app, so a caller who knows the field names it in `parentFieldIds`
 and that mapping is never narrowed, and so a crowded instance converges to its few real parent
-fields; a field that stayed empty is kept), epics without members (a container is an
+fields; a field that stayed empty is kept). A discovered field the caller did not name still rests
+on the shape of its values alone, however consistent: the report counts such fields that supplied a
+parent as `hierarchy.inferredFieldCount` and states in the summary, the Markdown export, the Jira
+comment and the report card that the relation is not verified, instead of asserting it), epics without members (a container is an
 issue of a type that holds work for another issue and is never held itself, so an empty epic is
 found without reading an Epic Name field; a scope in which nothing holds work — only new empty
 epics, or a JQL that leaves out their children — cannot tell a container from a standalone issue,
@@ -1127,7 +1130,9 @@ asked, no more issues than the total leaves); otherwise the read ends `read-fail
 `malformed-payload`. A hit that leaves out a field the report requested (the assignee, a field
 required on create) ends it `read-failed` with failure `permission`: Jira states a missing value as
 `null`, so an omitted field is evidence the account could not read. A create-metadata page ends its
-collection only by `isLast` or a reached total; an empty page without either is malformed. A rule's
+collection only by `isLast` or a reached total, and the two must agree: a page that calls itself
+last without reaching a total it states, or that states a total that is not a count, is malformed,
+as is an empty page without either statement. A rule's
 count is the number of issues that break it, once each, however many fields or template elements
 they break (`deviationCount` counts every deviation). Labels are kept whole: the trace and the
 requirement identifiers are read from them and the memory budget below charges each one. The page size adapts to the 256 KiB transport cap (a truncated
@@ -1158,7 +1163,8 @@ text and collapses line breaks. The bounded result carries the summary
 container's issues and done issues, and the estimate totals (with hours beside the seconds of the
 default estimate) as plain `;`-separated lines derived from the computed report, so a model that
 quotes a line states exactly what the report holds instead of reshaping JSON (lab S10, #4181 AC2; a
-list beyond 300 lines says how many it left out); the full lists are paged through `section` (`statuses`,
+list beyond 300 lines, or beyond what fits the tool result's 65,536-byte string bound in UTF-8,
+says how many it left out); the full lists are paged through `section` (`statuses`,
 `epics`, `deviations`, `orphans`, `uncovered`, `requirements`) and `section: "comment"` returns the
 exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.
 A section page the model does not size is the largest one (100 entries), and every page is cut
@@ -1167,6 +1173,8 @@ continues from there. Each further page is another model round over a growing co
 (2026-11-02) Qwen paged a 41-row coverage list as 15 + 25 rows, never read the last row and reasoned
 until its output was exhausted. The `section` line of `atlassian.jira-report` records
 `sectionItemCount`, `sectionItemTotal` and `sectionByteFitted`.
+Every section page keeps the `progress` and `exports` envelope of the summary, so the Chat report
+card shows the status, an incomplete report's warning and both export buttons for it too.
 A new report may name the `section` (with `startAt`/`maxResults`) it wants; once the report
 completes in that call the page is returned with the `reportId`, otherwise the call reports
 `reading` as before. Every section page also carries `report` with only the report's identity:
@@ -1192,7 +1200,8 @@ the existing `atlassian.action.outcome` line for the call.
 issue something judged. The template checker therefore also reports whether at least one template
 of the issue's project and issue type applies (`covers`, the same matching as the write gate), and
 the report's compliance counts `issuesChecked` as the issues a template judged when the checker is
-`applied`, with `issuesWithoutTemplate` and `withoutTemplateByType` (largest first, then by name)
+`applied` (`issuesJudged` is the separate denominator of every deviation count: the issues a template
+or the required-field rules of their type judged, so "N of M issues deviate" never exceeds 100 %), with `issuesWithoutTemplate` and `withoutTemplateByType` (largest first, then by name)
 for the rest, so a lab project whose Bugs and Sub-tasks have no template no longer reads as
 181 compliant issues. With `none` every issue is without a template and `issuesChecked` is the
 issues read (only required-field rules could have judged them); with `unavailable` coverage is not

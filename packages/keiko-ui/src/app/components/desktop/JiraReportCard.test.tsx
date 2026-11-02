@@ -33,9 +33,23 @@ const report = {
       donePercent: 27.7,
     },
   },
-  compliance: { issuesChecked: 2350, issuesWithDeviations: 235, deviationCount: 240 },
-  coverage: { uncoveredEpics: { total: 1, items: ["REP-4"] }, orphans: { total: 9, items: [] } },
+  hierarchy: { discovery: "complete", fieldCount: 3, observedFieldCount: 1, inferredFieldCount: 0 },
+  compliance: {
+    issuesChecked: 4,
+    issuesJudged: 2350,
+    issuesWithDeviations: 235,
+    deviationCount: 240,
+  },
+  coverage: {
+    containerRoles: "observed",
+    uncoveredEpics: { total: 1, items: ["REP-4"] },
+    orphans: { total: 9, items: [] },
+  },
 };
+/** The identity a section page of the tool carries instead of the summary (jira-report-result). */
+function sectionIdentity(completeness: Record<string, unknown>): Record<string, unknown> {
+  return { digest: "d".repeat(64), generatedAt: "2026-11-02T10:00:00.000Z", completeness };
+}
 function data(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     outcome: "succeeded",
@@ -88,6 +102,38 @@ describe("Jira report card", () => {
       screen.getByText("1 epics without members, 9 issues without an epic or parent"),
     ).toBeInTheDocument();
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("does not present an unobserved empty-container count as an established zero", async () => {
+    const unobserved = data({
+      report: {
+        ...report,
+        compliance: { ...report.compliance, issuesJudged: 4, issuesWithDeviations: 0 },
+        coverage: {
+          containerRoles: "unobserved",
+          uncoveredEpics: { total: 0, items: [] },
+          orphans: { total: 4, items: [] },
+        },
+      },
+    });
+    const { container } = render(
+      <JiraChatTools transcript={transcript(unobserved)} chatId="chat-1" />,
+    );
+    expect(
+      screen.getByText(
+        "Epics without members cannot be told for this scope, 4 issues without an epic or parent",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/0 epics without members/u)).not.toBeInTheDocument();
+    expect(await axe(container)).toHaveNoViolations();
+  });
+
+  it("discloses a parent relation that rests on a field Jira gives no role", () => {
+    const inferred = data({
+      report: { ...report, hierarchy: { ...report.hierarchy, inferredFieldCount: 1 } },
+    });
+    render(<JiraChatTools transcript={transcript(inferred)} chatId="chat-1" />);
+    expect(screen.getByText(/custom field whose role Jira does not state/u)).toBeInTheDocument();
   });
 
   it("says an incomplete report describes only the issues read", () => {
@@ -156,6 +202,53 @@ describe("Jira report card", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("could not be exported");
     expect(saveTextDownload).not.toHaveBeenCalled();
     expect(reportClientDiagnostic).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the status and the exports on a section page of a finished report", async () => {
+    const section = {
+      outcome: "succeeded",
+      status: "complete",
+      reportId: REPORT_ID,
+      progress: { issuesRead: 40, issuesTotal: 40, pageCount: 1, elapsedMs: 2 },
+      exports: ["markdown", "csv"],
+      report: sectionIdentity({ complete: true, issuesRead: 40, issuesTotal: 40, pageCount: 1 }),
+      section: { name: "comment", text: "Keiko Jira report REP" },
+    };
+    const file = { fileName: "report.csv", content: "a", mediaType: "text/csv" };
+    exportJiraReport.mockResolvedValue(file);
+    render(<JiraChatTools transcript={transcript(section)} chatId="chat-1" />);
+    expect(screen.getByText("Complete: 40 issues read")).toBeInTheDocument();
+    screen.getByRole("button", { name: "Export Markdown" });
+    screen.getByRole("button", { name: "Export CSV" }).focus();
+    await userEvent.keyboard("{Enter}");
+    await waitFor(() => {
+      expect(saveTextDownload).toHaveBeenCalledExactlyOnceWith(file);
+    });
+  });
+
+  it("keeps the warning of an incomplete report on a section page", () => {
+    const section = {
+      outcome: "succeeded",
+      status: "incomplete",
+      reportId: REPORT_ID,
+      progress: { issuesRead: 10, issuesTotal: 40, pageCount: 1, elapsedMs: 2 },
+      exports: ["markdown", "csv"],
+      report: sectionIdentity({
+        complete: false,
+        reason: "scope-changed",
+        issuesRead: 10,
+        issuesTotal: 40,
+        pageCount: 1,
+      }),
+      section: { name: "orphans", total: 0, startAt: 0, items: [] },
+    };
+    render(<JiraChatTools transcript={transcript(section)} chatId="chat-1" />);
+    expect(
+      screen.getByText(
+        "Incomplete (the issues changed while reading): 10 of 40 issues read. The figures describe only the issues read.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Export CSV" })).toBeInTheDocument();
   });
 
   it("offers no export without a Chat to bind the report to", () => {

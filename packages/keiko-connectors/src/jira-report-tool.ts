@@ -227,14 +227,18 @@ function sectionPageActivity(
 function sectionView(
   session: JiraReportSession,
   section: CatalogJsonObject | undefined,
+  elapsedMs: number,
 ): ManagedMcpToolResult {
   const { report } = session;
-  if (report === undefined || section === undefined) return readView(session, 0);
+  if (report === undefined || section === undefined) return readView(session, elapsedMs);
   return {
     data: {
       outcome: "succeeded",
       status: jiraReportState(session),
       reportId: session.id,
+      // The envelope the report card reads: a page without it hides the status and the exports.
+      progress: jiraReportProgressView(session, elapsedMs),
+      exports: [...JIRA_REPORT_EXPORTS_VIEW],
       report: jiraReportIdentity(report),
       section,
       ...(typeof section.nextStartAt === "number" ? { nextStartAt: section.nextStartAt } : {}),
@@ -306,7 +310,7 @@ async function runSession<Context extends ManagedMcpInvocationContext>(
   );
   return section === undefined
     ? readView(session, now() - session.startedAt)
-    : sectionView(session, section);
+    : sectionView(session, section, now() - session.startedAt);
 }
 
 type NewArgs = Extract<JiraReportArgs, { readonly kind: "new" }>;

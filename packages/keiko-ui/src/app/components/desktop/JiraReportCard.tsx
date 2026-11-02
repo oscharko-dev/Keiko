@@ -85,16 +85,19 @@ function Figures({
       <p>
         {t("chat.jira.report.compliance", {
           issues: figures.issuesWithDeviations,
-          checked: figures.issuesChecked,
+          checked: figures.issuesJudged,
           count: figures.deviationCount,
         })}
       </p>
       <p>
-        {t("chat.jira.report.coverage", {
-          epics: figures.uncoveredEpics,
-          orphans: figures.orphans,
-        })}
+        {figures.containerRoles === "unobserved"
+          ? t("chat.jira.report.coverageUnobserved", { orphans: figures.orphans })
+          : t("chat.jira.report.coverage", {
+              epics: figures.uncoveredEpics,
+              orphans: figures.orphans,
+            })}
       </p>
+      {figures.inferredParentFields > 0 ? <p>{t("chat.jira.report.parentUnverified")}</p> : null}
     </>
   );
 }

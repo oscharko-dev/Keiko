@@ -20,10 +20,14 @@ export interface JiraReportView {
         readonly done: number;
         readonly donePercent: number;
         readonly issuesWithDeviations: number;
-        readonly issuesChecked: number;
+        readonly issuesJudged: number;
         readonly deviationCount: number;
         readonly uncoveredEpics: number;
         readonly orphans: number;
+        /** `unobserved`: the scope shows no container, so the epic count is no established zero. */
+        readonly containerRoles: "observed" | "unobserved";
+        /** Parent relations that rest on a custom field whose role Jira does not state. */
+        readonly inferredParentFields: number;
       }
     | undefined;
 }
@@ -49,28 +53,32 @@ function counts<Key extends string>(
     ? (Object.fromEntries(keys.map((key, index) => [key, values[index]])) as Record<Key, number>)
     : undefined;
 }
-function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
-  const project = record(record(report.progress)?.project);
-  const compliance = record(report.compliance);
+type Figures = NonNullable<JiraReportView["figures"]>;
+function coverageOf(
+  report: Record<string, unknown>,
+): Pick<Figures, "uncoveredEpics" | "orphans" | "containerRoles"> | undefined {
   const coverage = record(report.coverage);
-  const status = counts(project, ["total", "new", "indeterminate", "done"] as const);
-  const audit = counts(compliance, [
-    "issuesWithDeviations",
-    "issuesChecked",
-    "deviationCount",
-  ] as const);
   const uncoveredEpics = listTotal(coverage?.uncoveredEpics);
   const orphans = listTotal(coverage?.orphans);
+  const roles = coverage?.containerRoles;
+  if (uncoveredEpics === undefined || orphans === undefined) return undefined;
+  if (roles !== "observed" && roles !== "unobserved") return undefined;
+  return { uncoveredEpics, orphans, containerRoles: roles };
+}
+function figuresOf(report: Record<string, unknown>): JiraReportView["figures"] {
+  const project = record(record(report.progress)?.project);
+  const status = counts(project, ["total", "new", "indeterminate", "done"] as const);
+  const audit = counts(record(report.compliance), [
+    "issuesWithDeviations",
+    "issuesJudged",
+    "deviationCount",
+  ] as const);
+  const coverage = coverageOf(report);
+  const inferred = count(record(report.hierarchy)?.inferredFieldCount);
   const percent = project?.donePercent;
-  if (
-    status === undefined ||
-    audit === undefined ||
-    uncoveredEpics === undefined ||
-    orphans === undefined ||
-    typeof percent !== "number"
-  )
-    return undefined;
-  return { ...status, ...audit, uncoveredEpics, orphans, donePercent: percent };
+  if (status === undefined || audit === undefined || coverage === undefined) return undefined;
+  if (inferred === undefined || typeof percent !== "number") return undefined;
+  return { ...status, ...audit, ...coverage, donePercent: percent, inferredParentFields: inferred };
 }
 
 /** Undefined for anything that is not a well-formed `jira.report` result. */

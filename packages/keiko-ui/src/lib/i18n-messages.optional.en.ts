@@ -2884,6 +2884,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.report.compliance": "{issues} of {checked} issues deviate ({count} deviations)",
   "chat.jira.report.coverage":
     "{epics} epics without members, {orphans} issues without an epic or parent",
+  "chat.jira.report.coverageUnobserved":
+    "Epics without members cannot be told for this scope, {orphans} issues without an epic or parent",
+  "chat.jira.report.parentUnverified":
+    "Epic membership comes from a custom field whose role Jira does not state.",
   "chat.jira.report.exportMarkdown": "Export Markdown",
   "chat.jira.report.exportCsv": "Export CSV",
   "chat.jira.report.exportFailed": "The report could not be exported. Run it again to export it.",
