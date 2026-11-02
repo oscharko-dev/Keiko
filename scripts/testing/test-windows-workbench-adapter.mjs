@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 import { createHash } from "node:crypto";
 import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   createRuntimeGatewayConfinement,
   planWindowsGatewayRuntimeSandbox,
