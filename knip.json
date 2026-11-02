@@ -19,6 +19,7 @@
         "scripts/testing/chat-skills-lab/run.mjs",
         "scripts/testing/chat-skills-lab/serve.mjs",
         "scripts/testing/chat-skills-lab/verify-tests.mjs",
+        "scripts/testing/test-secure-read-windows-paths.mjs",
         "scripts/testing/test-windows-gateway-service.mjs",
         "scripts/testing/test-windows-workbench-adapter.mjs",
         "tests/e2e/**/*.spec.ts!",
