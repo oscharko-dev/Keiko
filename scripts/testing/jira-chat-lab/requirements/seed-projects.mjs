@@ -229,9 +229,8 @@ async function seedBase() {
   (await bulkCreate("RPT", subtasks)).forEach((key, index) => (subtasks[index].key = key));
   const bugs = bugPlan(fields, epics);
   (await bulkCreate("RPT", bugs)).forEach((key, index) => (bugs[index].key = key));
-  for (const item of [...tasks, ...bugs]) {
-    if (item.status !== "To Do") await moveTo(item.key, item.status);
-  }
+  const moving = [...tasks, ...bugs].filter((item) => item.status !== "To Do");
+  await inBatches(moving, 1, (item) => moveTo(item.key, item.status));
   const strip = ({ fields: _fields, type, ...rest }) => ({ type, ...rest });
   privateJson(truthPath, {
     schemaVersion: 1,
@@ -240,7 +239,7 @@ async function seedBase() {
     uncoveredRequirements: buildCorpus(1)
       .truth.filter((_, index) => (index + 1) % 10 === 0)
       .map((item) => item.id),
-    issues: [...epics, ...tasks, ...subtasks, ...bugs].map(strip),
+    issues: [...epics, ...tasks, ...subtasks, ...bugs].map((item) => strip(item)),
   });
   console.log(
     JSON.stringify({
@@ -262,7 +261,7 @@ async function transitionIds(sampleKey) {
 
 async function inBatches(items, size, step, from = 0) {
   if (from >= items.length) return;
-  await Promise.all(items.slice(from, from + size).map(step));
+  await Promise.all(items.slice(from, from + size).map((item) => step(item)));
   return inBatches(items, size, step, from + size);
 }
 

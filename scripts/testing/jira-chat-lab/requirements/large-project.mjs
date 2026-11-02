@@ -174,7 +174,7 @@ export function progressTruthOfJira(jira) {
 // ---------- what the completed report states ----------
 
 const isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
-const records = (value) => (Array.isArray(value) ? value.filter(isRecord) : []);
+const records = (value) => (Array.isArray(value) ? value.filter((item) => isRecord(item)) : []);
 const EPIC_FIGURE = new RegExp(String.raw`^(${LARGE_PROJECT}-\d+);[^;]*;(\d+);(\d+)$`, "u");
 
 const succeeded = (exchanges) =>
@@ -207,8 +207,8 @@ const epicEntry = (epic) => [epic.key, epic.members?.total, epic.members?.done];
 /** Every epic the report states: summary items, epic section pages and the plain figure lines. */
 function statedEpics({ summary, pages }) {
   return [
-    ...records(summary.report.epics?.items).map(epicEntry),
-    ...pages.flatMap((page) => records(page.section.items).map(epicEntry)),
+    ...records(summary.report.epics?.items).map((item) => epicEntry(item)),
+    ...pages.flatMap((page) => records(page.section.items).map((item) => epicEntry(item))),
     ...String(summary.report.figures ?? "")
       .split("\n")
       .flatMap((line) => {

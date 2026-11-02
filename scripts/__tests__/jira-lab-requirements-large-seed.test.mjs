@@ -145,7 +145,7 @@ function fakeJira() {
 
 const cleanup = [];
 afterEach(async () => {
-  for (const close of cleanup.splice(0)) await close();
+  await Promise.all(cleanup.splice(0).map((close) => close()));
 });
 
 async function laboratory() {
