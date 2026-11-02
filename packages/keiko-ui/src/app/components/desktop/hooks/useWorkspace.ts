@@ -312,6 +312,92 @@ function nextContentZoom(current: number, key: string): number {
   return clampContentZoom(current + 0.1);
 }
 
+export function nextContentZoomFromWheel(current: number, deltaY: number): number {
+  return clampContentZoom(current * Math.exp(-deltaY * 0.0015));
+}
+
+export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow {
+  const current = win.zoom ?? 1;
+  const zoom = nextContentZoomFromWheel(current, deltaY);
+  return zoom === current ? win : { ...win, zoom };
+}
+
+// Issue #2402 — identity-preserving: content zoom snaps to 0.1 steps, so most wheel events are
+// no-ops; returning the SAME array for those skips the whole downstream chain (persistence
+// schedule, connection prune, selection normalization, scene re-render). `deltas` replays every
+// queued wheel event IN ORDER — see createWheelContentZoomQueue for why a raw SUM cannot be used.
+export function applyWheelZoomToWindows(
+  ws: AppWindow[] | null,
+  windowId: string,
+  deltas: readonly number[],
+): AppWindow[] | null {
+  if (ws === null) return ws;
+  const index = ws.findIndex((w) => w.id === windowId);
+  const current = index === -1 ? undefined : ws[index];
+  if (current === undefined) return ws;
+  let updated = current;
+  for (const deltaY of deltas) updated = applyContentWheelZoom(updated, deltaY);
+  // Compare the resulting zoom, not the object: a batch that pins at the clamp and eases straight
+  // back allocates a new object with the ORIGINAL value.
+  if (updated.zoom === current.zoom) return ws;
+  const next = ws.slice();
+  next[index] = updated;
+  return next;
+}
+
+export interface WheelContentZoomQueue {
+  readonly queue: (windowId: string, deltaY: number) => void;
+  readonly cancel: () => void;
+}
+
+// Issue #2402 — a trackpad pinch synthesizes ctrl-wheel at 60-120+Hz. Mirror queueView's rAF
+// coalescing: deltas for one window accumulate per animation frame and flush as ONE commit.
+//
+// The commit replays the deltas in order instead of summing them, because the 0.1 snap and the
+// clamp apply on every step and are nonlinear: from zoom=1, deltaY -100 twice reaches 1.4 while
+// summing first reaches 1.3; from zoom=1.9, -300 then +40 hits the 2.0 cap and settles on 1.9 while
+// summing first lands on 2.0. Exported so a unit test can pin the frame-cancellation bookkeeping.
+export function createWheelContentZoomQueue(
+  apply: (windowId: string, deltas: readonly number[]) => void,
+): WheelContentZoomQueue {
+  let frame: number | null = null;
+  let pendingWindowId: string | null = null;
+  let pendingDeltas: number[] = [];
+  const cancelScheduledFrame = (): void => {
+    if (frame !== null && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frame);
+    }
+    frame = null;
+  };
+  const flush = (): void => {
+    // queue() calls this on a mid-frame target switch and then schedules a new frame; cancelling
+    // first keeps at most one frame outstanding, so cancel() below is always complete.
+    cancelScheduledFrame();
+    const windowId = pendingWindowId;
+    const deltas = pendingDeltas;
+    pendingWindowId = null;
+    pendingDeltas = [];
+    if (windowId !== null) apply(windowId, deltas);
+  };
+  const queue = (windowId: string, deltaY: number): void => {
+    // A mid-frame target switch flushes the previous window so deltas never leak across windows.
+    if (pendingWindowId !== null && pendingWindowId !== windowId) flush();
+    pendingWindowId = windowId;
+    pendingDeltas.push(deltaY);
+    if (typeof window.requestAnimationFrame !== "function") {
+      flush();
+      return;
+    }
+    frame ??= window.requestAnimationFrame(flush);
+  };
+  const cancel = (): void => {
+    cancelScheduledFrame();
+    pendingWindowId = null;
+    pendingDeltas = [];
+  };
+  return { queue, cancel };
+}
+
 // GEN-UI-KEYBOARD-006 — resolve which window a keyboard chord (move/resize/content
 // zoom/snap) acts on from where focus currently is, instead of always the topmost
 // window. Walk up from document.activeElement to the nearest
@@ -335,6 +421,7 @@ interface UsePanZoomArgs {
   readonly winsRef: CurrentRef<AppWindow[]>;
   readonly selectionRef: CurrentRef<WorkspaceUiSelectionState>;
   readonly setView: Dispatch<SetStateAction<View>>;
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
 interface QueueViewOptions {
@@ -459,6 +546,62 @@ function activeWindowOwnsWheelTarget(
 ): boolean {
   const activeWindowId = activeSelectedWindowId(selection);
   return activeWindowId !== null && windowIdFromWheelTarget(target) === activeWindowId;
+}
+
+// GEN-PERF-WORKSPACE-005 — the ctrl/cmd-wheel zoom branch re-read
+// el.getBoundingClientRect() on EVERY wheel event. A Windows trackpad pinch
+// synthesizes ctrl-wheel at 60-120+Hz, so each step paid a synchronous layout
+// read (a forced reflow whenever anything — e.g. a streaming chat — dirtied
+// layout between events). Cache the rect with a TTL matching the view-active
+// settle window: at most one layout read per 160ms of continuous gesture, and
+// staleness is bounded by the same window (the workspace rect cannot
+// meaningfully change mid-pinch; a real resize refreshes within 160ms).
+function createGestureRectReader(el: HTMLElement): () => DOMRect {
+  let zoomRect: DOMRect | null = null;
+  let zoomRectReadAt = 0;
+  return (): DOMRect => {
+    const now = Date.now();
+    if (zoomRect === null || now - zoomRectReadAt > VIEW_ACTIVE_SETTLE_MS) {
+      zoomRect = el.getBoundingClientRect();
+      zoomRectReadAt = now;
+    }
+    return zoomRect;
+  };
+}
+
+interface ActiveWindowContentZoom {
+  readonly route: (event: WheelEvent, selection: WorkspaceUiSelectionState) => boolean;
+  readonly cancel: () => void;
+}
+
+// Issue #3657 — the active window owns a Ctrl/Command wheel gesture: it zooms that window's content
+// and never moves the camera. Any other window keeps routing to workspace zoom (route is false).
+function createActiveWindowContentZoom(
+  setWins: Dispatch<SetStateAction<AppWindow[] | null>>,
+  beforeZoom: () => void,
+): ActiveWindowContentZoom {
+  const queue = createWheelContentZoomQueue((windowId, deltas) => {
+    setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas));
+  });
+  let lastEventAt = Number.NEGATIVE_INFINITY;
+  const route = (event: WheelEvent, selection: WorkspaceUiSelectionState): boolean => {
+    const windowId = activeWindowOwnsWheelTarget(event.target, selection)
+      ? windowIdFromWheelTarget(event.target)
+      : null;
+    if (windowId === null) return false;
+    beforeZoom();
+    // One body-free line per gesture, not one per 60-120+Hz wheel event.
+    const now = Date.now();
+    if (now - lastEventAt > VIEW_ACTIVE_SETTLE_MS) {
+      reportClientDiagnostic("[keiko] workspace window content zoomed by wheel.", {
+        composerActivity: "workspace-window-content-zoomed",
+      });
+    }
+    lastEventAt = now;
+    queue.queue(windowId, normalizeWheelDelta(event).y);
+    return true;
+  };
+  return { route, cancel: queue.cancel };
 }
 
 function frontmostLayoutWindowId(
@@ -605,6 +748,7 @@ function usePanZoom({
   winsRef,
   selectionRef,
   setView,
+  setWins,
 }: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
@@ -749,6 +893,15 @@ function usePanZoom({
     [cameraSmoothness, isLayoutLocked, setView],
   );
 
+  const settleCameraAnimation = useCallback((): void => {
+    if (animationFrameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+      setView(animationTargetRef.current);
+      renderedViewRef.current = animationTargetRef.current;
+    }
+  }, [setView]);
+
   const queueView = useCallback(
     (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       if (isLayoutLocked()) return;
@@ -790,32 +943,18 @@ function usePanZoom({
   useEffect(() => {
     const el = wsRef.current;
     if (el === null) return;
-    // GEN-PERF-WORKSPACE-005 — the ctrl/cmd-wheel zoom branch re-read
-    // el.getBoundingClientRect() on EVERY wheel event. A Windows trackpad pinch
-    // synthesizes ctrl-wheel at 60-120+Hz, so each step paid a synchronous layout
-    // read (a forced reflow whenever anything — e.g. a streaming chat — dirtied
-    // layout between events). Cache the rect with a TTL matching the view-active
-    // settle window: at most one layout read per 160ms of continuous gesture, and
-    // staleness is bounded by the same window (the workspace rect cannot
-    // meaningfully change mid-pinch; a real resize refreshes within 160ms).
-    let zoomRect: DOMRect | null = null;
-    let zoomRectReadAt = 0;
-    const gestureRect = (): DOMRect => {
-      const now = Date.now();
-      if (zoomRect === null || now - zoomRectReadAt > VIEW_ACTIVE_SETTLE_MS) {
-        zoomRect = el.getBoundingClientRect();
-        zoomRectReadAt = now;
-      }
-      return zoomRect;
-    };
+    const gestureRect = createGestureRectReader(el);
+    // Issue #2402 — the wallpaper shader's gesture suppression (data-view-active,
+    // GEN-PERF-WORKSPACE-004) must engage for content zoom exactly as for camera zoom.
+    const contentZoom = createActiveWindowContentZoom(setWins, () => {
+      settleCameraAnimation();
+      markViewActive();
+    });
     const onWheel = (e: WheelEvent): void => {
       if (routeLockedWorkspaceWheel(e, isLayoutLocked())) return;
       if (e.metaKey || e.ctrlKey) {
-        if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
-          e.preventDefault();
-          return;
-        }
         e.preventDefault();
+        if (contentZoom.route(e, selectionRef.current)) return;
         const r = gestureRect();
         const v = viewRef.current;
         const delta = normalizeWheelDelta(e);
@@ -842,8 +981,20 @@ function usePanZoom({
         smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
-    return installWorkspaceWheelListener(el, onWheel);
-  }, [wsRef, queueView, selectionRef, isLayoutLocked]);
+    const removeWheelListener = installWorkspaceWheelListener(el, onWheel);
+    return (): void => {
+      removeWheelListener();
+      contentZoom.cancel();
+    };
+  }, [
+    wsRef,
+    queueView,
+    selectionRef,
+    isLayoutLocked,
+    setWins,
+    settleCameraAnimation,
+    markViewActive,
+  ]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -2306,6 +2457,7 @@ export function useWorkspace(
     winsRef,
     selectionRef,
     setView,
+    setWins,
   });
 
   useHydrate({

@@ -2,7 +2,7 @@ import { useRef } from "react";
 import type { ReactElement } from "react";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useWorkspace } from "./useWorkspace";
+import { createWheelContentZoomQueue, useWorkspace } from "./useWorkspace";
 import type { AppWindow } from "../windows/types";
 
 const diagnostics = vi.hoisted(() => ({ report: vi.fn() }));
@@ -237,27 +237,52 @@ describe("useWorkspace wheel zoom routing", () => {
     expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
   });
 
-  it("keeps Ctrl/Command wheel inside the active window from zooming the workspace", async () => {
+  // Issue #3657 — the active window owns the gesture, so it never moves the workspace camera, but
+  // swallowing it left Ctrl/Command wheel inside a window doing nothing at all.
+  it.each([{ ctrlKey: true }, { metaKey: true }])(
+    "routes %o wheel inside the active window to its content zoom, not the workspace",
+    async (modifier) => {
+      window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
+      render(<Harness />);
+      mockWorkspaceRect();
+
+      fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+      await waitFor(() =>
+        expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+      );
+
+      const wasNotCancelled = fireEvent.wheel(screen.getByTestId("window-target"), {
+        bubbles: true,
+        cancelable: true,
+        clientX: 200,
+        clientY: 200,
+        deltaY: -100,
+        ...modifier,
+      });
+
+      expect(wasNotCancelled).toBe(false);
+      await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.2"));
+      expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
+      expect(screen.getByTestId("view-x")).toHaveTextContent("0");
+      expect(screen.getByTestId("view-y")).toHaveTextContent("0");
+    },
+  );
+
+  it("leaves content zoom alone for Ctrl wheel inside a locked workspace", () => {
     window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow()]));
     render(<Harness />);
     mockWorkspaceRect();
-
-    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
-    await waitFor(() =>
-      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "Toggle layout lock" }));
 
     fireEvent.wheel(screen.getByTestId("window-target"), {
       bubbles: true,
       cancelable: true,
-      clientX: 200,
-      clientY: 200,
       ctrlKey: true,
       deltaY: -100,
     });
 
-    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
     expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+    expect(screen.getByTestId("view-zoom")).toHaveTextContent("1");
   });
 
   it("keeps trackpad pan over non-scrollable window chrome routed to the workspace view", async () => {
@@ -719,5 +744,210 @@ describe("useWorkspace wheel zoom layout-read coalescing (GEN-PERF-WORKSPACE-005
       expect(Number(screen.getByTestId("view-zoom").textContent)).toBeGreaterThan(1),
     );
     expect(rectSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Issue #2402 — a trackpad pinch synthesizes ctrl-wheel at 60-120+Hz, so the content-zoom branch
+// must coalesce per frame, keep snapped no-op steps from flipping the wins identity, and engage the
+// wallpaper shader's gesture suppression. Restored with the active-window route of issue #3657.
+describe("useWorkspace active-window content-zoom coalescing (issues #2402, #3657)", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.clear();
+    vi.restoreAllMocks();
+  });
+
+  function mockAnimationFrames(): FrameRequestCallback[] {
+    const callbacks: FrameRequestCallback[] = [];
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        callbacks.push(callback);
+        return callbacks.length;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+    return callbacks;
+  }
+
+  function fireContentZoomWheel(deltaY: number): void {
+    fireEvent.wheel(screen.getByTestId("window-target"), {
+      bubbles: true,
+      cancelable: true,
+      clientX: 200,
+      clientY: 200,
+      ctrlKey: true,
+      deltaY,
+    });
+  }
+
+  async function renderActiveWindow(zoom = 1): Promise<ReturnType<typeof render>> {
+    window.localStorage.setItem(WORKSPACE_STORAGE_KEY, JSON.stringify([appWindow({ zoom })]));
+    const view = render(<Harness />);
+    mockWorkspaceRect();
+    fireEvent.click(screen.getByRole("button", { name: "Activate files" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("selected-window-ids")).toHaveTextContent("files-1"),
+    );
+    return view;
+  }
+
+  it("coalesces a same-frame burst into one commit that replays each snapped step", async () => {
+    const callbacks = mockAnimationFrames();
+    await renderActiveWindow();
+    const scheduledBefore = callbacks.length;
+
+    fireContentZoomWheel(-100);
+    fireContentZoomWheel(-100);
+
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+    expect(callbacks.length - scheduledBefore).toBe(1);
+
+    act(() => callbacks[scheduledBefore]?.(0));
+
+    // 1 -[-100]-> 1.2 -[-100]-> 1.4. Summing first (exp(0.3) ≈ 1.35 → 1.3) would diverge.
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.4"));
+  });
+
+  it("replays a burst across the max bound like separate commits", async () => {
+    const callbacks = mockAnimationFrames();
+    await renderActiveWindow(1.9);
+    const scheduledBefore = callbacks.length;
+
+    // 1.9 -[-300]-> 2.0 -[+40]-> 1.9. Summing first (-260) never reaches the cap and lands on 2.0.
+    fireContentZoomWheel(-300);
+    fireContentZoomWheel(40);
+    act(() => callbacks[scheduledBefore]?.(0));
+
+    await waitFor(() => expect(screen.getByTestId("files-zoom")).toHaveTextContent("1.9"));
+  });
+
+  it("preserves the wins identity when a step does not change the snapped zoom", async () => {
+    const callbacks = mockAnimationFrames();
+    await renderActiveWindow();
+    const identityBefore = screen.getByTestId("wins-identity-changes").textContent;
+    const scheduledBefore = callbacks.length;
+
+    fireContentZoomWheel(0);
+    act(() => callbacks[scheduledBefore]?.(0));
+
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+    expect(screen.getByTestId("wins-identity-changes")).toHaveTextContent(identityBefore ?? "");
+  });
+
+  it("marks the workspace view-active so the wallpaper shader pauses", async () => {
+    mockAnimationFrames();
+    await renderActiveWindow();
+    expect(screen.getByTestId("workspace").dataset["viewActive"]).toBeUndefined();
+
+    fireContentZoomWheel(-100);
+
+    expect(screen.getByTestId("workspace").dataset["viewActive"]).toBe("true");
+  });
+
+  // The WheelEvent constructor rejects NaN like a browser does, so a hostile value that reaches the
+  // listener some other way is built as a plain Event with only the fields onWheel reads.
+  it("never lets a NaN wheel delta produce an invalid window zoom", async () => {
+    const callbacks = mockAnimationFrames();
+    await renderActiveWindow();
+    const scheduledBefore = callbacks.length;
+    const event = new Event("wheel", { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "deltaY", { value: Number.NaN, configurable: true });
+    Object.defineProperty(event, "ctrlKey", { value: true, configurable: true });
+
+    fireEvent(screen.getByTestId("window-target"), event);
+    expect(callbacks.length - scheduledBefore).toBe(1);
+    act(() => callbacks[scheduledBefore]?.(0));
+
+    expect(screen.getByTestId("files-zoom")).toHaveTextContent("1");
+  });
+
+  it("cancels the queued frame on unmount so a stale callback cannot commit", async () => {
+    const callbacks = mockAnimationFrames();
+    const cancelAnimationFrameSpy = vi.spyOn(window, "cancelAnimationFrame");
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const view = await renderActiveWindow();
+    const scheduledBefore = callbacks.length;
+
+    fireContentZoomWheel(-100);
+    const queuedFrame = callbacks[scheduledBefore];
+
+    view.unmount();
+
+    expect(cancelAnimationFrameSpy).toHaveBeenCalledWith(scheduledBefore + 1);
+    expect(() => queuedFrame?.(0)).not.toThrow();
+    expect(errorSpy).not.toHaveBeenCalled();
+  });
+
+  it("records one body-free activity line per gesture, not per wheel event", async () => {
+    mockAnimationFrames();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    await renderActiveWindow();
+    const zoomReports = (): number =>
+      diagnostics.report.mock.calls.filter(
+        ([, context]) =>
+          (context as { readonly composerActivity?: string }).composerActivity ===
+          "workspace-window-content-zoomed",
+      ).length;
+    expect(zoomReports()).toBe(0);
+
+    fireContentZoomWheel(-100);
+    fireContentZoomWheel(-100);
+    expect(zoomReports()).toBe(1);
+
+    now.mockReturnValue(1_010_000);
+    fireContentZoomWheel(-100);
+    expect(zoomReports()).toBe(2);
+  });
+});
+
+describe("createWheelContentZoomQueue frame bookkeeping", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockTrackedAnimationFrames(): {
+    readonly scheduled: ReadonlyMap<number, FrameRequestCallback>;
+    readonly cancelled: ReadonlySet<number>;
+  } {
+    let nextFrameId = 1;
+    const scheduled = new Map<number, FrameRequestCallback>();
+    const cancelled = new Set<number>();
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation(
+      (callback: FrameRequestCallback): number => {
+        const id = nextFrameId;
+        nextFrameId += 1;
+        scheduled.set(id, callback);
+        return id;
+      },
+    );
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id: number) => {
+      cancelled.add(id);
+    });
+    return { scheduled, cancelled };
+  }
+
+  it("cancels the superseded frame on a mid-frame target switch and leaves none on cancel", () => {
+    const { scheduled, cancelled } = mockTrackedAnimationFrames();
+    const applied: Array<{ readonly windowId: string; readonly deltas: readonly number[] }> = [];
+    const contentZoom = createWheelContentZoomQueue((windowId, deltas) => {
+      applied.push({ windowId, deltas: [...deltas] });
+    });
+
+    contentZoom.queue("win-a", 10);
+    contentZoom.queue("win-b", 20);
+    contentZoom.queue("win-c", 30);
+    contentZoom.cancel();
+
+    const expected = [
+      { windowId: "win-a", deltas: [10] },
+      { windowId: "win-b", deltas: [20] },
+    ];
+    expect(applied).toEqual(expected);
+    expect(scheduled.size).toBe(3);
+    expect([...scheduled.keys()].every((id) => cancelled.has(id))).toBe(true);
+
+    // Even a callback the browser still ran finds nothing pending after cleanup.
+    for (const callback of scheduled.values()) callback(0);
+    expect(applied).toEqual(expected);
   });
 });

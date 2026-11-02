@@ -410,6 +410,7 @@ export const CLIENT_COMPOSER_ACTIVITIES = [
   "workspace-window-sizing-retired",
   "workspace-layout-locked",
   "workspace-layout-unlocked",
+  "workspace-window-content-zoomed",
   "literal-input-preserved",
   "draft-resynchronized",
   "context-details-expanded",
