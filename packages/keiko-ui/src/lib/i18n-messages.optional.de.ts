@@ -48,6 +48,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
   "chat.jira.draft.operation": "Jira-Vorgänge anlegen",
   "chat.jira.attach.operation": "Datei an Jira-Vorgang anhängen",
+  "chat.jira.link.operation": "Jira-Vorgänge verknüpfen",
   "chat.jira.draft.legend": "Anzulegende Vorgänge ({selected} von {total} ausgewählt)",
   "chat.jira.draft.dependent": "Ausgelassen, weil ein Vorgang, von dem er abhängt, ausgelassen ist",
   "chat.jira.draft.parent": "Übergeordnet ({fieldId}): {target}",

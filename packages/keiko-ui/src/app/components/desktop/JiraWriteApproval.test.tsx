@@ -196,6 +196,41 @@ describe("Jira Chat write approvals", () => {
     expect(screen.queryByRole("button", { name: "Approve this action" })).toBeNull();
     expect(decide).not.toHaveBeenCalled();
   });
+  it("says an edit carrying only links links issues, and any other edit updates fields", async () => {
+    const view = approval();
+    const observe = vi.fn().mockResolvedValue(view);
+    const linking = {
+      ...call,
+      arguments: {
+        issueKey: "LAB-1",
+        links: [{ type: "Relates", direction: "outward", issueKey: "LAB-2" }],
+      },
+    };
+    const { unmount } = render(
+      <JiraWriteApproval
+        approval={view}
+        call={linking}
+        turnState="pending"
+        observe={observe}
+        decide={vi.fn()}
+      />,
+    );
+    await ready();
+    expect(screen.getByText("Link Jira issues")).toBeInTheDocument();
+    unmount();
+    render(
+      <JiraWriteApproval
+        approval={view}
+        call={call}
+        turnState="pending"
+        observe={observe}
+        decide={vi.fn()}
+      />,
+    );
+    await ready();
+    expect(screen.queryByText("Link Jira issues")).not.toBeInTheDocument();
+  });
+
   it("brings a decision the human is waited for into view, and only then", async () => {
     const reveal = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
     try {

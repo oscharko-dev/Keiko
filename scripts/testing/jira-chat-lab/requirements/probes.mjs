@@ -3,6 +3,7 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { basicAuth, labRequest } from "../lab-client.mjs";
+import { fieldWriteProbe } from "./field-writes.mjs";
 
 const REPO = join(import.meta.dirname, "..", "..", "..", "..");
 const fieldMetadata = await import(
@@ -90,10 +91,18 @@ async function typeCoverage(session, projectKey, typeName) {
       };
 }
 
+/** What the projection offers must also land: the metadata comparison alone proves no write. */
+async function typeWrites(session, project, typeName) {
+  const offered = await typeCoverage(session, project, typeName);
+  if (offered.status !== "green") return offered;
+  const written = await fieldWriteProbe(session, typeName);
+  return { ...written, detail: `${offered.detail}; ${written.detail}` };
+}
+
 /** Probes keyed by scenario id. Each returns one probe-layer check. */
 export const PROBES = Object.freeze({
-  S05: (session, project) => typeCoverage(session, project, "Epic"),
-  S07: (session, project) => typeCoverage(session, project, "Task"),
-  S08: (session, project) => typeCoverage(session, project, "Bug"),
-  S09: (session, project) => typeCoverage(session, project, "Sub-task"),
+  S05: (session, project) => typeWrites(session, project, "Epic"),
+  S07: (session, project) => typeWrites(session, project, "Task"),
+  S08: (session, project) => typeWrites(session, project, "Bug"),
+  S09: (session, project) => typeWrites(session, project, "Sub-task"),
 });

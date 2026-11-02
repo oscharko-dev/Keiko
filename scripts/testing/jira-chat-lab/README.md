@@ -679,6 +679,8 @@ KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
   --project REQ --model <chat-model-id> --embedding-model <embedding-model-id> [--only S04,S05]
 ```
 
+The probes of S05, S07, S08 and S09 prove `fields-writable` by writing. `field-writes.mjs` takes every field Jira lists for the issue type on create and on edit, writes it alone through Keiko's production mutation path into its own project `FLD`, and reads it back from Jira. Comment, attachment and link take their own calls and must land the same way. Jira's own refusal of a value, such as a sprint on a sub-task, is listed in the check's detail and does not count against Keiko. A refusal that never reached Jira, a failure after the write, or a value Jira did not keep turns the scenario red.
+
 The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
 the private session. Before a group it checks the remaining license time: the published test
 license counts from Jira's start, so `requirements/license-window.mjs` stops and starts the

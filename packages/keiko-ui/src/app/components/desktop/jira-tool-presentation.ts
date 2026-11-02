@@ -40,12 +40,31 @@ export function jiraOperationLabel(
 ): WidgetMessageKey {
   return OPERATION_LABELS[operation] ?? actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[operation]);
 }
+const isEmpty = (value: unknown): boolean =>
+  value === undefined ||
+  (Array.isArray(value) ? value.length === 0 : Object.keys(value as object).length === 0);
+/** An edit carrying nothing but links updates no field of the issue. */
+function onlyLinks(args: ChatToolExchange["call"]["arguments"]): boolean {
+  const links = args.links;
+  return Array.isArray(links) && links.length > 0 && isEmpty(args.fields) && isEmpty(args.updates);
+}
+/** What this one call does to the human, where the operation alone would say something else. */
+export function jiraCallLabel(
+  operation: keyof typeof JIRA_MANAGED_ACTION_TYPES,
+  args: ChatToolExchange["call"]["arguments"],
+): WidgetMessageKey {
+  return operation === "jira.edit" && onlyLinks(args)
+    ? "chat.jira.link.operation"
+    : jiraOperationLabel(operation);
+}
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.tool";
   const operation = MANAGED_TOOLS.find(
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
-  return operation === undefined ? "chat.jira.tool" : jiraOperationLabel(operation);
+  return operation === undefined
+    ? "chat.jira.tool"
+    : jiraCallLabel(operation, exchange.call.arguments);
 }
 export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.tool";

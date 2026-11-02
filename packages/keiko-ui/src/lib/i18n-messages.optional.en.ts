@@ -45,6 +45,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.writeApproval.refresh": "Refresh action state",
   "chat.jira.draft.operation": "Create Jira issues",
   "chat.jira.attach.operation": "Attach a file to a Jira issue",
+  "chat.jira.link.operation": "Link Jira issues",
   "chat.jira.draft.legend": "Issues to create ({selected} of {total} selected)",
   "chat.jira.draft.dependent": "Left out because an issue it depends on is left out",
   "chat.jira.draft.parent": "Parent ({fieldId}): {target}",

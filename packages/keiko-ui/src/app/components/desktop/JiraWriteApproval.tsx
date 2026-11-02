@@ -20,7 +20,7 @@ import {
   useOptionalWidgetTranslate as useTranslate,
   type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
-import { jiraOperationLabel } from "./jira-tool-presentation";
+import { jiraCallLabel } from "./jira-tool-presentation";
 import { JiraAttachmentReview } from "./JiraAttachmentReview";
 import { JiraDecisionActions } from "./JiraDecisionActions";
 import { DraftFields, JiraDraftPreview } from "./JiraDraftPreview";
@@ -156,23 +156,30 @@ function approvalTitleKey(approval: ChatToolWriteApprovalView): WidgetMessageKey
     : "chat.jira.writeApproval.title";
 }
 
-function ApprovalHeader({ approval }: { readonly approval: ChatToolWriteApprovalView }): ReactNode {
+function ApprovalHeader({
+  approval,
+  call,
+}: {
+  readonly approval: ChatToolWriteApprovalView;
+  readonly call: ChatToolExchange["call"];
+}): ReactNode {
   const t = useTranslate();
   return (
     <>
       <strong>{t(approvalTitleKey(approval))}</strong>
-      <p>{approvalOperationLabel(approval, t)}</p>
+      <p>{approvalOperationLabel(approval, call, t)}</p>
     </>
   );
 }
 
 function approvalOperationLabel(
   approval: ChatToolWriteApprovalView,
+  call: ChatToolExchange["call"],
   t: ReturnType<typeof useTranslate>,
 ): string {
   return approval.kind === "mcp-chat-write"
     ? approval.operation
-    : t(jiraOperationLabel(approval.operation));
+    : t(jiraCallLabel(approval.operation, call.arguments));
 }
 
 /** A decision waits on the human, who may have scrolled away while the turn worked. */
@@ -311,7 +318,7 @@ export function JiraWriteApproval({
   const status = approvalStatusKey(state.verified, state.view.state, ended);
   return (
     <section ref={card} className={styles.cmpCard} aria-label={t(approvalTitleKey(approval))}>
-      <ApprovalHeader approval={approval} />
+      <ApprovalHeader approval={approval} call={call} />
       <ApprovalContent
         approval={approval}
         staged={staged}
