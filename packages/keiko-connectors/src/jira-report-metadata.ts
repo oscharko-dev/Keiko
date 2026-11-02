@@ -94,19 +94,29 @@ function requiredIds(values: readonly unknown[]): readonly string[] {
   return ids;
 }
 type PageEnd = "last" | "more" | "malformed";
+/** The collection size a page states: absent, a valid count, or `invalid` when it is neither. */
+function statedTotal(body: Record<string, unknown>): number | undefined | "invalid" {
+  const { total } = body;
+  if (total === undefined) return undefined;
+  return typeof total === "number" && Number.isSafeInteger(total) && total >= 0 ? total : "invalid";
+}
+/** A page that starts where asked and states no total that is not a count. */
+function coherent(body: Record<string, unknown>, startAt: number): boolean {
+  return (body.startAt ?? startAt) === startAt && statedTotal(body) !== "invalid";
+}
 /**
  * Whether a createmeta page ends its collection. Jira's own completion statement (`isLast`) or a
- * total this page reaches settles it; a page that starts elsewhere than asked, or that is empty
- * without either statement, proves nothing and is malformed, never an empty rule set.
+ * total this page reaches settles it, and the two must agree: a page that starts elsewhere than
+ * asked, that states a total it has not reached while calling itself last, or that is empty without
+ * either statement proves nothing and is malformed, never an empty rule set.
  */
 function pageEnd(body: Record<string, unknown>, startAt: number, read: number): PageEnd {
-  const { total } = body;
-  const validTotal = typeof total === "number" && Number.isSafeInteger(total) && total >= 0;
-  if (body.startAt !== undefined && body.startAt !== startAt) return "malformed";
-  if (body.isLast === true) return "last";
-  if (!validTotal) return "malformed";
-  if (startAt + read >= total) return "last";
-  return read === 0 ? "malformed" : "more";
+  const total = statedTotal(body);
+  if (!coherent(body, startAt) || total === "invalid") return "malformed";
+  const reached = total !== undefined && startAt + read >= total;
+  if (body.isLast === true) return total === undefined || reached ? "last" : "malformed";
+  if (reached) return "last";
+  return total === undefined || read === 0 ? "malformed" : "more";
 }
 /** Every page of one createmeta collection; the failure reason when a page cannot be read. */
 async function collectPages(

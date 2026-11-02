@@ -295,17 +295,14 @@ function createMeta(path: string, options: FixtureOptions): AtlassianHttpBodyRes
   if (options.noRequiredMetadata === true) return failure(404);
   if (path.startsWith("issue/createmeta/REP/issuetypes/")) {
     const typeId = path.slice(path.lastIndexOf("/") + 1);
-    return response({
-      values: createMetaFields(
-        typeId,
-        options.requireFixVersions === true,
-        options.noRequiredFields === true,
-      ),
-      isLast: true,
-      total: 5,
-    });
+    const values = createMetaFields(
+      typeId,
+      options.requireFixVersions === true,
+      options.noRequiredFields === true,
+    );
+    return response({ values, isLast: true, total: values.length });
   }
-  return response({ values: ISSUE_TYPES, isLast: true, total: 4 });
+  return response({ values: ISSUE_TYPES, isLast: true, total: ISSUE_TYPES.length });
 }
 
 export function fixtureJira(options: FixtureOptions): FixtureJira {

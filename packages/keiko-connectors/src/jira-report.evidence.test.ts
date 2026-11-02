@@ -166,6 +166,20 @@ describe("create metadata is trusted only with Jira's completion evidence (D2)",
     expect(record(reportOf(started.result).compliance).requiredFieldRules).not.toBe("applied");
   });
 
+  it("refuses a last page whose own total it has not reached, at both endpoints", async () => {
+    const contradicting = { startAt: 0, maxResults: 50, total: 4, isLast: true, values: [] };
+    const mistyped = { startAt: 0, maxResults: 50, total: "4", isLast: true, values: [] };
+    for (const page of [contradicting, mistyped]) {
+      for (const endpoint of [/\/issuetypes$/u, /\/issuetypes\//u]) {
+        const rewrite: Rewrite = (path, body) => (endpoint.test(path) ? page : body);
+        const started = await finished(await run({ issues }, { rewrite }));
+        expect(started.result.data.status).toBe("incomplete");
+        expect(completenessOf(started.result)).toMatchObject({ failure: "malformed-payload" });
+        expect(record(reportOf(started.result).compliance).requiredFieldRules).not.toBe("applied");
+      }
+    }
+  });
+
   describe("page coordinates and completion", () => {
     function pages(...bodies: Body[]): JiraReportHttp {
       const queue = [...bodies];
@@ -194,6 +208,15 @@ describe("create metadata is trusted only with Jira's completion evidence (D2)",
       expect(await reasonOf({ startAt: 0, total: 3, isLast: false, values: [] })).toBe(
         "malformed-payload",
       );
+      expect(await reasonOf({ startAt: 0, total: 4, isLast: true, values: [] })).toBe(
+        "malformed-payload",
+      );
+      expect(await reasonOf({ startAt: 0, total: 4, isLast: true, values: [{ id: "10" }] })).toBe(
+        "malformed-payload",
+      );
+      expect(await reasonOf({ startAt: 0, total: "4", isLast: true, values: [{ id: "10" }] })).toBe(
+        "malformed-payload",
+      );
     });
 
     it("reads a multi-page collection to its total and accepts an empty collection that says so", async () => {
@@ -201,8 +224,8 @@ describe("create metadata is trusted only with Jira's completion evidence (D2)",
         pages(
           { startAt: 0, total: 2, isLast: false, values: [{ id: "11" }] },
           { startAt: 1, total: 2, isLast: true, values: [{ id: "12" }] },
-          { startAt: 0, total: 1, isLast: true, values: [] },
-          { startAt: 0, total: 1, isLast: true, values: [] },
+          { startAt: 0, total: 0, isLast: true, values: [] },
+          { startAt: 0, total: 0, isLast: true, values: [] },
         ),
         "REP",
       );
