@@ -1323,6 +1323,27 @@ describe("runCommand — timeout & cancellation (fake child)", () => {
     expect(capacity.reserve(env)).toBeDefined();
   });
 
+  it("rejects the waiter, not the releasing command, when a queued admission throws", async () => {
+    let authoritative = true;
+    const capacity = createWindowsTerminationCapacity(
+      1,
+      () => "succeeded",
+      () => {
+        if (!authoritative) throw new WindowsSystemBinaryMissingError();
+        return { command: String.raw`C:WindowsSystem32	askkill.exe`, args: [] };
+      },
+    );
+    const env: NodeJS.ProcessEnv = { SystemRoot: String.raw`C:Windows` };
+    const held = capacity.reserve(env);
+    const waiting = capacity.acquire?.(env, controller().signal, 60_000);
+
+    authoritative = false;
+    expect(() => held?.release()).not.toThrow();
+    await expect(waiting).rejects.toBeInstanceOf(WindowsSystemBinaryMissingError);
+    authoritative = true;
+    expect(capacity.reserve(env)).toBeDefined();
+  });
+
   it("refuses a Windows spawn when authoritative taskkill is unavailable", async () => {
     const spawn = recordingSpawn();
     const home = recordingHome();
