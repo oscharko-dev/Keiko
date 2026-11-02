@@ -26,13 +26,37 @@ function reportCommandResponseFailure(
 }
 
 // The command validators load with the first command request. debugLaunchTarget reaches this module
-// from the first-load desktop shell, so a static import would put them in the initial bundle.
+// from the first-load desktop shell, so a static import would put them in the initial bundle. A failed
+// load is reported once, with the request's correlation, and surfaces as MODULE_LOAD_FAILED.
+async function loadCommandRunnerContracts(
+  correlationId: string,
+): Promise<typeof import("@oscharko-dev/keiko-contracts/runtime/command-runner")> {
+  try {
+    return await import("@oscharko-dev/keiko-contracts/runtime/command-runner");
+  } catch (cause) {
+    const error = new ApiError(
+      "MODULE_LOAD_FAILED",
+      "Command task validation could not be loaded.",
+      0,
+    );
+    error.correlationId = correlationId;
+    error.cause = cause;
+    reportClientDiagnostic("Keiko command validation could not load.", {
+      kind: "other",
+      errorKind: "unavailable",
+      correlationId,
+      moduleLoadFailure: "command-runner",
+      errorEvidence: clientErrorEvidence(cause),
+    });
+    throw error;
+  }
+}
+
 export async function fetchCommandCatalog(projectId: string): Promise<CommandTaskCatalog> {
   const params = new URLSearchParams();
   params.set("projectId", projectId);
-  const { validateCommandTaskCatalog } =
-    await import("@oscharko-dev/keiko-contracts/runtime/command-runner");
   const correlationId = newClientCorrelationId();
+  const { validateCommandTaskCatalog } = await loadCommandRunnerContracts(correlationId);
   let validationFailed = false;
   let emptyBodyRefused = false;
   try {
@@ -64,9 +88,8 @@ export async function fetchCommandCatalog(projectId: string): Promise<CommandTas
 export async function createCommandRun(
   input: CommandTaskRunRequest,
 ): Promise<CommandTaskRunResult> {
-  const { validateCommandTaskRunResult } =
-    await import("@oscharko-dev/keiko-contracts/runtime/command-runner");
   const correlationId = newClientCorrelationId();
+  const { validateCommandTaskRunResult } = await loadCommandRunnerContracts(correlationId);
   let validationFailed = false;
   let emptyBodyRefused = false;
   try {
