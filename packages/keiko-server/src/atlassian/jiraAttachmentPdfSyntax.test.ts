@@ -32,6 +32,13 @@ describe("PDF strings", () => {
       "Hi",
     ]);
   });
+  it("reads a string without a byte order mark as PDFDocEncoding and as Latin-1", () => {
+    // 0xA0 is the euro sign in PDFDocEncoding and a no-break space in Latin-1; 0x80 is a bullet.
+    expect(file("1 0 obj << /T <A080> >> endobj")?.stringText.split("\n")).toEqual([
+      "\u00a0\u0080",
+      "\u20ac\u2022",
+    ]);
+  });
   it("does not take a delimiter inside a comment or string for syntax", () => {
     const syntax = file("% ( not a string\n1 0 obj << /T (a>>b) >> endobj");
     expect(syntax?.stringText).toBe("a>>b");

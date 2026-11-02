@@ -100,18 +100,50 @@ function readEscape(raw: string, at: number): { readonly text: string; readonly 
   return { text: ESCAPES[char] ?? char, next: at + 1 };
 }
 
-/** The text of a PDF text string: UTF-16 and UTF-8 behind their byte order mark, else Latin-1. */
+// PDFDocEncoding (ISO 32000-1 Annex D.2) is the encoding of a text string without a byte order mark.
+// It equals Latin-1 except for these bytes; the rest of 0x18-0x1F, 0x7F, 0x9F and 0xAD map to nothing.
+const PDF_DOC_RUNS: readonly (readonly [number, string])[] = [
+  [0x18, "\u02d8\u02c7\u02c6\u02d9\u02dd\u02db\u02da\u02dc"],
+  [
+    0x80,
+    "\u2022\u2020\u2021\u2026\u2014\u2013\u0192\u2044\u2039\u203a\u2212\u2030\u201e\u201c\u201d\u2018\u2019\u201a\u2122\ufb01\ufb02\u0141\u0152\u0160\u0178\u017d\u0131\u0142\u0153\u0161\u017e",
+  ],
+  [0xa0, "\u20ac"],
+];
+const PDF_DOC_ENCODING: ReadonlyMap<number, string> = new Map(
+  PDF_DOC_RUNS.flatMap(([first, characters]) =>
+    Array.from(characters, (character, index): [number, string] => [first + index, character]),
+  ),
+);
+
+/** A text string without a byte order mark, read as PDFDocEncoding rather than as Latin-1. */
+function pdfDocEncodingText(latin1: string): string {
+  return Array.from(
+    latin1,
+    (character) => PDF_DOC_ENCODING.get(byteAt(character, 0)) ?? character,
+  ).join("");
+}
+
+/**
+ * The text of a PDF text string: UTF-16 and UTF-8 behind their byte order mark, else PDFDocEncoding
+ * and, because producers also write raw Latin-1, that reading too.
+ */
 function textStringVariants(latin1: string): readonly string[] {
   const first = byteAt(latin1, 0);
   const second = byteAt(latin1, 1);
-  let decoded = latin1;
+  let readings = [latin1];
   if ((first === 0xfe && second === 0xff) || (first === 0xff && second === 0xfe)) {
-    decoded = utf16Text(Buffer.from(latin1.slice(2), "latin1"), first === 0xfe);
+    readings = [utf16Text(Buffer.from(latin1.slice(2), "latin1"), first === 0xfe)];
   } else if (first === 0xef && second === 0xbb && byteAt(latin1, 2) === 0xbf) {
-    decoded = Buffer.from(latin1.slice(3), "latin1").toString("utf8");
+    readings = [Buffer.from(latin1.slice(3), "latin1").toString("utf8")];
+  } else {
+    const docEncoded = pdfDocEncodingText(latin1);
+    if (docEncoded !== latin1) readings.push(docEncoded);
   }
   // A text string whose two-byte characters carry no byte order mark still reads as ASCII with NULs.
-  return decoded.includes("\0") ? [decoded, decoded.replaceAll("\0", "")] : [decoded];
+  return readings.flatMap((decoded) =>
+    decoded.includes("\0") ? [decoded, decoded.replaceAll("\0", "")] : [decoded],
+  );
 }
 
 function utf16Text(bytes: Buffer, bigEndian: boolean): string {

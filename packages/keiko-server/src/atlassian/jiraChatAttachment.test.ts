@@ -10,7 +10,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { docxOf, withArchiveComment } from "../../../../tests/support/zip-fixture.js";
+import { docxOf, pdfOf, withArchiveComment } from "../../../../tests/support/zip-fixture.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
@@ -32,13 +32,15 @@ const BODY = "synthetic report body";
 const DIGEST = createHash("sha256").update(BODY).digest("hex");
 const CONFIGURED_SECRET = ["configured", "provider", "literal", "0123456789"].join("-");
 const LIMIT = JIRA_ATTACHMENT_MAX_BYTES;
+/** The provider key the deployment configures; a test may set another one for its own file. */
+let configuredKey = CONFIGURED_SECRET;
 
 function deps(): JiraChatAttachmentDeps {
   return {
     store,
     redactor: (value: unknown) => value,
     managedTaskWorkspaceRoot: undefined,
-    env: { KEIKO_DEFAULT_API_KEY: CONFIGURED_SECRET },
+    env: { KEIKO_DEFAULT_API_KEY: configuredKey },
     config: undefined,
     gatewayConfig: undefined,
     egress: undefined,
@@ -57,6 +59,7 @@ function connect(...scopes: readonly Partial<ChatConnectedScope>[]): void {
 }
 
 beforeEach(() => {
+  configuredKey = CONFIGURED_SECRET;
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-attach-")));
   outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-jira-attach-outside-")));
   mkdirSync(join(root, "docs"));
@@ -324,6 +327,40 @@ describe("the credential floor on attached bytes", () => {
       await source(() => ({ required: false }))({ ...REQUEST, path: "docs/notes.docx" }),
     ).toMatchObject({ ok: false, reason: "permission-denied" });
     expect(JSON.stringify(logs.events)).not.toContain(token);
+  });
+  // A viewer shows a PDFDocEncoding document title with its euro sign (byte 0xA0), so a configured
+  // literal with one must be found in it at the review and at the send.
+  it("refuses a PDF whose PDFDocEncoding title holds a configured literal with a euro sign", async () => {
+    const euroKey = ["configured", "provider", "\u20ac" + "literal", "0123456789"].join("-");
+    configuredKey = euroKey;
+    const title = Buffer.from(euroKey.replaceAll("\u20ac", "\u00a0"), "latin1").toString("hex");
+    const clean = Buffer.from(pdfOf("Quarterly planning notes")).toString("latin1");
+    const at = clean.indexOf("xref");
+    const pdf =
+      `${clean.slice(0, at)}7 0 obj << /Title <${title}> >> endobj\n${clean.slice(at)}`.replace(
+        "/Size 6",
+        "/Size 6 /Info 7 0 R",
+      );
+    writeFileSync(join(root, "docs", "notes.pdf"), Buffer.from(pdf, "latin1"));
+    connect({});
+    expect(
+      await previewJiraChatAttachment(deps(), chatId, ARGS("docs/notes.pdf"), "c", LIMIT),
+    ).toBeUndefined();
+    expect(logs.events.at(-1)?.extra).toMatchObject({
+      stage: "review",
+      refusal: "contains-credential",
+    });
+    expect(
+      await source(() => ({ required: false }))({ ...REQUEST, path: "docs/notes.pdf" }),
+    ).toMatchObject({ ok: false, reason: "permission-denied" });
+    expect(JSON.stringify(logs.events)).not.toContain(euroKey);
+  });
+  it("lets the same PDF through once its title is clean", async () => {
+    writeFileSync(join(root, "docs", "notes.pdf"), pdfOf("Quarterly planning notes"));
+    connect({});
+    expect(
+      await previewJiraChatAttachment(deps(), chatId, ARGS("docs/notes.pdf"), "c", LIMIT),
+    ).toMatchObject({ name: "notes.pdf" });
   });
   it("refuses a kind of file it cannot scan, at both stages", async () => {
     writeFileSync(

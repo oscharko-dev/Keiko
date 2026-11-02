@@ -461,6 +461,27 @@ describe("decoded PDF strings are scanned", () => {
     const pdf = pdfWithObjects([streamObject("/Filter /FlateDecode", deflated(content))]);
     expect(await admit(pdf, "n.pdf")).toEqual(CREDENTIAL);
   });
+  // PDFDocEncoding (the encoding of a text string without a byte order mark) puts the euro sign at
+  // 0xA0, where Latin-1 has a no-break space; a viewer shows the configured literal, so the scan
+  // must too.
+  const EURO_SECRET = ["configured", "provider", "\u20ac" + "literal", "0123456789"].join("-");
+  const pdfDocBytes = (value: string): string => value.replaceAll("\u20ac", "\u00a0");
+  const pdfDocHex = (value: string): string =>
+    Buffer.from(pdfDocBytes(value), "latin1").toString("hex");
+  const admitEuro = (bytes: Uint8Array): ReturnType<typeof admitAttachmentContent> =>
+    admitAttachmentContent({ bytes, name: "n.pdf", secrets: [EURO_SECRET] });
+  it("refuses a configured literal with a euro sign in a PDFDocEncoding string", async () => {
+    const pdf = pdfWithObjects([objectOf(`<${pdfDocHex(EURO_SECRET)}>`)], "/Info 7 0 R");
+    expect(await admitEuro(pdf)).toEqual(CREDENTIAL);
+    const literal = pdfWithObjects([objectOf(`(${pdfDocBytes(EURO_SECRET)})`)], "/Info 7 0 R");
+    expect(await admitEuro(literal)).toEqual(CREDENTIAL);
+  });
+  it("refuses the same literal in UTF-16, and keeps a clean PDFDocEncoding title", async () => {
+    const utf16 = pdfWithObjects([objectOf(`<${utf16Hex(EURO_SECRET)}>`)], "/Info 7 0 R");
+    expect(await admitEuro(utf16)).toEqual(CREDENTIAL);
+    const clean = pdfWithObjects([objectOf(`<${pdfDocHex("Price in \u20ac")}>`)], "/Info 7 0 R");
+    expect(await admitEuro(clean)).toEqual({ ok: true });
+  });
   it("keeps clean hexadecimal and UTF-16 document information", async () => {
     const pdf = pdfWithObjects(
       [`7 0 obj << /Title <${hex("Quarterly")}> /Subject <${utf16Hex("Planning")}> >> endobj`],
