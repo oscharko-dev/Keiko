@@ -12,6 +12,8 @@ $installed = Join-Path $env:ProgramFiles "KeikoRuntimeGateway\keiko-runtime-supe
 function Assert-GatewayCommand([string[]]$Arguments, [int]$Expected, [string]$Name) {
   & $helper @Arguments
   if ($LASTEXITCODE -ne $Expected) { throw "$Name returned $LASTEXITCODE, expected $Expected" }
+  # An expected nonzero state is not this step's result; the runner reads what is left here.
+  $global:LASTEXITCODE = 0
 }
 try {
   New-Item -ItemType Directory -Path $install -ErrorAction Stop | Out-Null
