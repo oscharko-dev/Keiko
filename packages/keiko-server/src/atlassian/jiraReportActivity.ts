@@ -23,6 +23,8 @@ type JiraReportRefusalKind =
   | "invalid-format"
   | "export-unavailable";
 
+const OPTIONAL_COUNT = { type: "integer", dataClass: "count", required: false } as const;
+
 const JIRA_REPORT_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -99,26 +101,26 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
       required: false,
       values: ["markdown", "csv"],
     },
-    issuesRead: { type: "integer", dataClass: "count", required: false },
-    issuesTotal: { type: "integer", dataClass: "count", required: false },
-    pageCount: { type: "integer", dataClass: "count", required: false },
-    issuesWithDeviations: { type: "integer", dataClass: "count", required: false },
-    deviationCount: { type: "integer", dataClass: "count", required: false },
-    requirementCount: { type: "integer", dataClass: "count", required: false },
+    issuesRead: OPTIONAL_COUNT,
+    issuesTotal: OPTIONAL_COUNT,
+    pageCount: OPTIONAL_COUNT,
+    issuesWithDeviations: OPTIONAL_COUNT,
+    deviationCount: OPTIONAL_COUNT,
+    requirementCount: OPTIONAL_COUNT,
     hierarchyDiscovery: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
       values: ["complete", "unavailable"],
     },
-    hierarchyFieldCount: { type: "integer", dataClass: "count", required: false },
-    hierarchyObservedFieldCount: { type: "integer", dataClass: "count", required: false },
-    hierarchyRejectedFieldCount: { type: "integer", dataClass: "count", required: false },
-    hierarchyInferredFieldCount: { type: "integer", dataClass: "count", required: false },
-    byteCount: { type: "integer", dataClass: "count", required: false },
-    invalidArgumentCount: { type: "integer", dataClass: "count", required: false },
-    sectionItemCount: { type: "integer", dataClass: "count", required: false },
-    sectionItemTotal: { type: "integer", dataClass: "count", required: false },
+    hierarchyFieldCount: OPTIONAL_COUNT,
+    hierarchyObservedFieldCount: OPTIONAL_COUNT,
+    hierarchyRejectedFieldCount: OPTIONAL_COUNT,
+    hierarchyInferredFieldCount: OPTIONAL_COUNT,
+    byteCount: OPTIONAL_COUNT,
+    invalidArgumentCount: OPTIONAL_COUNT,
+    sectionItemCount: OPTIONAL_COUNT,
+    sectionItemTotal: OPTIONAL_COUNT,
     sectionByteFitted: { type: "boolean", dataClass: "closed-enum", required: false },
     ruleIds: {
       type: "string-array",

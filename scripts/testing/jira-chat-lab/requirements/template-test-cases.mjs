@@ -10,9 +10,9 @@ import { turnIssues } from "./oracles.mjs";
 import { templateMarkdown, withTemplate } from "./templates.mjs";
 
 const TASK_QUERY = "project = REQ AND issuetype = Task";
-export const TEST_CASE_SECTIONS = Object.freeze(["Schritte", "Erwartet"]);
+const TEST_CASE_SECTIONS = Object.freeze(["Schritte", "Erwartet"]);
 /** The summary the template requires: `LH-002/AC1 <title>`. */
-export const TEST_CASE_SUMMARY_PATTERN = String.raw`^LH-\d{3}/AC\d+ \S`;
+const TEST_CASE_SUMMARY_PATTERN = String.raw`^LH-\d{3}/AC\d+ \S`;
 const TEMPLATE_NAME = "REQ-Task-Testfall";
 const FOOTER_START = "----\nKeiko traceability";
 
@@ -61,7 +61,7 @@ function criterionOf(issue, item) {
  * Grades the issues of the turn: exactly one conforming issue per acceptance criterion and nothing
  * else. No issue at all is absent evidence (`unverified`); any other deviation is `red`.
  */
-export function gradeTemplateTestCases({ tests, item }) {
+function gradeTemplateTestCases({ tests, item }) {
   if (tests.credited.length === 0) {
     return { status: "unverified", detail: "no test case issue in Jira" };
   }

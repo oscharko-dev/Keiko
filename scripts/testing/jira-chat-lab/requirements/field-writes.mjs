@@ -19,7 +19,7 @@ const fieldMetadata = await import(
 );
 
 /** The check's own project. No journey names it. */
-export const WRITE_CHECK_PROJECT = "FLD";
+const WRITE_CHECK_PROJECT = "FLD";
 const SCRUM = "com.pyxis.greenhopper.jira:gh-scrum-template";
 const ACTOR = "keiko-api";
 const EDIT_USER = "keiko-editor";
@@ -430,7 +430,7 @@ const SETTLED = new Set(["written", "refused-by-jira", "no-choice-offered"]);
 const failing = (results) => results.filter((result) => !SETTLED.has(result.outcome));
 
 /** Every field of one issue type, written and read back. Issues it created are removed again. */
-export async function fieldWriteCheck(session, typeName) {
+async function fieldWriteCheck(session, typeName) {
   const project = await ensureWriteCheckProject(session);
   const sprintId = await ensureChoices(session, project);
   const metadata = await createMetadata(session, typeName);

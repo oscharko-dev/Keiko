@@ -41,7 +41,8 @@
         "scripts/testing/jira-chat-lab/requirements/seed-projects.mjs",
         "scripts/testing/jira-chat-lab/session.mjs",
         "scripts/testing/jira-chat-lab/verify-connection.mjs",
-        "scripts/testing/jira-chat-lab/tls-front.mjs"
+        "scripts/testing/jira-chat-lab/tls-front.mjs",
+        "scripts/__tests__/fixtures/work-lock-lane/lane.mjs"
       ],
       "project": ["src/**/*.ts", "scripts/**/*.mjs", "tests/**/*.{ts,mts,mjs}", "native/**/*.mjs"],
       "ignore": [

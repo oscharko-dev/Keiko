@@ -80,7 +80,7 @@ function judgeEpics(id, own, codes) {
  * codes, a stray epic or a duplicate is `red`; every requirement with exactly one epic whose footer
  * states exactly its codes is `green`.
  */
-export function gradeDraftFindings({ epics, expected }) {
+function gradeDraftFindings({ epics, expected }) {
   const stray = epics.credited.filter((epic) => !expected.has(claimedRequirement(epic)));
   const judged = [...expected].map(([id, codes]) =>
     judgeEpics(

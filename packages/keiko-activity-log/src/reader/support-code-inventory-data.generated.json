@@ -2357,6 +2357,7 @@
     "keiko-ui/app/components/desktop/jira-tool-presentation",
     "keiko-ui/app/components/desktop/jiraActionFacts",
     "keiko-ui/app/components/desktop/jiraDraftTree",
+    "keiko-ui/app/components/desktop/jiraNames",
     "keiko-ui/app/components/desktop/keyboardShortcutLabels",
     "keiko-ui/app/components/desktop/keyboardShortcutsRegistry",
     "keiko-ui/app/components/desktop/knowledge-catalog",

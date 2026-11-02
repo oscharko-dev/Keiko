@@ -35,9 +35,7 @@ const OPERATION_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
   "jira.draft": "chat.jira.draft.operation",
   "jira.attach": "chat.jira.attach.operation",
 };
-export function jiraOperationLabel(
-  operation: keyof typeof JIRA_MANAGED_ACTION_TYPES,
-): WidgetMessageKey {
+function jiraOperationLabel(operation: keyof typeof JIRA_MANAGED_ACTION_TYPES): WidgetMessageKey {
   return OPERATION_LABELS[operation] ?? actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[operation]);
 }
 const isEmpty = (value: unknown): boolean =>

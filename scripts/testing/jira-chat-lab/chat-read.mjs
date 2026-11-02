@@ -549,7 +549,8 @@ export async function withLiveChat({
   session,
   modelId,
   run,
-  retainState = false,
+  // KEIKO_JIRA_LAB_RETAIN_STATE=1 keeps a journey's Chat database in the private session to diagnose it.
+  retainState = process.env.KEIKO_JIRA_LAB_RETAIN_STATE === "1",
   stateReady,
   browser = false,
   restoreState,

@@ -162,7 +162,7 @@ export function matchesSeededTruth(jira, large) {
 }
 
 /** The truth `gradeProgress` takes, from the JQL counts (lower-cased keys, as the answer is read). */
-export function progressTruthOfJira(jira) {
+function progressTruthOfJira(jira) {
   return {
     issueCount: jira.total,
     counts: new Map([...jira.byStatus].map(([key, count]) => [key.toLowerCase(), count])),
