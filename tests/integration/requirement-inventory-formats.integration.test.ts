@@ -188,7 +188,7 @@ function xmlEscaped(text: string): string {
 const SPREADSHEET_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 
 /** A one-sheet workbook with a header row and one row per requirement, as a requirement list. */
-function xlsx(): Uint8Array {
+function xlsx(sheetName = "Anforderungen", criteriaSeparator = "\n"): Uint8Array {
   const header = ["ID", "Titel", "Anforderung", "Priorität", "Abnahmekriterien"];
   const rows = [
     header,
@@ -197,7 +197,7 @@ function xlsx(): Uint8Array {
       spec.title,
       spec.text,
       spec.priority,
-      spec.criteria.join("\n"),
+      spec.criteria.join(criteriaSeparator),
     ]),
   ];
   const strings = rows.flat();
@@ -215,7 +215,7 @@ function xlsx(): Uint8Array {
   return zipTextEntries([
     {
       name: "xl/workbook.xml",
-      content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="${SPREADSHEET_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Anforderungen" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      content: `<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="${SPREADSHEET_NS}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscaped(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
     },
     {
       name: "xl/_rels/workbook.xml.rels",
@@ -277,6 +277,18 @@ function extraction(result: ParsedLike): Extraction {
   return { text, sections: unionSections(result.sections, unitSections) };
 }
 
+async function extractWorkbook(workbook: Uint8Array): Promise<Extraction> {
+  return extraction(
+    await xlsxParser.parseAsync(
+      selectionFromBytes(workbook, {
+        extension: "xlsx",
+        mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      }),
+      OPTIONS,
+    ),
+  );
+}
+
 async function extract(format: string): Promise<Extraction> {
   switch (format) {
     case "markdown":
@@ -316,15 +328,7 @@ async function extract(format: string): Promise<Extraction> {
         ),
       );
     case "xlsx":
-      return extraction(
-        await xlsxParser.parseAsync(
-          selectionFromBytes(xlsx(), {
-            extension: "xlsx",
-            mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-          }),
-          OPTIONS,
-        ),
-      );
+      return extractWorkbook(xlsx());
     default:
       return extraction(
         await pptxParser.parseAsync(
@@ -396,5 +400,16 @@ describe("requirement inventory across document formats", () => {
 
     expect(slides?.digest).toBe(markdownEntry?.digest);
     expect(slides?.sectionPath).not.toEqual(markdownEntry?.sectionPath);
+  });
+
+  it.each([
+    ["a sheet name with an equals sign", xlsx("Requirements=v2")],
+    ["a sheet name with a pipe", xlsx("Requirements|v2")],
+    ["a sheet name with an exclamation mark", xlsx("Req!2")],
+    ["criteria separated by a blank line inside the cell", xlsx("Anforderungen", "\n\n")],
+  ])("keeps the workbook's requirements and digests with %s", async (_label, workbook) => {
+    const reference = content(await extract("markdown"));
+
+    expect(content(await extractWorkbook(workbook))).toEqual(reference);
   });
 });

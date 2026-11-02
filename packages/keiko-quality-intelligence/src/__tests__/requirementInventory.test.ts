@@ -307,6 +307,86 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
     });
   });
 
+  describe("a workbook extraction with valid but unusual sheet names and multi-paragraph cells", () => {
+    it.each([
+      "Requirements=v2",
+      "Requirements|v2",
+      "Q&A (rev=2|draft)",
+      "Sheet!1",
+      "Übersicht 2026",
+    ])("reads a row of the sheet %s", (sheet) => {
+      const [row] = detect([
+        `${sheet}!2: ID=FR-4 | Titel=Export | Anforderung=Der Export liefert CSV. | Priorität=Muss`,
+      ]).entries;
+
+      expect(row).toMatchObject({
+        id: "FR-4",
+        unitKind: "table-row",
+        title: "Export",
+        priority: "Muss",
+        statement: "Der Export liefert CSV.",
+      });
+    });
+
+    it("keeps every criterion of a cell that holds a blank line", () => {
+      const [entry] = detect([
+        "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
+        "",
+        "Second criterion",
+        "Sheet1!3: ID=FR-5 | Titel=Import",
+      ]).entries;
+
+      expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual([
+        "First criterion",
+        "Second criterion",
+      ]);
+    });
+
+    it("keeps every paragraph of a statement cell and the cells that follow it", () => {
+      const [entry] = detect([
+        "Sheet1!2: ID=FR-4 | Titel=Export | Anforderung=Der Export liefert CSV.",
+        "",
+        "Er liefert UTF-8. | Priorität=Muss",
+      ]).entries;
+
+      expect(entry).toMatchObject({
+        statement: "Der Export liefert CSV. Er liefert UTF-8.",
+        priority: "Muss",
+      });
+    });
+
+    it("matches the single-newline cell exactly", () => {
+      const blank = detect([
+        "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
+        "",
+        "Second criterion",
+      ]).entries[0];
+      const single = detect([
+        "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
+        "Second criterion",
+      ]).entries[0];
+
+      expect(blank?.digest).toBe(single?.digest);
+    });
+
+    it("ends the row at a recorded section boundary, never inside a free-text cell", () => {
+      const lines = [
+        "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
+        "",
+        "Second criterion",
+      ];
+      const text = lines.join("\n");
+      const start = text.indexOf("Second");
+      const [entry] = deriveRequirementInventory({
+        text,
+        documentKey: KEY,
+        sections: [{ sectionPath: ["Notes"], characterStart: start, characterEnd: text.length }],
+      }).entries;
+
+      expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual(["First criterion"]);
+    });
+  });
+
   it("reads a priority tag in a heading", () => {
     const [entry] = detect(["## FR-9 Export (MUSS)", "Der Export liefert CSV."]).entries;
 

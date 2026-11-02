@@ -30,6 +30,7 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
   continueProjectedRow,
+  endsInParagraphCell,
   openProjectedRow,
   parseProjectedRow,
   tableCells,
@@ -260,7 +261,9 @@ function projectedCandidates(context: Context): readonly Candidate[] {
   };
   context.lines.forEach((line, index) => {
     const started = openProjectedRow(line.text, context.vocabulary);
-    if (started !== undefined || collapse(line.text).length === 0) close();
+    const blank = collapse(line.text).length === 0;
+    const breaks = blank && open !== undefined && !endsInParagraphCell(open.row);
+    if (started !== undefined || breaks || startsSection(context.starts, line)) close();
     if (started !== undefined) open = { row: started, line: index };
     else if (open !== undefined) continueProjectedRow(open.row, line.text, context.vocabulary);
   });

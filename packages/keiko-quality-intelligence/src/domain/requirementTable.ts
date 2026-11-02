@@ -107,14 +107,18 @@ export function parseTableRow(
 /**
  * The text a workbook extraction stores for one row: `Sheet!2: ID=FR-1 | Titel=Foo | Priorität=Muss`
  * (the xlsx parser labels every cell with its column header). A cell that holds line breaks (a list
- * of acceptance criteria) continues on the lines that follow, up to the next row or a blank line.
+ * of acceptance criteria) continues on the lines that follow, up to the next row. A blank line
+ * inside a free-text cell (criteria, statement) is a paragraph break of that cell; it ends any
+ * other row, whose cells are single labels.
  */
 export interface ProjectedRow {
   readonly cells: string[];
   readonly roles: (TableColumnRole | undefined)[];
 }
 
-const PROJECTION_PREFIX = /^[^\n|=]{1,120}!\d{1,9}:[ \t]+(?=[^=|\n]{1,80}=)/u;
+// A worksheet name may hold `=`, `|` and `!` but never `:` (Excel forbids `\ / ? * [ ] :`), so the
+// first colon ends the `Sheet!Row:` prefix.
+const PROJECTION_PREFIX = /^[^\n:]{1,120}!\d{1,9}:[ \t]+(?=[^=|\n]{1,80}=)/u;
 const PROJECTED_CELL_BREAK = / \| (?=[^=|\n]{1,80}=)/u;
 
 function appendProjectedCells(
@@ -141,6 +145,16 @@ export function openProjectedRow(
   const row: ProjectedRow = { cells: [], roles: [] };
   const parts = raw.slice(prefix[0].length).split(PROJECTED_CELL_BREAK);
   return appendProjectedCells(row, parts, vocabulary) ? row : undefined;
+}
+
+const PARAGRAPH_ROLES: ReadonlySet<TableColumnRole | undefined> = new Set([
+  "criteria",
+  "statement",
+]);
+
+/** Whether the row's last cell is free text, so a blank line is a paragraph break inside it. */
+export function endsInParagraphCell(row: ProjectedRow): boolean {
+  return PARAGRAPH_ROLES.has(row.roles.at(-1));
 }
 
 /** A line inside a multi-line cell: it completes the last cell, then may open further cells. */

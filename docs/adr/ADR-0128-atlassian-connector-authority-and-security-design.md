@@ -1259,7 +1259,9 @@ citation; a repair cut at its output limit or still uncited leaves the complete 
   technical tokens (`HTTP-2`, `AES-256`, `ISO-27001`, `UTF-8`, `SHA-256`, `TLS-1`, ...) are reserved
   data, not requirements. Candidates are headings, strong lines (bracketed, separated), table rows
   with an id/statement/priority column, rows of a workbook extraction (`Sheet!2: ID=FR-1 | Titel=Foo`,
-  identifier in the first column, the lines of a multi-line cell read as separate criteria), and, in
+  identifier in the first column, the lines of a multi-line cell read as separate criteria; the
+  sheet name is read up to its first colon, so `=`, `|` and `!` in a name are legal, and a blank line
+  inside a criteria or statement cell is a paragraph break of that cell, not the end of the row), and, in
   HTML and slides, recorded section headings; a
   heading needs a body or a second identifier of its prefix. Priority, criteria, metadata keys and
   modal verbs are data in several languages (DE, EN, FR, ES, IT) and extensible through the
