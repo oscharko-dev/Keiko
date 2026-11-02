@@ -61,7 +61,9 @@ import {
   gradeReportComment,
   jiraReportFacts,
 } from "./report-export.mjs";
-import { countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
+import { aggregateParts, countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
+import { draftFindingsPart } from "./draft-findings.mjs";
+import { templateTestCasesPart } from "./template-test-cases.mjs";
 import {
   epicTemplateConforms,
   epicTemplateMarkdown,
@@ -523,12 +525,14 @@ export const JOURNEYS = {
       "Prüfe ALLE Anforderungen des Lastenhefts auf Qualitätsmängel. Antworte in genau zwei Zeilen: `UNKLAR:` mit den IDs der Anforderungen mit unklarer, nicht prüfbarer Formulierung und `OHNE ABNAHMEKRITERIEN:` mit den IDs der Anforderungen ohne Abnahmekriterien.",
     );
     const grade = gradeQualityFindings(turn.answer, truth);
-    return result(
-      grade.vagueOk && grade.missingOk ? "green" : "red",
-      turn,
-      `vague wording ${grade.vagueReported}/${grade.vague} (exact: ${grade.vagueOk}), missing acceptance criteria ${grade.missingReported}/${grade.missing} (exact: ${grade.missingOk})`,
-      ["vague-wording-findings", "missing-acceptance-findings"],
-    );
+    const answer = {
+      label: "answer",
+      status: grade.vagueOk && grade.missingOk ? "green" : "red",
+      covers: ["vague-wording-findings", "missing-acceptance-findings"],
+      detail: `vague wording ${grade.vagueReported}/${grade.vague} (exact: ${grade.vagueOk}), missing acceptance criteria ${grade.missingReported}/${grade.missing} (exact: ${grade.missingOk})`,
+    };
+    const draft = await draftFindingsPart(ctx, chat);
+    return aggregateParts([answer, draft.part], [turn, draft.turn]);
   },
   async S16(ctx, chat) {
     const item = buildCorpus(1).truth.find((entry) => entry.id === "LH-002");
@@ -537,12 +541,14 @@ export const JOURNEYS = {
       `Entwirf für die Anforderung LH-002 aus dem Lastenheft zu jedem Abnahmekriterium genau einen Testfall. Schreibe jeden Testfall in genau eine Zeile im Format \`${TEST_CASE_FORMAT.replace("<id>", "LH-002")}\`, mit der Kriterium-Referenz LH-002/AC1, LH-002/AC2 usw. Lege nichts in Jira an.`,
     );
     const grade = gradeCriterionTestCases(turn.answer, item);
-    return result(
-      grade.ok ? "green" : "red",
-      turn,
-      `${grade.cases} test cases for ${item.acceptanceCount} criteria: ${grade.missing.length} missing, ${grade.unusable.length} without usable steps or result, ${grade.duplicated.length} duplicated, ${grade.invented.length} invented references`,
-      ["test-case-per-criterion", "traceability"],
-    );
+    const answer = {
+      label: "answer",
+      status: grade.ok ? "green" : "red",
+      covers: ["test-case-per-criterion", "traceability"],
+      detail: `${grade.cases} test cases for ${item.acceptanceCount} criteria: ${grade.missing.length} missing, ${grade.unusable.length} without usable steps or result, ${grade.duplicated.length} duplicated, ${grade.invented.length} invented references`,
+    };
+    const written = await templateTestCasesPart(ctx, chat);
+    return aggregateParts([answer, written.part], [turn, written.turn]);
   },
   S17: (ctx, chat) => backlogJourney(ctx, chat),
   S18: (ctx) => modesAndReadableApproval(ctx),

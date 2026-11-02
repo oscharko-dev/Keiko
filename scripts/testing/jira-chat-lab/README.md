@@ -608,12 +608,20 @@ call is visible and finished while the turn still ran, without a generation-chan
 second turn for the Soll requirements whose Chat mode is changed after its first completed write,
 which ends the admitted turn early, so the product's early-ending answer must name exactly the
 epics Jira shows as created (evidence: a new `chat.tool-turn.ended` line in the Activity Log). A part
-whose evidence is absent is `unverified`, covers nothing and leaves S17 `partial`. The catalog also
-lists the human criteria no journey exercises yet (S15 findings attached to an epic draft, S16 the
-format the template defines), so those scenarios stay `partial` until a journey covers them. S14's
-`edits-proposed-as-draft` is moved to follow-up #4196 by owner decision: the scenario declares it
-under `deferred` with the issue number, `coverage.mjs` accepts a deferral only with an issue number,
-and the scorecard row prints "deferred to #4196" so a green S14 never reads as covering it. S10 asks for three strict line formats
+whose evidence is absent is `unverified`, covers nothing and leaves S17 `partial`. S15 adds a second
+turn (`draft-findings.mjs`) that drafts epics for one seeded vague requirement and one without
+acceptance criteria and credits `findings-attached-to-epic-draft` only when the epic Jira holds
+states, in its trace footer (`Quality findings:`), exactly the closed codes the production quality
+checks derive for that requirement; an epic without a footer is `unverified`. S16 adds a turn
+(`template-test-cases.mjs`) under a REQ Task template that defines the form (sections `Schritte` and
+`Erwartet`, summary `<id>/AC<n>`; Task rather than Sub-task, which would need a parent chain) and
+credits `template-defined-format` only for exactly one conforming, requirement-labelled issue per
+criterion of LH-002; the template is removed afterwards. Both write REQ, so they take the work lock
+and prepare REQ like S05. An epic for a requirement without criteria stays satisfiable under an epic
+template: the section needs text, not criteria, so the draft can state that none are defined.
+S14's `edits-proposed-as-draft` is moved to follow-up #4196 by owner decision: the scenario declares
+it under `deferred` with the issue number, `coverage.mjs` accepts a deferral only with an issue
+number, and the scorecard row prints "deferred to #4196" so a green S14 never reads as covering it. S10 asks for three strict line formats
 (`ANZAHL;type;status;n`, `EPIC;key;members;done`, `SCHÄTZUNG;total;done;remaining`) and grades them
 against the issues Jira holds. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
 that name each requirement (tokenised like the product) and requires the complete `jira.report`

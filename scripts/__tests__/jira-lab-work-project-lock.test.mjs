@@ -185,7 +185,7 @@ describe("withWorkProjectLock", () => {
     expect(prepared).toBe(false);
   });
 
-  it.each(["S02", "S03", "S04", "S15", "S16"])(
+  it.each(["S02", "S03", "S04"])(
     "runs %s, which writes no shared issue, beside a lane that holds the lock",
     async (id) => {
       const dir = directory();
@@ -193,6 +193,31 @@ describe("withWorkProjectLock", () => {
       mkdirSync(lock);
       writeFileSync(join(lock, "owner.json"), JSON.stringify({ pid: process.pid, id: "S05" }));
       await expect(withWorkProjectLock(dir, id, () => Promise.resolve("ran"))).resolves.toBe("ran");
+    },
+  );
+
+  it.each(["S15", "S16"])(
+    "serializes %s, which creates epics or test cases in REQ, and prepares REQ first",
+    async (id) => {
+      const dir = directory();
+      let prepared = false;
+      let lockedDuringRun = false;
+      await withWorkProjectLock(
+        dir,
+        id,
+        () => {
+          lockedDuringRun = workProjectLockHeld(dir);
+          return Promise.resolve();
+        },
+        {
+          prepare: () => {
+            prepared = true;
+            return Promise.resolve();
+          },
+        },
+      );
+      expect(lockedDuringRun).toBe(true);
+      expect(prepared).toBe(true);
     },
   );
 
