@@ -205,7 +205,7 @@ const FAILURES: Readonly<
   "guards-remain": {
     kind: "conflict",
     message:
-      "A coding run is still protected by the gateway's network policy. Stop it, restart Windows if none is running, and try again.",
+      "A coding run may still be protected by the gateway's network policy, so nothing was removed.",
   },
   "invalid-request": {
     kind: "validation-failed",
