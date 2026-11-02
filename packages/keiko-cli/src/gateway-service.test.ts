@@ -86,7 +86,7 @@ describe("keiko gateway-service", () => {
     [23, "could not be copied"],
     [24, "Service Control Manager"],
     [25, "did not start"],
-    [26, "still protected"],
+    [26, "nothing was removed"],
     [27, "rejected"],
     [99, "unexpected result"],
   ])("install result %i fails closed with a plain reason", async (exitCode, text) => {
