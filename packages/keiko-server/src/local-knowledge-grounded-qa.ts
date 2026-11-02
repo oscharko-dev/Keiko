@@ -137,6 +137,7 @@ import {
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
+import { gatewayErrorStatus } from "./grounded-gateway-error-status.js";
 import {
   assertConversationReadinessAdmission,
   captureConversationReadinessAdmission,
@@ -2872,11 +2873,7 @@ function stateFailureRoute(
   return { status: 200, body: answer };
 }
 
-export function gatewayErrorStatus(error: GatewayError): number {
-  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
-  if (error.retryable) return 503;
-  return 502;
-}
+export { gatewayErrorStatus };
 
 export function mapGroundedAskError(
   error: unknown,

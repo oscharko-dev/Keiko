@@ -38,6 +38,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import {
   AuthenticationError,
+  CallerAttemptAdmissionError,
   CancelledError,
   ConfigInvalidError,
   TransportError,
@@ -4044,6 +4045,11 @@ describe("gatewayErrorStatus", () => {
   it("maps a non-retryable, non-authentication gateway error to 502", () => {
     expect(gatewayErrorStatus(new ConfigInvalidError("bad config"))).toBe(502);
   });
+  // Lab S12 of epic #4173 (Qwen): an exhausted grounded synthesis grant reached the browser as 502.
+  // A caller's own attempt or token cap is the nonretryable 403 on every route (ADR-0171).
+  it("maps a caller attempt-admission refusal to 403", () => {
+    expect(gatewayErrorStatus(new CallerAttemptAdmissionError("grant exhausted"))).toBe(403);
+  });
 });
 
 describe("mapGroundedAskError", () => {
@@ -4093,6 +4099,11 @@ describe("mapGroundedAskError", () => {
   it.each([
     { slug: "gateway", cause: new TransportError("private-cause-canary"), status: 503 },
     { slug: "unexpected", cause: new Error("private-cause-canary"), status: 500 },
+    {
+      slug: "attempt-admission",
+      cause: new CallerAttemptAdmissionError("private-cause-canary"),
+      status: 403,
+    },
   ])(
     "correlates and diagnoses a $slug failure from the real Knowledge Pod handler",
     async ({ slug, cause, status }) => {

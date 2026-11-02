@@ -264,6 +264,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
+import { gatewayErrorStatus } from "./grounded-gateway-error-status.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
   buildPackCitations,
@@ -353,12 +354,7 @@ export function mappedContextPackValidationError(
 // enum and the fixed cancellation string carry no caller data and stay verbatim. Reading the LIVE
 // secrets via currentRedactionSecrets(deps) (not the startup snapshot) scrubs apiKey/baseUrl values
 // added through PATCH /api/gateway/config after process start (Epic #177).
-export function gatewayErrorStatus(error: GatewayError): number {
-  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
-  if (error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return 403;
-  if (error.retryable) return 503;
-  return 502;
-}
+export { gatewayErrorStatus };
 
 // ADR-0173 D5 g25/g27 — mirrors the buffered desktop chat path (`chat-handlers.ts`): a GatewayError
 // mapped straight to an HTTP response used to leave no trace in the operator diagnostic sink, unlike
