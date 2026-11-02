@@ -844,8 +844,11 @@ another. When the search finds nothing, the create carries that same identity la
 of the same item reconciles to the issue instead of creating it a second time (2026-11-02, S19: Qwen
 created the epic with `jira.create`, then put it in a draft that created it again); a repeated
 `jira.create` of it is refused the same way. A create with a parent, an epic link or links never
-carries the label and never matches, and a search that cannot decide (several matches, or a candidate
-set that cannot be read completely) leaves the create unmarked. A draft that Jira
+carries the label and never matches. Several matches refuse the create as `conflict` before any write
+(an earlier run already made duplicates; creating another would add to them), and a search that cannot
+be completed (a candidate set that cannot be read completely) leaves the create unmarked. The identity
+label is appended only to a valid `labels` array; a malformed `labels` value is left as given so field
+validation refuses it, never replaced by the identity alone. A draft that Jira
 refused only in part carries `JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE` instead of the single-write "nothing
 was changed": it names the items now in Jira and scopes the correction to the refused ones. Absence
 requires consistent evidence: every page must state the `startAt` that was requested and a page size

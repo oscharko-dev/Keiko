@@ -372,6 +372,17 @@ function existingTwinRefusal(
     },
   };
 }
+function ambiguousTwinRefusal(): Extract<JiraMutationAttempt, { ok: false }> {
+  return {
+    ok: false,
+    reason: "conflict",
+    detail: {
+      messages: [
+        "Several issues already match this issue: a Keiko draft created it more than once in this project with this type and summary. Nothing was created. Look them up in Jira instead of creating it again.",
+      ],
+    },
+  };
+}
 /** The one-item draft a create that hangs from nothing would be, on a create screen with labels. */
 function twinItem(
   create: CreateRequest,
@@ -404,7 +415,8 @@ const UNIDENTIFIED: DraftTwin = { kind: "new", identity: undefined };
  * of creating it a second time (S19, Qwen: jira.create first, then a draft of the same epic). Only a
  * create that hangs from nothing can be such a twin: one with links, or with a field that points at
  * another issue (a parent or epic link), never is, and neither is a create on a screen without
- * labels, where no identity label exists. A search that cannot decide leaves the create unmarked.
+ * labels, where no identity label exists. Several matches refuse it too; a search that cannot be
+ * completed leaves the create unmarked.
  */
 async function draftTwin(
   request: JiraMutationRequest,
@@ -415,6 +427,8 @@ async function draftTwin(
   if (item === undefined) return UNIDENTIFIED;
   const found = await reconcileJiraDraftItem(request, item, metadata, undefined);
   if (found.kind === "absent") return { kind: "new", identity: item.identity };
+  if (found.kind === "refused" && !found.attempt.ok && found.attempt.reason === "conflict")
+    return { kind: "repeat", attempt: ambiguousTwinRefusal() };
   const receipt = found.kind === "existing" && found.attempt.ok ? found.attempt.receipt : undefined;
   const issueKey = receipt?.issueKey;
   return issueKey === undefined

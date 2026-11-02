@@ -474,7 +474,10 @@ export function withJiraDraftIdentity(
   identity: string,
 ): Readonly<Record<string, unknown>> {
   if (!labelsWritable(metadata)) return fields;
-  const labels = Array.isArray(fields.labels) ? (fields.labels as readonly unknown[]) : [];
+  // A malformed value stays as given so field validation refuses it; replacing it would send the
+  // issue without the labels the caller asked for.
+  if (fields.labels !== undefined && !Array.isArray(fields.labels)) return fields;
+  const labels = (fields.labels ?? []) as readonly unknown[];
   return labels.includes(identity) ? fields : { ...fields, labels: [...labels, identity] };
 }
 

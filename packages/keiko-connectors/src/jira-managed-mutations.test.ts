@@ -1493,6 +1493,43 @@ it("creates when no draft made this issue, carrying the identity a draft of it w
   expect(f.created().labels).toEqual(["anforderung", identity]);
 });
 
+it("refuses a create when two issues carry its draft identity, sending nothing", async () => {
+  const f = twinFixture([
+    { key: "SYN-4", id: "10004" },
+    { key: "SYN-5", id: "10005" },
+  ]);
+  expect(await f.run(TWIN_CREATE)).toMatchObject({ ok: false, reason: "conflict" });
+  expect(f.searches()).toHaveLength(1);
+  expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+});
+
+it("still creates once when the identity search cannot be completed", async () => {
+  const f = twinFixture([]);
+  const base = f.http.getMockImplementation();
+  f.http.mockImplementation((request) =>
+    new URL(request.url).pathname.endsWith("/search")
+      ? Promise.resolve(response({}, 500))
+      : (base?.(request) ?? Promise.resolve(response({}, 404))),
+  );
+  expect(await f.run(TWIN_CREATE)).toMatchObject({ ok: true, receipt: { issueKey: "SYN-9" } });
+  expect(f.created().labels).toEqual(["anforderung"]);
+});
+
+it.each([
+  ["a string", "anforderung"],
+  ["a number", 7],
+  ["an object", { name: "anforderung" }],
+])(
+  "refuses malformed labels (%s) instead of replacing them with the identity",
+  async (_name, labels) => {
+    const f = twinFixture([]);
+    expect(
+      await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, labels } }),
+    ).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+  },
+);
+
 it("leaves a create that hangs from an epic link without a draft identity", async () => {
   const f = twinFixture([]);
   await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, customfield_10000: "SYN-2" } });
