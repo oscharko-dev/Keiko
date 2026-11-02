@@ -9,10 +9,6 @@ import { ApiError } from "./api-shared-primitives";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorEvidence } from "./client-error-evidence";
 import { correlationIdOf } from "./client-error-summary";
-import {
-  validateCommandTaskCatalog,
-  validateCommandTaskRunResult,
-} from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import type { CommandTaskCatalog, CommandTaskRunRequest, CommandTaskRunResult } from "./types";
 
 function reportCommandResponseFailure(
@@ -29,9 +25,13 @@ function reportCommandResponseFailure(
   });
 }
 
+// The command validators load with the first command request. debugLaunchTarget reaches this module
+// from the first-load desktop shell, so a static import would put them in the initial bundle.
 export async function fetchCommandCatalog(projectId: string): Promise<CommandTaskCatalog> {
   const params = new URLSearchParams();
   params.set("projectId", projectId);
+  const { validateCommandTaskCatalog } =
+    await import("@oscharko-dev/keiko-contracts/runtime/command-runner");
   const correlationId = newClientCorrelationId();
   let validationFailed = false;
   let emptyBodyRefused = false;
@@ -64,6 +64,8 @@ export async function fetchCommandCatalog(projectId: string): Promise<CommandTas
 export async function createCommandRun(
   input: CommandTaskRunRequest,
 ): Promise<CommandTaskRunResult> {
+  const { validateCommandTaskRunResult } =
+    await import("@oscharko-dev/keiko-contracts/runtime/command-runner");
   const correlationId = newClientCorrelationId();
   let validationFailed = false;
   let emptyBodyRefused = false;
