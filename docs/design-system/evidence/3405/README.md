@@ -84,7 +84,8 @@ gate rejected its old digest. The original nine-case producer regenerated all 17
 cases passed in 50.4 seconds, including the real-BFF outage case. All 14 PNGs changed bytes because
 the previous set was rendered on Linux; the progress, reconnecting and dark update-window captures
 were inspected. The three JSON records bind the current sources, and the freshness gate passes. This
-remains updater fixture evidence.
+is macOS browser and fixture qualification; it does not claim Linux execution. It remains updater
+fixture evidence.
 
 ## Reproduce
 
