@@ -238,3 +238,10 @@ Node 24.22.0 and passed in 1.1 minutes, including the real-BFF outage journey; o
 `11-progress-state.png` changed bytes and was inspected, and the three records rebind every
 declared digest. No updater behavior, baseline or numerical ceiling changed. This remains updater
 fixture evidence.
+
+The connector selection, Jira Pod card and read-grant changes of the same pull request changed the
+optional message catalogs again. The complete original nine-case producer ran on 2026-11-02 (UTC)
+on macOS arm64 with Node 26.13.0, npm 11.19.1 and Playwright 1.64.1 and passed in 48.0 seconds,
+including the real-BFF outage journey; only `11-progress-state.png` changed bytes (the progress
+bar's captured position) and was inspected, and the three records rebind every declared digest.
+The evidence freshness gate passed. No updater behavior, baseline or numerical ceiling changed.
