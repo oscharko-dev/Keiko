@@ -61,7 +61,7 @@ try {
   if ($LASTEXITCODE) { throw "Installed-service proof failed" }
   $transportArgs = @()
   if ($VerifyTransport) { $transportArgs += "--verify-transport" }
-  node scripts/testing/test-windows-workbench-adapter.mjs $installed @transportArgs
+  node scripts/testing/test-windows-workbench-adapter.mjs $installed $install @transportArgs
   if ($LASTEXITCODE) { throw "Workbench native adapter proof failed" }
 } finally {
   if ($created) {

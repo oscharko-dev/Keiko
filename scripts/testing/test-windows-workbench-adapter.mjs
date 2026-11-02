@@ -17,14 +17,15 @@ import {
 } from "@oscharko-dev/keiko-sandbox";
 import { createNativeRuntimeProcessBackend } from "../../packages/keiko-server/dist/coding-runtime/nativeRuntimeProcessBackend.js";
 
-const [helper, ...options] = process.argv.slice(2);
+// The probe lives apart from the helper: the product installer owns the helper's directory.
+const [helper, probeRoot, ...options] = process.argv.slice(2);
 assert.ok(
   options.length === 0 || (options.length === 1 && options[0] === "--verify-transport"),
   "unexpected Workbench adapter test arguments",
 );
 const verifyTransport = options.length === 1;
 const installed = await realpath(helper);
-const root = dirname(installed);
+const root = await realpath(probeRoot);
 const observer = join(root, "gateway-service-probe.exe");
 const bytes = await readFile(installed);
 function launch(source, contents, port, args) {
