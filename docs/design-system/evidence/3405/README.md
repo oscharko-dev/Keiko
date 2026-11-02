@@ -250,3 +250,9 @@ The Jira report card's two new messages (PR #4182, review repairs) changed the o
 the original producer ran again on 2026-11-02 with Node 24.18.0. All cases passed, including the
 real-BFF outage journey, and the three records rebind every declared digest. The evidence freshness
 gate passed. No updater behavior, baseline or numerical ceiling changed.
+
+The requirements read's Chat row label and partial-list note (PR #4182) changed the optional catalogs
+again, so the original producer ran on 2026-11-02 with Node 24.18.0. All cases passed, including the
+real-BFF outage journey; only `11-progress-state.png` changed bytes (the progress bar's captured
+position), and the three records rebind every declared digest. The evidence freshness gate passed.
+No updater behavior, baseline or numerical ceiling changed.
