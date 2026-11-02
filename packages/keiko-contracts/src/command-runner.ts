@@ -8,6 +8,7 @@
 // Discovery and execution live in keiko-server (composing keiko-tools `runCommand`), so the browser
 // never gains process, shell, or filesystem authority.
 
+import { COMMAND_TASK_TRUST_STATES, type CommandTaskTrustState } from "./command-task-trust.js";
 import { deepFreeze } from "./deep-freeze.js";
 import {
   isNonEmptyString,
@@ -39,15 +40,7 @@ export const COMMAND_TASK_SOURCES: readonly CommandTaskSource[] = Object.freeze(
   "package-json-script",
 ] as const satisfies readonly CommandTaskSource[]);
 
-// Repository-authored scripts are executable code from the selected workspace. The browser can see
-// whether a task is currently runnable, but the server owns the trust decision and re-checks it at
-// execution time; the request never carries this field back as authority.
-export type CommandTaskTrustState = "trusted" | "approval-required";
-
-export const COMMAND_TASK_TRUST_STATES: readonly CommandTaskTrustState[] = Object.freeze([
-  "trusted",
-  "approval-required",
-] as const satisfies readonly CommandTaskTrustState[]);
+export { COMMAND_TASK_TRUST_STATES, type CommandTaskTrustState } from "./command-task-trust.js";
 
 export type CommandTaskTrustReason = "repository-authored-script";
 
