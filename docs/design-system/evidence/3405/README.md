@@ -218,3 +218,16 @@ and four harness inputs; only the outage harness digest changed. A first run in 
 without `fonts-liberation` rendered every capture in DejaVu Sans and was discarded: reproduce this
 set with the Liberation fonts installed. This remains updater presentation and declared BFF recovery
 evidence; it does not prove native installation, replacement or restart.
+
+## Message catalog translation — 2026-11-02 (#4183)
+
+Moving hard-coded English texts into the optional message catalogs (PR #4198) changes the digests of
+`i18n-messages.optional.en.ts` and `i18n-messages.optional.de.ts`, two declared UI sources. The
+original producer ran with tracked evidence enabled on Windows 11 (Node 24.21.0, Playwright
+Chromium headless shell build 1248). Eight of the nine cases passed. The ninth, "routes default
+updater JSON and PNG evidence into one untracked output root", asserts the default output
+routing and fails by construction while `KEIKO_WRITE_TRACKED_EVIDENCE=1` is set. All 17 declared artifacts
+were rewritten and `npm run check:update-ui-evidence` passes. This is Windows rendering, not the
+Linux Liberation-font set used for the previous captures, so all 14 PNGs differ in bytes from that set;
+the progress capture was inspected. The update window itself did not change. A Linux regeneration
+remains preferable if a reviewer wants byte-comparable captures.
