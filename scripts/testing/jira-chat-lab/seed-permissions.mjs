@@ -23,7 +23,11 @@ function grants(actor, permissions) {
 }
 
 const grantKey = (value) => `${value.permission}:${value.holder.type}:${value.holder.parameter}`;
-const normalizeGrants = (values) => values.map((value) => grantKey(value)).sort().join("|");
+const normalizeGrants = (values) =>
+  values
+    .map((value) => grantKey(value))
+    .sort()
+    .join("|");
 
 /** A lab seeded by an earlier fixture gains new grants; anything else in its scheme is drift. */
 async function reconcileGrants(session, auth, schemeId, actual, permissions) {
