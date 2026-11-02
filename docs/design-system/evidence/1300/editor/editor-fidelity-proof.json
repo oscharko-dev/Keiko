@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "3cf3ccc97476901a7270ecd64c099e8e356b2495194ffae0ffe46ad4c462fe87"
+      "sha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -69,7 +69,7 @@
     },
     {
       "path": "package.json",
-      "sha256": "e0a4c2a1953726e492a43cf68c776d5f31f2679045fa4d6851a72255e8d1dc3a"
+      "sha256": "e230c6e59e398304ca6b583f517f2c445738a5aff840dcc3383df57593cbd3c7"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-11-01T10:31:03.563Z",
-    "repoHeadSha": "5c0a2e049c1d6e7ee53f81dc53de9ecbc9f62c73"
+    "generatedAt": "2026-11-02T09:37:10.178Z",
+    "repoHeadSha": "d4fe8b0f1ba13c252b4007cce8aa757809934a9e"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {
