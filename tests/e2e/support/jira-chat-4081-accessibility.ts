@@ -348,7 +348,7 @@ async function formEvidence(session: EvidenceSession, form: Locator, hub: Locato
     .scrollIntoViewIfNeeded();
   await capture(session, hub, "hub-create-context", { name: "dark", theme: "dark" });
   await captureMatrix(session, form, "hub-create-form");
-  await expect(hub.getByRole("button", { name: copy.save, exact: true })).toBeVisible();
+  await expect(form.getByRole("button", { name: copy.create, exact: true })).toBeVisible();
 }
 
 async function keyboardDecision(page: Page, allow: Locator, deny: Locator): Promise<void> {

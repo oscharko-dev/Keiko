@@ -25,7 +25,6 @@ export const JIRA_BROWSER_COPY = {
     label: "Label",
     url: "Base URL",
     token: "API token",
-    save: "Save connector",
     verify: "Verify connection",
     connectors: "Connectors",
     access: "Access",
@@ -39,7 +38,6 @@ export const JIRA_BROWSER_COPY = {
     label: "Bezeichnung",
     url: "Basis-URL",
     token: "API-Token",
-    save: "Connector speichern",
     verify: "Verbindung prüfen",
     connectors: "Konnektoren",
     access: "Zugriff",
@@ -137,7 +135,7 @@ export async function createAndConnect(
   await form.getByLabel(copy.label, { exact: true }).fill(name);
   await form.getByLabel(copy.url, { exact: true }).fill(fixture().jiraBaseUrl);
   await form.getByLabel(copy.token, { exact: true }).fill("synthetic-jira-browser-fixture-pat");
-  await activate(form.getByRole("button", { name: copy.save, exact: true }));
+  await activate(form.getByRole("button", { name: copy.create, exact: true }));
   const card = hub.getByTestId("acx-connector").filter({ hasText: name });
   await activate(card.getByRole("button", { name: copy.verify, exact: true }));
   await expect(card.locator('[data-status="ok"]')).toBeVisible();

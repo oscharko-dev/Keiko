@@ -71,8 +71,14 @@
   color: var(--fg-muted);
 }
 .cmpManage {
-  padding: 0;
+  /* A text link with a full 24px touch target (WCAG 2.5.8). */
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  margin: 0 -6px;
+  padding: 0 6px;
   border: 0;
+  border-radius: var(--radius-control);
   font: inherit;
   font-size: 11px;
   color: var(--accent-on-tint);

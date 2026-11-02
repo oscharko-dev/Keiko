@@ -1,5 +1,8 @@
 .cmpControls {
   display: flex;
+  /* Never narrower than its content (at most 220px): the model select absorbs a narrow composer
+     row instead, so the Skills button cannot slide under its neighbours. */
+  flex: 0 0 auto;
   align-items: center;
   min-width: 0;
   max-width: 220px;
