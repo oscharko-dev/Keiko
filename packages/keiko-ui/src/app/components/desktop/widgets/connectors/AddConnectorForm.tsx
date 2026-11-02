@@ -59,6 +59,8 @@ interface TextFieldConfig {
   readonly placeholderKey: MessageKey;
   readonly type?: "text" | "password" | "email";
   readonly hintKey?: MessageKey;
+  /** The placeholder a Jira Pod (Jira Data Center) shows instead of the Atlassian Cloud example. */
+  readonly livePlaceholderKey?: MessageKey;
 }
 
 const DEFAULT_FIELDS: EntryFields = {
@@ -78,11 +80,13 @@ const TEXT_FIELDS: readonly TextFieldConfig[] = [
     name: "displayName",
     labelKey: "atlassianConnectors.add.displayName",
     placeholderKey: "atlassianConnectors.add.displayNamePlaceholder",
+    livePlaceholderKey: "atlassianConnectors.live.displayNamePlaceholder",
   },
   {
     name: "baseUrl",
     labelKey: "atlassianConnectors.add.baseUrl",
     placeholderKey: "atlassianConnectors.add.baseUrlPlaceholder",
+    livePlaceholderKey: "atlassianConnectors.live.baseUrlPlaceholder",
   },
   {
     name: "email",
@@ -266,7 +270,11 @@ function EntryFieldsView({
           key={cfg.name}
           id={`${prefix}-${cfg.name}`}
           labelKey={cfg.labelKey}
-          placeholderKey={cfg.placeholderKey}
+          placeholderKey={
+            controller.jiraLive
+              ? (cfg.livePlaceholderKey ?? cfg.placeholderKey)
+              : cfg.placeholderKey
+          }
           value={fields[cfg.name]}
           onChange={(value) => controller.setText(cfg.name, value)}
           errorKey={errors[cfg.name]}

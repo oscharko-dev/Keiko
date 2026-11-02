@@ -27,6 +27,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Chat can search and read Jira issues and metadata after your consent. Access still depends on the Jira account permissions.",
   "atlassianConnectors.live.patHint":
     "Create a personal access token in your Jira profile. It is used only to save this connection and is never shown again.",
+  "atlassianConnectors.live.displayNamePlaceholder": "e.g. Jira Data Center",
+  "atlassianConnectors.live.baseUrlPlaceholder": "https://jira.example.com",
 
   "chat.jira.writeApproval.unavailable": "Action approval is currently unavailable",
   "chat.jira.writeApproval.title": "Review Jira action",

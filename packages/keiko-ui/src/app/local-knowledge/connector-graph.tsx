@@ -1890,7 +1890,6 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
         {/* Create a live HTML Manual Knowledge Pod from a site origin (Issue #2063); refresh of an
             existing pod lives on the pod detail. Reloads the catalog when the job settles. */}
         <HtmlManualPodCreate onCreateComplete={reload} />
-        <AtlassianConnectorsPanel jiraLive />
         <CapsuleSection
           capsules={capsules}
           isLoading={isLoading}
@@ -1910,6 +1909,9 @@ export function ConnectorGraph(props: ConnectorGraphProps): ReactNode {
           onDelete={setDeleteSetTarget}
           deleteBusyId={capsuleSetActionBusy}
         />
+        {/* Jira Live Pods follow the pods this page creates and indexes: a live connection is a
+            separate kind of source, and listing it first pushed the person's own pods below it. */}
+        <AtlassianConnectorsPanel jiraLive />
       </section>
       {createDialogOpen ? (
         <CreateCapsuleDialog

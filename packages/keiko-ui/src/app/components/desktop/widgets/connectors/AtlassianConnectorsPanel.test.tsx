@@ -184,6 +184,25 @@ it("shows only owned Live Pods in the Hub without sync or legacy approvals", asy
   expect(await axe(container)).toHaveNoViolations();
 });
 
+it("renders the live Jira Pods as one Knowledge Pods page section", async () => {
+  render(
+    <AtlassianConnectorsPanel
+      jiraLive
+      client={makeClient({ listConnectors: vi.fn(async () => []) })}
+      pollIntervalMs={100000}
+    />,
+  );
+  await screen.findByText("No Jira Pods yet. Create one to connect Jira to a Chat.");
+  // A page section heading like the pod list's, without a nested "Connectors" heading.
+  expect(screen.getByRole("heading", { level: 2, name: "Jira Live Pods" })).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "Connectors" })).toBeNull();
+  expect(screen.getByRole("region", { name: "Jira Live Pods" })).toBeVisible();
+  expect(screen.getByTestId("acx-panel")).toHaveProperty(
+    "className",
+    expect.stringMatching(/cmpEmbedded/),
+  );
+});
+
 it("describes an empty live Jira Hub without offering a connector sync", async () => {
   render(
     <AtlassianConnectorsPanel

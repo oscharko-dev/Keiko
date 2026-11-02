@@ -215,6 +215,18 @@ describe("ConnectorGraph — empty state", () => {
 });
 
 describe("ConnectorGraph — with capsules", () => {
+  // 1.3.5 field report: the Jira Live Pods section came first and filled the page's height, so a
+  // newly created Knowledge Pod appeared a screen below it. The person's own pods come first.
+  it("lists the Knowledge Pods before the Jira Live Pods section", async () => {
+    render(
+      <ConnectorGraph fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Policy" })])} />,
+    );
+    const list = await screen.findByRole("list", { name: "Knowledge Pod list" });
+    const jira = screen.getByTestId("acx-panel");
+    expect(list.compareDocumentPosition(jira) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(jira.className).toMatch(/cmpEmbedded/);
+  });
+
   it("renders one row per capsule with the correct display name", async () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "Alpha Docs" }),

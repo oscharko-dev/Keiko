@@ -29,6 +29,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Nach deiner Lesefreigabe kann der Chat Jira-Vorgänge und Metadaten suchen und lesen. Der Zugriff hängt weiterhin von den Jira-Berechtigungen ab.",
   "atlassianConnectors.live.patHint":
     "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Keiko speichert es für den Jira-Zugriff. Gespeicherte Tokens werden nicht erneut angezeigt.",
+  "atlassianConnectors.live.displayNamePlaceholder": "z. B. Jira Data Center",
+  "atlassianConnectors.live.baseUrlPlaceholder": "https://jira.example.com",
 
   "chat.jira.writeApproval.unavailable": "Aktionsfreigabe derzeit nicht verfügbar",
   "chat.jira.writeApproval.title": "Jira-Aktion prüfen",

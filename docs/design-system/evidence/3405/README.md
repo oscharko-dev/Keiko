@@ -231,3 +231,10 @@ and four harness inputs; only the outage harness digest changed. A first run in 
 without `fonts-liberation` rendered every capture in DejaVu Sans and was discarded: reproduce this
 set with the Liberation fonts installed. This remains updater presentation and declared BFF recovery
 evidence; it does not prove native installation, replacement or restart.
+
+The Jira Pod create form's Data Center placeholders (PR #4182) changed both optional message
+catalogs. The complete original nine-case producer ran on 2026-11-02 (UTC) on macOS arm64 with
+Node 24.22.0 and passed in 1.1 minutes, including the real-BFF outage journey; only
+`11-progress-state.png` changed bytes and was inspected, and the three records rebind every
+declared digest. No updater behavior, baseline or numerical ceiling changed. This remains updater
+fixture evidence.

@@ -20,6 +20,21 @@
   font-size: 13px;
 }
 
+/* Embedded in the Knowledge Pods page, the Jira Live Pods section is one page section: it takes the
+   height of its content and scrolls with the page. Filling the page (height: 100%) left a screen of
+   empty space above the Knowledge Pods list and nested a second scroll area inside the page's own. */
+.scope.cmpEmbedded {
+  gap: 10px;
+  height: auto;
+  margin-top: 24px;
+  padding: 0;
+  overflow: visible;
+}
+
+.cmpEmbeddedTitle {
+  margin: 0;
+}
+
 .scope :global(.acx-title) {
   margin: 0;
   font-size: 16px;
