@@ -52,6 +52,7 @@ pull request; the replay refuses that, and every row's `split` is `development`.
 | dev-3                                | product | `bf7574364`: the Reviewer is told to report each finding once confirmed and to plan for about 15 read or search calls; the Counter-checker to use at most four.           | `dfcb28e93038`       | 0       | n/a (1 presented, unmatched)                                                              | 1                     | 18 budget-exhausted, 6 model-failed, 4 complete, 1 deadline-exceeded, 1 files-unprocessed | 184 s            |
 | dev-4                                | product | `7b3437265` with `KEIKO_REVIEW_RUN_MAX_PROMPT_TOKENS=1500000`: the Reviewer prompt allowance raised from 600,000 to 1,500,000 tokens.                                     | `c2a4ccc7abfb`       | 4       | 75.0 % (3/4, Wilson 95 % interval 30.1 to 95.4 %; 15 presented, 2 undecided, 9 unmatched) | 3                     | 10 model-failed, 8 budget-exhausted, 5 complete, 5 files-unprocessed, 2 deadline-exceeded | 477 s            |
 | dev-5                                | product | `b6c850be8`: the review route buffers every upstream model call (`2b8e673dc`), and the Reviewer's default prompt allowance is 1,500,000 tokens.                           | `9b108e9e321b`       | 1       | 0.0 % (0/1, Wilson 95 % interval 0.0 to 79.3 %; 11 presented, 10 unmatched)               | 3                     | 9 budget-exhausted, 9 deadline-exceeded, 7 complete, 4 files-unprocessed, 1 model-failed  | 775 s            |
+| dev-6                                | product | `912b930f5`: the counter-check wall time raised from 300 to 600 seconds.                                                                                                  | `7c5395d728e4`       | 3       | 33.3 % (1/3, Wilson 95 % interval 6.1 to 79.2 %; 13 presented, 10 unmatched)              | 3                     | 11 budget-exhausted, 7 complete, 6 deadline-exceeded, 5 files-unprocessed, 1 model-failed | 845 s            |
 
 Reading of the runs so far:
 
@@ -100,6 +101,15 @@ Reading of the runs so far:
 - The one decided finding was a false alarm, so the development verdict is `fail` at 0/1. With 1
   to 4 decided findings per run, the development rate cannot tell dev-4 and dev-5 apart: most
   presented findings overlap no historical thread (`unmatched`) and count in no rate.
+- In dev-6 the 600-second wall time cut the counter-checks that ran out of time from 20 of 48 to
+  7 of 42. The Counter-checker settled all 42 candidates: 14 confirmed, 20 refuted (15
+  `evidence-mismatch`, 5 `guarded-elsewhere`) and 8 undecided (7 out of time, 1 out of prompt
+  budget). Decided checks took 81 to 582 seconds, and the counter-checks of one review took 438
+  seconds on average.
+- The Reviewer averaged 851,283 prompt tokens per review. Ten Reviewer turns were prompt-allowance
+  refusals and one ended on `invalid-tool-call`; the tool refused 7 reports as schema-invalid.
+- dev-6 presented 13 findings: 1 hit, 2 false alarms and 10 unmatched. dev-4, dev-5 and dev-6 each
+  decided 1 to 4 findings, 8 in all, of which 4 are hits.
 
 ## Final holdout run
 
