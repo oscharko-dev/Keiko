@@ -35,8 +35,12 @@ export function useWorkspaceConnectorWindows(
       add === undefined
         ? undefined
         : {
-            manageServers: (): void => void add("settings", { initialTab: "mcp" }),
-            managePods: (): void => void add("localKnowledge"),
+            manageServers: (): void => {
+              add("settings", { initialTab: "mcp" });
+            },
+            managePods: (): void => {
+              add("localKnowledge");
+            },
           },
     [add],
   );

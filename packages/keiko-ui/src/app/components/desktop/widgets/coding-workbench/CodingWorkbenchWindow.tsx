@@ -1466,7 +1466,6 @@ function WorkbenchHeader({
   readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
-  const t = useCodingWorkbenchTranslate();
   return (
     <header className={styles["cmp-workbench-header"]}>
       <div className={styles.cmpHeaderRow}>

@@ -1,4 +1,5 @@
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 /**
@@ -26,5 +27,7 @@ export function mcpChatConfigurationDigest(
   selection: readonly string[] | undefined,
 ): string {
   if (selection === undefined) return revision;
-  return sha256Hex(canonicalise({ revision, servers: [...new Set(selection)].sort() }));
+  return sha256Hex(
+    canonicalise({ revision, servers: [...new Set(selection)].sort(compareStrings) }),
+  );
 }

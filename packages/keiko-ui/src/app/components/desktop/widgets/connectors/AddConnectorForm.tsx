@@ -256,7 +256,6 @@ function EntryFieldsView({
   readonly controller: EntryController;
   readonly prefix: string;
 }): ReactNode {
-  const t = useTranslate();
   const { fields, errors, busy } = controller;
   return (
     <>
@@ -291,6 +290,11 @@ function EntryFieldsView({
   );
 }
 
+function submitLabelKey(busy: boolean, jiraLive: boolean): MessageKey {
+  if (busy) return "atlassianConnectors.add.saving";
+  return jiraLive ? "atlassianConnectors.live.add" : "atlassianConnectors.add.submit";
+}
+
 function EntryForm({
   controller,
   onClose,
@@ -311,13 +315,7 @@ function EntryForm({
       ) : null}
       <div className="acx-actions">
         <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-          {busy
-            ? t("atlassianConnectors.add.saving")
-            : t(
-                controller.jiraLive
-                  ? "atlassianConnectors.live.add"
-                  : "atlassianConnectors.add.submit",
-              )}
+          {t(submitLabelKey(busy, controller.jiraLive))}
         </button>
         <button type="button" className="lk-btn" onClick={onClose} disabled={busy}>
           {t("atlassianConnectors.add.cancel")}

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { isGroundingScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { errorBody } from "../route-error.js";
 import type { RouteResult } from "../routes.js";
 import type {
@@ -118,7 +119,7 @@ function canonicalGroundingScope(chat: Chat): string {
     local: deduplicateAndSort(localKnowledgeScopes(chat).map(canonicalLocalKnowledgeScope)),
     gitChange: deduplicateAndSort(gitChangeScopes(chat).map(canonicalGitChangeScope)),
     ...canonicalJiraScope(chat),
-    ...(chat.mcpServers === undefined ? {} : { mcp: [...chat.mcpServers].sort() }),
+    ...(chat.mcpServers === undefined ? {} : { mcp: [...chat.mcpServers].sort(compareStrings) }),
   });
 }
 

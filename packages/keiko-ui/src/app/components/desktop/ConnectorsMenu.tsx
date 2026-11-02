@@ -135,7 +135,19 @@ function SectionHeader({
   );
 }
 
-function ServerSection(props: ConnectorsMenuProps): ReactNode {
+type ServerSectionProps = Pick<
+  ConnectorsMenuProps,
+  "servers" | "selectedServers" | "loading" | "busy" | "onServersChange" | "onManageServers"
+>;
+
+type PodSectionProps = Pick<
+  ConnectorsMenuProps,
+  "pods" | "boundPodId" | "loading" | "busy" | "onPodChange" | "onManagePods"
+>;
+
+type ConnectorsPanelBodyProps = Omit<ConnectorsMenuProps, "onOpen">;
+
+function ServerSection(props: ServerSectionProps): ReactNode {
   const t = useTranslate();
   const chosen = props.selectedServers === undefined ? undefined : new Set(props.selectedServers);
   return (
@@ -167,7 +179,7 @@ function ServerSection(props: ConnectorsMenuProps): ReactNode {
   );
 }
 
-function PodSection(props: ConnectorsMenuProps): ReactNode {
+function PodSection(props: PodSectionProps): ReactNode {
   const t = useTranslate();
   const unknownBound =
     props.boundPodId !== undefined && !props.pods.some((pod) => pod.id === props.boundPodId);
@@ -240,14 +252,41 @@ function ModeSection({
   );
 }
 
-function ConnectorsPanelBody(props: ConnectorsMenuProps): ReactNode {
+function ConnectorsPanelBody({
+  servers,
+  selectedServers,
+  pods,
+  boundPodId,
+  loading,
+  busy,
+  failed,
+  mode,
+  onServersChange,
+  onPodChange,
+  onManageServers,
+  onManagePods,
+}: ConnectorsPanelBodyProps): ReactNode {
   const t = useTranslate();
   return (
     <>
-      <ServerSection {...props} />
-      <PodSection {...props} />
-      {props.mode === undefined ? null : <ModeSection mode={props.mode} busy={props.busy} />}
-      {props.failed ? (
+      <ServerSection
+        servers={servers}
+        selectedServers={selectedServers}
+        loading={loading}
+        busy={busy}
+        onServersChange={onServersChange}
+        onManageServers={onManageServers}
+      />
+      <PodSection
+        pods={pods}
+        boundPodId={boundPodId}
+        loading={loading}
+        busy={busy}
+        onPodChange={onPodChange}
+        onManagePods={onManagePods}
+      />
+      {mode === undefined ? null : <ModeSection mode={mode} busy={busy} />}
+      {failed ? (
         <p role="alert" className={styles.cmpError}>
           {t("chat.connectors.failed")}
         </p>
@@ -261,11 +300,11 @@ function ConnectorsPanelBody(props: ConnectorsMenuProps): ReactNode {
  * centrally configured MCP server and per Jira Pod. What is switched off is not offered to the
  * model at all: no tools, no context.
  */
-export function ConnectorsMenu(props: ConnectorsMenuProps): ReactNode {
+export function ConnectorsMenu({ onOpen, ...body }: ConnectorsMenuProps): ReactNode {
   const t = useTranslate();
   const id = useId();
   const disclosure = useContextDisclosure();
-  const count = activeConnectorCount(props.servers, props.selectedServers, props.boundPodId);
+  const count = activeConnectorCount(body.servers, body.selectedServers, body.boundPodId);
   const label = t("chat.connectors.title");
   return (
     <div className={styles.cmpRoot}>
@@ -278,7 +317,7 @@ export function ConnectorsMenu(props: ConnectorsMenuProps): ReactNode {
         aria-controls={disclosure.open ? id : undefined}
         aria-expanded={disclosure.open}
         onClick={() => {
-          if (!disclosure.open) props.onOpen?.();
+          if (!disclosure.open) onOpen?.();
           disclosure.toggle();
         }}
       >
@@ -293,9 +332,9 @@ export function ConnectorsMenu(props: ConnectorsMenuProps): ReactNode {
               className={styles.cmpPanel}
               style={disclosure.position}
               aria-label={label}
-              aria-busy={props.loading || props.busy}
+              aria-busy={body.loading || body.busy}
             >
-              <ConnectorsPanelBody {...props} />
+              <ConnectorsPanelBody {...body} />
             </section>,
             document.body,
           )

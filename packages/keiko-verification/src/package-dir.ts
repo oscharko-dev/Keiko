@@ -89,7 +89,7 @@ function normalizeRelative(value: string): string | undefined {
     return undefined;
   }
   const segments = normalized.split("/").filter((segment) => segment !== "" && segment !== ".");
-  if (segments.length === 0 || segments.some((segment) => segment === "..")) return undefined;
+  if (segments.length === 0 || segments.includes("..")) return undefined;
   return segments.join("/");
 }
 
@@ -194,7 +194,8 @@ function discoverPackages(
 ): { readonly candidates: readonly string[]; readonly complete: boolean } {
   const state: DiscoveryState = { probe, limits, candidates: [], visited: 0 };
   const complete = discoverIn(state, "", 0);
-  return { candidates: state.candidates.sort(compareStrings), complete };
+  state.candidates.sort(compareStrings);
+  return { candidates: state.candidates, complete };
 }
 
 function readManifestText(probe: Probe, dir: string): string {

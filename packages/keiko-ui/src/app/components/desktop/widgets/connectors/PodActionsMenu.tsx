@@ -60,7 +60,8 @@ function useMenuKeys(
       return;
     }
     const buttons = menuItems(menu.current);
-    const current = buttons.findIndex((button) => button === document.activeElement);
+    const active = document.activeElement;
+    const current = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
     const target = nextIndex(event.key, current, buttons.length);
     if (target === undefined) return;
     event.preventDefault();

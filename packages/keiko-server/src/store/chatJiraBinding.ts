@@ -10,6 +10,7 @@ import {
   type CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { isMcpServerName, MCP_SERVER_MAX } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import type { UpdateChatOptions } from "./types.js";
 import { invalidRequest } from "./errors.js";
 
@@ -193,7 +194,7 @@ function nextMcpServers(existing: Chat, patch: UpdateChatPatch): readonly string
   if (patch.mcpServers === undefined) return existing.mcpServers;
   if (patch.mcpServers === null) return undefined;
   if (!validMcpSelection(patch.mcpServers)) throw invalidRequest("Invalid MCP server selection.");
-  return [...patch.mcpServers].sort();
+  return [...patch.mcpServers].sort(compareStrings);
 }
 
 function sameMcpSelection(
