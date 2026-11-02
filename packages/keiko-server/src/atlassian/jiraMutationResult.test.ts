@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { JiraMutationAttempt } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
+  JIRA_EXISTING_GUIDANCE,
   JIRA_REJECTED_GUIDANCE,
   JIRA_UNCERTAIN_GUIDANCE,
   jiraAttemptToolResult,
@@ -200,5 +201,42 @@ describe("what the model is told to do next (#4176)", () => {
     expect(data.fieldErrors).toEqual([
       { fieldId: "customfield_10000", fieldName: "Risk class", message: "Invalid." },
     ]);
+  });
+});
+
+// S19 of epic #4173: a create a Keiko draft already made is refused before any request. The model
+// must report the existing key, not "correct the fields" into a second issue.
+describe("a create refused because a draft already made the issue", () => {
+  it("names the existing key and tells the model to report it, not to correct and resend", () => {
+    const message =
+      "SYN-4 already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report SYN-4 as the result; do not create it again.";
+    const result = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "conflict",
+      receipt: { issueKey: "SYN-4", issueId: "10004" },
+      detail: { messages: [message] },
+    });
+
+    expect(result).toEqual({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "conflict",
+        issueKey: "SYN-4",
+        issueId: "10004",
+        messages: [message],
+        guidance: JIRA_EXISTING_GUIDANCE,
+      },
+    });
+  });
+
+  it("keeps the ordinary refusal guidance for a conflict that names no existing issue", () => {
+    const data = jiraAttemptToolResult("rejected", {
+      ok: false,
+      reason: "conflict",
+      detail: { messages: ["Jira reported a conflict."] },
+    }).data;
+
+    expect(data.guidance).toBe(JIRA_REJECTED_GUIDANCE);
   });
 });

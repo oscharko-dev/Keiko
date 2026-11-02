@@ -3321,9 +3321,14 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["tool-schema", "report-omission", "unsupported-issue-key"],
+        values: ["tool-schema", "report-omission", "report-coverage", "unsupported-issue-key"],
       },
       omittedFindingCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      mismatchedRequirementCount: {
         type: "integer",
         dataClass: "count",
         required: false,

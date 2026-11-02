@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   omittedReportFindingKeys,
+  reportCoverageCorrection,
+  reportCoverageMismatches,
   reportFindingCorrection,
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
@@ -179,4 +181,119 @@ it("asks for an answer with only shown keys in one fixed sentence", () => {
       "states and call the tool again, or say that nothing was created and give the reason the " +
       "tool result states.",
   );
+});
+
+function requirementPage(
+  items: readonly Record<string, unknown>[],
+  canonicalId = "keiko.jira.report",
+  status = "completed",
+): ChatToolExchange {
+  return {
+    call: { id: "call-requirements", name: "jira_report", arguments: { section: "requirements" } },
+    result: {
+      schemaVersion: 1,
+      invocationId: "invocation-requirements",
+      toolRef: { canonicalId, contractVersion: 1 },
+      status,
+      reason: "none",
+      effectStarted: true,
+      data: {
+        outcome: "succeeded",
+        section: { name: "requirements", startAt: 0, total: items.length, items },
+      },
+    },
+  } as unknown as ChatToolExchange;
+}
+
+const covered = (id: string, keys: readonly string[]): Record<string, unknown> => ({
+  id,
+  covered: true,
+  coveredBy: keys,
+  coveredByTotal: keys.length,
+});
+
+// S12 of epic #4173: Qwen's coverage matrix gave eight of 41 requirements a key that fit the
+// numbering (LH-011 -> RPT-10) or swapped one (LH-021: RPT-20 for RPT-19), not what the report said.
+describe("reportCoverageMismatches", () => {
+  const page = requirementPage([
+    covered("LH-001", ["RPT-1", "RPT-38"]),
+    { id: "LH-010", covered: false },
+    covered("LH-011", ["RPT-65", "RPT-66", "RPT-67"]),
+    covered("LH-021", ["RPT-19", "RPT-92"]),
+  ]);
+
+  it("names each requirement whose line adds, swaps or drops a key, with the report's keys", () => {
+    const answer = [
+      "LH-001;ABGEDECKT;RPT-1, RPT-38",
+      "LH-010;OFFEN;",
+      "LH-011;ABGEDECKT;RPT-10, RPT-65, RPT-66, RPT-67",
+      "| LH-021 | RPT-20, RPT-92 |",
+    ].join("\n");
+    expect(reportCoverageMismatches([page], answer)).toEqual([
+      { id: "LH-011", keys: ["RPT-65", "RPT-66", "RPT-67"] },
+      { id: "LH-021", keys: ["RPT-19", "RPT-92"] },
+    ]);
+    expect(reportCoverageMismatches([page], "LH-001: RPT-1")).toEqual([
+      { id: "LH-001", keys: ["RPT-1", "RPT-38"] },
+    ]);
+  });
+
+  it("flags issues given to a requirement the report leaves uncovered", () => {
+    expect(reportCoverageMismatches([page], "LH-010 is covered by RPT-5")).toEqual([
+      { id: "LH-010", keys: [] },
+    ]);
+  });
+
+  it("accepts the report's keys in any order and judges no line without one requirement and a key", () => {
+    const answer = [
+      "LH-011: RPT-67, RPT-66, RPT-65 (three tasks)",
+      "LH-010 is not covered.",
+      "LH-001 and LH-011 share RPT-99.",
+      "LH-0011 RPT-5",
+      "Summary: 3 of 4 covered, see RPT-1.",
+    ].join("\n");
+    expect(reportCoverageMismatches([page], answer)).toEqual([]);
+  });
+
+  it("judges nothing from capped key lists, other tools, unfinished results or other sections", () => {
+    const capped = requirementPage([
+      { id: "LH-011", covered: true, coveredBy: ["RPT-65"], coveredByTotal: 3 },
+    ]);
+    const answer = "LH-011;ABGEDECKT;RPT-10";
+    expect(reportCoverageMismatches([capped], answer)).toEqual([]);
+    expect(
+      reportCoverageMismatches(
+        [requirementPage([covered("LH-011", ["RPT-65"])], "keiko.jira.search")],
+        answer,
+      ),
+    ).toEqual([]);
+    expect(
+      reportCoverageMismatches(
+        [requirementPage([covered("LH-011", ["RPT-65"])], "keiko.jira.report", "denied")],
+        answer,
+      ),
+    ).toEqual([]);
+    expect(reportCoverageMismatches([reportPage("deviations", ["RPT-65"])], answer)).toEqual([]);
+  });
+});
+
+it("states the report's keys for each mismatched requirement in one fixed sentence", () => {
+  expect(
+    reportCoverageCorrection([
+      { id: "LH-011", keys: ["RPT-65", "RPT-66"] },
+      { id: "LH-020", keys: [] },
+    ]),
+  ).toBe(
+    "Your answer gives 2 requirement(s) other issues than the jira.report requirements section " +
+      "read in this turn states. The report states: LH-011: RPT-65, RPT-66; LH-020: no issue. " +
+      "Answer again in full and give every requirement exactly the issues the report states for it.",
+  );
+  const many = Array.from({ length: 70 }, (_, index) => ({
+    id: `LH-${String(index + 100)}`,
+    keys: [`RPT-${String(index + 1)}`],
+  }));
+  const text = reportCoverageCorrection(many);
+  expect(text).toContain("gives 70 requirement(s)");
+  expect(text).toContain("LH-163: RPT-64; and 6 more.");
+  expect(text).not.toContain("LH-164");
 });

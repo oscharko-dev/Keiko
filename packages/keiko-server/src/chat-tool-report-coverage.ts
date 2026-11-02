@@ -165,3 +165,109 @@ export function unsupportedIssueKeyCorrection(unsupported: readonly string[]): s
     "was created and give the reason the tool result states."
   );
 }
+
+/** A requirement and the issue keys the report states for it; empty when no issue names it. */
+export interface ReportedRequirementCoverage {
+  readonly id: string;
+  readonly keys: readonly string[];
+}
+
+const REQUIREMENTS_SECTION = "requirements";
+// The correction names at most this many requirements; the count still covers every mismatch.
+const COVERAGE_CORRECTION_ROWS_MAX = 64;
+
+/** One requirement item of a report page, or undefined when its key list is capped or malformed. */
+function coverageEntry(
+  item: Readonly<Record<string, unknown>> | undefined,
+): ReportedRequirementCoverage | undefined {
+  if (typeof item?.id !== "string" || item.id.length === 0) return undefined;
+  if (item.covered === false) return { id: item.id, keys: [] };
+  if (item.covered !== true || !Array.isArray(item.coveredBy)) return undefined;
+  const keys = item.coveredBy.filter(
+    (key): key is string => typeof key === "string" && ISSUE_KEY.test(key),
+  );
+  // A capped or partly malformed list cannot judge an answer that names more issues.
+  if (keys.length !== item.coveredBy.length || item.coveredByTotal !== keys.length)
+    return undefined;
+  return { id: item.id, keys };
+}
+
+/** The items of one completed `jira.report` requirements page; empty for any other exchange. */
+function requirementItems(exchange: ChatToolExchange): readonly unknown[] {
+  const { result } = exchange;
+  if (result?.status !== "completed" || result.toolRef?.canonicalId !== REPORT_TOOL) return [];
+  const section = record(record(result.data)?.section);
+  return section?.name === REQUIREMENTS_SECTION && Array.isArray(section.items)
+    ? section.items
+    : [];
+}
+
+/** Requirement coverage the turn's completed `jira.report` requirement pages state, by id. */
+function reportedCoverage(
+  exchanges: readonly ChatToolExchange[],
+): ReadonlyMap<string, ReportedRequirementCoverage> {
+  const coverage = new Map<string, ReportedRequirementCoverage>();
+  for (const item of exchanges.flatMap(requirementItems)) {
+    const entry = coverageEntry(record(item));
+    if (entry !== undefined) coverage.set(entry.id, entry);
+  }
+  return coverage;
+}
+
+const TOKEN_CHAR = /[\p{L}\p{N}_-]/u;
+
+/** Whether a line names a token on its own: `LH-001` but not `LH-0010` or `XLH-001`. */
+function namesToken(line: string, token: string): boolean {
+  for (let at = line.indexOf(token); at >= 0; at = line.indexOf(token, at + 1)) {
+    const before = line.charAt(at - 1);
+    const after = line.charAt(at + token.length);
+    if ((at === 0 || !TOKEN_CHAR.test(before)) && (after === "" || !TOKEN_CHAR.test(after)))
+      return true;
+  }
+  return false;
+}
+
+function sameKeys(named: ReadonlySet<string>, stated: readonly string[]): boolean {
+  return named.size === stated.length && stated.every((key) => named.has(key));
+}
+
+/**
+ * Requirements an answer line attributes to other issues than the turn's `jira.report` requirement
+ * pages state. Keiko computes the coverage; an answer that copies it with an issue added, swapped or
+ * left out misreports the project (S12 of epic #4173: Qwen gave eight of 41 requirements a key that
+ * fit the numbering, not the report). Only a line that names exactly one reported requirement and
+ * at least one issue of the report's projects is judged; a line without issue keys is not.
+ */
+export function reportCoverageMismatches(
+  exchanges: readonly ChatToolExchange[],
+  answer: string,
+): readonly ReportedRequirementCoverage[] {
+  const coverage = reportedCoverage(exchanges);
+  const projects = new Set([...coverage.values()].flatMap((entry) => entry.keys.map(projectOf)));
+  if (projects.size === 0) return [];
+  const mismatched = new Map<string, ReportedRequirementCoverage>();
+  for (const line of answer.split("\n")) {
+    const [entry, ...others] = [...coverage.values()].filter((item) => namesToken(line, item.id));
+    if (entry === undefined || others.length > 0) continue;
+    const named = new Set(keysIn(line).filter((key) => projects.has(projectOf(key))));
+    if (named.size > 0 && !sameKeys(named, entry.keys)) mismatched.set(entry.id, entry);
+  }
+  return [...mismatched.values()];
+}
+
+/** The one correction a turn gets when its answer attributes issues other than the report does. */
+export function reportCoverageCorrection(
+  mismatched: readonly ReportedRequirementCoverage[],
+): string {
+  const rows = mismatched
+    .slice(0, COVERAGE_CORRECTION_ROWS_MAX)
+    .map((entry) => `${entry.id}: ${entry.keys.length === 0 ? "no issue" : entry.keys.join(", ")}`);
+  const more = mismatched.length - rows.length;
+  const rest = more > 0 ? `; and ${String(more)} more` : "";
+  return (
+    `Your answer gives ${String(mismatched.length)} requirement(s) other issues than the ` +
+    `jira.report requirements section read in this turn states. The report states: ` +
+    `${rows.join("; ")}${rest}. Answer again in full ` +
+    "and give every requirement exactly the issues the report states for it."
+  );
+}

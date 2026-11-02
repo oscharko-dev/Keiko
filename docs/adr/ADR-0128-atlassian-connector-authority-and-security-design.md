@@ -715,9 +715,11 @@ S05: Qwen read the epic fields, then created three epics one by one and the huma
 times). The pointer sits in the result the model reads; the tool description does not grow, and a
 refused read carries no pointer. The same sentence (at most 256 characters) adds that each item
 carries every field it needs, labels included, because a later `jira.edit` asks again, and that a
-description is text with a heading per section, never JSON (lab S05, 2026-11-02: Qwen left the
+description is text with an `h2.` heading per section, never JSON (lab S05, 2026-11-02: Qwen left the
 labels out of its draft and added them with three edits, four approvals in all; Gemma wrote each
-description as a JSON object, so no section was found).
+description as a JSON object, so no section was found; once told only "a heading", Qwen wrote
+`== Ziel ==`, which neither Jira Data Center's wiki markup nor the section reader treats as a
+heading).
 
 *Paged drafts.* One model call cannot carry hundreds of items, and the model's output is bounded,
 so a large draft is written in pages through `jira.draft-stage`, a read-class tool (row 21: it
@@ -827,7 +829,19 @@ read completely is refused as `bounds-exceeded` instead of creating a possible d
 whose items all exist (or were deselected, at least one existing) writes nothing and reports
 `not-dispatched`; its result then carries `JIRA_DRAFT_EXISTING_GUIDANCE`, which tells the model that
 nothing is missing and not to create the issues again with `jira.create` — the lab's S19 rerun showed
-a model reading the bare outcome as a failure and creating duplicates one by one. A draft that Jira
+a model reading the bare outcome as a failure and creating duplicates one by one. A single
+`jira.create` checks the same identity (2026-11-02, S19: Gemma read that guidance and still created
+both epics again with `jira.create`). A create that hangs from nothing (no links, and no field whose
+value is an issue key or `{ key }`, so no parent or epic link) on a create screen with labels is
+searched by the identity label a draft item with the same project, issue type and summary carries.
+A match refuses the create as `conflict` before any write, with the existing issue's receipt and
+`JIRA_EXISTING_GUIDANCE`: report that key, do not create it again or change its fields to get
+another. When the search finds nothing, the create carries that same identity label, so a later draft
+of the same item reconciles to the issue instead of creating it a second time (2026-11-02, S19: Qwen
+created the epic with `jira.create`, then put it in a draft that created it again); a repeated
+`jira.create` of it is refused the same way. A create with a parent, an epic link or links never
+carries the label and never matches, and a search that cannot decide (several matches, or a candidate
+set that cannot be read completely) leaves the create unmarked. A draft that Jira
 refused only in part carries `JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE` instead of the single-write "nothing
 was changed": it names the items now in Jira and scopes the correction to the refused ones. Absence
 requires consistent evidence: every page must state the `startAt` that was requested and a page size
@@ -931,6 +945,17 @@ round, so the model may either correct a refused call as its tool result states 
 again, or report that nothing was created and why. The rest is unchanged: once per turn, with the report
 omission checked first, and the same fallbacks. It is recorded as `unsupported-issue-key` with
 `unsupportedKeyCount`, never the keys.
+An answer that gives a requirement other issues than the turn's `jira.report` requirements section
+states gets that same round, checked after the omission and before the unsupported keys
+(2026-11-02, S12 of epic #4173: Qwen's coverage matrix gave eight of 41 requirements a key that fit
+the numbering, such as `RPT-10` for `LH-011`, or swapped one, and kept them after the
+unsupported-key correction named them). Only a line that names exactly one requirement of the
+report and at least one issue key of the report's projects is judged, and only against an item
+whose key list is complete (`coveredByTotal` equal to its listed keys). An uncovered requirement
+states no issue. The correction gives the report's own keys for each mismatched requirement (at
+most 64 rows, with the count of the rest), so the model copies them instead of recalling a
+pattern. It is recorded as `report-coverage` with `mismatchedRequirementCount`, never the ids or
+keys.
 
 **Customer-defined issue templates (#4177, 2026-10-31).** A project lead defines what each issue
 type must look like and where in the workflow that applies; Keiko enforces it deterministically
@@ -1240,7 +1265,11 @@ citation; a repair cut at its output limit or still uncited leaves the complete 
   `statementTruncated` / `criteriaTruncated`), and a page budgets its items against the rest of the
   result. A cursor binds the selection and the document revisions it was issued for (the `documents`
   view binds the ordered document scopes and revisions); a changed selection, order or document
-  answers `cursor-stale` instead of skipping or repeating units. Within one turn, later pages and
+  answers `cursor-stale` instead of skipping or repeating units. That refusal carries a fixed
+  `nextStep`: repeat the issuing call's own arguments with the cursor, read again without one if it
+  is refused again, and never report the requirements as complete before the last page (2026-11-02,
+  S17 of epic #4173: Qwen sent a `priorities` page's cursor without the filter, got a bare
+  `cursor-stale` and created epics for 22 of 25 requirements as if they were all). Within one turn, later pages and
   the trace reuse the first read only while the resolved Pods are unchanged and still pass the
   lifecycle and model-use floor; a Pod made stale or sealed meanwhile is refused as in a new turn. The
   `documents` view lists the documents read; `change-queries` returns label-only JQL batches. When a

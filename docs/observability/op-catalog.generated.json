@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "608923c4b1c26c1d03a0ae4c553ed9aa9314142a8dbd203a9e2c9bde98ab8136",
+    "catalogDigest": "996f0f119449a609ec7c88f807686cc75440e8d428804738d33750d9770d8936",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3445,9 +3445,14 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": false,
-            "values": ["tool-schema", "report-omission", "unsupported-issue-key"]
+            "values": ["tool-schema", "report-omission", "report-coverage", "unsupported-issue-key"]
           },
           "omittedFindingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "mismatchedRequirementCount": {
             "type": "integer",
             "dataClass": "count",
             "required": false
@@ -3465,7 +3470,7 @@
         "proofIds": ["chat.tool-turn.corrected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/chat-tool-turn-ending.ts:284",
-        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:333"]
+        "emitterSites": ["packages/keiko-server/src/chat-tool-turn-ending.ts:337"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -59318,6 +59323,12 @@
                   "required": true
                 },
                 {
+                  "name": "mismatchedRequirementCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
                   "name": "omittedFindingCount",
                   "type": "integer",
                   "dataClass": "count",
@@ -109929,7 +109940,7 @@
     {
       "op": "knowledge.requirements-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirementsTool.ts:540",
+      "site": "packages/keiko-server/src/requirementsTool.ts:548",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

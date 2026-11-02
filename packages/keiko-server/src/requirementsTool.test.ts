@@ -35,6 +35,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { resetRequirementTurnCache } from "./requirement-inventory.js";
 import { openTraceSession } from "./requirement-trace.js";
 import {
+  REQUIREMENTS_CURSOR_STALE_NEXT_STEP,
   REQUIREMENTS_PAGE_BYTES_MAX,
   REQUIREMENTS_PAGE_LIMIT_MAX,
   createKnowledgeRequirementsProvider,
@@ -198,6 +199,10 @@ describe("paging (#4179 review, defect 2)", () => {
     expect(other).toMatchObject({ outcome: "failed", reason: "cursor-stale" });
     expect(forged).toMatchObject({ outcome: "failed", reason: "cursor-stale" });
     expect(resumed.outcome).toBe("succeeded");
+    // S17 of epic #4173: a bare refusal let Qwen report the first page as all requirements.
+    expect(other.nextStep).toBe(REQUIREMENTS_CURSOR_STALE_NEXT_STEP);
+    expect(forged.nextStep).toBe(REQUIREMENTS_CURSOR_STALE_NEXT_STEP);
+    expect(REQUIREMENTS_CURSOR_STALE_NEXT_STEP.length).toBeLessThanOrEqual(400);
   });
 });
 

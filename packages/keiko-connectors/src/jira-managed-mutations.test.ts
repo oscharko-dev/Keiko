@@ -1397,3 +1397,122 @@ it("does not confirm an edit whose requested link is missing on readback (#4176)
   });
   expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });
+
+// S19 of epic #4173: the draft recognised both epics as existing and said not to create them again;
+// Gemma then created both with jira.create. A create that repeats an issue a Keiko draft created
+// (same project, type and summary, hanging from nothing) is refused and names the existing key.
+function twinFixture(found: readonly { key: string; id: string }[]): {
+  http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  run: (args: CatalogJsonObject) => ReturnType<typeof executeJiraManagedMutation>;
+  searches: () => readonly string[];
+  created: () => Readonly<Record<string, unknown>>;
+} {
+  const labels = {
+    ...field("labels", "array"),
+    operations: ["set", "add", "remove"],
+    schema: { type: "array", items: "string", system: "labels" },
+  };
+  let posted: Readonly<Record<string, unknown>> = {};
+  const http = vi.fn<AtlassianHttpBodyPort>((request) => {
+    const url = new URL(request.url);
+    if (request.method === "POST") {
+      posted = (JSON.parse(request.bodyJson ?? "{}") as { fields: Record<string, unknown> }).fields;
+      return Promise.resolve(response({ id: "10009", key: "SYN-9" }, 201));
+    }
+    if (url.pathname.includes("createmeta"))
+      return Promise.resolve(
+        response({ values: [...FIELDS, labels], start: 0, size: 100, last: true, total: 5 }),
+      );
+    if (url.pathname.endsWith("/search"))
+      return Promise.resolve(
+        response({
+          startAt: 0,
+          maxResults: 50,
+          total: found.length,
+          issues: found.map((issue) => ({
+            ...issue,
+            fields: { summary: "[LH-019] Nachreichung" },
+          })),
+        }),
+      );
+    if (url.pathname.endsWith("/issue/SYN-9"))
+      return Promise.resolve(response({ id: "10009", key: "SYN-9", fields: posted }));
+    return Promise.resolve(response({}, 404));
+  });
+  const run = (args: CatalogJsonObject): ReturnType<typeof executeJiraManagedMutation> =>
+    executeJiraManagedMutation(
+      "jira.create",
+      args,
+      {
+        invocationId: "synthetic",
+        correlationId: "synthetic",
+        signal: new AbortController().signal,
+        beforeEffect: () => true,
+      },
+      { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http },
+    );
+  const created = (): Readonly<Record<string, unknown>> => posted;
+  const searches = (): readonly string[] =>
+    http.mock.calls
+      .map(([request]) => new URL(request.url))
+      .filter((url) => url.pathname.endsWith("/search"))
+      .map((url) => url.searchParams.get("jql") ?? "");
+  return { http, run, searches, created };
+}
+const TWIN_CREATE = {
+  projectId: "10000",
+  issueTypeId: "10001",
+  fields: { summary: "[LH-019] Nachreichung", customfield_10000: "Epic", labels: ["anforderung"] },
+};
+
+it("refuses a create a Keiko draft already made, naming the existing key (S19 of #4173)", async () => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  expect(await f.run(TWIN_CREATE)).toEqual({
+    ok: false,
+    reason: "conflict",
+    receipt: { issueKey: "SYN-4", issueId: "10004" },
+    detail: {
+      messages: [
+        "SYN-4 already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report SYN-4 as the result; do not create it again.",
+      ],
+    },
+  });
+  expect(f.searches()).toEqual([
+    expect.stringMatching(/^project = 10000 AND issuetype = 10001 AND labels = "keiko-draft-/u),
+  ]);
+  expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+});
+
+it("creates when no draft made this issue, carrying the identity a draft of it would find", async () => {
+  const f = twinFixture([]);
+  expect(await f.run(TWIN_CREATE)).toMatchObject({ ok: true, receipt: { issueKey: "SYN-9" } });
+  const [search] = f.searches();
+  const identity = /labels = "(keiko-draft-[0-9a-f]{20})"/u.exec(search ?? "")?.[1];
+  expect(identity).toBeDefined();
+  // S19 of #4173 (Qwen): a later draft of the same epic searches for this label and reconciles.
+  expect(f.created().labels).toEqual(["anforderung", identity]);
+});
+
+it("leaves a create that hangs from an epic link without a draft identity", async () => {
+  const f = twinFixture([]);
+  await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, customfield_10000: "SYN-2" } });
+  expect(f.created().labels).toEqual(["anforderung"]);
+});
+
+it.each([
+  ["a parent", { parent: { key: "SYN-2" } }],
+  ["an epic link", { customfield_10000: "SYN-2" }],
+])("never reconciles a create that hangs from %s", async (_name, extra) => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, ...extra } });
+  expect(f.searches()).toEqual([]);
+});
+
+it("never reconciles a create with links", async () => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  await f.run({
+    ...TWIN_CREATE,
+    links: [{ type: "Relates", direction: "outward", issueKey: "SYN-2" }],
+  });
+  expect(f.searches()).toEqual([]);
+});

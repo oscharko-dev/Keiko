@@ -46,6 +46,7 @@ import {
 import {
   jiraDraftIdentity,
   jiraDraftParentKey,
+  parseJiraDraft,
   reconcileJiraDraftItem,
   resolveJiraDraftItem,
   withJiraDraftIdentity,
@@ -327,13 +328,98 @@ async function createIssue(
   if (links === undefined) return INVALID;
   const metadata = await jiraCreateMutationMetadata(request, projectId, issueTypeId);
   if (!metadata.ok) return metadata;
-  const traced = trace === undefined ? fields : traceCreateFields(fields, metadata.fields, trace);
+  const twin = await draftTwin(request, { projectId, issueTypeId, fields, links }, metadata.fields);
+  if (twin.kind === "repeat") return twin.attempt;
   return createWithMetadata(
     request,
-    { projectId, issueTypeId, fields: traced, links },
+    { projectId, issueTypeId, fields: createdFields(fields, metadata.fields, trace, twin), links },
     metadata.fields,
     policy,
   );
+}
+/** The fields a create sends: traced to its requirements, and with its draft identity. */
+function createdFields(
+  fields: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+  trace: JiraTraceRequest | undefined,
+  twin: Extract<DraftTwin, { kind: "new" }>,
+): Readonly<Record<string, unknown>> {
+  const traced = trace === undefined ? fields : traceCreateFields(fields, metadata, trace);
+  return twin.identity === undefined
+    ? traced
+    : withJiraDraftIdentity(traced, metadata, twin.identity);
+}
+const ISSUE_KEY_VALUE = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
+/** A field value that points at another issue: a bare key, or `{ key }` as `parent` takes it. */
+function pointsAtIssue(value: unknown): boolean {
+  if (typeof value === "string") return ISSUE_KEY_VALUE.test(value);
+  const key = asRecord(value)?.key;
+  return typeof key === "string" && ISSUE_KEY_VALUE.test(key);
+}
+const TWIN_REF = "create";
+function existingTwinRefusal(
+  receipt: JiraMutationReceipt & { readonly issueKey: string },
+): Extract<JiraMutationAttempt, { ok: false }> {
+  const { issueKey } = receipt;
+  return {
+    ok: false,
+    reason: "conflict",
+    receipt,
+    detail: {
+      messages: [
+        `${issueKey} already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report ${issueKey} as the result; do not create it again.`,
+      ],
+    },
+  };
+}
+/** The one-item draft a create that hangs from nothing would be, on a create screen with labels. */
+function twinItem(
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+): JiraDraftItem | undefined {
+  if (create.links.length > 0 || Object.values(create.fields).some(pointsAtIssue)) return undefined;
+  if (!metadata.some((field) => field.id === "labels" && field.operations.includes("set")))
+    return undefined;
+  return parseJiraDraft({
+    items: [
+      {
+        ref: TWIN_REF,
+        projectId: create.projectId,
+        issueTypeId: create.issueTypeId,
+        fields: create.fields,
+      },
+    ],
+  })?.items[0];
+}
+type DraftTwin =
+  | { readonly kind: "repeat"; readonly attempt: Extract<JiraMutationAttempt, { ok: false }> }
+  | { readonly kind: "new"; readonly identity: string | undefined };
+const UNIDENTIFIED: DraftTwin = { kind: "new", identity: undefined };
+/**
+ * Whether a Keiko draft already created exactly this create, found by the draft identity a draft
+ * item with the same project, type and summary carries (S19 of epic #4173: the draft recognised
+ * both epics as existing and said not to create them again, then Gemma created both with
+ * jira.create). A match refuses the create and names the existing key; nothing is sent. Otherwise
+ * the create carries that same identity, so a later draft of the item recognises the issue instead
+ * of creating it a second time (S19, Qwen: jira.create first, then a draft of the same epic). Only a
+ * create that hangs from nothing can be such a twin: one with links, or with a field that points at
+ * another issue (a parent or epic link), never is, and neither is a create on a screen without
+ * labels, where no identity label exists. A search that cannot decide leaves the create unmarked.
+ */
+async function draftTwin(
+  request: JiraMutationRequest,
+  create: CreateRequest,
+  metadata: readonly JiraFieldMetadata[],
+): Promise<DraftTwin> {
+  const item = twinItem(create, metadata);
+  if (item === undefined) return UNIDENTIFIED;
+  const found = await reconcileJiraDraftItem(request, item, metadata, undefined);
+  if (found.kind === "absent") return { kind: "new", identity: item.identity };
+  const receipt = found.kind === "existing" && found.attempt.ok ? found.attempt.receipt : undefined;
+  const issueKey = receipt?.issueKey;
+  return issueKey === undefined
+    ? UNIDENTIFIED
+    : { kind: "repeat", attempt: existingTwinRefusal({ ...receipt, issueKey }) };
 }
 interface CreateRequest {
   readonly projectId: string;

@@ -39,6 +39,8 @@ import {
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import {
   omittedReportFindingKeys,
+  reportCoverageCorrection,
+  reportCoverageMismatches,
   reportFindingCorrection,
   unsupportedIssueKeyCorrection,
   unsupportedIssueKeys,
@@ -72,6 +74,7 @@ const TOOL_TURN_INSTRUCTION: GatewayMessage = { role: "system", content: TOOL_TU
 
 type AnswerCorrectionLog =
   | { readonly correctionKind: "report-omission"; readonly omittedFindingCount: number }
+  | { readonly correctionKind: "report-coverage"; readonly mismatchedRequirementCount: number }
   | { readonly correctionKind: "unsupported-issue-key"; readonly unsupportedKeyCount: number };
 
 // Local estimates are not provider counts; the margin keeps the gateway's exact admission and its
@@ -681,7 +684,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /**
    * An answer Keiko can check against its own tool results gets ONE further round carrying a fixed
    * correction: an answer that leaves out issues the turn's `jira.report` finding pages list (S11 of
-   * epic #4173), or one that names issue keys of the turn's Jira projects no tool result and no
+   * epic #4173), one that gives a requirement other issues than its requirement pages state (S12),
+   * or one that names issue keys of the turn's Jira projects no tool result and no
    * message shows (S01: an answer claimed a key after three refused creates). The model writes the
    * answer; Keiko only checks it. The round stays inside the Authority Envelope; a second answer
    * stands, and a failed round falls back to the first answer.
@@ -712,6 +716,12 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       return {
         content: reportFindingCorrection(omitted),
         log: { correctionKind: "report-omission", omittedFindingCount: omitted.length },
+      };
+    const mismatched = reportCoverageMismatches(this.settledExchanges, answer.content);
+    if (mismatched.length > 0)
+      return {
+        content: reportCoverageCorrection(mismatched),
+        log: { correctionKind: "report-coverage", mismatchedRequirementCount: mismatched.length },
       };
     const context = [...request.messages, ...this.continuation].map((message) => message.content);
     const unsupported = unsupportedIssueKeys(this.settledExchanges, context, answer.content);

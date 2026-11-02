@@ -281,6 +281,30 @@ describe("recordChatToolTurnCorrected", () => {
     expect(line).not.toMatch(/message-private-id|RPT-/u);
   });
 
+  it("counts the requirements an answer attributed to other issues, never naming them", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-coverage-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 4,
+      correctionKind: "report-coverage",
+      mismatchedRequirementCount: 8,
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({
+      correlationId: "turn-coverage-proof",
+      level: "warn",
+      extra: {
+        correctionKind: "report-coverage",
+        mismatchedRequirementCount: 8,
+        settledExchangeCount: 4,
+      },
+    });
+    const line = formatActivityLogProofLine(event ?? {});
+    expectActivityLogProof("chat.tool-turn.corrected.line", line);
+    expect(line).not.toMatch(/message-private-id|LH-0|RPT-/u);
+  });
+
   it("counts the issue keys an answer named without a tool result, never naming them", () => {
     const logs = createBufferedServerLogSink();
     recordChatToolTurnCorrected(logs, {

@@ -46,7 +46,11 @@ import {
   syntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { multipartFileSize } from "../../../../tests/support/jira-managed-remote.js";
-import { omittedReportFindingKeys, unsupportedIssueKeys } from "../chat-tool-report-coverage.js";
+import {
+  omittedReportFindingKeys,
+  reportCoverageMismatches,
+  unsupportedIssueKeys,
+} from "../chat-tool-report-coverage.js";
 import { recordChatToolTurnCorrected } from "../chat-tool-turn-ending.js";
 
 // Pass-through spies: the turn's completeness check and its log line run as in production unless a
@@ -56,6 +60,7 @@ vi.mock("../chat-tool-report-coverage.js", async (importOriginal) => {
   return {
     ...actual,
     omittedReportFindingKeys: vi.fn(actual.omittedReportFindingKeys),
+    reportCoverageMismatches: vi.fn(actual.reportCoverageMismatches),
     unsupportedIssueKeys: vi.fn(actual.unsupportedIssueKeys),
   };
 });
@@ -1023,6 +1028,49 @@ describe.each([false, true])(
       await pending;
       expect(f.calls).toHaveLength(2);
       expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
+    });
+  },
+);
+
+// S12 of epic #4173: Qwen's coverage matrix gave eight of 41 requirements a key that fit the
+// numbering instead of the keys the report stated. Such an answer gets ONE further round that states
+// the report's keys for each of them; the model writes the final answer, and neither requirement ids
+// nor keys reach the Activity Log.
+describe.each([false, true])(
+  "an answer that attributes other issues than the report states (stream=%s)",
+  (stream) => {
+    it("gets one round stating the report's keys, then the model's new answer stands", async () => {
+      vi.mocked(recordChatToolTurnCorrected).mockClear();
+      vi.mocked(reportCoverageMismatches).mockReturnValueOnce([
+        { id: "LH-011", keys: ["RPT-65", "RPT-66"] },
+        { id: "LH-020", keys: [] },
+      ]);
+      const f = fixture();
+      const ctx = sendContext(f, `report-coverage-${String(stream)}`);
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      void pending.catch(() => undefined);
+      await approveReadForWrite(f);
+      await pending;
+
+      expect(f.calls).toHaveLength(4);
+      const correction = (request: GatewayCallRequest | undefined): string =>
+        JSON.stringify(request?.messages.filter((message) => message.role === "system").at(-1));
+      expect(correction(f.calls[2])).toContain("gives 2 requirement(s) other issues");
+      expect(correction(f.calls[2])).toContain("LH-011: RPT-65, RPT-66; LH-020: no issue");
+      expect(correction(f.calls[3])).not.toContain("other issues");
+      const [user, assistant] = f.deps.store.listMessages(f.chatId);
+      expect(user?.turnState).toBe("completed");
+      expect(assistant?.content).toBe("No Jira projects are visible.");
+      expect(vi.mocked(recordChatToolTurnCorrected)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(recordChatToolTurnCorrected).mock.calls[0]?.[1]).toMatchObject({
+        correctionKind: "report-coverage",
+        mismatchedRequirementCount: 2,
+      });
+      expect(JSON.stringify(vi.mocked(recordChatToolTurnCorrected).mock.calls)).not.toMatch(
+        /LH-0|RPT-/u,
+      );
     });
   },
 );

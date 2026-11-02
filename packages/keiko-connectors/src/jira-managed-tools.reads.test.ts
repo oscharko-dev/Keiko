@@ -433,7 +433,7 @@ it("points create fields at jira.draft for several issues, and only create field
   });
   expect(created.data.draft).toEqual({
     tool: "jira.draft",
-    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves the draft once, while each jira.create or later jira.edit asks again. Write a description as text with a heading per section, never as JSON.",
+    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves the draft once, while each jira.create or later jira.edit asks again. Write a description as text with an h2. heading per section, never as JSON.",
   });
   const types = await fixture({
     ...REMOTE_PAGE,

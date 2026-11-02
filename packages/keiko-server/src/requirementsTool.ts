@@ -399,6 +399,14 @@ function activityOf(
   };
 }
 
+/**
+ * A cursor continues only the call that returned it (S17 of epic #4173: Qwen sent the cursor of a
+ * `priorities` page without the filter, got a bare `cursor-stale` and reported 22 of 25 requirements
+ * as all of them). The refusal says how to continue instead of only that it failed.
+ */
+export const REQUIREMENTS_CURSOR_STALE_NEXT_STEP =
+  "A cursor continues only the call that returned it. Call again with exactly that call's arguments (view, ids, priorities, query, documents, projectKey) and this cursor. If it is refused again, the documents changed: read again without a cursor. Never report the requirements as complete before the last page.";
+
 function failure(reason: string, collection?: RequirementCollection, nextStep?: string): Served {
   const disposition = reason === "cursor-stale" ? "cursor-stale" : "refused";
   return {
@@ -481,7 +489,7 @@ function serve(
   const view = buildView(collection, parsed, redact);
   const cursor = parsed.cursor === undefined ? undefined : decodeCursor(parsed.cursor);
   if (parsed.cursor !== undefined && cursor?.fingerprint !== view.fingerprint)
-    return failure("cursor-stale", collection);
+    return failure("cursor-stale", collection, REQUIREMENTS_CURSOR_STALE_NEXT_STEP);
   const labelReserve = view.units.length > 0 ? PAGE_LABEL_BYTES_RESERVE : 0;
   const window = fitWindow(
     view.items.map((item) => byteSize(item) + labelReserve),
