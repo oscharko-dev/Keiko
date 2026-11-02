@@ -327,6 +327,8 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
       "Pure hostile payload inspection returns a fixed closed refusal without inspecting the thrown value. Request admission propagates BAD_REQUEST before execution; command UI response admission records the existing correlated contract-validation diagnostic.",
     "packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass":
       "Pure leaf error classification performs no I/O and returns a fixed unknown fallback without inspecting the caught inspection failure. The parser propagates its existing closed rejection to the consumer diagnostic boundary; no separate logged fact is emitted.",
+    "packages/keiko-contracts/src/git-editor.ts:parserInspectionClass":
+      "Pure hostile error classification returns the fixed unknown-error refusal without reading private fields. The parser propagates a closed rejection; UI failBffResponse reports the existing correlated contract-validation diagnostic and server blame admission uses its fixed BAD_REQUEST refusal. The classifier does not emit a separate logged fact.",
     "packages/keiko-contracts/src/observability.ts:completeRegistrationShape":
       "Pure metadata validation refuses an unreadable attachment; raw metadata is preserved for the physical writer's registered rejection diagnostic.",
     "packages/keiko-contracts/src/observability.ts:rejectedActivityLogEventKind":
@@ -336,6 +338,7 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map(
 
 // A reviewed catch listed here may only return exactly this fixed fallback.
 const REVIEWED_FIXED_FAILURE_FALLBACKS = new Map([
+  ["packages/keiko-contracts/src/git-editor.ts:parserInspectionClass", "unknown error"],
   ["packages/keiko-contracts/src/managed-lsp-parse-safely.ts:parserInspectionClass", "unknown"],
   ["packages/keiko-contracts/src/observability.ts:completeRegistrationShape", false],
   [

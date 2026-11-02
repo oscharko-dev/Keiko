@@ -156,10 +156,13 @@ function change(value: unknown): value is GitChangedFile {
     )
   );
 }
-function changes(value: unknown): boolean {
-  return (
-    Array.isArray(value) && value.length <= CODING_RUNTIME_GIT_MAX_PATHS && value.every(change)
-  );
+function changes(value: unknown): value is readonly GitChangedFile[] {
+  if (!Array.isArray(value) || value.length > CODING_RUNTIME_GIT_MAX_PATHS) return false;
+  const count = value.length;
+  for (let index = 0; index < count; index += 1) {
+    if (!(index in value) || !change(value[index])) return false;
+  }
+  return true;
 }
 function status(value: Record<string, unknown>): boolean {
   return (
@@ -190,6 +193,9 @@ function proposal(value: Record<string, unknown>, kind: "stage" | "unstage"): bo
     value.pathCount <= CODING_RUNTIME_GIT_MAX_PATHS
   );
 }
+function isStageStatus(value: unknown): value is CodingRuntimeGitStage["status"] {
+  return typeof value === "string" && Object.hasOwn(STAGE_STATUS_REASONS, value);
+}
 function count(value: unknown): boolean {
   return (
     value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
@@ -213,23 +219,28 @@ function sync(value: Record<string, unknown>): boolean {
 export function isSafeTaskBranchName(value: unknown): value is string {
   return typeof value === "string" && isSafeGitRefName(value) && !value.startsWith("-");
 }
+function isBranchStatus(
+  value: unknown,
+): value is keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS {
+  return (
+    typeof value === "string" && Object.hasOwn(CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS, value)
+  );
+}
+function branchStatusReason(status: unknown, reason: unknown): boolean {
+  if (!isBranchStatus(status)) return false;
+  const allowed: readonly unknown[] = CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS[status];
+  return allowed.includes(reason);
+}
 function branch(value: Record<string, unknown>): boolean {
   return (
     keys(value, ["kind", "status", "reason", "branch"]) &&
-    typeof value.status === "string" &&
-    Object.hasOwn(CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS, value.status) &&
-    (
-      CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS[
-        value.status as keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS
-      ] as readonly unknown[]
-    ).includes(value.reason) &&
+    branchStatusReason(value.status, value.reason) &&
     (value.branch === undefined || isSafeTaskBranchName(value.branch))
   );
 }
 function stageStatusReason(status: unknown, reason: unknown): boolean {
-  if (typeof status !== "string" || !Object.hasOwn(STAGE_STATUS_REASONS, status)) return false;
-  const allowed: readonly unknown[] =
-    STAGE_STATUS_REASONS[status as CodingRuntimeGitStage["status"]];
+  if (!isStageStatus(status)) return false;
+  const allowed: readonly unknown[] = STAGE_STATUS_REASONS[status];
   return allowed.includes(reason);
 }
 function resultOfKind(value: Record<string, unknown>): boolean {

@@ -6,8 +6,9 @@
 // the leaf-package boundary (ADR-0019 rule 1): keiko-contracts cannot import a provider SDK.
 // Leaf-package rules: pure types and frozen const tables only. No IO.
 //
-// Imports ONLY from ./git-delivery.js (GitDeliveryMergeBlockReason, GitDeliveryProviderCapability).
+// Domain imports come from ./git-delivery.js; structural traversal uses the import-free primitive.
 
+import { isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
 import type {
   GitDeliveryBranchPattern,
   GitDeliveryMergeBlockReason,
@@ -152,12 +153,16 @@ function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
-}
-
 function isProviderCapability(value: unknown): boolean {
   return isGitDeliveryProviderCapability(value);
+}
+
+function isCapabilityArray(value: unknown): value is readonly GitDeliveryProviderCapability[] {
+  return isPhysicalArrayOf(value, isProviderCapability);
+}
+
+function isPatternArray(value: unknown): value is readonly GitDeliveryBranchPattern[] {
+  return isPhysicalArrayOf(value, isGitDeliveryBranchPattern);
 }
 
 // ─── Guards ──────────────────────────────────────────────────────────────────────
@@ -165,19 +170,17 @@ function isProviderCapability(value: unknown): boolean {
 export function isGitDeliveryChecksOverallStatus(
   value: unknown,
 ): value is GitDeliveryChecksOverallStatus {
-  return (
-    isNonEmptyString(value) &&
-    (GIT_DELIVERY_CHECKS_OVERALL_STATUSES as readonly string[]).includes(value)
-  );
+  const gitDeliveryChecksOverallStatusesValues: readonly string[] =
+    GIT_DELIVERY_CHECKS_OVERALL_STATUSES;
+  return isNonEmptyString(value) && gitDeliveryChecksOverallStatusesValues.includes(value);
 }
 
 export function isGitDeliveryPullRequestStatus(
   value: unknown,
 ): value is GitDeliveryPullRequestStatus {
-  return (
-    isNonEmptyString(value) &&
-    (GIT_DELIVERY_PULL_REQUEST_STATUSES as readonly string[]).includes(value)
-  );
+  const gitDeliveryPullRequestStatusesValues: readonly string[] =
+    GIT_DELIVERY_PULL_REQUEST_STATUSES;
+  return isNonEmptyString(value) && gitDeliveryPullRequestStatusesValues.includes(value);
 }
 
 export function isGitDeliveryBranchProtection(
@@ -250,7 +253,7 @@ export function isGitDeliveryProviderDescriptor(
     value.schemaVersion === GIT_DELIVERY_PROVIDER_SCHEMA_VERSION &&
     isNonEmptyString(value.providerInstanceId) &&
     Array.isArray(value.capabilities) &&
-    value.capabilities.every(isProviderCapability)
+    isCapabilityArray(value.capabilities)
   );
 }
 
@@ -260,7 +263,7 @@ export function isGitDeliveryRemoteTargetPolicy(
   return (
     isRecord(value) &&
     Array.isArray(value.allowedPushTargetPatterns) &&
-    value.allowedPushTargetPatterns.every(isGitDeliveryBranchPattern) &&
+    isPatternArray(value.allowedPushTargetPatterns) &&
     typeof value.forcePushGloballyDenied === "boolean"
   );
 }

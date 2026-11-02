@@ -1140,6 +1140,13 @@
     "packages/keiko-contracts/src/__tests__/support/field-read-observations.ts": {
       "anti-slop/no-unknown-returns": 1
     },
+    "packages/keiko-contracts/src/__tests__/support/git-read-wire-contract.ts": {
+      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-reflect-get": 1,
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 3,
+      "anti-slop/no-unsafe-dictionary-type": 2
+    },
     "packages/keiko-contracts/src/__tests__/support/identity-header-observations.ts": {
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 1
@@ -1166,6 +1173,10 @@
       "anti-slop/no-reflect-get": 1,
       "anti-slop/no-runtime-typeof": 2,
       "anti-slop/no-unknown-returns": 1
+    },
+    "packages/keiko-contracts/src/__tests__/support/readiness-blocker-observations.ts": {
+      "anti-slop/no-reflect-get": 2,
+      "anti-slop/no-unknown-returns": 2
     },
     "packages/keiko-contracts/src/__tests__/support/tagged-fact-observations.ts": {
       "anti-slop/no-object-parameters": 1,
@@ -1355,9 +1366,8 @@
     },
     "packages/keiko-contracts/src/coding-runtime-git.ts": {
       "anti-slop/no-runtime-typeof": 17,
-      "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/no-unsafe-dictionary-type": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-unknown-parameters": 5,
+      "anti-slop/no-unsafe-dictionary-type": 7
     },
     "packages/keiko-contracts/src/coding-safe-activity.test.ts": {
       "anti-slop-effect/prefer-effect-match": 2,
@@ -1918,7 +1928,9 @@
       "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-known-value-widening": 2,
-      "anti-slop/no-unknown-parameters": 2,
+      "anti-slop/no-runtime-typeof": 3,
+      "anti-slop/no-unknown-parameters": 3,
+      "anti-slop/no-unknown-returns": 4,
       "anti-slop/no-unsafe-dictionary-type": 8,
       "anti-slop/require-safety-comment-for-type-assertion": 11
     },
@@ -1939,14 +1951,12 @@
     "packages/keiko-contracts/src/git-ci-readiness.ts": {
       "anti-slop/no-runtime-typeof": 11,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 8,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-unsafe-dictionary-type": 8
     },
     "packages/keiko-contracts/src/git-commit-intent.ts": {
       "anti-slop/no-conditional-empty-object-spread": 3,
       "anti-slop/no-runtime-typeof": 4,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/git-commit-policy.test.ts": {
       "anti-slop/no-chained-type-assertions": 2,
@@ -1955,14 +1965,12 @@
     "packages/keiko-contracts/src/git-commit-policy.ts": {
       "anti-slop/no-runtime-typeof": 4,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/git-delivery-action-sheet.ts": {
       "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-unsafe-dictionary-type": 7
     },
     "packages/keiko-contracts/src/git-delivery-evidence.test.ts": {
       "anti-slop/no-known-value-widening": 3,
@@ -1971,106 +1979,110 @@
     },
     "packages/keiko-contracts/src/git-delivery-evidence.ts": {
       "anti-slop/no-runtime-typeof": 4,
-      "anti-slop/no-unsafe-dictionary-type": 5,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 5
     },
     "packages/keiko-contracts/src/git-delivery-observation.test.ts": {
+      "anti-slop/no-unknown-returns": 2,
       "anti-slop/require-safety-comment-for-type-assertion": 3
     },
     "packages/keiko-contracts/src/git-delivery-observation.ts": {
-      "anti-slop/no-runtime-typeof": 3,
-      "anti-slop/no-unsafe-dictionary-type": 2,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-runtime-typeof": 4,
+      "anti-slop/no-unsafe-dictionary-type": 2
+    },
+    "packages/keiko-contracts/src/git-delivery-policy.test.ts": {
+      "anti-slop/no-unknown-returns": 2
     },
     "packages/keiko-contracts/src/git-delivery-policy.ts": {
-      "anti-slop/no-chained-type-assertions": 2,
       "anti-slop/no-runtime-typeof": 4,
-      "anti-slop/no-unknown-parameters": 6,
-      "anti-slop/no-unsafe-dictionary-type": 3,
-      "anti-slop/require-safety-comment-for-type-assertion": 5
+      "anti-slop/no-unknown-parameters": 5,
+      "anti-slop/no-unsafe-dictionary-type": 8
     },
     "packages/keiko-contracts/src/git-delivery-provider.test.ts": {
       "anti-slop/no-known-value-widening": 2,
+      "anti-slop/no-reflect-get": 1,
+      "anti-slop/no-unknown-returns": 1,
       "anti-slop/no-unsafe-dictionary-type": 2
     },
     "packages/keiko-contracts/src/git-delivery-provider.ts": {
       "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/git-delivery.test.ts": {
       "anti-slop/no-chained-type-assertions": 2,
-      "anti-slop/no-known-value-widening": 1,
-      "anti-slop/no-unsafe-dictionary-type": 3,
+      "anti-slop/no-known-value-widening": 6,
+      "anti-slop/no-reflect-get": 5,
+      "anti-slop/no-runtime-typeof": 4,
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/no-unknown-returns": 7,
+      "anti-slop/no-unsafe-dictionary-type": 7,
       "anti-slop/require-safety-comment-for-type-assertion": 5
     },
     "packages/keiko-contracts/src/git-delivery.ts": {
-      "anti-slop/no-chained-type-assertions": 2,
-      "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unsafe-dictionary-type": 17,
-      "anti-slop/require-safety-comment-for-type-assertion": 15
+      "anti-slop/no-unsafe-dictionary-type": 38
     },
     "packages/keiko-contracts/src/git-editor.test.ts": {
-      "anti-slop/no-known-value-widening": 3,
-      "anti-slop/no-unknown-returns": 3,
+      "anti-slop/no-known-value-widening": 8,
+      "anti-slop/no-object-parameters": 1,
+      "anti-slop/no-runtime-typeof": 2,
+      "anti-slop/no-unknown-parameters": 12,
+      "anti-slop/no-unknown-returns": 11,
       "anti-slop/no-unsafe-dictionary-type": 5,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-contracts/src/git-editor.ts": {
-      "anti-slop/no-chained-type-assertions": 4,
-      "anti-slop/no-runtime-typeof": 16,
-      "anti-slop/no-unknown-parameters": 8,
-      "anti-slop/no-unsafe-dictionary-type": 18,
-      "anti-slop/require-safety-comment-for-type-assertion": 12
+      "anti-slop/no-runtime-typeof": 13,
+      "anti-slop/no-unknown-parameters": 6,
+      "anti-slop/no-unsafe-dictionary-type": 29
     },
     "packages/keiko-contracts/src/git-history.test.ts": {
-      "anti-slop/no-known-value-widening": 2,
-      "anti-slop/no-unsafe-dictionary-type": 2
+      "anti-slop/no-known-value-widening": 3,
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/no-unsafe-dictionary-type": 3
     },
     "packages/keiko-contracts/src/git-history.ts": {
-      "anti-slop/no-runtime-typeof": 5,
-      "anti-slop/no-unknown-parameters": 3,
-      "anti-slop/no-unsafe-dictionary-type": 7,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-runtime-typeof": 1,
+      "anti-slop/no-unknown-parameters": 4,
+      "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-contracts/src/git-journey-outcome.test.ts": {
       "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-contracts/src/git-journey-validation.ts": {
-      "anti-slop/no-chained-type-assertions": 1,
       "anti-slop/no-runtime-typeof": 9,
       "anti-slop/no-unknown-parameters": 3,
-      "anti-slop/no-unsafe-dictionary-type": 11,
-      "anti-slop/require-safety-comment-for-type-assertion": 4
+      "anti-slop/no-unsafe-dictionary-type": 16
+    },
+    "packages/keiko-contracts/src/git-merge.test.ts": {
+      "anti-slop/no-unknown-returns": 2
     },
     "packages/keiko-contracts/src/git-merge.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-runtime-typeof": 3,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/git-preflight.ts": {
-      "anti-slop/no-runtime-typeof": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-runtime-typeof": 1
     },
     "packages/keiko-contracts/src/git-pull-request-identity.ts": {
       "anti-slop/no-runtime-typeof": 7,
       "anti-slop/no-unsafe-dictionary-type": 3
     },
     "packages/keiko-contracts/src/git-pull-request.test.ts": {
+      "anti-slop-effect/prefer-effect-match": 1,
       "anti-slop/no-chained-type-assertions": 2,
+      "anti-slop/no-known-value-widening": 1,
+      "anti-slop/no-unknown-returns": 2,
       "anti-slop/require-safety-comment-for-type-assertion": 4
     },
     "packages/keiko-contracts/src/git-pull-request.ts": {
       "anti-slop/no-conditional-empty-object-spread": 1,
       "anti-slop/no-runtime-typeof": 5,
       "anti-slop/no-unknown-parameters": 1,
-      "anti-slop/no-unsafe-dictionary-type": 1,
-      "anti-slop/require-safety-comment-for-type-assertion": 1
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-contracts/src/git-repository-agent.test.ts": {
       "anti-slop/no-known-value-widening": 2,
@@ -2081,40 +2093,45 @@
       "anti-slop/no-conditional-empty-object-spread": 2,
       "anti-slop/no-runtime-typeof": 8,
       "anti-slop/no-unknown-parameters": 8,
-      "anti-slop/no-unsafe-dictionary-type": 4,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-unsafe-dictionary-type": 4
     },
     "packages/keiko-contracts/src/git-repository-summary.test.ts": {
       "anti-slop/no-known-value-widening": 2,
+      "anti-slop/no-unknown-parameters": 2,
       "anti-slop/no-unsafe-dictionary-type": 2
     },
     "packages/keiko-contracts/src/git-repository-summary.ts": {
-      "anti-slop/no-runtime-typeof": 4,
-      "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/no-unsafe-dictionary-type": 5,
-      "anti-slop/require-safety-comment-for-type-assertion": 2
+      "anti-slop/no-unknown-parameters": 6,
+      "anti-slop/no-unsafe-dictionary-type": 7
     },
     "packages/keiko-contracts/src/git-repository.test.ts": {
       "anti-slop/no-known-value-widening": 3,
+      "anti-slop/no-reflect-get": 2,
+      "anti-slop/no-unknown-parameters": 2,
+      "anti-slop/no-unknown-returns": 2,
       "anti-slop/no-unsafe-dictionary-type": 6
     },
     "packages/keiko-contracts/src/git-repository.ts": {
-      "anti-slop/no-runtime-typeof": 8,
+      "anti-slop/no-runtime-typeof": 2,
       "anti-slop/no-unknown-parameters": 4,
-      "anti-slop/no-unsafe-dictionary-type": 9,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-unsafe-dictionary-type": 11
     },
     "packages/keiko-contracts/src/git-sync.test.ts": {
       "anti-slop/no-chained-type-assertions": 3,
       "anti-slop/no-known-value-widening": 2,
+      "anti-slop/no-unknown-parameters": 2,
       "anti-slop/no-unsafe-dictionary-type": 2,
       "anti-slop/require-safety-comment-for-type-assertion": 6
     },
     "packages/keiko-contracts/src/git-sync.ts": {
-      "anti-slop/no-runtime-typeof": 5,
+      "anti-slop/no-runtime-typeof": 1,
+      "anti-slop/no-unknown-parameters": 4,
+      "anti-slop/no-unsafe-dictionary-type": 10
+    },
+    "packages/keiko-contracts/src/git-wire-envelope-validation.ts": {
+      "anti-slop/no-runtime-typeof": 7,
       "anti-slop/no-unknown-parameters": 2,
-      "anti-slop/no-unsafe-dictionary-type": 5,
-      "anti-slop/require-safety-comment-for-type-assertion": 3
+      "anti-slop/no-unsafe-dictionary-type": 5
     },
     "packages/keiko-contracts/src/governed-tool-bridge.test.ts": {
       "anti-slop/no-chained-type-assertions": 1,
@@ -16842,15 +16859,24 @@
       "anti-slop/no-module-mocking": 1,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
+    "packages/keiko-ui/src/lib/api.git-parser-safety.test.ts": {
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/no-unknown-returns": 4
+    },
     "packages/keiko-ui/src/lib/api.git-read-lazy.test.ts": {
       "anti-slop/no-module-mocking": 2,
-      "anti-slop/no-unknown-returns": 4,
+      "anti-slop/no-unknown-returns": 7,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },
     "packages/keiko-ui/src/lib/api.git-sync-loading.test.ts": {
       "anti-slop/no-module-mocking": 1,
       "anti-slop/no-unknown-parameters": 1,
       "anti-slop/no-unknown-returns": 6
+    },
+    "packages/keiko-ui/src/lib/api.git-sync-typed.test.ts": {
+      "anti-slop/no-known-value-widening": 2,
+      "anti-slop/no-unknown-parameters": 1,
+      "anti-slop/no-unsafe-dictionary-type": 1
     },
     "packages/keiko-ui/src/lib/api.inline-completion.test.ts": {
       "anti-slop/no-unknown-parameters": 1
@@ -16868,7 +16894,7 @@
       "anti-slop/no-conditional-empty-object-spread": 103,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 7,
-      "anti-slop/no-unknown-parameters": 8,
+      "anti-slop/no-unknown-parameters": 10,
       "anti-slop/no-unsafe-dictionary-type": 5,
       "anti-slop/require-safety-comment-for-type-assertion": 12
     },
@@ -17037,7 +17063,7 @@
       "anti-slop/no-conditional-empty-object-spread": 17,
       "anti-slop/no-known-value-widening": 1,
       "anti-slop/no-runtime-typeof": 16,
-      "anti-slop/no-unknown-parameters": 12,
+      "anti-slop/no-unknown-parameters": 13,
       "anti-slop/no-unsafe-dictionary-type": 8,
       "anti-slop/require-safety-comment-for-type-assertion": 1
     },

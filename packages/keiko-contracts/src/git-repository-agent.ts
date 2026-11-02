@@ -162,22 +162,23 @@ const MODE_BY_OPERATION: Readonly<
   merge: ["preview", "execute"],
 };
 
+const GIT_REPOSITORY_AGENT_DENIAL_REASONS_VALUES: readonly unknown[] =
+  GIT_REPOSITORY_AGENT_DENIAL_REASONS;
+const GIT_REPOSITORY_AGENT_OPERATION_KINDS_VALUES: readonly unknown[] =
+  GIT_REPOSITORY_AGENT_OPERATION_KINDS;
+const GIT_REPOSITORY_AGENT_OPERATION_MODES_VALUES: readonly unknown[] =
+  GIT_REPOSITORY_AGENT_OPERATION_MODES;
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isOperation(value: unknown): value is GitRepositoryAgentOperationKind {
-  return (
-    typeof value === "string" &&
-    GIT_REPOSITORY_AGENT_OPERATION_KINDS.includes(value as GitRepositoryAgentOperationKind)
-  );
+  return typeof value === "string" && GIT_REPOSITORY_AGENT_OPERATION_KINDS_VALUES.includes(value);
 }
 
 function isMode(value: unknown): value is GitRepositoryAgentOperationMode {
-  return (
-    typeof value === "string" &&
-    GIT_REPOSITORY_AGENT_OPERATION_MODES.includes(value as GitRepositoryAgentOperationMode)
-  );
+  return typeof value === "string" && GIT_REPOSITORY_AGENT_OPERATION_MODES_VALUES.includes(value);
 }
 
 // Case-folded once, from the readable table above, so the lookup and the table can never disagree.
@@ -224,7 +225,11 @@ interface InternalParseOk<T> {
 
 type InternalParseResult<T> = InternalParseOk<T> | GitRepositoryAgentParseFail;
 
-function validateEnvelope(input: unknown): InternalParseResult<Readonly<Record<string, unknown>>> {
+function validateEnvelope(
+  input: unknown,
+): InternalParseResult<
+  Readonly<Partial<Record<keyof GitRepositoryAgentOperationRequest, unknown>>>
+> {
   if (!isRecord(input)) return parseFail("bad-request", "Request body must be an object.");
   if (containsDirectShellShape(input)) {
     return parseFail(
@@ -445,9 +450,7 @@ export function isGitRepositoryAgentOperationResponse(
     return (
       typeof input.message === "string" &&
       typeof input.denialReason === "string" &&
-      GIT_REPOSITORY_AGENT_DENIAL_REASONS.includes(
-        input.denialReason as GitRepositoryAgentDenialReason,
-      )
+      GIT_REPOSITORY_AGENT_DENIAL_REASONS_VALUES.includes(input.denialReason)
     );
   }
   return false;

@@ -24,15 +24,20 @@ it("loads Git read validators only when a Git read is requested", async () => {
   const fetch = vi.fn().mockRejectedValue(new TypeError("offline"));
   vi.stubGlobal("fetch", fetch);
   for (const read of [
+    (): Promise<unknown> => api.fetchGitHistory({ root: "/repo" }),
     (): Promise<unknown> => api.fetchGitStatus("/repo"),
     (): Promise<unknown> => api.fetchGitSummary("/repo"),
     (): Promise<unknown> => api.fetchGitRemotes("/repo"),
     (): Promise<unknown> => api.fetchGitDiff({ root: "/repo", path: "index.ts" }),
+    (): Promise<unknown> =>
+      api.fetchGitDeliverySyncPreview({ operation: "fetch", projectId: "/repo" }),
+    (): Promise<unknown> =>
+      api.fetchGitDeliverySyncExecute({ operation: "fetch", projectId: "/repo" }),
   ]) {
     await expect(read()).rejects.toBeDefined();
     expect(new Set(imports)).toEqual(new Set(["fetchers", "summary"]));
   }
-  expect(fetch).toHaveBeenCalledTimes(4);
+  expect(fetch).toHaveBeenCalledTimes(7);
 });
 
 function hasRuntimeBinding(clause: ts.ImportClause | undefined): boolean {
@@ -56,8 +61,47 @@ it("keeps ordinary Git validator imports out of the eager API module", () => {
   const eagerGitImports = source.statements.filter((statement) => {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
       return false;
-    if (!/\/git-repository(?:-summary)?$/u.test(statement.moduleSpecifier.text)) return false;
+    if (!/\/git-(?:repository(?:-summary)?|history|sync)$/u.test(statement.moduleSpecifier.text))
+      return false;
     return hasRuntimeBinding(statement.importClause);
   });
   expect(eagerGitImports.map((statement) => statement.getText(source))).toEqual([]);
+});
+
+it("ordinary Git reads select typed parsers in the existing deferred module", () => {
+  const directory = dirname(fileURLToPath(import.meta.url));
+  const source = ts.createSourceFile(
+    "coding-workbench-lazy-fetchers.ts",
+    readFileSync(resolve(directory, "coding-workbench-lazy-fetchers.ts"), "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  for (const [name, parser] of [
+    ["fetchGitStatus", "parseGitRepositoryStatusResponse"],
+    ["fetchGitDiff", "parseGitRepositoryDiffResponse"],
+    ["fetchGitHistory", "parseGitHistoryResponse"],
+    ["fetchGitSummary", "parseGitRepositorySummary"],
+    ["fetchGitRemotes", "parseGitRemotesResponse"],
+    ["fetchGitSyncPreview", "parseGitSyncPreview"],
+    ["fetchGitSyncExecute", "parseGitSyncExecuteResponse"],
+  ]) {
+    const fn = source.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === name,
+    );
+    expect(fn).toBeDefined();
+    if (fn === undefined || !ts.isFunctionDeclaration(fn)) throw new TypeError("fetcher absent");
+    const calls: string[] = [];
+    function visit(node: ts.Node): void {
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === "fetchJson"
+      ) {
+        calls.push(node.arguments[2]?.getText(source) ?? "missing");
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(fn);
+    expect(calls).toEqual([parser]);
+  }
 });

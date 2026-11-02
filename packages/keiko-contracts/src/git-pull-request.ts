@@ -12,13 +12,19 @@
 //
 // Leaf-package rules (ADR-0019, ADR-0058, ADR-0064): pure types, frozen const tables, and pure
 // functions only. No IO, no clock, no crypto, no randomness, no provider field names. Relative imports
-// end in ".js" and reference only sibling git-delivery*.ts leaves.
+// end in ".js" and reference sibling Git leaves or import-free structural primitives.
 //
 // Content-free by construction: the synthesizer's INPUTS are counts, coarse area tokens, typed enums,
 // and branch names — never raw diff content, file paths, or commit message bodies. The composed
 // title/body DRAFT it returns is user-editable and is NEVER persisted to evidence (evidence carries only
 // the titleByteLength / bodyByteLength already defined on the GitDeliveryPr*Inputs).
 
+import { isPhysicalArrayOf, isInSet } from "./contract-validation-primitives.js";
+import {
+  hasGitReadinessForbiddenAdvisory,
+  isGitReadinessSeverityRanked,
+} from "./git-delivery-readiness-validation.js";
+import { isGitDeliveryRiskClass } from "./git-delivery.js";
 import type {
   GitDeliveryExecutionErrorCode,
   GitDeliveryParseResult,
@@ -287,10 +293,6 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isInSet<T extends string>(set: readonly T[]): (v: unknown) => v is T {
-  return (v: unknown): v is T => isString(v) && (set as readonly string[]).includes(v);
 }
 
 // ─── Exported enum guards ─────────────────────────────────────────────────────────────────────────
@@ -621,11 +623,15 @@ export function isGitPullRequestReadinessBlocker(
 }
 
 function isBlockerArray(value: unknown): value is readonly GitPullRequestReadinessBlocker[] {
-  return Array.isArray(value) && value.every(isGitPullRequestReadinessBlocker);
+  return isPhysicalArrayOf(value, isGitPullRequestReadinessBlocker);
 }
 
 function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
-  return blockers.some((blocker) => blocker.severity === "blocking");
+  const extent = blockers.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (blockers[index]?.severity === "blocking") return true;
+  }
+  return false;
 }
 
 // Every code collectAdvisoryBlockers ever constructs via advisory(...) — kept immediately beside
@@ -637,30 +643,6 @@ function hasBlockingBlocker(blockers: readonly GitPullRequestReadinessBlocker[])
 // a genuinely conflicted PR.
 const CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT: ReadonlySet<GitPullRequestReadinessBlockerCode> =
   new Set(["draft-pr", "checks-pending", "approval-insufficient"]);
-
-function hasIllegitimateAdvisoryBlocker(
-  blockers: readonly GitPullRequestReadinessBlocker[],
-): boolean {
-  return blockers.some(
-    (blocker) =>
-      blocker.severity === "advisory" &&
-      !CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT.has(blocker.code),
-  );
-}
-
-// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
-// been seen, no blocking entry may follow.
-function isSeverityRanked(blockers: readonly GitPullRequestReadinessBlocker[]): boolean {
-  let sawAdvisory = false;
-  for (const blocker of blockers) {
-    if (blocker.severity === "advisory") {
-      sawAdvisory = true;
-    } else if (sawAdvisory) {
-      return false;
-    }
-  }
-  return true;
-}
 
 // Same gap as isGitMergeReadinessSummary: the documented invariants (reviewReady implies the object
 // exists and carries no blocking blocker; blocking entries precede advisory ones) were unchecked, so
@@ -675,13 +657,13 @@ export function isGitPullRequestReadinessSummary(
     isBoolean(value.reviewReady) &&
     isBlockerArray(value.blockers) &&
     (!value.reviewReady || (value.objectExists && !hasBlockingBlocker(value.blockers))) &&
-    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
-    isSeverityRanked(value.blockers)
+    !hasGitReadinessForbiddenAdvisory(value.blockers, CODES_COLLECT_ADVISORY_BLOCKERS_CAN_EMIT) &&
+    isGitReadinessSeverityRanked(value.blockers)
   );
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every(isString);
+  return isPhysicalArrayOf(value, isString);
 }
 
 export function isGitPullRequestChangeNarrative(
@@ -698,6 +680,35 @@ export function isGitPullRequestChangeNarrative(
   );
 }
 
+function isSummarySection(value: unknown): value is GitPrSummarySection {
+  return (
+    isRecord(value) &&
+    isGitPrChangeType(value.changeType) &&
+    isNonNegativeInteger(value.commitCount) &&
+    isNonNegativeInteger(value.fileCount) &&
+    isNonNegativeInteger(value.areaCount) &&
+    (value.primaryArea === undefined || isString(value.primaryArea))
+  );
+}
+
+function isRiskSection(value: unknown): value is GitPrRiskSection {
+  return (
+    isRecord(value) &&
+    isGitDeliveryRiskClass(value.riskClass) &&
+    isGitPrPolicyOutcome(value.policyOutcome) &&
+    isBoolean(value.requiresApproval)
+  );
+}
+
+function isChangeNarrativeSection(value: unknown): value is GitPrChangeNarrativeSection {
+  return (
+    isRecord(value) &&
+    isBoolean(value.touchesTests) &&
+    isStringArray(value.areas) &&
+    isGitPrChangeType(value.changeType)
+  );
+}
+
 export function isGitPullRequestMetadataDraft(
   value: unknown,
 ): value is GitPullRequestMetadataDraft {
@@ -705,9 +716,9 @@ export function isGitPullRequestMetadataDraft(
     isRecord(value) &&
     value.schemaVersion === GIT_PULL_REQUEST_SCHEMA_VERSION &&
     isString(value.composedTitle) &&
-    isRecord(value.summarySection) &&
-    isRecord(value.riskSection) &&
-    isRecord(value.changeNarrativeSection) &&
+    isSummarySection(value.summarySection) &&
+    isRiskSection(value.riskSection) &&
+    isChangeNarrativeSection(value.changeNarrativeSection) &&
     isString(value.riskNarrative)
   );
 }

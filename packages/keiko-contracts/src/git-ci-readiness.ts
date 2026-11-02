@@ -116,12 +116,17 @@ export function isGitCiCheckCounts(value: unknown): value is GitCiCheckCounts {
   )
     return false;
   if (!Object.values(value).every((entry) => count(entry))) return false;
-  return (
-    value.total ===
-    Object.entries(value)
-      .filter(([key]) => key !== "total")
-      .reduce((sum, [, amount]) => sum + (amount as number), 0)
-  );
+  const total = value.total;
+  const observed = Object.entries(value)
+    .filter(([key]) => key !== "total")
+    .reduce<{ readonly sum: number; readonly valid: boolean }>(
+      (observed, [, amount]) => {
+        if (!count(amount)) return { sum: observed.sum, valid: false };
+        return { sum: observed.sum + amount, valid: observed.valid };
+      },
+      { sum: 0, valid: true },
+    );
+  return count(total) && observed.valid && total === observed.sum;
 }
 function member(value: unknown, values: ReadonlySet<string>): boolean {
   return typeof value === "string" && values.has(value);
@@ -177,14 +182,16 @@ function identity(value: Record<string, unknown>): boolean {
     refs(value)
   );
 }
+const READINESS_REASON_STATES: Readonly<Record<string, GitCiReadinessState>> =
+  GIT_CI_READINESS_REASON_STATES;
+
 function readiness(value: Record<string, unknown>): boolean {
   if (
     typeof value.reason !== "string" ||
     !Object.hasOwn(GIT_CI_READINESS_REASON_STATES, value.reason)
   )
     return false;
-  if (value.state !== GIT_CI_READINESS_REASON_STATES[value.reason as GitCiReadinessReason])
-    return false;
+  if (value.state !== READINESS_REASON_STATES[value.reason]) return false;
   if (typeof value.complete !== "boolean" || !isGitCiCheckCounts(value.requiredChecks))
     return false;
   if (value.state !== "technical-ready") return true;

@@ -290,3 +290,26 @@ describe("git-commit-intent guards", () => {
     expect(isGitCommitIntentAnalysis(null)).toBe(false);
   });
 });
+
+import * as factoryPublicIntent from "@oscharko-dev/keiko-contracts/runtime/git-commit-intent";
+
+describe("commit warning factory boundary preservation", () => {
+  for (const [surface, module] of [
+    ["source", { GIT_COMMIT_QUALITY_WARNING_CODES, isGitCommitQualityWarningCode }],
+    ["public", factoryPublicIntent],
+  ] as const) {
+    it(`${surface} preserves the complete warning vocabulary without input coercion`, () => {
+      for (const code of module.GIT_COMMIT_QUALITY_WARNING_CODES) {
+        expect(module.isGitCommitQualityWarningCode(code)).toBe(true);
+      }
+      const hostile = {
+        get [Symbol.toPrimitive](): never {
+          throw new TypeError("warning membership must not inspect coercion");
+        },
+      };
+      for (const value of ["unknown-warning", "", null, undefined, 0, false, hostile]) {
+        expect(module.isGitCommitQualityWarningCode(value)).toBe(false);
+      }
+    });
+  }
+});

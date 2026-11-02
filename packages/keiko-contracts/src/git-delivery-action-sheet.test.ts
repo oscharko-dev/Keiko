@@ -499,3 +499,69 @@ describe("GIT_PREFLIGHT_RECOVERY_ACTION_HINT (#3394 review: one table for both p
     expect(GIT_PREFLIGHT_RECOVERY_ACTION_HINT["remote-unreachable"]).toBe("wait-for-provider");
   });
 });
+
+import * as g2PublicSheet from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
+
+describe("G2 physical action sheet collections", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryActionSheet],
+    ["public", g2PublicSheet.isGitDeliveryActionSheet],
+  ] as const) {
+    it(`${surface} admits the actual action sheet producer`, () => {
+      const sheet = buildGitDeliveryActionSheet(baseInput());
+      expect(validate(sheet)).toBe(true);
+      expect(sheet.actionId).toBe("act-1");
+      expect(sheet.preview.actionKind).toBe("commit");
+    });
+    it(`${surface} refuses absent physical recovery entries`, () => {
+      const sheet = buildGitDeliveryActionSheet(baseInput());
+      expect(validate({ ...sheet, recovery: Array(1) })).toBe(false);
+    });
+    it(`${surface} refuses an invalid blocker hidden by every`, () => {
+      const sheet = buildGitDeliveryActionSheet(baseInput());
+      const expectedBlockers = [{}];
+      Object.defineProperty(expectedBlockers, "every", { value: () => true });
+      expect(validate({ ...sheet, preview: { ...sheet.preview, expectedBlockers } })).toBe(false);
+    });
+  }
+});
+
+describe("G2 healthy inherited action sheet members", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryActionSheet],
+    ["public", g2PublicSheet.isGitDeliveryActionSheet],
+  ] as const) {
+    it(`${surface} preserves inherited-present recovery and blocker members`, () => {
+      const recovery = [RECOVERY_STAGE];
+      const expectedBlockers = [PREFLIGHT_ADVISORY];
+      Reflect.deleteProperty(recovery, "0");
+      Reflect.deleteProperty(expectedBlockers, "0");
+      Object.setPrototypeOf(recovery, [RECOVERY_STAGE]);
+      Object.setPrototypeOf(expectedBlockers, [PREFLIGHT_ADVISORY]);
+      const sheet = buildGitDeliveryActionSheet(baseInput({ recovery, expectedBlockers }));
+      expect(validate(sheet)).toBe(true);
+      expect(sheet.recovery).toBe(recovery);
+    });
+  }
+});
+
+describe("action state factory boundary preservation", () => {
+  for (const [surface, module] of [
+    ["source", { GIT_DELIVERY_ACTION_SHEET_STATES, isGitDeliveryActionSheetState }],
+    ["public", g2PublicSheet],
+  ] as const) {
+    it(`${surface} preserves the complete action state vocabulary without input coercion`, () => {
+      for (const state of module.GIT_DELIVERY_ACTION_SHEET_STATES) {
+        expect(module.isGitDeliveryActionSheetState(state)).toBe(true);
+      }
+      const hostile = {
+        get [Symbol.toPrimitive](): never {
+          throw new TypeError("action state membership must not inspect coercion");
+        },
+      };
+      for (const value of ["unknown-state", "", null, undefined, 0, false, hostile]) {
+        expect(module.isGitDeliveryActionSheetState(value)).toBe(false);
+      }
+    });
+  }
+});

@@ -66,7 +66,6 @@ export interface GitPreflightFinding {
 }
 
 export function isGitPreflightFindingCode(value: unknown): value is GitPreflightFindingCode {
-  return (
-    typeof value === "string" && (GIT_PREFLIGHT_FINDING_CODES as readonly string[]).includes(value)
-  );
+  const gitPreflightFindingCodesValues: readonly string[] = GIT_PREFLIGHT_FINDING_CODES;
+  return typeof value === "string" && gitPreflightFindingCodesValues.includes(value);
 }

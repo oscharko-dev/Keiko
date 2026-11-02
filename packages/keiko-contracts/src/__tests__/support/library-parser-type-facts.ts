@@ -50,6 +50,19 @@ export type LibraryParserTripleExpected<SOutput, POutput, WOutput> = readonly [
   true,
 ];
 
+/** The public and forwarding stages also return exactly the source stage's result. */
+export type LibraryParserTripleIdentityFacts<
+  S extends Callable,
+  P extends Callable,
+  W extends Callable,
+> = readonly [LibraryParserTripleFacts<S, P, W>, LibraryOutput<P>, LibraryOutput<W>];
+
+export type LibraryParserTripleIdentityExpected<SOutput, POutput> = readonly [
+  LibraryParserTripleExpected<SOutput, POutput, POutput>,
+  SOutput,
+  SOutput,
+];
+
 type AcceptedValue<F extends Callable> =
   LibraryOutput<F> extends infer R
     ? R extends { readonly ok: true; readonly value: infer V }

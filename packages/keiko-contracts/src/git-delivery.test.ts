@@ -918,3 +918,644 @@ describe("protected-branch constraint", () => {
     expect(isGitDeliveryConstraint({ kind: "protected-branch" })).toBe(false);
   });
 });
+
+import * as g2PublicDelivery from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
+
+describe("G2 resolved input dispatch observations", () => {
+  for (const [surface, parse] of [
+    ["source", parseGitDeliveryResolvedInputs],
+    ["public", g2PublicDelivery.parseGitDeliveryResolvedInputs],
+  ] as const) {
+    it(`${surface} retains the healthy two-read dispatch and original reference`, () => {
+      let reads = 0;
+      const input = {
+        get kind(): unknown {
+          reads += 1;
+          return "commit";
+        },
+        messageByteLength: 1,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      };
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy resolved input refused");
+      expect(result.value).toBe(input);
+      expect(reads).toBe(2);
+      if (result.value.kind !== "commit") throw new Error("healthy commit kind changed");
+      expect(result.value.messageByteLength).toBe(1);
+      expect(reads).toBe(3);
+    });
+    it(`${surface} refuses an inherited dispatch-table key on the second observation`, () => {
+      let reads = 0;
+      const input = {
+        get kind(): unknown {
+          reads += 1;
+          return reads === 1 ? "commit" : "toString";
+        },
+        messageByteLength: 1,
+        stagedPathCount: 1,
+        allowEmptyCommit: false,
+      };
+      expect(parse(input)).toEqual({
+        ok: false,
+        errors: [`resolvedInputs for kind "toString" has invalid fields`],
+      });
+      expect(reads).toBe(3);
+    });
+  }
+});
+
+import { isGitDeliveryNonEmptyConstraints } from "./git-delivery.js";
+
+describe("G2 original positive constraint extent condition", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryNonEmptyConstraints],
+    ["public", g2PublicDelivery.isGitDeliveryNonEmptyConstraints],
+  ] as const) {
+    it(`${surface} preserves dense nonempty constraints and refuses empty constraints`, () => {
+      expect(validate([{ kind: "risk-class-ceiling", maxRiskClass: "local-mutation" }])).toBe(true);
+      expect(validate([])).toBe(false);
+    });
+    it(`${surface} refuses a negative first observed extent without a later read`, () => {
+      let reads = 0;
+      const input = new Proxy([], {
+        get(target, key, receiver): unknown {
+          if (key === "length") {
+            reads += 1;
+            return -1;
+          }
+          const value: unknown = Reflect.get(target, key, receiver);
+          return value;
+        },
+      });
+      expect(validate(input)).toBe(false);
+      expect(reads).toBe(1);
+    });
+  }
+});
+
+import { isGitPreflightFindingCode } from "./git-preflight.js";
+import * as g2PublicPreflight from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+
+describe("G2 actual preflight code vocabulary", () => {
+  for (const [surface, validate] of [
+    ["source", isGitPreflightFindingCode],
+    ["public", g2PublicPreflight.isGitPreflightFindingCode],
+  ] as const) {
+    it(`${surface} admits the existing closed preflight code`, () => {
+      expect(validate("detached-head")).toBe(true);
+    });
+    it.each(["", "unknown-code", 7, undefined])(
+      `${surface} refuses non-vocabulary input %s`,
+      (value) => {
+        expect(validate(value)).toBe(false);
+      },
+    );
+  }
+});
+
+const GIT_DELIVERY_MEMBERSHIP_CONTROLS = [
+  ["isGitDeliveryActionKind", "GIT_DELIVERY_ACTION_KINDS"],
+  ["isGitDeliveryRiskClass", "GIT_DELIVERY_RISK_CLASSES"],
+  ["isGitDeliveryProviderCapability", "GIT_DELIVERY_PROVIDER_CAPABILITIES"],
+  ["isGitDeliveryBranchMatchKind", "GIT_DELIVERY_BRANCH_MATCH_KINDS"],
+  ["isGitDeliveryBlockReason", "GIT_DELIVERY_BLOCK_REASONS"],
+  ["isGitDeliveryMergeBlockReason", "GIT_DELIVERY_MERGE_BLOCK_REASONS"],
+  ["isGitDeliveryMergeStrategyHint", "GIT_DELIVERY_MERGE_STRATEGY_HINTS"],
+  ["isGitDeliveryAbortableOperation", "GIT_DELIVERY_ABORTABLE_OPERATIONS"],
+  ["isGitDeliveryRecoveryStrategyHint", "GIT_DELIVERY_RECOVERY_STRATEGY_HINTS"],
+  ["isGitDeliveryExecutionOutcome", "GIT_DELIVERY_EXECUTION_OUTCOMES"],
+  ["isGitDeliveryExecutionErrorCode", "GIT_DELIVERY_EXECUTION_ERROR_CODES"],
+] as const;
+
+describe("Git delivery vocabulary membership", () => {
+  it.each(["source", "public"] as const)(
+    "preserves all vocabularies through %s",
+    async (surface) => {
+      const module =
+        surface === "source"
+          ? await import("./git-delivery.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/git-delivery");
+      const hostile = new Proxy(
+        {},
+        {
+          get(): never {
+            throw new TypeError("membership must not coerce objects");
+          },
+        },
+      );
+      const rejected: readonly unknown[] = [
+        "not-a-git-delivery-member",
+        "",
+        null,
+        undefined,
+        false,
+        0,
+        [],
+        hostile,
+      ];
+      for (const [guardName, vocabularyName] of GIT_DELIVERY_MEMBERSHIP_CONTROLS) {
+        const guard = module[guardName];
+        for (const member of module[vocabularyName]) expect(guard(member)).toBe(true);
+        for (const value of rejected) expect(guard(value)).toBe(false);
+      }
+    },
+  );
+});
+
+describe("optional execution detail factory boundary preservation", () => {
+  for (const [surface, validate] of [
+    ["source", isGitDeliveryExecutionResult],
+    ["public", g2PublicDelivery.isGitDeliveryExecutionResult],
+  ] as const) {
+    it(`${surface} preserves absent healthy and malformed defined execution details`, () => {
+      const input = { schemaVersion: "1", outcome: "partial", durationMs: 1 };
+      expect(validate(input)).toBe(true);
+      const partialDetail = { attemptedUnitCount: 3, succeededUnitCount: 1 };
+      const defined = { ...input, partialDetail };
+      expect(validate(defined)).toBe(true);
+      expect(defined.partialDetail).toBe(partialDetail);
+      expect(validate({ ...input, partialDetail: null })).toBe(false);
+      expect(
+        validate({
+          ...input,
+          partialDetail: { attemptedUnitCount: "three", succeededUnitCount: 1 },
+        }),
+      ).toBe(false);
+    });
+    it(`${surface} propagates the exact error from a defined optional checker`, () => {
+      const failure = new TypeError("opaque execution detail inspection");
+      const partialDetail = {
+        get attemptedUnitCount(): never {
+          throw failure;
+        },
+        succeededUnitCount: 1,
+      };
+      let observed: unknown;
+      try {
+        validate({ schemaVersion: "1", outcome: "partial", durationMs: 1, partialDetail });
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+    });
+    it(`${surface} preserves earlier refusal before the optional field observation`, () => {
+      const input = {
+        schemaVersion: "1",
+        outcome: "partial",
+        durationMs: -1,
+        get partialDetail(): never {
+          throw new TypeError("later optional detail must remain unread");
+        },
+      };
+      expect(validate(input)).toBe(false);
+    });
+  }
+});
+
+function prMetadataInput(kind: "pr-create" | "pr-update"): Record<string, unknown> {
+  const metadata = {
+    kind,
+    verifiedCommitSha: "a".repeat(40),
+    headBranchName: "feature",
+    baseBranchName: "dev",
+    titleByteLength: 5,
+    bodyByteLength: 9,
+  };
+  return kind === "pr-create"
+    ? { ...metadata, isDraft: false }
+    : { ...metadata, prExternalId: "42", convertToDraft: true, convertFromDraft: false };
+}
+
+interface PrMetadataRefusal {
+  readonly field: string;
+  readonly invalid: string | number;
+  readonly reads: readonly string[];
+}
+
+function prMetadataRefusals(kind: "pr-create" | "pr-update"): readonly PrMetadataRefusal[] {
+  const prefix =
+    kind === "pr-create" ? ["verifiedCommitSha"] : ["verifiedCommitSha", "prExternalId"];
+  return [
+    { field: "verifiedCommitSha", invalid: "bad", reads: ["verifiedCommitSha"] },
+    ...(kind === "pr-update"
+      ? [{ field: "prExternalId", invalid: "", reads: ["verifiedCommitSha", "prExternalId"] }]
+      : []),
+    { field: "headBranchName", invalid: "", reads: [...prefix, "headBranchName"] },
+    {
+      field: "baseBranchName",
+      invalid: 7,
+      reads: [...prefix, "headBranchName", "baseBranchName"],
+    },
+    {
+      field: "titleByteLength",
+      invalid: 0.5,
+      reads: [...prefix, "headBranchName", "baseBranchName", "titleByteLength"],
+    },
+    {
+      field: "bodyByteLength",
+      invalid: -1,
+      reads: [...prefix, "headBranchName", "baseBranchName", "titleByteLength", "bodyByteLength"],
+    },
+  ];
+}
+
+describe.each([
+  ["source", parseGitDeliveryResolvedInputs],
+  ["public", g2PublicDelivery.parseGitDeliveryResolvedInputs],
+] as const)("#3918 PR metadata observations through %s", (_surface, parse) => {
+  describe.each(["pr-create", "pr-update"] as const)("%s", (kind) => {
+    it("preserves healthy order, identity and repeated draft observations", () => {
+      const prefix =
+        kind === "pr-create" ? ["verifiedCommitSha"] : ["verifiedCommitSha", "prExternalId"];
+      const metadataFields = [
+        "headBranchName",
+        "baseBranchName",
+        "titleByteLength",
+        "bodyByteLength",
+      ];
+      const draftReads =
+        kind === "pr-create"
+          ? ["isDraft"]
+          : ["convertToDraft", "convertFromDraft", "convertToDraft", "convertFromDraft"];
+      const reads: string[] = [];
+      const input = new Proxy(prMetadataInput(kind), {
+        get(target, key, receiver): unknown {
+          if (typeof key === "string" && key !== "kind") reads.push(key);
+          const member: unknown = Reflect.get(target, key, receiver);
+          return member;
+        },
+      });
+      const parsed = parse(input);
+      expect(parsed.ok).toBe(true);
+      if (parsed.ok) expect(parsed.value).toBe(input);
+      expect(reads).toEqual([...prefix, ...metadataFields, ...draftReads]);
+
+      if (kind === "pr-update") {
+        reads.length = 0;
+        input.convertToDraft = false;
+        input.convertFromDraft = true;
+        expect(parse(input).ok).toBe(true);
+        expect(reads).toEqual([
+          ...prefix,
+          ...metadataFields,
+          "convertToDraft",
+          "convertFromDraft",
+          "convertToDraft",
+        ]);
+      }
+    });
+
+    it("preserves inherited metadata and existing integer admission", () => {
+      const inherited = prMetadataInput(kind);
+      delete inherited.headBranchName;
+      delete inherited.baseBranchName;
+      delete inherited.titleByteLength;
+      delete inherited.bodyByteLength;
+      Object.setPrototypeOf(inherited, {
+        headBranchName: " ",
+        baseBranchName: "dev",
+        titleByteLength: 0,
+        bodyByteLength: 0,
+      });
+      const inheritedResult = parse(inherited);
+      expect(inheritedResult.ok).toBe(true);
+      if (inheritedResult.ok) expect(inheritedResult.value).toBe(inherited);
+      expect(
+        parse({
+          ...prMetadataInput(kind),
+          titleByteLength: -0,
+          bodyByteLength: Number.MAX_SAFE_INTEGER + 1,
+        }).ok,
+      ).toBe(true);
+    });
+
+    it("preserves every finite refusal frontier before later property reads", () => {
+      const refusals = prMetadataRefusals(kind);
+      for (const refusal of refusals) {
+        const reads: string[] = [];
+        const input = new Proxy(
+          { ...prMetadataInput(kind), [refusal.field]: refusal.invalid },
+          {
+            get(target, key, receiver): unknown {
+              if (typeof key === "string" && key !== "kind") {
+                reads.push(key);
+                if (!refusal.reads.includes(key))
+                  throw new TypeError("later PR field must remain unread");
+              }
+              const member: unknown = Reflect.get(target, key, receiver);
+              return member;
+            },
+          },
+        );
+        expect(parse(input)).toEqual({
+          ok: false,
+          errors: [`resolvedInputs for kind "${kind}" has invalid fields`],
+        });
+        expect(reads).toEqual(refusal.reads);
+      }
+    });
+
+    it("propagates an inherited middle getter's exact failure before later metadata", () => {
+      const failure = new TypeError("opaque PR metadata inspection");
+      const reads: string[] = [];
+      const values = prMetadataInput(kind);
+      delete values.baseBranchName;
+      Object.setPrototypeOf(values, {
+        get baseBranchName(): never {
+          throw failure;
+        },
+      });
+      const input = new Proxy(values, {
+        get(target, key, receiver): unknown {
+          if (typeof key === "string" && key !== "kind") reads.push(key);
+          const member: unknown = Reflect.get(target, key, receiver);
+          return member;
+        },
+      });
+      let observed: unknown;
+      try {
+        parse(input);
+      } catch (error) {
+        observed = error;
+      }
+      expect(observed).toBe(failure);
+      expect(reads).toEqual(
+        kind === "pr-create"
+          ? ["verifiedCommitSha", "headBranchName", "baseBranchName"]
+          : ["verifiedCommitSha", "prExternalId", "headBranchName", "baseBranchName"],
+      );
+    });
+  });
+});
+
+type RequiredTextAction = "branch-create" | "push" | "pr-description-apply";
+
+interface RequiredTextOwner {
+  readonly kind: RequiredTextAction;
+  readonly surface: "source" | "public";
+  readonly parse: typeof parseGitDeliveryResolvedInputs;
+}
+
+const REQUIRED_TEXT_OWNERS: readonly RequiredTextOwner[] = [
+  { kind: "branch-create", surface: "source", parse: parseGitDeliveryResolvedInputs },
+  {
+    kind: "branch-create",
+    surface: "public",
+    parse: g2PublicDelivery.parseGitDeliveryResolvedInputs,
+  },
+  { kind: "push", surface: "source", parse: parseGitDeliveryResolvedInputs },
+  { kind: "push", surface: "public", parse: g2PublicDelivery.parseGitDeliveryResolvedInputs },
+  { kind: "pr-description-apply", surface: "source", parse: parseGitDeliveryResolvedInputs },
+  {
+    kind: "pr-description-apply",
+    surface: "public",
+    parse: g2PublicDelivery.parseGitDeliveryResolvedInputs,
+  },
+];
+
+function requiredTextInput(kind: RequiredTextAction): Record<string, unknown> {
+  if (kind === "branch-create") {
+    return { kind, branchName: " ", baseBranchName: "dev", startPointRefHash: "opaque-ref" };
+  }
+  if (kind === "push") {
+    return {
+      kind,
+      verifiedCommitSha: "a".repeat(40),
+      sourceBranchName: " ",
+      remoteAlias: "origin",
+      remoteBranchName: "feature",
+      forcePush: false,
+      setUpstreamTracking: true,
+    };
+  }
+  return {
+    kind,
+    prExternalId: "42",
+    headBranchName: " ",
+    baseBranchName: "dev",
+    finalBodyByteLength: 0,
+  };
+}
+
+function requiredTextOrder(kind: RequiredTextAction): readonly string[] {
+  if (kind === "branch-create") return ["branchName", "baseBranchName", "startPointRefHash"];
+  if (kind === "push") {
+    return [
+      "verifiedCommitSha",
+      "sourceBranchName",
+      "remoteAlias",
+      "remoteBranchName",
+      "forcePush",
+      "setUpstreamTracking",
+    ];
+  }
+  return ["prExternalId", "headBranchName", "baseBranchName", "finalBodyByteLength"];
+}
+
+interface RequiredTextRefusal {
+  readonly field: string;
+  readonly invalid: string | number;
+  readonly reads: readonly string[];
+}
+
+const BRANCH_TEXT_REFUSALS: readonly RequiredTextRefusal[] = [
+  { field: "branchName", invalid: "", reads: ["branchName"] },
+  { field: "baseBranchName", invalid: 7, reads: ["branchName", "baseBranchName"] },
+  {
+    field: "startPointRefHash",
+    invalid: 0,
+    reads: ["branchName", "baseBranchName", "startPointRefHash"],
+  },
+];
+
+const PUSH_TEXT_REFUSALS: readonly RequiredTextRefusal[] = [
+  { field: "verifiedCommitSha", invalid: "invalid", reads: ["verifiedCommitSha"] },
+  {
+    field: "sourceBranchName",
+    invalid: "",
+    reads: ["verifiedCommitSha", "sourceBranchName"],
+  },
+  {
+    field: "remoteAlias",
+    invalid: 7,
+    reads: ["verifiedCommitSha", "sourceBranchName", "remoteAlias"],
+  },
+  {
+    field: "remoteBranchName",
+    invalid: 0,
+    reads: ["verifiedCommitSha", "sourceBranchName", "remoteAlias", "remoteBranchName"],
+  },
+];
+
+const DESCRIPTION_TEXT_REFUSALS: readonly RequiredTextRefusal[] = [
+  { field: "prExternalId", invalid: "", reads: ["prExternalId"] },
+  { field: "headBranchName", invalid: 7, reads: ["prExternalId", "headBranchName"] },
+  {
+    field: "baseBranchName",
+    invalid: 0,
+    reads: ["prExternalId", "headBranchName", "baseBranchName"],
+  },
+];
+
+function requiredTextRefusals(kind: RequiredTextAction): readonly RequiredTextRefusal[] {
+  if (kind === "branch-create") return BRANCH_TEXT_REFUSALS;
+  return kind === "push" ? PUSH_TEXT_REFUSALS : DESCRIPTION_TEXT_REFUSALS;
+}
+
+interface RequiredTextObservation {
+  readonly input: unknown;
+  readonly reads: readonly string[];
+  readonly receivers: readonly unknown[];
+}
+
+function observeRequiredTextInput(
+  values: Record<string, unknown>,
+  permitted: readonly string[],
+): RequiredTextObservation {
+  const reads: string[] = [];
+  const receivers: unknown[] = [];
+  const input = new Proxy(values, {
+    get(target, key, receiver): unknown {
+      if (typeof key === "string") {
+        reads.push(key);
+        receivers.push(receiver);
+        if (key !== "kind" && !permitted.includes(key))
+          throw new TypeError("later required text field must remain unread");
+      }
+      const member: unknown = Reflect.get(target, key, receiver);
+      return member;
+    },
+  });
+  return { input, reads, receivers };
+}
+
+function inheritedTextInput(
+  kind: RequiredTextAction,
+  failure: Error,
+  getterReceivers: unknown[],
+): Record<string, unknown> {
+  const values = requiredTextInput(kind);
+  let field: "baseBranchName" | "remoteAlias" | "headBranchName";
+  if (kind === "branch-create") {
+    delete values.baseBranchName;
+    field = "baseBranchName";
+  } else if (kind === "push") {
+    delete values.remoteAlias;
+    field = "remoteAlias";
+  } else {
+    delete values.headBranchName;
+    field = "headBranchName";
+  }
+  Object.setPrototypeOf(
+    values,
+    Object.defineProperty({}, field, {
+      get(this: unknown): never {
+        getterReceivers.push(this);
+        throw failure;
+      },
+    }),
+  );
+  return values;
+}
+
+function inheritedTextOrder(kind: RequiredTextAction): readonly string[] {
+  if (kind === "branch-create") return ["branchName", "baseBranchName"];
+  return kind === "push"
+    ? ["verifiedCommitSha", "sourceBranchName", "remoteAlias"]
+    : ["prExternalId", "headBranchName"];
+}
+
+describe("#3918 contiguous required text healthy observations", (): void => {
+  it.each(REQUIRED_TEXT_OWNERS)("$kind through $surface", ({ kind, parse }): void => {
+    const order = requiredTextOrder(kind);
+    const probe = observeRequiredTextInput(requiredTextInput(kind), order);
+    const result = parse(probe.input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toBe(probe.input);
+    expect(probe.reads).toEqual(["kind", "kind", ...order]);
+    expect(probe.receivers).toHaveLength(probe.reads.length);
+    for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+  });
+});
+
+describe("#3918 contiguous required text refusal observations", (): void => {
+  it.each(REQUIRED_TEXT_OWNERS)("$kind through $surface", ({ kind, parse }): void => {
+    for (const refusal of requiredTextRefusals(kind)) {
+      const values = { ...requiredTextInput(kind), [refusal.field]: refusal.invalid };
+      const probe = observeRequiredTextInput(values, refusal.reads);
+      expect(parse(probe.input)).toEqual({
+        ok: false,
+        errors: [`resolvedInputs for kind "${kind}" has invalid fields`],
+      });
+      expect(probe.reads).toEqual(["kind", "kind", ...refusal.reads, "kind"]);
+      expect(probe.receivers).toHaveLength(probe.reads.length);
+      for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+    }
+  });
+});
+
+describe("#3918 contiguous required text inherited getter observations", (): void => {
+  it.each(REQUIRED_TEXT_OWNERS)("$kind through $surface", ({ kind, parse }): void => {
+    const failure: Error = Object.freeze(new TypeError("opaque required text inspection"));
+    const getterReceivers: unknown[] = [];
+    const order = inheritedTextOrder(kind);
+    const values = inheritedTextInput(kind, failure, getterReceivers);
+    const probe = observeRequiredTextInput(values, order);
+    let observed: unknown;
+    try {
+      parse(probe.input);
+    } catch (error) {
+      observed = error;
+    }
+    expect(observed).toBe(failure);
+    expect(probe.reads).toEqual(["kind", "kind", ...order]);
+    expect(probe.receivers).toHaveLength(probe.reads.length);
+    for (const receiver of probe.receivers) expect(receiver).toBe(probe.input);
+    expect(getterReceivers).toHaveLength(1);
+    for (const receiver of getterReceivers) expect(receiver).toBe(probe.input);
+  });
+});
+
+for (const [guardName] of GIT_DELIVERY_MEMBERSHIP_CONTROLS) {
+  for (const surface of ["source", "public"]) {
+    it(`${surface} ${guardName} refuses additional nonstring classes without coercion (#3918)`, async (): Promise<void> => {
+      const api =
+        surface === "source"
+          ? await import("./git-delivery.js")
+          : await import("@oscharko-dev/keiko-contracts/runtime/git-delivery");
+      const guard = api[guardName];
+      let observations = 0;
+      const hostile = {
+        [Symbol.toPrimitive](): never {
+          observations += 1;
+          throw new TypeError("fixture primitive conversion must not run");
+        },
+        toString(): never {
+          observations += 1;
+          throw new TypeError("fixture string conversion must not run");
+        },
+        valueOf(): never {
+          observations += 1;
+          throw new TypeError("fixture value conversion must not run");
+        },
+      };
+      const callable = (): never => {
+        observations += 1;
+        throw new TypeError("fixture invocation must not run");
+      };
+      const boxedString: unknown = Object("commit");
+      const rejected: readonly unknown[] = [
+        Symbol("fixture"),
+        1n,
+        {},
+        boxedString,
+        hostile,
+        callable,
+      ];
+      for (const value of rejected) expect(guard(value)).toBe(false);
+      expect(observations).toBe(0);
+    });
+  }
+}

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  forbiddenAdvisoryObservation,
+  severityRankingObservation,
+} from "./__tests__/support/readiness-blocker-observations.js";
+import {
   GIT_PR_CHANGE_TYPES,
   GIT_PR_READINESS_BLOCKER_CODES,
   GIT_PR_RECOMMENDATIONS,
@@ -483,4 +487,136 @@ describe("guards and parse", () => {
     expect(GIT_PR_READINESS_BLOCKER_CODES).toContain("head-unpublished");
     expect(GIT_PR_RECOMMENDATIONS).toContain("create-as-draft");
   });
+});
+
+import { isGitPullRequestMetadataDraft as sourceMetadataGuard } from "./git-pull-request.js";
+import {
+  isGitPullRequestMetadataDraft as publicMetadataGuard,
+  isGitPullRequestReadinessSummary as publicReadinessGuard,
+  synthesizePullRequestMetadata as publicMetadataProducer,
+} from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+
+const metadataSectionCases: readonly [string, string, unknown][] = [
+  ["summarySection", "commitCount", "three"],
+  ["summarySection", "fileCount", -1],
+  ["summarySection", "areaCount", Number.NaN],
+  ["summarySection", "changeType", "unsupported"],
+  ["summarySection", "primaryArea", 7],
+  ["riskSection", "riskClass", "unsupported"],
+  ["riskSection", "policyOutcome", "unsupported"],
+  ["riskSection", "requiresApproval", "yes"],
+  ["changeNarrativeSection", "touchesTests", "yes"],
+  ["changeNarrativeSection", "areas", [7]],
+  ["changeNarrativeSection", "changeType", "unsupported"],
+];
+
+for (const [surface, guard, producer] of [
+  ["source", sourceMetadataGuard, synthesizePullRequestMetadata],
+  ["published", publicMetadataGuard, publicMetadataProducer],
+] as const) {
+  describe(`${surface} PR metadata section admission (#3918)`, () => {
+    it("admits the actual synthesized draft with its original references", () => {
+      const draft = producer(NARRATIVE, RISK_READY, "codex/metadata-proof");
+      expect(guard(draft)).toBe(true);
+      expect(draft.changeNarrativeSection.areas).toBe(NARRATIVE.areas);
+    });
+    it.each(metadataSectionCases)("refuses malformed %s.%s", (section, field, invalid) => {
+      const draft = producer(NARRATIVE, RISK_READY, "codex/metadata-proof");
+      const sectionValue =
+        section === "summarySection"
+          ? draft.summarySection
+          : section === "riskSection"
+            ? draft.riskSection
+            : draft.changeNarrativeSection;
+      const malformed: unknown = { ...draft, [section]: { ...sectionValue, [field]: invalid } };
+      expect(guard(malformed)).toBe(false);
+    });
+  });
+}
+
+describe("readiness severity-ranking observations", () => {
+  for (const { surface, guard } of [
+    { surface: "source", guard: isGitPullRequestReadinessSummary },
+    { surface: "public", guard: publicReadinessGuard },
+  ]) {
+    it.each(["sparse", "undefined", "out-of-order"])(
+      `${surface} refuses a final %s blocker observation with the existing index trace`,
+      (shape) => {
+        const trace: string[] = [];
+        const observed = severityRankingObservation(shape, trace);
+        const value = {
+          schemaVersion: "1",
+          objectExists: true,
+          reviewReady: true,
+        };
+        let reads = 0;
+        Object.defineProperty(value, "blockers", {
+          enumerable: true,
+          get: (): unknown =>
+            ++reads === 4
+              ? observed
+              : [{ code: "draft-pr", severity: "advisory", remediation: "user-actionable" }],
+        });
+        expect(guard(value)).toBe(false);
+        expect(reads).toBe(4);
+        expect(trace).toEqual(shape === "out-of-order" ? ["length", "0", "1"] : ["length", "0"]);
+      },
+    );
+  }
+});
+
+describe("readiness forbidden-advisory observations", () => {
+  for (const { surface, guard } of [
+    { surface: "source", guard: isGitPullRequestReadinessSummary },
+    { surface: "public", guard: publicReadinessGuard },
+  ]) {
+    it(`${surface} preserves advisory-only code reads, optional chaining and early refusal`, () => {
+      const trace: string[] = [];
+      const observed = forbiddenAdvisoryObservation(trace, "merge-conflict");
+      const value = {
+        schemaVersion: "1",
+        objectExists: true,
+        reviewReady: true,
+      };
+      let reads = 0;
+      Object.defineProperty(value, "blockers", {
+        enumerable: true,
+        get: (): unknown =>
+          ++reads === 3
+            ? observed
+            : [{ code: "draft-pr", severity: "advisory", remediation: "user-actionable" }],
+      });
+      expect(guard(value)).toBe(false);
+      expect(reads).toBe(3);
+      expect(trace).toEqual([
+        "length",
+        "0",
+        "1",
+        "non-advisory.severity",
+        "2",
+        "forbidden.severity",
+        "forbidden.code",
+      ]);
+    });
+  }
+});
+
+import { isGitPullRequestChangeNarrative } from "./git-pull-request.js";
+import { isGitPullRequestChangeNarrative as publicNarrativeGuard } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+
+describe("PR narrative array admission observations", () => {
+  for (const [surface, validate] of [
+    ["source", isGitPullRequestChangeNarrative],
+    ["public", publicNarrativeGuard],
+  ] as const) {
+    it(`${surface} refuses a non-array without inspecting length and preserves an empty array`, () => {
+      const areas = {
+        get length(): never {
+          throw new TypeError("non-array extent must remain unread");
+        },
+      };
+      expect(validate({ ...NARRATIVE, areas })).toBe(false);
+      expect(validate({ ...NARRATIVE, areas: [] })).toBe(true);
+    });
+  }
 });

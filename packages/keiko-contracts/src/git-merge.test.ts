@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  forbiddenAdvisoryObservation,
+  severityRankingObservation,
+} from "./__tests__/support/readiness-blocker-observations.js";
+import {
   deriveEligibleMergeStrategies,
   GIT_MERGE_READINESS_BLOCKER_CODES,
   GIT_MERGE_RECOMMENDATIONS,
@@ -525,4 +529,119 @@ describe("guards + parse", () => {
     });
     expect(parsed.ok).toBe(false);
   });
+});
+
+import * as g2PublicMerge from "@oscharko-dev/keiko-contracts/runtime/git-merge";
+
+describe("G2 physical merge readiness blockers", () => {
+  for (const [surface, validate] of [
+    ["source", isGitMergeReadinessSummary],
+    ["public", g2PublicMerge.isGitMergeReadinessSummary],
+  ] as const) {
+    it(`${surface} admits the actual readiness producer`, () => {
+      const summary = gitMergeReadinessFor({
+        pullRequest: pullRequest(),
+        checks: checks("passing"),
+      });
+      expect(validate(summary)).toBe(true);
+      expect(summary.mergeable).toBe(true);
+      expect(summary.blockers).toEqual([]);
+    });
+    it(`${surface} refuses a malformed physical blocker hidden by every`, () => {
+      const summary = gitMergeReadinessFor({
+        pullRequest: pullRequest(),
+        checks: checks("passing"),
+      });
+      const blockers = [{}];
+      Object.defineProperty(blockers, "every", { value: () => true });
+      expect(validate({ ...summary, blockers })).toBe(false);
+    });
+    it(`${surface} does not trust some to hide an actual blocking entry`, () => {
+      const blocked = gitMergeReadinessFor({ providerError: true });
+      const blockers = [...blocked.blockers];
+      Object.defineProperty(blockers, "some", { value: () => false });
+      expect(validate({ ...blocked, mergeable: true, blockers })).toBe(false);
+    });
+  }
+});
+
+describe("G2 healthy inherited readiness blockers", () => {
+  for (const [surface, validate] of [
+    ["source", isGitMergeReadinessSummary],
+    ["public", g2PublicMerge.isGitMergeReadinessSummary],
+  ] as const) {
+    it(`${surface} preserves an inherited-present actual producer blocker`, () => {
+      const blocked = gitMergeReadinessFor({ providerError: true });
+      const blockers = [...blocked.blockers];
+      expect(blockers.length).toBeGreaterThan(0);
+      Reflect.deleteProperty(blockers, "0");
+      Object.setPrototypeOf(blockers, [...blocked.blockers]);
+      expect(validate({ ...blocked, blockers })).toBe(true);
+    });
+  }
+});
+
+describe("readiness severity-ranking observations", () => {
+  for (const { surface, guard } of [
+    { surface: "source", guard: isGitMergeReadinessSummary },
+    { surface: "public", guard: g2PublicMerge.isGitMergeReadinessSummary },
+  ]) {
+    it.each(["sparse", "undefined", "out-of-order"])(
+      `${surface} refuses a final %s blocker observation with the existing index trace`,
+      (shape) => {
+        const trace: string[] = [];
+        const observed = severityRankingObservation(shape, trace);
+        const value = {
+          schemaVersion: "1",
+          mergeable: true,
+        };
+        let reads = 0;
+        Object.defineProperty(value, "blockers", {
+          enumerable: true,
+          get: (): unknown =>
+            ++reads === 4
+              ? observed
+              : [{ code: "checks-failing", severity: "advisory", remediation: "user-actionable" }],
+        });
+        expect(guard(value)).toBe(false);
+        expect(reads).toBe(4);
+        expect(trace).toEqual(shape === "out-of-order" ? ["length", "0", "1"] : ["length", "0"]);
+      },
+    );
+  }
+});
+
+describe("readiness forbidden-advisory observations", () => {
+  for (const { surface, guard } of [
+    { surface: "source", guard: isGitMergeReadinessSummary },
+    { surface: "public", guard: g2PublicMerge.isGitMergeReadinessSummary },
+  ]) {
+    it(`${surface} preserves advisory-only code reads, optional chaining and early refusal`, () => {
+      const trace: string[] = [];
+      const observed = forbiddenAdvisoryObservation(trace, "conflicts");
+      const value = {
+        schemaVersion: "1",
+        mergeable: true,
+      };
+      let reads = 0;
+      Object.defineProperty(value, "blockers", {
+        enumerable: true,
+        get: (): unknown =>
+          ++reads === 3
+            ? observed
+            : [{ code: "checks-failing", severity: "advisory", remediation: "user-actionable" }],
+      });
+      expect(guard(value)).toBe(false);
+      expect(reads).toBe(3);
+      expect(trace).toEqual([
+        "length",
+        "0",
+        "1",
+        "non-advisory.severity",
+        "2",
+        "forbidden.severity",
+        "forbidden.code",
+      ]);
+    });
+  }
 });

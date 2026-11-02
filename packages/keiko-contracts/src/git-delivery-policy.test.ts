@@ -689,3 +689,119 @@ describe("evaluateGitDeliveryEffectivePolicy", () => {
     });
   });
 });
+
+import * as g2PublicPolicy from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+
+describe("G2 physical policy pack admission", () => {
+  for (const [surface, parse] of [
+    ["source", parseGitRepoPolicyPack],
+    ["public", g2PublicPolicy.parseGitRepoPolicyPack],
+  ] as const) {
+    it(`${surface} preserves the healthy producer reference`, () => {
+      const input = repoPack({ rules: [{ actionKind: "commit", decision: "allowed" }] });
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy policy pack refused");
+      expect(result.value).toBe(input);
+      expect(result.value.rules).toBe(input.rules);
+    });
+    it(`${surface} refuses a physically missing rule`, () => {
+      expect(parse({ ...repoPack({}), rules: Array(1) })).toEqual({
+        ok: false,
+        errors: ["pack.rules contains an invalid GitDeliveryPolicyRule"],
+      });
+    });
+    it(`${surface} does not trust a rule-array every override`, () => {
+      const rules = [{}];
+      Object.defineProperty(rules, "every", { value: () => true });
+      expect(parse({ ...repoPack({}), rules })).toEqual({
+        ok: false,
+        errors: ["pack.rules contains an invalid GitDeliveryPolicyRule"],
+      });
+    });
+    it.each(["requiredApprovers", "constraints"] as const)(
+      `${surface} refuses malformed optional %s on an allowed rule`,
+      (field) => {
+        const rules = [{ actionKind: "commit", decision: "allowed", [field]: [42] }];
+        expect(parse({ ...repoPack({}), rules })).toEqual({
+          ok: false,
+          errors: ["pack.rules contains an invalid GitDeliveryPolicyRule"],
+        });
+      },
+    );
+  }
+});
+
+describe("G2 later policy decision observation", () => {
+  for (const [surface, parse] of [
+    ["source", parseGitRepoPolicyPack],
+    ["public", g2PublicPolicy.parseGitRepoPolicyPack],
+  ] as const) {
+    it(`${surface} refuses an invalid later decision rather than certifying optional fields`, () => {
+      let reads = 0;
+      const rule = {
+        actionKind: "commit",
+        get decision(): unknown {
+          reads += 1;
+          return reads === 1 ? "allowed" : "invalid-decision";
+        },
+      };
+      expect(parse({ ...repoPack({}), rules: [rule] })).toEqual({
+        ok: false,
+        errors: ["pack.rules contains an invalid GitDeliveryPolicyRule"],
+      });
+    });
+    it.each(["requiredApprovers", "constraints"] as const)(
+      `${surface} refuses malformed optional default rule %s`,
+      (field) => {
+        expect(
+          parse({ ...repoPack({}), defaultRule: { decision: "allowed", [field]: [42] } }),
+        ).toEqual({
+          ok: false,
+          errors: ["pack.defaultRule is not a valid GitDeliveryDefaultRule"],
+        });
+      },
+    );
+  }
+});
+
+it("G2 source/public preserve valid changing policy decisions", () => {
+  for (const parse of [parseGitRepoPolicyPack, g2PublicPolicy.parseGitRepoPolicyPack]) {
+    let reads = 0;
+    const rule = {
+      actionKind: "commit",
+      get decision(): unknown {
+        reads += 1;
+        return reads === 1 ? "allowed" : "constrained";
+      },
+      constraints: [{ kind: "provider-capability", capability: "draft-pr" }],
+    };
+    const input = { ...repoPack({}), rules: [rule] };
+    const result = parse(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("healthy changing policy refused");
+    expect(result.value).toBe(input);
+    expect(reads).toBe(3);
+  }
+});
+
+describe("G2 healthy inherited policy members", () => {
+  for (const [surface, parse] of [
+    ["source", parseGitRepoPolicyPack],
+    ["public", g2PublicPolicy.parseGitRepoPolicyPack],
+  ] as const) {
+    it(`${surface} preserves inherited-present rules and an empty allowed rule collection`, () => {
+      const rule = { actionKind: "commit", decision: "allowed" };
+      const rules = [rule];
+      Reflect.deleteProperty(rules, "0");
+      Object.setPrototypeOf(rules, [rule]);
+      const input = { ...repoPack({}), rules };
+      const result = parse(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) throw new Error("healthy inherited rule refused");
+      expect(result.value).toBe(input);
+      expect(result.value.rules).toBe(rules);
+      expect(parse(repoPack({ rules: [] })).ok).toBe(true);
+    });
+  }
+});

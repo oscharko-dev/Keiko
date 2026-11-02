@@ -7,9 +7,10 @@
 // This is the CORE atom module for the git-delivery surface. It imports NOTHING from its two
 // siblings (git-delivery-policy.ts / git-delivery-provider.ts). The siblings import FROM here, so
 // the dependency graph is a one-directional DAG with no cycles (verified by arch:check). The only
-// internal helpers come from workflow-handoff (approval shape) and git-repository (Git identity);
-// both are legal intra-package relative imports.
+// internal helpers come from workflow-handoff (approval shape), git-repository (Git identity),
+// and contract-validation-primitives (physical array members); all are intra-package imports.
 
+import { isInSet, isPhysicalArrayOf, isUndefinedOr } from "./contract-validation-primitives.js";
 import { isApprovalTokenShape } from "./workflow-handoff.js";
 import { isGitObjectId } from "./git-repository.js";
 
@@ -48,6 +49,9 @@ export const GIT_DELIVERY_ACTION_KINDS: readonly GitDeliveryActionKind[] = [
   "recovery",
 ] as const;
 
+export const isGitDeliveryActionKind: (value: unknown) => value is GitDeliveryActionKind =
+  isInSet(GIT_DELIVERY_ACTION_KINDS);
+
 // ─── Risk taxonomy ────────────────────────────────────────────────────────────
 // AC2: severity is DATA, never inferred from kind names or shell arguments.
 // Read GIT_DELIVERY_RISK_CLASS_SEVERITY[riskClass] to compare severity numerically.
@@ -61,6 +65,9 @@ export const GIT_DELIVERY_RISK_CLASSES: readonly GitDeliveryRiskClass[] = [
   "protected-or-merge",
   "recovery-or-rewrite",
 ] as const;
+
+export const isGitDeliveryRiskClass: (value: unknown) => value is GitDeliveryRiskClass =
+  isInSet(GIT_DELIVERY_RISK_CLASSES);
 
 // Ordinal severity. Higher ordinal = higher risk. Never compare ordinals by action name string.
 // Object.freeze (KEIKO-0879): the `Readonly<Record<...>>` annotation is compile-time only.
@@ -208,6 +215,10 @@ export const GIT_DELIVERY_MERGE_STRATEGY_HINTS: readonly GitDeliveryMergeStrateg
   "provider-default",
 ] as const;
 
+export const isGitDeliveryMergeStrategyHint: (
+  value: unknown,
+) => value is GitDeliveryMergeStrategyHint = isInSet(GIT_DELIVERY_MERGE_STRATEGY_HINTS);
+
 export interface GitDeliveryMergeInputs {
   readonly kind: "merge";
   readonly prExternalId: string;
@@ -226,6 +237,10 @@ export const GIT_DELIVERY_ABORTABLE_OPERATIONS: readonly GitDeliveryAbortableOpe
   "bisect",
 ] as const;
 
+export const isGitDeliveryAbortableOperation: (
+  value: unknown,
+) => value is GitDeliveryAbortableOperation = isInSet(GIT_DELIVERY_ABORTABLE_OPERATIONS);
+
 export interface GitDeliveryAbortInputs {
   readonly kind: "abort";
   readonly operationToAbort: GitDeliveryAbortableOperation;
@@ -241,6 +256,10 @@ export const GIT_DELIVERY_RECOVERY_STRATEGY_HINTS: readonly GitDeliveryRecoveryS
   "stash-and-reset",
   "restore-index",
 ] as const;
+
+export const isGitDeliveryRecoveryStrategyHint: (
+  value: unknown,
+) => value is GitDeliveryRecoveryStrategyHint = isInSet(GIT_DELIVERY_RECOVERY_STRATEGY_HINTS);
 
 // Recovery's elevated-approval requirement is expressed by policyDecision / approvalRequirement on
 // the envelope, NOT by an operator-approval token in the inputs.
@@ -309,6 +328,10 @@ export const GIT_DELIVERY_PROVIDER_CAPABILITIES: readonly GitDeliveryProviderCap
   "protected-branch-delete",
 ] as const;
 
+export const isGitDeliveryProviderCapability: (
+  value: unknown,
+) => value is GitDeliveryProviderCapability = isInSet(GIT_DELIVERY_PROVIDER_CAPABILITIES);
+
 // ─── Typed branch patterns (AC3 — structured data, not parsed strings) ───────────
 // Closed match set: exact, prefix. Glob is intentionally EXCLUDED to keep the leaf parse-free
 // (documented in ADR-0058).
@@ -319,6 +342,9 @@ export const GIT_DELIVERY_BRANCH_MATCH_KINDS: readonly GitDeliveryBranchMatchKin
   "exact",
   "prefix",
 ] as const;
+
+export const isGitDeliveryBranchMatchKind: (value: unknown) => value is GitDeliveryBranchMatchKind =
+  isInSet(GIT_DELIVERY_BRANCH_MATCH_KINDS);
 
 export interface GitDeliveryBranchPattern {
   readonly matchKind: GitDeliveryBranchMatchKind;
@@ -402,6 +428,9 @@ export const GIT_DELIVERY_BLOCK_REASONS: readonly GitDeliveryBlockReason[] = [
   "no-applicable-rule",
 ] as const;
 
+export const isGitDeliveryBlockReason: (value: unknown) => value is GitDeliveryBlockReason =
+  isInSet(GIT_DELIVERY_BLOCK_REASONS);
+
 export type GitDeliveryMergeBlockReason =
   | "checks-failing"
   | "approvals-missing"
@@ -418,6 +447,10 @@ export const GIT_DELIVERY_MERGE_BLOCK_REASONS: readonly GitDeliveryMergeBlockRea
   "merge-queue-position",
   "provider-policy",
 ] as const;
+
+export const isGitDeliveryMergeBlockReason: (
+  value: unknown,
+) => value is GitDeliveryMergeBlockReason = isInSet(GIT_DELIVERY_MERGE_BLOCK_REASONS);
 
 export type GitDeliveryPolicyDecision =
   | { readonly outcome: "allowed" }
@@ -451,6 +484,10 @@ export const GIT_DELIVERY_EXECUTION_OUTCOMES: readonly GitDeliveryExecutionOutco
   "partial",
 ] as const;
 
+export const isGitDeliveryExecutionOutcome: (
+  value: unknown,
+) => value is GitDeliveryExecutionOutcome = isInSet(GIT_DELIVERY_EXECUTION_OUTCOMES);
+
 export type GitDeliveryExecutionErrorCode =
   | "provider-rejected"
   | "network-failure"
@@ -469,6 +506,10 @@ export const GIT_DELIVERY_EXECUTION_ERROR_CODES: readonly GitDeliveryExecutionEr
   "timeout",
   "internal-error",
 ] as const;
+
+export const isGitDeliveryExecutionErrorCode: (
+  value: unknown,
+) => value is GitDeliveryExecutionErrorCode = isInSet(GIT_DELIVERY_EXECUTION_ERROR_CODES);
 
 export interface GitDeliveryPartialDetail {
   readonly attemptedUnitCount: number;
@@ -545,6 +586,22 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
+type RequiredGitDeliveryTextFields =
+  | readonly ["branchName", "baseBranchName", "startPointRefHash"]
+  | readonly ["sourceBranchName", "remoteAlias", "remoteBranchName"]
+  | readonly ["headBranchName", "baseBranchName"]
+  | readonly ["prExternalId", "headBranchName", "baseBranchName"];
+
+function hasRequiredGitDeliveryTextFields(
+  value: Record<string, unknown>,
+  fields: RequiredGitDeliveryTextFields,
+): boolean {
+  for (const field of fields) {
+    if (!isNonEmptyString(value[field])) return false;
+  }
+  return true;
+}
+
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
@@ -554,88 +611,24 @@ function isBoolean(value: unknown): value is boolean {
 }
 
 function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every(isString);
+  return isPhysicalArrayOf(value, isString);
 }
 
 export function isGitDeliveryNonEmptyConstraints(
   value: unknown,
 ): value is GitDeliveryNonEmptyConstraints {
-  return Array.isArray(value) && value.length > 0 && value.every(isGitDeliveryConstraint);
-}
-
-function isUndefinedOr<T>(check: (v: unknown) => v is T): (v: unknown) => v is T | undefined {
-  return (v: unknown): v is T | undefined => v === undefined || check(v);
+  if (!Array.isArray(value)) return false;
+  const nonEmpty = value.length > 0;
+  if (!nonEmpty) return false;
+  const extent = value.length;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    if (!isGitDeliveryConstraint(value[index])) return false;
+  }
+  return true;
 }
 
 // ─── Exported guards ─────────────────────────────────────────────────────────────
-
-export function isGitDeliveryActionKind(value: unknown): value is GitDeliveryActionKind {
-  return isString(value) && (GIT_DELIVERY_ACTION_KINDS as readonly string[]).includes(value);
-}
-
-export function isGitDeliveryRiskClass(value: unknown): value is GitDeliveryRiskClass {
-  return isString(value) && (GIT_DELIVERY_RISK_CLASSES as readonly string[]).includes(value);
-}
-
-export function isGitDeliveryProviderCapability(
-  value: unknown,
-): value is GitDeliveryProviderCapability {
-  return (
-    isString(value) && (GIT_DELIVERY_PROVIDER_CAPABILITIES as readonly string[]).includes(value)
-  );
-}
-
-export function isGitDeliveryBranchMatchKind(value: unknown): value is GitDeliveryBranchMatchKind {
-  return isString(value) && (GIT_DELIVERY_BRANCH_MATCH_KINDS as readonly string[]).includes(value);
-}
-
-export function isGitDeliveryBlockReason(value: unknown): value is GitDeliveryBlockReason {
-  return isString(value) && (GIT_DELIVERY_BLOCK_REASONS as readonly string[]).includes(value);
-}
-
-export function isGitDeliveryMergeBlockReason(
-  value: unknown,
-): value is GitDeliveryMergeBlockReason {
-  return isString(value) && (GIT_DELIVERY_MERGE_BLOCK_REASONS as readonly string[]).includes(value);
-}
-
-export function isGitDeliveryMergeStrategyHint(
-  value: unknown,
-): value is GitDeliveryMergeStrategyHint {
-  return (
-    isString(value) && (GIT_DELIVERY_MERGE_STRATEGY_HINTS as readonly string[]).includes(value)
-  );
-}
-
-export function isGitDeliveryAbortableOperation(
-  value: unknown,
-): value is GitDeliveryAbortableOperation {
-  return (
-    isString(value) && (GIT_DELIVERY_ABORTABLE_OPERATIONS as readonly string[]).includes(value)
-  );
-}
-
-export function isGitDeliveryRecoveryStrategyHint(
-  value: unknown,
-): value is GitDeliveryRecoveryStrategyHint {
-  return (
-    isString(value) && (GIT_DELIVERY_RECOVERY_STRATEGY_HINTS as readonly string[]).includes(value)
-  );
-}
-
-export function isGitDeliveryExecutionOutcome(
-  value: unknown,
-): value is GitDeliveryExecutionOutcome {
-  return isString(value) && (GIT_DELIVERY_EXECUTION_OUTCOMES as readonly string[]).includes(value);
-}
-
-export function isGitDeliveryExecutionErrorCode(
-  value: unknown,
-): value is GitDeliveryExecutionErrorCode {
-  return (
-    isString(value) && (GIT_DELIVERY_EXECUTION_ERROR_CODES as readonly string[]).includes(value)
-  );
-}
 
 export function isGitDeliveryBranchPattern(value: unknown): value is GitDeliveryBranchPattern {
   return (
@@ -645,12 +638,16 @@ export function isGitDeliveryBranchPattern(value: unknown): value is GitDelivery
   );
 }
 
+function isBranchPatternArray(value: unknown): value is readonly GitDeliveryBranchPattern[] {
+  return isPhysicalArrayOf(value, isGitDeliveryBranchPattern);
+}
+
 export function isGitDeliveryConstraint(value: unknown): value is GitDeliveryConstraint {
   if (!isRecord(value)) {
     return false;
   }
   if (value.kind === "branch-pattern" || value.kind === "protected-branch") {
-    return Array.isArray(value.patterns) && value.patterns.every(isGitDeliveryBranchPattern);
+    return Array.isArray(value.patterns) && isBranchPatternArray(value.patterns);
   }
   if (value.kind === "provider-capability") {
     return isGitDeliveryProviderCapability(value.capability);
@@ -761,27 +758,37 @@ function isActionPreview(value: unknown): value is GitDeliveryActionPreview {
 
 // ─── Per-kind resolved-input guards (one per kind for the dispatch lookup) ────────
 
-function isBranchCreateInputs(value: Record<string, unknown>): boolean {
-  return (
-    isNonEmptyString(value.branchName) &&
-    isNonEmptyString(value.baseBranchName) &&
-    isNonEmptyString(value.startPointRefHash)
-  );
+function isBranchCreateInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryBranchCreateInputs, "kind"> {
+  return hasRequiredGitDeliveryTextFields(value, [
+    "branchName",
+    "baseBranchName",
+    "startPointRefHash",
+  ]);
 }
 
-function isBranchSwitchInputs(value: Record<string, unknown>): boolean {
+function isBranchSwitchInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryBranchSwitchInputs, "kind"> {
   return isNonEmptyString(value.branchName);
 }
 
-function isStageInputs(value: Record<string, unknown>): boolean {
+function isStageInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryStageInputs, "kind"> {
   return isNonNegativeInteger(value.pathCount) && isBoolean(value.includesUntracked);
 }
 
-function isUnstageInputs(value: Record<string, unknown>): boolean {
+function isUnstageInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryUnstageInputs, "kind"> {
   return isNonNegativeInteger(value.pathCount);
 }
 
-function isCommitInputs(value: Record<string, unknown>): boolean {
+function isCommitInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryCommitInputs, "kind"> {
   return (
     isNonNegativeInteger(value.messageByteLength) &&
     isNonNegativeInteger(value.stagedPathCount) &&
@@ -789,36 +796,44 @@ function isCommitInputs(value: Record<string, unknown>): boolean {
   );
 }
 
-function isPushInputs(value: Record<string, unknown>): boolean {
+function isPushInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryPushInputs, "kind"> {
   return (
     isGitObjectId(value.verifiedCommitSha) &&
-    isNonEmptyString(value.sourceBranchName) &&
-    isNonEmptyString(value.remoteAlias) &&
-    isNonEmptyString(value.remoteBranchName) &&
+    hasRequiredGitDeliveryTextFields(value, [
+      "sourceBranchName",
+      "remoteAlias",
+      "remoteBranchName",
+    ]) &&
     isBoolean(value.forcePush) &&
     isBoolean(value.setUpstreamTracking)
   );
 }
 
-function isPrCreateInputs(value: Record<string, unknown>): boolean {
+function hasValidPrMetadata(value: Record<string, unknown>): boolean {
   return (
-    isGitObjectId(value.verifiedCommitSha) &&
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
+    hasRequiredGitDeliveryTextFields(value, ["headBranchName", "baseBranchName"]) &&
     isNonNegativeInteger(value.titleByteLength) &&
-    isNonNegativeInteger(value.bodyByteLength) &&
-    isBoolean(value.isDraft)
+    isNonNegativeInteger(value.bodyByteLength)
   );
 }
 
-function isPrUpdateInputs(value: Record<string, unknown>): boolean {
+function isPrCreateInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryPrCreateInputs, "kind"> {
+  return (
+    isGitObjectId(value.verifiedCommitSha) && hasValidPrMetadata(value) && isBoolean(value.isDraft)
+  );
+}
+
+function isPrUpdateInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryPrUpdateInputs, "kind"> {
   return (
     isGitObjectId(value.verifiedCommitSha) &&
     isNonEmptyString(value.prExternalId) &&
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
-    isNonNegativeInteger(value.titleByteLength) &&
-    isNonNegativeInteger(value.bodyByteLength) &&
+    hasValidPrMetadata(value) &&
     isBoolean(value.convertToDraft) &&
     isBoolean(value.convertFromDraft) &&
     // KEIKO-0805: convertToDraft and convertFromDraft are mutually exclusive — a single pr-update
@@ -828,16 +843,18 @@ function isPrUpdateInputs(value: Record<string, unknown>): boolean {
   );
 }
 
-function isPrDescriptionApplyInputs(value: Record<string, unknown>): boolean {
+function isPrDescriptionApplyInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryPrDescriptionApplyInputs, "kind"> {
   return (
-    isNonEmptyString(value.prExternalId) &&
-    isNonEmptyString(value.headBranchName) &&
-    isNonEmptyString(value.baseBranchName) &&
+    hasRequiredGitDeliveryTextFields(value, ["prExternalId", "headBranchName", "baseBranchName"]) &&
     isNonNegativeInteger(value.finalBodyByteLength)
   );
 }
 
-function isPrMarkReadyInputs(value: Record<string, unknown>): boolean {
+function isPrMarkReadyInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryPrMarkReadyInputs, "kind"> {
   return (
     isNonEmptyString(value.prExternalId) &&
     isGitObjectId(value.headSha) &&
@@ -848,7 +865,9 @@ function isPrMarkReadyInputs(value: Record<string, unknown>): boolean {
   );
 }
 
-function isMergeInputs(value: Record<string, unknown>): boolean {
+function isMergeInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryMergeInputs, "kind"> {
   return (
     isNonEmptyString(value.prExternalId) &&
     isGitDeliveryMergeStrategyHint(value.mergeStrategyHint) &&
@@ -856,13 +875,17 @@ function isMergeInputs(value: Record<string, unknown>): boolean {
   );
 }
 
-function isAbortInputs(value: Record<string, unknown>): boolean {
+function isAbortInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryAbortInputs, "kind"> {
   return (
     isGitDeliveryAbortableOperation(value.operationToAbort) && isBoolean(value.preserveIndexChanges)
   );
 }
 
-function isRecoveryInputs(value: Record<string, unknown>): boolean {
+function isRecoveryInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & Omit<GitDeliveryRecoveryInputs, "kind"> {
   return (
     isGitDeliveryRecoveryStrategyHint(value.recoveryStrategyHint) &&
     isNonEmptyString(value.targetRefHash) &&
@@ -870,9 +893,14 @@ function isRecoveryInputs(value: Record<string, unknown>): boolean {
   );
 }
 
-const RESOLVED_INPUT_GUARDS: Readonly<
-  Record<GitDeliveryActionKind, (value: Record<string, unknown>) => boolean>
-> = {
+type ResolvedInputGuards = {
+  readonly [Kind in GitDeliveryActionKind]: (
+    value: Record<string, unknown>,
+  ) => value is Record<string, unknown> &
+    Omit<Extract<GitDeliveryResolvedInputs, { readonly kind: Kind }>, "kind">;
+};
+
+const RESOLVED_INPUT_GUARDS: ResolvedInputGuards = {
   "branch-create": isBranchCreateInputs,
   "branch-switch": isBranchSwitchInputs,
   stage: isStageInputs,
@@ -890,6 +918,14 @@ const RESOLVED_INPUT_GUARDS: Readonly<
 
 // ─── Parsers ─────────────────────────────────────────────────────────────────────
 
+function validResolvedInputs(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & GitDeliveryResolvedInputs {
+  const observedKind = value.kind;
+  if (!isGitDeliveryActionKind(observedKind)) return false;
+  return RESOLVED_INPUT_GUARDS[observedKind](value);
+}
+
 export function parseGitDeliveryResolvedInputs(
   value: unknown,
 ): GitDeliveryParseResult<GitDeliveryResolvedInputs> {
@@ -899,37 +935,60 @@ export function parseGitDeliveryResolvedInputs(
   if (!isGitDeliveryActionKind(value.kind)) {
     return { ok: false, errors: ["resolvedInputs.kind must be a known GitDeliveryActionKind"] };
   }
-  const guard = RESOLVED_INPUT_GUARDS[value.kind];
-  if (!guard(value)) {
+  if (!validResolvedInputs(value)) {
     return { ok: false, errors: [`resolvedInputs for kind "${value.kind}" has invalid fields`] };
   }
-  return { ok: true, value: value as unknown as GitDeliveryResolvedInputs };
+  return { ok: true, value };
 }
 
-function envelopeFieldErrors(value: Record<string, unknown>): readonly string[] {
-  const errors: string[] = [];
-  if (value.schemaVersion !== GIT_DELIVERY_SCHEMA_VERSION) {
+type EnvelopeFields = Pick<
+  GitDeliveryActionEnvelope,
+  | "schemaVersion"
+  | "actionId"
+  | "policyDecision"
+  | "approvalRequirement"
+  | "preview"
+  | "executionResult"
+  | "evidenceRef"
+>;
+
+function validEnvelopeFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & EnvelopeFields {
+  const schema = value.schemaVersion === GIT_DELIVERY_SCHEMA_VERSION;
+  if (!schema)
     errors.push("envelope.schemaVersion must equal the GIT_DELIVERY_SCHEMA_VERSION literal");
-  }
-  if (!isNonEmptyString(value.actionId)) {
-    errors.push("envelope.actionId must be a non-empty string");
-  }
-  if (!isGitDeliveryPolicyDecision(value.policyDecision)) {
-    errors.push("envelope.policyDecision is not a valid GitDeliveryPolicyDecision");
-  }
-  if (!isGitDeliveryApprovalRequirement(value.approvalRequirement)) {
+  const action = isNonEmptyString(value.actionId);
+  if (!action) errors.push("envelope.actionId must be a non-empty string");
+  const policy = isGitDeliveryPolicyDecision(value.policyDecision);
+  if (!policy) errors.push("envelope.policyDecision is not a valid GitDeliveryPolicyDecision");
+  const approval = isGitDeliveryApprovalRequirement(value.approvalRequirement);
+  if (!approval)
     errors.push("envelope.approvalRequirement is not a valid GitDeliveryApprovalRequirement");
+  const preview = isUndefinedOr(isActionPreview)(value.preview);
+  if (!preview) errors.push("envelope.preview is not a valid GitDeliveryActionPreview");
+  const execution = isUndefinedOr(isGitDeliveryExecutionResult)(value.executionResult);
+  if (!execution) errors.push("envelope.executionResult is not a valid GitDeliveryExecutionResult");
+  const evidence = isUndefinedOr(isGitDeliveryEvidenceRef)(value.evidenceRef);
+  if (!evidence) errors.push("envelope.evidenceRef is not a valid GitDeliveryEvidenceRef");
+  return [schema, action, policy, approval, preview, execution, evidence].every(Boolean);
+}
+
+function isActionEnvelope(
+  value: Record<string, unknown>,
+  errors: string[],
+): value is Record<string, unknown> & GitDeliveryActionEnvelope {
+  const inputs = parseGitDeliveryResolvedInputs(value.resolvedInputs);
+  if (!inputs.ok) {
+    errors.push(...inputs.errors);
+    return false;
   }
-  if (!isUndefinedOr(isActionPreview)(value.preview)) {
-    errors.push("envelope.preview is not a valid GitDeliveryActionPreview");
+  if (value.kind !== inputs.value.kind) {
+    errors.push("envelope.kind must equal envelope.resolvedInputs.kind");
+    return false;
   }
-  if (!isUndefinedOr(isGitDeliveryExecutionResult)(value.executionResult)) {
-    errors.push("envelope.executionResult is not a valid GitDeliveryExecutionResult");
-  }
-  if (!isUndefinedOr(isGitDeliveryEvidenceRef)(value.evidenceRef)) {
-    errors.push("envelope.evidenceRef is not a valid GitDeliveryEvidenceRef");
-  }
-  return errors;
+  return validEnvelopeFields(value, errors);
 }
 
 export function parseGitDeliveryActionEnvelope(
@@ -938,18 +997,9 @@ export function parseGitDeliveryActionEnvelope(
   if (!isRecord(value)) {
     return { ok: false, errors: ["envelope must be an object"] };
   }
-  const inputs = parseGitDeliveryResolvedInputs(value.resolvedInputs);
-  if (!inputs.ok) {
-    return { ok: false, errors: inputs.errors };
-  }
-  if (value.kind !== inputs.value.kind) {
-    return { ok: false, errors: ["envelope.kind must equal envelope.resolvedInputs.kind"] };
-  }
-  const fieldErrors = envelopeFieldErrors(value);
-  if (fieldErrors.length > 0) {
-    return { ok: false, errors: fieldErrors };
-  }
-  return { ok: true, value: value as unknown as GitDeliveryActionEnvelope };
+  const errors: string[] = [];
+  if (!isActionEnvelope(value, errors)) return { ok: false, errors };
+  return { ok: true, value };
 }
 
 // ─── Risk-class lookups ──────────────────────────────────────────────────────────
