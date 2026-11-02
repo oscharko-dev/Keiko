@@ -8,6 +8,11 @@ import {
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  ManagedMcpInvocationContext,
+  ManagedMcpToolResult,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { buildUiStoreOverDatabase } from "../store/index.js";
 import { runMigrations } from "../store/schema.js";
 import { createChatToolMutationStore } from "../store/chatToolMutations.js";
@@ -19,8 +24,15 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
-import { field, response } from "../../../../tests/support/jira-managed-remote.js";
+import {
+  field,
+  fixtureRead,
+  fixtureWrite,
+  response,
+  type SyntheticJira,
+} from "../../../../tests/support/jira-managed-remote.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
+import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
 import { jiraAttemptToolResult, validJiraMutationAttempt } from "./jiraMutationResult.js";
 import { createJiraChatTemplatePreflight } from "./jiraChatTemplatePreflight.js";
 import { jiraIssueTemplateSource, recordJiraTemplateRefusal } from "./jiraTemplateLog.js";
@@ -457,5 +469,137 @@ describe("the dry run before approval", () => {
       expect(await f.run()).toBeUndefined();
       expect(f.http).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("a violating write never reaches Jira under Full access (#4177)", () => {
+  // Full access (`autonomous-delivery`) asks no human, so the pre-approval dry run never runs and
+  // nothing claims an approval (`beforeMutation` admits): the gate in front of the Jira request is
+  // the only thing between the model's arguments and a POST. The connection is built exactly as the
+  // Chat catalog builds it, with the issue templates of the markdown skill library.
+  const VIOLATING = { projectId: "10000", issueTypeId: "10001", fields: { summary: "Add login" } };
+  const CONFORMING = {
+    ...VIOLATING,
+    fields: { summary: "Add login", description: "## Acceptance criteria\n* works" },
+  };
+
+  function fullAccessWrite(args: Record<string, unknown>): {
+    run: () => Promise<ManagedMcpToolResult>;
+    methods: () => string[];
+    journal: ReturnType<typeof journalFixture>["journal"];
+    intent: JiraChatToolMutationIntent;
+  } {
+    const db = new DatabaseSync(":memory:");
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const store = buildUiStoreOverDatabase(db);
+    cleanup.push(() => {
+      store.close();
+    });
+    store.markdownSkills.import({
+      fileName: "template.md",
+      contentBase64: Buffer.from(TEMPLATE).toString("base64"),
+    });
+    const { journal, intent } = journalFixture();
+    const state: SyntheticJira = { fields: {}, comment: "" };
+    const requests: string[] = [];
+    const http = vi.fn<AtlassianHttpBodyPort>((request) => {
+      requests.push(request.method);
+      const path = new URL(request.url).pathname;
+      if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
+      if (path.endsWith("/issuetype/10001"))
+        return Promise.resolve(response({ id: "10001", name: "Story" }));
+      if (path.includes("createmeta")) {
+        const values = [
+          field("project", "project", true),
+          field("issuetype", "issuetype", true),
+          field("summary", "string", true),
+          field("description", "string"),
+        ];
+        return Promise.resolve(
+          response({ values, start: 0, size: values.length, last: true, total: values.length }),
+        );
+      }
+      if (request.method === "GET" && path.endsWith("/issue/SYN-1"))
+        return Promise.resolve(
+          response({
+            id: "10001",
+            key: "SYN-1",
+            fields: {
+              ...state.fields,
+              project: { id: "10000", key: "SYN" },
+              issuetype: { id: "10001", name: "Story" },
+            },
+          }),
+        );
+      return Promise.resolve(
+        request.method === "GET"
+          ? fixtureRead(path, state)
+          : fixtureWrite(path, request.bodyJson, state, request.upload),
+      );
+    });
+    const provider = createJiraProviderForCatalog<ManagedMcpInvocationContext>(
+      () => ({
+        baseUrl: "https://jira.example.invalid/context",
+        deployment: "data-center",
+        http: (): ReturnType<AtlassianHttpBodyPort> => {
+          throw new Error("A mutation must use the journal-owned HTTP port");
+        },
+        issueTemplates: jiraIssueTemplateSource(store),
+      }),
+      ["jira.create"],
+      (_operation, _args, _context, execute) =>
+        executeJiraChatMutation({
+          journal,
+          intent,
+          httpPortFactory:
+            (lifecycle) =>
+            (request): ReturnType<AtlassianHttpBodyPort> => {
+              if (lifecycle.beforeDispatch?.(request) !== true)
+                return Promise.resolve({ kind: "network-error" });
+              return http(request).then((answer) => {
+                if (answer.kind === "response") lifecycle.onResponse?.(request, answer.status);
+                return answer;
+              });
+            },
+          beforeEffect: () => true,
+          beforeMutation: () => true,
+          execute: (port) => execute(port, undefined),
+        }),
+    );
+    return {
+      journal,
+      intent,
+      methods: () => requests,
+      run: () =>
+        provider.tools()[0]?.execute(args as CatalogJsonObject, {
+          invocationId: intent.invocationId,
+          correlationId: intent.correlationId,
+          signal: new AbortController().signal,
+          beforeEffect: () => true,
+        }) ?? Promise.reject(new TypeError("Missing jira.create tool")),
+    };
+  }
+
+  it("sends no POST or PUT and hands the model the listed violations", async () => {
+    const f = fullAccessWrite(VIOLATING);
+    const result = await f.run();
+    expect(result.data).toEqual({
+      outcome: "rejected",
+      reason: "field-validation",
+      violations: [
+        { ruleId: "section-missing", subject: "Acceptance criteria", template: "SYN/Story" },
+      ],
+    });
+    expect(f.methods().length).toBeGreaterThan(0);
+    expect(f.methods().filter((method) => method === "POST" || method === "PUT")).toEqual([]);
+    expect(f.journal.find(f.intent.invocationId)).toMatchObject({ outcome: "rejected" });
+  });
+
+  it("creates the issue of a conforming write under the same mode (control)", async () => {
+    const f = fullAccessWrite(CONFORMING);
+    const result = await f.run();
+    expect(f.methods().filter((method) => method === "POST")).toHaveLength(1);
+    expect(result.data).toMatchObject({ outcome: "succeeded" });
   });
 });
