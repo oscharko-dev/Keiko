@@ -4,7 +4,7 @@
 // no explanatory text; a Pod that needs attention shows one remediation line and the action that
 // resolves it.
 
-import type { ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type {
   AtlassianConnectorMetadata,
@@ -63,18 +63,50 @@ function StatusHint({ state }: { readonly state: LivePodState }): ReactNode {
   const t = useTranslate();
   if (state.kind === "failed") {
     return (
-      <output className="acx-hint" data-status={state.status} data-testid="acx-verify-status">
+      <p className="acx-hint" aria-hidden="true">
         {t(verifyStatusCopyKey(state.status))}
-      </output>
+      </p>
     );
   }
   if (state.kind === "unknown") {
-    return <output className="acx-hint">{t("atlassianConnectors.live.refreshRequired")}</output>;
+    return <p className="acx-hint">{t("atlassianConnectors.live.refreshRequired")}</p>;
   }
   if (state.kind === "unverified") {
-    return <output className="acx-hint">{t("atlassianConnectors.live.verifyRequired")}</output>;
+    return <p className="acx-hint">{t("atlassianConnectors.live.verifyRequired")}</p>;
   }
   return null;
+}
+
+function verifiedStatus(state: LivePodState): AtlassianConnectorVerifyStatus | undefined {
+  if (state.kind === "ready") return "ok";
+  return state.kind === "failed" ? state.status : undefined;
+}
+
+// The outcome of a check run in this view; a state loaded with the card is not news.
+function useCheckedStatus(state: LivePodState): AtlassianConnectorVerifyStatus | undefined {
+  const [checked, setChecked] = useState<AtlassianConnectorVerifyStatus>();
+  const previous = useRef(state.kind);
+  const status = verifiedStatus(state);
+  useEffect(() => {
+    if (state.kind === "verifying") setChecked(undefined);
+    else if (previous.current === "verifying") setChecked(status);
+    previous.current = state.kind;
+  }, [state.kind, status]);
+  return checked;
+}
+
+// The one live region of the card: a check's outcome is announced as its label and guidance,
+// also when it succeeded, while the visible card keeps only the chip and, on failure, one line.
+function VerifyAnnouncement({ state }: { readonly state: LivePodState }): ReactNode {
+  const t = useTranslate();
+  const status = useCheckedStatus(state);
+  return (
+    <output className="sr-only" data-status={status} data-testid="acx-verify-status">
+      {status === undefined
+        ? null
+        : `${t(verifyStatusLabelKey(status))}. ${t(verifyStatusCopyKey(status))}`}
+    </output>
+  );
 }
 
 function repairAction(state: LivePodState): "verify" | "refresh" | undefined {
@@ -188,6 +220,7 @@ export function LivePodHeader({
         {actions}
       </div>
       <StatusHint state={state} />
+      <VerifyAnnouncement state={state} />
     </>
   );
 }

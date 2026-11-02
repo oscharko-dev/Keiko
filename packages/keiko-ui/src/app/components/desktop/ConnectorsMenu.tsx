@@ -9,7 +9,7 @@ import type { McpServerChoice } from "./useMcpServerChoices";
 import type { PodChoice } from "./useJiraPodChoices";
 import styles from "./ConnectorsMenu.module.css";
 
-export interface ConnectorsMenuMode {
+interface ConnectorsMenuMode {
   readonly value: CodingWorkbenchMode;
   readonly ceiling: CodingWorkbenchMode;
   readonly onChange: (mode: CodingWorkbenchMode) => void;
@@ -240,6 +240,22 @@ function ModeSection({
   );
 }
 
+function ConnectorsPanelBody(props: ConnectorsMenuProps): ReactNode {
+  const t = useTranslate();
+  return (
+    <>
+      <ServerSection {...props} />
+      <PodSection {...props} />
+      {props.mode === undefined ? null : <ModeSection mode={props.mode} busy={props.busy} />}
+      {props.failed ? (
+        <p role="alert" className={styles.cmpError}>
+          {t("chat.connectors.failed")}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * The per-Chat and per-run connector selection (owner decision 2026-11-02): one switch per
  * centrally configured MCP server and per Jira Pod. What is switched off is not offered to the
@@ -279,16 +295,7 @@ export function ConnectorsMenu(props: ConnectorsMenuProps): ReactNode {
               aria-label={label}
               aria-busy={props.loading || props.busy}
             >
-              <ServerSection {...props} />
-              <PodSection {...props} />
-              {props.mode === undefined ? null : (
-                <ModeSection mode={props.mode} busy={props.busy} />
-              )}
-              {props.failed ? (
-                <p role="alert" className={styles.cmpError}>
-                  {t("chat.connectors.failed")}
-                </p>
-              ) : null}
+              <ConnectorsPanelBody {...props} />
             </section>,
             document.body,
           )

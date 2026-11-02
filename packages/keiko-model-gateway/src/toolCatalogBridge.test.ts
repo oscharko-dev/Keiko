@@ -242,11 +242,15 @@ describe("production gateway catalog bridge", () => {
     const properties = requiredRecord(parameters.properties, "verification properties");
     expect(typeof advertisedFunction.description).toBe("string");
     expect(parameters.type).toBe("object");
-    expect(parameters.required).toEqual(["targetPath", "verifierId"]);
+    expect(parameters.required).toEqual(["packageDir", "targetPath", "verifierId"]);
     expect(requiredRecord(properties.targetPath, "targetPath schema")).toMatchObject({
       type: "string",
       minLength: 0,
       maxLength: 4096,
+    });
+    expect(requiredRecord(properties.packageDir, "packageDir schema")).toMatchObject({
+      type: "string",
+      minLength: 0,
     });
   });
 

@@ -2201,7 +2201,6 @@
     "keiko-ui/app/components/desktop/AppShell",
     "keiko-ui/app/components/desktop/AppShellBoundary",
     "keiko-ui/app/components/desktop/AttachmentStrip",
-    "keiko-ui/app/components/desktop/AutonomyModeSelect",
     "keiko-ui/app/components/desktop/ChatConnectorsControl",
     "keiko-ui/app/components/desktop/ChatContextMeter",
     "keiko-ui/app/components/desktop/ChatContextMeterContainer",

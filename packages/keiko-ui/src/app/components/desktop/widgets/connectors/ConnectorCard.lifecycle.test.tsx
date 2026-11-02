@@ -85,7 +85,7 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
       expect(within(card).getByTestId("acx-pod-state")).toHaveTextContent("Ready");
       expect(card).toHaveTextContent("Lab Jirahttps://jira.example.invalidReady");
       expect(card).not.toHaveTextContent(/consent|Connection verified|Added|Health/u);
-      expect(within(card).queryByTestId("acx-verify-status")).toBeNull();
+      expect(within(card).getByTestId("acx-verify-status")).toBeEmptyDOMElement();
       expect(within(card).getByRole("button", { name: "Add to workspace" })).toHaveClass(
         "lk-btn-primary",
       );
@@ -149,9 +149,8 @@ describe("Jira Pod lifecycle in the existing Hub", () => {
     );
     const card = await screen.findByTestId("acx-connector");
     expect(within(card).getByTestId("acx-pod-state")).toHaveTextContent("Authentication failed");
-    expect(within(card).getByTestId("acx-verify-status")).toHaveTextContent(
-      "Check the account and token, then verify again.",
-    );
+    expect(card).toHaveTextContent("Check the account and token, then verify again.");
+    expect(within(card).getByTestId("acx-verify-status")).toBeEmptyDOMElement();
   });
   it("exposes Live actions without Data indexing, sync, export or invented storage state", async () => {
     render(<AtlassianConnectorsPanel client={client()} jiraLive />);

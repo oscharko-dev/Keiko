@@ -49,7 +49,7 @@ export function useCodingWorkbenchConnectors(list = listAtlassianConnectors): {
       failed: servers.failed || catalog.failed,
       onServersChange: (selection) => setMcpServers(selection ?? undefined),
       onPodChange: (podId) => setPicked(podId ?? ""),
-      onOpen: () => {
+      onOpen: (): void => {
         servers.reload();
         catalog.reload();
       },

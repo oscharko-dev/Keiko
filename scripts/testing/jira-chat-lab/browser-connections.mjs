@@ -1,19 +1,24 @@
 import assert from "node:assert/strict";
 
+/** A Pod's status chip names its state; "Ready" is the verified, usable one. */
+export function readyChip(card) {
+  return card.getByTestId("acx-pod-state").filter({ hasText: /^Ready$/u });
+}
+
 /** The Chat composer's Access radios (owner decision 2026-11-02): one label per autonomy mode. */
-export const ACCESS_MODE_LABELS = Object.freeze({
+const ACCESS_MODE_LABELS = Object.freeze({
   "governed-assist": "Ask for approval",
   "supervised-coding": "Supervised workspace",
   "autonomous-delivery": "Full access",
 });
 
 /** The composer's Connectors button; its name carries the active count once any is on. */
-export function connectorsTrigger(chat) {
+function connectorsTrigger(chat) {
   return chat.getByRole("button", { name: /^Connectors(?::|$)/u });
 }
 
 /** The panel is portalled to the document body, outside the Chat window. */
-export function connectorsPanel(page) {
+function connectorsPanel(page) {
   return page.getByRole("region", { name: "Connectors", exact: true });
 }
 

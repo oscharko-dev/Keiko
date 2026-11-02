@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { join } from "node:path";
 import { chromium } from "@playwright/test";
 import { readPrivateFile } from "./lab-client.mjs";
-import { connectPodFromPanel } from "./browser-connections.mjs";
+import { connectPodFromPanel, readyChip } from "./browser-connections.mjs";
 import { consentCardCount, establishedReadGrant } from "./read-grant.mjs";
 
 function stage(value) {
@@ -43,10 +43,6 @@ export async function openBrowser(chat) {
     { id: chat.id, title: chat.title },
   );
   return { browser, page };
-}
-/** A Pod's status chip names its state; "Ready" is the verified, usable one. */
-export function readyChip(card) {
-  return card.getByTestId("acx-pod-state").filter({ hasText: /^Ready$/u });
 }
 export async function createPod(page, session) {
   await page.getByRole("button", { name: "Local Knowledge", exact: true }).click();

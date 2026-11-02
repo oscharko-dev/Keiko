@@ -9,6 +9,7 @@ import {
   closeConnectors,
   openConnectors,
   podSwitch,
+  readyChip,
 } from "./browser-connections.mjs";
 import { establishedReadGrant } from "./read-grant.mjs";
 
@@ -44,9 +45,6 @@ async function reloadHub(page) {
 async function menuAction(card, label) {
   await card.getByRole("button", { name: /^More actions:/u }).click();
   await card.getByRole("menuitem", { name: label, exact: true }).click();
-}
-function readyChip(card) {
-  return card.getByTestId("acx-pod-state").filter({ hasText: /^Ready$/u });
 }
 async function save(page, card, button) {
   const response = page.waitForResponse(
