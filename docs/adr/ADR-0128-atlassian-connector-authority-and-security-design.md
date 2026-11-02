@@ -729,7 +729,10 @@ are those two members, so the action digest the approval is bound to commits to 
 whole item list: a draft extended after its digest was read resolves to nothing (`draft-changed`),
 an unknown or foreign draft to `draft-not-found`, and one that cannot run (an unknown relation, a
 cycle) to `draft-invalid` — each a structured refusal the model corrects, returned before a human
-is asked. The approval card reads the staged items through
+is asked. A `draft-invalid` refusal carries the same fixed sentence for its closed problem and item
+number that the executor's own check gives (`Item 2 has a malformed parent. …`), so the model learns
+what to correct; it never echoes a field value, key or text of the draft (lab S07, Qwen: a bare
+`draft-invalid` led the model to strip required sections instead of naming the parent's `ref`). The approval card reads the staged items through
 `GET /api/atlassian-connectors/jira-drafts/:draftId?chatId=…&digest=…`, served only to the owning
 Chat and only for the digest the call carries, so the person reviews exactly the items the
 approval commits to. The card lays the items out as a tree of named facts, never as JSON, and

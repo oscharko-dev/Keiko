@@ -419,6 +419,30 @@ describe("the dry run before approval", () => {
       });
     });
 
+    it("tells the model which item of an invalid draft to correct, in fixed words (S07 of #4173)", async () => {
+      const sink = logs();
+      const orphan = { ...item("story", GOOD), parent: { fieldId: "customfield_10101" } };
+      const f = preflight(
+        "# Ordinary skill\n",
+        { items: [item("epic", GOOD), orphan] },
+        "jira.draft",
+      );
+      expect(await f.run()).toEqual({
+        outcome: "rejected",
+        reason: "field-validation",
+        draftRefusal: "draft-invalid",
+        guidance:
+          "Item 2 has a malformed parent. Nest an item by giving it parent { fieldId, ref } for an " +
+          "item of this draft, or { fieldId, issueKey } for an existing issue, with fieldId the " +
+          "relation field named in the child's create fields. Nothing was changed. Correct the " +
+          "draft and send it once.",
+        items: [],
+      });
+      expect(f.http).not.toHaveBeenCalled();
+      const drafts = sink.events.filter((event) => event.op === "atlassian.jira-draft");
+      expect(drafts.at(-1)?.extra).toMatchObject({ phase: "refused", refusal: "draft-invalid" });
+    });
+
     it("lets a conforming draft through to the human's approval", async () => {
       const f = preflight(
         TEMPLATE,

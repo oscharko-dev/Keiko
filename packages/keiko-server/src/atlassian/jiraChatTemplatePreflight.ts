@@ -214,7 +214,7 @@ async function draftPreflight(
     });
     return draftTemplateRefusalData(refusal);
   }
-  return draft.ok ? undefined : draftRefusalData(draft.reason);
+  return draft.ok ? undefined : draftRefusalData(draft);
 }
 /** The counts of the staged draft a call names (zero for an inline or unavailable draft). */
 function draftSizes(

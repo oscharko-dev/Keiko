@@ -149,8 +149,7 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       // The draft runs on exactly the item list the approval covered: a draft that changed or
       // vanished since is refused here, before any item is journaled.
       const draft = readableChatDraft(deps.jiraDraftStore, context.chatId, args);
-      if (!draft.ok)
-        return Promise.resolve({ data: draftRefusalData(draft.reason), isError: true });
+      if (!draft.ok) return Promise.resolve({ data: draftRefusalData(draft), isError: true });
       return executeJiraChatDraft({
         ...shared,
         arguments: draft.arguments,
