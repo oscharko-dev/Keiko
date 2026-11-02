@@ -20,7 +20,9 @@ import {
   type StoredIssue,
   type SyntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
+import { describeCatalogSchemaMismatch } from "@oscharko-dev/keiko-tool-catalog";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { chatToolTurnPartialAnswer } from "../chat-tool-turn-ending.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
@@ -974,6 +976,11 @@ describe("source traceability of a draft (#4179)", () => {
       guidance: JIRA_DRAFT_UNTRACED_GUIDANCE,
       items: [],
     });
+    // A result the declared schema refuses reaches the model as a bare handler failure instead.
+    const declared = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
+    expect(
+      describeCatalogSchemaMismatch(declared?.descriptor.resultSchema ?? {}, first.data),
+    ).toBeUndefined();
     expect(jira.posts()).toHaveLength(0);
 
     // Sending the same draft again is the person's choice to create it as it is.

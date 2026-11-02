@@ -1,9 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
 import type { JiraAttachmentSource } from "./jira-attachments.js";
+import { jiraEditAlreadyHeld } from "./jira-mutation-confirmation.js";
 
 import {
   field,
@@ -16,6 +17,12 @@ import {
   type SyntheticJira,
 } from "../../../tests/support/jira-managed-remote.js";
 
+const ALREADY_HELD = {
+  ok: false,
+  reason: "conflict",
+  receipt: { issueKey: "SYN-1" },
+  detail: { messages: ["SYN-1 already holds this. Nothing was written."] },
+};
 function fixture(attachmentSource?: JiraAttachmentSource): {
   controller: AbortController;
   beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
@@ -271,15 +278,15 @@ it("confirms changed label membership while preserving unrelated labels", async 
   ).toEqual({ ok: true, receipt: { issueKey: "SYN-1" } });
   expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });
-it("does not attribute a label operation whose final membership already held", async () => {
+it("writes nothing for a label operation whose final membership already holds", async () => {
   const f = fixture();
   expect(
     await f.run("jira.edit", {
       issueKey: "SYN-1",
       updates: [{ fieldId: "labels", operation: "add", value: "initial" }],
     }),
-  ).toEqual({ ok: false, reason: "conflict" });
-  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+  ).toEqual(ALREADY_HELD);
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(0);
 });
 it("compares replaced label sets independently of their returned order", async () => {
   const f = fixture();
@@ -798,22 +805,29 @@ it.each(CONFIRMED_OPERATIONS)(
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
-it("does not attribute an unchanged pre-existing summary to a newly acknowledged edit", async () => {
+it("writes nothing and claims no effect when the summary already holds", async () => {
   const f = fixture();
-  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Original" } })).toEqual({
-    ok: false,
-    reason: "conflict",
-  });
-  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Original" } })).toEqual(
+    ALREADY_HELD,
+  );
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(0);
 });
-it("does not attribute a pre-existing assignee to a newly acknowledged assignment", async () => {
+it("writes nothing and claims no effect when the assignee already holds", async () => {
   const f = fixture();
   f.http.mockResolvedValueOnce(response([{ name: "previous-user", active: true }]));
-  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "previous-user" })).toEqual({
-    ok: false,
-    reason: "conflict",
+  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "previous-user" })).toEqual(
+    ALREADY_HELD,
+  );
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(0);
+});
+it("still writes when only part of an edit already holds", async () => {
+  const f = fixture();
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { summary: "Original" },
+    updates: [{ fieldId: "labels", operation: "add", value: "triage" }],
   });
-  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });
 it("does not attribute an already-held target status to a transition from matching fields alone", async () => {
   const f = fixture();
@@ -1093,6 +1107,60 @@ it("keeps a lost link answer unconfirmed when the issue cannot be read back (#41
     },
   });
   expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(1);
+});
+describe("an edit the issue verifiably already holds", () => {
+  const opaque = {
+    id: "customfield_10105",
+    name: "Sprint",
+    required: false,
+    hasDefaultValue: false,
+    kind: "opaque",
+    richText: false,
+    operations: ["set"],
+  } as const;
+  const held = (requested: CatalogJsonObject, current: Record<string, unknown>): boolean =>
+    jiraEditAlreadyHeld([opaque], { ok: true, fields: requested, update: {} }, current);
+
+  it("accepts an identical opaque value", () => {
+    expect(held({ customfield_10105: 7 }, { customfield_10105: 7 })).toBe(true);
+  });
+  it.each([
+    ["a value Jira may have reshaped", { customfield_10105: [{ id: 7, state: "active" }] }],
+    ["a different value", { customfield_10105: 8 }],
+    ["a field the read did not return", {}],
+  ])("does not accept %s", (_label, current) => {
+    expect(held({ customfield_10105: 7 }, current)).toBe(false);
+  });
+  it("does not accept a request that asks for nothing", () => {
+    expect(held({}, {})).toBe(false);
+  });
+  it("does not accept a field it has no metadata for", () => {
+    expect(held({ customfield_1: 7 }, { customfield_1: 7 })).toBe(false);
+  });
+});
+it("writes nothing when every requested link is already on the issue", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  f.http.mockImplementation((request) => {
+    if (request.method === "GET" && request.url.includes("/issue/SYN-1?"))
+      return Promise.resolve(
+        response({
+          id: "10001",
+          key: "SYN-1",
+          fields: {
+            issuelinks: [{ id: "1", type: { name: "Relates" }, outwardIssue: { key: "SYN-2" } }],
+          },
+        }),
+      );
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-2" }],
+    }),
+  ).toEqual(ALREADY_HELD);
+  expect(writes(f)).toEqual([]);
 });
 it("does not write a link the issue already has (#4176)", async () => {
   const f = fixture();

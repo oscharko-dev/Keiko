@@ -69,8 +69,12 @@ import {
 import {
   confirmJiraAssignment,
   confirmJiraComment,
+  jiraAlreadyHeldRefusal,
+  jiraAssignmentAlreadyHeld,
+  jiraEditAlreadyHeld,
   jiraMutationFieldSelection,
   readJiraMutationIssue,
+  type JiraIssueReadback,
   type JiraValidatedMutationFields,
 } from "./jira-mutation-confirmation.js";
 
@@ -576,6 +580,27 @@ function changesOnlyThroughLinkCalls(
     Object.keys(update).length === 0
   );
 }
+interface IssueReading {
+  readonly values: JiraValidatedMutationFields;
+  readonly transitionId: string | undefined;
+}
+/** The issue before the write, or a refusal when an edit would change nothing on it. */
+async function readChangingIssue(
+  request: JiraMutationRequest,
+  metadata: readonly JiraFieldMetadata[],
+  { values, transitionId }: IssueReading,
+  { purpose, issueKey }: FieldTarget,
+): Promise<JiraIssueReadback> {
+  const prior = await readJiraMutationIssue(
+    request,
+    issueKey,
+    jiraMutationFieldSelection(values, transitionId !== undefined),
+  );
+  if (!prior.ok || purpose !== "edit") return prior;
+  return jiraEditAlreadyHeld(metadata, values, prior.fields)
+    ? jiraAlreadyHeldRefusal(issueKey)
+    : prior;
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
@@ -593,11 +618,8 @@ async function fieldMutation(
   const values = withLinks(validated, admitted.links);
   const transitionId = purpose === "transition" ? transitionArgument(args) : undefined;
   const target = fieldMutationTarget(issueKey, transitionId);
-  const prior = await readJiraMutationIssue(
-    request,
-    issueKey,
-    jiraMutationFieldSelection(values, transitionId !== undefined),
-  );
+  const reading = { values, transitionId };
+  const prior = await readChangingIssue(request, metadata.fields, reading, fieldTarget);
   if (!prior.ok) return prior;
   // Jira does not de-duplicate links: one already on the issue is not written again.
   const plan = planJiraIssueLinks(
@@ -810,6 +832,7 @@ async function assignIssue(
   if (policy.check) return CHECKED;
   const prior = await readJiraMutationIssue(request, issueKey, ["assignee"]);
   if (!prior.ok) return prior;
+  if (jiraAssignmentAlreadyHeld(prior, name)) return jiraAlreadyHeldRefusal(issueKey);
   const acknowledged = await statusMutation(
     request,
     `issue/${encodeURIComponent(issueKey)}/assignee`,

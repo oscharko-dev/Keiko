@@ -484,8 +484,12 @@ operation's documented 201/204 response, required identity and successful bounde
 establish a confirmed result. Confirmation checks the affected resource: returned creation/comment identity and
 requested content, edited field values, assignment identity, or the transition's current target
 status and requested fields. Edit/assignment/transition capture the relevant state before dispatch.
-A state that already matched before dispatch does not establish a new effect; a self-transition
-therefore remains unconfirmed. Label updates compare only the requested membership changes, while
+A state that already matched before dispatch does not establish a new effect. An edit or assignment
+that the captured state verifiably already holds is therefore refused before any write, and the
+journal settles it as rejected, so it cannot block the turn's later writes as an uncertain one. An
+opaque value proves this only when identical, because Jira may reshape it on read; otherwise the
+write proceeds and an unchanged readback stays unconfirmed. A self-transition remains unconfirmed.
+Label updates compare only the requested membership changes, while
 replacement sets ignore ordering and reference labels never substitute for identities. Failed or
 contradictory readback remains acknowledged-but-unconfirmed in the server composer and never permits
 automatic mutation replay. These checks observe the requested result; they do not promise exclusive

@@ -53,7 +53,7 @@ const REQUIREMENT_PROBLEMS = {
 };
 const REQUIREMENT_REFUSAL = {
   type: "string",
-  enum: ["no-knowledge-pod", "unavailable", "references"],
+  enum: ["no-knowledge-pod", "unavailable", "references", "untraced"],
 };
 const NUMERIC_ID = { ...text(32), pattern: "^[0-9]{1,32}$" };
 const PROJECT_ID = { ...NUMERIC_ID, description: "Numeric id from the project read." };

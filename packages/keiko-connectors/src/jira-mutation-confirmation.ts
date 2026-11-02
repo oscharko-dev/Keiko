@@ -201,6 +201,41 @@ function identityMatches(
   const expectedId = input.receipt.issueId ?? input.prior?.id;
   return expectedId === undefined || expectedId === current.id;
 }
+function valueHeld(field: JiraFieldMetadata, expected: unknown, actual: unknown): boolean {
+  // Jira may reshape an opaque value on read, so only an identical one proves it is already held.
+  if (field.kind === "opaque") return JSON.stringify(actual) === JSON.stringify(expected);
+  const wanted = comparable(field, expected);
+  return wanted !== undefined && comparable(field, actual, expected) === wanted;
+}
+/** Whether the issue verifiably holds everything an edit asks for, so no write is needed at all. */
+export function jiraEditAlreadyHeld(
+  metadata: readonly JiraFieldMetadata[],
+  values: JiraValidatedMutationFields,
+  current: Record<string, unknown>,
+): boolean {
+  const sets = Object.entries(values.fields);
+  const updates = Object.keys(values.update);
+  if (sets.length + updates.length + (values.links?.length ?? 0) === 0) return false;
+  return (
+    updates.every((id) => id === "labels") &&
+    updatesMatch(values, current) &&
+    sets.every(([id, expected]) => {
+      const field = metadata.find((value) => value.id === id);
+      return (
+        field !== undefined && Object.hasOwn(current, id) && valueHeld(field, expected, current[id])
+      );
+    })
+  );
+}
+/** Refused before any write: the state already holds, and repeating it could only look uncertain. */
+export function jiraAlreadyHeldRefusal(issueKey: string): Failure {
+  return {
+    ok: false,
+    reason: "conflict",
+    receipt: { issueKey },
+    detail: { messages: [`${issueKey} already holds this. Nothing was written.`] },
+  };
+}
 export async function confirmJiraMutationFields(
   request: JiraMutationRequest,
   input: JiraFieldConfirmation,
@@ -243,6 +278,12 @@ function assignee(value: unknown): string | null | undefined {
   if (value === null) return null;
   const name = projectJiraFieldReference(value)?.name;
   return typeof name === "string" ? name : undefined;
+}
+export function jiraAssignmentAlreadyHeld(
+  prior: Extract<JiraIssueReadback, { ok: true }>,
+  name: string | null,
+): boolean {
+  return assignee(prior.fields.assignee) === name;
 }
 export async function confirmJiraAssignment(
   request: JiraMutationRequest,
