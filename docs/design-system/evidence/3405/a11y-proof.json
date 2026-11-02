@@ -8,91 +8,91 @@
   "sourceFiles": [
     {
       "path": "scripts/lib/update-ui-evidence-sources.json",
-      "sha256": "f399d392d210bb0b37ffda4db30378bce5c2f0c3a8f6cb62fe3b083e7d250aba"
+      "sha256": "03f2dee4e8c4109fdcb7e5327e88c3f15d4039f4d10a7f376d6bd26e6b77b351"
     },
     {
       "path": "design-system/product-token-bindings.json",
-      "sha256": "a65598e8ec68cd19ee2c9fdb8431c913c167801416e8020d026df155935b53bc"
+      "sha256": "0c0aae52aba97d91f8b4d033ca21ddc35171561129d94c8becf65659bb3d8584"
     },
     {
       "path": "design-system/keiko-tokens.css",
-      "sha256": "399663c2e17842e0b3a38a94d8306ace2c48984bee263782006aa98a50fd0ae4"
+      "sha256": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d"
     },
     {
       "path": "design-system/keiko-semantic-tokens.css",
-      "sha256": "42e9e1d3cb86fc139ad97712c705f00d2df6f3261f94f20e0a2c18b727f3496b"
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
     },
     {
       "path": "design-system/keiko-editor-tokens.css",
-      "sha256": "99fadab685417fffea51b8c8fb179b8cd0862827fb7e7c003341f95a883b06a3"
+      "sha256": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
     },
     {
       "path": "design-system/keiko-ai.css",
-      "sha256": "64d2933482696c952ac1cf5949001801016434cf454969c9cf0ccbf555b53e03"
+      "sha256": "182e1bf6a116ae9f2cc94006214a64d3c0b710b495090bd13bc72adc8dd9c2da"
     },
     {
       "path": "design-system/keiko-data.css",
-      "sha256": "4fb8c6e729305a59aeb34812da9797126abeb9c3e989d6a1394fe7d4fffa6009"
+      "sha256": "19182f9152d143b309b2fbf144281d209471808e4c366a936a6b805ff8888270"
     },
     {
       "path": "design-system/keiko-dataviz.css",
-      "sha256": "77050f8f916a189af7322ea492122b1e87cce189f4643c9ff22cad597be32b30"
+      "sha256": "18d86a59ff212192ab553e80c127b1c6c6a996d7a950c8d9744f1b666d5081b1"
     },
     {
       "path": "design-system/keiko-inputs.css",
-      "sha256": "769847cb9e0d66c7e2756301707c9e2840a9718fc7e409596eca932660fe7831"
+      "sha256": "1051fad455b2a230e130054e6e36bc6f06a8600799a71139bba3a17b13a81408"
     },
     {
       "path": "design-system/keiko-nav.css",
-      "sha256": "550badb56b5f65c0d678c018811f5c49eaf6d8a2985f4cd5e59ce1ab441466d5"
+      "sha256": "a84751a5e33b29484e57914c3d13bb9c165e9ea8bf2c2a5192bbb2e6db8be71b"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
-      "sha256": "f34569f0ea8feec2f0442e10d900759eddf5fd174efa7cb837381533a337f7d2"
+      "sha256": "a9421356f4bc74d96a7863a18c36817098bce72ab2e40464fd9a5ced32ed944c"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
-      "sha256": "727593d85db769db204979dbf9883ad6bb5492073c98d7757dbe4678f25404d8"
+      "sha256": "6a852d3ecd88fc78cd3881f7e609e03d8da1f11bd7154d7025a752cb269949cc"
     },
     {
       "path": "packages/keiko-ui/next.config.mjs",
-      "sha256": "108a10ff50718b7ae6a0672b5e8207d5e107563c427eef82329141c76a3f01e5"
+      "sha256": "5d2f34ac59dbccc52eb1b485b399caac66dd11b70906d3bea9337e097283191e"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx",
-      "sha256": "a52baec42f2346983706fcde214ac519fd6b16a8447ad5065afae7704f3a8e71"
+      "sha256": "f871071c366e4caa1c9f73d678a5072c152141e1bbcad1e870e6dc1a563e6084"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNoticeContent.tsx",
-      "sha256": "0941ac04672d1ca20b09ca34ac1a39249aad420f7bd2c342ffbd84210959fb68"
+      "sha256": "20cc4f1aabe0db16174f7fb1374ef0a6249c7d03cea64f21b0c42ea810e43a19"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx",
-      "sha256": "5050c636328e33190d6eba098874286b8a7522db3e4d646c7047a97eedaa9ee4"
+      "sha256": "e470cb8c0fe7c18fef7d5b2b7f49eb3d16d39f26f5c3a882aed12f2ae3c715ed"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
-      "sha256": "2a79480d63b492106b54cd79e3a1ec513839ba4d98b1750914ba4e5864f50657"
+      "sha256": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998"
     },
     {
       "path": "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts",
-      "sha256": "9974169e188fa7dc789e35d037322a186b3cddee081ee8c678188a97186dbda8"
+      "sha256": "aab4708993761c799c966f08002759a330910ac5a005a727cecb4ccd453452b8"
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "99210b565e307a6cf0dcaaa1689d30a7633ed72554434dc4d9bff1b40bc7ecb4"
+      "sha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2"
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "5f99c4a03fd0d2418bfe6f49760bef3a77304a405a0034dc3a02e5dee58be65e"
+      "sha256": "af2858b377f22f5d37677d4dbd317148bc50362be24b736646c37d48eea4fb2c"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "a056f4b0ea4f1261d495691e48fc32818e249c29441b6cc09a45eff7d4864970"
+      "sha256": "e4b9029bffe25896be92d77bbd28d9acd96535f46e96e9d13a2d282064a4951b"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "b11d63815a7ad7ada2cfcfa7791e006ed49199329f4170d0fc72488093f83662"
+      "sha256": "042480b654c698acc64a41a7be9f67e53fd7d8294989a0be03ba3256df439006"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
@@ -104,14 +104,14 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
-      "sha256": "ad38fea672f351423bf6442faa2ab724add1f01a014df095741e4be68ab36f5e"
+      "sha256": "48a5b89217f4e144af6b385199e1803cde0389649d363c9268e30120a02e3b46"
     }
   ],
   "harnessProvenanceSha256": {
-    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "3de6bf9f50b3d5fa6a3301fd56703446f8a5325dce8a3d8037e50c53623140d3",
-    "tests/e2e/fixtures/keiko.e2e.config.json": "8e04c1a6e56ab1c9bd761ec3a712145b57eadb5665981a5373b2819e86e152c3",
-    "tests/e2e/support/evidence.ts": "56507b3d4cb97a7eea7ce6b6ed04b8060892d02b7489eea7a00943f6396a7a3c",
-    "tests/e2e/support/update-bff-outage-3405.mjs": "b37ff4b16d0c570ed892f659a38cd18e64fe856291133035e7e918b19cda2ce8"
+    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
+    "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
+    "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
+    "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f"
   },
   "wcagTags": [
     "wcag2a",
