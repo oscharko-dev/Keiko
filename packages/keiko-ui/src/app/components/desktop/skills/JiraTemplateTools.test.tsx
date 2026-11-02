@@ -213,6 +213,41 @@ describe("Jira issue template tools", () => {
     expect(templates.validateJiraTemplate).toHaveBeenLastCalledWith("pod-1", "BODY-3");
   });
 
+  it("withdraws the old template and its validation when the refresh after a replacement fails", async () => {
+    const stored = (revision: number): MarkdownSkillLibrary["skills"] => [
+      {
+        id: "skill-1",
+        revision,
+        digest: String(revision).repeat(64),
+        name: "Story template",
+        byteCount: 4,
+        createdAt: 1,
+      },
+    ];
+    vi.mocked(skills.readMarkdownSkill).mockImplementation((reference) =>
+      Promise.resolve({ ...DOCUMENT, revision: reference.revision, body: "BODY" }),
+    );
+    vi.mocked(templates.validateJiraTemplate).mockResolvedValue({
+      valid: true,
+      findings: [],
+      checked: { project: true, fields: true, linkTypes: true, transitions: true },
+    });
+    const user = userEvent.setup();
+    const view = render(<JiraTemplateTools library={libraryOf(stored(2))} />);
+    await user.click(screen.getByRole("button", { name: "Jira issue templates" }));
+    await screen.findByText("Story template");
+    const [first] = screen.getAllByRole("button", { name: "Validate against Jira" });
+    await waitFor(() => expect(first).toBeEnabled());
+    if (first) await user.click(first);
+    await screen.findByText("The template matches the Jira instance.");
+    vi.mocked(templates.fetchJiraTemplates).mockRejectedValue(new Error("unavailable"));
+    view.rerender(<JiraTemplateTools library={libraryOf(stored(3))} />);
+    await screen.findByRole("alert");
+    expect(screen.queryByText("The template matches the Jira instance.")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Validate against Jira" })).not.toBeInTheDocument();
+    expect(skills.readMarkdownSkill).toHaveBeenCalledTimes(1);
+  });
+
   it("starts each proposal from its own Markdown, not the previous project's edits", async () => {
     vi.mocked(templates.proposeJiraTemplates).mockImplementation((_pod, projectKey) =>
       Promise.resolve([

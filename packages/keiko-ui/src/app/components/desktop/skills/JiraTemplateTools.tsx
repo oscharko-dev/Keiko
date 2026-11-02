@@ -78,6 +78,12 @@ function libraryVersion(skills: MarkdownSkillLibrary["skills"]): string {
   return skills.map((skill) => `${skill.id}:${String(skill.revision)}:${skill.digest}`).join("|");
 }
 
+/** The template list together with the stored-library version it was read for. */
+interface Loaded {
+  readonly version: string;
+  readonly entries: readonly JiraTemplateEntry[];
+}
+
 type Run = (kind: Work, operation: () => Promise<void>) => Promise<void>;
 
 /** Validation and proposal need a Pod; each result is recorded against what it was made from. */
@@ -115,10 +121,12 @@ function useTemplateActions(
 }
 
 function useJiraTemplateTools(podId: string | undefined, version: string): Tools {
-  const [templates, setTemplates] = useState<readonly JiraTemplateEntry[]>([]);
+  const [loaded, setLoaded] = useState<Loaded>();
   const [work, setWork] = useState<Work>("loading");
   const [failed, setFailed] = useState(false);
   const latestLoad = useRef(0);
+  const currentVersion = useRef(version);
+  currentVersion.current = version;
   const run: Run = async (kind, operation) => {
     setWork(kind);
     setFailed(false);
@@ -133,9 +141,10 @@ function useJiraTemplateTools(podId: string | undefined, version: string): Tools
   const reload = (): Promise<void> =>
     run("loading", async () => {
       const load = ++latestLoad.current;
+      const readFor = currentVersion.current;
       const next = await fetchJiraTemplates();
       // An older read that settles last must not replace the newer list.
-      if (load === latestLoad.current) setTemplates(next);
+      if (load === latestLoad.current) setLoaded({ version: readFor, entries: next });
     });
   useEffect(() => {
     void reload();
@@ -144,6 +153,9 @@ function useJiraTemplateTools(podId: string | undefined, version: string): Tools
   }, [version]);
   const actions = useTemplateActions(run, podId);
   const { validation } = actions;
+  // A list read for an older stored library describes rules the store no longer holds, so while
+  // the current read is unavailable nothing is listed, validated or qualified from it.
+  const templates = loaded?.version === version ? loaded.entries : [];
   return {
     ...actions,
     templates,
