@@ -833,10 +833,39 @@ function firstLexicalSupport(answer: GroundedAnswer): "weak" | undefined {
   return answer.citations[0]?.lexicalSupport;
 }
 
+type WeakSupportCallKind = "query-transform" | "judge" | "answer";
+
+function weakSupportCallKind(
+  request: Parameters<ModelPort["call"]>[0],
+  judgeVerdict: "supported" | "unsupported" | undefined,
+): WeakSupportCallKind {
+  if (request.messages[0]?.content.includes("Rewrite broad") === true) return "query-transform";
+  return judgeVerdict !== undefined && request.responseFormat !== undefined ? "judge" : "answer";
+}
+
+// The fake model's reply: a query rewrite, the judge's verdict, or the answer (a citation repair
+// answers with `repair` when one is configured).
+function weakSupportReply(
+  kind: WeakSupportCallKind,
+  input: {
+    readonly answerText: string;
+    readonly judgeVerdict: "supported" | "unsupported" | undefined;
+    readonly repair: AskOptions["repair"];
+  },
+): { readonly content: string; readonly finishReason: "stop" | "length" } {
+  if (kind === "query-transform")
+    return { content: '{"queries":["release"]}', finishReason: "stop" };
+  if (kind === "judge")
+    return { content: JSON.stringify({ verdict: input.judgeVerdict }), finishReason: "stop" };
+  return input.repair ?? { content: input.answerText, finishReason: "stop" };
+}
+
 interface AskOptions {
   readonly groundedAnswers?: { readonly ownAssessment?: "allowed" | "disabled" };
   // Receives the system prompt of every answer-generation call.
   readonly systemPrompts?: string[];
+  // What the model answers a citation repair with; absent repeats the first answer.
+  readonly repair?: { readonly content: string; readonly finishReason: "stop" | "length" };
 }
 
 function lexicalSupports(answer: GroundedAnswer): readonly ("weak" | undefined)[] {
@@ -874,17 +903,22 @@ describe("weakly supported citations", () => {
     const chat = rescueStore.updateChat(created.id, {
       localKnowledgeScope: { kind: "capsule", capsuleId: seeded.capsuleId, connectedAtMs: 1 },
     });
+    let answerCalls = 0;
     const fakeModel: ModelPort = {
       call: (request) => {
-        const isQueryTransform = request.messages[0]?.content.includes("Rewrite broad") === true;
-        const isJudge = judgeVerdict !== undefined && request.responseFormat !== undefined;
-        if (!isQueryTransform && !isJudge)
+        const kind = weakSupportCallKind(request, judgeVerdict);
+        if (kind === "answer") {
           options.systemPrompts?.push(request.messages[0]?.content ?? "");
-        const reply = isQueryTransform ? '{"queries":["release"]}' : answerText;
+          answerCalls += 1;
+        }
+        const reply = weakSupportReply(kind, {
+          answerText,
+          judgeVerdict,
+          repair: answerCalls > 1 ? options.repair : undefined,
+        });
         return Promise.resolve({
           modelId: "chat-model",
-          content: isJudge ? JSON.stringify({ verdict: judgeVerdict }) : reply,
-          finishReason: "stop" as const,
+          ...reply,
           toolCalls: [],
           structuredOutput: null,
           usage: {
@@ -1135,6 +1169,56 @@ describe("weakly supported citations", () => {
       );
       const line = sink.events.find((event) => event.op === "search.answer.assessed");
       expect(line?.extra).toMatchObject({ policy: "disabled", outcome: "neutralized" });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  // S12 of epic #4173 (Gemma): the citation repair regenerates the whole answer with the output
+  // grant that is left. Cut at that limit, it must not replace the complete first answer, and the
+  // log says why the answer kept no citation.
+  it("keeps the complete answer when the citation repair is cut at its output limit", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const complete =
+        "The release checklist covers signing, notarization and upload, each step in order.";
+      const answer = await askWith(complete, "repair-cut", undefined, "corr-repair-cut", {
+        repair: { content: "The release checklist covers signing [1", finishReason: "length" },
+      });
+
+      expect(answer.content).toBe(complete);
+      const reconciled = sink.events.find((event) => event.op === "search.citations.reconciled");
+      expect(reconciled?.correlationId).toBe("corr-repair-cut");
+      expect(reconciled?.extra).toMatchObject({
+        citationRepairDisposition: "rejected-truncated",
+        attachedCount: 0,
+      });
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("records an applied citation repair on the reconciliation line", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const answer = await askWith(
+        "The release checklist covers signing, notarization and upload, each step in order.",
+        "repair-applied",
+        undefined,
+        "corr-repair-applied",
+        {
+          repair: {
+            content: "The release checklist covers signing, notarization and upload [1].",
+            finishReason: "stop",
+          },
+        },
+      );
+
+      expect(answer.citations).toHaveLength(1);
+      const reconciled = sink.events.find((event) => event.op === "search.citations.reconciled");
+      expect(reconciled?.extra).toMatchObject({ citationRepairDisposition: "applied" });
     } finally {
       resetServerLogger();
     }

@@ -713,7 +713,11 @@ successful page of it carries `draft: { tool: "jira.draft", use }`, one fixed se
 several issues go into one `jira.draft`, approved once, while `jira.create` asks once per issue (lab
 S05: Qwen read the epic fields, then created three epics one by one and the human approved three
 times). The pointer sits in the result the model reads; the tool description does not grow, and a
-refused read carries no pointer.
+refused read carries no pointer. The same sentence (at most 256 characters) adds that each item
+carries every field it needs, labels included, because a later `jira.edit` asks again, and that a
+description is text with a heading per section, never JSON (lab S05, 2026-11-02: Qwen left the
+labels out of its draft and added them with three edits, four approvals in all; Gemma wrote each
+description as a JSON object, so no section was found).
 
 *Paged drafts.* One model call cannot carry hundreds of items, and the model's output is bounded,
 so a large draft is written in pages through `jira.draft-stage`, a read-class tool (row 21: it
@@ -1168,7 +1172,12 @@ paged the tool and listed 41 of 41. `chat.grounded-tool-round.completed` records
 (`requirementUnitCount`, `excerptRequirementCount`). The guidance replaces redundant wording, so the
 mixed Jira/Data overflow pin keeps its budget. An answer built from tool results carries no excerpt
 markers; the optional citation repair runs only while a synthesis attempt slot is free and otherwise
-keeps the completed answer instead of failing the turn.
+keeps the completed answer instead of failing the turn. The repair regenerates the whole answer, so
+it replaces a complete first answer only when it ended on its own and attaches at least one
+citation; a repair cut at its output limit or still uncited leaves the complete answer standing
+(lab S12, Gemma: a repair with the remaining output grant cut a 41-row coverage matrix at row 28).
+`search.citations.reconciled` records the outcome in `citationRepairDisposition`
+(`rejected-truncated`, `rejected-uncited`, `applied`, `skipped-budget`, `not-needed`).
 
 - _Authority._ The tool is a read: the current Chat authority admits it, exactly as it admits a
   grounded answer over an attached Knowledge Pod. No Jira read grant or consent is involved, and

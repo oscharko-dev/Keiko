@@ -45,6 +45,7 @@ import type {
   AnswerGeneratorInput,
   ConversationGroundedAnswer,
   ConversationGroundedQuery,
+  GroundedCitationRepair,
   ReferenceReranker,
 } from "./types.js";
 
@@ -81,6 +82,7 @@ interface GeneratedAnswer {
   readonly attached: AttachCitationsResult;
   readonly ownAssessment?: string;
   readonly neutralized: boolean;
+  readonly citationRepair?: GroundedCitationRepair;
 }
 
 function splitGeneratedAnswer(
@@ -190,14 +192,41 @@ async function generateGroundedAnswerText(
   );
   const sent = promptReferencesOf(deps, answerInput.references);
   if (deps.signal?.aborted === true || !shouldRepairMissingCitations(generated, sent)) {
-    return generated;
+    return { ...generated, citationRepair: "not-needed" };
   }
-  if (deps.answerGenerator.repairAvailable?.() === false) return generated;
+  if (deps.answerGenerator.repairAvailable?.() === false)
+    return { ...generated, citationRepair: "skipped-budget" };
+  const generatedComplete = lastAnswerComplete(deps);
   const repairedText = await deps.answerGenerator.generate({
     ...answerInput,
     citationRepair: true,
   });
-  return attachGenerated(deps, answerInput, repairedText);
+  const repaired = attachGenerated(deps, answerInput, repairedText);
+  return settledRepair(generated, generatedComplete, repaired, lastAnswerComplete(deps));
+}
+
+function lastAnswerComplete(deps: GroundedAnswerDependencies): boolean {
+  return deps.answerGenerator.lastAnswerComplete?.() !== false;
+}
+
+// A repair regenerates the whole answer. One cut at its output limit, or one that still cites
+// nothing, would replace a complete answer with a worse one, so a complete first answer stands
+// (S12 of epic #4173: a repair with the remaining output grant cut a 41-line coverage matrix at
+// line 28). An empty first answer has nothing to keep.
+function settledRepair(
+  generated: GeneratedAnswer,
+  generatedComplete: boolean,
+  repaired: GeneratedAnswer,
+  repairedComplete: boolean,
+): GeneratedAnswer {
+  const generatedEmpty =
+    generated.attached.text.trim().length === 0 && generated.ownAssessment === undefined;
+  if (!generatedEmpty && generatedComplete) {
+    if (!repairedComplete) return { ...generated, citationRepair: "rejected-truncated" };
+    if (repaired.attached.citations.length === 0)
+      return { ...generated, citationRepair: "rejected-uncited" };
+  }
+  return { ...repaired, citationRepair: "applied" };
 }
 
 // Citations resolve only against the evidence the model was shown: a window-fitted prompt keeps
@@ -222,6 +251,7 @@ function buildGroundedAnswer(
     answer: attached.text,
     ...(generated.ownAssessment === undefined ? {} : { ownAssessment: generated.ownAssessment }),
     ...(generated.neutralized ? { ownAssessmentNeutralized: true as const } : {}),
+    ...(generated.citationRepair === undefined ? {} : { citationRepair: generated.citationRepair }),
     references,
     citations: attached.citations,
     pack,

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "046cd5ac4d32e5c872a97867bfeddf06153f54d8fa37b66ac48e34169aff5f15",
+    "catalogDigest": "6b1d1629208023b38dfda4e26ce4d974eab5d30432cac3a4e5b5cd451113833a",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -35225,8 +35225,8 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.answer.assessed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:376",
-        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:443"]
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:378",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:445"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35279,6 +35279,8 @@
               "not-needed",
               "applied",
               "rejected-content-changed",
+              "rejected-truncated",
+              "rejected-uncited",
               "failed",
               "skipped-budget",
               "skipped-capability"
@@ -35390,8 +35392,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:40",
         "emitterSites": [
-          "packages/keiko-server/src/grounded-citation-log.ts:238",
-          "packages/keiko-server/src/grounded-citation-log.ts:279"
+          "packages/keiko-server/src/grounded-citation-log.ts:240",
+          "packages/keiko-server/src/grounded-citation-log.ts:281"
         ]
       },
       {
@@ -35441,8 +35443,8 @@
         "failureClasses": ["knowledge-citation-reconciliation"],
         "proofIds": ["search.citations.support-settled.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:311",
-        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:354"]
+        "registrationSite": "packages/keiko-server/src/grounded-citation-log.ts:313",
+        "emitterSites": ["packages/keiko-server/src/grounded-citation-log.ts:356"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35516,6 +35518,8 @@
               "not-needed",
               "applied",
               "rejected-content-changed",
+              "rejected-truncated",
+              "rejected-uncited",
               "failed",
               "skipped-budget",
               "skipped-capability"
@@ -35615,7 +35619,7 @@
         "proofIds": ["search.connected-context.answer-details.line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/grounded-answer-activity.ts:20",
-        "emitterSites": ["packages/keiko-server/src/grounded-answer-activity.ts:186"]
+        "emitterSites": ["packages/keiko-server/src/grounded-answer-activity.ts:188"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -110290,7 +110294,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2341",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2348",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110327,7 +110331,7 @@
     {
       "op": "search.answer.assessed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:379",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:381",
       "package": "keiko-server"
     },
     {
@@ -110339,7 +110343,7 @@
     {
       "op": "search.citations.support-settled",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-citation-log.ts:314",
+      "site": "packages/keiko-server/src/grounded-citation-log.ts:316",
       "package": "keiko-server"
     },
     {

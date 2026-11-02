@@ -1976,6 +1976,8 @@ export type CitationRepairDisposition =
   | "not-needed"
   | "applied"
   | "rejected-content-changed"
+  | "rejected-truncated"
+  | "rejected-uncited"
   | "failed"
   | "skipped-budget"
   | "skipped-capability";

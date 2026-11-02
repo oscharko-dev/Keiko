@@ -750,6 +750,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   private sent: SentKnowledgePrompt | undefined;
   private measuredPromptTokens = 0;
   private readonly synthesis = createGroundedSynthesisCallBudget();
+  private lastComplete = true;
 
   public constructor(
     private readonly model: ModelPort,
@@ -784,6 +785,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       });
     }
     this.measuredPromptTokens = response.usage.promptTokens;
+    this.lastComplete = response.finishReason !== "length";
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
@@ -801,6 +803,11 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   /** An optional citation repair needs a free synthesis attempt slot (#4179). */
   public repairAvailable(): boolean {
     return this.synthesis.remaining() > 0;
+  }
+
+  /** Whether the last answer ended on its own rather than at its output limit (S12 of #4173). */
+  public lastAnswerComplete(): boolean {
+    return this.lastComplete;
   }
 
   /** Counts of the last request this generator sent; undefined before the first call. */
@@ -2662,6 +2669,7 @@ function logScopedCitationReconciliation(
       refusal: enforcedNoEvidenceReason(result) !== undefined,
     },
     correlationId,
+    result.citationRepair === undefined ? {} : { citationRepairDisposition: result.citationRepair },
   );
 }
 
