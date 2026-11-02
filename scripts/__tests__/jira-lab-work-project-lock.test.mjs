@@ -1,9 +1,14 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
-import { withWorkProjectLock } from "../testing/jira-chat-lab/requirements/work-project-lock.mjs";
+import {
+  withWorkProjectLock,
+  workProjectLockHeld,
+} from "../testing/jira-chat-lab/requirements/work-project-lock.mjs";
 
 const directories = [];
 function directory() {
@@ -45,7 +50,7 @@ describe("withWorkProjectLock", () => {
     await expect(Promise.all([first, second])).resolves.toEqual(["one", "two"]);
     expect(order).toEqual(["first-start", "first-end", "second"]);
     expect(lines.map((line) => line.state)).toEqual(["waiting", "acquired"]);
-    expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
+    expect(workProjectLockHeld(dir)).toBe(false);
   });
 
   it("keeps the waiting lane's session alive on every poll and survives a failed keep-alive", async () => {
@@ -106,7 +111,7 @@ describe("withWorkProjectLock", () => {
     release();
     await Promise.all([busyLane, waitingLane]);
     expect(order).toEqual(["busy-S05", "waiting-S07", "busy-S06"]);
-    expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
+    expect(workProjectLockHeld(dir)).toBe(false);
   });
 
   it("releases the lock when the journey throws", async () => {
@@ -114,7 +119,7 @@ describe("withWorkProjectLock", () => {
     await expect(
       withWorkProjectLock(dir, "S07", () => Promise.reject(new Error("journey failed"))),
     ).rejects.toThrow("journey failed");
-    expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
+    expect(workProjectLockHeld(dir)).toBe(false);
   });
 
   it("takes over a lock whose holder is no longer running", async () => {
@@ -140,7 +145,7 @@ describe("withWorkProjectLock", () => {
         },
         {
           prepare: () => {
-            order.push(existsSync(join(dir, "work-project.lock")) ? "prepare-locked" : "prepare");
+            order.push(workProjectLockHeld(dir) ? "prepare-locked" : "prepare");
             return Promise.resolve();
           },
         },
@@ -164,7 +169,7 @@ describe("withWorkProjectLock", () => {
       ),
     ).rejects.toThrow("reset failed");
     expect(ran).toBe(false);
-    expect(existsSync(join(dir, "work-project.lock"))).toBe(false);
+    expect(workProjectLockHeld(dir)).toBe(false);
   });
 
   it("never prepares a journey that reads only the report project", async () => {
@@ -199,7 +204,7 @@ describe("withWorkProjectLock", () => {
       dir,
       "S13",
       () => {
-        lockedDuringRun = existsSync(join(dir, "work-project.lock"));
+        lockedDuringRun = workProjectLockHeld(dir);
         return Promise.resolve();
       },
       {
@@ -222,5 +227,111 @@ describe("withWorkProjectLock", () => {
       "read",
     );
     expect(existsSync(lock)).toBe(true);
+  });
+});
+
+// Two real lane processes. The lock module is the production one; the fixture only pauses a lane at
+// named points of the protocol so the schedules that lost a live lane's lock are reproduced exactly.
+const LANE = join(dirname(fileURLToPath(import.meta.url)), "fixtures/work-lock-lane/lane.mjs");
+
+describe("withWorkProjectLock across processes", () => {
+  const children = [];
+  afterEach(() => {
+    for (const child of children.splice(0)) child.kill("SIGKILL");
+  });
+
+  function startLane(config) {
+    const child = spawn(process.execPath, [LANE, JSON.stringify(config)], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", (chunk) => {
+      stderr += String(chunk);
+    });
+    const exited = new Promise((resolve) => {
+      child.on("exit", (code, signal) => resolve({ code, signal, stderr }));
+    });
+    children.push(child);
+    return exited;
+  }
+
+  async function until(markers, ...files) {
+    for (let waited = 0; waited < 20_000; waited += 10) {
+      const found = files.find((file) => existsSync(join(markers, file)));
+      if (found) return found;
+      await delay(10); // NOSONAR typescript:S9382 -- polling a child process's marker
+    }
+    throw new Error(`timed out waiting for ${files.join(" or ")}`);
+  }
+
+  const touch = (markers, file) => writeFileSync(join(markers, file), "");
+  const events = (markers) => readFileSync(join(markers, "events.log"), "utf8").trim().split("\n");
+
+  function setup() {
+    const dir = directory();
+    const markers = join(dir, "markers");
+    mkdirSync(markers);
+    const config = (name, extra = {}) => ({ name, directory: dir, markers, ...extra });
+    return { dir, markers, config };
+  }
+
+  it("keeps a live lane's lock and its issues when two lanes recover the same dead holder", async () => {
+    // A lane died holding the lock. Lane B computes its queue ticket first but publishes it late;
+    // lane A, whose ticket is later, inspects the dead owner and enters. B then resumes with the
+    // same stale observation. Removing the observed lock deleted A's live lock and, through the
+    // reset, A's issues: both lanes ran at once (#4174).
+    const { markers, config } = setup();
+    const crashed = await startLane(config("dead", { role: "crash" }));
+    expect(crashed.signal).toBe("SIGKILL");
+    const laneB = startLane(config("b", { pauses: ["ticket", "commit"] }));
+    await until(markers, "b-paused-ticket");
+    const laneA = startLane(config("a", { pauses: ["commit"] }));
+    await until(markers, "a-paused-commit");
+    touch(markers, "go-b-ticket");
+    await until(markers, "b-paused-commit");
+    touch(markers, "go-a-commit");
+    await until(markers, "a-inside");
+    touch(markers, "go-b-commit");
+    await until(markers, "b-resumed-commit");
+    const outcome = await until(markers, "b-polled", "b-inside");
+    expect(outcome).toBe("b-polled");
+    expect(existsSync(join(markers, "req-1"))).toBe(true);
+    expect(events(markers)).toEqual(["dead-prepare", "dead-enter", "a-prepare", "a-enter"]);
+    touch(markers, "release-a");
+    await until(markers, "b-inside");
+    touch(markers, "release-b");
+    await expect(Promise.all([laneA, laneB])).resolves.toMatchObject([{ code: 0 }, { code: 0 }]);
+    expect(events(markers)).toEqual([
+      "dead-prepare",
+      "dead-enter",
+      "a-prepare",
+      "a-enter",
+      "a-exit",
+      "b-prepare",
+      "b-enter",
+      "b-exit",
+    ]);
+  });
+
+  it("serves a fresh lock the same way: the second lane waits and then runs alone", async () => {
+    const { markers, config } = setup();
+    const laneA = startLane(config("a"));
+    await until(markers, "a-inside");
+    const laneB = startLane(config("b"));
+    await until(markers, "b-polled");
+    expect(existsSync(join(markers, "b-inside"))).toBe(false);
+    expect(existsSync(join(markers, "req-1"))).toBe(true);
+    touch(markers, "release-a");
+    await until(markers, "b-inside");
+    touch(markers, "release-b");
+    await expect(Promise.all([laneA, laneB])).resolves.toMatchObject([{ code: 0 }, { code: 0 }]);
+    expect(events(markers)).toEqual([
+      "a-prepare",
+      "a-enter",
+      "a-exit",
+      "b-prepare",
+      "b-enter",
+      "b-exit",
+    ]);
   });
 });
