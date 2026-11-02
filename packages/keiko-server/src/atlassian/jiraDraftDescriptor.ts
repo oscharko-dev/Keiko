@@ -18,7 +18,7 @@ const DESCRIPTION =
 // that does not match it.
 const STAGED_ITEM = {
   type: "object",
-  description: "One item in the jira.draft item form.",
+  description: "One item in the jira.draft item form, requirementIds included.",
   properties: {},
   required: [],
   additionalProperties: true,

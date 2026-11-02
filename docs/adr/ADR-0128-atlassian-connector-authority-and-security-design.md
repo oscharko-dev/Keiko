@@ -727,7 +727,11 @@ changes nothing in Jira, so it needs the Chat's read grant, not a write approval
 appends at most 50 validated items to a server-held draft session — in memory only, bound to the
 Chat that started it, expiring when idle, and bounded per Chat and in total, exactly like a
 `jira.report` session — and returns its `draftId`, the `draftDigest` of the exact item list, the
-item count and the `unresolvedRefs` still to be written. Every appended item first passes the
+item count and the `unresolvedRefs` still to be written. Its item schema only points at
+`jira.draft`'s item form to keep the catalog small, and names `requirementIds` there, because that
+schema is the only place a model learns of the trace argument (lab S14, 2026-11-02: a model staged
+four epics without `requirementIds`, so none traced its requirement and the later change comparison
+found no baseline). Every appended item first passes the
 customer-template dry run of a create (#4177); a violating page is refused whole with the violations
 and nothing of it is staged. When the draft is complete the model calls `jira.draft` once with only
 `{draftId, draftDigest}` (a call may instead carry one page of `items` itself). The call's arguments
