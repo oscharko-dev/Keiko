@@ -224,10 +224,12 @@ function metadataResult(
   return withDraftPointer(remoteJiraPage(body, metadataItems(body.values), startAt, maxResults));
 }
 // A model reads create fields right before it creates. Several issues created one by one ask the
-// human once each; one jira.draft asks once (S05 of epic #4173: three epics, three approvals).
+// human once each; one jira.draft asks once (S05 of epic #4173: three epics, three approvals). A
+// field left out of the draft costs one more approval per issue to add later (S05, Qwen: labels
+// added by three edits), and a description written as a JSON object loses its sections (S05, Gemma).
 const DRAFT_POINTER = Object.freeze({
   tool: "jira.draft",
-  use: "To create several issues, put them all in one jira.draft: the human approves the whole draft once. jira.create asks once per issue.",
+  use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves the draft once, while each jira.create or later jira.edit asks again. Write a description as text with a heading per section, never as JSON.",
 });
 function withDraftPointer(result: ManagedMcpToolResult): ManagedMcpToolResult {
   return result.data.outcome === "succeeded"

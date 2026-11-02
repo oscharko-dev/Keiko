@@ -425,14 +425,15 @@ it("keeps legacy metadata paging distinct from issue paging", async () => {
 });
 it("points create fields at jira.draft for several issues, and only create fields", async () => {
   // S05 of epic #4173: a model read create fields, then created three epics one by one and the
-  // human approved three times where one draft asks once.
+  // human approved three times where one draft asks once. Later runs left the labels out of the
+  // draft and added them by three edits, or wrote the description as a JSON object.
   const created = await fixture({ ...REMOTE_PAGE, values: [META] }).run("jira.create-fields", {
     projectKey: "SYN",
     issueTypeId: "1",
   });
   expect(created.data.draft).toEqual({
     tool: "jira.draft",
-    use: "To create several issues, put them all in one jira.draft: the human approves the whole draft once. jira.create asks once per issue.",
+    use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves the draft once, while each jira.create or later jira.edit asks again. Write a description as text with a heading per section, never as JSON.",
   });
   const types = await fixture({
     ...REMOTE_PAGE,
