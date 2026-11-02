@@ -10,7 +10,7 @@
 // content-free fields; only the terminal run-completed event carries the already-redacted
 // VerificationReport. A step event never embeds the full VerificationResult (which holds outputSummary).
 
-import { COMMAND_TASK_TRUST_STATES, type CommandTaskTrustState } from "./command-runner.js";
+import { COMMAND_TASK_TRUST_STATES, type CommandTaskTrustState } from "./command-task-trust.js";
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
 import {
   isVerificationReport,

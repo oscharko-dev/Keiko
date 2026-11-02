@@ -180,6 +180,7 @@
     "keiko-contracts/coding-workbench-runtime-research",
     "keiko-contracts/coding-workbench-validation",
     "keiko-contracts/command-runner",
+    "keiko-contracts/command-task-trust",
     "keiko-contracts/command-termination",
     "keiko-contracts/comparators",
     "keiko-contracts/connected-context",

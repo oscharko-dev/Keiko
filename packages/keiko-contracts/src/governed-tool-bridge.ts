@@ -1,4 +1,4 @@
-import { isRecord } from "./run-result-validation.js";
+import { isRecord } from "./contract-validation-primitives.js";
 import {
   CHANGESET_EDIT_ARGUMENT_LIMITS,
   GENERIC_TOOL_ARGUMENT_LIMITS,
