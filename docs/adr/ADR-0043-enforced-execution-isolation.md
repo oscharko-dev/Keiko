@@ -820,3 +820,31 @@ reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 
 is the qualification evidence for this decision. It passed on 2026-11-01 (head `9b851924a`, Windows Server 2025): the confined root connected to
 the permitted gateway port and the hostile port stayed refused (10013), where the same probe had
 timed out (10060) before the exemption.
+
+### D19 — An administrator installs the Windows broker once; ordinary launches never elevate
+
+Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
+<status|install|repair|uninstall>` owns that lifecycle (owner decisions, 2026-11-02):
+
+- **Elevation.** Windows asks through UAC. Only the native supervisor runs elevated
+  (`native/runtime-supervisor/windows/gateway_install.c`); Node and package scripts do not. The
+  helper refuses unless its own bytes match the pin, and only a release-qualified Windows package
+  yields a pin, so install accepts exactly what a launch would accept. Until releases carry a
+  verified Authenticode signature, UAC names an unknown publisher.
+- **Placement.** The image goes to `%ProgramFiles%\KeikoRuntimeGateway`, which is owned by
+  Administrators and closed to inherited or user write access. The copy is verified again there,
+  before the running service is stopped, so a failed copy leaves the old broker serving.
+- **Start.** The service is `SERVICE_AUTO_START` with delayed start, depends on BFE and runs as
+  LocalSystem with its default service permissions. It restarts after a failed stop, because a
+  standard user cannot start it and a launch must not prompt.
+- **Updates.** A helper that changes between releases leaves the installed digest stale, and the
+  launch refuses until `repair` runs, at one UAC prompt per change. There is no self-update: that
+  would need a verified signature chain the Windows releases do not have yet.
+- **Removal.** Uninstall refuses while a durable deny guard remains, because such a guard may still
+  protect a live tree and removing it could widen that tree's access. Clearing a guard whose tree
+  is known to be gone remains the open recovery work D18 names, so uninstall stays refused until
+  that exists.
+
+Every action records body-free lifecycle evidence as `cli.gateway-service.*`. The lifecycle is
+qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
+product path instead of `New-Service`.

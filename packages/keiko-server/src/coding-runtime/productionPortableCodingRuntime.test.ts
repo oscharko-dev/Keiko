@@ -31,6 +31,7 @@ import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-
 import {
   discoverQualifiedPortableOpenCode,
   portableInstallCarriesReleaseSignature,
+  releasedWindowsGatewayHelperPin,
 } from "./productionPortableCodingRuntime.js";
 
 const TARGET = "windows-x64";
@@ -42,6 +43,28 @@ const LINUX_TARGET = "linux-x64";
 const LINUX_LAUNCHER = "qualified Linux launcher";
 const LINUX_NODE = "qualified Linux Node.js";
 const LINUX_USEARCH = "qualified Linux USearch";
+
+describe("released Windows gateway helper pin", () => {
+  const released = {
+    target: "windows-x64",
+    platformAssurance: "release-qualified",
+    nativeHelperSha256: "a".repeat(64),
+  } as const;
+
+  it("yields the digest only for a release-qualified Windows package", () => {
+    expect(releasedWindowsGatewayHelperPin(released)).toBe("a".repeat(64));
+    expect(
+      releasedWindowsGatewayHelperPin({ ...released, platformAssurance: "evaluation-unqualified" }),
+    ).toBeUndefined();
+    expect(releasedWindowsGatewayHelperPin({ ...released, target: "linux-x64" })).toBeUndefined();
+    expect(
+      releasedWindowsGatewayHelperPin({
+        target: "windows-x64",
+        platformAssurance: "release-qualified",
+      }),
+    ).toBeUndefined();
+  });
+});
 
 describe("production portable OpenCode discovery", () => {
   it("discovers only a disk-verified sidecar with a signed exact-byte attestation", () => {

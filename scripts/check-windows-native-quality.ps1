@@ -377,9 +377,21 @@ process.exit(41);
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
-  $gatewaySources = @("gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  $gatewaySources = @("gateway_install", "gateway_installed", "gateway_service", "gateway_loopback", "gateway_peer", "gateway_request", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
   & cl.exe @c11Flags $productionMTFlag "/Fo:$scratch\" "/Fe:$supervisorOut" $supervisor @gatewaySources /link @productionLinkFlags advapi32.lib userenv.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
+
+  # #4068 W1/W11: install rules that need no administrator rights. The installed lifecycle itself
+  # runs on the disposable runner in scripts/testing/test-windows-gateway-scm.ps1.
+  $installTest = Join-Path (Split-Path $supervisor) "gateway_install.test.c"
+  $installTestOut = Join-Path $scratch "gateway-install-test.exe"
+  $installScratch = Join-Path $scratch "install-test"
+  New-Item -ItemType Directory -Force -Path $installScratch | Out-Null
+  $installSources = @("gateway_install", "gateway_installed", "gateway_wfp") | ForEach-Object { Join-Path (Split-Path $supervisor) "$_.c" }
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$installScratch\" "/Fe:$installTestOut" @installSources $installTest /link advapi32.lib fwpuclnt.lib rpcrt4.lib ws2_32.lib
+  if ($LASTEXITCODE -ne 0) { throw "MSVC gateway install test analysis failed" }
+  & $installTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows gateway install rules failed" }
 
   # #4068 W1/W11: the loopback-exemption list rules (keep foreign entries, never duplicate, remove
   # only the run's SID, no rewrite of an unchanged list) against an in-memory configuration list.

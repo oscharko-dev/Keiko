@@ -979,12 +979,27 @@ native profile and its seatbelt/kernel allowlist remain macOS/Linux-only by owne
 helper-source approval pin and D12 reference evidence were later released without a rebuild (see
 "Evidence pins released on 2026-11-02").
 
+### Gateway service lifecycle on 2026-11-02 (W1/W3/W13 components)
+
+`keiko gateway-service` now owns install, repair, status and removal (ADR-0043 D19). On the Windows
+11 host, without administrator rights: the status command reports `absent` (exit 10) and a malformed
+pin is refused (exit 27) for status and install; the install rules test passes, and the supervisor
+builds under the production flags. Install, repair, uninstall, digest refusal and the service
+configuration run only on the disposable runner, through `test-windows-gateway-scm.ps1`; that run is
+their first execution and is pending. This host has not run them, and no customer installation is
+qualified.
+
+Known limits: uninstall refuses while a durable deny guard remains; a launch refused for a missing
+or stale service does not yet tell the Workbench user to run `repair`; `keiko uninstall` does not
+yet remove or mention the service; a published release is still `evaluation-unqualified`, so the
+command refuses it with `helper-not-qualified`.
+
 ### Current acceptance priorities
 
 1. Prove authenticated host-to-sidecar control and concurrent tree isolation on the
    installed path. The application-isolation drop on the gateway listener's receive path is
    resolved (ADR-0043 D18). These are prerequisites for a successful task (W1/W11).
-2. Qualify standard-user service setup, crash recovery, stale installation refusal and
+2. Qualify the gateway service lifecycle above, crash recovery, stale installation refusal and
    upgrade/rollback. The release owner must approve the Windows runtime/helper inputs
    before a customer npm launch can be qualified (W3/W4/W9/W13).
 3. Run the standalone and Workbench task suites in all three modes with an approved

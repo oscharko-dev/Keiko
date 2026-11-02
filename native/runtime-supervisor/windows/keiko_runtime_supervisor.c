@@ -1,4 +1,5 @@
 /* KRP1/KRC1/KRS1 no-shell Windows Job Object runtime supervisor. */
+#include "gateway_install.h"
 #include "gateway_service.h"
 #include <shlobj.h>
 #pragma comment(lib, "shell32.lib")
@@ -603,6 +604,12 @@ int wmain(int argc, wchar_t **argv) {
   if (argc == 2 && wcscmp(argv[1], L"--gateway-service") == 0) return keiko_gateway_dispatch();
   if (argc == 3 && wcscmp(argv[1], L"--gateway-installed") == 0)
     return keiko_gateway_launch_installed(argv[2]);
+  if (argc == 3 && wcscmp(argv[1], L"--gateway-service-status") == 0)
+    return keiko_gateway_service_status(argv[2]);
+  if (argc == 3 && wcscmp(argv[1], L"--gateway-service-install") == 0)
+    return keiko_gateway_service_install(argv[2]);
+  if (argc == 2 && wcscmp(argv[1], L"--gateway-service-uninstall") == 0)
+    return keiko_gateway_service_uninstall();
   if (argc == 2 && wcscmp(argv[1], L"--probe-stdio-owner") == 0) {
     puts("{\"schemaVersion\":1,\"ownedStdio\":\"windows-job\"}");
     return 0;
