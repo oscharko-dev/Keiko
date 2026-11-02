@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   JIRA_DRAFT_RESULT_ROWS_MAX,
+  JIRA_MUTATION_DETAIL_LIMITS,
   JIRA_MUTATION_LINKS_MAX,
+  JIRA_TEMPLATE_VIOLATIONS_MAX,
+  sanitizeJiraMutationFailureDetail,
   type JiraMutationAttempt,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
@@ -10,7 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { catalogJsonBytes, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
-import { jiraAttemptToolResult } from "./jiraMutationResult.js";
+import { JIRA_REJECTED_GUIDANCE, jiraAttemptToolResult } from "./jiraMutationResult.js";
 
 const PROJECTION = "c".repeat(64) as CatalogDigest;
 
@@ -169,4 +172,119 @@ it("keeps every single-issue mutation at one result", () => {
   for (const declaration of JIRA_MUTATION_DECLARATIONS)
     if (declaration.name !== "jira.draft")
       expect(declaration.descriptor.bounds.maxResultCount).toBe(1);
+});
+
+// Review (#4176 AC4): a refused write must return every field error Jira gave, with the display
+// names and guidance that let the model correct it. The result bound is the encoded worst case of
+// what the sanitizer admits, not an ASCII one, for every operation that can return it.
+describe("the refusal detail of every single-issue mutation fits its descriptor (review)", () => {
+  const TEXTS: readonly (readonly [string, string])[] = [
+    ["ASCII", "x".repeat(200)],
+    ["quotes", '"'.repeat(200)],
+    ["backslashes", "\\".repeat(200)],
+    ["CJK", "漢".repeat(200)],
+    ["emoji", "😀".repeat(200)],
+    ["lone surrogates", "\ud800".repeat(200)],
+  ];
+  const OPERATIONS = [
+    "jira.create",
+    "jira.edit",
+    "jira.assign",
+    "jira.comment",
+    "jira.transition",
+    "jira.attach",
+  ];
+  const GATED = ["jira.create", "jira.edit", "jira.transition"];
+  const descriptorOf = (
+    name: string,
+  ): (typeof JIRA_MUTATION_DECLARATIONS)[number]["descriptor"] => {
+    const declaration = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === name);
+    if (declaration === undefined) throw new Error(`Expected the ${name} declaration`);
+    return declaration.descriptor;
+  };
+  function envelopeOf(
+    descriptor: (typeof JIRA_MUTATION_DECLARATIONS)[number]["descriptor"],
+    data: CatalogJsonObject,
+  ): unknown {
+    return {
+      schemaVersion: 1,
+      invocationId: "catalog-invocation-refused",
+      toolRef: descriptor.toolRef,
+      projectionDigest: PROJECTION,
+      effectStarted: true,
+      status: "completed",
+      reason: "none",
+      data,
+      page: { truncated: false, reason: "none", cursor: null },
+      metrics: {
+        inputBytes: 10,
+        outputBytes: catalogJsonBytes(data),
+        resultCount: 1,
+        durationMs: 10,
+      },
+    };
+  }
+  function refusedWith(text: string, fieldId: string): JiraMutationAttempt {
+    const detail = sanitizeJiraMutationFailureDetail({
+      fieldErrors: Array.from({ length: 16 }, () => ({ fieldId, fieldName: text, message: text })),
+      messages: [text, text, text, text],
+    });
+    return { ok: false, reason: "field-validation", ...(detail === undefined ? {} : { detail }) };
+  }
+
+  it.each(OPERATIONS.flatMap((name) => TEXTS.map(([kind, text]) => [name, kind, text] as const)))(
+    "%s returns eight named field errors and three messages made of %s",
+    (name, _kind, text) => {
+      const descriptor = descriptorOf(name);
+      const attempt = refusedWith(text, "a".repeat(64));
+      const result = jiraAttemptToolResult("rejected", attempt).data;
+      expect(Reflect.get(result, "fieldErrors") as unknown[]).toHaveLength(
+        JIRA_MUTATION_DETAIL_LIMITS.fieldErrors,
+      );
+      expect(Reflect.get(result, "messages") as unknown[]).toHaveLength(
+        JIRA_MUTATION_DETAIL_LIMITS.messages,
+      );
+      expect(Reflect.get(result, "guidance")).toBe(JIRA_REJECTED_GUIDANCE);
+      const bound = descriptor.bounds.maxResultBytes;
+      expect(catalogJsonBytes(result)).toBeLessThanOrEqual(bound);
+      expect(
+        validateToolResultEnvelope(envelopeOf(descriptor, result), {
+          descriptor,
+          projectionDigest: PROJECTION,
+        }),
+      ).toMatchObject({ status: "completed" });
+    },
+  );
+
+  it.each(GATED.flatMap((name) => TEXTS.map(([kind, text]) => [name, kind, text] as const)))(
+    "%s returns the largest template refusal beside the largest detail, made of %s",
+    (name, _kind, text) => {
+      const descriptor = descriptorOf(name);
+      const refused = refusedWith(text, "a".repeat(64));
+      const attempt: JiraMutationAttempt = {
+        ...refused,
+        violations: Array.from({ length: JIRA_TEMPLATE_VIOLATIONS_MAX }, () => ({
+          ruleId: "template-unreadable" as const,
+          subject: text.repeat(2).slice(0, 120),
+          template: text.repeat(2).slice(0, 256),
+        })),
+      } as JiraMutationAttempt;
+      const result = jiraAttemptToolResult("rejected", attempt).data;
+      expect(Reflect.get(result, "violations") as unknown[]).toHaveLength(
+        JIRA_TEMPLATE_VIOLATIONS_MAX,
+      );
+      expect(catalogJsonBytes(result)).toBeLessThanOrEqual(descriptor.bounds.maxResultBytes);
+      expect(
+        validateToolResultEnvelope(envelopeOf(descriptor, result), {
+          descriptor,
+          projectionDigest: PROJECTION,
+        }),
+      ).toMatchObject({ status: "completed" });
+    },
+  );
+
+  it("needed more than the former 4,096 bytes for the largest named refusal", () => {
+    const result = jiraAttemptToolResult("rejected", refusedWith("x".repeat(200), "a".repeat(64)));
+    expect(catalogJsonBytes(result.data)).toBeGreaterThan(4096);
+  });
 });

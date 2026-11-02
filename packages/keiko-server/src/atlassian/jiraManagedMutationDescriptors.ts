@@ -181,20 +181,45 @@ const LINK_RESULT = {
   },
   linksUnconfirmed: { type: "boolean" },
 };
-// The partial-effect result of a create or edit lists every requested link as missing, after the
-// issue was already created: a result the catalog rejects would lose the receipt and the repair
-// details exactly then. The bound is the worst case of what the producer can emit, in encoded
-// bytes: a link type name of up to 255 UTF-16 units (a lone surrogate is escaped to 6 JSON bytes,
-// CJK text takes 3 and an emoji 4), an issue key of up to 128 characters and the JSON around them,
-// for each of the most links a request may carry, beside the usual result.
-const LINK_TYPE_UNITS_MAX = 255;
+// A result bound is the worst case of what the producer can emit, in encoded bytes, never the
+// ASCII one. A refusal carries up to eight field errors (id, display name, message) and three
+// messages, each string bounded to JIRA_MUTATION_DETAIL_LIMITS.messageBytes of its JSON encoding by
+// the sanitizer, beside the usual result (outcome, reason, guidance and receipt identities). A
+// create, edit or transition can also carry the issue-template violations of the gate: a subject of
+// up to 120 and a template of up to 256 UTF-16 units, where a lone surrogate is escaped to 6 JSON
+// bytes, CJK text takes 3 and an emoji 4. The partial-effect result of a create or edit lists every
+// requested link as missing after the issue was already created: a link type name of up to 255
+// units, an issue key of up to 128 characters and the JSON around them, for each of the most links
+// a request may carry. A result the catalog rejects would lose the receipt and the correction
+// details exactly then.
 const JSON_BYTES_PER_UNIT_MAX = 6;
+const JSON_STRING_QUOTES = 2;
+const JSON_OBJECT_OVERHEAD = 64;
+const DETAIL_STRING_BYTES_MAX = JIRA_MUTATION_DETAIL_LIMITS.messageBytes + JSON_STRING_QUOTES;
+const FIELD_ERROR_BYTES_MAX =
+  64 + JSON_STRING_QUOTES + 2 * DETAIL_STRING_BYTES_MAX + JSON_OBJECT_OVERHEAD;
+const DETAIL_BYTES_MAX =
+  JIRA_MUTATION_DETAIL_LIMITS.fieldErrors * FIELD_ERROR_BYTES_MAX +
+  JIRA_MUTATION_DETAIL_LIMITS.messages * (DETAIL_STRING_BYTES_MAX + 1) +
+  JSON_OBJECT_OVERHEAD;
+const VIOLATION_BYTES_MAX =
+  (Math.max(...JIRA_TEMPLATE_RULE_IDS.map((id) => id.length)) + 120 + 256) *
+    JSON_BYTES_PER_UNIT_MAX +
+  JSON_OBJECT_OVERHEAD;
+const LINK_TYPE_UNITS_MAX = 255;
 const LINK_REF_BYTES_MAX = LINK_TYPE_UNITS_MAX * JSON_BYTES_PER_UNIT_MAX + 128 + 64;
-const USUAL_RESULT_BYTES_MAX = 12288;
-const LINKED_RESULT_BOUNDS = {
-  maxResultBytes: USUAL_RESULT_BYTES_MAX + JIRA_ISSUE_LINKS_MAX * LINK_REF_BYTES_MAX,
+const USUAL_RESULT_BYTES_MAX = 4096;
+const SINGLE_RESULT_BYTES_MAX = USUAL_RESULT_BYTES_MAX + DETAIL_BYTES_MAX;
+const GATED_RESULT_BYTES_MAX =
+  SINGLE_RESULT_BYTES_MAX + JIRA_TEMPLATE_VIOLATIONS_MAX * VIOLATION_BYTES_MAX;
+const GATED_RESULT_BOUNDS = {
+  maxResultBytes: GATED_RESULT_BYTES_MAX,
   maxDurationMs: 90000,
   maxResultCount: 1,
+};
+const LINKED_RESULT_BOUNDS = {
+  ...GATED_RESULT_BOUNDS,
+  maxResultBytes: GATED_RESULT_BYTES_MAX + JIRA_ISSUE_LINKS_MAX * LINK_REF_BYTES_MAX,
 };
 
 export const JIRA_VIOLATIONS_SCHEMA = {
@@ -367,6 +392,7 @@ const DEFINITIONS: Readonly<
       { issueKey: ISSUE_KEY, transitionId: NUMERIC_ID, fields: FIELDS, updates: UPDATES },
       ["issueKey", "transitionId"],
     ),
+    bounds: GATED_RESULT_BOUNDS,
   },
   "jira.attach": {
     description:
@@ -427,7 +453,7 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
       handlerRequirement: { id: name, contractVersion: 1 },
       bounds: {
         maxArgumentBytes: 262144,
-        maxResultBytes: definition.bounds?.maxResultBytes ?? 4096,
+        maxResultBytes: definition.bounds?.maxResultBytes ?? SINGLE_RESULT_BYTES_MAX,
         maxResultCount: definition.bounds?.maxResultCount ?? 1,
         maxDurationMs: definition.bounds?.maxDurationMs ?? 90000,
       },

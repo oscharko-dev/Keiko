@@ -399,9 +399,14 @@ metadata projects Jira's declared `schemaType` so a caller can shape an opaque v
 write returns, to the model only, the refused field with Keiko's closed validation reason, or
 Jira's own bounded field errors and messages (at most 8 and 3, each cut on code-point boundaries
 to 200 UTF-8 bytes of its JSON encoding, control characters removed, so quotes and non-ASCII text
-cannot push the detail past the 4 KiB result bound); none of it is logged. A field error also
+cannot push one string past its bound); none of it is logged. A field error also
 carries the field's display name (`fieldName`) when the request's current metadata knows it, so the
-model and the person see "Risk class", not only `customfield_10000`. Every result also carries a
+model and the person see "Risk class", not only `customfield_10000`. Every mutation descriptor's
+result bound is the encoded worst case of what the producer can emit, derived from those limits: the
+usual 4 KiB result plus eight named field errors and three messages, plus, for the operations the
+issue-template gate can refuse (create, edit, transition), 25 violations at their worst-case
+encoding, plus, for create and edit, the requested links; a refusal never loses its correction
+detail to the catalog's byte bound. Every result also carries a
 fixed `guidance` sentence, never derived from remote text: after a definitive rejection it tells the
 model to correct the named fields and send the corrected change once, and to explain in plain
 language which field is the problem if Jira refuses again; after an uncertain outcome
