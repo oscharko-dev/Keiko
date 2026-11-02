@@ -2078,7 +2078,11 @@ export function runtimeOperationsModule(typedRegistry) {
       ...runConstructors,
     ].join(", ")} } from "./activity-log-field-contracts.js";`,
     ...factories,
-    `export const ACTIVITY_LOG_OPERATION_REGISTRY = [${operations}] as const;`,
+    // The registry calls the field constructors while the module loads. Marking that one call pure
+    // lets a bundler drop the registry from a bundle that never reads it, such as the first-load UI
+    // chunk, as it could when the registry was plain literals.
+    "// The registry only calls side-effect-free field constructors.",
+    `export const ACTIVITY_LOG_OPERATION_REGISTRY = /*#__PURE__*/ (() => [${operations}] as const)();`,
     "",
   ].join("\n");
 }
