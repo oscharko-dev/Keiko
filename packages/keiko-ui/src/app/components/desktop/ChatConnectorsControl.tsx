@@ -32,15 +32,19 @@ function reportConnectorFailure(message: string, error: unknown): void {
   });
 }
 
-/** One PATCH at a time; a reply for a Chat that is no longer shown is not published. */
+/** One PATCH at a time; a reply for another Chat, or older than the shown revision, is dropped. */
 function useChatConnectorPatch(
   chat: Chat,
   onChatChanged: (chat: Chat) => void,
   persist: typeof updateGroundingScopes,
 ): { busy: boolean; failed: boolean; submit: (patch: UpdateChatInput) => void } {
   const locked = useRef(false);
-  const shown = useRef(chat.id);
-  shown.current = chat.id;
+  // The newest revision this control has seen or published for the shown Chat.
+  const shown = useRef({ id: chat.id, updatedAt: chat.updatedAt });
+  shown.current =
+    shown.current.id === chat.id
+      ? { id: chat.id, updatedAt: Math.max(shown.current.updatedAt, chat.updatedAt) }
+      : { id: chat.id, updatedAt: chat.updatedAt };
   const [busy, setBusy] = useState(false);
   const [failedChat, setFailedChat] = useState<string>();
   const submit = (patch: UpdateChatInput): void => {
@@ -49,7 +53,9 @@ function useChatConnectorPatch(
     setBusy(true);
     setFailedChat(undefined);
     const publish = (updated: Chat): void => {
-      if (shown.current === updated.id) onChatChanged(updated);
+      if (shown.current.id !== updated.id || updated.updatedAt < shown.current.updatedAt) return;
+      shown.current = { id: updated.id, updatedAt: updated.updatedAt };
+      onChatChanged(updated);
     };
     void persist(chat, patch, publish)
       .then(publish)

@@ -349,6 +349,29 @@ describe("ChatConnectorsControl", () => {
     expect(changed).not.toHaveBeenCalled();
   });
 
+  it("rejects a delayed reply older than a newer canonical state of the same Chat", async () => {
+    const user = userEvent.setup();
+    const { persist, finish } = deferredPersist();
+    const changed = vi.fn();
+    const { rerender } = render(
+      <ChatConnectorsControl chat={CHAT} onChatChanged={changed} list={list} persist={persist} />,
+    );
+    const panel = await open(user);
+    await user.click(within(panel).getByRole("switch", { name: /build/ }));
+    rerender(
+      <ChatConnectorsControl
+        chat={{ ...CHAT, updatedAt: 5 }}
+        onChatChanged={changed}
+        list={list}
+        persist={persist}
+      />,
+    );
+    await act(async () => {
+      finish({ ...CHAT, mcpServers: ["wiki"], updatedAt: 3 });
+    });
+    expect(changed).not.toHaveBeenCalled();
+  });
+
   it("publishes the interim canonical Chat that the mutation reports while it is shown", async () => {
     const user = userEvent.setup();
     const interim = { ...CHAT, updatedAt: 9 };
