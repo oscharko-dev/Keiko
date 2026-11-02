@@ -522,15 +522,17 @@ interface DialogCopy {
   readonly submitRequirements: string;
 }
 
-function computeDialogCopy(preserveExisting: boolean): DialogCopy {
+function computeDialogCopy(preserveExisting: boolean, t: GatewaySetupTranslate): DialogCopy {
   return {
-    title: preserveExisting ? "Update Keiko credentials" : "Connect Keiko to your internal LLMs",
+    title: preserveExisting
+      ? t("gatewaySetup.ui.copy.titleUpdate")
+      : t("gatewaySetup.ui.copy.titleSetup"),
     description: preserveExisting
-      ? "Leave stored gateway fields blank to keep the current value. Keiko never returns existing secrets to the browser."
-      : "Keiko needs the internal gateway URL and API token before chat and agent workflows can run. The token is tested once and stored only on this machine.",
+      ? t("gatewaySetup.ui.copy.descriptionUpdate")
+      : t("gatewaySetup.ui.copy.descriptionSetup"),
     submitRequirements: preserveExisting
-      ? "Enter at least one field to update. Blank stored gateway fields keep their current value."
-      : "Base URL and API token are required. The Figma access token is optional.",
+      ? t("gatewaySetup.ui.copy.requirementsUpdate")
+      : t("gatewaySetup.ui.copy.requirementsSetup"),
   };
 }
 
@@ -925,7 +927,7 @@ function figmaOnlyMessage(t: GatewaySetupTranslate, mode: GatewaySuccessMode): s
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.audioAndFigma");
   }
-  return "Verified Figma access token. Reloading Keiko…";
+  return t("gatewaySetup.ui.success.figmaOnly");
 }
 
 function figmaAndGatewaySettingsMessage(
@@ -935,7 +937,7 @@ function figmaAndGatewaySettingsMessage(
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.gatewayAudioAndFigma");
   }
-  return "Updated model gateway settings and verified Figma access token. Reloading Keiko…";
+  return t("gatewaySetup.ui.success.gatewayAndFigma");
 }
 
 function noFigmaNoGatewayCredentialsMessage(
@@ -945,7 +947,7 @@ function noFigmaNoGatewayCredentialsMessage(
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.audio");
   }
-  return "Updated model gateway settings. Reloading Keiko…";
+  return t("gatewaySetup.ui.success.gateway");
 }
 
 function figmaAndVerifiedModelsMessage(
@@ -1154,17 +1156,21 @@ function GatewayBaseUrlField({
   inputRef,
   onChange,
 }: GatewayBaseUrlFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field gw-span-2">
       <span>
-        Base URL {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        {t("gatewaySetup.ui.baseUrl")}{" "}
+        {preserveExisting ? (
+          <span className="dlg-opt">{t("gatewaySetup.ui.leaveBlankToKeep")}</span>
+        ) : null}
       </span>
       <input
         className="gw-input mono"
         value={value}
         placeholder={
           preserveExisting
-            ? "Only enter a value to replace the stored gateway URL"
+            ? t("gatewaySetup.ui.baseUrlReplacePlaceholder")
             : "https://llm-gateway.example.com/v1"
         }
         autoComplete="off"
@@ -1194,10 +1200,14 @@ function GatewayApiKeyField({
   disabled,
   onChange,
 }: GatewayApiKeyFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
       <span>
-        API token {preserveExisting ? <span className="dlg-opt">leave blank to keep</span> : null}
+        {t("gatewaySetup.ui.apiToken")}{" "}
+        {preserveExisting ? (
+          <span className="dlg-opt">{t("gatewaySetup.ui.leaveBlankToKeep")}</span>
+        ) : null}
       </span>
       <input
         className="gw-input mono"
@@ -1205,8 +1215,8 @@ function GatewayApiKeyField({
         value={value}
         placeholder={
           preserveExisting
-            ? "Only enter a value to replace the stored token"
-            : "Paste your API token"
+            ? t("gatewaySetup.ui.apiTokenReplacePlaceholder")
+            : t("gatewaySetup.ui.apiTokenPlaceholder")
         }
         autoComplete="off"
         disabled={disabled}
@@ -1234,15 +1244,18 @@ function GatewayApiKeyHeaderField({
   disabled,
   onChange,
 }: GatewayApiKeyHeaderFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
       <span>
-        API key header <span className="dlg-opt">optional</span>
+        {t("gatewaySetup.ui.apiKeyHeader")} <span className="dlg-opt">{t("common.optional")}</span>
       </span>
       <input
         className="gw-input mono"
         value={value}
-        placeholder={preserveExisting ? "Leave blank to keep stored header" : "Authorization"}
+        placeholder={
+          preserveExisting ? t("gatewaySetup.ui.headerPreservePlaceholder") : "Authorization"
+        }
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1299,16 +1312,18 @@ function GatewayTimeoutField({
   disabled,
   onChange,
 }: GatewayTimeoutFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
       <span>
-        Request timeout (ms) <span className="dlg-opt">optional</span>
+        {t("gatewaySetup.ui.requestTimeout")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
       </span>
       <input
         className="gw-input mono"
         inputMode="numeric"
         value={value}
-        placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "120000"}
+        placeholder={preserveExisting ? t("gatewaySetup.ui.timeoutPreservePlaceholder") : "120000"}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1328,13 +1343,14 @@ function GatewayDeploymentNamesField({
   disabled,
   onChange,
 }: GatewayDeploymentNamesFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
-      <span>Deployment names for Microsoft Foundry</span>
+      <span>{t("gatewaySetup.ui.deploymentNames")}</span>
       <textarea
         className="gw-input gw-textarea mono"
         value={value}
-        placeholder="Paste deployment names, one per line"
+        placeholder={t("gatewaySetup.ui.deploymentNamesPlaceholder")}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1354,15 +1370,17 @@ function GatewayImageInputModelsField({
   disabled,
   onChange,
 }: GatewayImageInputModelsFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
       <span>
-        Image-input models <span className="dlg-opt">optional</span>
+        {t("gatewaySetup.ui.imageInputModels")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
       </span>
       <textarea
         className="gw-input gw-textarea mono"
         value={value}
-        placeholder="Paste image-capable model names, one per line"
+        placeholder={t("gatewaySetup.ui.imageInputModelsPlaceholder")}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -1523,26 +1541,27 @@ function GatewayStoredCredentials({
   hiddenModelCount,
   fields,
 }: GatewayStoredCredentialsProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <>
-      <div className="gw-current" aria-label="Stored model gateway credentials">
+      <div className="gw-current" aria-label={t("gatewaySetup.ui.storedAria")}>
         <div className="gw-current-row">
-          <span>Gateway URL</span>
-          <strong>Stored</strong>
+          <span>{t("gatewaySetup.ui.gatewayUrl")}</span>
+          <strong>{t("gatewaySetup.ui.stored")}</strong>
         </div>
         <div className="gw-current-row">
-          <span>API token</span>
+          <span>{t("gatewaySetup.ui.apiToken")}</span>
           <strong className="mono">••••••••••••</strong>
         </div>
         <div className="gw-current-row">
-          <span>API key header</span>
+          <span>{t("gatewaySetup.ui.apiKeyHeader")}</span>
           <strong className="mono">{storedApiKeyHeaderName ?? "authorization"}</strong>
         </div>
         <div className="gw-current-models">
-          <span>Configured models</span>
+          <span>{t("gatewaySetup.ui.configuredModels")}</span>
           <div className="gw-model-chips">
             {visibleModelNames.length === 0 ? (
-              <strong>Stored</strong>
+              <strong>{t("gatewaySetup.ui.stored")}</strong>
             ) : (
               visibleModelNames.map((modelId) => (
                 <strong key={modelId} className="mono">
@@ -1555,7 +1574,7 @@ function GatewayStoredCredentials({
         </div>
       </div>
       <details className="gw-replace">
-        <summary>Replace model gateway settings</summary>
+        <summary>{t("gatewaySetup.ui.replaceGateway")}</summary>
         {fields}
       </details>
     </>
@@ -1577,15 +1596,16 @@ function GatewayModelSection({
   hiddenModelCount,
   fields,
 }: GatewayModelSectionProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <section className="gw-section" aria-labelledby="gw-model-section-title">
       <div className="gw-section-head">
         <div>
-          <h2 id="gw-model-section-title">Model gateway</h2>
+          <h2 id="gw-model-section-title">{t("gatewaySetup.ui.modelGateway")}</h2>
           <p>
             {preserveExisting
-              ? "Blank gateway fields keep the stored value."
-              : "Base URL and API token are required."}
+              ? t("gatewaySetup.ui.blankKeepsStored")
+              : t("gatewaySetup.ui.baseUrlAndTokenRequired")}
           </p>
         </div>
       </div>
@@ -1878,11 +1898,12 @@ function VoiceProviderLocalityField({
   return (
     <div className="gw-field">
       <span id={labelId}>
-        Provider locality <span className="dlg-opt">optional</span>
+        {t("gatewaySetup.ui.providerLocality")}{" "}
+        <span className="dlg-opt">{t("common.optional")}</span>
       </span>
       <KeikoSelect
         ariaLabelledBy={labelId}
-        menuTitle="Provider locality"
+        menuTitle={t("gatewaySetup.ui.providerLocality")}
         sections={voiceProviderLocalitySections(t)}
         showMenuHeader={false}
         triggerClassName="gw-input gw-provider-locality-select"
@@ -2424,11 +2445,15 @@ function VoiceStoredCredentials({
       <div className="gw-current" aria-label={t("gatewaySetup.voice.storedAria")}>
         <div className="gw-current-row">
           <span>{t("gatewaySetup.voice.audioModels")}</span>
-          <strong>{voiceModelNames.length > 0 ? "Stored" : "Not configured"}</strong>
+          <strong>
+            {voiceModelNames.length > 0
+              ? t("gatewaySetup.ui.stored")
+              : t("gatewaySetup.ui.notConfigured")}
+          </strong>
         </div>
         {voiceModelNames.length > 0 ? (
           <div className="gw-current-models">
-            <span>Voice models</span>
+            <span>{t("gatewaySetup.ui.voiceModels")}</span>
             <div className="gw-model-chips">
               {voiceModelNames.map((modelId) => (
                 <strong key={modelId} className="mono">
@@ -2511,17 +2536,18 @@ function FigmaSection({
   setFigmaAccessToken,
   figmaAccessTokenRef,
 }: FigmaSectionProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <section className="gw-section" aria-labelledby="gw-figma-section-title">
       <div className="gw-section-head">
         <div>
-          <h2 id="gw-figma-section-title">Figma Snapshot</h2>
-          <p>Optional connector credential.</p>
+          <h2 id="gw-figma-section-title">{t("gatewaySetup.ui.figmaTitle")}</h2>
+          <p>{t("gatewaySetup.ui.figmaHint")}</p>
         </div>
       </div>
       <label className="gw-field">
         <span>
-          Figma access token <span className="dlg-opt">optional</span>
+          {t("gatewaySetup.ui.figmaToken")} <span className="dlg-opt">{t("common.optional")}</span>
         </span>
         <input
           className="gw-input mono"
@@ -2529,8 +2555,8 @@ function FigmaSection({
           value={figmaAccessToken}
           placeholder={
             preserveExisting
-              ? "Stored Figma token is kept when blank"
-              : "Paste a read-only Figma PAT when needed"
+              ? t("gatewaySetup.ui.figmaPreservePlaceholder")
+              : t("gatewaySetup.ui.figmaPlaceholder")
           }
           autoComplete="off"
           disabled={busy || success !== undefined}
@@ -2555,6 +2581,7 @@ function GatewaySetupStatus({
   success,
   busy,
 }: GatewaySetupStatusProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <>
       {error !== undefined ? (
@@ -2570,7 +2597,7 @@ function GatewaySetupStatus({
       ) : null}
       {busy ? (
         <output className="gw-pending" style={NATIVE_BLOCK_STYLE}>
-          Testing credentials…
+          {t("gatewaySetup.ui.testing")}
         </output>
       ) : null}
     </>
@@ -2590,6 +2617,7 @@ function GatewaySetupActions({
   success,
   canSubmit,
 }: GatewaySetupActionsProps): ReactNode {
+  const t = useGatewaySetupTranslate();
   return (
     <div className="gw-actions">
       {onCancel !== undefined ? (
@@ -2599,7 +2627,7 @@ function GatewaySetupActions({
           disabled={busy || success !== undefined}
           onClick={onCancel}
         >
-          Cancel
+          {t("common.cancel")}
         </button>
       ) : null}
       <button
@@ -2609,7 +2637,7 @@ function GatewaySetupActions({
         aria-busy={busy}
         aria-describedby="gw-submit-requirements"
       >
-        {busy ? "Testing credentials…" : "Test & save"}
+        {busy ? t("gatewaySetup.ui.testing") : t("gatewaySetup.ui.testAndSave")}
       </button>
     </div>
   );
@@ -3310,7 +3338,7 @@ export function GatewaySetupDialog({
     hasGatewayCredentialInput,
     hasFigmaCredentialInput,
   });
-  const dialogCopy = computeDialogCopy(preserveExisting);
+  const dialogCopy = computeDialogCopy(preserveExisting, t);
   const modelNames = storedModels.map((model) => model.id);
   const visibleModelNames = modelNames.slice(0, 6);
   const hiddenModelCount = Math.max(0, modelNames.length - visibleModelNames.length);
@@ -3463,10 +3491,7 @@ export function GatewaySetupDialog({
             figmaAccessTokenRef={figmaAccessTokenRef}
           />
 
-          <div className="gw-note">
-            Stored secrets stay local and are never returned to the browser. Supported API-key
-            headers: Authorization, X-Litellm-Key, X-Api-Key, api-key.
-          </div>
+          <div className="gw-note">{t("gatewaySetup.ui.secretsNote")}</div>
           {/* role=alert/status: the test result arrives after a long async wait
               while all controls are disabled — without a live region screen
               readers never hear it (audit C084). */}

@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 // Issue #153 — governed workflow evidence inside the Conversation Center.
 //
 // RunSummaryCard renders historical workflow run metadata that already exists in the chat log.
@@ -24,6 +26,7 @@ export function isRunSummaryMessage(message: ChatMessage): boolean {
 }
 
 export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const status = message.workflowStatus ?? "queued";
   const workflowLabel = message.workflowId ?? message.taskType ?? "workflow";
   const runIdShort = message.runId === undefined ? "" : message.runId.slice(0, 8);
@@ -49,7 +52,7 @@ export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): 
       className="run-summary-card"
       data-testid="run-summary-card"
       data-status={status}
-      aria-label={`Workflow run ${workflowLabel} - ${status}`}
+      aria-label={tUi("workflowHandoff.ui.run", { label: workflowLabel, status })}
     >
       <header className="run-summary-card-head">
         <SparkIcon size={14} style={{ color: "var(--accent)" }} />
@@ -76,14 +79,17 @@ export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): 
           </p>
         ) : null}
         {message.runId !== undefined ? (
-          <div className="run-summary-card-actions" aria-label="Workflow result actions">
+          <div
+            className="run-summary-card-actions"
+            aria-label={tUi("workflowHandoff.ui.workflowResultActions")}
+          >
             {onOpenResult !== undefined ? (
               <button
                 type="button"
                 className="run-summary-card-action"
                 onClick={() => onOpenResult(message)}
               >
-                Open result
+                {tUi("workflowHandoff.ui.openResult")}
               </button>
             ) : null}
             {evidenceHref !== undefined ? (
@@ -93,7 +99,7 @@ export function RunSummaryCard({ message, onOpenResult }: RunSummaryCardProps): 
                 target="_blank"
                 rel="noreferrer"
               >
-                Evidence
+                {tUi("workflowHandoff.ui.evidence")}
               </a>
             ) : null}
           </div>

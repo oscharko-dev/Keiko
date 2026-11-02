@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import type { ReactNode } from "react";
 
 export type CfgValue = string | number | boolean | readonly string[] | undefined;
@@ -30,9 +32,9 @@ function resolveAccessNote(keiko: boolean, access: AccessMode): string {
 }
 
 export function PermControl({ cfg, set }: PermControlProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const keiko = cfg["keikoMode"] !== false;
-  const rawAccess = cfg["access"];
-  const access: AccessMode = rawAccess === "full" ? "full" : "ask";
+  const access: AccessMode = cfg["access"] === "full" ? "full" : "ask";
   const note = resolveAccessNote(keiko, access);
   return (
     <div className="permctl">
@@ -50,8 +52,8 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
         <img className="perm-orca" src="/keiko-logo.svg" alt="" />
         <span className="perm-tt">
-          <span className="perm-name">Keiko-Mode</span>
-          <span className="perm-desc">Zero standing rights · Keiko governs</span>
+          <span className="perm-name">{tUi("permControl.ui.keikoMode")}</span>
+          <span className="perm-desc">{tUi("permControl.ui.zeroStandingRightsKeikoGoverns")}</span>
         </span>
         <span className={"perm-sw" + (keiko ? " on" : "")}>
           <span />
@@ -61,7 +63,11 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         // Two mutually-exclusive access modes are a single-select radio group, not two
         // independent toggle buttons (GEN-UI-A11Y-021): role="radiogroup" + labelled,
         // children role="radio" + aria-checked.
-        <div className="perm-legacy" role="radiogroup" aria-label="Legacy access mode">
+        <div
+          className="perm-legacy"
+          role="radiogroup"
+          aria-label={tUi("permControl.ui.legacyAccessMode")}
+        >
           {LEGACY_OPTIONS.map(([a, lbl]) => (
             <button
               type="button"

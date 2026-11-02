@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { GitBranchListEntry } from "@/lib/api";
 import KeikoSelect from "../../../KeikoSelect";
 import { Icons } from "../../../Icons";
@@ -46,6 +47,7 @@ export function NewBranchDialog({
   onCreate,
   onClose,
 }: NewBranchDialogProps): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const initialBase =
     branches.find((branch) => branch.name === currentBranch)?.name ?? branches[0]?.name ?? "";
   const [branchName, setBranchName] = useState("");
@@ -64,7 +66,7 @@ export function NewBranchDialog({
       open
       ref={dialogRef}
       aria-modal="true"
-      aria-label="New branch"
+      aria-label={t("gitClientWindow.ui.newBranch")}
       tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
@@ -108,7 +110,7 @@ export function NewBranchDialog({
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
           <BranchIcon size={16} />
           <h2 style={{ margin: 0, font: "var(--weight-semibold) var(--text-body) var(--font-ui)" }}>
-            New branch
+            {t("gitClientWindow.ui.newBranch")}
           </h2>
         </div>
         <label style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
@@ -119,13 +121,13 @@ export function NewBranchDialog({
               textTransform: "uppercase",
             }}
           >
-            Branch name
+            {t("gitClientWindow.ui.branchName")}
           </span>
           <input
             ref={inputRef}
             value={branchName}
             style={INPUT_STYLE}
-            aria-label="Branch name"
+            aria-label={t("gitClientWindow.ui.branchName")}
             onChange={(event) => setBranchName(event.currentTarget.value)}
           />
         </label>
@@ -137,12 +139,12 @@ export function NewBranchDialog({
               textTransform: "uppercase",
             }}
           >
-            Base branch
+            {t("gitClientWindow.ui.baseBranch")}
           </span>
           <KeikoSelect
             value={baseBranchName}
-            ariaLabel="Base branch"
-            menuTitle="Base branch"
+            ariaLabel={t("gitClientWindow.ui.baseBranch")}
+            menuTitle={t("gitClientWindow.ui.baseBranch")}
             leadingVisual={<BranchIcon size={12} />}
             mono
             sections={[
@@ -150,29 +152,29 @@ export function NewBranchDialog({
                 options: branches.map((branch) => ({
                   value: branch.name,
                   label: branch.name,
-                  ...(branch.name === currentBranch ? { badge: "current" } : {}),
+                  ...(branch.name === currentBranch
+                    ? { badge: t("gitClientWindow.ui.current") }
+                    : {}),
                 })),
               },
             ]}
             onValueChange={setBaseBranchName}
           />
         </div>
-        <p style={SUBTLE_TEXT_STYLE}>
-          The branch starts from the selected base branch. Commit hashes stay internal.
-        </p>
+        <p style={SUBTLE_TEXT_STYLE}>{t("gitClientWindow.ui.branchHint")}</p>
         {error !== null || (outcome !== null && outcome.status !== "succeeded") ? (
           <MutationOutcome outcome={outcome} error={error} testid="git-branch-outcome" />
         ) : null}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-3)" }}>
           <button type="button" style={SECONDARY_BTN} onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </button>
           <button
             type="submit"
             disabled={!canSubmit}
             style={{ ...PRIMARY_BTN, ...disabledStyle(!canSubmit) }}
           >
-            Create branch
+            {t("gitClientWindow.ui.createBranch")}
           </button>
         </div>
       </form>

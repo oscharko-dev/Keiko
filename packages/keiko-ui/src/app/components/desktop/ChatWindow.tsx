@@ -2150,6 +2150,7 @@ function VoiceDialogMicMuteButton({
   buttonRef,
   compact = false,
 }: VoiceDialogMicMuteButtonProps): ReactNode {
+  const tUi = useTranslate();
   const hintId = useId();
   const label = muted ? "Unmute voice dialogue microphone" : "Mute voice dialogue microphone";
   return (
@@ -2169,7 +2170,7 @@ function VoiceDialogMicMuteButton({
         {muted ? <span className="cmp-voice-dialog-mic-slash" /> : null}
       </span>
       <span id={hintId} className="sr-only">
-        When muted, Keiko cannot hear your microphone until you unmute.
+        {tUi("chatWindow.ui.whenMutedKeikoCannotHear")}
       </span>
     </button>
   );

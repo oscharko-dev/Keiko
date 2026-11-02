@@ -24,6 +24,7 @@ import {
   type EditorOutlineNode,
   type EditorOutlineSnapshot,
 } from "./editorOutlineModel";
+import { useEditorAgentTranslate } from "./editor-agent-i18n";
 import styles from "./EditorOutline.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -110,6 +111,7 @@ function outlineEmptyText(
 
 export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
   const t = useOptionalWidgetTranslate();
+  const tEditor = useEditorAgentTranslate();
   const snapshot = props.snapshot;
   const tree = useMemo(() => buildEditorOutlineTree(snapshot?.symbols ?? []), [snapshot?.symbols]);
   const allNodeIds = useMemo(() => collectNodeIds(tree), [tree]);
@@ -205,7 +207,11 @@ export function EditorOutlinePanel(props: EditorOutlinePanelProps): ReactNode {
       {props.visible ? (
         <div className={styles.outlineBody}>
           {hasSymbols ? (
-            <div className={styles.outlineTree} role="tree" aria-label="Current file symbols">
+            <div
+              className={styles.outlineTree}
+              role="tree"
+              aria-label={tEditor("editor.ui.fileSymbols")}
+            >
               {visibleNodes.map((node) => {
                 const expandable = node.children.length > 0;
                 const rowKind = kindLabel(node.symbol.kind);

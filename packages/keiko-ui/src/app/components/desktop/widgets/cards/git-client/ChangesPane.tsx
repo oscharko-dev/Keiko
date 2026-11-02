@@ -153,6 +153,7 @@ export function ChangesPane({
   onSelectCommit,
   commitComposer,
 }: ChangesPaneProps): ReactNode {
+  const t = useTranslate();
   const tablistRef = useRef<HTMLDivElement | null>(null);
   const baseId = useId();
   const changeCount = status?.changes.length ?? 0;
@@ -179,7 +180,7 @@ export function ChangesPane({
         <div
           ref={tablistRef}
           role="tablist"
-          aria-label="Changes and history"
+          aria-label={t("gitClientWindow.ui.changesAndHistory")}
           style={{ display: "flex", alignItems: "stretch" }}
         >
           {TABS.map((entry) => {
@@ -330,7 +331,7 @@ function ChangesList({
           }}
         >
           <InfoIcon size={14} />
-          Resolve conflicted files before committing or syncing.
+          {t("gitClientWindow.ui.resolveConflicts")}
         </div>
       ) : null}
 
@@ -349,7 +350,7 @@ function ChangesList({
               disabled={bulkActionsBlocked || !hasUnstaged}
               onClick={onStageAll}
             >
-              <CheckIcon size={11} /> Stage all
+              <CheckIcon size={11} /> {t("gitClientWindow.ui.stageAll")}
             </button>
             <button
               type="button"
@@ -357,7 +358,7 @@ function ChangesList({
               disabled={bulkActionsBlocked || !hasStaged}
               onClick={onUnstageAll}
             >
-              <ResetIcon size={11} /> Unstage all
+              <ResetIcon size={11} /> {t("gitClientWindow.ui.unstageAll")}
             </button>
           </span>
         </div>
@@ -393,10 +394,10 @@ function ChangesList({
       <div style={FILE_LIST_STYLE}>
         {status.clean || status.changes.length === 0 ? (
           <div className="rv-empty">
-            <p className="rv-empty-p">No changes</p>
+            <p className="rv-empty-p">{t("gitClientWindow.ui.noChanges")}</p>
           </div>
         ) : (
-          <nav aria-label="Changed files">
+          <nav aria-label={t("gitClientWindow.ui.changedFiles")}>
             <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
               {status.changes.map((change) => (
                 <ChangeRow
@@ -461,7 +462,7 @@ function changesListUnavailableState(
   if (statusLoading && status === null) {
     return (
       <output className="rv-empty" style={LOADING_STATE_STYLE}>
-        Loading changes…
+        {t("gitClientWindow.ui.loadingChanges")}
       </output>
     );
   }
@@ -469,7 +470,7 @@ function changesListUnavailableState(
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <GitIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
+        <p style={SUBTLE_TEXT_STYLE}>{t("gitClientWindow.ui.selectRepoForChanges")}</p>
       </div>
     );
   }
@@ -477,7 +478,7 @@ function changesListUnavailableState(
     return (
       <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
         <GitIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
+        <p style={SUBTLE_TEXT_STYLE}>{status.message ?? t("gitClientWindow.ui.notGitRepo")}</p>
       </div>
     );
   }
@@ -485,10 +486,7 @@ function changesListUnavailableState(
     return (
       <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
         <BranchIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>
-          Detached HEAD. Switch to an existing branch or create a branch before committing or
-          syncing.
-        </p>
+        <p style={SUBTLE_TEXT_STYLE}>{t("gitClientWindow.ui.detachedHead")}</p>
       </div>
     );
   }
