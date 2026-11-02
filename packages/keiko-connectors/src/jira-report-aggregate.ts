@@ -430,10 +430,17 @@ function rowsDigest(rows: readonly JiraReportRow[]): string {
   return hash.digest("hex");
 }
 function withDigest(report: Omit<JiraReport, "digest">): JiraReport {
-  // The digest covers what Jira holds; when it was read and in how many pages is not part of it.
-  const { rows, generatedAt: _generatedAt, completeness, ...rest } = report;
+  // The digest covers what Jira holds; when it was read, in how many pages and whether a field's
+  // role could be named are not part of it.
+  const { rows, generatedAt: _generatedAt, completeness, hierarchy, ...rest } = report;
   const { pageCount: _pageCount, ...stableCompleteness } = completeness;
-  const stable = { ...rest, completeness: stableCompleteness, rows: rowsDigest(rows) };
+  const { inferredFieldCount: _inferredFieldCount, ...stableHierarchy } = hierarchy;
+  const stable = {
+    ...rest,
+    completeness: stableCompleteness,
+    hierarchy: stableHierarchy,
+    rows: rowsDigest(rows),
+  };
   return { digest: sha256Hex(canonicalise(stable)), ...report };
 }
 

@@ -29,7 +29,12 @@ export interface JiraReportHierarchyFields {
   readonly reason?: JiraReportFailure;
   /** Fields that may name an issue's parent; each value is checked against the issue-key shape. */
   readonly parentFieldIds: readonly string[];
+  /** Candidates of Jira Software's own Epic Link type: their role needs no disclosure. */
+  readonly ownedParentFieldIds: readonly string[];
 }
+
+/** Jira Software's own Epic Link type, the same on every Data Center instance. */
+const JIRA_SOFTWARE_EPIC_LINK = "com.pyxis.greenhopper.jira:gh-epic-link";
 
 /** A field an app defines (a custom type, no Jira system role) whose value shape Jira cannot state. */
 function parentCandidateId(item: unknown): string | undefined {
@@ -53,7 +58,8 @@ function catalogOf(items: readonly unknown[]): readonly JiraReportFieldCatalogEn
 /**
  * Parent-field candidates from the field list by schema shape alone, so no instance-specific id
  * and no app's field-type key is ever assumed; whether a candidate really holds a parent is
- * decided on the issues read, by the issue-key shape of its value.
+ * decided on the issues read, by the issue-key shape of its value. Epic Link's own type only spares
+ * that field the unverified-role disclosure; it never makes a field a parent.
  */
 export async function discoverHierarchyFields(
   http: JiraReportHttp,
@@ -65,12 +71,19 @@ export async function discoverHierarchyFields(
       reason: outcome.reason,
       catalog: undefined,
       parentFieldIds: [],
+      ownedParentFieldIds: [],
     };
   const catalog = catalogOf(outcome.items);
   const candidates = outcome.items
     .flatMap((item) => parentCandidateId(item) ?? [])
     .sort(compareCodePoints);
-  return { discovery: "complete", catalog, parentFieldIds: candidates };
+  const owned = outcome.items.flatMap((item) => {
+    const id = parentCandidateId(item);
+    return id !== undefined && asRecord(asRecord(item)?.schema)?.custom === JIRA_SOFTWARE_EPIC_LINK
+      ? id
+      : [];
+  });
+  return { discovery: "complete", catalog, parentFieldIds: candidates, ownedParentFieldIds: owned };
 }
 
 export interface JiraReportRequiredFields {

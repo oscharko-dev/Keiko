@@ -70,6 +70,10 @@ function fieldPlan(
   return {
     parentFieldIds: [...new Set([...hierarchy.parentFieldIds, ...session.request.parentFieldIds])],
     namedParentFieldIds: new Set(session.request.parentFieldIds),
+    roleKnownParentFieldIds: new Set([
+      ...session.request.parentFieldIds,
+      ...hierarchy.ownedParentFieldIds,
+    ]),
     parentFieldsSeen: new Set(),
     parentFieldsNonKey: new Set(),
     parentFieldsRejected: new Set(),

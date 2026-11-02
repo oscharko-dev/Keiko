@@ -66,7 +66,7 @@ export interface JiraReportSession {
 
 function inferredFieldCount(plan: JiraReportSession["plan"]): number {
   if (plan === undefined) return 0;
-  return [...plan.parentFieldsSeen].filter((id) => !plan.namedParentFieldIds.has(id)).length;
+  return [...plan.parentFieldsSeen].filter((id) => !plan.roleKnownParentFieldIds.has(id)).length;
 }
 
 /** How the parent relation was found so far: counts and one closed word, never a field id. */
