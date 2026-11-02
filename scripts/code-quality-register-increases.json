@@ -1886,7 +1886,7 @@
       "rule": "anti-slop/no-unsafe-dictionary-type",
       "from": 4,
       "to": 5,
-      "reason": "test-witness",
+      "reason": "proof-fixture",
       "issue": 3918
     },
     {
