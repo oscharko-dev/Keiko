@@ -18,6 +18,7 @@ import { basename, join } from "node:path";
 import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
+import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-window.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
 import { basicAuth, labRequest } from "../lab-client.mjs";
@@ -428,7 +429,7 @@ async function runJourney({ ctx, session, modelId, capsuleId, id }) {
   return check;
 }
 
-export async function runJourneys({ session, modelId, embeddingModelId, truth, ids }) {
+export async function runJourneys({ session, directory, modelId, embeddingModelId, truth, ids }) {
   const checks = {};
   await withLiveChat({
     session,
@@ -452,12 +453,16 @@ export async function runJourneys({ session, modelId, embeddingModelId, truth, i
       ctx.freshChat = async (toolMode) =>
         (await freshBoundChat(ctx, session, modelId, capsuleId, toolMode)).chat;
       const ordered = [...ids.filter((id) => id !== "S14"), ...ids.filter((id) => id === "S14")];
-      for (const id of ordered) {
-        const started = Date.now();
-        checks[id] = await runJourney({ ctx, session, modelId, capsuleId, id });
-        checks[id].durationMs = Date.now() - started;
-        reportJourney(id, checks[id], started);
-      }
+      await eachJourneyInLicenseWindow(
+        ordered,
+        (minimumSeconds) => ensureLicenseWindow(session, directory, minimumSeconds),
+        async (id) => {
+          const started = Date.now();
+          checks[id] = await runJourney({ ctx, session, modelId, capsuleId, id });
+          checks[id].durationMs = Date.now() - started;
+          reportJourney(id, checks[id], started);
+        },
+      );
     },
   });
   return checks;

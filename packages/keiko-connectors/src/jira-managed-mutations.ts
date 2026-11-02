@@ -131,13 +131,6 @@ function linkedUpdate(
     ? validated.update
     : { ...validated.update, issuelinks: jiraIssueLinkAdds(plan.inline) };
 }
-/** Links may only be requested when current metadata offers them. */
-function linkOffer(
-  metadata: readonly JiraFieldMetadata[],
-  links: readonly JiraIssueLinkRequest[],
-): Extract<JiraMutationAttempt, { ok: false }> | undefined {
-  return links.length === 0 ? undefined : jiraIssueLinksOffered(metadata);
-}
 function numericId(value: unknown): value is string {
   return typeof value === "string" && /^\d{1,32}$/u.test(value);
 }
@@ -454,8 +447,6 @@ async function createWithMetadata(
     "data-center",
   );
   if (!validated.ok) return validationFailure(validated);
-  const refused = linkOffer(metadata, create.links);
-  if (refused !== undefined) return refused;
   const gate = await gateJiraMutationByTemplates({
     request,
     source: policy.templates,
@@ -467,9 +458,9 @@ async function createWithMetadata(
   });
   if (!gate.ok) return gate;
   if (policy.check) return CHECKED;
-  // The link a template requires rides on the create itself, never on a later call.
+  // The link a template requires rides on the create itself where the screen offers it.
   const links = gate.links ?? create.links;
-  const plan = planJiraIssueLinks(links);
+  const plan = planJiraIssueLinks(links, undefined, jiraIssueLinksOffered(metadata) === undefined);
   const response = await request("issue", "POST", {
     fields: validated.fields,
     update: linkedUpdate(validated, plan),
@@ -536,8 +527,7 @@ function linkedFieldChanges(
     args.updates ?? [],
   );
   if (!validated.ok) return validationFailure(validated);
-  const links = parseJiraIssueLinks(args.links) ?? [];
-  return linkOffer(fields, links) ?? { ok: true, validated, links };
+  return { ok: true, validated, links: parseJiraIssueLinks(args.links) ?? [] };
 }
 interface FieldTarget {
   readonly purpose: "edit" | "transition";
@@ -572,6 +562,20 @@ async function admitFieldMutation(
   if (!gate.ok) return { stop: gate };
   return policy.check ? { stop: CHECKED } : { links: gate.links ?? linked.links };
 }
+/** Only links that take their own call change nothing on the issue request: none is sent. */
+function changesOnlyThroughLinkCalls(
+  purpose: "edit" | "transition",
+  validated: Validated,
+  update: Readonly<Record<string, unknown>>,
+  links: readonly JiraIssueLinkRequest[],
+): boolean {
+  return (
+    purpose === "edit" &&
+    links.length > 0 &&
+    Object.keys(validated.fields).length === 0 &&
+    Object.keys(update).length === 0
+  );
+}
 async function fieldMutation(
   request: JiraMutationRequest,
   metadata: JiraMutationMetadata,
@@ -596,15 +600,18 @@ async function fieldMutation(
   );
   if (!prior.ok) return prior;
   // Jira does not de-duplicate links: one already on the issue is not written again.
-  const plan = planJiraIssueLinks(admitted.links, prior.fields.issuelinks);
-  const acknowledged = await statusMutation(
-    request,
-    target.path,
-    target.method,
-    { fields: validated.fields, update: linkedUpdate(validated, plan), ...target.body },
-    metadata.fields,
+  const plan = planJiraIssueLinks(
+    admitted.links,
+    prior.fields.issuelinks,
+    jiraIssueLinksOffered(metadata.fields) === undefined,
   );
-  if (!acknowledged.ok) return acknowledged;
+  const update = linkedUpdate(validated, plan);
+  const onlyLinkCalls = changesOnlyThroughLinkCalls(purpose, validated, update, admitted.links);
+  if (!onlyLinkCalls) {
+    const body = { fields: validated.fields, update, ...target.body };
+    const sent = await statusMutation(request, target.path, target.method, body, metadata.fields);
+    if (!sent.ok) return sent;
+  }
   return completeJiraLinkedMutation(
     request,
     {
@@ -616,6 +623,7 @@ async function fieldMutation(
       ...(targetStatusId === undefined ? {} : { targetStatusId }),
     },
     plan,
+    onlyLinkCalls,
   );
 }
 function editArgumentsRefusal(args: CatalogJsonObject): Refusal | undefined {

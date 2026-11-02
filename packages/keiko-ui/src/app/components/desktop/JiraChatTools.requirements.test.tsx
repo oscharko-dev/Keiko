@@ -34,10 +34,15 @@ function requirementsRead(totals: Record<string, unknown>, nextCursor?: string):
 }
 
 const COPY = {
-  en: { label: "Requirements", partial: "Partial list. Some requirements are not included." },
+  en: {
+    label: "Requirements",
+    partial: "Partial list. Some requirements are not included.",
+    details: "View requirements",
+  },
   de: {
     label: "Anforderungen",
     partial: "Teilliste. Nicht alle Anforderungen sind enthalten.",
+    details: "Anforderungen ansehen",
   },
 } as const;
 
@@ -65,6 +70,9 @@ describe("knowledge.requirements transcript row", () => {
         );
         expect(screen.getByText(COPY[locale].label)).toBeVisible();
         expect(screen.getByText(COPY[locale].partial)).toBeVisible();
+        expect(screen.getByRole("region", { name: COPY[locale].label })).toBeVisible();
+        expect(screen.getByText(COPY[locale].details)).toBeVisible();
+        expect(screen.queryByText(/Jira/u)).not.toBeInTheDocument();
       } finally {
         localStorage.removeItem(I18N_STORAGE_KEY);
       }

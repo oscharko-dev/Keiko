@@ -97,7 +97,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2"
+      "sha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c"
     },
     {
       "path": "scripts/lib/css-rendered-evidence.mjs",
@@ -120,10 +120,10 @@
       "sha256": "def885e0621a21a7d998dbedce5c5994c5391a3c8a0c1d1fb4070502d1ff0d7f"
     }
   ],
-  "postCssSha256": "ec4cf7c88ede7534c4ee76c0dfcc81be9fdbc40a5139d97d8baf9c14de4ec7f4",
+  "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
   "run": {
-    "generatedAt": "2026-11-02T09:37:11.420Z",
-    "repoHeadSha": "d4fe8b0f1ba13c252b4007cce8aa757809934a9e"
+    "generatedAt": "2026-11-02T19:01:52.215Z",
+    "repoHeadSha": "bb996d88c9f72a043554e316a4480d29cb703264"
   },
   "gate": "zero serious/critical violations, zero undispositioned axe incomplete rules, and deterministic focus/name/keyboard/motion/forced-colors checks passing in every theme/contrast/motion mode",
   "coverage": "contrast (color-contrast), name/role/value (aria-*, label, button-name, link-name), keyboard semantics (tablist/grid/listbox roles), reduced-motion, forced-colors, prefers-contrast",

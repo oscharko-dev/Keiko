@@ -86,6 +86,32 @@ function validObservation(
   return mutationIntentError({ ...record, userMessageId: message.id }) === undefined;
 }
 
+/** The journal commits before any dispatch, so a reviewed call it never saw cannot have been sent. */
+function neverDispatched(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  records: readonly ChatToolMutationRecord[],
+): boolean {
+  const invocationId = exchange.approval?.invocationId;
+  return (
+    invocationId !== undefined &&
+    exchange.result === undefined &&
+    message.turnState !== undefined &&
+    message.turnState !== "pending" &&
+    !records.some((record) => record.invocationId === invocationId)
+  );
+}
+
+function observedOutcome(
+  message: ChatMessage,
+  exchange: ChatToolExchange,
+  record: ChatToolMutationRecord | undefined,
+  records: readonly ChatToolMutationRecord[],
+): ChatToolExchange["mutationOutcome"] {
+  if (record !== undefined) return observedChatToolMutationOutcome(record);
+  return neverDispatched(message, exchange, records) ? "not-dispatched" : undefined;
+}
+
 /** Historical effects remain visible after authority expires or the connection closes.
  * The journal is authoritative; projection neither grants authority nor executes an action. */
 export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMessage): ChatMessage {
@@ -98,12 +124,11 @@ export function projectChatToolMutationHistory(db: DatabaseSync, input: ChatMess
   let correlationId: string | undefined;
   const exchanges = transcript.exchanges.map((exchange) => {
     const record = records.find((candidate) => validObservation(message, exchange, candidate));
-    if (record === undefined) return exchange;
-    const mutationOutcome = observedChatToolMutationOutcome(record);
+    const mutationOutcome = observedOutcome(message, exchange, record, records);
     if (mutationOutcome === undefined || mutationOutcome === exchange.mutationOutcome)
       return exchange;
     observationCount++;
-    correlationId ??= record.correlationId;
+    correlationId ??= record?.correlationId;
     return { ...exchange, mutationOutcome };
   });
   if (observationCount === 0) return message;

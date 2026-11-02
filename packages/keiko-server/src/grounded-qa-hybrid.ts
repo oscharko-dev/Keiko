@@ -1,3 +1,4 @@
+import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   deploymentContentPolicy,
   currentContentRedactor,
@@ -2448,7 +2449,7 @@ function withHybridAnswerDuration(
 ): HybridGroundedAnswer {
   const elapsedMs = Math.max(0, Date.now() - (ctx.startedAtMs ?? Date.now()));
   return {
-    ...answer,
+    ...withToolResultsAsSource(answer, ctx.deps.store),
     elapsedMs,
     contextPack: {
       ...answer.contextPack,

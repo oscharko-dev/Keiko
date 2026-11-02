@@ -1,3 +1,4 @@
+import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   type GatewayCallRequest,
   CancelledError,
@@ -2687,6 +2688,13 @@ interface PersistScopedGroundedAnswerInput {
   readonly promptContext?: GroundedPromptContextWire | undefined;
 }
 
+function withScopedPromptContext(
+  answer: GroundedAnswer,
+  promptContext: GroundedPromptContextWire | undefined,
+): GroundedAnswer {
+  return promptContext === undefined ? answer : { ...answer, promptContext };
+}
+
 async function persistScopedGroundedAnswer(
   persistedInput: PersistScopedGroundedAnswerInput,
 ): Promise<GroundedAnswer> {
@@ -2723,8 +2731,10 @@ async function persistScopedGroundedAnswer(
     context,
     deps,
   );
-  const { promptContext } = persistedInput;
-  const finalAnswer = promptContext === undefined ? entailed : { ...entailed, promptContext };
+  const finalAnswer = withToolResultsAsSource(
+    withScopedPromptContext(entailed, persistedInput.promptContext),
+    deps.store,
+  );
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,

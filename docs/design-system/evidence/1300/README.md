@@ -256,3 +256,12 @@ zero gated differences and all 14 reference captures; the seven-mode accessibili
 serious/critical violations and zero unresolved incomplete findings; all 108 running-app captures
 have zero page errors, unexpected API requests, missing selectors, crashed windows or unavailable
 workspace-trust states. No producer assertion, tolerance, budget or source stylesheet changed.
+
+## PR #4182 composer wrap input refresh — 2026-11-02
+
+The composer's controls now wrap below a 400 px container instead of overlapping, which changes
+`globals.css`, a declared producer input. The four original producers were rerun on macOS arm64, Node
+24.18.0. Component fidelity passed with zero gated differences and no missing selectors; editor
+fidelity passed with zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof has zero serious/critical violations and zero unresolved incomplete findings; all
+108 running-app captures passed. No producer assertion, tolerance or budget changed.

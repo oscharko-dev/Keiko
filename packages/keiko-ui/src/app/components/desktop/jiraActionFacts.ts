@@ -6,6 +6,7 @@
 // the action digest, not this model.
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { jiraDraftValueOf, type JiraDraftField, type JiraDraftValue } from "./jiraDraftTree";
+import { jiraNamed, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -123,11 +124,38 @@ export function jiraActionFacts(
   args: unknown,
   managed: boolean,
   t: OptionalWidgetTranslate,
+  names: JiraNames = NO_JIRA_NAMES,
 ): readonly Fact[] {
   const raw = record(args);
   if (raw === undefined)
     return [{ id: t("chat.jira.writeApproval.preview"), value: jiraDraftValueOf(args) }];
   return Object.entries(raw).flatMap(([key, value]) =>
-    managed ? jiraFacts(key, value, t) : [{ id: key, value: jiraDraftValueOf(value) }],
+    managed
+      ? managedFacts(key, value, raw, t, names)
+      : [{ id: key, value: jiraDraftValueOf(value) }],
   );
+}
+/** Jira's own names where this turn read them; a field that repeats the target is said once. */
+function managedFacts(
+  key: string,
+  value: unknown,
+  raw: Raw,
+  t: OptionalWidgetTranslate,
+  names: JiraNames,
+): readonly Fact[] {
+  const lookup = key === "projectId" ? names.projects : names.issueTypes;
+  const known =
+    (key === "projectId" || key === "issueTypeId") && typeof value === "string"
+      ? lookup.get(value)
+      : undefined;
+  return jiraFacts(key, known ?? value, t)
+    .filter(
+      (fact) =>
+        key !== "fields" ||
+        !restatesTarget(fact, stringOf(raw.projectId), stringOf(raw.issueTypeId)),
+    )
+    .map((fact) => (key === "fields" ? jiraNamed(fact, names) : fact));
+}
+function stringOf(value: unknown): string {
+  return typeof value === "string" ? value : "";
 }

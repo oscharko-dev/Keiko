@@ -1082,6 +1082,7 @@ export const DESKTOP_CHAT_STREAM_EVENT_TYPES = [
   "cancelled",
   "tool-read-consent",
   "tool-write-approval",
+  "tool-exchange",
 ] as const;
 export type DesktopChatStreamEventType = (typeof DESKTOP_CHAT_STREAM_EVENT_TYPES)[number];
 
@@ -1132,13 +1133,23 @@ export interface DesktopChatStreamWriteApprovalEvent {
   };
 }
 
+/** A tool call as it starts and settles, so the human sees the turn's work while it happens. */
+export interface DesktopChatStreamToolExchangeEvent {
+  readonly event: "tool-exchange";
+  readonly data: {
+    readonly messageId: string;
+    readonly exchange: Omit<ChatToolExchange, "approval">;
+  };
+}
+
 export type DesktopChatStreamEvent =
   | DesktopChatStreamTokenEvent
   | DesktopChatStreamDoneEvent
   | DesktopChatStreamErrorEvent
   | DesktopChatStreamCancelledEvent
   | DesktopChatStreamReadConsentEvent
-  | DesktopChatStreamWriteApprovalEvent;
+  | DesktopChatStreamWriteApprovalEvent
+  | DesktopChatStreamToolExchangeEvent;
 
 export type DesktopChatStreamTerminalEvent = Extract<
   DesktopChatStreamEvent,
@@ -1211,6 +1222,26 @@ function isDesktopChatWriteApprovalData(data: unknown): boolean {
   );
 }
 
+function isDesktopChatStreamedExchange(exchange: unknown): boolean {
+  return (
+    isWireRecord(exchange) &&
+    exactKeys(exchange, ["call", "result", "mutationOutcome"], "exchange").length === 0 &&
+    isChatToolCallView(exchange.call) &&
+    (exchange.result === undefined || isWireRecord(exchange.result)) &&
+    (exchange.mutationOutcome === undefined || typeof exchange.mutationOutcome === "string")
+  );
+}
+
+function isDesktopChatToolExchangeData(data: unknown): boolean {
+  return (
+    isWireRecord(data) &&
+    exactKeys(data, ["messageId", "exchange"], "data").length === 0 &&
+    typeof data.messageId === "string" &&
+    /^[\w-]{1,128}$/u.test(data.messageId) &&
+    isDesktopChatStreamedExchange(data.exchange)
+  );
+}
+
 const CHAT_READ_VIEW_KEYS = [
   "kind",
   "grantId",
@@ -1269,20 +1300,19 @@ function isDesktopChatReadConsentData(data: unknown): boolean {
   );
 }
 
+const DESKTOP_CHAT_TOOL_EVENT_DATA: ReadonlyMap<unknown, (data: unknown) => boolean> = new Map([
+  ["tool-write-approval", isDesktopChatWriteApprovalData],
+  ["tool-read-consent", isDesktopChatReadConsentData],
+  ["tool-exchange", isDesktopChatToolExchangeData],
+]);
+
 export function isDesktopChatStreamEvent(value: unknown): value is DesktopChatStreamEvent {
   if (!isWireRecord(value)) return false;
   const { event, data } = value;
+  const isToolData = DESKTOP_CHAT_TOOL_EVENT_DATA.get(event);
+  if (isToolData !== undefined)
+    return exactKeys(value, ["event", "data"], "event").length === 0 && isToolData(data);
   switch (event) {
-    case "tool-write-approval":
-      return (
-        exactKeys(value, ["event", "data"], "event").length === 0 &&
-        isDesktopChatWriteApprovalData(data)
-      );
-    case "tool-read-consent":
-      return (
-        exactKeys(value, ["event", "data"], "event").length === 0 &&
-        isDesktopChatReadConsentData(data)
-      );
     case "token":
       return isDesktopChatTokenData(data);
     case "error":

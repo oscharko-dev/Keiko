@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it } from "vitest";
+import { eachJourneyInLicenseWindow } from "../testing/jira-chat-lab/requirements/license-window.mjs";
 import {
   enterActive,
   otherActiveLanes,
@@ -39,6 +40,23 @@ function laneFile(directory, pid, state) {
   mkdirSync(join(directory, "lanes"), { recursive: true });
   writeFileSync(join(directory, "lanes", String(pid)), state);
 }
+
+describe("journeys and the license window", () => {
+  it("asks for a window that outlasts the journey before each one, in the journeys' order", async () => {
+    const calls = [];
+    await eachJourneyInLicenseWindow(
+      ["S01", "S14"],
+      async (seconds) => {
+        expect(seconds).toBeGreaterThanOrEqual(1_800);
+        calls.push("window");
+      },
+      async (id) => {
+        calls.push(id);
+      },
+    );
+    expect(calls).toEqual(["window", "S01", "window", "S14"]);
+  });
+});
 
 describe("parallel lab lanes", () => {
   it("counts only other live lanes that use Jira and removes lanes whose process is gone", () => {

@@ -1201,6 +1201,42 @@ describe("ordinary Chat exact-action write approval admission", () => {
     return entry;
   }
 
+  it("gives the human the full decision time however little of the read grant is left", () => {
+    let clock = now;
+    approvals = new AtlassianActionApprovalRegistry(() => clock);
+    store.updateChat(chat.id, { toolMode: "governed-assist" });
+    registerCurrentAuthority({
+      expiresAt: new Date(now + 3 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
+      budget: {
+        maxRuntimeMs: 3 * ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        maxToolCalls: 20,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 0,
+      },
+    });
+    const grantId = grantRead();
+    clock = now + ATLASSIAN_ACTION_APPROVAL_TTL_MS - 1_000;
+    const requested = requestJiraChatWriteApproval(
+      { ...deps, atlassianActionApprovalRegistry: approvals },
+      chat.id,
+      reference,
+      action,
+      new Date(clock).toISOString(),
+      "write-admission",
+    );
+    if (requested.kind !== "review-required") throw new Error("Expected a review");
+    expect(requested.approval.expiresAt).toBe(clock + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+    const grant = approvals.getChatReadGrant(grantId)?.grant;
+    expect(grant?.state).toBe("granted");
+    expect(grant?.expiresAt).toBe(requested.approval.expiresAt);
+    // Past the original grant's end the decision is still open, and the grant still current.
+    clock = now + ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1_000;
+    expect(approvals.getChatWriteApproval(requested.approval.approvalId)?.approval.state).toBe(
+      "pending",
+    );
+    expect(approvals.getChatReadGrant(grantId)?.grant.state).toBe("granted");
+  });
+
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "requires current read consent before writes and obeys the %s policy",
     (mode) => {

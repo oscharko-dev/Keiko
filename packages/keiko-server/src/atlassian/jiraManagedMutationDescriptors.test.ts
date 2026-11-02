@@ -13,6 +13,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { catalogJsonBytes, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
 import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
 import { JIRA_REJECTED_GUIDANCE, jiraAttemptToolResult } from "./jiraMutationResult.js";
 
@@ -116,6 +117,17 @@ it("still refuses a draft result with more rows than the catalog carries (a larg
 // A create or edit that landed but whose further links did not must still return its receipt and
 // the missing links through the descriptor's own result contract, whatever the link type names are
 // written in (review): the bound is the encoded worst case, not the ASCII one.
+describe("a write tool waits in place for the human's decision", () => {
+  it.each(JIRA_MUTATION_DECLARATIONS.map((entry) => [entry.name, entry] as const))(
+    "%s keeps its work budget on top of the time the human has to decide",
+    (_name, declaration) => {
+      expect(declaration.descriptor.bounds.maxDurationMs).toBeGreaterThanOrEqual(
+        ATLASSIAN_ACTION_APPROVAL_TTL_MS + 60_000,
+      );
+    },
+  );
+});
+
 describe("the partial-effect result of a create or edit fits its descriptor (review)", () => {
   const LINK_TYPES: readonly (readonly [string, (index: number) => string])[] = [
     ["ASCII", (index: number): string => `${"t".repeat(254)}${String(index % 10)}`],

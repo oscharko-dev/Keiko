@@ -34,6 +34,8 @@ interface JiraDraftListEntry {
 }
 export interface JiraDraftField {
   readonly id: string;
+  /** Jira's own name for the field when this turn read it; the id stays the key. */
+  readonly label?: string;
   readonly value: JiraDraftValue;
 }
 export interface JiraDraftTreeItem {

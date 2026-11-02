@@ -12,6 +12,8 @@ const LICENSE_PATH = "/rest/plugins/applications/1.0/installed/jira-software/lic
 const LICENSE_MEDIA = "application/vnd.atl.plugins+json";
 const SESSION_SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "..", "session.mjs");
 const READY_TIMEOUT_MS = 600_000;
+/** Longer than the longest journey seen, so a lane already inside one still ends in the window. */
+const JOURNEY_LICENSE_SECONDS = 2_700;
 
 function remainingSeconds(license) {
   const usable = license?.valid === true && license.expired === false;
@@ -61,6 +63,19 @@ export async function ensureLicenseWindow(session, directory, minimumSeconds) {
   const remaining = await renewedLicense(session, directory, minimumSeconds);
   await enterActive(directory);
   return remaining;
+}
+
+/**
+ * Runs each journey inside a license window that outlasts it. Two lanes need longer than the
+ * three-hour license, so checking only at the start lets Jira refuse every later write and turns
+ * the rest of the scorecard red. A lane needing a renewal waits at this boundary until every other
+ * lane reached it too, because they read the same license.
+ */
+export async function eachJourneyInLicenseWindow(ids, ensureWindow, run, index = 0) {
+  if (index >= ids.length) return;
+  await ensureWindow(JOURNEY_LICENSE_SECONDS);
+  await run(ids[index]);
+  await eachJourneyInLicenseWindow(ids, ensureWindow, run, index + 1);
 }
 
 async function renewedLicense(session, directory, minimumSeconds) {

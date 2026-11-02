@@ -18,6 +18,7 @@ import {
   JIRA_TEMPLATE_VIOLATIONS_MAX,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./actionApprovalLimits.js";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
@@ -79,7 +80,7 @@ const LINKS = {
   type: "array",
   maxItems: JIRA_ISSUE_LINKS_MAX,
   description:
-    'Links to add by Jira link type name (for example "Relates"). outward: this issue → issueKey; inward: issueKey → this issue. Needs the issuelinks field in current metadata; existing links are kept. Each link after the first is a separate call: succeeded-unconfirmed with linksMissing means the issue exists, so add only the missing links with jira.edit and never create it again.',
+    'Links to add by Jira link type name (for example "Relates"). outward: this issue → issueKey; inward: issueKey → this issue. Existing links are kept. Each link after the first is a separate call: succeeded-unconfirmed with linksMissing means the issue exists, so add only the missing links with jira.edit and never create it again.',
   items: object(
     {
       type: { ...text(255), minLength: 1 },
@@ -213,9 +214,13 @@ const USUAL_RESULT_BYTES_MAX = 4096;
 const SINGLE_RESULT_BYTES_MAX = USUAL_RESULT_BYTES_MAX + DETAIL_BYTES_MAX;
 const GATED_RESULT_BYTES_MAX =
   SINGLE_RESULT_BYTES_MAX + JIRA_TEMPLATE_VIOLATIONS_MAX * VIOLATION_BYTES_MAX;
+// A write waits in place for the human's decision, so its settlement budget declares that wait on
+// top of its own work (ADR-0175). Charging the decision to the work budget ended every card after
+// 90 seconds, however much time the approval itself still had.
+const WRITE_DURATION_MS_MAX = 90000 + ATLASSIAN_ACTION_APPROVAL_TTL_MS;
 const GATED_RESULT_BOUNDS = {
   maxResultBytes: GATED_RESULT_BYTES_MAX,
-  maxDurationMs: 90000,
+  maxDurationMs: WRITE_DURATION_MS_MAX,
   maxResultCount: 1,
 };
 const LINKED_RESULT_BOUNDS = {
@@ -463,7 +468,7 @@ function declaration(name: JiraMutationOperation): ManagedMcpToolDeclaration {
         maxArgumentBytes: 262144,
         maxResultBytes: definition.bounds?.maxResultBytes ?? SINGLE_RESULT_BYTES_MAX,
         maxResultCount: definition.bounds?.maxResultCount ?? 1,
-        maxDurationMs: definition.bounds?.maxDurationMs ?? 90000,
+        maxDurationMs: definition.bounds?.maxDurationMs ?? WRITE_DURATION_MS_MAX,
       },
       idempotency: "server-key-required",
       cancellation: "before-effect",

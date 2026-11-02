@@ -228,6 +228,10 @@ bridge admits it for the same, and the generated plugin client waits one grace a
 a bridge deadline that stops a call leaves a `coding-runtime.tool-bridge` diagnostic naming the
 deadline. A fixed 30 s default in the registry, the catalog and the bridge cut a waiting approval
 off long before its own five-minute ceiling (F43/F44, PR #3452).
+A Chat write tool waits the same way: Jira and external MCP write descriptors declare their own work
+budget plus the ten-minute approval lifetime (`ATLASSIAN_ACTION_APPROVAL_TTL_MS`) in
+`maxDurationMs`, and a read tool keeps its work budget. A write budget of 90 s (Jira) or 60 s (MCP)
+ended the turn while its approval card still offered a decision (#4173).
 An approval-required action is eligible only when the current mode/envelope permits that action
 and a valid approval channel can complete the existing approval protocol; listing is not approval.
 All three ADR-0138 modes preserve monotonic authority and mode-independent hard denials.

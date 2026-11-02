@@ -582,6 +582,33 @@ export class AtlassianActionApprovalRegistry {
     return retained === undefined ? invalidReadGrant(correlationId) : { ok: true, grant: retained };
   }
 
+  /**
+   * Restarts the time of a granted read. The grant is the turn's automatic evidence, not a human's
+   * decision, so its remainder must not shorten the time a human has to decide a write bound to it.
+   * It keeps its proof and only ever gets longer, within the approval lifetime.
+   */
+  public renewChatReadGrant(
+    subject: ChatToolAuthoritySubject,
+    requestedAt: number,
+    expiresAt: number,
+    correlationId?: string,
+  ): ChatToolReadGrant | undefined {
+    const current = this.findGrantedChatReadGrant(subject, correlationId);
+    const entry =
+      current === undefined ? undefined : this.getChatReadGrant(current.grantId, correlationId);
+    if (
+      entry === undefined ||
+      expiresAt <= entry.grant.expiresAt ||
+      requestedAt > this.now() ||
+      expiresAt - requestedAt > ATLASSIAN_ACTION_APPROVAL_TTL_MS
+    )
+      return undefined;
+    return this.retainReadGrant(
+      { ...entry, grant: { ...entry.grant, requestedAt, expiresAt } },
+      correlationId,
+    );
+  }
+
   public rejectChatReadGrant(
     grantId: string,
     subject: ChatToolAuthoritySubject,

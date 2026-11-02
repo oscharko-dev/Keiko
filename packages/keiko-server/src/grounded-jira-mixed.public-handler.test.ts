@@ -1898,3 +1898,36 @@ it.each(["default", "preserve"] as const)(
     expect(JSON.stringify(answer.citations)).not.toContain("jira");
   },
 );
+
+it("names no untraceable statement when the answer rests on settled Jira results", async () => {
+  const f = runtime();
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  provider(["tool", "answer"], "Jira tool result: project SYN is visible.");
+  const result = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "What does Feature return? Also list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const answer = result.body as GroundedAnswer;
+  expect(answer.content).toContain("Jira tool result");
+  expect(answer.uncertainty.map((marker) => marker.kind)).not.toContain("uncited-answer");
+  const stored = f.deps.store.findMessageById(answer.assistantMessageId)?.groundedAnswer;
+  expect(stored?.uncertainty.map((marker) => marker.kind)).not.toContain("uncited-answer");
+});
+
+it("still names untraceable statements when no Jira result backs the answer", async () => {
+  const f = runtime();
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  provider(["answer"], "Feature returns true.");
+  const result = await handleGroundedAsk(
+    context({ chatId: f.chatId, content: "What does Feature return?", modelId: MODEL }),
+    f.deps,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  const answer = result.body as GroundedAnswer;
+  expect(answer.uncertainty.map((marker) => marker.kind)).toContain("uncited-answer");
+});

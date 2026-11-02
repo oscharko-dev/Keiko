@@ -1,8 +1,16 @@
 "use client";
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange, ChatTurnState } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { JIRA_MANAGED_ACTION_TYPES } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   decideJiraChatWriteApproval,
   getJiraChatWriteApproval,
@@ -12,12 +20,13 @@ import {
   useOptionalWidgetTranslate as useTranslate,
   type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
-import { actionTypeLabelKey } from "./widgets/connectors/connector-labels";
+import { jiraOperationLabel } from "./jira-tool-presentation";
 import { JiraAttachmentReview } from "./JiraAttachmentReview";
 import { JiraDecisionActions } from "./JiraDecisionActions";
 import { DraftFields, JiraDraftPreview } from "./JiraDraftPreview";
 import { jiraActionFacts } from "./jiraActionFacts";
 import { jiraDraftExcluded, jiraDraftTree } from "./jiraDraftTree";
+import { JiraNamesContext } from "./jiraNames";
 import { useJiraDecision } from "./useJiraDecision";
 import { useStagedJiraDraft, type StagedJiraDraft } from "./useStagedJiraDraft";
 import styles from "./JiraChatTools.module.css";
@@ -92,8 +101,9 @@ function ActionDetails({
   readonly note?: WidgetMessageKey;
 }): ReactNode {
   const t = useTranslate();
+  const names = useContext(JiraNamesContext);
   // Not memoized: the translator keeps its identity while a late-loading catalog refreshes it.
-  const facts = jiraActionFacts(args, managed, t);
+  const facts = jiraActionFacts(args, managed, t, names);
   return (
     <fieldset className={styles.cmpFactsGroup} aria-label={t("chat.jira.writeApproval.preview")}>
       {note === undefined ? null : <p className={styles.cmpDraftNote}>{t(note)}</p>}
@@ -148,18 +158,32 @@ function approvalTitleKey(approval: ChatToolWriteApprovalView): WidgetMessageKey
 
 function ApprovalHeader({ approval }: { readonly approval: ChatToolWriteApprovalView }): ReactNode {
   const t = useTranslate();
-  const mcp = approval.kind === "mcp-chat-write";
   return (
     <>
       <strong>{t(approvalTitleKey(approval))}</strong>
-      <p>
-        {approval.kind === "mcp-chat-write"
-          ? approval.operation
-          : t(actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[approval.operation]))}
-      </p>
-      <p>{t(mcp ? "chat.mcp.writeApproval.disclosure" : "chat.jira.writeApproval.disclosure")}</p>
+      <p>{approvalOperationLabel(approval, t)}</p>
     </>
   );
+}
+
+function approvalOperationLabel(
+  approval: ChatToolWriteApprovalView,
+  t: ReturnType<typeof useTranslate>,
+): string {
+  return approval.kind === "mcp-chat-write"
+    ? approval.operation
+    : t(jiraOperationLabel(approval.operation));
+}
+
+/** A decision waits on the human, who may have scrolled away while the turn worked. */
+function useRevealWhileDecidable(decidable: boolean): RefObject<HTMLElement | null> {
+  const card = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = card.current;
+    if (decidable && typeof element?.scrollIntoView === "function")
+      element.scrollIntoView({ block: "start" });
+  }, [decidable]);
+  return card;
 }
 
 /** A staged draft that is not shown cannot be approved: the human would not see what it covers. */
@@ -175,19 +199,31 @@ function StagedDraftNote({ status }: { readonly status: "loading" | "unavailable
 }
 
 /** The draft's tree when it is readable as one, otherwise the request's facts. */
+const ATTACHMENT_FILE_ARGS = new Set(["name", "source"]);
+/** The file named by these arguments is shown once, as the server read it. */
+function shownArgs(approval: ChatToolWriteApprovalView, args: unknown): unknown {
+  if (approval.kind !== "jira-chat-write" || approval.attachment === undefined) return args;
+  if (typeof args !== "object" || args === null) return args;
+  return Object.fromEntries(Object.entries(args).filter(([key]) => !ATTACHMENT_FILE_ARGS.has(key)));
+}
+
 function ApprovalContent({
   approval,
   staged,
   draft,
+  decidable,
   editable,
   toggle,
 }: {
   readonly approval: ChatToolWriteApprovalView;
   readonly staged: StagedJiraDraft;
   readonly draft: ReturnType<typeof useDraftSelection>;
+  readonly decidable: boolean;
   readonly editable: boolean;
   readonly toggle: (ref: string) => void;
 }): ReactNode {
+  // A settled draft is deleted; saying it cannot be approved any more would only confuse its outcome.
+  if (staged.status === "unavailable" && !decidable) return null;
   if (staged.status === "loading" || staged.status === "unavailable")
     return <StagedDraftNote status={staged.status} />;
   if (draft.tree !== undefined)
@@ -202,7 +238,7 @@ function ApprovalContent({
     );
   return (
     <ActionDetails
-      args={staged.args}
+      args={shownArgs(approval, staged.args)}
       managed={approval.kind === "jira-chat-write"}
       {...(isDraft(approval) ? { note: "chat.jira.draft.unreadable" as const } : {})}
     />
@@ -236,6 +272,15 @@ function useDraftReview(
   };
 }
 
+function approvalStatusKey(
+  verified: boolean,
+  state: ChatToolWriteApprovalView["state"],
+  ended: boolean,
+): WidgetMessageKey {
+  if (!verified) return "chat.jira.writeApproval.unavailable";
+  return APPROVAL_KEYS[ended && state === "pending" ? "expired" : state];
+}
+
 export function JiraWriteApproval({
   approval,
   call,
@@ -247,29 +292,32 @@ export function JiraWriteApproval({
   const t = useTranslate();
   const refresh = useCallback(() => observe(approval.approvalId), [observe, approval.approvalId]);
   const [deselection, toggle] = useDeselection();
+  // A finished turn has no decision left to make, and its stored state is the whole story.
+  const ended = turnState !== undefined && turnState !== "pending";
   const state = useJiraDecision({
     key: `${approval.approvalId}:${approval.actionDigest}`,
     current: approval,
     decide: (decision) =>
       isDraft(approval) ? decide(approval, decision, deselection) : decide(approval, decision),
-    observe: refresh,
+    ...(ended ? {} : { observe: refresh }),
   });
+  const decidable = state.view.state === "pending" && turnState === "pending";
+  const card = useRevealWhileDecidable(decidable);
   const { staged, draft, blocked } = useDraftReview(approval, state.view, {
     call,
     ...(loadDraft === undefined ? {} : { loadDraft }),
     deselection,
   });
-  const status = state.verified
-    ? APPROVAL_KEYS[state.view.state]
-    : "chat.jira.writeApproval.unavailable";
+  const status = approvalStatusKey(state.verified, state.view.state, ended);
   return (
-    <section className={styles.cmpCard} aria-label={t(approvalTitleKey(approval))}>
+    <section ref={card} className={styles.cmpCard} aria-label={t(approvalTitleKey(approval))}>
       <ApprovalHeader approval={approval} />
       <ApprovalContent
         approval={approval}
         staged={staged}
         draft={draft}
-        editable={state.view.state === "pending" && turnState === "pending" && !state.busy}
+        decidable={decidable}
+        editable={decidable && !state.busy}
         toggle={toggle}
       />
       <JiraAttachmentReview approval={approval} />

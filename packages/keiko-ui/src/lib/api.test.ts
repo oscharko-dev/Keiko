@@ -5546,3 +5546,22 @@ it("delivers the canonical Jira write preview before terminal completion", async
   expect(handlers.onWriteApproval).toHaveBeenCalledExactlyOnceWith(payload);
   expect(handlers.onDone).toHaveBeenCalledOnce();
 });
+
+it("delivers a running tool call before terminal completion", async () => {
+  const payload = {
+    messageId: "message-1",
+    exchange: { call: { id: "call-1", name: "jira_search", arguments: { jql: "project = LAB" } } },
+  };
+  const stream = makeSseStream([
+    `event: tool-exchange\ndata: ${JSON.stringify(payload)}\n\nevent: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+  ]);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+  const handlers = { ...makeStreamHandlers(), onToolExchange: vi.fn() };
+  await sendDesktopChatStream(
+    { chatId: "c1", projectPath: "/repo", content: "Search Jira" },
+    new AbortController().signal,
+    handlers,
+  );
+  expect(handlers.onToolExchange).toHaveBeenCalledExactlyOnceWith(payload);
+  expect(handlers.onDone).toHaveBeenCalledOnce();
+});

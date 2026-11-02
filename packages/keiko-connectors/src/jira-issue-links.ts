@@ -10,7 +10,9 @@ import { asArray, asRecord } from "./atlassian-sync-classify.js";
  * Issue links (#4176). The caller names the link type and the other issue; Jira validates the type
  * and the target. Jira Data Center and Cloud take ONE `issuelinks` operation per create/edit request
  * (JRASERVER-66329, unresolved), so the request carries the first link on Jira's own add-update and
- * every further link is its own `POST /rest/api/2/issueLink` after the issue exists.
+ * every further link is its own `POST /rest/api/2/issueLink` after the issue exists. Linking is an
+ * action of its own in Jira, not a screen field: where the screen does not offer `issuelinks`, every
+ * link takes that call, and Jira's Link Issues permission decides.
  */
 export const JIRA_ISSUE_LINKS_MAX = JIRA_MUTATION_LINKS_MAX;
 export const JIRA_ISSUE_LINKS_PER_REQUEST_MAX = 1;
@@ -66,7 +68,7 @@ export function parseJiraIssueLinks(value: unknown): readonly JiraIssueLinkReque
 export interface JiraIssueLinkPlan {
   /** Already on the issue when it was read: nothing is written for them. */
   readonly present: readonly JiraIssueLinkRequest[];
-  /** At most one link: it rides on the create/edit request itself. */
+  /** At most one link, when the screen offers it: it rides on the create/edit request itself. */
   readonly inline: readonly JiraIssueLinkRequest[];
   /** Every other link: one separate call each, after the request succeeded. */
   readonly further: readonly JiraIssueLinkRequest[];
@@ -78,14 +80,12 @@ export interface JiraIssueLinkPlan {
 export function planJiraIssueLinks(
   links: readonly JiraIssueLinkRequest[],
   existing?: unknown,
+  inlineOffered = true,
 ): JiraIssueLinkPlan {
   const present = links.filter((link) => jiraIssueLinksPresent(existing, [link]));
   const missing = links.filter((link) => !present.includes(link));
-  return {
-    present,
-    inline: missing.slice(0, JIRA_ISSUE_LINKS_PER_REQUEST_MAX),
-    further: missing.slice(JIRA_ISSUE_LINKS_PER_REQUEST_MAX),
-  };
+  const inline = inlineOffered ? missing.slice(0, JIRA_ISSUE_LINKS_PER_REQUEST_MAX) : [];
+  return { present, inline, further: missing.slice(inline.length) };
 }
 /** The plan's links in the order they are accepted: already present, inline, then further. */
 export function orderedJiraIssueLinks(plan: JiraIssueLinkPlan): readonly JiraIssueLinkRequest[] {
@@ -93,7 +93,7 @@ export function orderedJiraIssueLinks(plan: JiraIssueLinkPlan): readonly JiraIss
 }
 
 type Failure = Extract<JiraMutationAttempt, { ok: false }>;
-/** Current metadata must offer `add` on `issuelinks`, whichever way a link is written. */
+/** A link can ride on the request only when current metadata offers `add` on `issuelinks`. */
 export function jiraIssueLinksOffered(metadata: readonly JiraFieldMetadata[]): Failure | undefined {
   const field = metadata.find((candidate) => candidate.id === "issuelinks");
   return field?.kind !== "links" || !field.operations.includes("add")

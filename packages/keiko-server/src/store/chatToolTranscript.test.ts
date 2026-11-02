@@ -595,7 +595,7 @@ describe("a backlog draft's deselection is part of the one approval (#4178)", ()
   });
 });
 
-function observedMutationFixture(): ReturnType<typeof fixture> & {
+function observedMutationFixture(journaled = true): ReturnType<typeof fixture> & {
   intent: ChatToolMutationIntent;
 } {
   const base = fixture();
@@ -630,7 +630,7 @@ function observedMutationFixture(): ReturnType<typeof fixture> & {
   };
   const journal = f.store.chatToolMutations;
   if (journal === undefined) throw new Error("Missing mutation owner");
-  journal.prepare(intent);
+  if (journaled) journal.prepare(intent);
   return { ...f, intent };
 }
 function acknowledgeMutation(f: ReturnType<typeof observedMutationFixture>): void {
@@ -642,6 +642,28 @@ function acknowledgeMutation(f: ReturnType<typeof observedMutationFixture>): voi
 }
 
 describe("authoritative late mutation history", () => {
+  // The journal commits before any dispatch, so a call it never saw cannot have reached the source:
+  // a card that was never decided must not read as a change that may have been applied.
+  it("reports a reviewed call the journal never saw as not sent once its turn has ended", () => {
+    const f = observedMutationFixture(false);
+    const outcome = (): unknown =>
+      f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome;
+    expect(outcome()).toBeUndefined();
+    f.db.prepare("UPDATE chat_messages SET client_turn_state = 'failed' WHERE id = ?").run(f.id);
+    expect(outcome()).toBe("not-dispatched");
+    const event = f.logs.events.find((entry) => entry.op === "chat.tool-mutation.projected");
+    expect(formatActivityLogProofLine(event ?? {})).not.toContain(f.id);
+  });
+  it("keeps an ended turn's dispatched call unknown, whatever the card says", () => {
+    const f = observedMutationFixture();
+    const journal = f.store.chatToolMutations;
+    if (journal === undefined) throw new Error("Missing mutation owner");
+    expect(journal.beginDispatch(f.intent.invocationId, () => true)).toBe(true);
+    f.db.prepare("UPDATE chat_messages SET client_turn_state = 'failed' WHERE id = ?").run(f.id);
+    expect(f.store.findMessageById(f.id)?.toolTranscript?.exchanges[0]?.mutationOutcome).toBe(
+      "unknown",
+    );
+  });
   it("keeps an active prepared mutation pending instead of claiming no effect", () => {
     const f = observedMutationFixture();
     expect(

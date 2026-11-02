@@ -7,6 +7,7 @@ import {
   useWorkspaceConnectorWindows,
 } from "./connector-windows-context";
 import { JiraChatTools } from "./JiraChatTools";
+import { ChatJiraNames } from "./jiraNames";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
 import { mergeRepositoryFileScope, MAX_REPOSITORY_FOCUS_PATHS } from "./repositoryFileScope";
@@ -2631,6 +2632,8 @@ export function sendStatusLabel(status: SendStatus): string {
       return "Submitting your message…";
     case "contacting":
       return "Preparing response…";
+    case "awaiting-decision":
+      return "Waiting for your decision";
     case "streaming":
       return "Receiving response…";
     case "completed":
@@ -2650,6 +2653,8 @@ function sendLifecycleStatusLabel(status: SendStatus, t: I18nTranslate): string 
       return t("chat.send.statusQueued");
     case "contacting":
       return t("chat.send.statusContacting");
+    case "awaiting-decision":
+      return t("chat.send.statusAwaitingDecision");
     case "streaming":
       return t("chat.send.statusStreaming");
     case "cancelled":
@@ -5523,25 +5528,27 @@ function ChatWindowLog({
             <ConversationQuestionMap items={questionMapItems} onJump={scrollToQuestion} />
           ) : null}
           <div className="chatw-log">
-            <ConversationThread
-              messages={visible}
-              streamingAssistantMessage={streamingAssistantMessage}
-              onOpenRunResult={onOpenRunResult}
-              repositoryRoots={repositoryRoots}
-              openRepositoryReference={openRepositoryReference}
-              previewWindows={previewWindows}
-              windowId={windowId}
-              sending={sending}
-              sendStatus={sendStatus}
-              regeneratingMessageId={regeneratingMessageId}
-              activeChat={activeChat}
-              onCancelGrounded={cancelGrounded}
-              onRegenerate={regenerateMessage}
-              onCancelRegenerate={cancelSend}
-              showRegenerateControls={!effectiveMinimal}
-              registerQuestionAnchor={registerQuestionAnchor}
-              focusedMessageId={focusedQuestionId}
-            />
+            <ChatJiraNames messages={visible}>
+              <ConversationThread
+                messages={visible}
+                streamingAssistantMessage={streamingAssistantMessage}
+                onOpenRunResult={onOpenRunResult}
+                repositoryRoots={repositoryRoots}
+                openRepositoryReference={openRepositoryReference}
+                previewWindows={previewWindows}
+                windowId={windowId}
+                sending={sending}
+                sendStatus={sendStatus}
+                regeneratingMessageId={regeneratingMessageId}
+                activeChat={activeChat}
+                onCancelGrounded={cancelGrounded}
+                onRegenerate={regenerateMessage}
+                onCancelRegenerate={cancelSend}
+                showRegenerateControls={!effectiveMinimal}
+                registerQuestionAnchor={registerQuestionAnchor}
+                focusedMessageId={focusedQuestionId}
+              />
+            </ChatJiraNames>
             <GroundedAnswerPanel chat={activeChat} busy={sending} />
             {/* Issue #148 — disclose which attached documents contributed extracted context. */}
             <SentDocumentsNote documents={lastSentDocuments} />

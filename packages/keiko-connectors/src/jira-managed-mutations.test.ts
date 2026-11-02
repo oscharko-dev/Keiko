@@ -1311,21 +1311,77 @@ it("says the issue exists and which links are missing when a create's link fails
   // The issue is created once: neither the failed link nor the create is ever sent again.
   expect(writes(f).map(({ path }) => path)).toEqual(["issue", "issueLink"]);
 });
-it("refuses links before dispatch when current metadata does not offer them (#4176)", async () => {
-  const f = fixture();
-  expect(
-    await f.run("jira.create", {
-      projectId: "10000",
-      issueTypeId: "10001",
-      fields: { summary: "Synthetic", customfield_10000: "Required" },
-      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
-    }),
-  ).toEqual({
-    ok: false,
-    reason: "field-validation",
-    detail: { fieldId: "issuelinks", validation: "unsupported-field" },
+const RELATES_SYN_9 = { type: "Relates", direction: "outward", issueKey: "SYN-9" };
+/** The default Jira edit screen has no Linked Issues field; `linkAnswer` answers the link call. */
+function editScreenWithoutLinks(
+  f: ReturnType<typeof fixture>,
+  linkAnswer?: Awaited<ReturnType<AtlassianHttpBodyPort>>,
+): void {
+  const dispatch = f.http.getMockImplementation();
+  f.http.mockImplementation((request) => {
+    if (request.url.endsWith("/editmeta"))
+      return Promise.resolve(response({ fields: { summary: field("summary", "string") } }));
+    if (linkAnswer !== undefined && request.url.endsWith("/issueLink"))
+      return Promise.resolve(linkAnswer);
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
   });
-  expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+}
+it("sends no empty edit and uses Jira's link action where the edit screen has no links (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f);
+  const result = await f.run("jira.edit", { issueKey: "SYN-1", links: [RELATES_SYN_9] });
+  expect(result).toMatchObject({ ok: true, links: { requested: 1, created: 1, missing: [] } });
+  expect(writes(f).map(({ method, path }) => `${method} ${path}`)).toEqual(["POST issueLink"]);
+  expect(writes(f)[0]?.body).toEqual({
+    type: { name: "Relates" },
+    inwardIssue: { key: "SYN-1" },
+    outwardIssue: { key: "SYN-9" },
+  });
+});
+it("still sends the fields of an edit whose link takes Jira's link action (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f);
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { summary: "Changed" },
+    links: [RELATES_SYN_9],
+  });
+  expect(writes(f).map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "PUT issue/SYN-1",
+    "POST issueLink",
+  ]);
+});
+it("keeps a link-only edit a plain refusal when Jira refuses the link (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f, response({ errorMessages: ["No permission"], errors: {} }, 403));
+  const result = await f.run("jira.edit", { issueKey: "SYN-1", links: [RELATES_SYN_9] });
+  expect(result).toMatchObject({ ok: false, reason: "permission-denied" });
+  expect(result).not.toHaveProperty("receipt");
+  expect(result).not.toHaveProperty("links");
+});
+it("keeps a link-only edit open when Jira's answer to the link was lost (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f, response({}, 503));
+  const result = await f.run("jira.edit", { issueKey: "SYN-1", links: [RELATES_SYN_9] });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "unavailable",
+    receipt: { issueKey: "SYN-1" },
+    links: { missing: [RELATES_SYN_9] },
+  });
+});
+it("links through Jira's link action where the create screen does not offer links (#4176)", async () => {
+  const f = fixture();
+  await f.run("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Synthetic", customfield_10000: "Required" },
+    links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+  });
+  const [create, link] = writes(f);
+  expect(create?.path).toBe("issue");
+  expect(create?.body).not.toHaveProperty("update.issuelinks");
+  expect(link?.path).toBe("issueLink");
 });
 it.each([
   [{ type: "Blocks", direction: "sideways", issueKey: "SYN-2" }],

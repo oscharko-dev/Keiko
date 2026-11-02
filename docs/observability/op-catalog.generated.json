@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "89c3ed310e53f253f5ffc088ac3e77b280e191d3968046a6b25a38ec17964fae",
+    "catalogDigest": "fecbf098667f8d556deb785101dc8e176455ad0cb43926e0c0542d4777bf8caf",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -3351,7 +3351,7 @@
         "proofIds": ["chat.tool-mutation.projected.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/store/chatToolMutationProjection.ts:22",
-        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationProjection.ts:113"]
+        "emitterSites": ["packages/keiko-server/src/store/chatToolMutationProjection.ts:138"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -107042,21 +107042,21 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa-multi-source.ts:2198",
+      "site": "packages/keiko-server/src/grounded-qa-multi-source.ts:2202",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:321",
+      "site": "packages/keiko-server/src/grounded-qa.ts:322",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3291",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3295",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -109891,7 +109891,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:3685",
+      "site": "packages/keiko-server/src/grounded-qa.ts:3689",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110441,7 +110441,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2349",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2350",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

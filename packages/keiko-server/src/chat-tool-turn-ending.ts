@@ -1,4 +1,4 @@
-import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatToolExchange, GroundedUncertainty } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -358,4 +358,30 @@ export function recordChatToolTurnCorrected(
   } catch {
     recordActivityLogLoss("port-sink-failed");
   }
+}
+
+interface ToolTranscriptLookup {
+  findMessageById(
+    id: string,
+  ):
+    | { readonly toolTranscript?: { readonly exchanges: readonly ChatToolExchange[] } | undefined }
+    | undefined;
+}
+
+/**
+ * An answer built on settled tool results has a visible source: those results. Calling it
+ * untraceable would be false, so only that note goes; a marker that cites nothing valid stays.
+ */
+export function withToolResultsAsSource<
+  Answer extends {
+    readonly userMessageId: string;
+    readonly uncertainty: readonly GroundedUncertainty[];
+  },
+>(answer: Answer, store: ToolTranscriptLookup): Answer {
+  const exchanges = store.findMessageById(answer.userMessageId)?.toolTranscript?.exchanges ?? [];
+  if (!exchanges.some((exchange) => exchange.result?.status === "completed")) return answer;
+  return {
+    ...answer,
+    uncertainty: answer.uncertainty.filter((marker) => marker.kind !== "uncited-answer"),
+  };
 }

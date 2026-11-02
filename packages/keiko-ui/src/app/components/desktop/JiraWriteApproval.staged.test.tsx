@@ -105,6 +105,26 @@ describe("a staged Jira backlog draft is reviewed and approved once (#4178)", ()
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeDisabled();
   });
 
+  it("says nothing about a deleted draft once the decision is settled", async () => {
+    const load = vi
+      .fn<Load>()
+      .mockRejectedValue(new ApiError("JIRA_DRAFT_UNAVAILABLE", "gone", 404));
+    render(
+      <JiraWriteApproval
+        approval={{ ...approval(), state: "claimed" }}
+        call={call}
+        turnState="completed"
+        observe={vi.fn()}
+        decide={vi.fn()}
+        loadDraft={load}
+      />,
+    );
+    await waitFor(() => expect(load).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByText(/Loading the draft/u)).toBeNull());
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText(/no longer available/u)).toBeNull();
+  });
+
   it("cannot be approved when the draft is no longer available, but can be declined", async () => {
     const load = vi
       .fn<Load>()

@@ -1373,6 +1373,8 @@ describe("normal Chat write approval and durable outcome", () => {
       const completed = await pending;
       if (streamed) {
         expect(response.body()).toContain("event: done");
+        // The running turn shows its calls as they happen, in every mode.
+        expect(response.body()).toContain("event: tool-exchange");
         if (mode !== "autonomous-delivery")
           expect(response.body()).toContain("event: tool-write-approval");
       } else expect(completed).toMatchObject({ status: 200 });

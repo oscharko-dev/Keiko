@@ -187,6 +187,26 @@ export function chatWriteApprovalTiming(
     ),
   };
 }
+/** A review gets the full approval lifetime, whatever is left of the automatic read grant. */
+function withFullDecisionTime<Envelope extends ChatToolAuthorityEnvelope>(
+  registry: NonNullable<ApprovalRegistry>,
+  facts: ChatWriteFacts<Envelope>,
+  now: number,
+  correlationId: string,
+): ChatWriteFacts<Envelope> {
+  const expiresAt = Math.min(
+    Date.parse(facts.envelope.expiresAt),
+    now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+  );
+  if (facts.readExpiresAt >= expiresAt) return facts;
+  const renewed = registry.renewChatReadGrant(
+    facts.envelope.subject,
+    now,
+    expiresAt,
+    correlationId,
+  );
+  return renewed === undefined ? facts : { ...facts, readExpiresAt: renewed.expiresAt };
+}
 function chatWriteApprovalWithinBounds(
   entry: ChatWriteApprovalEntry,
   facts: ChatWriteFacts,
@@ -372,20 +392,15 @@ function chatWriteFactsResolver<
 }
 
 /** Source-specific adapters retain policy and validation; this existing owner retains the workflow. */
-export function createChatWriteApprovalOwner<
+function chatWriteApprovalCurrency<
   Deps extends Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">,
   Envelope extends ChatToolAuthorityEnvelope,
   Action extends ChatToolWriteActionIdentity,
 >(
   owner: ChatWriteApprovalOwnerConfiguration<Deps, Envelope, Action>,
-): ChatWriteApprovalOwner<Deps, Action> {
-  const factsFor = chatWriteFactsResolver(owner);
-  const isCurrent = (
-    deps: Deps,
-    entry: ChatWriteApprovalEntry,
-    nowIso: string,
-    correlationId: string,
-  ): boolean => {
+  factsFor: ReturnType<typeof chatWriteFactsResolver<Deps, Envelope, Action>>,
+): ChatWriteApprovalOwner<Deps, Action>["isCurrent"] {
+  return (deps, entry, nowIso, correlationId) => {
     if (!owner.matchesEntry(entry)) return false;
     const facts = factsFor(deps, entry.subject.chatId, entry.authority, nowIso, correlationId);
     if (facts === undefined || !sameReadGrantSubject(entry, facts.envelope.subject)) return false;
@@ -394,6 +409,16 @@ export function createChatWriteApprovalOwner<
       chatWriteApprovalWithinBounds(entry, facts, Date.parse(nowIso))
     );
   };
+}
+export function createChatWriteApprovalOwner<
+  Deps extends Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">,
+  Envelope extends ChatToolAuthorityEnvelope,
+  Action extends ChatToolWriteActionIdentity,
+>(
+  owner: ChatWriteApprovalOwnerConfiguration<Deps, Envelope, Action>,
+): ChatWriteApprovalOwner<Deps, Action> {
+  const factsFor = chatWriteFactsResolver(owner);
+  const isCurrent = chatWriteApprovalCurrency(owner, factsFor);
   return {
     isCurrent,
     request: (
@@ -409,7 +434,18 @@ export function createChatWriteApprovalOwner<
       const registry = deps.atlassianActionApprovalRegistry;
       if (facts === undefined || registry === undefined)
         return denyChatToolWriteApproval("authority-denied", chatId, correlationId);
-      const entry = owner.pending(facts, authority, action, Date.parse(nowIso), draftItemRefs);
+      const now = Date.parse(nowIso);
+      const first = owner.pending(facts, authority, action, now, draftItemRefs);
+      const entry =
+        owner.policy(first, facts.envelope) === "review-required"
+          ? owner.pending(
+              withFullDecisionTime(registry, facts, now, correlationId),
+              authority,
+              action,
+              now,
+              draftItemRefs,
+            )
+          : first;
       return requestRetainedChatWriteApproval(
         registry,
         entry,

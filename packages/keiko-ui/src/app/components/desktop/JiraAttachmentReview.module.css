@@ -11,7 +11,3 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
-.cmpDigest {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.85em;
-}

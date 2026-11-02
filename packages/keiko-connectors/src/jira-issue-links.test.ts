@@ -176,6 +176,12 @@ describe("planJiraIssueLinks", () => {
     expect(orderedJiraIssueLinks(plan)).toEqual([REQUESTS[1], REQUESTS[0], REQUESTS[2]]);
   });
 
+  it("sends every link through its own call where the screen does not offer links", () => {
+    const plan = planJiraIssueLinks(REQUESTS, undefined, false);
+    expect(plan.inline).toEqual([]);
+    expect(plan.further).toEqual(REQUESTS);
+  });
+
   it("plans nothing for no links", () => {
     expect(planJiraIssueLinks([])).toEqual({ present: [], inline: [], further: [] });
   });

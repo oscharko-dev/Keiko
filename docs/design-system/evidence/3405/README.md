@@ -256,3 +256,8 @@ again, so the original producer ran on 2026-11-02 with Node 24.18.0. All cases p
 real-BFF outage journey; only `11-progress-state.png` changed bytes (the progress bar's captured
 position), and the three records rebind every declared digest. The evidence freshness gate passed.
 No updater behavior, baseline or numerical ceiling changed.
+
+The Chat's waiting status and the attachment and requirements labels (PR #4182) changed the core and
+optional catalogs, so the original producer ran on 2026-11-02 with Node 24.18.0. All nine cases
+passed, including the real-BFF outage journey, and the three records rebind every declared digest. The
+evidence freshness gate passed. No updater behavior, baseline or numerical ceiling changed.

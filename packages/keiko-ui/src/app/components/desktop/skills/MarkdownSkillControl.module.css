@@ -23,6 +23,7 @@
 .cmpFilePicker:focus-within,
 .cmpMarkdown:focus-visible,
 .cmpDialog input:focus-visible,
+.cmpDialog select:focus-visible,
 .cmpDialog textarea:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
@@ -111,6 +112,16 @@
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
+}
+.cmpUpload select,
+.cmpUpload input:not([type="file"]) {
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  font: inherit;
 }
 .cmpFilePicker {
   position: relative;

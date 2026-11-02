@@ -1,3 +1,4 @@
+import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "../atlassian/actionApprovalLimits.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -461,17 +462,21 @@ it("preserves dependency graph identity and disposes each runtime without recurs
   expect(dispose).toHaveBeenCalledOnce();
 });
 
-it("revokes a pending write approval at the invocation deadline", async () => {
+// The decision may outlast the tool's own work budget; when its time is up nothing was sent.
+it("keeps a pending write approval open past the tool's work budget and ends it unsent", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   try {
     const f = fixture(true);
     const pending = send(f);
     void pending.catch(() => undefined);
     await pendingWrite(f);
+    const approval = (): string | undefined =>
+      f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state;
     await vi.advanceTimersByTimeAsync(60_001);
+    expect(approval()).toBe("pending");
+    await vi.advanceTimersByTimeAsync(ATLASSIAN_ACTION_APPROVAL_TTL_MS);
     await pending;
-    const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
-    expect(transcript?.exchanges[0]?.approval?.state).toBe("revoked");
+    expect(approval()).toBe("expired");
     expect(f.effects).toEqual([]);
   } finally {
     vi.useRealTimers();

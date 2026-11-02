@@ -36,8 +36,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Action declined",
   "chat.jira.writeApproval.expired": "Action approval expired",
   "chat.jira.writeApproval.revoked": "Action approval revoked",
-  "chat.jira.writeApproval.disclosure":
-    "Review the proposed action and its exact details below. Approval applies only to this action. An approval is not confirmation that Jira was changed.",
   "chat.jira.writeApproval.preview": "Proposed action details",
   "chat.jira.writeApproval.working": "Checking this action…",
   "chat.jira.writeApproval.failed":
@@ -45,6 +43,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.writeApproval.allow": "Approve this action",
   "chat.jira.writeApproval.deny": "Decline this action",
   "chat.jira.writeApproval.refresh": "Refresh action state",
+  "chat.jira.draft.operation": "Create Jira issues",
+  "chat.jira.attach.operation": "Attach a file to a Jira issue",
   "chat.jira.draft.legend": "Issues to create ({selected} of {total} selected)",
   "chat.jira.draft.dependent": "Left out because an issue it depends on is left out",
   "chat.jira.draft.parent": "Parent ({fieldId}): {target}",
@@ -79,6 +79,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.resultUnavailable": "Result unavailable",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",
   "chat.requirements.tool": "Requirements",
+  "chat.requirements.details": "View requirements",
   "chat.requirements.partial": "Partial list. Some requirements are not included.",
   "chat.jira.write.notDispatched": "Not sent to Jira",
   "chat.jira.write.rejected": "Jira action rejected",
@@ -117,8 +118,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.mcp.tool": "MCP action",
   "chat.mcp.details": "View MCP result",
   "chat.mcp.writeApproval.title": "Approve MCP action",
-  "chat.mcp.writeApproval.disclosure":
-    "Review this tool and its arguments. Approval permits this action once within the current connection and authority.",
   "chat.mcp.write.notDispatched": "Not sent to the MCP server",
   "chat.mcp.write.rejected": "MCP action rejected",
   "chat.mcp.write.succeeded": "Action confirmed",
@@ -1958,6 +1957,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.send.cancel": "Cancel response",
   "chat.send.statusQueued": "Submitting your message…",
   "chat.send.statusContacting": "Preparing response…",
+  "chat.send.statusAwaitingDecision": "Waiting for your decision",
   "chat.send.statusStreaming": "Receiving response…",
   "chat.send.statusCancelled": "Response cancelled.",
   "chat.voice.pendingTurn":

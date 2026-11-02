@@ -50,19 +50,37 @@ async function writeFrom(
   return writeFrom(request, issueKey, links, created + 1);
 }
 
+/** Jira answered and refused: unlike a lost answer, nothing can have landed. */
+const LOST_ANSWERS: ReadonlySet<JiraMutationFailure["reason"]> = new Set([
+  "timeout",
+  "unavailable",
+  "malformed-payload",
+]);
+function refusedBeforeAnyEffect(written: JiraIssueLinkWrites): boolean {
+  return (
+    written.failure !== undefined &&
+    written.created === 0 &&
+    !LOST_ANSWERS.has(written.failure.reason)
+  );
+}
+
 /**
  * Finishes a create/edit that carried links: writes the further ones, then confirms the issue. Any
  * failure after the issue was acknowledged names the issue and which requested links are missing,
- * so a partial effect is never reported as plain failure or as success.
+ * so a partial effect is never reported as plain failure or as success. An edit that was only those
+ * calls has no partial effect when Jira refuses the first: that stays a plain refusal.
  */
 export async function completeJiraLinkedMutation(
   request: JiraMutationRequest,
   input: JiraFieldConfirmation,
   plan: JiraIssueLinkPlan,
+  onlyLinkCalls = false,
 ): Promise<JiraMutationAttempt> {
   const links = orderedJiraIssueLinks(plan);
   if (links.length === 0) return confirmJiraMutationFields(request, input);
   const written = await writeFrom(request, input.issueKey, plan.further, 0);
+  if (onlyLinkCalls && written.failure !== undefined && refusedBeforeAnyEffect(written))
+    return written.failure;
   const settled = written.failure ?? (await confirmJiraMutationFields(request, input));
   if (settled.ok)
     return {

@@ -78,6 +78,7 @@ if (values.model) {
   const ids = JOURNEY_IDS.filter((id) => scenarios.some((scenario) => scenario.id === id));
   journeys = await runJourneys({
     session,
+    directory,
     modelId: values.model,
     embeddingModelId: values["embedding-model"],
     truth,

@@ -188,9 +188,43 @@ describe("Jira Chat write approvals", () => {
         decide={decide}
       />,
     );
-    await waitFor(() => expect(observe).toHaveBeenCalledOnce());
+    // Nothing is left to decide, so nothing asks the human to refresh a decision either.
+    expect(screen.getByText("Action approval expired")).toBeVisible();
+    expect(observe).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Refresh action state" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Approve this action" })).toBeNull();
     expect(decide).not.toHaveBeenCalled();
+  });
+  it("brings a decision the human is waited for into view, and only then", async () => {
+    const reveal = vi.spyOn(HTMLElement.prototype, "scrollIntoView");
+    try {
+      const view = approval();
+      const { unmount } = render(
+        <JiraWriteApproval
+          approval={view}
+          call={call}
+          turnState="cancelled"
+          observe={vi.fn().mockResolvedValue(view)}
+          decide={vi.fn()}
+        />,
+      );
+      expect(reveal).not.toHaveBeenCalled();
+      unmount();
+      render(
+        <JiraWriteApproval
+          approval={view}
+          call={call}
+          turnState="pending"
+          observe={vi.fn().mockResolvedValue(view)}
+          decide={vi.fn()}
+        />,
+      );
+      expect(reveal).toHaveBeenCalledExactlyOnceWith({ block: "start" });
+      await ready();
+    } finally {
+      reveal.mockRestore();
+    }
   });
 });
 
@@ -540,7 +574,7 @@ describe("Jira backlog draft approval (#4178)", () => {
   });
 });
 
-it("shows an attachment approval's file by name, size and digest, never its content (#4176)", async () => {
+it("shows an attachment approval's file once, by name and size, never its content (#4176)", async () => {
   const view: ChatToolWriteApprovalView = {
     kind: "jira-chat-write",
     approvalId: "approval-attach",
@@ -577,7 +611,9 @@ it("shows an attachment approval's file by name, size and digest, never its cont
   const facts = screen.getByRole("list", { name: "Proposed action details" });
   expect(facts).toHaveTextContent("report.txt");
   expect(facts).toHaveTextContent(`${new Intl.NumberFormat().format(12345)} B`);
-  expect(facts).toHaveTextContent(`sha256 ${"b".repeat(64)}`);
+  expect(facts).not.toHaveTextContent("sha256");
+  expect(screen.getAllByText("report.txt")).toHaveLength(1);
+  expect(screen.getByText("Attach a file to a Jira issue")).toBeInTheDocument();
   expect(await axe(container)).toHaveNoViolations();
 });
 it("renders no file facts for an approval that carries no attachment", async () => {

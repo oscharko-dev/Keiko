@@ -1,3 +1,4 @@
+import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   type ParsedDesktopChatSend,
   buildCanonicalTurnMemoryResult,
@@ -2557,22 +2558,25 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     assistantContent,
     workerCtx.userMessage,
   );
-  const answer: GroundedAnswer = {
-    groundingKind: "connected-context",
-    userMessageId: userMessage.id,
-    assistantMessageId: assistantMessage.id,
-    ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
-    content: assistantContent,
-    ...singleAnswerEvidenceDeclaration(output),
-    citations,
-    uncertainty: buildUncertainty(output.pack, currentContentRedactor(deps)),
-    omittedCount: connectedContextOmittedCount(output.pack),
-    elapsedMs: output.elapsedMs,
-    contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
-    ...(modelInvoked && output.promptContext !== undefined
-      ? { promptContext: output.promptContext }
-      : {}),
-  };
+  const answer: GroundedAnswer = withToolResultsAsSource(
+    {
+      groundingKind: "connected-context",
+      userMessageId: userMessage.id,
+      assistantMessageId: assistantMessage.id,
+      ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
+      content: assistantContent,
+      ...singleAnswerEvidenceDeclaration(output),
+      citations,
+      uncertainty: buildUncertainty(output.pack, currentContentRedactor(deps)),
+      omittedCount: connectedContextOmittedCount(output.pack),
+      elapsedMs: output.elapsedMs,
+      contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
+      ...(modelInvoked && output.promptContext !== undefined
+        ? { promptContext: output.promptContext }
+        : {}),
+    },
+    deps.store,
+  );
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {
     registerSingleGroundedTurn(workerCtx, output, assistantMessage.id, evidenceRunId);

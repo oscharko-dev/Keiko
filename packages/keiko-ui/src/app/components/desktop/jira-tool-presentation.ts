@@ -30,14 +30,30 @@ const MANAGED_TOOLS = [...JIRA_MANAGED_READ_TOOLS, ...JIRA_MUTATION_OPERATIONS];
 const REQUIREMENTS_TOOL_ALIAS = "knowledge_requirements";
 const REQUIREMENTS_CUT_COUNTS = ["unitsOmitted", "documentsOmitted", "documentsNotExtracted"];
 
+/** A draft and an attachment are governed like a create and an edit, but are neither to the human. */
+const OPERATION_LABELS: Readonly<Record<string, WidgetMessageKey>> = {
+  "jira.draft": "chat.jira.draft.operation",
+  "jira.attach": "chat.jira.attach.operation",
+};
+export function jiraOperationLabel(
+  operation: keyof typeof JIRA_MANAGED_ACTION_TYPES,
+): WidgetMessageKey {
+  return OPERATION_LABELS[operation] ?? actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[operation]);
+}
 export function jiraToolLabel(exchange: ChatToolExchange): WidgetMessageKey {
   if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.tool";
   const operation = MANAGED_TOOLS.find(
     (name) => name.replace(/[.-]/gu, "_") === exchange.call.name,
   );
-  return operation === undefined
-    ? "chat.jira.tool"
-    : actionTypeLabelKey(JIRA_MANAGED_ACTION_TYPES[operation]);
+  return operation === undefined ? "chat.jira.tool" : jiraOperationLabel(operation);
+}
+export function jiraToolRegionLabel(exchange: ChatToolExchange): WidgetMessageKey {
+  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.tool";
+  return exchange.call.name.startsWith("mcp_") ? "chat.mcp.tool" : "chat.jira.tool";
+}
+export function jiraToolDetailsLabel(exchange: ChatToolExchange): WidgetMessageKey {
+  if (exchange.call.name === REQUIREMENTS_TOOL_ALIAS) return "chat.requirements.details";
+  return exchange.call.name.startsWith("mcp_") ? "chat.mcp.details" : "chat.jira.details";
 }
 function plainRecord(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)

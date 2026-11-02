@@ -347,6 +347,18 @@ cancellation/denial and settlement status; a matching journal outcome is project
 argument identity checks. Transcript reload and model-history projection keep that outcome paired
 with the original call/result IDs. A later abort or authority loss cannot erase an already observed
 remote effect or imply rollback, and an orphaned pending record never authorizes takeover/replay.
+The journal commits before any dispatch and keeps its records, so a reviewed call of an ended turn
+with no journal record under its approval's invocation id was never sent: it projects as
+`not-dispatched` without a result. A call with a journal record and no outcome stays `unknown`,
+whatever its card says.
+A human waited for keeps the whole decision time: asking for a write approval restarts a granted
+read in that Chat, forward only, within the approval lifetime and under the same consent proof, so the
+remainder of an older read grant no longer shortens the card. Restart is a store transition, not a
+new consent; a revoked or expired grant is never restarted.
+Running turns stream each call as it starts and settles (`tool-exchange`, approval excluded, which
+keeps its own event). While a decision is open, the composer says the turn waits for the human, the
+card comes into view and carries the only row for that call. A finished turn's card has nothing to
+refresh or decide and shows the stored outcome.
 
 
 **Bounded Jira field validation (#4083).** The connector owns one metadata-driven field matrix
@@ -370,14 +382,17 @@ values on read. The system `parent` field is an `issue` reference (`{ key }`, `{
 key, canonicalized to one identity). `attachment`, `issuelinks`, `comment`, routing and computed
 system fields stay outside plain field writes and are written through their own tools or
 arguments. Issue links are the `links` kind: `jira.create` and `jira.edit` take a bounded `links`
-argument (at most 20 `{ type, direction, issueKey }` entries; duplicates collapse) only when current
-metadata offers `add` on the canonical `array:issuelinks` field; `outward` means this issue →
-`issueKey`. Jira Data Center and Cloud both refuse a create or edit with more than one `issuelinks`
-operation (JRASERVER-66329, unresolved; a Data Center 10.3 answers 400 "We support at most 1
-operation for this field"), so the request itself carries at most one `update.issuelinks` add
-and every further link is its own `POST /rest/api/2/issueLink` (`inwardIssue` is the link's source:
-an `outward` link names this issue there) after the issue exists, in order, each dispatched at most
-once. Those calls are the same approved mutation, not new ones: no new operation or approval path
+argument (at most 20 `{ type, direction, issueKey }` entries; duplicates collapse); `outward` means
+this issue → `issueKey`. Linking is an action of its own in Jira, not a screen field, and a default
+edit screen does not offer it, so the screen only decides how a link travels and Jira's Link Issues
+permission decides whether it lands. Jira Data Center and Cloud both refuse a create or edit with
+more than one `issuelinks` operation (JRASERVER-66329, unresolved; a Data Center 10.3 answers 400
+"We support at most 1 operation for this field"), so the request itself carries at most one
+`update.issuelinks` add, only when current metadata offers `add` on the canonical `array:issuelinks`
+field, and every other link is its own `POST /rest/api/2/issueLink` (`inwardIssue` is the link's
+source: an `outward` link names this issue there) after the issue exists, in order, each dispatched
+at most once. An edit that changes nothing else sends no empty issue request; when Jira refuses its
+first link call nothing happened, so it stays a plain refusal. Those calls are the same approved mutation, not new ones: no new operation or approval path
 exists, the server dispatches them only after the invocation's own write was acknowledged and under
 the same current-authority and approval guards (at most the approved count, the journal record
 unchanged), and the connector writes only the approved links, none that the read before an edit
@@ -669,7 +684,7 @@ claim to find a secret deliberately encoded into pixel data or another opaque re
 
 *Review and send.* When the approval is requested the server reads the file and attaches its
 **name, size and SHA-256** to the approval view and so to the approval proof; the human is shown
-those, never the content. At send time the file is read again and must match the approved name, size
+the name and size, never the content. At send time the file is read again and must match the approved name, size
 and digest, otherwise nothing is sent and the model is told the file changed after review
 (`conflict`). Where policy requires a review and no approval is found (an expired record), the send
 is refused as `unreviewed`; a file that cannot be read for review gets no approval at all; under

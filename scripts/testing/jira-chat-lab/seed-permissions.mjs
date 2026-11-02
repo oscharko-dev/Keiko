@@ -12,12 +12,38 @@ const full = [
   "TRANSITION_ISSUES",
   "RESOLVE_ISSUES",
   "CLOSE_ISSUES",
+  "CREATE_ATTACHMENTS",
+  "LINK_ISSUES",
 ];
 function grants(actor, permissions) {
   return permissions.map((permission) => ({
     permission,
     holder: { type: "user", parameter: actorDetails(actor).name },
   }));
+}
+
+const grantKey = (value) => `${value.permission}:${value.holder.type}:${value.holder.parameter}`;
+const normalizeGrants = (values) => values.map((value) => grantKey(value)).sort().join("|");
+
+/** A lab seeded by an earlier fixture gains new grants; anything else in its scheme is drift. */
+async function reconcileGrants(session, auth, schemeId, actual, permissions) {
+  const present = new Set(actual.map((value) => grantKey(value)));
+  const missing = permissions.filter((grant) => !present.has(grantKey(grant)));
+  await Promise.all(
+    missing.map((grant) =>
+      checked(
+        session,
+        "add-permission-grant",
+        "POST",
+        `/rest/api/2/permissionscheme/${schemeId}/permission`,
+        auth,
+        grant,
+        [201],
+      ),
+    ),
+  );
+  if (normalizeGrants([...actual, ...missing]) !== normalizeGrants(permissions))
+    throw new TypeError("Synthetic permission scheme drift");
 }
 
 async function associateScheme(session, project, permissions) {
@@ -49,13 +75,7 @@ async function associateScheme(session, project, permissions) {
     `/rest/api/2/permissionscheme/${scheme.id}?expand=permissions`,
     auth,
   );
-  const normalize = (values) =>
-    values
-      .map((value) => `${value.permission}:${value.holder.type}:${value.holder.parameter}`)
-      .sort()
-      .join("|");
-  if (normalize(actual.permissions) !== normalize(permissions))
-    throw new TypeError("Synthetic permission scheme drift");
+  await reconcileGrants(session, auth, scheme.id, actual.permissions, permissions);
   const path = `/rest/api/2/project/${project}/permissionscheme`;
   const current = await checked(session, "current-permission-scheme", "GET", path, auth);
   if (String(current.id) !== String(scheme.id))

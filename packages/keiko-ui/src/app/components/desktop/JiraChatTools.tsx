@@ -8,7 +8,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import {
+  jiraToolDetailsLabel,
   jiraToolLabel,
+  jiraToolRegionLabel,
   jiraToolState,
   jiraToolOutcomeHelp,
   jiraToolPartialNotice,
@@ -18,6 +20,16 @@ import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
 function jiraReportOf(exchange: ChatToolExchange): ReturnType<typeof jiraReportView> {
   return exchange.call.name === "jira_report" ? jiraReportView(exchange.result?.data) : undefined;
+}
+function JiraToolResultDetails({ exchange }: { readonly exchange: ChatToolExchange }): ReactNode {
+  const t = useTranslate();
+  if (exchange.result?.data == null) return null;
+  return (
+    <details>
+      <summary>{t(jiraToolDetailsLabel(exchange))}</summary>
+      <pre className={styles.cmpResult}>{JSON.stringify(exchange.result.data, null, 2)}</pre>
+    </details>
+  );
 }
 function JiraToolExchange({
   exchange,
@@ -31,23 +43,27 @@ function JiraToolExchange({
   const t = useTranslate();
   const mcp = exchange.call.name.startsWith("mcp_");
   const state = jiraToolState(exchange, turnState);
-  const help = jiraToolOutcomeHelp(state);
+  // While the turn runs the state says enough; the help explains what a finished turn left open.
+  const help = turnState === "pending" ? undefined : jiraToolOutcomeHelp(state);
   const report = jiraReportOf(exchange);
   const partial = jiraToolPartialNotice(exchange);
   return (
-    <section className={styles.cmpCard} aria-label={t(mcp ? "chat.mcp.tool" : "chat.jira.tool")}>
+    <section className={styles.cmpCard} aria-label={t(jiraToolRegionLabel(exchange))}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
       {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
-      {exchange.result?.data == null ? null : (
-        <details>
-          <summary>{t(mcp ? "chat.mcp.details" : "chat.jira.details")}</summary>
-          <pre className={styles.cmpResult}>{JSON.stringify(exchange.result.data, null, 2)}</pre>
-        </details>
-      )}
+      <JiraToolResultDetails exchange={exchange} />
     </section>
+  );
+}
+/** The card already says what an undecided action is waiting for. */
+function awaitsDecision(exchange: ChatToolExchange, turnState: ChatTurnState | undefined): boolean {
+  return (
+    exchange.approval?.state === "pending" &&
+    exchange.result === undefined &&
+    turnState === "pending"
   );
 }
 export function JiraChatTools({
@@ -63,7 +79,7 @@ export function JiraChatTools({
   return (
     <div className={styles.cmpStack}>
       {transcript.exchanges.map((exchange) => (
-        <div key={exchange.call.id}>
+        <div key={exchange.call.id} className={styles.cmpExchange}>
           {exchange.approval === undefined ? null : (
             <JiraWriteApproval
               key={exchange.approval.approvalId}
@@ -72,7 +88,9 @@ export function JiraChatTools({
               turnState={turnState}
             />
           )}
-          <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
+          {awaitsDecision(exchange, turnState) ? null : (
+            <JiraToolExchange exchange={exchange} turnState={turnState} chatId={chatId} />
+          )}
         </div>
       ))}
     </div>

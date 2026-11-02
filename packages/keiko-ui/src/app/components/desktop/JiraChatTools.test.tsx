@@ -97,7 +97,9 @@ describe("Jira Chat tools without a read consent card", () => {
     expect(screen.getByRole("button", { name: "Approve this action" })).toBeVisible();
     expect(screen.getAllByText("Running")).toHaveLength(1);
     expect(screen.getByRole("region", { name: "MCP action" })).toBeVisible();
-    expect(screen.getByRole("region", { name: "Jira action" })).toBeVisible();
+    // The card already says what the undecided action waits for; no second row repeats it.
+    expect(screen.getByRole("region", { name: "Review Jira action" })).toBeVisible();
+    expect(screen.queryByRole("region", { name: "Jira action" })).toBeNull();
     await waitFor(() =>
       expect(screen.getByRole("button", { name: "Approve this action" })).toBeEnabled(),
     );

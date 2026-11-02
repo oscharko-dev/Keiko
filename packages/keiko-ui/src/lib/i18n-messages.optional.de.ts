@@ -39,8 +39,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
   "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
   "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
-  "chat.jira.writeApproval.disclosure":
-    "Prüfe die vorgeschlagene Aktion und ihre genauen Details unten. Die Freigabe gilt nur für diese Aktion. Sie bestätigt keine Änderung in Jira.",
   "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
   "chat.jira.writeApproval.working": "Aktion wird geprüft…",
   "chat.jira.writeApproval.failed":
@@ -48,6 +46,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
   "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
   "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+  "chat.jira.draft.operation": "Jira-Vorgänge anlegen",
+  "chat.jira.attach.operation": "Datei an Jira-Vorgang anhängen",
   "chat.jira.draft.legend": "Anzulegende Vorgänge ({selected} von {total} ausgewählt)",
   "chat.jira.draft.dependent": "Ausgelassen, weil ein Vorgang, von dem er abhängt, ausgelassen ist",
   "chat.jira.draft.parent": "Übergeordnet ({fieldId}): {target}",
@@ -83,6 +83,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
   "chat.requirements.tool": "Anforderungen",
+  "chat.requirements.details": "Anforderungen ansehen",
   "chat.requirements.partial": "Teilliste. Nicht alle Anforderungen sind enthalten.",
   "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
   "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
@@ -122,8 +123,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.mcp.tool": "MCP-Aktion",
   "chat.mcp.details": "MCP-Ergebnis anzeigen",
   "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
-  "chat.mcp.writeApproval.disclosure":
-    "Prüfe das Tool und seine Argumente. Die Freigabe erlaubt diese Aktion einmal innerhalb der aktuellen Verbindung und Berechtigung.",
   "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
   "chat.mcp.write.rejected": "MCP-Aktion abgelehnt",
   "chat.mcp.write.succeeded": "Aktion bestätigt",
@@ -2031,6 +2030,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.send.cancel": "Antwort abbrechen",
   "chat.send.statusQueued": "Nachricht wird gesendet…",
   "chat.send.statusContacting": "Antwort wird vorbereitet…",
+  "chat.send.statusAwaitingDecision": "Deine Entscheidung steht aus",
   "chat.send.statusStreaming": "Antwort wird empfangen…",
   "chat.send.statusCancelled": "Antwort abgebrochen.",
   "chat.voice.pendingTurn":

@@ -117,7 +117,9 @@ has a three-hour lifetime. A healthy container or successful read does not estab
 write availability. Each qualification group requires license/read/write/HTTPS
 preflight and completion within the valid session. An expired group must be repeated
 in full. Never change clocks, licensing code or license data. A normal update did
-not renew the original expired laboratory; its data remains retained.
+not renew the original expired laboratory; its data remains retained. A scorecard
+checks the license again before each journey and, once no lane uses Jira, restarts
+the containers at that boundary, because two lanes outlast one license.
 
 `session.mjs stop <directory>` stops only that manifest’s containers and retains
 its volumes. This harness does not delete existing laboratories or renew licenses

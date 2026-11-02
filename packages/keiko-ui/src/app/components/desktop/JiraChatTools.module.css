@@ -4,6 +4,11 @@
   margin-block: 12px;
   min-width: 0;
 }
+.cmpExchange {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
 .cmpCard {
   display: flex;
   flex-direction: column;

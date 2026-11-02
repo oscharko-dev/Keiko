@@ -1,5 +1,5 @@
 "use client";
-import { useId, useState, type ReactNode } from "react";
+import { useContext, useId, useState, type ReactNode } from "react";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type {
   JiraDraftField,
@@ -7,6 +7,7 @@ import type {
   JiraDraftTreeItem,
   JiraDraftValue,
 } from "./jiraDraftTree";
+import { JiraNamesContext, jiraNamed, restatesTarget } from "./jiraNames";
 import styles from "./JiraChatTools.module.css";
 
 // Longer text is collapsed to this many characters until the human expands it in place.
@@ -83,7 +84,7 @@ export function DraftFields({ fields }: { readonly fields: readonly JiraDraftFie
     <dl className={styles.cmpDraftFields}>
       {fields.map((field) => (
         <div key={field.id}>
-          <dt>{field.id}</dt>
+          <dt>{field.label ?? field.id}</dt>
           <dd>
             <DraftValue value={field.value} />
           </dd>
@@ -93,8 +94,20 @@ export function DraftFields({ fields }: { readonly fields: readonly JiraDraftFie
   );
 }
 
+function ItemFields({ item }: { readonly item: JiraDraftTreeItem }): ReactNode {
+  const names = useContext(JiraNamesContext);
+  return (
+    <DraftFields
+      fields={item.fields
+        .filter((field) => !restatesTarget(field, item.projectId, item.issueTypeId))
+        .map((field) => jiraNamed(field, names))}
+    />
+  );
+}
+
 function ItemRelations({ item }: { readonly item: JiraDraftTreeItem }): ReactNode {
   const t = useTranslate();
+  const names = useContext(JiraNamesContext);
   const parent = item.parentRef ?? item.parentIssueKey;
   const notes = [
     ...(item.requirementIds.length === 0
@@ -117,8 +130,8 @@ function ItemRelations({ item }: { readonly item: JiraDraftTreeItem }): ReactNod
     <>
       <span className={styles.cmpDraftNote}>
         {t("chat.jira.draft.target", {
-          projectId: item.projectId,
-          issueTypeId: item.issueTypeId,
+          projectId: names.projects.get(item.projectId) ?? item.projectId,
+          issueTypeId: names.issueTypes.get(item.issueTypeId) ?? item.issueTypeId,
         })}
       </span>
       {notes.length === 0 ? null : <span className={styles.cmpDraftNote}>{notes.join(" · ")}</span>}
@@ -150,7 +163,7 @@ function DraftItem({ item, deselected, excluded, editable, toggle }: ItemProps):
             <span className={styles.cmpDraftNote}>{t("chat.jira.draft.dependent")}</span>
           ) : null}
           <ItemRelations item={item} />
-          <DraftFields fields={item.fields} />
+          <ItemFields item={item} />
         </div>
       </div>
       {item.children.length === 0 ? null : (
