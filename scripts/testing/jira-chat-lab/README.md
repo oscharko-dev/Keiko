@@ -675,3 +675,23 @@ PowerPoint, PDF) carries all of it; `jira-lab-corpus-documents.test.mjs` extract
 out of each format and compares them, including the v1 to v2 changes, with the truth; `STRUCTURE_RULES` is the lab's stand-in for the issue
 templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
 truth; the product under test may not.
+
+## Moving the laboratory to the next Jira Data Center release
+
+The release is pinned in three places that must name the same `tag@sha256:digest`: the `jira`
+service image in `compose.yaml`, the `JIRA_IMAGE` constant in `verification.mjs` (which the native
+verification compares with the running container) and its mirror in
+`scripts/__tests__/jira-native-verification.test.mjs`. Take the new digest from the registry
+manifest of the release tag, never from a floating tag. The version also appears in prose in this
+README and in `docs/local-knowledge/atlassian-connector-guide.md` ("Bounded Data Center support");
+change the guide only after the qualification below passed, because it states which version the
+product accepts.
+
+A new image needs a fresh session (`session.mjs init`, an empty directory): an existing database
+volume belongs to the old release and Jira's upgrade is not part of this harness. Then rerun, in
+order: `setup.mjs`, `seed.mjs`, `qualify-fields.mjs`, `seed-content.mjs`, the product HTTPS
+verification and the Chat read and write groups above, `seed-projects.mjs` and `seed-estimates.mjs`,
+and the requirements scorecard with a model. Compare the new scorecard with the previous
+`trend.tsv`; a changed REST schema, permission refusal status (the content seed records Jira's
+400 for a denied write) or field schema shows up there first, and the oracles that name such a
+detail are the lab code to adjust. Product code never gains a version-specific branch for it.
