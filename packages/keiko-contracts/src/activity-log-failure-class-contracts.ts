@@ -1016,6 +1016,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "windows-gateway-service",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: ["coding-runtime.windows-gateway-service"],
+      end: [],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-runtime.windows-gateway-service"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-runtime.windows-gateway-service"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["coding-runtime.windows-gateway-service"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "cli-install-layout-normalization",
     requiredProductSurfaces: ["keiko-cli"],
     requiredLifecycleOperations: {

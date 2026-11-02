@@ -14843,6 +14843,38 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-runtime.windows-gateway-service",
+    category: "diagnostic",
+    owner: "keiko-server",
+    emitter: "coding-runtime.windowsGatewayServiceProbe.stateEvent",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      state: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["ready", "absent", "stopped", "image-mismatch", "state-unknown"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["windows-gateway-service"],
+    proofIds: ["coding-runtime.windows-gateway-service.real-sink-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-runtime.workspace-discovery",
     category: "search",
     owner: "keiko-server",

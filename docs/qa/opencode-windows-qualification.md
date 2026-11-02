@@ -999,10 +999,13 @@ Not exercised: the UAC relaunch (the runner is already elevated), repair during 
 with a remaining durable deny guard, and a real package or model-backed task. This host has not run
 the elevated path, and no customer installation is qualified.
 
-Known limits: uninstall refuses while a durable deny guard remains; a launch refused for a missing
-or stale service does not yet tell the Workbench user to run `repair`; `keiko uninstall` does not
-yet remove or mention the service; a published release is still `evaluation-unqualified`, so the
-command refuses it with `helper-not-qualified`.
+Readiness now names a missing, stopped, stale or unreadable broker through closed
+`gateway-service-*` reasons, and the Workbench shows the command to run. These are unit and route
+proofs with a stubbed helper result; no released Windows runtime has shown them in the real Workbench.
+
+Known limits: uninstall refuses while a durable deny guard remains; `keiko uninstall` names the
+service but does not remove it; a published release is still `evaluation-unqualified`, so the command
+refuses it with `helper-not-qualified`.
 
 ### Current acceptance priorities
 

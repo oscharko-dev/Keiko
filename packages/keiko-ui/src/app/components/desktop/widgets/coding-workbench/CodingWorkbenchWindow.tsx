@@ -1808,6 +1808,7 @@ function WorkbenchColumns({
           selectedBaseBranch={selectedBaseBranch(activeWorkspace, repositoryRoot, selectedBranch)}
           refreshWorkspace={activeWorkspace.refresh}
           runtimePosture={runtimePosture}
+          runtimeUnavailableReason={state.runtime.value?.runtimeUnavailableReason}
           onBoundRepository={(boundRoot): void => {
             // A successful bind flips the shared context back to a bound state and persists the
             // Workbench's own repository selection for the next opening.

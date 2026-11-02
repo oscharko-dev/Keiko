@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "72a9ff612b817f56621181b0b6458ddadf07034326aa2442f34fe576c3b37630"
+    "catalogDigest": "72d1706e6d5c065414f427c8da5fc414d5b4d75ccd956dc9118bfa0fcfef4f8a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 622,
-    "proofCount": 645,
-    "resolvedProofCount": 645,
-    "failureClassCount": 388,
+    "operationCount": 623,
+    "proofCount": 646,
+    "resolvedProofCount": 646,
+    "failureClassCount": 389,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -428,6 +428,7 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.websearch.performed",
+        "coding-runtime.windows-gateway-service",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -842,6 +843,7 @@
     "chat-turn": ["bff.dependency-failure"],
     "cli-audit": ["runtime-packages.dependency-failure"],
     "cli-gateway-service": ["runtime-packages.dependency-failure"],
+    "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
@@ -1852,6 +1854,9 @@
     ],
     "coding-runtime.websearch.performed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
+    ],
+    "coding-runtime.windows-gateway-service.real-sink-line": [
+      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
     ],
     "coding-runtime.workspace-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts",

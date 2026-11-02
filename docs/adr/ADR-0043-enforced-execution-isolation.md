@@ -845,6 +845,13 @@ Issue #4068 needs the D18 broker on a customer machine. `keiko gateway-service
   is known to be gone remains the open recovery work D18 names, so uninstall stays refused until
   that exists.
 
-Every action records body-free lifecycle evidence as `cli.gateway-service.*`. The lifecycle is
+- **Visibility.** A released Windows runtime reports the broker state on each readiness read, because
+  it starts delayed after boot and can be installed while Keiko runs. A broker that is not ready makes
+  the runtime unavailable with a closed `gateway-service-*` reason, and the Workbench names the command
+  to run. The launch stays fail-closed regardless of the last reading. `keiko uninstall` names the
+  service when its folder exists; it does not remove it, because removal needs an administrator.
+
+Every action records body-free lifecycle evidence as `cli.gateway-service.*`, and a change of broker
+state records `coding-runtime.windows-gateway-service`. The lifecycle is
 qualified on the disposable runner by `test-windows-gateway-scm.ps1`, which installs through the
 product path instead of `New-Service`.

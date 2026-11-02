@@ -557,6 +557,14 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.setup.repairFailed":
     "The repair did not complete. Refresh the task workspaces, then try again.",
   "codingWorkbench.setup.findingUnknown": "its state could not be re-verified",
+  "codingWorkbench.gatewayService.absent":
+    "Coding runs need the Windows runtime gateway, which is not installed. In a terminal, run: keiko gateway-service install. Windows asks for approval once.",
+  "codingWorkbench.gatewayService.stopped":
+    "The Windows runtime gateway is stopped. It starts shortly after Windows starts. If this stays, in a terminal, run: keiko gateway-service repair",
+  "codingWorkbench.gatewayService.stale":
+    "The Windows runtime gateway does not match this Keiko version. In a terminal, run: keiko gateway-service repair. Windows asks for approval once.",
+  "codingWorkbench.gatewayService.unknown":
+    "Keiko could not read the state of the Windows runtime gateway. In a terminal, run: keiko gateway-service status",
   "codingWorkbench.setup.repairAndBind": "Repair and bind",
   "codingWorkbench.setup.repairing": "Repairing…",
   "codingWorkbench.setup.runtimeUnavailable":

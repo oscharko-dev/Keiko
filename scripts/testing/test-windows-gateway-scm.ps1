@@ -59,6 +59,7 @@ try {
   Stop-Service -Name $serviceName
   Assert-GatewayCommand @("--gateway-service-status", $digest) 11 "Status while stopped"
   Assert-GatewayCommand @("--gateway-service-install", $digest) 0 "Repair of a stopped service"
+  Write-Host "gateway-service install: foreign pin refused; install, repeat, status and repair passed"
   node scripts/testing/test-windows-gateway-service.mjs installed $installed $install
   if ($LASTEXITCODE) { throw "Installed-service proof failed" }
   $transportArgs = @()
@@ -72,6 +73,7 @@ try {
     if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) { throw "Uninstall left the service" }
     if (Test-Path -LiteralPath (Split-Path $installed)) { throw "Uninstall left the installation directory" }
     Assert-GatewayCommand @("--gateway-service-status", $digest) 10 "Status after uninstall"
+    Write-Host "gateway-service removal: service and installation directory are gone"
   }
   $target = [IO.Path]::GetFullPath($install)
   if ([IO.Path]::GetDirectoryName($target) -ne [IO.Path]::GetFullPath($env:ProgramFiles) -or

@@ -69,7 +69,14 @@ import type {
 } from "./productionOpenCodeBackend.js";
 import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorkspaceTextRead.js";
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
-import { discoverQualifiedPortableOpenCode } from "./productionPortableCodingRuntime.js";
+import {
+  discoverQualifiedPortableOpenCode,
+  releasedWindowsGatewayHelperPin,
+} from "./productionPortableCodingRuntime.js";
+import {
+  createWindowsGatewayServiceProbe,
+  type WindowsGatewayServiceProbe,
+} from "./windowsGatewayServiceProbe.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 
 type ProductionOpenCodePorts = Pick<
@@ -213,12 +220,15 @@ export type ProductionOpenCodeActivationResult =
       readonly evidenceClass: CodingWorkbenchRuntimeEvidenceClass;
       /** What the activated runtime is, from its verified release metadata (#3904 AC4). */
       readonly runtimeVersion: CodingWorkbenchRuntimeVersion;
+      /** Present only for a released Windows runtime, whose launches need the broker (#4068). */
+      readonly windowsGatewayService?: WindowsGatewayServiceProbe;
       readonly unavailableReason?: undefined;
     }
   | {
       readonly ports?: undefined;
       readonly evidenceClass?: undefined;
       readonly runtimeVersion?: undefined;
+      readonly windowsGatewayService?: undefined;
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
@@ -411,8 +421,26 @@ export function resolveProductionOpenCodeActivation(
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
     runtimeVersion: runtimeVersionFacts(runtime.portable),
+    ...windowsGatewayServiceFacts(input, runtime.portable),
     ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
+}
+
+function windowsGatewayServiceFacts(
+  input: Pick<ProductionOpenCodeActivationInput, "activityLog">,
+  portable: ResolvedPortableOpenCodeRuntime,
+): { readonly windowsGatewayService?: WindowsGatewayServiceProbe } {
+  if (!("platformAssurance" in portable)) return {};
+  const helperSha256 = releasedWindowsGatewayHelperPin(portable);
+  return helperSha256 === undefined
+    ? {}
+    : {
+        windowsGatewayService: createWindowsGatewayServiceProbe({
+          helperPath: portable.nativeHelperPath,
+          helperSha256,
+          activityLog: input.activityLog ?? processServerLogSink(),
+        }),
+      };
 }
 
 /**

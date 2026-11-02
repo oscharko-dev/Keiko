@@ -11,6 +11,16 @@ import {
 
 describe("Coding Workbench translations", () => {
   it.each([
+    ["codingWorkbench.gatewayService.absent", "keiko gateway-service install"],
+    ["codingWorkbench.gatewayService.stopped", "keiko gateway-service repair"],
+    ["codingWorkbench.gatewayService.stale", "keiko gateway-service repair"],
+    ["codingWorkbench.gatewayService.unknown", "keiko gateway-service status"],
+  ] as const)("%s names the command in both languages", (key, command) => {
+    expect(translateCodingWorkbench("en", key)).toContain(command);
+    expect(translateCodingWorkbench("de", key)).toContain(command);
+  });
+
+  it.each([
     "codingWorkbench.setup.runtimeUnavailable",
     "codingWorkbench.alert.runtimeUnqualified",
   ] as const)("explains the Windows npm runtime limitation in %s", (key) => {
