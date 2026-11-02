@@ -2340,30 +2340,11 @@ it.each(["source", "public"])(
   },
 );
 
-export function parsePublicMemoryRecord(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryRecord> {
-  const result = validatePublicMemoryRecord(input);
-  return result;
-}
-
-export function parsePublicMemoryScope(input: unknown): PublicMemoryValidation<PublicMemoryScope> {
-  const result = validatePublicMemoryScope(input);
-  return result;
-}
-
-export function parsePublicMemoryPayload(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryStructuredPayload> {
-  const result = validatePublicMemoryStructuredPayload(input);
-  return result;
-}
-
 describe("Memory public parsers (#3918)", () => {
   it("preserves original record, scope and payload references and optional presence", () => {
     const payload = { kind: "string-list", items: ["fixture-item"] };
     const input = { ...happyRecord(), scope: happyScopeUser(), payload };
-    const record = parsePublicMemoryRecord(input);
+    const record = validatePublicMemoryRecord(input);
     expect(record.ok).toBe(true);
     if (!record.ok) throw new TypeError("healthy public memory refused");
     expect(record.value).toBe(input);
@@ -2371,10 +2352,10 @@ describe("Memory public parsers (#3918)", () => {
     expect(record.value.payload).toBe(payload);
     expect(record.value).not.toHaveProperty("staleReason");
     const ownUndefined = { ...input, staleReason: undefined };
-    expect(parsePublicMemoryRecord(ownUndefined)).toEqual({ ok: true, value: ownUndefined });
+    expect(validatePublicMemoryRecord(ownUndefined)).toEqual({ ok: true, value: ownUndefined });
     expect(Object.hasOwn(ownUndefined, "staleReason")).toBe(true);
-    const scope = parsePublicMemoryScope(input.scope);
-    const parsedPayload = parsePublicMemoryPayload(payload);
+    const scope = validatePublicMemoryScope(input.scope);
+    const parsedPayload = validatePublicMemoryStructuredPayload(payload);
     if (!scope.ok || !parsedPayload.ok) throw new TypeError("healthy public nested memory refused");
     expect(scope.value).toBe(input.scope);
     expect(parsedPayload.value).toBe(payload);
@@ -2382,13 +2363,13 @@ describe("Memory public parsers (#3918)", () => {
 
   it("refuses malformed values through each actual public parser with owning reasons", () => {
     for (const input of [undefined, null, 12, "record", []]) {
-      expect(parsePublicMemoryRecord(input).ok).toBe(false);
-      expect(parsePublicMemoryScope(input).ok).toBe(false);
-      expect(parsePublicMemoryPayload(input).ok).toBe(false);
+      expect(validatePublicMemoryRecord(input).ok).toBe(false);
+      expect(validatePublicMemoryScope(input).ok).toBe(false);
+      expect(validatePublicMemoryStructuredPayload(input).ok).toBe(false);
     }
     const record = { ...happyRecord(), schemaVersion: "2", type: "bad", updatedAt: -1 };
-    expect(parsePublicMemoryRecord(record)).toEqual(validateMemoryRecord(record));
-    expect(parsePublicMemoryRecord(record)).toMatchObject({
+    expect(validatePublicMemoryRecord(record)).toEqual(validateMemoryRecord(record));
+    expect(validatePublicMemoryRecord(record)).toMatchObject({
       ok: false,
       errors: [
         'record.schemaVersion must be the literal "1"',
@@ -2396,11 +2377,11 @@ describe("Memory public parsers (#3918)", () => {
         "record.updatedAt must be a finite non-negative number",
       ],
     });
-    expect(parsePublicMemoryScope({ kind: "user", userId: "" })).toEqual({
+    expect(validatePublicMemoryScope({ kind: "user", userId: "" })).toEqual({
       ok: false,
       errors: ["scope.userId must be a non-empty string for kind=user"],
     });
-    expect(parsePublicMemoryPayload({ kind: "string-list", items: [12] })).toEqual({
+    expect(validatePublicMemoryStructuredPayload({ kind: "string-list", items: [12] })).toEqual({
       ok: false,
       errors: ["payload.items entry must be a non-empty bounded control-free string"],
     });
@@ -2408,24 +2389,24 @@ describe("Memory public parsers (#3918)", () => {
 
   it("retains global coordinates and payload bounds and literal domain result identities", () => {
     const scope = { kind: "global", userId: "ignored" };
-    const parsedScope = parsePublicMemoryScope(scope);
+    const parsedScope = validatePublicMemoryScope(scope);
     expect(parsedScope).toEqual({ ok: true, value: scope });
     for (const payload of [
       { kind: "string-list", items: [] },
       { kind: "key-value", entries: [{ key: "label", value: "" }] },
     ])
-      expect(parsePublicMemoryPayload(payload)).toEqual({ ok: true, value: payload });
+      expect(validatePublicMemoryStructuredPayload(payload)).toEqual({ ok: true, value: payload });
     expect(
-      parsePublicMemoryPayload({
+      validatePublicMemoryStructuredPayload({
         kind: "string-list",
         items: Array.from({ length: 129 }, () => "item"),
       }).ok,
     ).toBe(false);
     expectTypeOf<
       readonly [
-        LibraryOutput<typeof parsePublicMemoryRecord>,
-        LibraryOutput<typeof parsePublicMemoryScope>,
-        LibraryOutput<typeof parsePublicMemoryPayload>,
+        LibraryOutput<typeof validatePublicMemoryRecord>,
+        LibraryOutput<typeof validatePublicMemoryScope>,
+        LibraryOutput<typeof validatePublicMemoryStructuredPayload>,
       ]
     >().toEqualTypeOf<
       readonly [
@@ -2445,79 +2426,6 @@ interface RemainingMemoryCase {
   readonly optionalField: string;
 }
 
-export function parsePublicMemoryProposal(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryProposal> {
-  const result = validatePublicMemoryProposal(input);
-  return result;
-}
-
-export function parsePublicMemoryAcceptance(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryAcceptance> {
-  const result = validatePublicMemoryAcceptance(input);
-  return result;
-}
-
-export function parsePublicMemoryRejection(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryRejection> {
-  const result = validatePublicMemoryRejection(input);
-  return result;
-}
-
-export function parsePublicMemoryUpdate(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryUpdate> {
-  const result = validatePublicMemoryUpdate(input);
-  return result;
-}
-
-export function parsePublicMemorySupersession(
-  input: unknown,
-): PublicMemoryValidation<PublicMemorySupersession> {
-  const result = validatePublicMemorySupersession(input);
-  return result;
-}
-
-export function parsePublicMemoryPin(input: unknown): PublicMemoryValidation<PublicMemoryPin> {
-  const result = validatePublicMemoryPin(input);
-  return result;
-}
-
-export function parsePublicMemoryUnpin(input: unknown): PublicMemoryValidation<PublicMemoryUnpin> {
-  const result = validatePublicMemoryUnpin(input);
-  return result;
-}
-
-export function parsePublicMemoryArchive(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryArchive> {
-  const result = validatePublicMemoryArchive(input);
-  return result;
-}
-
-export function parsePublicMemoryForget(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryForget> {
-  const result = validatePublicMemoryForget(input);
-  return result;
-}
-
-export function parsePublicMemoryAuditRecord(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryAuditRecord> {
-  const result = validatePublicMemoryAuditRecord(input);
-  return result;
-}
-
-export function parsePublicMemoryRetrievalRequest(
-  input: unknown,
-): PublicMemoryValidation<PublicMemoryRetrievalRequest> {
-  const result = validatePublicMemoryRetrievalRequest(input);
-  return result;
-}
-
 function lifecycleProofInput(fields: Record<string, unknown>): Record<string, unknown> {
   return { schemaVersion: "1", memoryId: "mem-1", reviewerId: "rev-1", ...fields };
 }
@@ -2535,27 +2443,27 @@ function remainingMemoryCase(
 function remainingInitialMemoryCases(): readonly RemainingMemoryCase[] {
   return [
     remainingMemoryCase(
-      parsePublicMemoryProposal,
+      validatePublicMemoryProposal,
       happyProposal(),
       { initialStatus: "accepted" },
       'proposal.initialStatus must be the literal "proposed"',
       "captureReason",
     ),
     remainingMemoryCase(
-      parsePublicMemoryAcceptance,
+      validatePublicMemoryAcceptance,
       lifecycleProofInput({ proposalId: "prop-1", mintedMemoryId: "mem-1", acceptedAt: 0 }),
       { acceptedAt: -1 },
       "acceptance.acceptedAt must be a finite non-negative number",
       "bodyOverride",
     ),
     remainingMemoryCase(
-      parsePublicMemoryRejection,
+      validatePublicMemoryRejection,
       lifecycleProofInput({ proposalId: "prop-1", rejectedAt: 0, reason: "fixture" }),
       { reason: "" },
       "rejection.reason must be a bounded control-free non-empty string",
     ),
     remainingMemoryCase(
-      parsePublicMemoryUpdate,
+      validatePublicMemoryUpdate,
       lifecycleProofInput({ updatedAt: 0, bodyPatch: "fixture" }),
       { bodyPatch: undefined },
       "update must change at least one field",
@@ -2567,7 +2475,7 @@ function remainingInitialMemoryCases(): readonly RemainingMemoryCase[] {
 function remainingLifecycleMemoryCases(): readonly RemainingMemoryCase[] {
   return [
     remainingMemoryCase(
-      parsePublicMemorySupersession,
+      validatePublicMemorySupersession,
       lifecycleProofInput({
         oldMemoryId: "old",
         newMemoryId: "new",
@@ -2579,21 +2487,21 @@ function remainingLifecycleMemoryCases(): readonly RemainingMemoryCase[] {
       'supersession.edgeKind must be the literal "supersedes"',
     ),
     remainingMemoryCase(
-      parsePublicMemoryPin,
+      validatePublicMemoryPin,
       lifecycleProofInput({ pinnedAt: 0 }),
       { pinnedAt: -1 },
       "pin.pinnedAt must be a finite non-negative number",
       "reason",
     ),
     remainingMemoryCase(
-      parsePublicMemoryUnpin,
+      validatePublicMemoryUnpin,
       lifecycleProofInput({ unpinnedAt: 0 }),
       { unpinnedAt: -1 },
       "unpin.unpinnedAt must be a finite non-negative number",
       "reason",
     ),
     remainingMemoryCase(
-      parsePublicMemoryArchive,
+      validatePublicMemoryArchive,
       lifecycleProofInput({ archivedAt: 0 }),
       { archivedAt: -1 },
       "archive.archivedAt must be a finite non-negative number",
@@ -2605,7 +2513,7 @@ function remainingLifecycleMemoryCases(): readonly RemainingMemoryCase[] {
 function remainingOtherMemoryCases(): readonly RemainingMemoryCase[] {
   return [
     remainingMemoryCase(
-      parsePublicMemoryForget,
+      validatePublicMemoryForget,
       lifecycleProofInput({
         forgottenAt: 0,
         reason: "user-request",
@@ -2615,14 +2523,14 @@ function remainingOtherMemoryCases(): readonly RemainingMemoryCase[] {
       "forget.userAcknowledgedDestructive must be the literal true",
     ),
     remainingMemoryCase(
-      parsePublicMemoryAuditRecord,
+      validatePublicMemoryAuditRecord,
       happyAuditRecord(),
       { actionKind: "archived" },
       "auditRecord.action.kind must match auditRecord.actionKind",
       "initiatorReviewerId",
     ),
     remainingMemoryCase(
-      parsePublicMemoryRetrievalRequest,
+      validatePublicMemoryRetrievalRequest,
       { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] },
       { scopes: [] },
       "retrieval.scopes must be a non-empty array",
@@ -2660,7 +2568,7 @@ function remainingAuditProofActions(): readonly Record<string, unknown>[] {
 function auditMemoryProofCases(): readonly RemainingMemoryCase[] {
   return [...initialAuditProofActions(), ...remainingAuditProofActions()].map((action) =>
     remainingMemoryCase(
-      parsePublicMemoryAuditRecord,
+      validatePublicMemoryAuditRecord,
       { ...happyAuditRecord(), actionKind: action.kind, action },
       { actionKind: action.kind === "accepted" ? "archived" : "accepted" },
       "auditRecord.action.kind must match auditRecord.actionKind",
@@ -2705,7 +2613,7 @@ function assertRemainingInitialMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryProposal>,
-      LibraryOutput<typeof parsePublicMemoryProposal>,
+      LibraryOutput<typeof validatePublicMemoryProposal>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2716,7 +2624,7 @@ function assertRemainingInitialMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryAcceptance>,
-      LibraryOutput<typeof parsePublicMemoryAcceptance>,
+      LibraryOutput<typeof validatePublicMemoryAcceptance>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2727,7 +2635,7 @@ function assertRemainingInitialMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryRejection>,
-      LibraryOutput<typeof parsePublicMemoryRejection>,
+      LibraryOutput<typeof validatePublicMemoryRejection>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2738,7 +2646,7 @@ function assertRemainingInitialMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryUpdate>,
-      LibraryOutput<typeof parsePublicMemoryUpdate>,
+      LibraryOutput<typeof validatePublicMemoryUpdate>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2752,7 +2660,7 @@ function assertRemainingLifecycleMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemorySupersession>,
-      LibraryOutput<typeof parsePublicMemorySupersession>,
+      LibraryOutput<typeof validatePublicMemorySupersession>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2763,7 +2671,7 @@ function assertRemainingLifecycleMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryPin>,
-      LibraryOutput<typeof parsePublicMemoryPin>,
+      LibraryOutput<typeof validatePublicMemoryPin>,
     ]
   >().toEqualTypeOf<
     readonly [PublicMemoryValidation<PublicMemoryPin>, PublicMemoryValidation<PublicMemoryPin>]
@@ -2771,7 +2679,7 @@ function assertRemainingLifecycleMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryUnpin>,
-      LibraryOutput<typeof parsePublicMemoryUnpin>,
+      LibraryOutput<typeof validatePublicMemoryUnpin>,
     ]
   >().toEqualTypeOf<
     readonly [PublicMemoryValidation<PublicMemoryUnpin>, PublicMemoryValidation<PublicMemoryUnpin>]
@@ -2779,7 +2687,7 @@ function assertRemainingLifecycleMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryArchive>,
-      LibraryOutput<typeof parsePublicMemoryArchive>,
+      LibraryOutput<typeof validatePublicMemoryArchive>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2793,7 +2701,7 @@ function assertRemainingOtherMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryForget>,
-      LibraryOutput<typeof parsePublicMemoryForget>,
+      LibraryOutput<typeof validatePublicMemoryForget>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2804,7 +2712,7 @@ function assertRemainingOtherMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryAuditRecord>,
-      LibraryOutput<typeof parsePublicMemoryAuditRecord>,
+      LibraryOutput<typeof validatePublicMemoryAuditRecord>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2815,7 +2723,7 @@ function assertRemainingOtherMemoryTypes(): void {
   expectTypeOf<
     readonly [
       LibraryOutput<typeof validatePublicMemoryRetrievalRequest>,
-      LibraryOutput<typeof parsePublicMemoryRetrievalRequest>,
+      LibraryOutput<typeof validatePublicMemoryRetrievalRequest>,
     ]
   >().toEqualTypeOf<
     readonly [
@@ -2826,7 +2734,7 @@ function assertRemainingOtherMemoryTypes(): void {
 }
 
 function expectRemainingMemoryAccumulation(): void {
-  expect(parsePublicMemoryProposal({ ...happyProposal(), proposedAt: -1, body: "" })).toEqual({
+  expect(validatePublicMemoryProposal({ ...happyProposal(), proposedAt: -1, body: "" })).toEqual({
     ok: false,
     errors: [
       "proposal.proposedAt must be a finite non-negative number",
@@ -2834,7 +2742,7 @@ function expectRemainingMemoryAccumulation(): void {
     ],
   });
   expect(
-    parsePublicMemoryAuditRecord({
+    validatePublicMemoryAuditRecord({
       ...happyAuditRecord(),
       occurredAt: -1,
       summary: "",
@@ -2849,7 +2757,7 @@ function expectRemainingMemoryAccumulation(): void {
     ],
   });
   expect(
-    parsePublicMemoryRetrievalRequest({
+    validatePublicMemoryRetrievalRequest({
       schemaVersion: "1",
       requestedAt: -1,
       scopes: [],
@@ -2892,7 +2800,7 @@ describe("Memory remaining public parsers (#3918)", () => {
     assertRemainingLifecycleMemoryTypes();
     assertRemainingOtherMemoryTypes();
     expect(
-      parsePublicMemoryForget(
+      validatePublicMemoryForget(
         lifecycleProofInput({
           forgottenAt: 0,
           reason: "user-request",
@@ -2902,15 +2810,15 @@ describe("Memory remaining public parsers (#3918)", () => {
     ).toBe(false);
     const scopes = new Array<unknown>(1);
     expect(
-      parsePublicMemoryRetrievalRequest({ schemaVersion: "1", requestedAt: 0, scopes }).ok,
+      validatePublicMemoryRetrievalRequest({ schemaVersion: "1", requestedAt: 0, scopes }).ok,
     ).toBe(false);
     const input = { schemaVersion: "1", requestedAt: 0, scopes: [happyScopeUser()] };
     for (const toggle of ["includeArchived", "includeSuperseded"]) {
       for (const value of [undefined, false, true]) {
         const healthy = { ...input, [toggle]: value };
-        expect(parsePublicMemoryRetrievalRequest(healthy)).toEqual({ ok: true, value: healthy });
+        expect(validatePublicMemoryRetrievalRequest(healthy)).toEqual({ ok: true, value: healthy });
       }
-      expect(parsePublicMemoryRetrievalRequest({ ...input, [toggle]: "yes" })).toEqual({
+      expect(validatePublicMemoryRetrievalRequest({ ...input, [toggle]: "yes" })).toEqual({
         ok: false,
         errors: [`retrieval.${toggle} must be a boolean when set`],
       });

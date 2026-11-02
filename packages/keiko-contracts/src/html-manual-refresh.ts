@@ -145,14 +145,15 @@ function onlyKnownKeys(
   allowed: readonly string[],
   field: string,
   errors: string[],
-): void {
+): boolean {
   const allowedSet = new Set(allowed);
   for (const key of Object.keys(value)) {
     if (!allowedSet.has(key)) {
       errors.push(`${field} must not include ${key}`);
-      return;
+      return false;
     }
   }
+  return true;
 }
 
 function pushEnum(
@@ -160,10 +161,12 @@ function pushEnum(
   field: string,
   value: unknown,
   allowed: readonly string[],
-): void {
+): boolean {
   if (typeof value !== "string" || !allowed.includes(value)) {
     errors.push(`${field} must be one of ${allowed.join("|")}`);
+    return false;
   }
+  return true;
 }
 
 // A redaction-safe opaque fingerprint token: non-empty, bounded, and shaped exactly like the
@@ -177,85 +180,126 @@ function isSafeFingerprint(value: unknown): value is string {
   return /^[A-Za-z0-9_-]+:[A-Za-z0-9_-]+$/u.test(value);
 }
 
-function validateRefreshCounts(input: unknown, errors: string[]): void {
+function validateRefreshCounts(
+  input: unknown,
+  errors: string[],
+): input is ManualRefreshChangeCounts {
   if (!isRefreshRecord(input)) {
     errors.push("refreshSummary.counts must be an object");
-    return;
+    return false;
   }
-  onlyKnownKeys(input, COUNT_KEYS, "refreshSummary.counts", errors);
+  let valid = onlyKnownKeys(input, COUNT_KEYS, "refreshSummary.counts", errors);
   for (const key of COUNT_KEYS) {
     if (!isNonNegativeInteger(input[key])) {
       errors.push(`refreshSummary.counts.${key} must be a non-negative integer`);
+      valid = false;
     }
   }
+  return valid;
 }
 
-function validateRefreshReasonCodes(input: unknown, errors: string[]): void {
+function validateRefreshReasonCodes(
+  input: unknown,
+  errors: string[],
+): input is readonly ManualRefreshReasonCode[] {
   if (!Array.isArray(input)) {
     errors.push("refreshSummary.reasonCodes must be an array");
-    return;
+    return false;
   }
   const seen = new Set<string>();
+  const allowed: readonly string[] = MANUAL_REFRESH_REASON_CODES;
   for (const code of input) {
-    if (
-      typeof code !== "string" ||
-      !(MANUAL_REFRESH_REASON_CODES as readonly string[]).includes(code)
-    ) {
+    if (typeof code !== "string" || !allowed.includes(code)) {
       errors.push(
         `refreshSummary.reasonCodes entry must be one of ${MANUAL_REFRESH_REASON_CODES.join("|")}`,
       );
-      return;
+      return false;
     }
     if (seen.has(code)) {
       errors.push("refreshSummary.reasonCodes entries must be unique");
-      return;
+      return false;
     }
     seen.add(code);
   }
+  return true;
 }
 
-function validateRefreshIdentity(input: Record<string, unknown>, errors: string[]): void {
-  if (input.schemaVersion !== HTML_MANUAL_REFRESH_SCHEMA_VERSION) {
-    errors.push('refreshSummary.schemaVersion must be the literal "1"');
-  }
-  if (!isSafeFingerprint(input.crawlRunFingerprint)) {
-    errors.push("refreshSummary.crawlRunFingerprint must be a redaction-safe opaque token");
-  }
+function validateRefreshTime(input: Record<string, unknown>, errors: string[]): boolean {
+  // Keep the original finite-first, third-observation negative comparison. A validated
+  // reference remains mutable; reversing the comparison would change a later NaN observation.
   if (
     typeof input.refreshedAt !== "number" ||
     !Number.isFinite(input.refreshedAt) ||
     input.refreshedAt < 0
   ) {
     errors.push("refreshSummary.refreshedAt must be a finite non-negative number");
+    return false;
   }
+  return true;
 }
 
-function validateRefreshEnums(input: Record<string, unknown>, errors: string[]): void {
-  pushEnum(errors, "refreshSummary.outcome", input.outcome, MANUAL_REFRESH_OUTCOMES);
-  pushEnum(errors, "refreshSummary.sourceKind", input.sourceKind, [
+function validateRefreshIdentity(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> &
+  Pick<ManualRefreshChangeSummary, "schemaVersion" | "crawlRunFingerprint" | "refreshedAt"> {
+  const schema = input.schemaVersion === HTML_MANUAL_REFRESH_SCHEMA_VERSION;
+  if (!schema) errors.push('refreshSummary.schemaVersion must be the literal "1"');
+  const fingerprint = isSafeFingerprint(input.crawlRunFingerprint);
+  if (!fingerprint)
+    errors.push("refreshSummary.crawlRunFingerprint must be a redaction-safe opaque token");
+  const time = validateRefreshTime(input, errors);
+  return schema && fingerprint && time;
+}
+
+function validateRefreshEnums(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> &
+  Pick<ManualRefreshChangeSummary, "outcome" | "sourceKind" | "removalDetection"> {
+  const outcome = pushEnum(
+    errors,
+    "refreshSummary.outcome",
+    input.outcome,
+    MANUAL_REFRESH_OUTCOMES,
+  );
+  const kind = pushEnum(errors, "refreshSummary.sourceKind", input.sourceKind, [
     "html-manual-local",
     "html-manual-http",
   ]);
-  pushEnum(
+  const removal = pushEnum(
     errors,
     "refreshSummary.removalDetection",
     input.removalDetection,
     MANUAL_REFRESH_REMOVAL_DETECTIONS,
   );
+  return outcome && kind && removal;
+}
+
+function validateRefreshCountField(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & { counts: ManualRefreshChangeCounts } {
+  return validateRefreshCounts(input.counts, errors);
+}
+
+function validateRefreshReasonField(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & { reasonCodes: readonly ManualRefreshReasonCode[] } {
+  return validateRefreshReasonCodes(input.reasonCodes, errors);
 }
 
 export function validateManualRefreshChangeSummary(
   input: unknown,
 ): LocalKnowledgeValidation<ManualRefreshChangeSummary> {
-  if (!isRefreshRecord(input)) {
-    return { ok: false, errors: ["refreshSummary must be an object"] };
-  }
+  if (!isRefreshRecord(input)) return { ok: false, errors: ["refreshSummary must be an object"] };
   const errors: string[] = [];
-  onlyKnownKeys(input, REFRESH_SUMMARY_KEYS, "refreshSummary", errors);
-  validateRefreshIdentity(input, errors);
-  validateRefreshEnums(input, errors);
-  validateRefreshCounts(input.counts, errors);
-  validateRefreshReasonCodes(input.reasonCodes, errors);
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input as unknown as ManualRefreshChangeSummary };
+  const keys = onlyKnownKeys(input, REFRESH_SUMMARY_KEYS, "refreshSummary", errors);
+  const identity = validateRefreshIdentity(input, errors);
+  const enums = validateRefreshEnums(input, errors);
+  const counts = validateRefreshCountField(input, errors);
+  const reasons = validateRefreshReasonField(input, errors);
+  if (keys && identity && enums && counts && reasons) return { ok: true, value: input };
+  return { ok: false, errors };
 }

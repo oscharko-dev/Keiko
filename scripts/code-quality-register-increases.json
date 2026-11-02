@@ -1626,6 +1626,14 @@
       "issue": 3918
     },
     {
+      "path": "packages/keiko-contracts/src/html-manual-refresh.ts",
+      "rule": "anti-slop/no-unsafe-dictionary-type",
+      "from": 4,
+      "to": 11,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    },
+    {
       "path": "packages/keiko-contracts/src/local-knowledge-array-observations.test.ts",
       "rule": "anti-slop/no-known-value-widening",
       "from": 0,
@@ -2157,7 +2165,7 @@
       "path": "packages/keiko-contracts/src/memory.test.ts",
       "rule": "anti-slop/no-unknown-parameters",
       "from": 0,
-      "to": 18,
+      "to": 4,
       "reason": "test-witness",
       "issue": 3918
     },

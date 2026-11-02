@@ -27,6 +27,26 @@ export function expectIndependentFailures(
   if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
 }
 
+/** Admission returns the very input and nested references and leaves its serialized bytes intact. */
+export function expectUnchangedAdmission<T extends object>(
+  validate: (
+    input: T,
+  ) =>
+    | { readonly ok: true; readonly value: T }
+    | { readonly ok: false; readonly errors: readonly string[] },
+  input: T,
+  nested: readonly (keyof T)[],
+): void {
+  const before = JSON.stringify(input);
+  const result = validate(input);
+  expect(result.ok).toBe(true);
+  if (result.ok) {
+    expect(result.value).toBe(input);
+    for (const key of nested) expect(result.value[key]).toBe(input[key]);
+  }
+  expect(JSON.stringify(input)).toBe(before);
+}
+
 /** Admits a proxy of `target` that checks every read's receiver, and returns the field reads. */
 export function receiverCheckedReads<T extends object>(
   validate: (input: T) => CheckedEnvelope,
