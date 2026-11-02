@@ -181,8 +181,13 @@ function discoverIn(state: DiscoveryState, dir: string, depth: number): boolean 
     state.candidates.push(dir);
     return true;
   }
-  if (depth >= state.limits.maxDepth) return true;
-  return childFolders(state, dir).every((child) => discoverIn(state, child, depth + 1));
+  // A folder at the depth limit with subfolders leaves a subtree unexplored: the search is not
+  // complete, so a single package seen elsewhere cannot be trusted as the only one.
+  if (depth >= state.limits.maxDepth) return childFolders(state, dir).length === 0;
+  // Every sibling is searched even after one subtree was cut off, so the candidates listed for an
+  // incomplete search are all the packages the bounds allowed to see.
+  const outcomes = childFolders(state, dir).map((child) => discoverIn(state, child, depth + 1));
+  return outcomes.every(Boolean);
 }
 
 // Every outermost folder below the root that holds a package.json, bounded by depth, directory and

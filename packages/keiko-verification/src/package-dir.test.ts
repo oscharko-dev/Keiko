@@ -86,6 +86,44 @@ describe("resolveVerificationPackage", () => {
     });
   });
 
+  it("does not pick a shallow package as unique while a deeper subtree was left unexplored", () => {
+    const manifest = JSON.stringify({ name: "frontend" });
+    const deep = "modules/a/b/c/d/e/f/g";
+    const workspace = mavenRepo({
+      "frontend/package.json": manifest,
+      [`${deep}/client/package.json`]: manifest,
+    });
+    expect(resolveVerificationPackage(workspace, nodeWorkspaceFs)).toEqual({
+      kind: "ambiguous",
+      candidates: ["frontend"],
+    });
+    // The explicit folder stays the way to choose the deeper package.
+    const chosen = resolveVerificationPackage(workspace, nodeWorkspaceFs, {
+      packageDir: `${deep}/client`,
+    });
+    expect(chosen.kind).toBe("package");
+  });
+
+  it("still lists the packages beside a subtree the depth limit cut off", () => {
+    const manifest = JSON.stringify({ name: "p" });
+    const workspace = mavenRepo({
+      "frontend/package.json": manifest,
+      "modules/a/b/c/d/e/f/g/client/package.json": manifest,
+      "zeta/package.json": manifest,
+    });
+    expect(resolveVerificationPackage(workspace, nodeWorkspaceFs)).toEqual({
+      kind: "ambiguous",
+      candidates: ["frontend", "zeta"],
+    });
+  });
+
+  it("keeps a shallow package unique when the depth limit cuts off no subfolder", () => {
+    const workspace = mavenRepo({ "frontend/package.json": JSON.stringify({ name: "frontend" }) });
+    mkdirSync(join(workspace.root, "modules/a/b/c/d/e/f/g"), { recursive: true });
+    const resolution = resolveVerificationPackage(workspace, nodeWorkspaceFs);
+    expect(resolution.kind).toBe("package");
+  });
+
   it.each(["../outside", "/etc", "a/../../b", "C:/x", "a\u0000b"])(
     "refuses the escaping or malformed packageDir %j",
     (packageDir) => {
