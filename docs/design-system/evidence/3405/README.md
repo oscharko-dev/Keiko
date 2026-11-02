@@ -78,6 +78,14 @@ were inspected again. All 25 source hashes and four harness hashes match the rev
 The unchanged freshness gate, 23 updater/editor evidence contract tests and both Linux Editor
 bundle gates pass; no baseline or numerical ceiling changed. This remains updater fixture evidence.
 
+The typed Git reads in the #3918 Git contracts slice change `api.ts`, so the unchanged freshness
+gate rejected its old digest. The original nine-case producer regenerated all 17 artifacts on
+2026-11-02 (UTC) from signed head `1421e2e78` on macOS arm64 with Node 24.18.0. All nine Chromium
+cases passed in 50.4 seconds, including the real-BFF outage case. All 14 PNGs changed bytes because
+the previous set was rendered on Linux; the progress, reconnecting and dark update-window captures
+were inspected. The three JSON records bind the current sources, and the freshness gate passes. This
+remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
