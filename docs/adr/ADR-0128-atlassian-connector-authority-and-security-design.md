@@ -862,8 +862,12 @@ do this in one turn, so three things were made explicit. (1) The tool descriptio
 child of a not-yet-existing parent, and any second issue, to `jira.draft`). `jira.create` accepts a
 `project` or `issuetype` inside `fields` only when it repeats `projectId` or `issueTypeId`
 exactly (`{ "id": <same id> }`); it is then dropped, because it asks for the same issue (lab S07
-of epic #4173: Qwen repeated both and got four unexplained refusals). Any other value would
-override the routing, so it is refused before any request. The refusal names the field, is
+of epic #4173: Qwen repeated both and got four unexplained refusals). Each `jira.draft` and
+`jira.draft-stage` item follows the same rule when it is parsed, and both recognize the two field
+names in any letter case, because Jira has no field `issueType` (lab S17, 2026-11-02: Qwen wrote
+`issueType: { id }` into all 25 items of an approved draft, and Jira refused every item). A
+dropped repetition changes nothing that is sent, so it records no separate Activity Log field. Any
+other value would override the routing, so it is refused before any request. The refusal names the field, is
 `invalid-field`, and says to send the change without it. The same holds for every argument Keiko
 refuses before a request on `jira.create`, `jira.edit`, `jira.transition`, `jira.assign`,
 `jira.comment`, `jira.attach` and a draft item: the refusal names the argument (an unknown one by the

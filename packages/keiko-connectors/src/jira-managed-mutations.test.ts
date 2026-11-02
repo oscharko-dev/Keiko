@@ -117,6 +117,26 @@ it("creates once when fields only restate projectId and issueTypeId (Qwen, 2026-
   });
 });
 
+it("accepts a restated issue type in another letter case, as one create (S17 of #4173)", async () => {
+  // Qwen wrote `issueType: { id }` beside issueTypeId into every item; Jira has no such field.
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", issueType: { id: "10001" } },
+    }),
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
+  const posted = f.http.mock.calls.filter(([request]) => request.method === "POST");
+  const body = JSON.parse(posted[0]?.[0].bodyJson ?? "null") as { readonly fields?: unknown };
+  expect(body.fields).toEqual({
+    project: { id: "10000" },
+    issuetype: { id: "10001" },
+    summary: "Synthetic",
+    customfield_10000: "Required",
+  });
+});
+
 it.each(["summary", "customfield_10000"])(
   "does not widen an immutable ordinary field %s",
   async (id) => {

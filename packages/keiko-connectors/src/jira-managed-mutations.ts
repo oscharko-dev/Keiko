@@ -49,6 +49,7 @@ import {
   reconcileJiraDraftItem,
   resolveJiraDraftItem,
   withJiraDraftIdentity,
+  withoutRestatedJiraRouting,
   type JiraDraftItem,
 } from "./jira-draft.js";
 import {
@@ -249,11 +250,6 @@ function createContextFields(fields: readonly JiraFieldMetadata[]): readonly Jir
       : field,
   );
 }
-/** A routing field inside `fields` that restates the call's own numeric identity, and nothing else. */
-function restatesRouting(value: unknown, id: unknown): boolean {
-  const record = asRecord(value);
-  return record !== undefined && Object.keys(record).length === 1 && record.id === id;
-}
 function routingOverride(fieldId: string): Extract<JiraMutationAttempt, { ok: false }> {
   return {
     ...INVALID,
@@ -276,20 +272,11 @@ function withoutRestatedRouting(
 ): { readonly ok: true; readonly fields: unknown } | Extract<JiraMutationAttempt, { ok: false }> {
   const fields = asRecord(args.fields);
   if (fields === undefined) return { ok: true, fields: args.fields };
-  const routing: Readonly<Record<string, unknown>> = {
+  const routed = withoutRestatedJiraRouting(fields, {
     project: args.projectId,
     issuetype: args.issueTypeId,
-  };
-  const overridden = Object.keys(routing).find(
-    (id) => Object.hasOwn(fields, id) && !restatesRouting(fields[id], routing[id]),
-  );
-  if (overridden !== undefined) return routingOverride(overridden);
-  return {
-    ok: true,
-    fields: Object.fromEntries(
-      Object.entries(fields).filter(([id]) => !Object.hasOwn(routing, id)),
-    ),
-  };
+  });
+  return routed.ok ? routed : routingOverride(routed.fieldId);
 }
 function createArgumentsRefusal(
   args: CatalogJsonObject,

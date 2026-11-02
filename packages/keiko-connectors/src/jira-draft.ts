@@ -117,15 +117,54 @@ function parseLinks(value: unknown): readonly JiraDraftLink[] | undefined {
   const links = input.map(parseLink);
   return links.every((link) => link !== undefined) ? links : undefined;
 }
+/** The routing field a key names in any letter case (a model writes `issueType`), if any. */
+function routingFieldOf(id: string): "project" | "issuetype" | undefined {
+  const lower = id.toLowerCase();
+  return lower === "project" || lower === "issuetype" ? lower : undefined;
+}
+/** A routing field that restates the call's own numeric identity as `{ id }`, and nothing else. */
+function restatesRouting(value: unknown, id: unknown): boolean {
+  const record = asRecord(value);
+  return (
+    record !== undefined &&
+    Object.keys(record).length === 1 &&
+    (typeof record.id === "string" || typeof record.id === "number") &&
+    String(record.id) === id
+  );
+}
+export type JiraRoutedFields =
+  | { readonly ok: true; readonly fields: Readonly<Record<string, unknown>> }
+  | { readonly ok: false; readonly fieldId: string };
+/**
+ * `fields` without a routing field (`project`, `issuetype`, in any letter case) that only repeats
+ * the call's own `projectId` or `issueTypeId`: the same issue is asked for twice (S05 and S17 of
+ * epic #4173: Qwen wrote `project` and `issueType` into every item, and Jira refused all 25). A
+ * routing field naming anything else would override the routing and is named in the refusal.
+ */
+export function withoutRestatedJiraRouting(
+  fields: Readonly<Record<string, unknown>>,
+  routing: { readonly project: unknown; readonly issuetype: unknown },
+): JiraRoutedFields {
+  const kept: Record<string, unknown> = {};
+  for (const [id, value] of Object.entries(fields)) {
+    const routed = routingFieldOf(id);
+    if (routed === undefined) kept[id] = value;
+    else if (!restatesRouting(value, routing[routed])) return { ok: false, fieldId: id };
+  }
+  return { ok: true, fields: kept };
+}
 function itemFields(
   value: unknown,
   parent: JiraDraftParent | null,
+  routing: { readonly project: string; readonly issuetype: string },
 ): Readonly<Record<string, unknown>> | undefined {
-  const fields = asRecord(value);
-  if (fields === undefined) return undefined;
-  const routed = ["project", "issuetype", ...(parent === null ? [] : [parent.fieldId])];
+  const raw = asRecord(value);
+  if (raw === undefined) return undefined;
+  const routed = withoutRestatedJiraRouting(raw, routing);
+  if (!routed.ok) return undefined;
+  const { fields } = routed;
   const summary = fields.summary;
-  return routed.some((id) => Object.hasOwn(fields, id)) ||
+  return (parent !== null && Object.hasOwn(fields, parent.fieldId)) ||
     typeof summary !== "string" ||
     summary.trim().length === 0
     ? undefined
@@ -197,7 +236,7 @@ function parseItem(value: unknown): ParsedJiraDraftItem | JiraDraftProblem {
   const relations = parseRelations(raw);
   if (typeof relations === "string") return relations;
   const { parent, links, requirementIds } = relations;
-  const fields = itemFields(raw.fields, parent);
+  const fields = itemFields(raw.fields, parent, { project: projectId, issuetype: issueTypeId });
   if (fields === undefined) return "item-fields";
   return {
     ref,

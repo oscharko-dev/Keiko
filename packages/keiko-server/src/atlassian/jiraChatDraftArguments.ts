@@ -68,7 +68,7 @@ const PROBLEM_GUIDANCE: Readonly<Record<JiraDraftProblem, string>> = {
   "item-ids":
     "needs projectId and issueTypeId as numeric id strings from the project and issue-type reads, not keys or names.",
   "item-fields":
-    "needs fields with a non-empty summary, without project, issuetype or the field its parent relation writes. A parent goes only in the item's parent.",
+    "needs fields with a non-empty summary, without the field its parent relation writes, and without project or issuetype naming another project or issue type than its projectId and issueTypeId. A parent goes only in the item's parent.",
   "item-parent":
     "has a malformed parent. Nest an item by giving it parent { fieldId, ref } for an item of this draft, or { fieldId, issueKey } for an existing issue, with fieldId the relation field named in the child's create fields.",
   "item-links":

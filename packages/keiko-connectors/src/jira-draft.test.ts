@@ -54,6 +54,23 @@ describe("parseJiraDraft", () => {
     expect(parsed.items.map((entry) => entry.ref)).toEqual(["epic", "task", "bug", "loose"]);
   });
 
+  it("drops routing fields that only restate the item's own ids, in any letter case (S17 of #4173)", () => {
+    // Qwen wrote `project` and `issueType` beside projectId and issueTypeId into all 25 items, and
+    // Jira refused every one after the draft was approved.
+    const parsed = draft([
+      {
+        ...item("a"),
+        fields: {
+          summary: "Item a",
+          project: { id: "10000" },
+          issueType: { id: "10001" },
+          labels: ["anforderung"],
+        },
+      },
+    ]);
+    expect(parsed.items[0]?.fields).toEqual({ summary: "Item a", labels: ["anforderung"] });
+  });
+
   it.each([
     ["an unknown reference", [item("a", { parent: { fieldId: "parent", ref: "missing" } })]],
     ["a self-reference", [item("a", { parent: { fieldId: "parent", ref: "a" } })]],
@@ -67,6 +84,10 @@ describe("parseJiraDraft", () => {
     ["a duplicate reference", [item("a"), item("a")]],
     ["a missing summary", [{ ...item("a"), fields: { description: "x" } }]],
     ["a routing override", [{ ...item("a"), fields: { summary: "x", project: { id: "1" } } }]],
+    [
+      "a routing override in another letter case",
+      [{ ...item("a"), fields: { summary: "x", issueType: { id: "999" } } }],
+    ],
     [
       "a parent field also written directly",
       [
