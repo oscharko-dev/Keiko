@@ -266,8 +266,10 @@ function gaps(issue, structured, part, fieldIds) {
       .filter(
         (code) => entry === undefined || !structurallyReported(code, entry, fieldIds, sectionCount),
       )
-      .map(label),
-    undescribed: issue.deviations.filter((code) => !describedInAnswer(code, part)).map(label),
+      .map((code) => label(code)),
+    undescribed: issue.deviations
+      .filter((code) => !describedInAnswer(code, part))
+      .map((code) => label(code)),
   };
 }
 

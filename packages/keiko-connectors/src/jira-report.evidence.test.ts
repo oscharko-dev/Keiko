@@ -171,18 +171,19 @@ describe("create metadata is trusted only with Jira's completion evidence (D2)",
     expect(record(reportOf(started.result).compliance).requiredFieldRules).not.toBe("applied");
   });
 
-  it("refuses a last page whose own total it has not reached, at both endpoints", async () => {
-    const contradicting = { startAt: 0, maxResults: 50, total: 4, isLast: true, values: [] };
-    const mistyped = { startAt: 0, maxResults: 50, total: "4", isLast: true, values: [] };
-    for (const page of [contradicting, mistyped]) {
-      for (const endpoint of [/\/issuetypes$/u, /\/issuetypes\//u]) {
-        const rewrite: Rewrite = (path, body) => (endpoint.test(path) ? page : body);
-        const started = await finished(await run({ issues }, { rewrite }));
-        expect(started.result.data.status).toBe("incomplete");
-        expect(completenessOf(started.result)).toMatchObject({ failure: "malformed-payload" });
-        expect(record(reportOf(started.result).compliance).requiredFieldRules).not.toBe("applied");
-      }
-    }
+  const contradicting = { startAt: 0, maxResults: 50, total: 4, isLast: true, values: [] };
+  const mistyped = { startAt: 0, maxResults: 50, total: "4", isLast: true, values: [] };
+  it.each([
+    ["contradicting", "issue types", contradicting, /\/issuetypes$/u],
+    ["contradicting", "fields", contradicting, /\/issuetypes\//u],
+    ["mistyped", "issue types", mistyped, /\/issuetypes$/u],
+    ["mistyped", "fields", mistyped, /\/issuetypes\//u],
+  ] as const)("refuses a %s last page at the %s endpoint", async (_kind, _name, page, endpoint) => {
+    const rewrite: Rewrite = (path, body) => (endpoint.test(path) ? page : body);
+    const started = await finished(await run({ issues }, { rewrite }));
+    expect(started.result.data.status).toBe("incomplete");
+    expect(completenessOf(started.result)).toMatchObject({ failure: "malformed-payload" });
+    expect(record(reportOf(started.result).compliance).requiredFieldRules).not.toBe("applied");
   });
 
   describe("page coordinates and completion", () => {
