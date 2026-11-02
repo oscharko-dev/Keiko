@@ -1235,11 +1235,13 @@ paged the tool and listed 41 of 41. `chat.grounded-tool-round.completed` records
 mixed Jira/Data overflow pin keeps its budget. An answer built from tool results carries no excerpt
 markers; the optional citation repair runs only while a synthesis attempt slot is free and otherwise
 keeps the completed answer instead of failing the turn. The repair regenerates the whole answer, so
-it replaces a complete first answer only when it ended on its own and attaches at least one
-citation; a repair cut at its output limit or still uncited leaves the complete answer standing
+it replaces a complete first answer only when it finished with the natural `stop` and attaches at
+least one citation; a repair interrupted at its output limit, by a content filter, an error or a
+cancellation, or still uncited, leaves the complete answer standing
 (lab S12, Gemma: a repair with the remaining output grant cut a 41-row coverage matrix at row 28).
 `search.citations.reconciled` records the outcome in `citationRepairDisposition`
-(`rejected-truncated`, `rejected-uncited`, `applied`, `skipped-budget`, `not-needed`).
+(`rejected-truncated` for every interrupted repair, `rejected-uncited`, `applied`,
+`skipped-budget`, `not-needed`).
 
 - _Authority._ The tool is a read: the current Chat authority admits it, exactly as it admits a
   grounded answer over an attached Knowledge Pod. No Jira read grant or consent is involved, and

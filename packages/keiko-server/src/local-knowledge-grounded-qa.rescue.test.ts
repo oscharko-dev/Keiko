@@ -1199,6 +1199,30 @@ describe("weakly supported citations", () => {
     }
   });
 
+  it.each(["content_filter", "error", "cancelled"] as const)(
+    "keeps the complete answer when the citation repair ended with finish reason %s",
+    async (finishReason) => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const complete =
+          "The release checklist covers signing, notarization and upload, each step in order.";
+        const answer = await askWith(complete, `repair-${finishReason}`, undefined, undefined, {
+          repair: { content: "The release checklist covers signing [1].", finishReason },
+        });
+
+        expect(answer.content).toBe(complete);
+        const reconciled = sink.events.find((event) => event.op === "search.citations.reconciled");
+        expect(reconciled?.extra).toMatchObject({
+          citationRepairDisposition: "rejected-truncated",
+          attachedCount: 0,
+        });
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
   it("records an applied citation repair on the reconciliation line", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));

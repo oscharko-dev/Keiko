@@ -785,7 +785,8 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       });
     }
     this.measuredPromptTokens = response.usage.promptTokens;
-    this.lastComplete = response.finishReason !== "length";
+    // Only a natural stop is complete: a length cut, a content filter, an error or a cancellation is not.
+    this.lastComplete = response.finishReason === "stop";
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
@@ -805,7 +806,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return this.synthesis.remaining() > 0;
   }
 
-  /** Whether the last answer ended on its own rather than at its output limit (S12 of #4173). */
+  /** Whether the last answer ended on its own rather than being interrupted (S12 of #4173). */
   public lastAnswerComplete(): boolean {
     return this.lastComplete;
   }
