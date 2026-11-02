@@ -417,66 +417,73 @@ it("executes the real Jira project provider through gateway, binder and SDK with
   }
 });
 
+// Owner decision 2026-10-31 (#4176, ADR-0128 bounded field validation): a refused read hands the
+// model Jira's own bounded errorMessages so it can correct the call. They stay in the model-facing
+// result only; the Activity Log and the managed host's log never carry them.
 it.each([
-  { status: 403, body: { errorMessages: ["private-jira-error"] }, raw: undefined },
-  { status: 200, body: {}, raw: undefined },
-  { status: 200, body: [], raw: "{" },
-])("records Jira provider failure through the managed host", async ({ status, body, raw }) => {
-  const m = await jiraFixture(body, status, raw);
-  const f = fixture(undefined, m.managed);
-  try {
-    const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
-    expect(result).toMatchObject({
-      kind: "settled",
-      result: {
-        status: "failed",
-        reason: "provider-reported-error",
-        data: {
-          outcome: "failed",
-          reason: status === 403 ? "permission-denied" : "malformed-payload",
+  {
+    status: 403,
+    body: { errorMessages: ["private-jira-error"] },
+    raw: undefined,
+    data: { outcome: "failed", reason: "permission-denied", messages: ["private-jira-error"] },
+  },
+  {
+    status: 200,
+    body: {},
+    raw: undefined,
+    data: { outcome: "failed", reason: "malformed-payload" },
+  },
+  { status: 200, body: [], raw: "{", data: { outcome: "failed", reason: "malformed-payload" } },
+])(
+  "records Jira provider failure through the managed host",
+  async ({ status, body, raw, data }) => {
+    const m = await jiraFixture(body, status, raw);
+    const f = fixture(undefined, m.managed);
+    try {
+      const result = await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
+      expect(result).toMatchObject({
+        kind: "settled",
+        result: {
+          status: "failed",
+          reason: "provider-reported-error",
+          data,
+          page: null,
+          metrics: { outputBytes: JSON.stringify(data).length, resultCount: 0 },
         },
-        page: null,
-        metrics: {
-          outputBytes: JSON.stringify({
-            outcome: "failed",
-            reason: status === 403 ? "permission-denied" : "malformed-payload",
-          }).length,
-          resultCount: 0,
-        },
-      },
-    });
-    expect(m.requests).toHaveLength(1);
-    expect(JSON.stringify(result)).not.toContain("private-jira-error");
-    const settlement = f.logs.events.find(
-      (event) =>
-        event.op === "tool-catalog.invocation-settled" &&
-        event.extra?.reason === "provider-reported-error",
-    );
-    expectActivityLogProof(
-      "tool-catalog.invocation-settled.emitted-line",
-      formatActivityLogProofLine(settlement ?? {}),
-    );
-    expect(f.logs.lines().join("\n")).not.toContain("permission-denied");
-    expect(f.logs.lines().join("\n")).not.toContain("private-jira-error");
+      });
+      expect(result.kind === "settled" ? result.result.data : undefined).toEqual(data);
+      expect(m.requests).toHaveLength(1);
+      const settlement = f.logs.events.find(
+        (event) =>
+          event.op === "tool-catalog.invocation-settled" &&
+          event.extra?.reason === "provider-reported-error",
+      );
+      expectActivityLogProof(
+        "tool-catalog.invocation-settled.emitted-line",
+        formatActivityLogProofLine(settlement ?? {}),
+      );
+      expect(f.logs.lines().join("\n")).not.toContain("permission-denied");
+      expect(f.logs.lines().join("\n")).not.toContain("private-jira-error");
 
-    await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
-    expect(m.requests).toHaveLength(1);
-    const lines = m.logs.lines();
-    expect(lines.join("\n")).not.toContain("permission-denied");
-    expect(lines.join("\n")).not.toContain("private-jira-error");
-    const records = lines.map((line) => JSON.parse(line) as { phase?: string });
-    expect(records.filter((record) => record.phase === "failed")).toHaveLength(1);
-    const timelines = analyzeLogText(lines.join("\n")).timelines;
-    expect(
-      timelines.some((timeline) =>
-        timeline.lines.some((line) => line.op === "mcp.managed.lifecycle"),
-      ),
-    ).toBe(true);
-  } finally {
-    f.dispose();
-    await m.managed.close();
-  }
-});
+      await f.binder.dispatch({ ...f.invocation, arguments: {} }, identity);
+      expect(m.requests).toHaveLength(1);
+      const lines = m.logs.lines();
+      expect(lines.join("\n")).not.toContain("permission-denied");
+      expect(lines.join("\n")).not.toContain("private-jira-error");
+      const records = lines.map((line) => JSON.parse(line) as { phase?: string });
+      expect(records.filter((record) => record.phase === "failed")).toHaveLength(1);
+      const timelines = analyzeLogText(lines.join("\n")).timelines;
+      expect(
+        timelines.some((timeline) =>
+          timeline.lines.some((line) => line.op === "mcp.managed.lifecycle"),
+        ),
+      ).toBe(true);
+    } finally {
+      f.dispose();
+      await m.managed.close();
+    }
+  },
+);
 
 const metadataField = {
   fieldId: "summary",
