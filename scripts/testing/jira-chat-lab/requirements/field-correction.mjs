@@ -50,36 +50,69 @@ function rejectedByJira(node) {
   return Object.values(node).some(rejectedByJira);
 }
 
-/** The position of the first write whose result carries Jira's own sprint error, or -1. */
-export function jiraSprintRejection(exchanges) {
-  return exchanges.findIndex(
-    (exchange) =>
-      WRITE_OPERATIONS.some((operation) => toolExchangeOf(exchange, operation)) &&
-      rejectedByJira(exchange.result?.data),
+const isWrite = (exchange) =>
+  WRITE_OPERATIONS.some((operation) => toolExchangeOf(exchange, operation));
+
+/** The positions of the writes whose result carries Jira's own sprint error. */
+function jiraSprintRejections(exchanges) {
+  return exchanges.flatMap((exchange, position) =>
+    isWrite(exchange) && rejectedByJira(exchange.result?.data) ? [position] : [],
   );
 }
 
-/** The position of the last write that completed, or -1. */
-function lastCompletedWrite(exchanges) {
-  return exchanges.findLastIndex(
-    (exchange) =>
-      WRITE_OPERATIONS.some((operation) => toolExchangeOf(exchange, operation)) &&
-      exchange.result?.status === "completed",
+/** The position of the first write whose result carries Jira's own sprint error, or -1. */
+export function jiraSprintRejection(exchanges) {
+  return jiraSprintRejections(exchanges)[0] ?? -1;
+}
+
+/**
+ * The issue keys a write names: the issue an edit was called on, the issue a create or an item of a
+ * draft reports. A rejected create names none, because no issue exists yet.
+ */
+function writtenKeys(exchange) {
+  const data = exchange.result?.data;
+  const items = Array.isArray(data?.items) ? data.items : [];
+  return new Set(
+    [
+      exchange.call?.arguments?.issueKey,
+      data?.issueKey,
+      ...items.map((item) => item?.issueKey),
+    ].filter((key) => typeof key === "string"),
   );
 }
 
 /**
+ * Whether a write completed after a Jira sprint rejection of the credited task `key` and names that
+ * same task. The rejected write either named the task (an edit of it) or named no issue (a create
+ * that never produced one); a later write of an unrelated issue corrects nothing.
+ */
+function correctedAfterRejection(exchanges, key) {
+  return jiraSprintRejections(exchanges).some((rejection) => {
+    const rejectedKeys = writtenKeys(exchanges[rejection]);
+    if (rejectedKeys.size > 0 && !rejectedKeys.has(key)) return false;
+    return exchanges
+      .slice(rejection + 1)
+      .some(
+        (exchange) =>
+          isWrite(exchange) &&
+          exchange.result?.status === "completed" &&
+          writtenKeys(exchange).has(key),
+      );
+  });
+}
+
+/**
  * Grades the turn: Jira's own sprint error reached the model (`rejected`), and afterwards exactly
- * one new task was created and holds the requested sprint (`corrected`). Without a Jira rejection
- * the field-error path was never exercised, so a correct task alone verifies nothing.
+ * one new task was created and holds the requested sprint (`corrected`) through a completed write of
+ * that task that follows the rejected write. Without a Jira rejection the field-error path was
+ * never exercised, so a correct task alone verifies nothing.
  */
 export function gradeFieldCorrection({ tasks, exchanges, sprintField, sprintId }) {
-  const rejection = jiraSprintRejection(exchanges);
   const [task] = tasks.credited;
   const single = tasks.credited.length === 1 && tasks.duplicates.length === 0;
   const inSprint = single && sprintIdsOf(task.fields[sprintField]).includes(sprintId);
-  const rejected = rejection >= 0;
-  const corrected = rejected && inSprint && lastCompletedWrite(exchanges) > rejection;
+  const rejected = jiraSprintRejection(exchanges) >= 0;
+  const corrected = rejected && inSprint && correctedAfterRejection(exchanges, task.key);
   return { rejected, corrected, inSprint, key: single ? task.key : undefined };
 }
 

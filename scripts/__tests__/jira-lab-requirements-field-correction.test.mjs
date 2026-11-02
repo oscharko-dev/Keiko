@@ -15,8 +15,8 @@ const SPRINT_FIELD = "customfield_10105";
 const SPRINT_ID = 7;
 const CHAT = { id: "chat" };
 
-const write = (operation, status, data) => ({
-  call: { id: `call-${operation}`, name: operation.replace(".", "_"), arguments: {} },
+const write = (operation, status, data, args = {}) => ({
+  call: { id: `call-${operation}`, name: operation.replace(".", "_"), arguments: args },
   result: { toolRef: { canonicalId: `keiko.${operation}` }, status, data },
 });
 const jiraRejection = (message = "Number value expected as the Sprint id.") =>
@@ -33,7 +33,21 @@ const keikoRejection = () =>
     fieldId: SPRINT_FIELD,
     messages: ["Sprint must be valid JSON. Nothing was changed."],
   });
-const created = () => write("jira.create", "completed", { outcome: "succeeded", key: "REQ-9" });
+const created = (issueKey = "REQ-9") =>
+  write("jira.create", "completed", { outcome: "succeeded", issueKey, issueId: "10009" });
+const edit = (issueKey, status = "completed") =>
+  write(
+    "jira.edit",
+    status,
+    status === "completed"
+      ? { outcome: "succeeded", issueKey }
+      : {
+          outcome: "rejected",
+          reason: "field-validation",
+          messages: ["Number value expected as the Sprint id."],
+        },
+    { issueKey },
+  );
 const sprintRead = (id) => [
   `com.atlassian.greenhopper.service.sprint.Sprint@1a2b[id=${id},rapidViewId=2,state=FUTURE,name=REQ Lab Sprint]`,
 ];
@@ -114,6 +128,24 @@ describe("S20 Jira's field error and the corrected retry", () => {
   });
 
   it.each([
+    ["a create retried after Jira's rejection", [jiraRejection(), created()]],
+    [
+      "an edit of the task retried after Jira's rejection",
+      [created(), edit("REQ-9", "failed"), edit("REQ-9")],
+    ],
+    ["a retry beside an unrelated write", [jiraRejection(), edit("REQ-100"), created()]],
+  ])("is corrected by %s", (_name, exchanges) => {
+    expect(
+      gradeFieldCorrection({
+        tasks: tasksOf(task("REQ-9", sprintRead(SPRINT_ID))),
+        exchanges,
+        sprintField: SPRINT_FIELD,
+        sprintId: SPRINT_ID,
+      }).corrected,
+    ).toBe(true);
+  });
+
+  it.each([
     ["the task is in another sprint", [jiraRejection(), created()], [task("REQ-9", sprintRead(3))]],
     ["no task was created", [jiraRejection()], []],
     [
@@ -127,6 +159,23 @@ describe("S20 Jira's field error and the corrected retry", () => {
       [task("REQ-9", sprintRead(7))],
     ],
     ["only Keiko refused the value", [keikoRejection(), created()], [task("REQ-9", sprintRead(7))]],
+    [
+      // The task sits in the sprint, its sprint edit was rejected and never retried; the later
+      // success wrote an unrelated issue (the auditor's trace at 6a267e276).
+      "the later success wrote an unrelated issue",
+      [created(), edit("REQ-9", "failed"), edit("REQ-100")],
+      [task("REQ-9", sprintRead(7))],
+    ],
+    [
+      "the later success is an unrelated create",
+      [jiraRejection(), created("REQ-100")],
+      [task("REQ-9", sprintRead(7))],
+    ],
+    [
+      "the rejected edit concerned another issue",
+      [created("REQ-9"), edit("REQ-100", "failed"), edit("REQ-9")],
+      [task("REQ-9", sprintRead(7))],
+    ],
   ])("is not corrected when %s", (_name, exchanges, issues) => {
     const grade = gradeFieldCorrection({
       tasks: tasksOf(...issues),
@@ -179,6 +228,11 @@ describe("S20 Jira's field error and the corrected retry", () => {
     it.each([
       ["a rejection without a corrected retry", [jiraRejection()], []],
       ["no task in the sprint", [created()], [task("REQ-9", null)]],
+      [
+        "an unrelated later success after a rejected sprint edit",
+        [created(), edit("REQ-9", "failed"), edit("REQ-100")],
+        [task("REQ-9", sprintRead(SPRINT_ID))],
+      ],
     ])("is red for %s", async (_name, exchanges, after) => {
       const { ctx } = context({ exchanges, after });
       expect((await JOURNEYS.S20(ctx, CHAT)).status).toBe("red");
