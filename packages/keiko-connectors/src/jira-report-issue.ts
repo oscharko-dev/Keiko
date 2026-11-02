@@ -18,8 +18,6 @@ export interface JiraReportFieldPlan {
   readonly parentFieldIds: readonly string[];
   /** The ones the caller named; they are never narrowed away. */
   readonly namedParentFieldIds: ReadonlySet<string>;
-  /** Caller-named fields and Jira Software's own Epic Link fields: no unverified-role disclosure. */
-  readonly roleKnownParentFieldIds: ReadonlySet<string>;
   /** Collects the parent fields that held a parent key on an issue; the report states the count. */
   readonly parentFieldsSeen: Set<string>;
   /** Collects discovered fields that held a value which is no issue key. */

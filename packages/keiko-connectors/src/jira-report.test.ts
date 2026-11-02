@@ -581,7 +581,7 @@ describe("activity", () => {
         fieldCount: 3,
         observedFieldCount: 1,
         rejectedFieldCount: 2,
-        inferredFieldCount: 0,
+        inferredFieldCount: 1,
       },
     });
     expect(JSON.stringify(line)).not.toMatch(/REP-|jira\.example|Story|customfield/u);

@@ -53,7 +53,7 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
       observedFieldCount: 1,
       // The two decoys and the thirty extra fields holding free text, shown by value.
       rejectedFieldCount: 32,
-      inferredFieldCount: 0,
+      inferredFieldCount: 1,
     });
     for (const section of ["progress", "epics", "coverage", "compliance"] as const)
       expect(crowded[section]).toEqual(known[section]);
@@ -122,21 +122,5 @@ describe("hierarchy discovery depends on the schema shape, never on an app's fie
       reason: "permission-denied",
       parentFieldIds: [],
     });
-  });
-});
-
-describe("Jira Software's own Epic Link needs no unverified-role disclosure", () => {
-  it("discloses the same field only when an app's type carries it", async () => {
-    const issues = syntheticProject(30);
-    const known = reportOf(await harness({ issues }).run({ projectKey: "REP" }));
-    const foreign = reportOf(
-      await harness({ issues, foreignFieldTypeKeys: true }).run({ projectKey: "REP" }),
-    );
-    expect(record(known.hierarchy)).toMatchObject({ observedFieldCount: 1, inferredFieldCount: 0 });
-    expect(record(foreign.hierarchy)).toMatchObject({
-      observedFieldCount: 1,
-      inferredFieldCount: 1,
-    });
-    expect(foreign.epics).toEqual(known.epics);
   });
 });

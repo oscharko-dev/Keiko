@@ -492,8 +492,8 @@ describe("an issue key in a business field is no parent without role evidence (D
 
   it("discloses a field holding one issue key and nothing else as unverified, not as a parent", async () => {
     const { result, report } = await run({ issues }, { rewrite: mention(() => false) });
-    // The business field rests on the value shape alone; Jira Software's Epic Link does not.
-    expect(record(reportOf(result).hierarchy)).toMatchObject({ inferredFieldCount: 1 });
+    // The Epic link field and the business field both rest on the value shape alone.
+    expect(record(reportOf(result).hierarchy)).toMatchObject({ inferredFieldCount: 2 });
     expect(report === undefined ? "" : exportJiraReport(report, "markdown").content).toContain(
       "Not verified",
     );
@@ -505,7 +505,7 @@ describe("an issue key in a business field is no parent without role evidence (D
       { issues },
       { rewrite: mention(() => false), args: { parentFieldIds: [DECOY_BLOB] } },
     );
-    expect(record(reportOf(result).hierarchy)).toMatchObject({ inferredFieldCount: 0 });
+    expect(record(reportOf(result).hierarchy)).toMatchObject({ inferredFieldCount: 1 });
   });
 
   it("honours the field when the caller names it", async () => {
