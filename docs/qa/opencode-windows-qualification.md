@@ -19,6 +19,30 @@ into `dev` at `37b1ee9d0c6308b1a59eef3470aa47036fb8362b`, the fetched base of th
 All W1–W15 acceptance groups remain open. Individual component results below do not close their
 broader Workbench acceptance group.
 
+## Evidence pins released on 2026-11-02
+
+The helper-source approval pin and the D12 editor evidence are no longer blockers of this branch.
+Both digests are file-granular, and each was invalidated by an edit that changed neither a shipped
+byte nor a measured number, so the repair moves those edits out of the pinned files and rebinds
+nothing:
+
+- `hostNpmInvocation` moved to `scripts/lib/host-npm-invocation.mjs`.
+  `scripts/lib/host-executable.mjs` is byte-identical to `dev` again, which also restores the #1300
+  visual evidence, whose only changed input it was.
+- The Windows path-spelling, device-root and isolated-staging generation proofs moved to
+  `scripts/testing/test-secure-read-windows-paths.mjs`, run by the Windows native-quality lane.
+  `native/secure-workspace-read/test-protocol.mjs` is byte-identical to `dev` again.
+
+Limit on the unchanged harness: its file-generation case keeps its staging files beside the target,
+and the 2026-10-26 run below observed that this can refuse all 32 reads on a Windows host. It passes
+on the hosted Windows lane, and it is only as strong there as on `dev`; the isolated-staging proof is
+the separate Windows evidence for that sharing protection. Changing the pinned harness itself remains
+a governed helper rebuild.
+
+Limit of this host: Smart App Control is on and refuses freshly built unsigned executables (Code
+Integrity event 3077, `spawn UNKNOWN`), so these native proofs execute on the hosted Windows lane,
+not on this machine. Its security setting was not changed.
+
 ## Revalidation on 2026-10-28
 
 Completed CI for head `867c14540b516fee1940ad3d3f340b65ecfc5091` confirms that the earlier
@@ -952,7 +976,8 @@ Windows with a reason; owner-private fixtures set an explicit ACL instead of rel
 
 Remaining limits: file-symlink cases are skipped, not passed, on a host without the privilege; the
 native profile and its seatbelt/kernel allowlist remain macOS/Linux-only by owner decision; the
-helper-source approval pin and D12 reference evidence remain release-owner items.
+helper-source approval pin and D12 reference evidence were later released without a rebuild (see
+"Evidence pins released on 2026-11-02").
 
 ### Current acceptance priorities
 
