@@ -14,10 +14,15 @@
 //   ctx.useSpecificationFormat(format) -> the Pod holds the specification as that office format only
 //   ctx.replaceSpecification(version) -> the Pod holds the Markdown specification of that version
 //   ctx.labSprint()          -> { sprintId, fieldId } of the work project's lab sprint (S20)
-// ctx.turn(chat, content, { observeBeforeApproval }) calls the observer while a write approval is
-// pending, before it is decided; approvals.records lists { approval, call, observed } per approval.
+//   ctx.turnEnds()           -> count of early-ending turns the live log recorded (S17)
+// ctx.turn(chat, content, { observeBeforeApproval, during }) calls the observer while a write approval
+// is pending, before it is decided; approvals.records lists { approval, call, observed } per approval.
+// `during` is `{ when: "first-exchange" | "first-write", run }`: the lab starts `run` once, as soon as
+// that point of the stored tool transcript is reached, and the turn reports `induced`
+// (`{ ok, error?, turnOpen }`, `turnOpen`: the turn had not settled when `run` finished).
 // A check names the catalog obligations it verifies in `covers`; the scorecard credits them only
 // when the check is green, so a check that covers part of a scenario never turns it green.
+import { backlogJourney } from "./backlog-turn.mjs";
 import { changeImpactTruth, structuredChangeSet } from "./change-impact.mjs";
 import { STRUCTURE_RULES, buildCorpus, corpusChange } from "./corpus.mjs";
 import {
@@ -27,7 +32,6 @@ import {
 } from "./coverage-matrix.mjs";
 import {
   epicConforms,
-  gradeBacklog,
   gradeChangeImpact,
   gradeCriterionTestCases,
   gradeDeviationReport,
@@ -540,38 +544,7 @@ export const JOURNEYS = {
       ["test-case-per-criterion", "traceability"],
     );
   },
-  async S17(ctx, chat) {
-    const query = "project = REQ AND issuetype = Epic";
-    const before = await snapshotBefore(ctx, query);
-    const requested = buildCorpus(1)
-      .truth.filter((item) => item.priority === "Muss")
-      .map((item) => item.id);
-    const refusalsBefore = ctx.refusals();
-    const turn = await ctx.turn(
-      chat,
-      "Lege im Jira-Projekt REQ für ALLE Anforderungen mit Priorität Muss aus dem Lastenheft je ein Epic nach der Strukturvorgabe an. Melde am Ende alle angelegten Schlüssel.",
-    );
-    const epics = turnIssues({
-      before,
-      issues: await ctx.search(query, "summary,labels"),
-      exchanges: turn.toolExchanges,
-    });
-    // Only this turn's refusals count; earlier journeys share the same live log.
-    const refused = ctx.refusals() > refusalsBefore;
-    const grade = gradeBacklog({ requested, created: epics.credited, answer: turn.answer });
-    const ok =
-      !turn.failure &&
-      grade.mappingOk &&
-      grade.namesOk &&
-      !refused &&
-      epics.duplicates.length === 0;
-    return result(
-      ok ? "green" : "red",
-      turn,
-      `${grade.mapped}/${requested.length} requirements mapped to one epic each, ${countsOf(epics, "epics")}, ${grade.stray} unmapped, ${grade.unnamed} reported keys missing from the answer${refused ? ", generation-changed refusal logged" : ""}`,
-      ["epic-per-must-requirement", "answer-lists-created-keys", "no-generation-refusal"],
-    );
-  },
+  S17: (ctx, chat) => backlogJourney(ctx, chat),
   S18: (ctx) => modesAndReadableApproval(ctx),
   S19: (ctx, chat) => rerunCreatesNoDuplicates(ctx, chat),
   S20: (ctx, chat) => fieldErrorCorrection(ctx, chat),

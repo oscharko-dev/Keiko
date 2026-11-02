@@ -111,8 +111,13 @@ const FINE = phrase(
 const NEGATOR = phrase(
   String.raw`nicht|kein\p{L}*|nie|not|no|never|n't|isn't|aren't|doesn't|don't|fails?\s+to`,
 );
+// ... or that a problem word is itself negated: "nicht leer", "is not missing", "fehlt nicht".
+const NOT_A_PROBLEM = phrase(
+  String.raw`(?:nicht|not|never|nie|kein\p{L}*)\s+(?:\p{L}+\s+)?(?:leer|fehlend|fehlt|missing|empty|ungültig|invalid|falsch|wrong|unset|absent|fehlerhaft|incorrect)|fehl\p{L}*\s+(?:nicht|nirgends)|nichts\s+(?:fehlt|ist\s+falsch)`,
+);
 const NEGATED_FINE = new RegExp(String.raw`${NEGATOR}(?:\s+\p{L}+){0,2}\s+${FINE}`, "giu");
 const NOTHING_FOUND_RE = new RegExp(NOTHING_FOUND, "iu");
+const NOT_A_PROBLEM_RE = new RegExp(NOT_A_PROBLEM, "iu");
 const FINE_RE = new RegExp(FINE, "iu");
 
 /**
@@ -120,9 +125,18 @@ const FINE_RE = new RegExp(FINE, "iu");
  * compliant" describe a deviation; a fine-claim that no negator in reach flips is a denial.
  */
 function deniesDeviation(clause) {
-  if (NOTHING_FOUND_RE.test(clause)) return true;
+  if (NOTHING_FOUND_RE.test(clause) || NOT_A_PROBLEM_RE.test(clause)) return true;
   return FINE_RE.test(clause.replaceAll(NEGATED_FINE, " "));
 }
+
+// A description of a deviation states a violation: a field that is absent, empty, wrong or unlike the
+// template. Naming the checked fields ("Geprüft wurden Summary, Parent ...") or calling them present
+// states none, so it describes no deviation however many field words it holds.
+const VIOLATION = phrase(
+  String.raw`fehl\p{L}*|missing|lack\p{L}*|absent|ohne|without|kein\p{L}*|nicht|not|no|n't|never|ungültig\p{L}*|invalid|falsch\p{L}*|wrong|incorrect|leer\p{L}*|empty|unset|verletz\p{L}*|violat\p{L}*|weicht\s+ab|abweich\p{L}*|deviat\p{L}*|mangel\p{L}*|m[äa]ngel\p{L}*|fehlerhaft\p{L}*|unvollständig\p{L}*|incomplete|unzulässig\p{L}*|mismatch\p{L}*|differs?|expected|erwartet|statt`,
+);
+const VIOLATION_RE = new RegExp(VIOLATION, "iu");
+const DEVIATION_SCOPE_RE = new RegExp(phrase(DEVIATION_NOUN), "iu");
 
 const CLAUSE_BREAK = /[.;!?\n]+|\s+(?:aber|jedoch|während|whereas|but|however|although|obwohl)\s+/i;
 
@@ -149,32 +163,58 @@ function listLeads(lines) {
   return leads;
 }
 
+const HEADING = /^\s{0,3}(#{1,6})\s+\S/;
+
+/** For each line, the Markdown headings above it that no heading of the same or a higher level closed. */
+function enclosingHeadings(lines) {
+  const stack = [];
+  return lines.map((line) => {
+    const level = HEADING.exec(line)?.[1].length;
+    if (level !== undefined) {
+      while (stack.length > 0 && stack.at(-1).level >= level) stack.pop();
+      stack.push({ level, line });
+    }
+    return stack.map((heading) => heading.line);
+  });
+}
+
+const clausesOf = (keyLines) =>
+  keyLines
+    .join("\n")
+    .split(CLAUSE_BREAK)
+    .map((clause) => clause.trim())
+    .filter((clause) => clause !== "");
+
 /**
  * Per issue key, the clauses of the lines that name it, of the lines that continue them and of the
- * lead that introduces the list naming it. A lead that opens a list belongs to that list, never to
- * the issues of the list before it.
+ * lead that introduces the list naming it, plus the `context` that frames them: the lead and every
+ * heading that encloses the issue's lines. A lead that opens a list belongs to that list, never to
+ * the issues of the list before it. The context is never credited as a description by itself, but
+ * it can deny ("## No deviations found" over a list) or state that what follows are deviations.
  */
 function clausesByKey(answer) {
   const lines = answer.split("\n");
   const leads = listLeads(lines);
+  const headings = enclosingHeadings(lines);
   const opening = new Set(leads.values());
   const segments = new Map();
+  const context = new Map();
   let current = [];
   for (const [index, line] of lines.entries()) {
     if (opening.has(index)) continue;
     const keys = line.match(ISSUE_KEY);
     if (keys) current = [...new Set(keys)];
     const attributed = leads.has(index) ? [lines[leads.get(index)], line] : [line];
-    for (const key of current) segments.set(key, [...(segments.get(key) ?? []), ...attributed]);
+    const framing = [...(leads.has(index) ? [lines[leads.get(index)]] : []), ...headings[index]];
+    for (const key of current) {
+      segments.set(key, [...(segments.get(key) ?? []), ...attributed]);
+      context.set(key, [...new Set([...(context.get(key) ?? []), ...framing])]);
+    }
   }
   return new Map(
     [...segments].map(([key, keyLines]) => [
       key,
-      keyLines
-        .join("\n")
-        .split(CLAUSE_BREAK)
-        .map((clause) => clause.trim())
-        .filter((clause) => clause !== ""),
+      { clauses: clausesOf(keyLines), context: context.get(key) ?? [] },
     ]),
   );
 }
@@ -185,24 +225,39 @@ const mentionsAnyDeviation = (clause) =>
     pattern.test(clause),
   );
 
+const NO_PART = Object.freeze({ clauses: [], context: [] });
+const namesNoField = (text) => !mentionsAnyDeviation(text);
+
 /**
- * An issue is denied as a whole when a clause naming it states that nothing is wrong without naming
- * any field: "RPT-1: Keine Abweichung". What follows cannot undo that statement.
+ * An issue is denied as a whole when a clause naming it, or a lead or heading that frames it, states
+ * that nothing is wrong without naming any field: "RPT-1: Keine Abweichung", "## No deviations
+ * found". What follows cannot undo that statement.
  */
-function issueDenied(key, clauses) {
-  return clauses.some(
-    (clause) => hasKey(clause, key) && deniesDeviation(clause) && !mentionsAnyDeviation(clause),
+function issueDenied(key, { clauses, context }) {
+  return (
+    clauses.some(
+      (clause) => hasKey(clause, key) && deniesDeviation(clause) && namesNoField(clause),
+    ) || context.some((line) => deniesDeviation(line) && namesNoField(line))
   );
 }
 
-/** Whether a non-denying clause of an issue's part of the answer describes the deviation. */
-function describedInAnswer(code, clauses) {
+/**
+ * Whether a clause of an issue's part of the answer describes the deviation: it names the field,
+ * states a violation (or sits under a lead that says these are deviations), denies nothing itself
+ * and no enclosing line denies this very field.
+ */
+function describedInAnswer(code, { clauses, context }) {
   const pattern = deviationPattern(code);
-  return clauses.some((clause) => pattern.test(clause) && !deniesDeviation(clause));
+  if (context.some((line) => pattern.test(line) && deniesDeviation(line))) return false;
+  const scoped = context.some((line) => DEVIATION_SCOPE_RE.test(line));
+  return clauses.some(
+    (clause) =>
+      pattern.test(clause) && !deniesDeviation(clause) && (scoped || VIOLATION_RE.test(clause)),
+  );
 }
 
 /** Deviations of one expected issue that the tool did not report and the answer did not describe. */
-function gaps(issue, structured, clauses, fieldIds) {
+function gaps(issue, structured, part, fieldIds) {
   const entry = structured.get(issue.key);
   const sectionCount = issue.deviations.filter((code) => code.startsWith("section:")).length;
   const label = (code) => `${issue.key} ${code}`;
@@ -212,7 +267,7 @@ function gaps(issue, structured, clauses, fieldIds) {
         (code) => entry === undefined || !structurallyReported(code, entry, fieldIds, sectionCount),
       )
       .map(label),
-    undescribed: issue.deviations.filter((code) => !describedInAnswer(code, clauses)).map(label),
+    undescribed: issue.deviations.filter((code) => !describedInAnswer(code, part)).map(label),
   };
 }
 
@@ -225,10 +280,8 @@ function gaps(issue, structured, clauses, fieldIds) {
 export function gradeDeviationReport(answer, issues, structured, fieldIds = {}) {
   const expected = issues.filter((issue) => issue.deviations.length > 0);
   const expectedKeys = new Set(expected.map((issue) => issue.key));
-  const clauses = clausesByKey(answer);
-  const reported = new Set(
-    [...clauses.keys()].filter((key) => !issueDenied(key, clauses.get(key))),
-  );
+  const parts = clausesByKey(answer);
+  const reported = new Set([...parts.keys()].filter((key) => !issueDenied(key, parts.get(key))));
   const found = expected.filter((issue) => reported.has(issue.key) && structured.has(issue.key));
   const falseFindings = [...reported].filter((key) => !expectedKeys.has(key));
   // A denied issue is described by nothing: its clauses do not count.
@@ -236,7 +289,7 @@ export function gradeDeviationReport(answer, issues, structured, fieldIds = {}) 
     gaps(
       issue,
       structured,
-      reported.has(issue.key) ? (clauses.get(issue.key) ?? []) : [],
+      reported.has(issue.key) ? (parts.get(issue.key) ?? NO_PART) : NO_PART,
       fieldIds,
     ),
   );

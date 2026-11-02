@@ -597,10 +597,21 @@ S17) read the matching Jira issue keys before the turn and grade only the keys t
 during it, so earlier journeys, reruns and the Jira actor's timezone cannot leak into the verdict.
 S05 additionally requires exactly one write approval for its batch, S04 requires title, priority
 and chapter per requirement, S11 each seeded deviation twice over (the structured `jira.report` result of the turn names it for
-that issue, and the answer attributes it to that issue without denying it; an answer such as
-"Keine Abweichung" or "vollständig und korrekt" leaves it undescribed, and a turn without a
-completed `jira.report` deviation list credits nothing and leaves S11 partial), and S17 a one-to-one mapping of the new
-epics onto the Muss requirements plus every created key in the answer. S10 asks for three strict line formats
+that issue, and the answer describes it: a clause that names the field and states a violation,
+under no denial. An answer such as "Keine Abweichung" or "vollständig und korrekt", a heading such
+as "## No deviations found" over the list, a bare list of the checked fields and "sind vorhanden"
+leave it undescribed, and a turn without a completed `jira.report` deviation list credits nothing
+and leaves S11 partial), and S17 three parts (`backlog-turn.mjs`): a one-to-one mapping of the new
+epics onto the Muss requirements plus every created key in the answer; the Settings readiness run
+(`POST /api/gateway/readiness`, the trigger of the 2026-10-31 refusal) started once the first tool
+call is visible and finished while the turn still ran, without a generation-changed refusal; and a
+second turn for the Soll requirements whose Chat mode is changed after its first completed write,
+which ends the admitted turn early, so the product's early-ending answer must name exactly the
+epics Jira shows as created (evidence: a new `chat.tool-turn.ended` line in the Activity Log). A part
+whose evidence is absent is `unverified`, covers nothing and leaves S17 `partial`. The catalog also
+lists the human criteria no journey exercises yet (S14 edits proposed as a backlog draft, S15
+findings attached to an epic draft, S16 the format the template defines), so those scenarios stay
+`partial` until a journey covers them. S10 asks for three strict line formats
 (`ANZAHL;type;status;n`, `EPIC;key;members;done`, `SCHÄTZUNG;total;done;remaining`) and grades them
 against the issues Jira holds. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
 that name each requirement (tokenised like the product) and requires the complete `jira.report`

@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
 import { scenarioVerdict } from "../testing/jira-chat-lab/requirements/coverage.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "../testing/jira-chat-lab/requirements/corpus.mjs";
+import {
+  gradeCatalogRefresh,
+  gradeInterruption,
+} from "../testing/jira-chat-lab/requirements/backlog-turn.mjs";
 import { JOURNEYS } from "../testing/jira-chat-lab/requirements/journey-checks.mjs";
 
 const scenario = (id) => SCENARIOS.find((entry) => entry.id === id);
@@ -609,6 +613,76 @@ describe("S11 compliance report", () => {
     });
   });
 
+  describe("an answer headed by an explicit denial (the auditor's grouped counterexample)", () => {
+    const grouped = (heading) =>
+      [heading, "### Summary und Abgrenzung", "- RPT-1", "### Epic parent", "- RPT-3"].join("\n");
+
+    it.each([
+      "## No deviations found",
+      "## Keine Abweichungen gefunden",
+      "# Ergebnis: keine Abweichung",
+      "## Nothing to report",
+    ])("does not credit the inner headings of %j", async (heading) => {
+      const check = await grade(grouped(heading));
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("3 of 3 seeded deviations not described");
+      const result = verdict(check);
+      expect(result.status).toBe("red");
+      expect(result.covered).toEqual([]);
+    });
+
+    it("keeps the same inner headings described under a heading that states deviations", async () => {
+      expect((await grade(grouped("## Abweichungen"))).status).toBe("green");
+      expect((await grade(grouped("## Deviations per issue"))).status).toBe("green");
+    });
+
+    it("describes nothing with fields listed under a heading that states neither", async () => {
+      const check = await grade(grouped("## Compliance-Bericht"));
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("3 of 3 seeded deviations not described");
+    });
+
+    it("lets a heading that names the field and calls it fine deny that field only", async () => {
+      const answer = [
+        "## Abweichungen",
+        "### Summary ist korrekt",
+        "- RPT-1: Summary",
+        "### Abschnitt Abgrenzung fehlt",
+        "- RPT-1",
+        "### Epic parent fehlt",
+        "- RPT-3",
+      ].join("\n");
+      const check = await grade(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("1 of 3 seeded deviations not described");
+    });
+
+    it("lets a later heading of the same level end the denial", async () => {
+      const answer = [
+        "## No deviations found",
+        "### Dokumentation",
+        "- RPT-2",
+        "## Abweichungen",
+        "### Summary und Abgrenzung",
+        "- RPT-1",
+        "### Epic parent",
+        "- RPT-3",
+      ].join("\n");
+      expect((await grade(answer)).status).toBe("green");
+    });
+
+    it("still reads a genuinely missing-fields grouped answer as green", async () => {
+      const answer = [
+        "## Deviations",
+        "### Zusammenfassung ohne Präfix und Abschnitt Abgrenzung fehlt",
+        "- RPT-1",
+        "### Kein Epic zugeordnet",
+        "- RPT-3",
+      ].join("\n");
+      expect((await grade(answer)).status).toBe("green");
+    });
+  });
+
   it("does not take a compliant issue for a false finding", async () => {
     const answer = [
       "RPT-1: Zusammenfassung ohne Präfix; Abschnitt Abgrenzung fehlt",
@@ -665,6 +739,25 @@ describe("S11 compliance report", () => {
       const check = await gradeFive(answer);
       expect(check.status).toBe("red");
       expect(check.detail).toMatch(/[1-5] of 5 seeded deviations not described/);
+    });
+
+    // The auditor's counterexamples (PRRT_kwDOSqilAM6yR_l4, 2026-11-01): an answer that lists the
+    // checks, or that says the fields are present, describes no deviation although it contains every
+    // seeded field word and no denial phrase.
+    it.each([
+      "RPT-1: Geprüft wurden Summary, Parent, Estimate, Label und Abnahmekriterien.",
+      "RPT-1: Summary, Parent, Estimate, Label und Abnahmekriterien sind vorhanden.",
+      "RPT-1: Summary, Parent, Estimate, Label und Abnahmekriterien wurden geprüft.",
+      "RPT-1: Checked summary, parent, estimate, label and Abnahmekriterien.",
+      "RPT-1: summary, parent, estimate, label and Abnahmekriterien are present.",
+      "RPT-1: Summary, Parent, Estimate, Label und Abnahmekriterien sind nicht leer.",
+      "RPT-1: Summary, Parent, Estimate, Label und Abnahmekriterien fehlen nicht.",
+      "RPT-1: summary, parent, estimate, label and Abnahmekriterien are not missing.",
+    ])("is not green for a bare check list or present fields %#", async (answer) => {
+      const check = await gradeFive(answer);
+      expect(check.status).toBe("red");
+      expect(check.detail).toContain("5 of 5 seeded deviations not described");
+      expect(verdict(check).covered).toEqual([]);
     });
 
     it("is green when a structured result and an answer naming each deviation agree", async () => {
@@ -830,6 +923,159 @@ describe("S17 long backlog request", () => {
       refusals: () => refusals,
     };
     expect((await run("S17", ctx)).status).toBe("red");
+  });
+});
+
+describe("S17 human obligations of #4175", () => {
+  const SOLL = TRUTH.filter((item) => item.priority === "Soll").map((item) => item.id);
+  const journeyVerdict = (check) =>
+    scenarioVerdict(scenario("S17"), [{ layer: "journey", ...check }]);
+  const settled = { ok: true, turnOpen: true };
+
+  it("keeps S17 partial for a correct backlog without a refresh or an interruption", async () => {
+    // The auditor's counterexample at f47e7f0fa: 25 correctly mapped epics, every key in the answer
+    // and no refusal used to be green although neither human obligation was exercised.
+    const jira = fakeJira();
+    const check = await run(
+      "S17",
+      context(jira, () => {
+        const keys = MUSS.map((id) => jira.createEpic(id));
+        return { answer: `Angelegt: ${keys.join(", ")}` };
+      }),
+    );
+    expect(check.status).toBe("green");
+    const verdict = journeyVerdict(check);
+    expect(verdict.status).toBe("partial");
+    expect(verdict.uncovered).toEqual([
+      "survives-unchanged-catalog-refresh",
+      "interrupted-turn-reports-created-keys",
+    ]);
+  });
+
+  describe("the unchanged catalog refresh", () => {
+    it.each([
+      [undefined, false, undefined, "unverified"],
+      [{ ok: false, error: "HTTP 502", turnOpen: true }, false, undefined, "unverified"],
+      [{ ok: true, turnOpen: false }, false, undefined, "unverified"],
+      [settled, true, undefined, "red"],
+      [settled, false, "HTTP 400", "red"],
+      [settled, false, undefined, "green"],
+    ])("grades %j (refused %s, failure %s) as %s", (induced, refused, failure, status) => {
+      expect(gradeCatalogRefresh({ induced, refused, failure }).status).toBe(status);
+    });
+
+    it("credits the refresh obligation only when the lab induced it during the turn", async () => {
+      const jira = fakeJira();
+      const ctx = context(jira, () => ({
+        answer: MUSS.map((id) => jira.createEpic(id)).join(", "),
+      }));
+      const base = ctx.turn;
+      ctx.turn = async (...args) => ({ ...(await base(...args)), induced: settled });
+      const check = await run("S17", ctx);
+      expect(check.covers).toContain("survives-unchanged-catalog-refresh");
+      expect(journeyVerdict(check).uncovered).toEqual(["interrupted-turn-reports-created-keys"]);
+    });
+  });
+
+  describe("the interrupted turn", () => {
+    const epic = (key) => ({ key });
+    const grade = (overrides) =>
+      gradeInterruption({
+        induced: settled,
+        ended: true,
+        created: [epic("REQ-1"), epic("REQ-2")],
+        answer: "Completed: jira_create REQ-1, jira_create REQ-2",
+        ...overrides,
+      });
+
+    it("is green when the early-ending answer names exactly the created keys", () => {
+      expect(grade({}).status).toBe("green");
+    });
+
+    it.each([
+      ["omits a created key", { answer: "Completed: jira_create REQ-1" }],
+      ["names a key Jira does not show", { answer: "REQ-1, REQ-2, REQ-77" }],
+      ["names none", { answer: "The request was not finished." }],
+    ])("is red when the answer %s", (_name, overrides) => {
+      expect(grade(overrides).status).toBe("red");
+    });
+
+    it.each([
+      ["the mode was not changed mid-turn", { induced: undefined }],
+      ["the mode change failed", { induced: { ok: false, error: "409", turnOpen: true } }],
+      ["the mode change came after the turn settled", { induced: { ok: true, turnOpen: false } }],
+      ["the turn did not end early", { ended: false }],
+      ["nothing had been written yet", { created: [], answer: "" }],
+    ])("is unverified when %s", (_name, overrides) => {
+      expect(grade(overrides).status).toBe("unverified");
+    });
+
+    function interruptedContext({ answer, ended }) {
+      const jira = fakeJira();
+      let ends = 0;
+      let turns = 0;
+      const ctx = context(jira, () => {
+        turns += 1;
+        if (turns === 1) {
+          const keys = MUSS.map((id) => jira.createEpic(id));
+          return { answer: keys.join(", ") };
+        }
+        const keys = SOLL.slice(0, 3).map((id) => jira.createEpic(id));
+        ends += ended ? 1 : 0;
+        return { answer: answer(keys) };
+      });
+      const base = ctx.turn;
+      ctx.turn = async (...args) => ({ ...(await base(...args)), induced: settled });
+      return {
+        ...ctx,
+        freshChat: async () => ({ id: "second" }),
+        turnEnds: () => ends,
+      };
+    }
+
+    it("covers the obligation through the journey only for an exact early-ending answer", async () => {
+      const exact = await run(
+        "S17",
+        interruptedContext({
+          answer: (keys) => `Not finished. Completed: ${keys.join(", ")}`,
+          ended: true,
+        }),
+      );
+      expect(exact.status).toBe("green");
+      expect(exact.covers).toContain("interrupted-turn-reports-created-keys");
+      expect(journeyVerdict(exact).status).toBe("green");
+      const wrong = await run(
+        "S17",
+        interruptedContext({ answer: (keys) => keys.slice(1).join(", "), ended: true }),
+      );
+      expect(wrong.status).toBe("red");
+      expect(wrong.detail).toContain("1 missing from");
+      const notEnded = await run(
+        "S17",
+        interruptedContext({ answer: (keys) => keys.join(", "), ended: false }),
+      );
+      expect(notEnded.covers).not.toContain("interrupted-turn-reports-created-keys");
+      expect(journeyVerdict(notEnded).status).toBe("partial");
+    });
+  });
+});
+
+describe("catalog obligations of the human criteria that no journey exercises yet", () => {
+  // #4179: S14 proposes edits as a backlog draft, S15 attaches findings to epic drafts, S16 uses the
+  // format its template defines. Their journeys check only the answer-level parts, so a journey that
+  // covers every other obligation leaves the scenario partial, never green.
+  it.each([
+    ["S14", ["changes-detected", "affected-issues"], ["edits-proposed-as-draft"]],
+    [
+      "S15",
+      ["vague-wording-findings", "missing-acceptance-findings"],
+      ["findings-attached-to-epic-draft"],
+    ],
+    ["S16", ["test-case-per-criterion", "traceability"], ["template-defined-format"]],
+  ])("%s stays partial with only %j covered", (id, covers, uncovered) => {
+    const verdict = scenarioVerdict(scenario(id), [{ layer: "journey", status: "green", covers }]);
+    expect(verdict.status).toBe("partial");
+    expect(verdict.uncovered).toEqual(uncovered);
   });
 });
 

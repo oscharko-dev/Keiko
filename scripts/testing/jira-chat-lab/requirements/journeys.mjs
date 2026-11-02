@@ -24,6 +24,7 @@ import { basicAuth, labRequest } from "../lab-client.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "./corpus.mjs";
 import { writeCorpusDocuments } from "./corpus-documents.mjs";
 import { FORMATS } from "./formats.mjs";
+import { startDuring } from "./mid-turn.mjs";
 import { JOURNEYS, JOURNEY_IDS } from "./journey-checks.mjs";
 import { labSprintSetup } from "./field-correction.mjs";
 
@@ -185,13 +186,14 @@ async function messageIds(ctx, chat) {
  * returns how many write approvals it decided (S05 expects exactly one write). Read grants are
  * never decided by anyone: the supervisor refuses one that waits.
  */
-async function superviseTurn(ctx, chat, prior, isSettled, observe) {
-  const decisions = { ids: new Set(), writes: 0, records: [] };
+async function superviseTurn(ctx, chat, prior, isSettled, { observe, during }) {
+  const decisions = { ids: new Set(), writes: 0, records: [], induced: undefined };
   const started = Date.now();
   while (!isSettled() && Date.now() - started < TURN_LIMIT_MS) {
     const observed = await api(ctx, "observe", messagesPath(ctx, chat), undefined, "GET");
     const user = observed.messages.find((m) => m.role === "user" && !prior.has(m.id));
     await approvePending(ctx, user?.toolTranscript, decisions, observe);
+    decisions.induced ??= startDuring(during, user?.toolTranscript?.exchanges ?? [], isSettled);
     await delay(500);
   }
   return decisions;
@@ -243,7 +245,10 @@ async function chatTurn(ctx, chat, content, options = {}) {
     .catch((error) => (failure = String(error?.message ?? error).slice(0, 300)))
     .finally(() => (settled = true));
   try {
-    decisions = await superviseTurn(ctx, chat, prior, () => settled, options.observeBeforeApproval);
+    decisions = await superviseTurn(ctx, chat, prior, () => settled, {
+      observe: options.observeBeforeApproval,
+      during: options.during,
+    });
   } finally {
     // A turn that outlives supervision is cancelled, so it cannot write into the next journey.
     if (!settled) send.abort();
@@ -254,6 +259,7 @@ async function chatTurn(ctx, chat, content, options = {}) {
     durationMs: Date.now() - started,
     failure,
     approvals: { writes, records },
+    induced: await decisions.induced,
     ...(await settledTurn(ctx, chat, prior)),
   };
 }
@@ -355,6 +361,7 @@ function journeyContext(live, session, truth) {
     comments: (key) => issueComments(session, key),
     exportReport: (chat, reportId, format) => exportReport(ctx, chat, reportId, format),
     refusals: () => logMatchCount(ctx.root, "generation-changed"),
+    turnEnds: () => logMatchCount(ctx.root, "chat.tool-turn.ended"),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
   };
   return ctx;

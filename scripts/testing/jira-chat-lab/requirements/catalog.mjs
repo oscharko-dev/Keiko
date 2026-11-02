@@ -103,21 +103,25 @@ export const SCENARIOS = Object.freeze([
     requirement: "beyond",
     issue: 4179,
     title: "Change impact of a new document version",
-    obligations: ["changes-detected", "affected-issues"],
+    obligations: ["changes-detected", "affected-issues", "edits-proposed-as-draft"],
   },
   {
     id: "S15",
     requirement: "beyond",
     issue: 4179,
     title: "Requirement-quality findings on drafts",
-    obligations: ["vague-wording-findings", "missing-acceptance-findings"],
+    obligations: [
+      "vague-wording-findings",
+      "missing-acceptance-findings",
+      "findings-attached-to-epic-draft",
+    ],
   },
   {
     id: "S16",
     requirement: "beyond",
     issue: 4179,
     title: "Test cases per acceptance criterion",
-    obligations: ["test-case-per-criterion", "traceability"],
+    obligations: ["test-case-per-criterion", "traceability", "template-defined-format"],
   },
   {
     id: "S17",
@@ -128,6 +132,8 @@ export const SCENARIOS = Object.freeze([
       "epic-per-must-requirement",
       "answer-lists-created-keys",
       "no-generation-refusal",
+      "survives-unchanged-catalog-refresh",
+      "interrupted-turn-reports-created-keys",
     ],
   },
   {
