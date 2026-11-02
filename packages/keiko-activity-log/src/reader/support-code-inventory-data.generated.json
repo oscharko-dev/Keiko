@@ -1719,6 +1719,7 @@
     "keiko-server/grounded-faithfulness",
     "keiko-server/grounded-faithfulness-eval",
     "keiko-server/grounded-follow-up",
+    "keiko-server/grounded-gateway-error-status",
     "keiko-server/grounded-git-history-evidence",
     "keiko-server/grounded-latency-eval",
     "keiko-server/grounded-message-persistence",
