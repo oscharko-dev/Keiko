@@ -3870,8 +3870,8 @@ earlier sections remain the record of what was qualified at that time.
 - Reads through a Jira Pod or an MCP server never ask the person. The server establishes the read
   grant when the first read is admitted; the `chat-read-consent` route and the Chat read card are
   retired. Grants keep their subject binding, expiry and revalidation at every use.
-- An unselected Chat resolves to Full access within the deployment ceiling; stored rows with the
-  former Ask default migrate to Full access, explicit selections are kept.
+- An unselected Chat (no stored row) resolves to Full access within the deployment ceiling; every
+  stored mode, a version-1 Ask row included, is a saved selection and is kept.
 - The Chat composer's **Connectors** menu replaces the **Tool access** popover: one switch per
   centrally configured MCP server and per Jira Pod, plus the Access mode. A switched-off connector
   gives the model no tools and no context. The Coding Workbench composer offers the same menu per

@@ -42,8 +42,11 @@ the shared request field. Existing description-scope and envelope validation sti
 Epic #4081 / #4084 adds ordinary Chat's persisted tool-mode selection and one opaque Jira Pod
 binding with monotonic binding/authentication generations. An unselected Chat resolves to Full
 access within the deployment ceiling (owner decision 2026-11-02: "full access is generally
-allowed"); legacy rows that stored the former Ask default migrate to Full access, while an explicit
-Supervised or Full selection is kept. The same Chat row stores an optional MCP server selection:
+allowed"). A stored mode is a saved selection and is kept until the person changes it: the former
+version-1 writer stored Ask for approval both when a person selected it and as the default of a
+Chat that only connected a tool source, and the two rows cannot be told apart, so every saved
+version-1 mode, Ask included, is preserved and only a Chat with no stored row resolves the Full
+access default. The same Chat row stores an optional MCP server selection:
 absent offers every enabled server, a list offers exactly those, and an unselected server
 contributes no tools and no context.
 The authenticated Chat PATCH path requires the current scope identity for Jira or mode intent,

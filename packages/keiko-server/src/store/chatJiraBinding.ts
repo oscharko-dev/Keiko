@@ -95,17 +95,14 @@ export function decodeJiraChatState(json: string | null): JiraChatState {
 }
 
 /**
- * Version 1 stored Ask for approval as the default of every Chat that connected a tool source, so a
- * stored Ask cannot be told apart from a Chat nobody chose a mode for. Since the owner decision of
- * 2026-11-02 Chat tools default to Full access; only Supervised workspace, which a person had to
- * pick, survives as a selection.
+ * Version 1 wrote Ask for approval both when a person selected it and as the default of a Chat that
+ * only connected a tool source (a Pod binding patch stored `governed-assist` beside the binding), so
+ * the two rows are byte-identical. The stored mode is the person's selection and is kept until they
+ * change it; only a Chat without any row resolves the Full access default. Widening an Ask row would
+ * silently remove the per-action write approval a person may have chosen.
  */
 function migratedState(value: StoredJiraChatState): JiraChatState {
-  return {
-    ...value,
-    schemaVersion: 2,
-    mode: value.mode === "supervised-coding" ? value.mode : CHAT_TOOL_DEFAULT_MODE,
-  };
+  return { ...value, schemaVersion: 2 };
 }
 
 export function jiraChatFields(
