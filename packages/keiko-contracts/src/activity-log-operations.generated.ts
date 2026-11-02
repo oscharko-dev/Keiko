@@ -4500,6 +4500,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "workspace-window-sizing-retired",
           "workspace-layout-locked",
           "workspace-layout-unlocked",
+          "workspace-window-content-zoomed",
           "literal-input-preserved",
           "draft-resynchronized",
           "context-details-expanded",
