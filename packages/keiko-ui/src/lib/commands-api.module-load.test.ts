@@ -26,23 +26,22 @@ describe("command validator module load failure (#3918)", () => {
       diagnostics.setClientDiagnosticWriter(writer);
       const api = await import("./commands-api");
 
-      const failure: unknown = await (
+      const request =
         kind === "catalog"
           ? api.fetchCommandCatalog("/fixture-project")
-          : api.createCommandRun({ projectId: "/fixture-project", taskId: "npm-script:test" })
-      ).catch((error: unknown) => error);
+          : api.createCommandRun({ projectId: "/fixture-project", taskId: "npm-script:test" });
 
-      expect(failure).toMatchObject({ code: "MODULE_LOAD_FAILED", status: 0 });
+      await expect(request).rejects.toMatchObject({ code: "MODULE_LOAD_FAILED", status: 0 });
       expect(fetch).not.toHaveBeenCalled();
       expect(writer).toHaveBeenCalledTimes(1);
-      const correlationId = (failure as { readonly correlationId?: unknown }).correlationId;
-      expect(typeof correlationId).toBe("string");
-      expect(writer.mock.calls[0]?.[1]).toMatchObject({
+      const meta = writer.mock.calls[0]?.[1];
+      expect(meta).toMatchObject({
         kind: "other",
         errorKind: "unavailable",
         moduleLoadFailure: "command-runner",
-        correlationId,
+        correlationId: expect.stringMatching(/\S/u),
       });
+      await expect(request).rejects.toMatchObject({ correlationId: meta?.correlationId });
       expect(JSON.stringify(writer.mock.calls)).not.toContain("fixture chunk load failure");
       diagnostics.resetClientDiagnosticWriter();
     },
