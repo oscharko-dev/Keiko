@@ -146,14 +146,11 @@ describe("candidateProvedEveryReusedJob", () => {
     "Semantic duplication",
     "Core quality",
     "Coverage suite (keiko-ui)",
-    "Coverage shard (scripts 1/3)",
-    "Coverage shard (scripts 2/3)",
-    "Coverage shard (scripts 3/3)",
+    "Coverage suite (scripts)",
     "Coverage and SonarCloud",
     "Build, scan, SBOM, smoke",
-    "Node 26 compatibility (shard 1/3)",
-    "Node 26 compatibility (shard 2/3)",
-    "Node 26 compatibility (shard 3/3)",
+    "Node 26 compatibility (shard 1/2)",
+    "Node 26 compatibility (shard 2/2)",
     "Portable secure-read smoke (linux-x64)",
     "Portable secure-read smoke (windows-x64)",
     "Portable secure-read smoke (macos-arm64)",
@@ -162,7 +159,7 @@ describe("candidateProvedEveryReusedJob", () => {
     "Firefox smoke (shard 2/2)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
-    "Coverage shard (packages 1/5)",
+    "Coverage shard (packages 1/3)",
   ].map((name) => ({ name, conclusion: "success" }));
 
   it("accepts a candidate that executed every reused job", async () => {
@@ -184,8 +181,8 @@ describe("candidateProvedEveryReusedJob", () => {
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
   });
 
-  it.each([1, 2, 3])("requires successful exact evidence for Node 26 shard %s", async (shard) => {
-    const name = `Node 26 compatibility (shard ${shard}/3)`;
+  it.each([1, 2])("requires successful exact evidence for Node 26 shard %s", async (shard) => {
+    const name = `Node 26 compatibility (shard ${shard}/2)`;
     const missing = everyJob.filter((job) => job.name !== name);
     for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
       const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
