@@ -259,27 +259,6 @@ export interface McpChatToolReadGrantView {
 }
 export type ChatToolReadGrantView = JiraChatToolReadGrantView | McpChatToolReadGrantView;
 
-export interface ChatToolReadConsentDecision {
-  readonly decision: "approve" | "reject";
-  readonly disclosureVersion: ReadDisclosureVersion;
-}
-
-export function validateChatToolReadConsentDecision(
-  value: unknown,
-): CodingWorkbenchValidationResult<ChatToolReadConsentDecision> {
-  if (!isRecord(value)) return invalid("chatReadConsent must be an object");
-  const errors: string[] = [];
-  validateKeys(value, ["decision", "disclosureVersion"], errors, "chatReadConsent");
-  if (value.decision !== "approve" && value.decision !== "reject")
-    errors.push("chatReadConsent.decision is invalid");
-  if (
-    value.disclosureVersion !== CHAT_TOOL_READ_DISCLOSURE_VERSION &&
-    value.disclosureVersion !== MCP_CHAT_READ_DISCLOSURE_VERSION
-  )
-    errors.push("chatReadConsent.disclosureVersion is invalid");
-  return result(value, errors);
-}
-
 const READ_GRANT_KEYS = [
   "schemaVersion",
   "kind",

@@ -477,7 +477,7 @@ The five canonical write descriptors use closed top-level arguments and result s
 field values are additionally validated against fresh Jira metadata, while additive updates are
 restricted to implemented label verbs. Assignment clearing is explicit (`clearAssignee: true`),
 mutually exclusive with `assigneeName`; absence never means clearing. This composition does not
-confer normal Chat binding, read-consent or approval authority on its own.
+confer normal Chat binding, read-grant or approval authority on its own.
 
 Authorized tool results include instance-qualified issue links derived from the private selected
 connection and validated issue keys, preserving the context path. Jira-supplied `self` URLs are never
@@ -567,7 +567,7 @@ still defaults to Ask for approval. Explicit configuration and the retained comp
 can narrow the ceiling; invalid values fail closed. Connector calls use that same resolved value
 for authority admission and budget reservation, and include it in the content-free action outcome.
 Memory retains its separate explicit-or-`governed-assist` default. This availability change does not
-itself grant a Chat read consent, mutation approval, connector scope or authority envelope.
+itself grant a Chat read grant, mutation approval, connector scope or authority envelope.
 
 
 This is the normative mapping for every v1 governed connector operation. Rows are derived from
@@ -1023,7 +1023,7 @@ the approval.
   link that rides on the create or edit itself, never on one written afterwards: the gate puts a link
   of a required type first, and a state that the primary write cannot make conforming is refused
   before any request. (2) In Ask-for-approval and Supervised modes Chat additionally runs the same pipeline as a
-  dry run (`checkJiraManagedMutationTemplates`) after read consent and before the write approval
+  dry run (`checkJiraManagedMutationTemplates`) after the read grant and before the write approval
   is created, so a human is never asked to approve a draft that would be refused. A failed dry run
   is recorded and falls through to the gate. Every item of a backlog draft is dry-run when it is
   staged (`jira.draft-stage`) and again before the draft's approval, staged or inline, with the
@@ -1384,8 +1384,9 @@ Jira automations/webhooks and is not guaranteed reversible) are `high`. No v1 ac
 have (e.g. destructive/delete actions, explicitly out of scope — D7).
 
 **Disposition derivation, spelled out once:** both `governed-assist` (Ask for approval) and
-`supervised-coding` (Supervised workspace) require review for every connector action's `internet`
-resource scope, regardless of risk tier (ADR-0138). Risk tiers describe the action and inform its
+`supervised-coding` (Supervised workspace) require review for every connector write's `internet`
+resource scope, regardless of risk tier (ADR-0138). Connector reads within the current binding and
+authority need no per-call review in any mode (owner decision 2026-11-02, see D4 below). Risk tiers describe the action and inform its
 review; they do not exempt comments or field edits from approval. `autonomous-delivery` (Full
 access) allows these actions only within a valid authority envelope, the required connector scopes
 and the resolved deployment ceiling. A missing read/write scope is denied in every mode, including
@@ -1408,9 +1409,14 @@ supervised-action path. Only the scope enum grows.
 
 Managed Jira catalog operations use the same `connector-access` effect class. The current
 project, issue-type, create/edit metadata, search, issue, comment, transition-metadata and assignable-user read capabilities map to `issue-tracker.read` (low risk). In ordinary Chat, every mode
-requires the current binding's first-read grant before HTTP; a valid grant permits subsequent
-read-class calls only within the current authority, binding and credential generation. That bounded
-read grant supplies the standing approval for read-class calls; it never approves writes. Missing or
+requires the current binding's read grant before HTTP; a valid grant permits subsequent read-class
+calls only within the current authority, binding and credential generation. The server establishes
+that grant itself when the first read is admitted (owner decision 2026-11-02: reads never ask the
+person); the former human read-consent route and Chat card are retired. The established grant is
+recorded `granted` in the turn's transcript and published on the existing `tool-read-consent` event,
+as evidence of the authority the turn read under; the Chat shows nothing for it. The grant never approves
+writes and is still revalidated at every use against actor, mode, binding, authority and
+verification generations. Missing or
 expired authority is denied. The ordinary buffered and streaming Chat paths compose this admission
 under #4084/#4091 through the shared catalog binder and managed host described in
 [ADR-0181](ADR-0181-shared-managed-mcp-host.md). The provider factory and SDK host never confer
@@ -1419,17 +1425,21 @@ invocation key requirement for external connector effects.
 
 The authenticated Chat PATCH and serializer own the single Jira binding and saved human mode.
 Responses add the server-resolved ceiling and effective mode without replacing the saved selection.
-The existing Chat settings, Knowledge Pods hub and workspace ports use that same PATCH; a
-presentation edge appears only after confirmation for the exact requested Chat and Pod. Replacing
-a binding requires explicit confirmation. Cancelled/superseded UI requests and late replies cannot
-create an edge for a different selection. A workspace node, drag payload or display of a verified
-Pod never grants authority. The existing shared mode selector disables options above the ceiling.
+The Chat composer's Connectors menu, the Knowledge Pods hub and workspace ports use that same
+PATCH; a presentation edge appears only after confirmation for the exact requested Chat and Pod.
+The Connectors menu switches the bound Pod (or none) and the Chat's MCP server selection directly;
+switching to another Pod replaces the binding and invalidates the earlier binding's grants and
+approvals. Cancelled/superseded UI requests and late replies cannot create an edge for a different
+selection. A workspace node, drag payload or display of a verified Pod never grants authority. The
+menu's Access control disables modes above the ceiling. An unselected Chat resolves to Full access
+within the deployment ceiling (owner decision 2026-11-02); a narrower explicit ceiling still caps
+it.
 
 Ask for approval and Supervised workspace require a concrete write approval. Full access omits
 per-action write approval only inside current validated authority. Approvals bind the canonical turn,
 action digest, arguments and current subject generations; the mutation journal claims an approval
-once at actual mutation dispatch, after metadata reads. Every mode still needs first-read consent,
-including the metadata reads required to prepare a mutation. Mixed Data-Pod/Jira turns preserve
+once at actual mutation dispatch, after metadata reads. Metadata reads that prepare a mutation use
+the same server-established read grant as any other read. Mixed Data-Pod/Jira turns preserve
 existing grounding citations and attribute Jira results separately; their orchestration phases share
 the accepted turn's Authority Envelope, while the grounded answer keeps its own synthesis grant
 (ADR-0181, amended for #4175).
@@ -1560,8 +1570,8 @@ A synced pod, and every live read or write action, reflects the visibility and p
 **token identity at the moment of the call** — a point-in-time snapshot, not a live or continuously
 re-evaluated permission set. Keiko does not replicate Confluence space permissions or Jira
 project/issue-level security schemes into a local ACL over synced content. Ordinary Chat calls
-additionally require the current Keiko actor-owned binding, authority, read consent and any concrete
-write approval; those checks never widen the Atlassian identity's permissions. The synced-content
+additionally require the current Keiko actor-owned binding, authority, server-established read
+grant and any concrete write approval; those checks never widen the Atlassian identity's permissions. The synced-content
 limitation must be documented wherever a connector or its persisted knowledge is presented.
 
 **Guidance for regulated deployments:** use a dedicated service-account API token scoped to only
@@ -1569,7 +1579,7 @@ the projects/spaces the deployment intends to expose, rather than a broad person
 local pod inherits that token's full read scope for every local user of the workspace the pod is
 part of. Rotate the token on the organization's existing credential-rotation cadence. The `authRef`
 and Live-Pod identity stay stable, while custody and matching Chat bindings advance their
-generations and access remains unavailable until verification and fresh consent. Treat a synced
+generations and access remains unavailable until verification succeeds again. Treat a synced
 pod as equivalent, from an access-control perspective,
 to a local export of everything that token could read at sync time, and govern its local retention
 and distribution accordingly.

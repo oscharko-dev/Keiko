@@ -4,7 +4,7 @@ import { createCodingToolInvocationRegistry } from "./coding-runtime/codingToolI
 import { processServerLogSink } from "./process-log-sink.js";
 import { defaultServerDiagnosticSink } from "./diagnostics-log.js";
 import {
-  waitForChatToolReadConsent,
+  acceptChatToolReadGrant,
   waitForChatToolWriteConsent,
   refreshChatToolWriteApproval,
   type ChatToolApprovalContext,
@@ -69,7 +69,7 @@ import type { ManagedProviderCatalog } from "./tool-catalog/managedProviderCatal
 import { requireDispatch } from "./tool-catalog/catalogToolErrors.js";
 
 const TOOL_TURN_RULES =
-  "When the user requests an operation supported by an offered tool, invoke the matching tool to request Keiko's required read consent or action approval. Keiko presents the actual consent or approval control and waits for any required decision before the effect. Asking for permission in prose does not open or replace those controls. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, consent, approval and budget checks remain binding.";
+  "When the user requests an operation supported by an offered tool, invoke the matching tool. If the Chat's mode requires an action approval, Keiko presents the approval control and waits for the decision before the effect; asking for permission in prose does not replace it. Invoke modifying tools only when the user has actually requested that change. Server authority, mode, approval and budget checks remain binding.";
 const TOOL_TURN_INSTRUCTION: GatewayMessage = { role: "system", content: TOOL_TURN_RULES };
 
 type AnswerCorrectionLog =
@@ -191,8 +191,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       writeExchange: (id) => this.writeExchange(id),
     };
   }
-  protected waitForReadConsent(grant: ChatToolReadGrantView, signal: AbortSignal): Promise<void> {
-    return waitForChatToolReadConsent(this.approvalContext(signal), grant);
+  protected waitForReadConsent(grant: ChatToolReadGrantView): Promise<void> {
+    return acceptChatToolReadGrant({ ...this.options, publish: () => this.publish() }, grant);
   }
   protected waitForWriteConsent(
     approval: ChatToolWriteApprovalView,
@@ -219,7 +219,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     }) => readonly string[] | undefined;
   } {
     return {
-      requestReadConsent: (grant, signal) => this.waitForReadConsent(grant, signal),
+      requestReadConsent: (grant) => this.waitForReadConsent(grant),
       requestWriteConsent: (approval, signal) => this.waitForWriteConsent(approval, signal),
       reviewableWrite: (action) => this.reviewableWrite(action),
       draftItemRefs: (action) => this.draftItemRefs(action),

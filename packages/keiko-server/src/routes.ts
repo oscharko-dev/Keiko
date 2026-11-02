@@ -418,7 +418,6 @@ import {
   handleListAtlassianConnectorActionApprovals,
   handleRejectAtlassianConnectorActionApproval,
 } from "./atlassian/writeActionRoutes.js";
-import { CHAT_READ_CONSENT_ROUTE_GROUP } from "./atlassian/chatReadConsentRoutes.js";
 import { JIRA_DRAFT_ROUTE_GROUP } from "./atlassian/jiraDraftRoutes.js";
 import { JIRA_REPORT_ROUTE_GROUP } from "./atlassian/jiraReportRoutes.js";
 import { CHAT_WRITE_APPROVAL_ROUTE_GROUP } from "./atlassian/chatWriteApprovalRoutes.js";
@@ -1751,7 +1750,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/diagnostics/report/download/:downloadId",
     handler: handleDownloadSupportReport,
   },
-  ...CHAT_READ_CONSENT_ROUTE_GROUP,
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
   ...JIRA_REPORT_ROUTE_GROUP,
   ...JIRA_DRAFT_ROUTE_GROUP,

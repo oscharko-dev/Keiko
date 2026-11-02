@@ -27,6 +27,7 @@ import type { TraceSession } from "../requirement-trace.js";
 import {
   executeJiraChatDraft,
   jiraDraftChildIntent,
+  JIRA_DRAFT_UNTRACED_GUIDANCE,
   JIRA_DRAFT_EXISTING_GUIDANCE,
   JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
   JIRA_DRAFT_PENDING_GUIDANCE,
@@ -742,8 +743,9 @@ describe("source traceability of a draft (#4179)", () => {
     ],
   } as unknown as CatalogJsonObject;
 
-  function session(close: () => void): TraceSession {
+  function session(close: () => void, units = 1): TraceSession {
     return {
+      unitCount: () => units,
       resolve: (references) =>
         references.includes("aaaaaaaa:LH-001")
           ? { ok: true, trace: TRACE }
@@ -870,6 +872,59 @@ describe("source traceability of a draft (#4179)", () => {
     expect((jira.posts()[0] as { fields: Record<string, unknown> }).fields).not.toHaveProperty(
       "description",
     );
+  });
+
+  it("returns a draft that names no requirement once with guidance when the Pods hold some (S14)", async () => {
+    const jira = syntheticJira();
+    let advised = false;
+    const adviseUntraced = vi.fn((): boolean => {
+      if (advised) return false;
+      advised = true;
+      return true;
+    });
+    const input = {
+      ...execution(jira),
+      openTrace: (): TraceSession => session(vi.fn()),
+      adviseUntraced,
+    };
+
+    const first = await executeJiraChatDraft(input);
+
+    expect(first.isError).toBe(true);
+    expect(first.data).toMatchObject({
+      outcome: "rejected",
+      requirementRefusal: "untraced",
+      guidance: JIRA_DRAFT_UNTRACED_GUIDANCE,
+      items: [],
+    });
+    expect(jira.posts()).toHaveLength(0);
+
+    // Sending the same draft again is the person's choice to create it as it is.
+    const second = await executeJiraChatDraft(input);
+
+    expect(second.data).toMatchObject({ outcome: "succeeded", createdCount: 4 });
+    expect(jira.posts()).toHaveLength(4);
+    expect(adviseUntraced).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not advise when the Pods hold no requirement or an item names one", async () => {
+    const adviseUntraced = vi.fn(() => true);
+    const empty = syntheticJira();
+    await executeJiraChatDraft({
+      ...execution(empty),
+      openTrace: () => session(vi.fn(), 0),
+      adviseUntraced,
+    });
+    const traced = syntheticJira();
+    await executeJiraChatDraft({
+      ...execution(traced, TRACED),
+      openTrace: () => session(vi.fn()),
+      adviseUntraced,
+    });
+
+    expect(adviseUntraced).not.toHaveBeenCalled();
+    expect(empty.posts()).toHaveLength(4);
+    expect(traced.posts()).toHaveLength(2);
   });
 
   it("reconciles a re-run to the existing issue instead of tracing a second one", async () => {

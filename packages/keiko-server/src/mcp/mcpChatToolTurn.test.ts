@@ -18,10 +18,10 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext } from "../routes.js";
-import { handleDecideChatReadConsent } from "../atlassian/chatReadConsentRoutes.js";
 import { handleDecideChatWriteApproval } from "../atlassian/chatWriteApprovalRoutes.js";
 import { installJiraChatCatalogRuntime } from "../atlassian/jiraChatCatalogRuntime.js";
 import { installMcpChatCatalogRuntime } from "./mcpChatCatalogRuntime.js";
+import { isCurrentMcpChatReadGrant } from "./mcpChatAuthority.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 
 const cleanup: (() => Promise<void>)[] = [];
@@ -118,6 +118,7 @@ function model(calls: GatewayCallRequest[], write: boolean): ModelPort {
 function fixture(
   write = false,
   responseLoss = false,
+  unselectedMode = false,
 ): {
   deps: UiHandlerDeps;
   root: string;
@@ -126,6 +127,8 @@ function fixture(
   effects: string[];
   server: McpServerDefinition;
   connectionLifetime: AbortController;
+  /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
+  acceptedReadGrants: string[];
 } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-mcp-chat-")));
   const calls: GatewayCallRequest[] = [];
@@ -207,8 +210,29 @@ function fixture(
   });
   configure(deps);
   deps.store.createProject(root);
-  const chat = deps.store.createChat(root, "Synthetic MCP", MODEL);
-  return { deps, root, chatId: chat.id, calls, effects, server, connectionLifetime };
+  const created = deps.store.createChat(root, "Synthetic MCP", MODEL);
+  // Writes need their concrete approval only in Ask for approval; an unselected Chat is Full access.
+  const chat = unselectedMode
+    ? created
+    : deps.store.updateChat(created.id, { toolMode: "governed-assist" });
+  const acceptedReadGrants: string[] = [];
+  const registry = deps.atlassianActionApprovalRegistry;
+  if (registry === undefined) throw new Error("Missing approval registry");
+  const accept = registry.acceptChatReadGrant.bind(registry);
+  vi.spyOn(registry, "acceptChatReadGrant").mockImplementation((grantId, ...rest) => {
+    acceptedReadGrants.push(grantId);
+    return accept(grantId, ...rest);
+  });
+  return {
+    deps,
+    root,
+    chatId: chat.id,
+    calls,
+    effects,
+    server,
+    connectionLifetime,
+    acceptedReadGrants,
+  };
 }
 function send(
   f: ReturnType<typeof fixture>,
@@ -226,36 +250,23 @@ function send(
     f.deps,
   );
 }
-async function approveRead(f: ReturnType<typeof fixture>): Promise<void> {
-  await vi.waitFor(() => {
-    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
-      "pending",
-    );
+function acceptedReadGrantStates(
+  f: ReturnType<typeof fixture>,
+): readonly { kind: string; state: string }[] {
+  return f.acceptedReadGrants.map((grantId) => {
+    const grant = f.deps.atlassianActionApprovalRegistry?.getChatReadGrant(grantId)?.grant;
+    if (grant === undefined) throw new Error("Missing accepted read grant");
+    return { kind: grant.kind, state: grant.state };
   });
-  const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
-  if (grant === undefined) throw new Error("Missing read disclosure");
-  expect(grant.kind).toBe("mcp-chat-read");
-  expect(f.effects).toEqual([]);
-  expect(
-    (
-      await handleDecideChatReadConsent(
-        context(
-          { decision: "approve", disclosureVersion: grant.disclosureVersion },
-          { approvalId: grant.grantId },
-        ),
-        f.deps,
-      )
-    ).status,
-  ).toBe(200);
 }
 
-it("runs a configured MCP read through ordinary Chat without a Pod or Coding session", async () => {
+it("runs a configured MCP read through ordinary Chat without a Pod, a Coding session or a consent", async () => {
   const f = fixture();
-  const pending = send(f);
-  void pending.catch(() => undefined);
-  await approveRead(f);
-  expect((await pending).status).toBe(200);
+  expect((await send(f)).status).toBe(200);
   expect(f.effects).toEqual(["get_status"]);
+  // The configured server is the consent: the server accepts its own read grant and writes no part.
+  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe("granted");
+  expect(acceptedReadGrantStates(f)).toEqual([{ kind: "mcp-chat-read-grant", state: "granted" }]);
   expect(
     f.calls[1]?.messages.some(
       (message) => message.role === "tool" && message.content.includes("synthetic-ready"),
@@ -271,7 +282,6 @@ it("keeps a configured mutation effect at zero until its exact approval, then jo
   const f = fixture(true);
   const pending = send(f);
   void pending.catch(() => undefined);
-  await approveRead(f);
   await vi.waitFor(() => {
     expect(
       f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
@@ -308,15 +318,23 @@ it("keeps a configured mutation effect at zero until its exact approval, then jo
   expect(f.effects).toEqual(["create_note"]);
 });
 
-it("revokes a pending consent when an unrelated configured server is added", async () => {
-  const f = fixture();
+it("resolves Full access for a Chat without a mode and runs a configured write without an approval", async () => {
+  const f = fixture(true, false, true);
+  expect(f.deps.store.findChatById(f.chatId)?.toolMode).toBe("autonomous-delivery");
+  expect((await send(f)).status).toBe(200);
+  expect(f.effects).toEqual(["create_note"]);
+  const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+  expect(transcript?.readGrant?.state).toBe("granted");
+  expect(transcript?.exchanges[0]?.approval).toBeUndefined();
+  expect(transcript?.exchanges[0]?.mutationOutcome).toBe("succeeded");
+  expect(acceptedReadGrantStates(f)).toEqual([{ kind: "mcp-chat-read-grant", state: "granted" }]);
+});
+
+it("revokes a pending write and stales the accepted read grant when an unrelated configured server is added", async () => {
+  const f = fixture(true);
   const pending = send(f);
   void pending.catch(() => undefined);
-  await vi.waitFor(() => {
-    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
-      "pending",
-    );
-  });
+  const approval = await pendingWrite(f);
   const snapshot = f.deps.mcpSettings?.read("mcp-chat-test");
   if (snapshot === undefined) throw new Error("Missing settings");
   f.deps.mcpSettings?.update(
@@ -329,8 +347,14 @@ it("revokes a pending consent when an unrelated configured server is added", asy
   );
   await pending;
   expect(f.effects).toEqual([]);
-  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).not.toBe(
-    "granted",
+  expect((await decideWrite(f, approval)).status).not.toBe(200);
+  // The retained grant stays recorded but no longer matches the changed configuration.
+  const grant = f.deps.atlassianActionApprovalRegistry?.getChatReadGrant(
+    f.acceptedReadGrants[0] ?? "missing",
+  );
+  if (grant === undefined) throw new Error("Missing accepted read grant");
+  expect(isCurrentMcpChatReadGrant(f.deps, grant, new Date().toISOString(), "mcp-chat-test")).toBe(
+    false,
   );
 });
 
@@ -363,7 +387,6 @@ it.each(["replace", "delete"] as const)(
     const f = fixture(true);
     const pending = send(f);
     void pending.catch(() => undefined);
-    await approveRead(f);
     const approval = await pendingWrite(f);
     const settings = f.deps.mcpSettings;
     if (settings === undefined) throw new Error("Missing settings");
@@ -390,7 +413,6 @@ it("retains an unknown remote effect and never writes again on duplicate deliver
   const f = fixture(true, true);
   const pending = send(f);
   void pending.catch(() => undefined);
-  await approveRead(f);
   const approval = await pendingWrite(f);
   expect((await decideWrite(f, approval)).status).toBe(200);
   expect((await pending).status).toBe(200);
@@ -439,50 +461,34 @@ it("preserves dependency graph identity and disposes each runtime without recurs
   expect(dispose).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "revokes pending consent at the invocation deadline (write=%s)",
-  async (write) => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-    try {
-      const f = fixture(write);
-      const pending = send(f);
-      void pending.catch(() => undefined);
-      if (write) {
-        await approveRead(f);
-        await pendingWrite(f);
-      } else {
-        await vi.waitFor(() => {
-          expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
-            "pending",
-          );
-        });
-      }
-      await vi.advanceTimersByTimeAsync(60_001);
-      await pending;
-      const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
-      expect(write ? transcript?.exchanges[0]?.approval?.state : transcript?.readGrant?.state).toBe(
-        "revoked",
-      );
-      expect(f.effects).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
-  },
-);
+it("revokes a pending write approval at the invocation deadline", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    const f = fixture(true);
+    const pending = send(f);
+    void pending.catch(() => undefined);
+    await pendingWrite(f);
+    await vi.advanceTimersByTimeAsync(60_001);
+    await pending;
+    const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+    expect(transcript?.exchanges[0]?.approval?.state).toBe("revoked");
+    expect(f.effects).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});
 
-it("revokes pending consent when its actual connection closes without a Settings change", async () => {
-  const f = fixture();
+it("revokes a pending write approval when its actual connection closes without a Settings change", async () => {
+  const f = fixture(true);
   const pending = send(f);
   void pending.catch(() => undefined);
-  await vi.waitFor(() => {
-    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
-      "pending",
-    );
-  });
+  await pendingWrite(f);
   const revision = f.deps.mcpSettings?.read("test").revision;
   f.connectionLifetime.abort();
   await pending;
   expect(f.effects).toEqual([]);
   expect(f.deps.mcpSettings?.read("test").revision).toBe(revision);
-  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe("revoked");
+  expect(
+    f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state,
+  ).toBe("revoked");
 });

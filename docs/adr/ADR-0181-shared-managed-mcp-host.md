@@ -119,7 +119,7 @@ HTTP acknowledgement is recorded before parsing a response or evaluating late ca
 A cancelled or denied catalog result retains its original closed envelope and null data;
 its separately validated, canonical journal observation is retained as `mutationOutcome`
 on the existing Chat exchange. The same projection reaches the live model continuation,
-reloaded history, compaction, and result card. Approval state reports consent only and does
+reloaded history, compaction, and result card. Approval state reports the decision only and does
 not imply a remote effect. A failed UI decision request requires an explicit state refresh;
 it never causes an automatic mutation or approval POST retry.
 
@@ -307,9 +307,22 @@ set for the canonical user message. Both envelopes must agree on actor, Chat, mo
 deadline and limits, and share the same cumulative usage object. Re-registration cannot add,
 remove or replace a source or reset its budget. Current facts for both sources are rechecked
 before model work and each effect; revocation terminates authority across the accepted set.
-The transcript retains one current read-consent view per source kind, with its legacy
+The transcript retains one current read-grant view per source kind, with its legacy
 single `readGrant` field projecting the latest update. Existing single-source transcripts
 and execution paths remain valid.
+
+**Per-Chat and per-run connector selection (owner decision 2026-11-02).** The person picks, in the
+Chat composer's Connectors menu, which centrally configured MCP servers and which Jira Pod a Chat
+offers to its model; the Coding Workbench composer offers the same menu for a run (`mcpServers` and
+`jiraPodId` on the start request). An absent MCP selection offers every enabled server; a list
+offers exactly those enabled servers; a disabled server stays unavailable whatever was selected.
+An unselected server or Pod contributes no tools and no context. The Chat's MCP authority binds a
+configuration digest of the registry revision and the selection, so changing the selection
+invalidates the earlier selection's read grants and write approvals. A Coding run's selection
+narrows the relay registry and the native read roots for that run only. The selection is
+presentation-owned state, never an Authority Envelope; the existing catalog, binder and
+authority checks remain authoritative. `chat.scope.update` records the selection only as
+`mcpServerSelectionCount`.
 
 Mixed Chat turns create that same accepted-turn authority before continuity, memory and
 retrieval preparation. Existing grounding owners assemble their evidence packs before
@@ -337,24 +350,24 @@ This exception never changes Memory admission, capture mode, or its deployment c
 Grounded mixed responses use the existing buffered transport and canonical turn owner.
 The ordinary streaming endpoint returns `STREAMING_UNSUPPORTED` before admitting a mixed
 turn, and the client follows its existing buffered fallback. That fallback and any replay
-share the canonical identity; neither dispatches a second remote mutation. Pending read
-consent and exact write approvals remain visible through the existing canonical-row GET
-observer while the buffered grounded request is running.
+share the canonical identity; neither dispatches a second remote mutation. Exact write
+approvals remain visible through the existing canonical-row GET observer while the buffered
+grounded request is running.
 
-Accepted read disclosure consent is retained in the existing private SQLite store by the
-existing approval registry, bounded by the original subject, disclosure version, proof
+An accepted read grant (server-established, owner decision 2026-11-02) is retained in the
+existing private SQLite store by the existing approval registry, bounded by the original subject, disclosure version, proof
 and expiry. Its originating turn reference remains provenance, not an execution lease
 restored after restart. A later turn must independently pass its current authority,
 custody, generation, model-capability and budget checks. Pending decisions still require
 their exact live origin authority and are revoked during shutdown. Lifecycle revocation
-persists; clean shutdown preserves only already granted consent. No turn authority,
-usage budget or pending write approval is restored from this record. Consent waits observe
-the turn's composite cancellation signal, including a shorter synthesis budget. Cancelling
-unfulfilled consent or an unclaimed write revokes that decision; already granted read
-consent remains governed by its original expiry and current authority checks. Shutdown
+persists; clean shutdown preserves only already granted read grants. No turn authority,
+usage budget or pending write approval is restored from this record. Write-approval waits
+observe the turn's composite cancellation signal, including a shorter synthesis budget.
+Cancelling an unclaimed write revokes that decision; an already granted read grant remains
+governed by its original expiry and current authority checks. Shutdown
 also drains local waiters when a concurrent registry has already advanced the durable row.
 
-If the process stops between the private consent commit and its transcript acknowledgement,
+If the process stops between the private grant commit and its transcript acknowledgement,
 history reads project the decision only onto the exact originating canonical message and
 matching grant identity, generations, disclosure and expiry. The projection never changes
 the stored transcript or resumes its turn. Existing read-grant observation events retain

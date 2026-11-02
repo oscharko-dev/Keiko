@@ -39,8 +39,13 @@ accepted Coding mode and the Coding deployment ceiling; their authority must not
 through the independent Memory capture policy, even though the Chat wire carries that mode in
 the shared request field. Existing description-scope and envelope validation still apply.
 
-Epic #4081 / #4084 adds ordinary Chat's persisted tool-mode selection, defaulting to Ask for
-approval, and one opaque Jira Pod binding with monotonic binding/authentication generations.
+Epic #4081 / #4084 adds ordinary Chat's persisted tool-mode selection and one opaque Jira Pod
+binding with monotonic binding/authentication generations. An unselected Chat resolves to Full
+access within the deployment ceiling (owner decision 2026-11-02: "full access is generally
+allowed"); legacy rows that stored the former Ask default migrate to Full access, while an explicit
+Supervised or Full selection is kept. The same Chat row stores an optional MCP server selection:
+absent offers every enabled server, a list offers exactly those, and an unselected server
+contributes no tools and no context.
 The authenticated Chat PATCH path requires the current scope identity for Jira or mode intent,
 rejects server-owned generation fields, resolves only a verified Pod belonging to the server's
 current operator, and rechecks that selection inside the existing serialized application path.
@@ -169,7 +174,7 @@ admissible, with a narrower read-only scope supported. No synthetic repository, 
 Coding/Editor session is needed. Unknown fields, invalid generations, inconsistent effective
 modes and non-Jira capabilities fail structural validation with content-free diagnostics.
 This contract does not itself confer authority: registration, current-state revalidation,
-read consent, approvals and budget reservation remain server responsibilities.
+read grants, approvals and budget reservation remain server responsibilities.
 
 The existing `EditorAgentAuthorityRegistry` retains both Coding and Chat variants in one
 bounded store. Its historical name does not imply an Editor session. Consumer-specific
@@ -194,7 +199,7 @@ owners for each resolution, including verification/custody readiness and the cur
 It compares the current mode and generations before returning the registry-approved envelope
 and private connection metadata. Connection PATCH shares the same readiness predicate, so a
 previous successful verification cannot authorize attachment while a new probe is pending.
-This resolver alone does not grant read consent, approve an action, reserve a budget or dispatch
+This resolver alone does not grant a read grant, approve an action, reserve a budget or dispatch
 an external effect; consumers must compose those existing gates before execution.
 
 Coding and Chat pass the same mode, action-class and connector-scope facets to the existing
@@ -202,7 +207,7 @@ Atlassian action policy. Its strictest disposition remains authoritative; a revi
 read needs the accepted Chat read grant, and a review-required write needs its concrete action
 approval. Policy inspection does not reserve budget. Chat reservation refreshes owned live
 facts before charging the same cumulative authority owner. Neither helper dispatches tools or
-substitutes for explicit consent to model transmission.
+substitutes for the server-established read grant that covers model transmission.
 
 The private Jira read-grant contract separately binds actor, Chat, Pod, generations and expiry.
 Its versioned disclosure covers model transmission and conversation retention, without write
@@ -213,7 +218,7 @@ actor/proof facts.
 
 The existing Atlassian approval owner retains these Chat read grants in its same bounded map,
 with a discriminator that excludes them from legacy approval retrieval and consumption.
-Pending grants retain the original authority reference; active consent can be reused only for
+Pending grants retain the original authority reference; an active grant can be reused only for
 the same current subject while the execution path independently establishes fresh valid
 authority. Acceptance is idempotent without extending TTL or replacing its proof. The owner
 snapshots private facts, handles expiry and supports per-Chat revocation and isolated disposal.
@@ -227,31 +232,31 @@ optimistic previews, stale conflicts and unchanged selections do not. Graph disp
 only its own owner with the disposal correlation. Observed tool-call auth failures still require
 their execution-entrypoint integration.
 
-Human read consent uses a typed subresource of the existing approval API. Its public card omits
-private actor/authority/proof facts; its bounded, closed decision carries only approval/rejection
-and the current disclosure version. The server re-resolves ownership, binding, verification,
-original authority, read scope and grant lifetime after reading the body, and computes acceptance
-evidence itself. Legacy approval routes cannot consume these grants. Consent changes only the
-existing retained record and never dispatches a tool. The current-state authority owner now
-requests/reuses consent through that same bounded approval owner. It preserves a retained
+Reads never ask the person (owner decision 2026-11-02). The former human read-consent
+subresource of the approval API and its Chat card are retired; the server accepts its own pending
+read grant when the read is admitted, computing the acceptance evidence itself after re-resolving
+ownership, binding, verification, original authority, read scope and grant lifetime. Legacy
+approval routes cannot consume these grants. Acceptance changes only the existing retained record
+and never dispatches a tool. The current-state authority owner requests/reuses the grant through
+that same bounded approval owner. It preserves a retained
 request's issuing authority and expiry, validates both current and issuing authority on reuse,
 and does not automatically repeat a rejected request within the same authority. Expiry is
 bounded by the issuing authority and existing approval TTL. The private ordinary-Chat read
 consumer uses the shared catalog binder and MCP routes without a Coding session. Its admission
-ports require that consent in every mode, re-resolve current authority before reservation and
-recheck consent/authority at each HTTP effect and again before publishing the read result.
+ports require that grant in every mode, re-resolve current authority before reservation and
+recheck grant/authority at each HTTP effect and again before publishing the read result.
 A successful response arriving after access loss is discarded without exposing its data; its
 already-performed effect retains the shared budget charge and one terminal settlement. A completed UI notification is not approval; the
-existing approval owner must contain the accepted record. Catalog offers create no consent
+existing approval owner must contain the accepted record. Catalog offers create no read-grant
 requests. The existing Harness counter owner is available to non-Coding compositions; the binder
 retains reservation, cancellation and settlement ownership. Concrete write approval, ordinary Chat orchestration and UI composition remain integration
 requirements. The application graph owns the lazy shared host (ADR-0181). Turn
-settlement must preserve valid Chat consent within its retained scope and expiry; the normal-Chat
+settlement must preserve a valid Chat read grant within its retained scope and expiry; the normal-Chat
 lifecycle must still prove that it does not revoke the issuing authority at each turn boundary.
 
 Accepted-turn authority minting reads the persisted human user message and current owned,
 verified Chat binding. It derives mode/ceiling and acceptance evidence server-side, retains
-the existing authority registry and grants no read consent or concrete write approval. The
+the existing authority registry and grants no read grant or concrete write approval. The
 same turn deadline bounds `expiresAt` and runtime. The envelope budget is the turn's only bound
 (#4175, owner decision 2026-10-31): the shared Chat tool loop derives its iteration and model-call
 ceilings from it rather than from the coding-harness defaults, and the stored tool transcript holds

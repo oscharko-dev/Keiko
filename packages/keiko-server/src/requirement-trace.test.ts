@@ -101,6 +101,14 @@ describe("trace session", () => {
     expect(resolution.trace.replaceLabelPrefixes).toEqual(["keiko-rev-"]);
   });
 
+  it("counts the units the Chat's Pods hold for the untraced-draft advisory", async () => {
+    const { open } = await session([{ capsuleId: "cap-a", text: specification(5).text }]);
+    const trace = open();
+
+    expect(trace.unitCount()).toBe(5);
+    trace.close();
+  });
+
   it("accepts a plain identifier that is unique and refuses it when two documents define it", async () => {
     const unique = await session([{ capsuleId: "cap-a", text: specification(3).text }]);
     const clash = await session([

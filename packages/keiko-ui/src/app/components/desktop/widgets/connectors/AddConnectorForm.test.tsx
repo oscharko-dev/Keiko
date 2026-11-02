@@ -208,11 +208,11 @@ it("retains the Jira creation identity when an uncertain response is retried", a
   await user.type(screen.getByLabelText("Label"), "Lab Jira");
   await user.type(screen.getByLabelText("Base URL"), "https://jira.example.invalid");
   await user.type(screen.getByLabelText("API token"), TOKEN);
-  await user.click(screen.getByRole("button", { name: "Save connector" }));
+  await user.click(screen.getByRole("button", { name: "Create Jira Pod" }));
   await screen.findByRole("alert");
   expect(screen.getByLabelText("API token")).toHaveValue("");
   await user.type(screen.getByLabelText("API token"), TOKEN);
-  await user.click(screen.getByRole("button", { name: "Save connector" }));
+  await user.click(screen.getByRole("button", { name: "Create Jira Pod" }));
   await waitFor(() => expect(close).toHaveBeenCalledOnce());
   expect(create).toHaveBeenCalledTimes(2);
   expect(create.mock.calls[1]?.[0]).toEqual(create.mock.calls[0]?.[0]);

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { isGroundingScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { errorBody } from "../route-error.js";
 import type { RouteResult } from "../routes.js";
 import type {
@@ -98,21 +99,26 @@ function canonicalGitChangeScope(scope: ChatGitChangeScope): CanonicalGitChangeS
   };
 }
 
+// A Chat that never had a Jira Pod binding keeps its pre-Jira identity: no `jira` key at all.
+function canonicalJiraScope(chat: Chat): { readonly jira?: Record<string, unknown> } {
+  if ((chat.jiraBindingGeneration ?? 0) === 0 && chat.jiraPodBinding === undefined) return {};
+  return {
+    jira: {
+      podId: chat.jiraPodBinding?.podId ?? null,
+      authenticationGeneration: chat.jiraPodBinding?.authenticationGeneration ?? null,
+      bindingGeneration: chat.jiraBindingGeneration ?? 0,
+      mode: chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE,
+    },
+  };
+}
+
 function canonicalGroundingScope(chat: Chat): string {
   return JSON.stringify({
     connected: canonicalConnectedScopes(chat),
     local: deduplicateAndSort(localKnowledgeScopes(chat).map(canonicalLocalKnowledgeScope)),
     gitChange: deduplicateAndSort(gitChangeScopes(chat).map(canonicalGitChangeScope)),
-    ...((chat.jiraBindingGeneration ?? 0) === 0 && chat.jiraPodBinding === undefined
-      ? {}
-      : {
-          jira: {
-            podId: chat.jiraPodBinding?.podId ?? null,
-            authenticationGeneration: chat.jiraPodBinding?.authenticationGeneration ?? null,
-            bindingGeneration: chat.jiraBindingGeneration ?? 0,
-            mode: chat.toolMode ?? "governed-assist",
-          },
-        }),
+    ...canonicalJiraScope(chat),
+    ...(chat.mcpServers === undefined ? {} : { mcp: [...chat.mcpServers].sort() }),
   });
 }
 

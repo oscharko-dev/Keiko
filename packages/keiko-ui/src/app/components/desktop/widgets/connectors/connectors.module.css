@@ -337,3 +337,83 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+/* Jira Pod card (owner decision 2026-11-02): name, base URL and a status chip in one row, one
+   visible primary action, everything else behind the "…" menu. */
+.cmpPodHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+}
+
+/* The identity keeps a readable width; when the window is narrow the chip and the actions wrap
+   below it instead of squeezing the name. */
+.cmpPodIdentity {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.cmpPodChip {
+  white-space: nowrap;
+}
+
+.cmpPodUrl {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpPodMenu {
+  position: relative;
+}
+
+.cmpPodMenuTrigger {
+  min-width: 32px;
+  padding-inline: 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.cmpPodMenuList {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  display: grid;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-overlay);
+  box-shadow: 0 8px 30px #0003;
+}
+
+.cmpPodMenuItem {
+  min-height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-control);
+  font: inherit;
+  font-size: 13px;
+  text-align: start;
+  white-space: nowrap;
+  color: var(--fg);
+  background: transparent;
+  cursor: pointer;
+}
+
+.cmpPodMenuItem:hover,
+.cmpPodMenuItem:focus-visible {
+  outline: none;
+  background: var(--menu-item-surface-hover);
+}
+
+.cmpPodMenuItem[data-danger="true"] {
+  color: var(--feedback-danger);
+}
+
+.cmpPodActions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}

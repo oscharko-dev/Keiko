@@ -10,23 +10,21 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.live.saveToken": "Save token",
   "atlassianConnectors.live.saving": "Saving changes…",
   "atlassianConnectors.live.rotateHint":
-    "The Pod and its Chat connections stay in place. Replacing the token stops current access and pending work. Verify the connection again and grant new Chat consent before continuing.",
+    "The Pod and its Chat connections stay. Replacing the token stops current access and pending actions; verify the connection again afterwards.",
   "atlassianConnectors.live.operationFailed":
     "The operation could not be confirmed. Refresh the Pod status before making another change.",
   "atlassianConnectors.live.refresh": "Refresh status",
-  "atlassianConnectors.live.refreshRequired":
-    "The current connection status is unknown. Refresh it before using this Pod.",
-  "atlassianConnectors.live.verifyRequired": "Verify this connection before using it in Chat.",
+  "atlassianConnectors.live.more": "More actions: {name}",
+  "atlassianConnectors.live.state.unknown": "Status unknown",
+  "atlassianConnectors.live.state.ready": "Ready",
+  "atlassianConnectors.live.refreshRequired": "Refresh the status before using this Pod.",
+  "atlassianConnectors.live.verifyRequired": "Verify the connection before using this Pod.",
   "atlassianConnectors.live.remove": "Remove Pod",
   "atlassianConnectors.live.keep": "Keep Pod",
   "atlassianConnectors.live.removeConfirm":
-    "Remove this Jira Pod and its saved token? This disconnects all connected Chats and cancels their pending permissions.",
-  "atlassianConnectors.live.capabilities":
-    "Chat can search and read Jira issues and metadata, and create, edit, assign, comment on or change the status of issues. Jira permissions and Chat approvals govern each action.",
-  "atlassianConnectors.live.readCapabilities":
-    "Chat can search and read Jira issues and metadata after your consent. Access still depends on the Jira account permissions.",
+    "Remove this Jira Pod and its token? Connected Chats are disconnected.",
   "atlassianConnectors.live.patHint":
-    "Create a personal access token in your Jira profile. It is used only to save this connection and is never shown again.",
+    "Create a personal access token in your Jira profile. It is never shown again.",
   "atlassianConnectors.live.displayNamePlaceholder": "e.g. Jira Data Center",
   "atlassianConnectors.live.baseUrlPlaceholder": "https://jira.example.com",
 
@@ -93,10 +91,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.write.pendingHelp":
     "No final outcome is available. This does not confirm an active execution, and the action is not retried automatically.",
 
-  "atlassianConnectors.live.empty": "No Jira Pods yet. Create one to connect Jira to a Chat.",
-  "chat.jira.connection": "Jira connection",
-  "chat.jira.podLabel": "Jira Pod",
-  "chat.jira.noPod": "No Jira Pod",
+  "atlassianConnectors.live.empty": "No Jira Pods yet.",
   "chat.jira.podUnavailable": "Current Pod unavailable",
   "chat.jira.verifyRequired": "Verification required",
   "chat.jira.addToWorkspace": "Add to workspace",
@@ -105,27 +100,18 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.jira.liveTools": "Live Jira tools",
   "chat.jira.liveReady": "Verified Jira Pod",
   "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
-  "chat.jira.effectiveMode": "Effective mode: {mode}",
-  "chat.jira.modeLabel": "Chat autonomy mode",
-  "chat.jira.modeHelp":
-    "The first Jira read always requires consent. Deployment limits and the current Chat permissions continue to apply.",
-  "chat.jira.replaceConfirm": "Replace the current Jira Pod and revoke its pending permissions.",
-  "chat.jira.apply": "Apply Jira settings",
-  "chat.jira.connectionFailed":
-    "Jira settings could not be loaded or saved. Reopen this control to refresh and retry.",
-  "chat.jira.bound": "Jira Pod connected by the server",
-  "chat.jira.unbound": "No Jira Pod connected",
+  "chat.connectors.title": "Connectors",
+  "chat.connectors.active": "Connectors: {count} active",
+  "chat.connectors.mcp": "MCP servers",
+  "chat.connectors.jira": "Jira Pods",
+  "chat.connectors.manage": "Manage",
+  "chat.connectors.noServers": "No MCP servers set up",
+  "chat.connectors.noPods": "No Jira Pods yet",
+  "chat.connectors.attention": "Check",
+  "chat.connectors.access": "Access",
+  "chat.connectors.failed": "Not saved. Try again.",
   "atlassianConnectors.live.title": "Jira Live Pods",
-  "atlassianConnectors.live.subtitle":
-    "Read current Jira data in a connected Chat with explicit read consent. Live access does not create an index or stored document collection.",
   "atlassianConnectors.live.add": "Create Jira Pod",
-  "chat.tools.connection": "Tool access",
-  "chat.tools.modeHelp":
-    "The selected mode applies to tools in this chat. Reading through MCP or Jira requires consent; writes follow the mode and deployment limits. Configure MCP servers in Settings.",
-  "chat.tools.apply": "Apply tool settings",
-  "chat.mcp.title": "Read MCP data in this chat",
-  "chat.mcp.disclosure":
-    "Content retrieved through configured MCP servers will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the configuration or authority changes. It does not grant permission to write.",
   "chat.mcp.tool": "MCP action",
   "chat.mcp.details": "View MCP result",
   "chat.mcp.writeApproval.title": "Approve MCP action",
@@ -143,18 +129,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "The change may have been applied. It will not be repeated automatically. Check the remote state before starting another write.",
   "chat.mcp.write.pendingHelp":
     "The action has started. Wait for its outcome before starting another write.",
-  "chat.jira.title": "Read Jira in this chat",
-  "chat.jira.disclosure":
-    "Jira content will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the connection or authority changes. It does not grant permission to write.",
-  "chat.jira.approve": "Allow reading",
-  "chat.jira.reject": "Do not allow",
-  "chat.jira.working": "Saving your decision…",
-  "chat.jira.failed": "Your decision could not be saved. Try again.",
-  "chat.jira.pending": "Waiting for your permission",
-  "chat.jira.granted": "Reading allowed",
-  "chat.jira.rejected": "Reading declined",
-  "chat.jira.expired": "Permission expired",
-  "chat.jira.revoked": "Permission revoked",
   "chat.jira.tool": "Jira action",
   "chat.jira.complete": "Completed",
   "chat.jira.running": "Running",
@@ -1595,6 +1569,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
   "chat.context.segment.skill": "Skill instructions",
+  "chat.context.segment.tools": "Tool definitions",
+  "chat.context.connectors": "Connectors",
+  "chat.context.connector.mcp": "MCP server",
+  "chat.context.connector.jira": "Jira Pod",
+  "chat.context.connector.idle": "Not connected",
+  "chat.context.connector.tools": "{count} tools",
+  "chat.context.connector.tools.one": "1 tool",
+  "chat.context.connector.tokens": "~{tokens}",
   "chat.context.notCompacted": "Not compacted",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",
@@ -2881,7 +2863,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.action.jira.assignable-users": "Find assignable Jira users",
   "atlassianConnectors.action.jira.report": "Compute Jira progress, compliance and coverage report",
   "atlassianConnectors.action.jira.draft-stage": "Stage part of a Jira backlog draft",
-  "chat.jira.report.title": "Jira report",
   "chat.jira.report.figures":
     "Figures are computed by Keiko from the Jira data read, not by the model.",
   "chat.jira.report.reading": "Reading Jira: {read} of {total} issues",

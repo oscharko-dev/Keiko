@@ -88,7 +88,7 @@ function context({ issues = [], act = () => ({}), format } = {}) {
         failure: undefined,
         durationMs: 1000,
         toolCalls: toolExchanges.length,
-        approvals: { reads: 1, writes, records },
+        approvals: { writes, records },
       };
     },
     freshChat: async (mode) => {

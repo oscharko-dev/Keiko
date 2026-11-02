@@ -252,7 +252,6 @@ function JiraLivePodsSection({
         <h2 className={`lk-section-head ${styles.cmpEmbeddedTitle}`} id={titleId}>
           {t("atlassianConnectors.live.title")}
         </h2>
-        <p className="acx-subtitle">{t("atlassianConnectors.live.subtitle")}</p>
       </header>
       <ConnectorsSection
         client={client}

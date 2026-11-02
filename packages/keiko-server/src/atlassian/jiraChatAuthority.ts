@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { chatToolTurnBudget } from "../chat-tool-turn-budget.js";
-import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  CHAT_TOOL_DEFAULT_MODE,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { CHAT_TOOL_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import {
@@ -100,7 +103,7 @@ function acceptedTurnEnvelope(
   deploymentCeiling: CodingWorkbenchMode,
   budget: ChatToolAuthorityEnvelope["budget"],
 ): JiraChatAuthorityEnvelope {
-  const requestedMode = facts.chat.toolMode ?? "governed-assist";
+  const requestedMode = facts.chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
   const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
     schemaVersion: "1",
@@ -259,7 +262,7 @@ export function resolveCurrentJiraChatAuthority(
       correlationId,
     );
   if (!isJiraEnvelope(resolution.envelope)) return { ok: false, reason: "invalid" };
-  if (resolution.envelope.requestedMode !== (facts.chat.toolMode ?? "governed-assist")) {
+  if (resolution.envelope.requestedMode !== (facts.chat.toolMode ?? CHAT_TOOL_DEFAULT_MODE)) {
     return recordChatAuthorityResult(
       "current-state",
       { ok: false, reason: "invalid" },

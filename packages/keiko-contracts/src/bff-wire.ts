@@ -356,8 +356,13 @@ export interface Chat {
   readonly jiraPodBinding?: ChatJiraPodBinding | undefined;
   /** Retained after disconnect so a later connection cannot reuse an earlier generation. */
   readonly jiraBindingGeneration?: number;
-  /** Absent legacy selections mean Ask for approval. */
+  /** Absent selections mean `CHAT_TOOL_DEFAULT_MODE` (Full access). */
   readonly toolMode?: CodingWorkbenchMode;
+  /**
+   * Names of the centrally configured MCP servers this Chat offers its model. Absent: every enabled
+   * server; empty: none.
+   */
+  readonly mcpServers?: readonly string[];
   /** Server projection of the current deployment ceiling; never persisted as a selection. */
   readonly toolModeCeiling?: CodingWorkbenchMode;
   /** Current selected mode clamped by the server deployment ceiling. */
@@ -590,6 +595,8 @@ export interface UpdateChatPatch {
   /** Selection intent only; the server resolves and validates the current Pod generation. */
   readonly jiraPodId?: string | null;
   readonly toolMode?: CodingWorkbenchMode;
+  /** Selection intent: server names, or null to offer every enabled server again. */
+  readonly mcpServers?: readonly string[] | null;
   /**
    * When supplied, reject any patch if its scope identity is stale, including title-only,
    * status-only and precondition-only updates. This precondition never grants source access.
@@ -702,6 +709,7 @@ export interface ChatsResponse {
  */
 export type ChatContextSegmentId =
   | "skill"
+  | "tools"
   | "system"
   | "summary"
   | "messages"
@@ -720,7 +728,23 @@ export interface ChatContextSegmentWire {
   readonly count?: number | undefined;
 }
 
+/**
+ * One connector a Chat offers its model: a configured MCP server or the bound Jira Pod. `toolCount`
+ * and `tokens` are the tool definitions it adds to every tool-capable request; both are absent while
+ * its tools are not known yet (an MCP server that is not connected contributes nothing until a
+ * turn or Settings connects it). `name` is the server name, or the Pod's display name when the
+ * server can resolve it.
+ */
+export interface ChatContextConnectorWire {
+  readonly kind: "mcp" | "jira";
+  readonly name?: string | undefined;
+  readonly toolCount?: number | undefined;
+  readonly tokens?: number | undefined;
+}
+
 export interface ChatContextStatusWire {
+  /** The Chat's active connectors; absent when it has none. */
+  readonly connectors?: readonly ChatContextConnectorWire[] | undefined;
   readonly protectedSkill?:
     | {
         readonly reference: import("./markdown-skills.js").MarkdownSkillReference;

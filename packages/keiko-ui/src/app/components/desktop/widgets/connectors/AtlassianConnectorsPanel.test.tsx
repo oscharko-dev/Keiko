@@ -174,12 +174,13 @@ it("shows only owned Live Pods in the Hub without sync or legacy approvals", asy
   const { container } = render(<AtlassianConnectorsPanel client={client} jiraLive />);
   const card = await screen.findByTestId("acx-connector");
   expect(card).toHaveTextContent("Live Jira");
-  expect(card).toHaveTextContent("Connection verified");
+  expect(card).toHaveTextContent("Ready");
   expect(screen.queryByText("Docs")).toBeNull();
   expect(screen.queryByRole("button", { name: /manage/i })).toBeNull();
   expect(client.listApprovals).not.toHaveBeenCalled();
   expect(screen.getByRole("button", { name: "Create Jira Pod" })).toBeVisible();
-  await user.click(screen.getByRole("button", { name: "Verify connection" }));
+  await user.click(screen.getByRole("button", { name: "More actions: Live Jira" }));
+  await user.click(screen.getByRole("menuitem", { name: "Verify connection" }));
   await waitFor(() => expect(client.listConnectors).toHaveBeenCalledTimes(2));
   expect(await axe(container)).toHaveNoViolations();
 });
@@ -192,7 +193,7 @@ it("renders the live Jira Pods as one Knowledge Pods page section", async () => 
       pollIntervalMs={100000}
     />,
   );
-  await screen.findByText("No Jira Pods yet. Create one to connect Jira to a Chat.");
+  await screen.findByText("No Jira Pods yet.");
   // A page section heading like the pod list's, without a nested "Connectors" heading.
   expect(screen.getByRole("heading", { level: 2, name: "Jira Live Pods" })).toBeVisible();
   expect(screen.queryByRole("heading", { name: "Connectors" })).toBeNull();
@@ -211,8 +212,6 @@ it("describes an empty live Jira Hub without offering a connector sync", async (
       pollIntervalMs={100000}
     />,
   );
-  expect(
-    await screen.findByText("No Jira Pods yet. Create one to connect Jira to a Chat."),
-  ).toBeVisible();
+  expect(await screen.findByText("No Jira Pods yet.")).toBeVisible();
   expect(screen.queryByText(/sync Confluence spaces/u)).toBeNull();
 });

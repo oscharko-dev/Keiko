@@ -2386,6 +2386,12 @@
               "required": true
             },
             {
+              "name": "mcpServerSelectionCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "outcome",
               "type": "string",
               "dataClass": "closed-enum",
@@ -2686,6 +2692,24 @@
               "required": false
             },
             {
+              "name": "connectorCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "connectorToolCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "connectorUnknownCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "contextWindowAssumed",
               "type": "boolean",
               "dataClass": "closed-enum",
@@ -2828,6 +2852,12 @@
               "type": "integer",
               "dataClass": "count",
               "required": true
+            },
+            {
+              "name": "toolDefinitionTokens",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
             }
           ],
           "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -3376,7 +3406,6 @@
             "chat.tool-authority.operation.read-grant",
             "chat.tool-authority.operation.read-grant-admission",
             "chat.tool-authority.operation.read-grant-lifecycle",
-            "chat.tool-authority.operation.read-consent-route",
             "chat.tool-authority.operation.catalog-read",
             "chat.tool-authority.operation.late-read-result",
             "chat.tool-authority.operation.write-approval"
@@ -47013,6 +47042,12 @@
               "required": false
             },
             {
+              "name": "trustManifestDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": false
+            },
+            {
               "name": "trustRefusal",
               "type": "string",
               "dataClass": "closed-enum",
@@ -47339,6 +47374,12 @@
               "name": "trustBasis",
               "type": "string",
               "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "trustManifestDigest",
+              "type": "string",
+              "dataClass": "digest",
               "required": false
             },
             {

@@ -14,7 +14,11 @@ import {
   type JiraTraceRequest,
 } from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type {
+  ManagedMcpProvider,
+  ManagedMcpToolResult,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "../deps.js";
 import type { CatalogHandlerContext } from "../tool-catalog/catalogToolPorts.js";
@@ -22,6 +26,7 @@ import type { CatalogLifecycleLogPort } from "../tool-catalog/catalogToolLifecyc
 import { CatalogDispatchFault, requireDispatch } from "../tool-catalog/catalogToolErrors.js";
 import {
   createManagedProviderCatalog,
+  managedCatalogToolDefinitions,
   type ManagedProviderCatalog,
 } from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
@@ -67,8 +72,14 @@ type CatalogInitialization =
   | { readonly ok: false; readonly error: unknown };
 type MutationExecutor = JiraManagedMutationExecutor<CatalogHandlerContext<JiraChatCatalogConsumer>>;
 type ApprovalRegistry = NonNullable<UiHandlerDeps["atlassianActionApprovalRegistry"]>;
+const JIRA_CHAT_PROFILE = { id: "jira-chat", version: 1 } as const;
 export interface JiraChatCatalogRuntime {
   readonly get: () => Promise<ChatCatalog>;
+  /**
+   * The tool definitions a Chat advertises with a bound Jira Pod. Static, so it is derived once
+   * from the providers the catalog hosts without admitting a host or touching a connection.
+   */
+  readonly toolDefinitions: () => readonly ToolDefinition[];
   readonly close: () => Promise<void>;
 }
 
@@ -137,7 +148,37 @@ function prepareMutation(
   return { current, intent, shared };
 }
 
+/** The turns already advised about an untraced draft, oldest first; bounded like a cache. */
+const ADVISED_TURNS_MAX = 256;
+function untracedAdvisory(
+  deps: UiHandlerDeps,
+  advised: Set<string>,
+  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
+  draftItemCount: number,
+): () => boolean {
+  return (): boolean => {
+    const key = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
+    if (advised.has(key)) return false;
+    advised.add(key);
+    if (advised.size > ADVISED_TURNS_MAX) advised.delete(advised.values().next().value ?? key);
+    recordJiraDraftActivity(deps.activityLog, context.correlationId, {
+      phase: "refused",
+      refusal: "requirements-untraced",
+      newDraft: false,
+      pageItemCount: 0,
+      itemCount: draftItemCount,
+      pageCount: 0,
+      byteCount: 0,
+      unresolvedRefCount: 0,
+      violationCount: 0,
+      durationMs: 0,
+    });
+    return true;
+  };
+}
+
 function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
+  const advised = new Set<string>();
   return (operation, args, context, execute) => {
     const { current, intent, shared } = prepareMutation(deps, operation, args, context);
     const turn = {
@@ -150,13 +191,26 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       // vanished since is refused here, before any item is journaled.
       const draft = readableChatDraft(deps.jiraDraftStore, context.chatId, args);
       if (!draft.ok) return Promise.resolve({ data: draftRefusalData(draft), isError: true });
+      const approval = draftApproval(deps, current.envelope.subject, context, intent);
+      const items: unknown = draft.arguments.items;
       return executeJiraChatDraft({
         ...shared,
         arguments: draft.arguments,
-        deselected: approvedDeselection(deps, current.envelope.subject, context, intent),
+        deselected: approval?.excludedItemRefs ?? [],
         context,
         connection: jiraChatDraftConnection(deps, current.credential),
         openTrace: () => openTraceSession(deps, turn),
+        // A draft a human reviewed runs as approved; the advisory guides an unreviewed one only.
+        ...(approval === undefined
+          ? {
+              adviseUntraced: untracedAdvisory(
+                deps,
+                advised,
+                context,
+                Array.isArray(items) ? items.length : 0,
+              ),
+            }
+          : {}),
         activity: (activity): void => {
           recordJiraDraftActivity(deps.activityLog, context.correlationId, activity);
         },
@@ -233,12 +287,13 @@ export function jiraChatDraftConnection(
 }
 
 /** The items the human left out when approving this draft; none without an approval. */
-function approvedDeselection(
+/** The human's approval of exactly this draft action, or undefined when none reviewed it. */
+function draftApproval(
   deps: UiHandlerDeps,
   subject: Parameters<ApprovalRegistry["findChatWriteApproval"]>[0],
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
   intent: { readonly invocationId: string; readonly actionDigest: string },
-): readonly string[] {
+): { readonly excludedItemRefs?: readonly string[] | undefined } | undefined {
   const approval = deps.atlassianActionApprovalRegistry?.findChatWriteApproval(
     subject,
     context.authorityReference,
@@ -246,8 +301,8 @@ function approvedDeselection(
     context.correlationId,
   )?.approval;
   return approval?.kind === "jira-chat-write" && approval.actionDigest === intent.actionDigest
-    ? (approval.excludedItemRefs ?? [])
-    : [];
+    ? approval
+    : undefined;
 }
 
 /**
@@ -333,6 +388,23 @@ function draftTool(
   };
 }
 
+function chatCatalogProviders(
+  deps: UiHandlerDeps,
+  store: JiraReportStore,
+  draftStore: JiraDraftStore,
+): readonly ManagedMcpProvider<CatalogHandlerContext<JiraChatCatalogConsumer>>[] {
+  return [
+    createJiraProviderForCatalog(
+      (context) => connection(deps, context),
+      JIRA_CHAT_TOOLS,
+      mutationExecutor(deps),
+      reportTool(deps, store),
+      draftTool(deps, draftStore),
+    ),
+    createKnowledgeRequirementsProvider(deps, store),
+  ];
+}
+
 function initializeCatalog(
   deps: UiHandlerDeps,
   log: CatalogLifecycleLogPort,
@@ -340,22 +412,31 @@ function initializeCatalog(
   draftStore: JiraDraftStore,
 ): Promise<ChatCatalog> {
   return createManagedProviderCatalog<JiraChatCatalogConsumer>({
-    providers: [
-      createJiraProviderForCatalog(
-        (context) => connection(deps, context),
-        JIRA_CHAT_TOOLS,
-        mutationExecutor(deps),
-        reportTool(deps, store),
-        draftTool(deps, draftStore),
-      ),
-      createKnowledgeRequirementsProvider(deps, store),
-    ],
+    providers: chatCatalogProviders(deps, store, draftStore),
     routes: jiraChatCatalogRoutes(),
-    profile: { id: "jira-chat", version: 1 },
+    profile: JIRA_CHAT_PROFILE,
     log,
     correlationId: randomUUID(),
     now: Date.now,
   });
+}
+
+// Static: the providers declare the same tools whatever the connection, so one derivation serves.
+function staticToolDefinitions(
+  deps: UiHandlerDeps,
+  store: JiraReportStore,
+  draftStore: JiraDraftStore,
+): () => readonly ToolDefinition[] {
+  let definitions: readonly ToolDefinition[] | undefined;
+  return () => {
+    definitions ??= managedCatalogToolDefinitions(
+      jiraChatCatalogRoutes(),
+      chatCatalogProviders(deps, store, draftStore).flatMap((provider) => provider.tools()),
+      JIRA_CHAT_PROFILE,
+      Date.now(),
+    );
+    return definitions;
+  };
 }
 
 /** One lazy SDK host per application graph; neither Pods nor turns own protocol transports. */
@@ -389,6 +470,7 @@ export function createJiraChatCatalogRuntime(
     return pending;
   };
   return {
+    toolDefinitions: staticToolDefinitions(deps, store, draftStore),
     get: async (): Promise<ChatCatalog> => {
       requireOpen();
       catalog ??= initialize();

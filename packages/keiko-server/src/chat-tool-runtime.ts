@@ -15,9 +15,13 @@ export async function createChatToolTurn(
   signal: AbortSignal,
   correlationId: string | undefined,
 ): Promise<ChatToolTurnPort | undefined> {
-  if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined)
+  const chat = deps.store.findChatById(message.chatId);
+  if (chat?.jiraPodBinding === undefined)
     return createMcpChatToolTurn(deps, modelId, message, signal, correlationId);
-  const mcp = await deps.mcpChatCatalog?.get(correlationIdOrUnknown(correlationId));
+  const mcp = await deps.mcpChatCatalog?.get(
+    correlationIdOrUnknown(correlationId),
+    chat.mcpServers,
+  );
   return mcp === undefined
     ? createJiraChatToolTurn(deps, modelId, message, signal, correlationId)
     : createChatSourcesToolTurn(deps, modelId, message, signal, correlationId, mcp);

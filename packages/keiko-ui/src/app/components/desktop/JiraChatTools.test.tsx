@@ -1,10 +1,23 @@
 import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
-import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
-import { JiraReadConsent, JiraChatTools } from "./JiraChatTools";
-const grant = (): ChatToolReadGrantView => ({
+import type {
+  ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts";
+import type { ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { JiraChatTools } from "./JiraChatTools";
+
+const connectors = vi.hoisted(() => ({ observe: vi.fn(), decide: vi.fn() }));
+vi.mock("@/lib/atlassian-connectors-api", async () => ({
+  ...(await vi.importActual<typeof import("@/lib/atlassian-connectors-api")>(
+    "@/lib/atlassian-connectors-api",
+  )),
+  getJiraChatWriteApproval: connectors.observe,
+  decideJiraChatWriteApproval: connectors.decide,
+}));
+
+const jiraGrant: ChatToolReadGrantView = {
   kind: "jira-chat-read",
   grantId: "grant-1",
   chatId: "chat-1",
@@ -15,93 +28,97 @@ const grant = (): ChatToolReadGrantView => ({
   disclosureVersion: "jira-chat-read-v1",
   requestedAt: Date.now(),
   expiresAt: Date.now() + 60000,
-});
-describe("Jira Chat read consent", () => {
-  it("requires explicit keyboard consent and explains model disclosure and retention", async () => {
-    const current = grant();
-    const decide = vi.fn().mockResolvedValue({ ...current, state: "granted" });
-    const { container } = render(<JiraReadConsent grant={current} decide={decide} />);
-    expect(screen.getByText(/sent to the selected model and retained/i)).toBeInTheDocument();
-    expect(decide).not.toHaveBeenCalled();
-    const user = userEvent.setup();
-    await user.tab();
-    expect(screen.getByRole("button", { name: "Allow reading" })).toHaveFocus();
-    await user.keyboard("{Enter}");
-    await waitFor(() => {
-      expect(screen.getByText("Reading allowed")).toBeInTheDocument();
-    });
-    expect(decide).toHaveBeenCalledExactlyOnceWith(current, "approve");
+};
+const mcpGrant: ChatToolReadGrantView = {
+  kind: "mcp-chat-read",
+  grantId: "mcp-grant",
+  chatId: "chat-1",
+  configurationDigest: "a".repeat(64),
+  state: "pending",
+  disclosureVersion: "mcp-chat-read-v1",
+  requestedAt: Date.now(),
+  expiresAt: Date.now() + 60000,
+};
+const writeApproval: ChatToolWriteApprovalView = {
+  kind: "jira-chat-write",
+  approvalId: "approval-1",
+  chatId: "chat-1",
+  podId: "11111111-1111-4111-8111-111111111111",
+  bindingGeneration: 1,
+  authenticationGeneration: 1,
+  invocationId: "action-1",
+  operation: "jira.edit",
+  actionDigest: "a".repeat(64),
+  requestedAt: Date.now(),
+  expiresAt: Date.now() + 60000,
+  state: "pending",
+};
+
+function transcript(grants: readonly ChatToolReadGrantView[]): ChatToolTranscript {
+  const [latest] = grants;
+  return {
+    schemaVersion: 1,
+    exchanges: [
+      { call: { id: "call-read", name: "mcp_lab_search", arguments: { query: "LAB" } } },
+      {
+        call: {
+          id: "call-write",
+          name: "jira_edit",
+          arguments: { issueKey: "LAB-1", fields: { summary: "Reviewed change" } },
+        },
+        approval: writeApproval,
+      },
+    ],
+    ...(latest === undefined ? {} : { readGrant: latest, readGrants: grants }),
+  };
+}
+
+function expectNoReadConsent(): void {
+  expect(screen.queryByRole("button", { name: "Allow reading" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Do not allow" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Read Jira in this chat" })).toBeNull();
+  expect(screen.queryByRole("region", { name: "Read MCP data in this chat" })).toBeNull();
+  expect(screen.queryByText("Waiting for your permission")).toBeNull();
+  expect(screen.queryByText("Reading allowed")).toBeNull();
+}
+
+describe("Jira Chat tools without a read consent card", () => {
+  it("renders tool exchanges and the write approval but no card for Jira and MCP read grants", async () => {
+    connectors.observe.mockResolvedValue(writeApproval);
+    const { container } = render(
+      <JiraChatTools
+        transcript={transcript([jiraGrant, mcpGrant])}
+        turnState="pending"
+        chatId="chat-1"
+      />,
+    );
+    expectNoReadConsent();
+    expect(screen.getByText("mcp_lab_search")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Approve this action" })).toBeVisible();
+    expect(screen.getAllByText("Running")).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "MCP action" })).toBeVisible();
+    expect(screen.getByRole("region", { name: "Jira action" })).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Approve this action" })).toBeEnabled(),
+    );
     expect(await axe(container)).toHaveNoViolations();
   });
-  it("preserves explicit rejection and lets fresh revocation override an earlier approval", async () => {
-    const current = grant();
-    const decide = vi.fn().mockResolvedValue({ ...current, state: "rejected" });
-    const { rerender } = render(<JiraReadConsent grant={current} decide={decide} />);
-    await userEvent.click(screen.getByRole("button", { name: "Do not allow" }));
-    await waitFor(() => {
-      expect(screen.getByText("Reading declined")).toBeInTheDocument();
-    });
-    expect(decide).toHaveBeenCalledExactlyOnceWith(current, "reject");
-    rerender(<JiraReadConsent grant={{ ...current, state: "revoked" }} decide={decide} />);
-    expect(screen.getByText("Permission revoked")).toBeInTheDocument();
-    expect(screen.queryByRole("button")).not.toBeInTheDocument();
-  });
-  it("never treats a failed request as consent", async () => {
-    const decide = vi.fn().mockRejectedValue(new Error("synthetic"));
-    render(<JiraReadConsent grant={grant()} decide={decide} />);
-    await userEvent.click(screen.getByRole("button", { name: "Allow reading" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("could not be saved");
-    expect(screen.getByText("Waiting for your permission")).toBeInTheDocument();
-  });
-});
 
-it("reuses the consent card for configured MCP without claiming a Jira connection", async () => {
-  const current: ChatToolReadGrantView = {
-    kind: "mcp-chat-read",
-    grantId: "mcp-grant",
-    chatId: "chat-1",
-    configurationDigest: "a".repeat(64),
-    state: "pending",
-    disclosureVersion: "mcp-chat-read-v1",
-    requestedAt: Date.now(),
-    expiresAt: Date.now() + 60000,
-  };
-  const decide = vi.fn().mockResolvedValue({ ...current, state: "granted" });
-  const { container } = render(<JiraReadConsent grant={current} decide={decide} />);
-  expect(screen.getByRole("region", { name: "Read MCP data in this chat" })).toBeVisible();
-  expect(screen.getByText(/configured MCP servers.*selected model.*retained/i)).toBeVisible();
-  expect(screen.queryByText("Read Jira in this chat")).toBeNull();
-  await userEvent.click(screen.getByRole("button", { name: "Allow reading" }));
-  expect(decide).toHaveBeenCalledExactlyOnceWith(current, "approve");
-  expect(await screen.findByText("Reading allowed")).toBeVisible();
-  expect(await axe(container)).toHaveNoViolations();
-});
+  it("renders the same exchanges when the transcript carries no read grant", () => {
+    connectors.observe.mockResolvedValue(writeApproval);
+    render(<JiraChatTools transcript={transcript([])} turnState="pending" />);
+    expectNoReadConsent();
+    expect(screen.getByText("mcp_lab_search")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Approve this action" })).toBeVisible();
+  });
 
-it("shows independent Jira and configured-MCP consent cards in one turn", () => {
-  const jira = { ...grant(), state: "granted" as const };
-  const mcp: ChatToolReadGrantView = {
-    kind: "mcp-chat-read",
-    grantId: "mcp-read",
-    chatId: "chat-1",
-    configurationDigest: "a".repeat(64),
-    state: "pending",
-    disclosureVersion: "mcp-chat-read-v1",
-    requestedAt: Date.now(),
-    expiresAt: Date.now() + 60000,
-  };
-  render(
-    <JiraChatTools
-      transcript={{
-        schemaVersion: 1,
-        exchanges: [],
-        readGrant: mcp,
-        readGrants: [jira, mcp],
-      }}
-    />,
-  );
-  expect(screen.getByRole("region", { name: "Read Jira in this chat" })).toBeVisible();
-  expect(screen.getByRole("region", { name: "Read MCP data in this chat" })).toBeVisible();
-  expect(screen.getByText("Reading allowed")).toBeVisible();
-  expect(screen.getByText("Waiting for your permission")).toBeVisible();
-  expect(screen.getAllByRole("button", { name: "Allow reading" })).toHaveLength(1);
+  it("renders nothing without a transcript and nothing for an empty one", () => {
+    const { container, rerender } = render(<JiraChatTools transcript={undefined} />);
+    expect(container).toBeEmptyDOMElement();
+    rerender(
+      <JiraChatTools transcript={{ schemaVersion: 1, exchanges: [], readGrants: [mcpGrant] }} />,
+    );
+    expectNoReadConsent();
+    expect(screen.queryByRole("region")).toBeNull();
+  });
 });

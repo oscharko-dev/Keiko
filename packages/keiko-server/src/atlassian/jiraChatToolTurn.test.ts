@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { createServer } from "node:http";
 import { JiraChatToolTurn } from "./jiraChatToolTurn.js";
+import type { ChatReadGrantEntry } from "./chatReadGrantState.js";
 import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
@@ -23,10 +24,7 @@ import type {
   DesktopChatSendResponse,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type {
-  ChatToolReadGrantView,
-  ChatToolWriteApprovalView,
-} from "@oscharko-dev/keiko-contracts";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
 import { handleRegenerateDesktopChat, handleSendDesktopChat } from "../chat-handlers.js";
 import { CatalogDispatchFault } from "../tool-catalog/catalogToolErrors.js";
@@ -39,7 +37,6 @@ import type {
 import { jiraChatActorDigest } from "./jiraPodAccess.js";
 import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import { JIRA_TOOL_GUIDANCE } from "./jiraToolGuidance.js";
-import { handleDecideChatReadConsent } from "./chatReadConsentRoutes.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
 import {
   SYNTHETIC_JIRA_BASE_URL,
@@ -292,6 +289,7 @@ function fixture(
   repeatTools: boolean | number = false,
   draft: DraftCall = false,
   script?: CorrectionScript,
+  unselectedMode = false,
 ): {
   deps: UiHandlerDeps;
   chatId: string;
@@ -302,6 +300,8 @@ function fixture(
   writes: () => number;
   jira: ReturnType<typeof syntheticJira>;
   uploads: readonly number[];
+  /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
+  acceptedReadGrants: string[];
 } {
   const root = mkdtempSync(join(tmpdir(), "keiko-jira-chat-turn-"));
   const calls: GatewayCallRequest[] = [];
@@ -320,11 +320,21 @@ function fixture(
   configure(deps);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Synthetic Jira", MODEL);
+  // An unselected Chat resolves the default (Full access); every other fixture pins Ask for approval
+  // so the concrete write approval stays under test.
   deps.store.updateChat(
     chat.id,
-    { jiraPodId: POD },
+    unselectedMode ? { jiraPodId: POD } : { jiraPodId: POD, toolMode: "governed-assist" },
     { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
   );
+  const acceptedReadGrants: string[] = [];
+  const approvals = deps.atlassianActionApprovalRegistry;
+  if (approvals === undefined) throw new Error("Missing approval registry");
+  const accept = approvals.acceptChatReadGrant.bind(approvals);
+  vi.spyOn(approvals, "acceptChatReadGrant").mockImplementation((grantId, ...rest) => {
+    acceptedReadGrants.push(grantId);
+    return accept(grantId, ...rest);
+  });
   const credentials = deps.atlassianConnectorCredentials;
   if (credentials === undefined) throw new Error("Missing credential owner");
   vi.spyOn(credentials.custody, "list").mockImplementation(() => [metadata(deps)]);
@@ -379,6 +389,7 @@ function fixture(
     writes: () => (draft ? jira.posts().length : writes),
     jira,
     uploads,
+    acceptedReadGrants,
   };
 }
 // #4175: a turn that reaches its deadline after settling tool calls answers from its transcript on
@@ -422,7 +433,7 @@ it.each([false, true])(
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     const result = await pending;
     expect(f.requests()).toBe(1);
     const [user, assistant] = f.deps.store.listMessages(f.chatId);
@@ -449,7 +460,7 @@ it.each([false, true])(
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve");
     await pending;
     const inJira = f.jira.issues.map((issue) => issue.key).sort();
@@ -526,10 +537,18 @@ function sendBody(f: ReturnType<typeof fixture>, clientTurnId: string): Record<s
     memory: { enabled: false, budgetTokens: 0, mode: "governed-assist", context: {} },
   };
 }
-function firstReadGrant(f: ReturnType<typeof fixture>): ChatToolReadGrantView {
-  const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
-  if (grant === undefined) throw new Error("Missing read consent");
-  return grant;
+// The read grant the server established for a turn: recorded granted, never waiting for a person.
+function readConsentPart(f: ReturnType<typeof fixture>): unknown {
+  return f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
+}
+function acceptedReadGrant(f: ReturnType<typeof fixture>): ChatReadGrantEntry {
+  const grantId = f.acceptedReadGrants.at(-1);
+  const entry =
+    grantId === undefined
+      ? undefined
+      : f.deps.atlassianActionApprovalRegistry?.getChatReadGrant(grantId);
+  if (entry === undefined) throw new Error("Missing accepted read grant");
+  return entry;
 }
 function expectUnchangedJiraOffer(calls: readonly GatewayCallRequest[]): void {
   const first = calls[0]?.toolCatalog;
@@ -551,7 +570,7 @@ function expectSharedGuidanceOncePerRound(calls: readonly GatewayCallRequest[]):
 }
 
 describe("normal buffered Chat through the owned Jira catalog", () => {
-  it("keeps hostile Jira metadata outside catalog, binding, credential and consent controls", async () => {
+  it("keeps hostile Jira metadata outside catalog, binding, credential and approval controls", async () => {
     const f = fixture();
     const credentials = f.deps.atlassianConnectorCredentials;
     const registry = f.deps.atlassianActionApprovalRegistry;
@@ -583,7 +602,6 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     });
     const factory = vi.mocked(credentials.httpBodyPortFactory).getMockImplementation();
     if (factory === undefined) throw new Error("Missing fixture transport");
-    let grantId = "";
     let granted: unknown;
     vi.mocked(credentials.httpBodyPortFactory).mockImplementation((...args) => {
       const port = factory(...args);
@@ -591,7 +609,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
         const response = await port(request);
         expect(request.method).toBe("GET");
         expect(request.url).toContain("issue/createmeta/KEIKO/issuetypes/10001");
-        granted = structuredClone(registry.getChatReadGrant(grantId));
+        granted = structuredClone(acceptedReadGrant(f));
         return {
           ...response,
           kind: "response",
@@ -635,16 +653,9 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
       }
       return result;
     });
-    const pending = send(f, "hostile-metadata");
-    void pending.catch(() => undefined);
-    await vi.waitFor(() => {
-      expect(firstReadGrant(f).state).toBe("pending");
-    });
-    const grant = firstReadGrant(f);
-    grantId = grant.grantId;
-    expect(f.requests()).toBe(0);
-    await approveReadForWrite(f);
-    expect((await pending).status).toBe(200);
+    expect((await send(f, "hostile-metadata")).status).toBe(200);
+    const grantId = acceptedReadGrant(f).grant.grantId;
+    expect(f.acceptedReadGrants).toEqual([grantId]);
     expect(f.calls).toHaveLength(2);
     expectUnchangedJiraOffer(f.calls);
     expect(f.deps.store.findChatById(f.chatId)?.jiraPodBinding).toEqual(binding);
@@ -654,6 +665,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     ).toEqual([credential]);
     expect(registry.getChatReadGrant(grantId)).toEqual(granted);
     expect(granted).toMatchObject({ grant: { state: "granted", grantId } });
+    expect(readConsentPart(f)).toMatchObject({ state: "granted" });
     expect(approveWrite).not.toHaveBeenCalled();
     const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
     expect(transcript?.exchanges).toHaveLength(1);
@@ -667,33 +679,19 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     expect(f.requests()).toBe(1);
     expect(f.writes()).toBe(0);
   });
-  it("waits for real consent, executes through MCP, persists pairs and reuses consent next turn", async () => {
+  it("grants its first read itself, executes through MCP, persists pairs and reuses the grant next turn", async () => {
     const f = fixture();
-    const pending = send(f, "human-turn-one");
-    void pending.catch(() => undefined);
-    await vi.waitFor(() => {
-      expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
-        "pending",
-      );
-    });
-    expect(f.requests()).toBe(0);
-    const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
-    if (grant === undefined) throw new Error("Missing pending consent");
-    expect(
-      (
-        await handleDecideChatReadConsent(
-          context(
-            { decision: "approve", disclosureVersion: grant.disclosureVersion },
-            { approvalId: grant.grantId },
-          ),
-          f.deps,
-        )
-      ).status,
-    ).toBe(200);
-    const completed = await pending;
+    const completed = await send(f, "human-turn-one");
     expect(completed.status).toBe(200);
     expect((completed.body as DesktopChatSendResponse).messages[0]?.turnState).toBe("completed");
     expect(f.requests()).toBe(1);
+    // The Pod connection is the consent: the grant is recorded granted and no human decides.
+    expect(readConsentPart(f)).toMatchObject({ state: "granted" });
+    expect(acceptedReadGrant(f).grant).toMatchObject({
+      kind: "jira-chat-read-grant",
+      state: "granted",
+    });
+    expect(acceptedReadGrant(f).grant.consentProofDigest).toMatch(/^[a-f0-9]{64}$/);
     expectSharedGuidanceOncePerRound(f.calls);
     expect(
       f.calls[1]?.messages.some(
@@ -705,6 +703,7 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     ).toBe("completed");
     expect((await send(f, "human-turn-two")).status).toBe(200);
     expect(f.requests()).toBe(2);
+    expect(f.acceptedReadGrants).toHaveLength(1);
     expect(
       f.deps.store
         .listMessages(f.chatId)
@@ -712,6 +711,27 @@ describe("normal buffered Chat through the owned Jira catalog", () => {
     ).toHaveLength(1);
     expect((await send(f, "human-turn-two")).status).toBe(200);
     expect(f.requests()).toBe(2);
+  });
+  it("resolves Full access for a Chat without a mode and writes without an approval", async () => {
+    const f = fixture(true, undefined, true, false, false, undefined, true);
+    expect(f.deps.store.findChatById(f.chatId)?.toolMode).toBe("autonomous-delivery");
+    expect((await send(f, "default-full-access-write")).status).toBe(200);
+    expect(f.writes()).toBe(1);
+    assertObservedWrite(f);
+    expect(firstToolExchange(f).approval).toBeUndefined();
+    expect(readConsentPart(f)).toMatchObject({ state: "granted" });
+    expect(acceptedReadGrant(f).grant.state).toBe("granted");
+  });
+  it("still needs the concrete write approval once a person selects Ask for approval", async () => {
+    const f = fixture(true, undefined, true, false, false, undefined, true);
+    f.deps.store.updateChat(f.chatId, { toolMode: "governed-assist" });
+    const pending = send(f, "selected-ask-write");
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await decidePendingWrite(f, "approve");
+    expect((await pending).status).toBe(200);
+    expect(f.writes()).toBe(1);
+    expect(firstToolExchange(f).approval?.state).toBe("claimed");
   });
   it.each([false, "missing", "stale", "unsupported", "mismatched"] as const)(
     "rejects a bound Chat with %s tool proof before any model or Jira call",
@@ -767,52 +787,23 @@ describe("normal streamed Chat through the owned Jira catalog", () => {
     },
   );
 
-  it("publishes consent while waiting, then completes through the same MCP loop", async () => {
+  it("grants its read without publishing a consent, then completes through the same MCP loop", async () => {
     const f = fixture();
     const response = mockResponse({ captureBody: true });
-    const pending = handleSendDesktopChatStream(
+    await handleSendDesktopChatStream(
       { ...sendContext(f, "streamed-human-turn"), res: response.res },
       f.deps,
     );
-    void pending.catch(() => undefined);
-    await vi.waitFor(() => {
-      expect(response.body()).toContain("event: tool-read-consent");
-    });
-    expect(f.requests()).toBe(0);
-    const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
-    if (grant === undefined) throw new Error("Missing streamed grant");
-    await handleDecideChatReadConsent(
-      context(
-        { decision: "approve", disclosureVersion: grant.disclosureVersion },
-        { approvalId: grant.grantId },
-      ),
-      f.deps,
-    );
-    await pending;
     expect(f.requests()).toBe(1);
-    expect(response.body()).toContain('"state":"granted"');
+    // The established grant is published as granted; there is nothing for a person to decide.
+    expect(response.body()).toContain("event: tool-read-consent");
+    expect(response.body()).not.toContain('"state":"pending"');
+    expect(readConsentPart(f)).toMatchObject({ state: "granted" });
+    expect(acceptedReadGrant(f).grant.state).toBe("granted");
     expect(response.body()).toContain("event: done");
     expect(response.body()).toContain("No Jira projects are visible.");
     expect(response.body()).not.toContain("resultBinding");
     expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("completed");
-  });
-  it("cancels a disconnected consent wait without a Jira request", async () => {
-    const f = fixture();
-    const response = mockResponse({ captureBody: true });
-    const pending = handleSendDesktopChatStream(
-      { ...sendContext(f, "disconnected-human-turn"), res: response.res },
-      f.deps,
-    );
-    void pending.catch(() => undefined);
-    await vi.waitFor(() => {
-      expect(response.body()).toContain("event: tool-read-consent");
-    });
-    response.res.destroy();
-    await pending;
-    expect(f.requests()).toBe(0);
-    await vi.waitFor(() => {
-      expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
-    });
   });
 });
 
@@ -843,22 +834,17 @@ it("discovers the five governed mutations through the ordinary Chat-owned MCP ca
   );
 });
 
-async function approveReadForWrite(f: ReturnType<typeof fixture>): Promise<void> {
-  await vi.waitFor(() => {
-    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
-      "pending",
-    );
-  });
-  expect(f.writes()).toBe(0);
-  const grant = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
-  if (grant === undefined) throw new Error("Missing write-turn read consent");
-  await handleDecideChatReadConsent(
-    context(
-      { decision: "approve", disclosureVersion: grant.disclosureVersion },
-      { approvalId: grant.grantId },
-    ),
-    f.deps,
+// A write turn reads first. The server accepts that read grant itself, without a read-consent part;
+// the write then waits for its concrete approval where the mode requires one.
+async function awaitReadGrantedForWrite(f: ReturnType<typeof fixture>): Promise<void> {
+  await vi.waitFor(
+    () => {
+      expect(f.acceptedReadGrants.length).toBeGreaterThan(0);
+    },
+    { timeout: 5000 },
   );
+  expect(acceptedReadGrant(f).grant.state).toBe("granted");
+  expect(readConsentPart(f)).toMatchObject({ state: "granted" });
 }
 
 // S09 of epic #4173: Qwen read the field metadata of three issue types, then ended its next round
@@ -876,7 +862,7 @@ it.each([false, true])(
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await pending;
     expect(f.calls.length).toBeGreaterThanOrEqual(2);
     expect(f.calls.map((call) => call.answerRepair)).toEqual(f.calls.map(() => "steered"));
@@ -903,7 +889,7 @@ it.each([false, true])(
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     const result = await pending;
     expect(f.calls).toHaveLength(10);
     expect(f.requests()).toBe(10);
@@ -938,8 +924,8 @@ describe.each([false, true])("a turn past the former fixed tool-call cap (stream
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
     await pending;
+    expect(acceptedReadGrant(f).grant.state).toBe("granted");
     return { f, body: response.body() };
   }
 
@@ -992,7 +978,7 @@ describe.each([false, true])(
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
       void pending.catch(() => undefined);
-      await approveReadForWrite(f);
+      await awaitReadGrantedForWrite(f);
       await pending;
 
       // tool round, the incomplete answer, the correction round (a tool call), the final answer.
@@ -1024,7 +1010,7 @@ describe.each([false, true])(
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
       void pending.catch(() => undefined);
-      await approveReadForWrite(f);
+      await awaitReadGrantedForWrite(f);
       await pending;
       expect(f.calls).toHaveLength(2);
       expect(vi.mocked(recordChatToolTurnCorrected)).not.toHaveBeenCalled();
@@ -1051,7 +1037,7 @@ describe.each([false, true])(
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
       void pending.catch(() => undefined);
-      await approveReadForWrite(f);
+      await awaitReadGrantedForWrite(f);
       await pending;
 
       expect(f.calls).toHaveLength(4);
@@ -1090,7 +1076,7 @@ describe.each([false, true])(
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
       void pending.catch(() => undefined);
-      await approveReadForWrite(f);
+      await awaitReadGrantedForWrite(f);
       await pending;
 
       expect(f.calls).toHaveLength(4);
@@ -1128,7 +1114,7 @@ describe.each([false, true])(
         ? handleSendDesktopChatStream(ctx, f.deps)
         : handleSendDesktopChat(ctx, f.deps);
       void pending.catch(() => undefined);
-      await approveReadForWrite(f);
+      await awaitReadGrantedForWrite(f);
       await pending;
       expect(f.calls).toHaveLength(2);
       expect(vi.mocked(unsupportedIssueKeys)).toHaveBeenCalled();
@@ -1157,8 +1143,8 @@ describe.each([false, true])("a refused write inside one Chat turn (stream=%s)",
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
     await pending;
+    expect(acceptedReadGrant(f).grant.state).toBe("granted");
     return { f, body: response.body() };
   }
   const outcomes = (f: ReturnType<typeof fixture>): (string | undefined)[] =>
@@ -1225,7 +1211,7 @@ it.each([false, true])(
       ? handleSendDesktopChatStream(ctx, f.deps)
       : handleSendDesktopChat(ctx, f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     const result = await pending;
     expect(f.writes()).toBe(1);
     expect(f.calls).toHaveLength(1);
@@ -1309,7 +1295,7 @@ describe("normal Chat write approval and durable outcome", () => {
         ? handleSendDesktopChatStream({ ...request, res: response.res }, f.deps)
         : handleSendDesktopChat(request, f.deps);
       void pending.catch(() => undefined);
-      await approveReadForWrite(f);
+      await awaitReadGrantedForWrite(f);
       if (mode !== "autonomous-delivery") await decidePendingWrite(f, "approve");
       const completed = await pending;
       if (streamed) {
@@ -1349,7 +1335,7 @@ it("executes only the selected backlog items and persists the deselection throug
   );
   const pending = handleSendDesktopChat(sendContext(f, "deselected-draft"), f.deps);
   void pending.catch(() => undefined);
-  await approveReadForWrite(f);
+  await awaitReadGrantedForWrite(f);
   await decidePendingWrite(f, "approve", ["epic"]);
   expect((await pending).status).toBe(200);
   // The Epic is deselected and the Story that depends on it follows; only the Loose item is sent.
@@ -1430,7 +1416,7 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     );
     const pending = handleSendDesktopChat(sendContext(f, "staged-draft"), f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve");
     expect((await pending).status).toBe(200);
     expect(f.jira.issues).toHaveLength(LARGE.epics + LARGE.stories);
@@ -1447,7 +1433,7 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     const left = Array.from({ length: 40 }, (_, index) => `s${String(index)}`);
     const pending = handleSendDesktopChat(sendContext(f, "staged-deselection"), f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve", left);
     expect((await pending).status).toBe(200);
     expect(f.jira.issues).toHaveLength(EPICS + STORIES - left.length);
@@ -1464,7 +1450,7 @@ describe("a staged backlog draft of any size is approved once (#4178)", () => {
     ]);
     const pending = handleSendDesktopChat(sendContext(f, "stale-draft"), f.deps);
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await pending;
     expect(f.jira.posts()).toHaveLength(0);
     expect(firstToolExchange(f).approval).toBeUndefined();
@@ -1479,7 +1465,7 @@ it("creates an epic, its task and two sub-tasks under that task from one approve
   const f = fixture(true, undefined, true, false, true);
   const pending = handleSendDesktopChat(sendContext(f, "nested-draft"), f.deps);
   void pending.catch(() => undefined);
-  await approveReadForWrite(f);
+  await awaitReadGrantedForWrite(f);
   await decidePendingWrite(f, "approve");
   expect((await pending).status).toBe(200);
   expect(f.jira.posts().map((post) => post.fields)).toMatchObject([
@@ -1499,7 +1485,7 @@ it("refuses a deselection outside the reviewed draft and leaves registry and tra
   const f = fixture(true, undefined, true, false, true);
   const pending = handleSendDesktopChat(sendContext(f, "foreign-deselection"), f.deps);
   void pending.catch(() => undefined);
-  await approveReadForWrite(f);
+  await awaitReadGrantedForWrite(f);
   const approval = await pendingWriteApproval(f);
   expect(await postWriteDecision(f, approval, "approve", ["not-in-the-draft"])).toBe(409);
   expect(await postWriteDecision(f, approval, "approve", ["epic", "epic"])).toBe(400);
@@ -1520,7 +1506,7 @@ it("keeps a rejected normal Chat write free of remote effects", async () => {
   const f = fixture(true);
   const pending = handleSendDesktopChat(sendContext(f, "rejected-write"), f.deps);
   void pending.catch(() => undefined);
-  await approveReadForWrite(f);
+  await awaitReadGrantedForWrite(f);
   await decidePendingWrite(f, "reject");
   await pending;
   expect(f.writes()).toBe(0);
@@ -1544,7 +1530,7 @@ it.each([
   async (outcome, acknowledgeWrite) => {
     const f = fixture(true, undefined, acknowledgeWrite);
     const pending = send(f, "regenerated-write");
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve");
     expect((await pending).status).toBe(200);
     expect(f.calls).toHaveLength(2);
@@ -1595,7 +1581,7 @@ it("retains late acknowledged Jira effects after the Chat has already been cance
     f.deps,
   );
   void pending.catch(() => undefined);
-  await approveReadForWrite(f);
+  await awaitReadGrantedForWrite(f);
   await decidePendingWrite(f, "approve");
   await vi.waitFor(() => {
     expect(f.writes()).toBe(1);
@@ -1626,169 +1612,164 @@ it("retains late acknowledged Jira effects after the Chat has already been cance
   expect(f.writes()).toBe(1);
 });
 
-function consentState(f: ReturnType<typeof fixture>, mutation: boolean): string | undefined {
-  const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
-  return mutation ? transcript?.exchanges[0]?.approval?.state : transcript?.readGrant?.state;
+function consentState(f: ReturnType<typeof fixture>): string | undefined {
+  return f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.approval?.state;
 }
-async function awaitPendingConsent(
-  f: ReturnType<typeof fixture>,
-  mutation: boolean,
-): Promise<void> {
-  if (mutation) await approveReadForWrite(f);
+async function awaitPendingConsent(f: ReturnType<typeof fixture>): Promise<void> {
+  await awaitReadGrantedForWrite(f);
   await vi.waitFor(() => {
-    expect(consentState(f, mutation)).toBe("pending");
+    expect(consentState(f)).toBe("pending");
   });
 }
-function expectCancelledConsent(
-  f: ReturnType<typeof fixture>,
-  mutation: boolean,
-  turnState: string,
-): void {
+function expectCancelledConsent(f: ReturnType<typeof fixture>, turnState: string): void {
   const message = f.deps.store.listMessages(f.chatId)[0];
   expect(message?.turnState).toBe(turnState);
-  expect(consentState(f, mutation)).toBe("revoked");
-  if (mutation) expect(message?.toolTranscript?.readGrant?.state).toBe("granted");
+  expect(consentState(f)).toBe("revoked");
+  expect(message?.toolTranscript?.readGrant?.state).toBe("granted");
+  expect(acceptedReadGrant(f).grant.state).toBe("granted");
   expect(firstToolExchange(f).result?.status).toBe("cancelled");
-  if (mutation) expect(firstToolExchange(f).mutationOutcome).toBe("not-dispatched");
+  expect(firstToolExchange(f).mutationOutcome).toBe("not-dispatched");
   expect(f.requests()).toBe(0);
   expect(f.writes()).toBe(0);
   expect(f.calls).toHaveLength(1);
 }
 
-describe.each([false, true])("consent cancellation (stream=%s)", (stream) => {
-  it.each([
-    { mutation: false, cause: "disconnect" },
-    { mutation: true, cause: "disconnect" },
-    { mutation: false, cause: "budget" },
-    { mutation: true, cause: "budget" },
-  ])("drains $cause while mutation=$mutation without dispatch", async ({ mutation, cause }) => {
-    const f = fixture(mutation);
-    const budget = new AbortController();
-    // eslint-disable-next-line @typescript-eslint/unbound-method -- Invoked only with explicit this via original.call below.
-    const original = JiraChatToolTurn.prototype.call;
-    vi.spyOn(JiraChatToolTurn.prototype, "call").mockImplementation(function (
-      this: JiraChatToolTurn,
-      model,
-      request,
-      signal,
-      observe,
-    ): Promise<NormalizedResponse> {
-      return original.call(this, model, request, AbortSignal.any([signal, budget.signal]), observe);
-    });
-    const registry = f.deps.atlassianActionApprovalRegistry;
-    if (registry === undefined) throw new Error("Missing approval owner");
-    const method = mutation ? "waitForChatWriteApproval" : "waitForChatReadGrant";
-    const wait = registry[method].bind(registry);
-    let waitFinished = false;
-    vi.spyOn(registry, method).mockImplementation(async (...args): Promise<void> => {
-      try {
-        await wait(...args);
-      } finally {
-        waitFinished = true;
-      }
-    });
-    const response = mockResponse({ captureBody: true });
-    const ctx = { ...sendContext(f, `cancel-${cause}-${String(mutation)}`), res: response.res };
-    const pending = stream
-      ? handleSendDesktopChatStream(ctx, f.deps)
-      : handleSendDesktopChat(ctx, f.deps);
-    let finished = false;
-    // Buffered unexpected-error mapping belongs to the HTTP boundary; this observer also
-    // drains a rejected handler before the isolated database is closed.
-    const drained = pending
-      .catch(() => undefined)
-      .finally(() => {
-        finished = true;
+describe.each([false, true])("write approval cancellation (stream=%s)", (stream) => {
+  it.each([{ cause: "disconnect" }, { cause: "budget" }])(
+    "drains $cause while the write approval is pending without dispatch",
+    async ({ cause }) => {
+      const f = fixture(true);
+      const budget = new AbortController();
+      // eslint-disable-next-line @typescript-eslint/unbound-method -- Invoked only with explicit this via original.call below.
+      const original = JiraChatToolTurn.prototype.call;
+      vi.spyOn(JiraChatToolTurn.prototype, "call").mockImplementation(function (
+        this: JiraChatToolTurn,
+        model,
+        request,
+        signal,
+        observe,
+      ): Promise<NormalizedResponse> {
+        return original.call(
+          this,
+          model,
+          request,
+          AbortSignal.any([signal, budget.signal]),
+          observe,
+        );
       });
-    try {
-      await awaitPendingConsent(f, mutation);
-      if (cause === "budget") budget.abort();
-      else response.res.destroy();
-      await vi.waitFor(
-        () => {
-          expect(waitFinished).toBe(true);
-          expect(finished).toBe(true);
+      const registry = f.deps.atlassianActionApprovalRegistry;
+      if (registry === undefined) throw new Error("Missing approval owner");
+      const wait = registry.waitForChatWriteApproval.bind(registry);
+      let waitFinished = false;
+      vi.spyOn(registry, "waitForChatWriteApproval").mockImplementation(
+        async (...args): Promise<void> => {
+          try {
+            await wait(...args);
+          } finally {
+            waitFinished = true;
+          }
         },
-        { timeout: 500, interval: 10 },
       );
-      await drained;
-      expectCancelledConsent(f, mutation, cause === "disconnect" ? "cancelled" : "failed");
-    } finally {
-      response.res.destroy();
-      await drained;
-    }
-  });
+      const response = mockResponse({ captureBody: true });
+      const ctx = { ...sendContext(f, `cancel-${cause}`), res: response.res };
+      const pending = stream
+        ? handleSendDesktopChatStream(ctx, f.deps)
+        : handleSendDesktopChat(ctx, f.deps);
+      let finished = false;
+      // Buffered unexpected-error mapping belongs to the HTTP boundary; this observer also
+      // drains a rejected handler before the isolated database is closed.
+      const drained = pending
+        .catch(() => undefined)
+        .finally(() => {
+          finished = true;
+        });
+      try {
+        await awaitPendingConsent(f);
+        if (cause === "budget") budget.abort();
+        else response.res.destroy();
+        await vi.waitFor(
+          () => {
+            expect(waitFinished).toBe(true);
+            expect(finished).toBe(true);
+          },
+          { timeout: 500, interval: 10 },
+        );
+        await drained;
+        expectCancelledConsent(f, cause === "disconnect" ? "cancelled" : "failed");
+      } finally {
+        response.res.destroy();
+        await drained;
+      }
+    },
+  );
 });
 
-it.each([false, true])(
-  "drains a real buffered HTTP disconnect while mutation=%s",
-  async (mutation) => {
-    const f = fixture(mutation);
-    let running: Promise<RouteResult> | undefined;
-    let bodyComplete = false;
-    let bodyAborted = false;
-    const server = createServer((req, res) => {
-      req.once("end", () => {
-        bodyComplete = req.complete;
-      });
-      req.once("aborted", () => {
-        bodyAborted = true;
-      });
-      running = handleSendDesktopChat(
-        {
-          req,
-          res,
-          params: {},
-          url: new URL("http://127.0.0.1/api/desktop/chat"),
-          correlationId: "http-consent-cancellation",
-        },
-        f.deps,
-      );
-      void running
-        .then((result) => {
-          if (!res.destroyed) res.writeHead(result.status).end(JSON.stringify(result.body));
-        })
-        .catch(() => {
-          res.destroy();
-        });
+it("drains a real buffered HTTP disconnect while the write approval is pending", async () => {
+  const f = fixture(true);
+  let running: Promise<RouteResult> | undefined;
+  let bodyComplete = false;
+  let bodyAborted = false;
+  const server = createServer((req, res) => {
+    req.once("end", () => {
+      bodyComplete = req.complete;
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
+    req.once("aborted", () => {
+      bodyAborted = true;
     });
-    const address = server.address();
-    if (address === null || typeof address === "string")
-      throw new Error("Missing isolated HTTP listener");
-    const controller = new AbortController();
-    const request = fetch(`http://127.0.0.1:${String(address.port)}/api/desktop/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(sendBody(f, "real-http-disconnect")),
-      signal: controller.signal,
-    }).catch(() => undefined);
-    try {
-      await awaitPendingConsent(f, mutation);
-      controller.abort();
-      await request;
-      await vi.waitFor(() => {
-        expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+    running = handleSendDesktopChat(
+      {
+        req,
+        res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/desktop/chat"),
+        correlationId: "http-consent-cancellation",
+      },
+      f.deps,
+    );
+    void running
+      .then((result) => {
+        if (!res.destroyed) res.writeHead(result.status).end(JSON.stringify(result.body));
+      })
+      .catch(() => {
+        res.destroy();
       });
-      await running;
-      expectCancelledConsent(f, mutation, "cancelled");
-      expect(bodyComplete).toBe(true);
-      expect(bodyAborted).toBe(false);
-    } finally {
-      controller.abort();
-      await request;
-      await running?.catch(() => undefined);
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) reject(error);
-          else resolve();
-        });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string")
+    throw new Error("Missing isolated HTTP listener");
+  const controller = new AbortController();
+  const request = fetch(`http://127.0.0.1:${String(address.port)}/api/desktop/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(sendBody(f, "real-http-disconnect")),
+    signal: controller.signal,
+  }).catch(() => undefined);
+  try {
+    await awaitPendingConsent(f);
+    controller.abort();
+    await request;
+    await vi.waitFor(() => {
+      expect(f.deps.store.listMessages(f.chatId)[0]?.turnState).toBe("cancelled");
+    });
+    await running;
+    expectCancelledConsent(f, "cancelled");
+    expect(bodyComplete).toBe(true);
+    expect(bodyAborted).toBe(false);
+  } finally {
+    controller.abort();
+    await request;
+    await running?.catch(() => undefined);
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) reject(error);
+        else resolve();
       });
-    }
-  },
-);
+    });
+  }
+});
 
 type PreparationFailure = "tool-proof" | "authority" | "catalog";
 const PREPARATION_RESPONSES: Record<PreparationFailure, readonly [number, string]> = {
@@ -1883,7 +1864,7 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     const f = attachFixture();
     const pending = send(f, "attach-approved");
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await decidePendingWrite(f, "approve");
     expect((await pending).status).toBe(200);
     const exchange = firstToolExchange(f);
@@ -1901,7 +1882,7 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     const f = attachFixture();
     const pending = send(f, "attach-drift");
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await vi.waitFor(() => {
       expect(firstToolExchange(f).approval?.state).toBe("pending");
     });
@@ -1924,7 +1905,7 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     );
     const pending = send(f, "attach-credential");
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await pending;
     expect(firstToolExchange(f).approval).toBeUndefined();
     expect(f.uploads).toEqual([]);
@@ -1934,7 +1915,7 @@ describe("attaching a connected file through the ordinary Chat turn (#4176)", ()
     const f = attachFixture("../escape.txt");
     const pending = send(f, "attach-outside");
     void pending.catch(() => undefined);
-    await approveReadForWrite(f);
+    await awaitReadGrantedForWrite(f);
     await pending;
     expect(firstToolExchange(f).approval).toBeUndefined();
     expect(f.uploads).toEqual([]);

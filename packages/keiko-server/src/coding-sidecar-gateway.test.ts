@@ -1188,7 +1188,9 @@ describe("coding-sidecar gateway", () => {
       ["keiko_research_fetch", "af805d28c78e78e6e103cd7e0964a51f9f8198660b9882dc077b989a6ebfcf2d"],
       ["keiko_skill", "6fe6bd523b0b52035e62c565bb047b24906161d97f549b320b28c2099a1ddd67"],
       ["keiko_skill_discover", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
-      ["keiko_verification", "8cbb4582b87ff37f13040c8f064d1080b848bcfe7b6ff2159adf682acd41c35f"],
+      // 2026-11-02: `packageDir` joined the verifier (a nested package.json of a monorepo), a
+      // deliberate schema change regenerated from the producer.
+      ["keiko_verification", "20aef7c72289db95ad8635cfcb46c37eb7c3256ed2497622630990a916f5cef9"],
       [
         "keiko_workspace_discover",
         "908a32e65f39462dc43df60ccccbf6e0dee4740b9421a84e7e145c485a4e2da4",

@@ -77,7 +77,7 @@ function context({ issues = [], truth = {}, act = () => ({}), extra = {} } = {})
         failure: undefined,
         durationMs: 1000,
         toolCalls: toolExchanges.length,
-        approvals: { reads: 1, writes },
+        approvals: { writes },
       };
     },
     deselectSkill: () => Promise.resolve(),

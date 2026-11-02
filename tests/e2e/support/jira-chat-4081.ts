@@ -27,10 +27,9 @@ export const JIRA_BROWSER_COPY = {
     token: "API token",
     save: "Save connector",
     verify: "Verify connection",
-    connection: "Tool access",
-    pod: "Jira Pod",
-    apply: "Apply tool settings",
-    connected: "Jira Pod connected by the server",
+    connectors: "Connectors",
+    access: "Access",
+    askForApproval: "Ask for approval",
     message: "Chat message",
     send: "Send message",
   },
@@ -42,10 +41,9 @@ export const JIRA_BROWSER_COPY = {
     token: "API-Token",
     save: "Connector speichern",
     verify: "Verbindung prüfen",
-    connection: "Tool-Zugriff",
-    pod: "Jira-Pod",
-    apply: "Tool-Einstellungen anwenden",
-    connected: "Jira-Pod vom Server verbunden",
+    connectors: "Konnektoren",
+    access: "Zugriff",
+    askForApproval: "Um Genehmigung bitten",
     message: "Chatnachricht",
     send: "Nachricht senden",
   },
@@ -144,15 +142,58 @@ export async function createAndConnect(
   await activate(card.getByRole("button", { name: copy.verify, exact: true }));
   await expect(card.locator('[data-status="ok"]')).toBeVisible();
   await activate(page.getByRole("button", { name: copy.hub, exact: true }));
-  const connection = region.getByTestId("jira-chat-connection").locator("summary");
-  await expect(connection).toHaveAccessibleName(new RegExp(`^${copy.connection}`, "u"));
-  await activate(connection);
-  await region
-    .getByRole("combobox", { name: new RegExp(`^${copy.pod}`, "u") })
-    .selectOption({ label: name });
-  await activate(region.getByRole("button", { name: copy.apply, exact: true }));
-  await expect(region.getByText(copy.connected, { exact: true })).toBeVisible();
-  await activate(connection);
+  await activate(connectorsTrigger(region, options.locale ?? "en"));
+  const pod = connectorsPanel(page, options.locale ?? "en").getByRole("switch", {
+    name,
+    exact: true,
+  });
+  await activate(pod);
+  await expect(pod).toHaveAttribute("aria-checked", "true");
+  await closeConnectors(region, options.locale ?? "en");
+}
+
+/** The composer's connector trigger; its name carries the active count once any is on. */
+export function connectorsTrigger(region: Locator, locale: JiraBrowserLocale = "en"): Locator {
+  return region.getByRole("button", {
+    name: new RegExp(`^${JIRA_BROWSER_COPY[locale].connectors}(?::|$)`, "u"),
+  });
+}
+
+/** The connector panel is portaled to the document body, outside the Chat window. */
+export function connectorsPanel(page: Page, locale: JiraBrowserLocale = "en"): Locator {
+  return page.getByRole("region", { name: JIRA_BROWSER_COPY[locale].connectors, exact: true });
+}
+
+/** Escape closes the panel and returns focus to its trigger. */
+export async function closeConnectors(
+  region: Locator,
+  locale: JiraBrowserLocale = "en",
+): Promise<void> {
+  const trigger = connectorsTrigger(region, locale);
+  if ((await trigger.getAttribute("aria-expanded")) === "true") {
+    await trigger.press("Escape");
+  }
+  await expect(trigger).toHaveAttribute("aria-expanded", "false");
+}
+
+/**
+ * Chat tool use defaults to Full access, where a Jira write runs without a card. Journeys that
+ * prove the exact-action approval first select "Ask for approval", the mode that asks for writes.
+ */
+export async function selectAskForApproval(
+  page: Page,
+  region: Locator,
+  locale: JiraBrowserLocale = "en",
+  activate: (control: Locator) => Promise<void> = (control) => control.click(),
+): Promise<void> {
+  const copy = JIRA_BROWSER_COPY[locale];
+  await activate(connectorsTrigger(region, locale));
+  const ask = connectorsPanel(page, locale)
+    .getByRole("radiogroup", { name: copy.access, exact: true })
+    .getByRole("radio", { name: copy.askForApproval, exact: true });
+  await activate(ask);
+  await expect(ask).toHaveAttribute("aria-checked", "true");
+  await closeConnectors(region, locale);
 }
 
 export async function send(region: Locator, content: string): Promise<void> {

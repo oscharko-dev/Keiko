@@ -1,6 +1,5 @@
 "use client";
 
-import { requestJiraChatConnection } from "./jira-chat-connection-request";
 import { chatConnectedScopeIdentity } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   adoptableGitChat,
@@ -2488,6 +2487,21 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
+  const replaceJiraChat = session.replaceChat;
+  // A lasso from a Jira Pod binds it to the Chat at once (owner decision 2026-11-02): the person's
+  // gesture is the selection, the server re-checks pod ownership and readiness on the PATCH.
+  const bindJiraChat = useCallback(
+    async (chat: Chat, podId: string, target: ChatBindingTarget | undefined): Promise<boolean> => {
+      if (chat.jiraPodBinding?.podId === podId) return true;
+      const updated = await updateGroundingScopes(chat, { jiraPodId: podId }, replaceJiraChat);
+      rememberGroundingChat(updated);
+      if (target !== undefined && !target.isCurrent()) return false;
+      replaceJiraChat(updated);
+      setSourceConnectionNotice(null);
+      return updated.jiraPodBinding?.podId === podId;
+    },
+    [rememberGroundingChat, replaceJiraChat],
+  );
   const handleConnectorBind = useCallback(
     async (
       chatWindowId: string,
@@ -2497,11 +2511,10 @@ function AppShellInner(): ReactNode {
       if (scope.kind === "jira-live") {
         const chat = await resolveChatForWindow(chatWindowId, target);
         if (chat === undefined || (target !== undefined && !target.isCurrent())) return false;
-        return requestJiraChatConnection(
-          chatWindowId,
-          chat.id,
-          scope.podId,
-          () => target?.isCurrent() ?? true,
+        return bindJiraChat(chat, scope.podId, target).catch((error: unknown) =>
+          rejectForConnectionFailure(
+            t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
+          ),
         );
       }
       try {
@@ -2522,6 +2535,7 @@ function AppShellInner(): ReactNode {
       }
     },
     [
+      bindJiraChat,
       groundingMutationKey,
       handleConnectorBindNow,
       rejectForConnectionFailure,
@@ -2529,7 +2543,6 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
-  const replaceJiraChat = session.replaceChat;
   const unbindJiraChat = useCallback(
     async (
       chat: Chat,

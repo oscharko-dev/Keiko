@@ -87,7 +87,7 @@ function context(
         failure: undefined,
         durationMs: 1000,
         toolCalls: 2,
-        approvals: { reads: 1, writes },
+        approvals: { writes },
       };
     },
   };

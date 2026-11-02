@@ -25,6 +25,7 @@ import {
   type ToolResultValidationBinding,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { NATIVE_TOOL_CATALOG_RUNTIME } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { CHAT_TOOL_DEFAULT_MODE } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 const FIRST = "aa6262ad-003d-4440-8519-5b84c3f87f01";
 const SECOND = "aa6262ad-003d-4440-8519-5b84c3f87f02";
@@ -281,9 +282,10 @@ describe("Chat Jira binding persistence", () => {
       corrupted.close();
     }
   });
-  it("defaults to Ask and preserves the legacy Data-Pod scope identity", () => {
+  it("defaults to Full access and preserves the legacy Data-Pod scope identity", () => {
     const chat = store.createChat(project, "Synthetic", "model");
-    expect(chat.toolMode).toBe("governed-assist");
+    expect(chat.toolMode).toBe(CHAT_TOOL_DEFAULT_MODE);
+    expect(chat.toolMode).toBe("autonomous-delivery");
     expect(chat.jiraBindingGeneration).toBe(0);
     const { toolMode: _mode, jiraBindingGeneration: _generation, ...legacy } = chat;
     expect(chat.groundingScopeIdentity).toBe(deriveChatGroundingScopeIdentity(legacy));
@@ -322,8 +324,8 @@ describe("Chat Jira binding persistence", () => {
   it("changes identity for mode or authentication-generation changes", () => {
     const chat = store.createChat(project, "Synthetic", "model");
     const first = store.updateChat(chat.id, { jiraPodId: FIRST }, target());
-    const mode = store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
-    expect(mode.toolMode).toBe("autonomous-delivery");
+    const mode = store.updateChat(chat.id, { toolMode: "governed-assist" });
+    expect(mode.toolMode).toBe("governed-assist");
     expect(mode.jiraPodBinding?.bindingGeneration).toBe(2);
     expect(mode.groundingScopeIdentity).not.toBe(first.groundingScopeIdentity);
     const rotated = store.updateChat(chat.id, { jiraPodId: FIRST }, target(FIRST, 2));
@@ -358,8 +360,66 @@ describe("Chat Jira binding persistence", () => {
     "{}",
     '{"schemaVersion":1,"generation":-1,"mode":"governed-assist"}',
     '{"schemaVersion":1,"generation":1,"mode":"full"}',
+    '{"schemaVersion":2,"generation":-1,"mode":"governed-assist"}',
+    '{"schemaVersion":2,"generation":1,"mode":"full"}',
+    '{"schemaVersion":3,"generation":1,"mode":"governed-assist"}',
   ])("fails closed on corrupt stored authority state: %s", (json) => {
     expect(() => decodeJiraChatState(json)).toThrow("Stored Jira Chat state is invalid.");
+  });
+
+  it.each([
+    ["governed-assist", "autonomous-delivery"],
+    ["supervised-coding", "supervised-coding"],
+    ["autonomous-delivery", "autonomous-delivery"],
+  ] as const)(
+    "migrates a stored version-1 %s state to %s and keeps version 2 untouched",
+    (stored, expected) => {
+      const binding = {
+        podId: FIRST,
+        authenticationGeneration: 1,
+        bindingGeneration: 3,
+        connectedAtMs: 1,
+      };
+      const legacy = JSON.stringify({ schemaVersion: 1, generation: 3, mode: stored, binding });
+      const migrated = decodeJiraChatState(legacy);
+      expect(migrated).toMatchObject({ schemaVersion: 2, generation: 3, mode: expected });
+      expect(migrated.binding?.podId).toBe(FIRST);
+      const current = JSON.stringify({ schemaVersion: 2, generation: 3, mode: stored });
+      expect(decodeJiraChatState(current)).toEqual({
+        schemaVersion: 2,
+        generation: 3,
+        mode: stored,
+      });
+    },
+  );
+
+  it("reads a stored version-1 Ask row as Full access and a stored Supervised row as Supervised", () => {
+    store.close();
+    const dbPath = join(project, "migration.db");
+    store = createNodeUiStore(dbPath);
+    store.createProject(project);
+    const ask = store.createChat(project, "Ask", "model");
+    const supervised = store.createChat(project, "Supervised", "model");
+    const raw = new DatabaseSync(dbPath);
+    try {
+      const write = raw.prepare("UPDATE chats SET jira_state_json = ? WHERE id = ?");
+      write.run(
+        JSON.stringify({ schemaVersion: 1, generation: 0, mode: "governed-assist" }),
+        ask.id,
+      );
+      write.run(
+        JSON.stringify({ schemaVersion: 1, generation: 0, mode: "supervised-coding" }),
+        supervised.id,
+      );
+    } finally {
+      raw.close();
+    }
+    expect(store.findChatById(ask.id)?.toolMode).toBe("autonomous-delivery");
+    expect(store.findChatById(supervised.id)?.toolMode).toBe("supervised-coding");
+    expect(store.updateChat(ask.id, { toolMode: "governed-assist" }).toolMode).toBe(
+      "governed-assist",
+    );
+    expect(store.findChatById(ask.id)?.toolMode).toBe("governed-assist");
   });
 
   it("persists body-free binding/mode evidence through the registered writer and reader", () => {
@@ -386,7 +446,7 @@ describe("Chat Jira binding persistence", () => {
         correlationId: "jira-binding-proof",
         jiraSourceCount: 1,
         jiraBindingGeneration: 1,
-        toolMode: "governed-assist",
+        toolMode: "autonomous-delivery",
       });
       expect(lines[2]).toMatchObject({
         jiraSourceCount: 0,

@@ -44,7 +44,6 @@ import { handleGroundedAsk, modelWindowAwareBudget } from "./grounded-qa.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
-import { handleDecideChatReadConsent } from "./atlassian/chatReadConsentRoutes.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -76,11 +75,10 @@ afterEach(async () => {
 });
 
 it.each(["new-turn", "fresh-registries"] as const)(
-  "reuses still-valid read consent for a real mixed Gateway call after %s",
+  "reuses its still-valid accepted read grant for a real mixed Gateway call after %s",
   async (kind) => {
     const f = runtime();
     const original = approvalOwner(f.deps);
-    const firstDecision = vi.spyOn(original, "waitForChatReadGrant");
     provider();
     const request = {
       chatId: f.chatId,
@@ -88,27 +86,33 @@ it.each(["new-turn", "fresh-registries"] as const)(
       modelId: MODEL,
     };
     expect((await handleGroundedAsk(context(request), f.deps)).status).toBe(200);
-    expect(firstDecision).toHaveBeenCalledTimes(1);
-    const first = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant;
-    if (first === undefined) throw new Error("Missing consent projection");
+    // The first read is granted by the server itself: no human decision, no read-consent part.
+    expect(f.acceptedReadGrants).toHaveLength(1);
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.readGrant?.state).toBe(
+      "granted",
+    );
+    const accepted = original.getChatReadGrant(f.acceptedReadGrants[0] ?? "missing");
+    if (accepted === undefined) throw new Error("Missing accepted read grant");
+    const first = projectChatReadGrant(accepted.grant);
+    expect(first.state).toBe("granted");
     let deps = f.deps;
     if (kind === "fresh-registries") {
       original.dispose();
       deps = restartConsentGraph(deps);
     }
     const owner = approvalOwner(deps);
-    const furtherDecision = vi
-      .spyOn(owner, "waitForChatReadGrant")
-      .mockRejectedValue(new Error("A valid Chat consent must not request another approval"));
-    furtherDecision.mockClear();
+    const furtherGrant = vi.spyOn(owner, "acceptChatReadGrant").mockImplementation(() => {
+      throw new Error("A valid Chat read grant must not be requested again");
+    });
+    furtherGrant.mockClear();
     const requests = provider();
     const result = await handleGroundedAsk(context(request), deps);
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     expect(requests).toHaveLength(2);
     expect(f.jiraRequests).toEqual(["GET", "GET"]);
-    expect(furtherDecision).not.toHaveBeenCalled();
+    expect(furtherGrant).not.toHaveBeenCalled();
     const retained = owner.getChatReadGrant(first.grantId);
-    if (retained === undefined) throw new Error("Missing retained consent");
+    if (retained === undefined) throw new Error("Missing retained read grant");
     expect(projectChatReadGrant(retained.grant)).toEqual(first);
     assertContinuedObservation(deps, f.chatId);
     if (kind === "fresh-registries") assertOriginAuthorityNotRestored(deps, retained);
@@ -152,6 +156,7 @@ function secondBoundChat(f: ReturnType<typeof runtime>, separatePod: boolean): s
     {
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
       jiraPodId: podId,
+      toolMode: "governed-assist",
     },
     { verifiedJiraPod: { podId, authenticationGeneration: 1 } },
   );
@@ -223,11 +228,19 @@ it.each([false, true])(
       const transcript = f.deps.store
         .listMessages(id)
         .find((message) => message.role === "user")?.toolTranscript;
-      expect(transcript?.readGrant).toMatchObject({ chatId: id, state: "granted" });
+      expect(transcript?.readGrant?.state).toBe("granted");
       expect(transcript?.exchanges[0]?.result?.status).toBe("completed");
       return transcript;
     });
-    expect(transcripts[0]?.readGrant?.grantId).not.toBe(transcripts[1]?.readGrant?.grantId);
+    // Each Chat holds its own accepted grant, bound to its own subject.
+    const grants = f.acceptedReadGrants.map((grantId) => {
+      const grant = approvalOwner(f.deps).getChatReadGrant(grantId)?.grant;
+      if (grant === undefined) throw new Error("Missing accepted read grant");
+      return grant;
+    });
+    expect(grants.map((grant) => grant.subject.chatId).sort()).toEqual([f.chatId, second].sort());
+    expect(grants.map((grant) => grant.state)).toEqual(["granted", "granted"]);
+    expect(new Set(grants.map((grant) => grant.grantId)).size).toBe(2);
     expect(transcripts[0]?.exchanges[0]?.call.id).not.toBe(transcripts[1]?.exchanges[0]?.call.id);
     expect(f.jiraRequests).toEqual(["GET", "GET"]);
   },
@@ -309,6 +322,8 @@ function runtime(
   chatId: string;
   root: string;
   jiraRequests: string[];
+  /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
+  acceptedReadGrants: string[];
 } {
   const root = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mixed-chat-"));
   const state = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mixed-state-"));
@@ -336,11 +351,14 @@ function runtime(
   configure(deps);
   deps.store.createProject(root);
   const chat = deps.store.createChat(root, "Mixed Chat", MODEL);
+  // Ask for approval is pinned so the concrete write approvals under test stay required; an
+  // unselected Chat resolves Full access.
   deps.store.updateChat(
     chat.id,
     {
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 0 },
       jiraPodId: POD,
+      toolMode: "governed-assist",
     },
     { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
   );
@@ -370,12 +388,11 @@ function runtime(
         });
       },
   );
-  vi.spyOn(approvals, "waitForChatReadGrant").mockImplementation(async (id) => {
-    const result = await handleDecideChatReadConsent(
-      context({ decision: "approve", disclosureVersion: "jira-chat-read-v1" }, id),
-      deps,
-    );
-    expect(result.status).toBe(200);
+  const acceptedReadGrants: string[] = [];
+  const accept = approvals.acceptChatReadGrant.bind(approvals);
+  vi.spyOn(approvals, "acceptChatReadGrant").mockImplementation((grantId, ...rest) => {
+    acceptedReadGrants.push(grantId);
+    return accept(grantId, ...rest);
   });
   vi.spyOn(approvals, "waitForChatWriteApproval").mockImplementation(async (id) => {
     const entry = approvals.getChatWriteApproval(id);
@@ -386,7 +403,7 @@ function runtime(
     );
     expect(result.status).toBe(200);
   });
-  return { deps, chatId: chat.id, root, jiraRequests };
+  return { deps, chatId: chat.id, root, jiraRequests, acceptedReadGrants };
 }
 
 function credentialContext(authRef: string, body: Record<string, unknown> = {}): RouteContext {
@@ -418,6 +435,7 @@ async function patchOwnedChat(
     {
       ...context({
         jiraPodId: podId,
+        ...(podId === null ? {} : { toolMode: "governed-assist" }),
         expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(existing),
       }),
       url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(chatId)}`),
@@ -1012,12 +1030,13 @@ async function startDeadlineMixedTurn(): Promise<{
   Object.assign(f.deps, { chatToolTurnBudget: THIRTY_CALL_BUDGET });
   const startedAt = Date.now();
   const registry = approvalOwner(f.deps);
-  const waitForRead = vi.spyOn(registry, "waitForChatReadGrant");
-  const decide = waitForRead.getMockImplementation();
-  if (decide === undefined) throw new Error("Missing consent fixture");
-  waitForRead.mockImplementation(async (...args) => {
-    await vi.advanceTimersByTimeAsync(299000);
-    return decide(...args);
+  // The turn spends nearly its whole budget before its first tool dispatch.
+  const acceptRead = vi.spyOn(registry, "acceptChatReadGrant");
+  const accept = acceptRead.getMockImplementation();
+  if (accept === undefined) throw new Error("Missing read grant fixture");
+  acceptRead.mockImplementation((...args) => {
+    vi.advanceTimersByTime(299000);
+    return accept(...args);
   });
   const requests = provider();
   const nativeFetch = vi.mocked(fetch).getMockImplementation();
@@ -1065,7 +1084,7 @@ async function startDeadlineMixedTurn(): Promise<{
   return { f, requests, pending, startedAt };
 }
 
-it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent awaiting read consent", async () => {
+it("answers mixed synthesis from its transcript at the accepted turn deadline after time spent before its first tool dispatch", async () => {
   const { f, requests, pending, startedAt } = await startDeadlineMixedTurn();
   try {
     await vi.advanceTimersByTimeAsync(1001);
@@ -1743,29 +1762,31 @@ it("keeps Memory capture governed when an empty-pack Jira turn has Full access",
   expect((result.body as GroundedAnswer).memory?.context.memories).toEqual([]);
 });
 
-it("abstains from fabricated Jira facts after refused consent with empty Data evidence", async () => {
-  const f = runtime();
+it("abstains from fabricated Jira facts after a rejected write with empty Data evidence", async () => {
+  const f = runtime(true);
   rmSync(join(f.root, "src"), { recursive: true });
   const registry = f.deps.atlassianActionApprovalRegistry;
   if (registry === undefined) throw new Error("Missing approval owner");
-  vi.spyOn(registry, "waitForChatReadGrant").mockImplementation(async (id) => {
+  vi.spyOn(registry, "waitForChatWriteApproval").mockImplementation(async (id) => {
+    const entry = registry.getChatWriteApproval(id);
+    if (entry === undefined) throw new Error("Missing write approval");
     expect(
       (
-        await handleDecideChatReadConsent(
-          context({ decision: "reject", disclosureVersion: "jira-chat-read-v1" }, id),
+        await handleDecideChatWriteApproval(
+          context({ decision: "reject", actionDigest: entry.approval.actionDigest }, id),
           f.deps,
         )
       ).status,
     ).toBe(200);
   });
-  const requests = provider(["tool", "answer"], "Invented Jira fact: project SYN was released.");
+  const requests = provider(["write", "answer"], "Invented Jira fact: project SYN was released.");
   const result = await handleGroundedAsk(
-    context({ chatId: f.chatId, content: "List Jira projects.", modelId: MODEL }),
+    context({ chatId: f.chatId, content: "Add the Jira comment.", modelId: MODEL }),
     f.deps,
   );
   expect(result.status).toBe(200);
   expect(requests).toHaveLength(2);
-  expect(f.jiraRequests).toEqual([]);
+  expect(f.jiraRequests.filter((method) => method !== "GET")).toEqual([]);
   expect((result.body as GroundedAnswer).content).not.toContain("Invented Jira fact");
   expect((result.body as GroundedAnswer).citations).toEqual([]);
   expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]?.result?.status).toBe(

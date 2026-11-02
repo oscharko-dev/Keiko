@@ -200,7 +200,7 @@ import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPrefe
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
-import { useCodingWorkbenchJiraPod } from "./useCodingWorkbenchJiraPod";
+import { useCodingWorkbenchConnectors } from "./useCodingWorkbenchConnectors";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
@@ -919,7 +919,6 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
-  onOpenMcpSettings,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
@@ -927,7 +926,6 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
-  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -1035,7 +1033,6 @@ export function CodingWorkbenchWindow({
     <WorkbenchContent
       history={history}
       onOpenHistory={onOpenHistory}
-      onOpenMcpSettings={onOpenMcpSettings}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -1305,7 +1302,6 @@ function useWorkbenchCatalogEvidence(
 }
 
 interface WorkbenchContentProps {
-  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly history: CodingTaskSession;
   readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
@@ -1485,11 +1481,6 @@ function WorkbenchHeader({
           active={runIsActive}
           onHistory={columns.onOpenHistory}
         />
-        {columns.onOpenMcpSettings !== undefined && (
-          <button type="button" onClick={columns.onOpenMcpSettings}>
-            {t("codingWorkbench.mcp.manage")}
-          </button>
-        )}
       </div>
       <CodingWorkbenchTrustAffordance
         binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -1599,10 +1590,10 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
-  const jiraPod = useCodingWorkbenchJiraPod();
+  const connectors = useCodingWorkbenchConnectors();
   const issueIntake = useCodingWorkbenchIssueIntake(
     repositoryRoot ?? "",
     `${activeWorkspace.activeBinding?.workspaceId ?? ""}:${history.conversationId ?? ""}`,
@@ -1713,7 +1704,8 @@ function WorkbenchColumns({
     promptDelivery,
     taskIntent,
     projectMemoryEnabled,
-    jiraPodId: jiraPod.podId,
+    jiraPodId: connectors.jiraPodId,
+    mcpServers: connectors.mcpServers,
     conversationId: history.conversationId,
     fork: history.fork,
     resumeMode,
@@ -1738,7 +1730,7 @@ function WorkbenchColumns({
       startBlockedReason={startBlocker}
       projectMemoryEnabled={projectMemoryEnabled}
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}
-      jiraPod={jiraPod.selection}
+      connectors={connectors.menu}
       autonomyMode={confirmedMode(state)}
       autonomyLabel={confirmedModeLabel(state, t)}
       activeRunMode={activeRunMode(state)}

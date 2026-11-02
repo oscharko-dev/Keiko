@@ -39,6 +39,26 @@ each byte of a manifest the run was authorized to write added friction without c
 paused twice within 22 seconds for the same manifest and delivered nothing. The two modes that ask
 before risky work keep asking.
 
+Amended a third time on 2026-11-02 (owner decision): package-script trust is a mode-dependent
+disposition, not a hard, mode-independent denial. ADR-0129 D3 names the hard denials (invalid or
+expired authority, workspace escape, denied sensitive paths, secret exfiltration, unsupported
+actions, exhausted budgets, platform restrictions) and script trust is not among them: in
+`autonomous-delivery` the validated Authority Envelope allows file and command work inside the run's
+workspace without per-action approval, and a confirmation that nothing contains added friction
+without safety (a Full access run asked to allow package scripts it had been authorized to write
+and run). `decideScriptTrust` therefore takes the run's effective mode and, after every established
+basis has been consulted, admits the run's own workspace root (an ordinary checkout or its managed
+worktree) under the basis `autonomous-envelope` while the root's `package.json` basis is readable
+(`known` or `absent`; an unreadable manifest stays refused). The scripts still run only under the
+verification runner's enforced egress isolation and sandbox (ADR-0043), the dependency install keeps
+`--ignore-scripts`, and the pull request carries the manifest diff. `governed-assist`,
+`supervised-coding` and every caller that supplies no mode (the command runner, the editor routes)
+keep the operator's explicit decision exactly as before. Trust is also asked only once the plan holds
+a script step that would run: a repository without a script for the requested verifier, or a package
+this verifier cannot install for, has nothing to allow and never pauses a run. The runner's selection
+line (`editor.verification.execute`, `state: "selected"`) names the basis and, for
+`autonomous-envelope`, the `package.json` digest it answered for (`trustManifestDigest`).
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -278,7 +298,10 @@ rule the verification runner, the command runner and the agent verification rout
 record merely derived from the repository never serves as that alternative — it inherits the
 repository's grant and stops with it — and the Coding Workbench offers the worktree grant as one
 explicit operator action only once the runner's own decision for the worktree is approval-required
-(2026-09-10, run 8). In `autonomous-delivery` — and in no other mode — one further basis exists under
+(2026-09-10, run 8). In `autonomous-delivery` — and in no other mode — two further bases exist. The first (2026-11-02,
+`autonomous-envelope`) admits the run's own root without any standing grant while its manifest basis
+is readable; see the third amendment above, which supersedes the repository-grant precondition of
+the second basis for the verification runner. The second exists under
 the repository's standing grant: the worktree's current `package.json` is exactly the one the run's
 own last governed effect (an edit or a vetted command) left behind, recorded by
 `WorkspaceScriptTrustService.admitRunManifest` after every completed effect and consulted by the same
@@ -291,9 +314,10 @@ manifest diff to review before anything persists. The admission is held in memor
 worktree's canonical root, bound to the exact manifest bytes (the same trust-basis fact), expires
 with the run's authority and is revoked with the run; a manifest changed by anything else since — the
 operator's editor, another process — no longer matches and is the same `worktree-manifest-drift` as
-before. A repository nobody trusted admits no run manifest (`repository-not-trusted` stands), an
-explicit worktree grant takes precedence, and `governed-assist` and `supervised-coding` never use this
-basis: they ask before risky work by definition. Every admission and revocation leaves a body-free
+before. A repository nobody trusted admits no run manifest (`repository-not-trusted` stands) unless the
+`autonomous-envelope` basis above applies, an explicit worktree grant takes precedence, and
+`governed-assist` and `supervised-coding` never use either basis: they ask before risky work by
+definition. Every admission and revocation leaves a body-free
 line (`workspace-script-trust.run-manifest-admitted` with the manifest digest,
 `workspace-script-trust.run-manifest-revoked` with the count), and the runner's selection line names
 the basis the scripts ran under (`trustBasis`). Every refusal names its reason in the closed

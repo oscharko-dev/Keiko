@@ -1,6 +1,11 @@
 "use client";
 
-import { JiraChatConnection } from "./JiraChatConnection";
+import { ChatConnectorsControl } from "./ChatConnectorsControl";
+import {
+  ConnectorWindowsProvider,
+  useConnectorWindows,
+  useWorkspaceConnectorWindows,
+} from "./connector-windows-context";
 import { JiraChatTools } from "./JiraChatTools";
 import { ChatDraftStatus } from "./ChatDraftStatus";
 import { MissingEvidenceActions } from "./MissingEvidenceActions";
@@ -2288,7 +2293,23 @@ function ComposerContextControls({
       </div>
       <ChatContextMeterContainer session={session} />
       <ChatSkillControl session={session} />
+      <ComposerConnectorsControl session={session} />
     </div>
+  );
+}
+
+function ComposerConnectorsControl({ session }: { readonly session: ChatSessionApi }): ReactNode {
+  const windows = useConnectorWindows();
+  const chat = session.activeChat;
+  if (chat === undefined) return null;
+  return (
+    <ChatConnectorsControl
+      key={chat.id}
+      chat={chat}
+      onChatChanged={session.replaceChat}
+      onManageServers={windows?.manageServers}
+      onManagePods={windows?.managePods}
+    />
   );
 }
 
@@ -4550,7 +4571,6 @@ function ChatScopeHeaderImpl({
         catalog={catalog}
         connected={connected}
       />
-      <JiraChatConnection key={chat.id} chat={chat} onChatChanged={onChatChanged} />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}
@@ -5912,62 +5932,64 @@ export function ChatWindow({
     setFocusedQuestionId(null);
   }, [activeChat?.id]);
 
+  const connectorWindows = useWorkspaceConnectorWindows(previewWindows?.add);
   return (
-    <div
-      className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
-    >
-      <ChatWindowStatusHeader
-        activeChat={activeChat}
-        replaceChat={replaceChat}
-        memoryControl={memoryControl}
-        pendingGitChangeComparisons={linkedGitChangeComparisons}
-        latestMemory={latestMemory}
-        memoryBudgetTokens={memoryBudgetTokens}
-        setMemoryBudgetTokens={setMemoryBudgetTokens}
-        acceptMemoryCandidate={acceptMemoryCandidate}
-        rejectMemoryCandidate={rejectMemoryCandidate}
-        forgetMemoryAction={forgetMemoryAction}
-        memoryDisclosure={memoryDisclosure}
-        noEligibleModels={noEligibleModels}
-        loading={loading}
-      />
-      {/* uiux-fix F009 C078 — the log is a scrollable region with (often) no
+    <ConnectorWindowsProvider value={connectorWindows}>
+      <div
+        className={`chatw${effectiveCompact ? " chatw-compact" : ""}${effectiveMinimal ? " chatw-minimal" : ""}`}
+      >
+        <ChatWindowStatusHeader
+          activeChat={activeChat}
+          replaceChat={replaceChat}
+          memoryControl={memoryControl}
+          pendingGitChangeComparisons={linkedGitChangeComparisons}
+          latestMemory={latestMemory}
+          memoryBudgetTokens={memoryBudgetTokens}
+          setMemoryBudgetTokens={setMemoryBudgetTokens}
+          acceptMemoryCandidate={acceptMemoryCandidate}
+          rejectMemoryCandidate={rejectMemoryCandidate}
+          forgetMemoryAction={forgetMemoryAction}
+          memoryDisclosure={memoryDisclosure}
+          noEligibleModels={noEligibleModels}
+          loading={loading}
+        />
+        {/* uiux-fix F009 C078 — the log is a scrollable region with (often) no
           focusable children: tabIndex makes it keyboard-scrollable (axe
           scrollable-region-focusable); role="log" keeps the implicit polite
           live-region semantics the previous aria-live="polite" provided.
           C090 — onScroll tracks whether the reader is near the bottom. */}
-      <ChatWindowLog
-        regionRef={logRegionRef}
-        stickRef={stickRef}
-        onLogScroll={onLogScroll}
-        pendingQuestionScrollRef={pendingQuestionScrollRef}
-        focusedQuestionId={focusedQuestionId}
-        setFocusedQuestionId={setFocusedQuestionId}
-        visible={visible}
-        hasLiveStreamingAssistant={hasLiveStreamingAssistant}
-        activeChat={activeChat}
-        effectiveMinimal={effectiveMinimal}
-        showQuestionMap={showQuestionMap}
-        questionMapItems={questionMapItems}
-        scrollToQuestion={scrollToQuestion}
-        streamingAssistantMessage={streamingAssistantMessage}
-        onOpenRunResult={onOpenRunResult}
-        repositoryRoots={repositoryRoots}
-        openRepositoryReference={openRepositoryReference}
-        previewWindows={previewWindows}
-        windowId={windowId}
-        sending={sending}
-        sendStatus={sendStatus}
-        regeneratingMessageId={regeneratingMessageId}
-        cancelGrounded={cancelGrounded}
-        regenerateMessage={regenerateMessage}
-        cancelSend={cancelSend}
-        registerQuestionAnchor={registerQuestionAnchor}
-        lastSentDocuments={lastSentDocuments}
-        lastSentImages={lastSentImages}
-      />
+        <ChatWindowLog
+          regionRef={logRegionRef}
+          stickRef={stickRef}
+          onLogScroll={onLogScroll}
+          pendingQuestionScrollRef={pendingQuestionScrollRef}
+          focusedQuestionId={focusedQuestionId}
+          setFocusedQuestionId={setFocusedQuestionId}
+          visible={visible}
+          hasLiveStreamingAssistant={hasLiveStreamingAssistant}
+          activeChat={activeChat}
+          effectiveMinimal={effectiveMinimal}
+          showQuestionMap={showQuestionMap}
+          questionMapItems={questionMapItems}
+          scrollToQuestion={scrollToQuestion}
+          streamingAssistantMessage={streamingAssistantMessage}
+          onOpenRunResult={onOpenRunResult}
+          repositoryRoots={repositoryRoots}
+          openRepositoryReference={openRepositoryReference}
+          previewWindows={previewWindows}
+          windowId={windowId}
+          sending={sending}
+          sendStatus={sendStatus}
+          regeneratingMessageId={regeneratingMessageId}
+          cancelGrounded={cancelGrounded}
+          regenerateMessage={regenerateMessage}
+          cancelSend={cancelSend}
+          registerQuestionAnchor={registerQuestionAnchor}
+          lastSentDocuments={lastSentDocuments}
+          lastSentImages={lastSentImages}
+        />
 
-      {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
+        {/* Issue #1560 — ONE composer render site across the empty→populated transition. The composer was
           previously rendered in two separate conditional slots (one for visible.length === 0, one for
           > 0). Because those are distinct positions in the child list, React unmounted the empty-state
           ComposerCore and mounted a fresh one the instant the first message landed — resetting its local
@@ -5977,41 +5999,42 @@ export function ChatWindow({
           and its live dialogue session — across the empty→populated transition. The condition is the
           exact union of the two prior slots (a chat is open, or messages exist), and the placeholder
           keeps the empty+loading "Connecting…" wording, so the rendered surface is unchanged. */}
-      <MissingEvidenceActions
-        chat={activeChat}
-        answer={
-          session.latestGrounded ??
-          messages.findLast(
-            (message) => message.role === "assistant" && message.groundedAnswer !== undefined,
-          )?.groundedAnswer
-        }
-        onChatChanged={replaceChat}
-        setDraft={session.setDraft}
-        draft={draft}
-        focusComposer={() => composerInputRef.current?.focus()}
-      />
-      <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
-      <ChatSourceTransitionStatus transition={session.groundingScopeTransition} />
-      <ChatWindowComposerFooter
-        visible={visible}
-        activeChat={activeChat}
-        suspended={suspended}
-        effectiveCompact={effectiveCompact}
-        effectiveMinimal={effectiveMinimal}
-        effectiveControlsNarrow={effectiveControlsNarrow}
-        effectiveBarCompact={effectiveBarCompact}
-        ready={ready}
-        loading={loading}
-        onSubmit={submitComposer}
-        inputRef={composerInputRef}
-        error={displayedError}
-        clearError={session.clearError}
-        notice={notice}
-        clearNotice={session.clearNotice}
-        canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
-        retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
-        discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
-      />
-    </div>
+        <MissingEvidenceActions
+          chat={activeChat}
+          answer={
+            session.latestGrounded ??
+            messages.findLast(
+              (message) => message.role === "assistant" && message.groundedAnswer !== undefined,
+            )?.groundedAnswer
+          }
+          onChatChanged={replaceChat}
+          setDraft={session.setDraft}
+          draft={draft}
+          focusComposer={() => composerInputRef.current?.focus()}
+        />
+        <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
+        <ChatSourceTransitionStatus transition={session.groundingScopeTransition} />
+        <ChatWindowComposerFooter
+          visible={visible}
+          activeChat={activeChat}
+          suspended={suspended}
+          effectiveCompact={effectiveCompact}
+          effectiveMinimal={effectiveMinimal}
+          effectiveControlsNarrow={effectiveControlsNarrow}
+          effectiveBarCompact={effectiveBarCompact}
+          ready={ready}
+          loading={loading}
+          onSubmit={submitComposer}
+          inputRef={composerInputRef}
+          error={displayedError}
+          clearError={session.clearError}
+          notice={notice}
+          clearNotice={session.clearNotice}
+          canonicalVoiceTurnRequiresRetry={canonicalVoiceTurnRequiresRetry === true}
+          retryPendingCanonicalVoiceTurn={retryPendingCanonicalVoiceTurn}
+          discardPendingCanonicalVoiceTurn={discardPendingCanonicalVoiceTurn}
+        />
+      </div>
+    </ConnectorWindowsProvider>
   );
 }

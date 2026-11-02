@@ -1159,6 +1159,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "template-violation",
           "draft-changed",
           "draft-invalid",
+          "requirements-untraced",
         ],
       },
       newDraft: {
@@ -1721,6 +1722,26 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       systemTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      toolDefinitionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      connectorCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      connectorToolCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      connectorUnknownCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -2778,6 +2799,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      mcpServerSelectionCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
     },
     causal: "correlation",
     lifecycle: "end",
@@ -3033,7 +3059,6 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       "chat.tool-authority.operation.read-grant",
       "chat.tool-authority.operation.read-grant-admission",
       "chat.tool-authority.operation.read-grant-lifecycle",
-      "chat.tool-authority.operation.read-consent-route",
       "chat.tool-authority.operation.catalog-read",
       "chat.tool-authority.operation.late-read-result",
       "chat.tool-authority.operation.write-approval",
@@ -17313,7 +17338,19 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["own-root", "repository", "worktree-human-grant", "run-manifest"],
+        values: [
+          "own-root",
+          "repository",
+          "worktree-human-grant",
+          "run-manifest",
+          "autonomous-envelope",
+        ],
+      },
+      trustManifestDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
       },
       verificationStatus: {
         type: "string",

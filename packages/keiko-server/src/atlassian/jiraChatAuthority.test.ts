@@ -87,7 +87,7 @@ beforeEach(() => {
   const created = store.createChat(project, "Jira", "model");
   chat = store.updateChat(
     created.id,
-    { jiraPodId: POD },
+    { jiraPodId: POD, toolMode: "governed-assist" },
     { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
   );
   metadata = [

@@ -48,6 +48,8 @@ export type TraceResolution =
 
 export interface TraceSession {
   readonly resolve: (references: readonly string[]) => TraceResolution;
+  /** How many requirement units the Chat's Knowledge Pods hold; zero when none can be read. */
+  readonly unitCount: () => number;
   readonly close: () => void;
 }
 
@@ -116,28 +118,37 @@ export function openTraceSession(deps: UiHandlerDeps, turn: TraceTurn): TraceSes
   let opened: Opened | "no-knowledge-pod" | undefined;
   let failed = false;
   const redact = contentRedact(deps);
+  const open = (): Opened | "no-knowledge-pod" | "unavailable" => {
+    if (failed) return "unavailable";
+    try {
+      opened ??= openCollection(deps, turn);
+      return opened;
+    } catch (error) {
+      failed = true;
+      emitServerDiagnostic(
+        deps.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: correlationIdOrUnknown(turn.correlationId),
+          operation: "knowledge.requirement-trace",
+          source: "requirement-trace",
+          error,
+          redact: () => "server-operation-failed",
+        }),
+      );
+      return "unavailable";
+    }
+  };
   return {
     resolve: (references): TraceResolution => {
-      if (failed) return { ok: false, reason: "unavailable", problems: [] };
-      try {
-        opened ??= openCollection(deps, turn);
-        if (opened === "no-knowledge-pod")
-          return { ok: false, reason: "no-knowledge-pod", problems: [] };
-        return resolveAgainst(opened, references, redact);
-      } catch (error) {
-        failed = true;
-        emitServerDiagnostic(
-          deps.diagnostics,
-          serverDiagnosticFromError({
-            correlationId: correlationIdOrUnknown(turn.correlationId),
-            operation: "knowledge.requirement-trace",
-            source: "requirement-trace",
-            error,
-            redact: () => "server-operation-failed",
-          }),
-        );
-        return { ok: false, reason: "unavailable", problems: [] };
-      }
+      const current = open();
+      if (current === "unavailable") return { ok: false, reason: "unavailable", problems: [] };
+      if (current === "no-knowledge-pod")
+        return { ok: false, reason: "no-knowledge-pod", problems: [] };
+      return resolveAgainst(current, references, redact);
+    },
+    unitCount: (): number => {
+      const current = open();
+      return typeof current === "string" ? 0 : current.collection.units.length;
     },
     close: (): void => {
       if (opened !== undefined && opened !== "no-knowledge-pod") opened.close();

@@ -1236,6 +1236,7 @@ export async function createChat(input: CreateChatInput): Promise<ChatResponse> 
 
 export interface UpdateChatInput {
   jiraPodId?: string | null;
+  mcpServers?: readonly string[] | null;
   toolMode?: CodingWorkbenchMode;
   expectedGroundingScopeIdentity?: string;
   title?: string;

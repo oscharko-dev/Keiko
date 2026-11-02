@@ -131,7 +131,10 @@ export async function createMcpChatToolTurn(
   correlationId: string | undefined,
 ): Promise<McpChatToolTurn | undefined> {
   const correlation = correlationIdOrUnknown(correlationId);
-  const managed = await deps.mcpChatCatalog?.get(correlation);
+  const managed = await deps.mcpChatCatalog?.get(
+    correlation,
+    deps.store.findChatById(message.chatId)?.mcpServers,
+  );
   if (managed === undefined) return undefined;
   if (!chatModelSupportsTools(deps, modelId)) {
     const generation = deps.gatewayConfig?.generation();

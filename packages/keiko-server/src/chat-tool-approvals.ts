@@ -10,6 +10,7 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import { randomUUID } from "node:crypto";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./atlassian/actionApprovals.js";
 import {
@@ -36,29 +37,47 @@ export interface ChatToolApprovalContext {
   readonly publish: () => Promise<void>;
   readonly writeExchange: (invocationId: string) => ChatToolExchange | undefined;
 }
-export async function waitForChatToolReadConsent(
-  input: ChatToolApprovalContext,
+/**
+ * Accepts the read grant a Chat tool source requested (owner decision 2026-11-02). The person
+ * connected the Jira Pod or configured the MCP server for this Chat; that connection is the consent,
+ * so a read never waits for a separate approval. The grant keeps its lifecycle: a Pod switch, a
+ * token or configuration change, or expiry revokes it and the next read requests a new one.
+ */
+export async function acceptChatToolReadGrant(
+  input: Pick<ChatToolApprovalContext, "deps" | "message" | "correlationId" | "publish">,
   grant: ChatToolReadGrantView,
 ): Promise<void> {
-  const { deps, message, correlationId, signal } = input;
+  const { deps, message, correlationId } = input;
   const registry = deps.atlassianActionApprovalRegistry;
   requireDispatch(registry !== undefined, "denied", "approval-required");
-  deps.store.updateChatToolTranscript(message.id, { kind: "read-consent", grant }, correlationId);
-  await input.publish();
-  await registry.waitForChatReadGrant(grant.grantId, signal);
-  if (
-    signal.aborted &&
-    registry.getChatReadGrant(grant.grantId, correlationId)?.grant.state === "pending"
-  )
-    registry.revokeChatReadGrant(grant.grantId, correlationId);
-  const current = registry.getChatReadGrant(grant.grantId, correlationId);
-  const view =
-    current === undefined
-      ? { ...grant, state: "expired" as const }
-      : projectChatReadGrant(current.grant);
+  const entry = registry.getChatReadGrant(grant.grantId, correlationId);
+  requireDispatch(entry !== undefined, "denied", "approval-required");
+  const proof = sha256Hex(
+    canonicalise({
+      kind:
+        entry.grant.kind === "mcp-chat-read-grant"
+          ? "mcp-chat-read-binding"
+          : "jira-chat-read-binding",
+      grantId: entry.grant.grantId,
+      subject: entry.grant.subject,
+      authority: entry.authority,
+      disclosureVersion: entry.grant.disclosureVersion,
+      acceptedAt: new Date().toISOString(),
+    }),
+  );
+  const accepted = registry.acceptChatReadGrant(
+    entry.grant.grantId,
+    entry.grant.subject,
+    entry.authority,
+    proof,
+    correlationId,
+  );
+  requireDispatch(accepted.ok, "denied", "approval-required");
+  // The granted grant is the turn's evidence of what it was allowed to read. No card shows it: the
+  // Chat renders nothing for a granted read.
   deps.store.updateChatToolTranscript(
     message.id,
-    { kind: "read-consent", grant: view },
+    { kind: "read-consent", grant: projectChatReadGrant(accepted.grant) },
     correlationId,
   );
   await input.publish();

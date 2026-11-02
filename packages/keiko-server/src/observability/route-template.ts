@@ -198,7 +198,6 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "mark-ready",
   "mcp",
   "servers",
-  "chat-read-consent",
   "chat-write-approval",
   "memory",
   "merge",

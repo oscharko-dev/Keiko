@@ -7,8 +7,11 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { processServerLogSink } from "../process-log-sink.js";
 
-/** Refusals of the final `jira.draft` call that names a staged draft, beside the staging ones. */
-type JiraDraftSubmitRefusal = "draft-changed" | "draft-invalid";
+/**
+ * Refusals of the final `jira.draft` call beside the staging ones. `requirements-untraced` is the
+ * once-per-turn advisory for a draft whose items name no requirement in a Chat that holds some.
+ */
+type JiraDraftSubmitRefusal = "draft-changed" | "draft-invalid" | "requirements-untraced";
 type JiraDraftRefusalKind = JiraDraftRefusal | JiraDraftSubmitRefusal;
 
 const COUNT_FIELD = { type: "integer", dataClass: "count", required: true } as const;
@@ -41,6 +44,7 @@ const JIRA_DRAFT_OPERATION = defineActivityLogOperation({
         "template-violation",
         "draft-changed",
         "draft-invalid",
+        "requirements-untraced",
       ],
     },
     newDraft: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -79,6 +83,7 @@ const REFUSAL_KIND: Readonly<Record<JiraDraftRefusalKind, ActivityLogErrorKind>>
   "template-violation": "invalid-request",
   "draft-changed": "conflict",
   "draft-invalid": "invalid-request",
+  "requirements-untraced": "invalid-request",
 };
 
 /** Counts and closed words only: no summary, field value, issue key, ref or draft id. */

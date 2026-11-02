@@ -131,20 +131,13 @@ async function selectRulesSkill(ctx, chatId) {
   );
 }
 
-async function approveReadGrant(ctx, grant, decisions) {
-  if (grant?.state !== "pending" || decisions.ids.has(grant.grantId)) return;
-  decisions.ids.add(grant.grantId);
-  decisions.reads += 1;
-  const id = encodeURIComponent(grant.grantId);
-  await api(
-    ctx,
-    "read-consent",
-    `/api/atlassian-connectors/action-approvals/${id}/chat-read-consent`,
-    {
-      decision: "approve",
-      disclosureVersion: grant.disclosureVersion,
-    },
-  );
+/**
+ * A read never waits for a person (owner decision 2026-11-02): the server establishes the grant
+ * itself, so a grant that is still pending is a product regression, never a step to approve.
+ */
+function refuseReadConsent(grant) {
+  if (grant?.state === "pending")
+    throw new TypeError("A read grant waited for a human decision; the server must establish it");
 }
 
 /**
@@ -170,7 +163,7 @@ async function approveWrite(ctx, exchange, decisions, observe) {
 }
 
 async function approvePending(ctx, transcript, decisions, observe) {
-  await approveReadGrant(ctx, transcript?.readGrant, decisions);
+  refuseReadConsent(transcript?.readGrant);
   await (transcript?.exchanges ?? []).reduce(
     (previous, exchange) => previous.then(() => approveWrite(ctx, exchange, decisions, observe)),
     Promise.resolve(),
@@ -189,10 +182,11 @@ async function messageIds(ctx, chat) {
 
 /**
  * Approves what the product asks for until the request settles or the lab limit passes, and
- * returns how many read grants and write approvals it decided (S05 expects exactly one write).
+ * returns how many write approvals it decided (S05 expects exactly one write). Read grants are
+ * never decided by anyone: the supervisor refuses one that waits.
  */
 async function superviseTurn(ctx, chat, prior, isSettled, observe) {
-  const decisions = { ids: new Set(), reads: 0, writes: 0, records: [] };
+  const decisions = { ids: new Set(), writes: 0, records: [] };
   const started = Date.now();
   while (!isSettled() && Date.now() - started < TURN_LIMIT_MS) {
     const observed = await api(ctx, "observe", messagesPath(ctx, chat), undefined, "GET");
@@ -255,11 +249,11 @@ async function chatTurn(ctx, chat, content, options = {}) {
     if (!settled) send.abort();
     await pending;
   }
-  const { reads, writes, records } = decisions;
+  const { writes, records } = decisions;
   return {
     durationMs: Date.now() - started,
     failure,
-    approvals: { reads, writes, records },
+    approvals: { writes, records },
     ...(await settledTurn(ctx, chat, prior)),
   };
 }

@@ -32,6 +32,7 @@ import {
 } from "../../../packages/keiko-server/dist/coding-app-session/launcherSessionPairingPort.js";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session-pairing";
 import { actorDetails, loadSession, readPrivateFile, requireLicense } from "./lab-client.mjs";
+import { establishedReadGrant } from "./read-grant.mjs";
 import { drainLiveChatTurns } from "./chat-lifecycle.mjs";
 
 process.on("warning", (warning) => {
@@ -286,7 +287,7 @@ export async function configureModel(deps, modelId, session, configPath, options
   );
   console.log(JSON.stringify({ operation: "jira-chat-live-model", verified: true }));
 }
-export async function prepareChat(origin, cookie, session, projectPath, modelId, actor = "api") {
+async function createVerifiedPod(origin, cookie, session, actor) {
   actorDetails(actor);
   if (actor === "admin") throw new TypeError("The laboratory administrator has no synthetic PAT");
   const credential = await jsonRequest(
@@ -313,6 +314,22 @@ export async function prepareChat(origin, cookie, session, projectPath, modelId,
     {},
   );
   assert.equal(verification.status, "ok");
+  return credential;
+}
+/**
+ * A new Chat's tool mode is Full access (owner decision 2026-11-02). A scenario that proves a write
+ * approval passes its own mode, so the Chat asks exactly as the scenario expects.
+ */
+export async function prepareChat(
+  origin,
+  cookie,
+  session,
+  projectPath,
+  modelId,
+  actor = "api",
+  toolMode = undefined,
+) {
+  const credential = await createVerifiedPod(origin, cookie, session, actor);
   const created = await jsonRequest(origin, cookie, "chat-create", "/api/chats", {
     projectPath,
     title: "Synthetic Jira live Chat",
@@ -325,11 +342,13 @@ export async function prepareChat(origin, cookie, session, projectPath, modelId,
     `/api/chats?id=${encodeURIComponent(created.chat.id)}`,
     {
       jiraPodId: credential.livePod.podId,
+      ...(toolMode === undefined ? {} : { toolMode }),
       expectedGroundingScopeIdentity: created.chat.groundingScopeIdentity,
     },
     "PATCH",
   );
   assert.equal(bound.chat.jiraPodBinding.podId, credential.livePod.podId);
+  if (toolMode !== undefined) assert.equal(bound.chat.toolMode, toolMode);
   console.log(JSON.stringify({ operation: "jira-chat-live-binding", verified: true }));
   return bound.chat;
 }
@@ -353,7 +372,11 @@ function startReadTurn(origin, cookie, chat, projectPath, modelId, signal) {
     signal,
   );
 }
-async function observeConsent(origin, cookie, chat, projectPath, signal, settled) {
+/**
+ * A read never waits for a person: the route that decided it is gone and the server establishes
+ * the grant itself. Observing the turn therefore only proves that no grant is ever pending.
+ */
+async function observeNoConsent(origin, cookie, chat, projectPath, signal, settled) {
   while (!settled() && !signal.aborted) {
     const messages = await jsonRequest(
       origin,
@@ -364,29 +387,14 @@ async function observeConsent(origin, cookie, chat, projectPath, signal, settled
       "GET",
       signal,
     );
-    const consent = messages.messages.find(
-      (message) => message.toolTranscript?.readGrant?.state === "pending",
-    );
-    if (consent !== undefined) {
-      assert.equal(consent.toolTranscript.exchanges[0].result, undefined);
-      const grant = consent.toolTranscript.readGrant;
-      const decided = await jsonRequest(
-        origin,
-        cookie,
-        "read-consent",
-        `/api/atlassian-connectors/action-approvals/${encodeURIComponent(grant.grantId)}/chat-read-consent`,
-        { decision: "approve", disclosureVersion: grant.disclosureVersion },
-      );
-      assert.equal(decided.approval.state, "granted");
-      return true;
-    }
+    for (const message of messages.messages) establishedReadGrant(message);
     await new Promise((resolve) => globalThis.setTimeout(resolve, 500));
   }
-  return false;
 }
 function assertCompletedRead(completed) {
   const user = completed.messages.find((message) => message.role === "user");
   assert.equal(user.turnState, "completed");
+  assert.ok(establishedReadGrant(user), "The server establishes the read grant itself");
   const read = user.toolTranscript.exchanges.find(
     (exchange) => exchange.call.name === "jira_projects",
   );
@@ -420,16 +428,8 @@ async function readTurn(origin, cookie, chat, projectPath, modelId) {
     },
   );
   try {
-    const granted = await observeConsent(
-      origin,
-      cookie,
-      chat,
-      projectPath,
-      controller.signal,
-      () => settled,
-    );
+    await observeNoConsent(origin, cookie, chat, projectPath, controller.signal, () => settled);
     const completed = await pending;
-    assert.equal(granted, true);
     assertCompletedRead(completed);
   } finally {
     globalThis.clearTimeout(timeout);

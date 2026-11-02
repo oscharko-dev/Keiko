@@ -28,7 +28,6 @@ export type {
   ChatToolReadGrant,
   ChatToolReadGrantState,
   ChatToolReadGrantView,
-  ChatToolReadConsentDecision,
   ChatToolWriteApprovalView,
   ChatToolWriteApprovalState,
   ChatToolWriteApprovalDecision,

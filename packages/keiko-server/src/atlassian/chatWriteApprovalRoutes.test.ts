@@ -82,7 +82,7 @@ function pendingForChat(
   const created = deps.store.createChat(root, "Approval", "synthetic-model");
   const chat = deps.store.updateChat(
     created.id,
-    { jiraPodId: POD },
+    { jiraPodId: POD, toolMode: "governed-assist" },
     { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
   );
   const binding = chat.jiraPodBinding;

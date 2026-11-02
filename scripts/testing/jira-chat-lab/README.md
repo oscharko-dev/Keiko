@@ -20,7 +20,7 @@ node scripts/testing/jira-chat-lab/catalog-chat.mjs /absolute/private/session ac
 ```
 
 Run groups serially with all other laboratory writers stopped. Each operation has
-its own authenticated Chat, first-read grant and exact write approval. The group
+its own authenticated Chat, a server-established read grant and exact write approval. The group
 creates one uniquely marked synthetic issue, edits it, assigns it, comments once,
 then sends the required transition-screen field and transition together. Independent
 Jira reads verify project counts, current field values, comment counts and change
@@ -63,7 +63,7 @@ first unreturned cursor; a missing/skipping cursor, duplicated record, incorrect
 premature completion fails qualification. Every physical Jira search must retain the exact
 requested cursor, limit and query, and every mutation is refused before forwarding. The
 observer passes real responses through unchanged and records only counts, cursors and statuses.
-The same Chat reuses its first read grant; no write approval is expected. Independent reads
+The same Chat reuses its first server-established read grant; no write approval is expected. Independent reads
 also require unchanged remote state after each page.
 
 The private pending intent is exclusive and retained on failure, together with product state.
@@ -234,9 +234,9 @@ node scripts/testing/jira-chat-lab/chat-read.mjs "$HOME/.local/share/keiko-jira-
 The script creates an isolated temporary product state, pairs through the real launcher
 attestation route, verifies the model using the production tool-calling probe, creates
 and verifies a Live Pod through HTTP, and binds it to a normal Chat. It sends one
-canonical turn, observes the server-owned pending read consent through GET, explicitly
-approves through the authenticated consent route, and checks the completed canonical
-turn, actual `jira_projects` result and final model answer. It uses the shared gateway,
+canonical turn and observes that no read consent is ever pending: reads need no human
+approval (owner decision 2026-11-02), the retired consent route is gone and the server
+establishes the read grant itself. It then checks the completed canonical turn, actual `jira_projects` result and final model answer. It uses the shared gateway,
 catalog and MCP host with real TLS/PAT access to the lab; no model/Jira transport is
 mocked. License checks bracket the group. Output and persisted Activity Logs are
 content-free. A log-sink warning makes the process fail. Private temporary product
@@ -259,10 +259,11 @@ the transport argument is `buffered`, `stream` or `browser`. Run groups sequenti
 stateful laboratory consumer. Each group uses the existing real model probe, authenticated
 normal Chat API, verified HTTPS Live Pod and shared gateway/binder/MCP execution path.
 It requests one unique synthetic comment and independently checks Jira before and after:
-exactly one matching comment and a total count increase of one. Every mode must first
-request its Chat read disclosure; the first two modes additionally require exactly one
+exactly one matching comment and a total count increase of one. The Chat's mode is
+always set explicitly (a new Chat defaults to Full access), every mode reads on a
+server-established grant without a consent step; the first two modes additionally require exactly one
 approval whose preview matches the proposed comment. Full access must require no write
-approval. Streaming must emit the corresponding consent/approval events and one terminal
+approval. Streaming must emit the corresponding read-grant (always granted)/approval events and one terminal
 response without a buffered fallback. Reloaded history must retain the confirmed mutation
 outcome. License checks bracket the complete group.
 
@@ -278,9 +279,9 @@ acceptance matrix require their own evidence.
 
 For `browser`, first build the current UI with `npm run build --workspace @oscharko-dev/keiko-ui`.
 The harness reuses the real browser setup below, creates and verifies the Pod through the
-Knowledge Hub, chooses the requested mode and connects the Chat through visible controls.
-It captures and persists the browser's actual canonical turn identity before approving
-the first read disclosure, checks the exact action textarea, and approves through the
+Knowledge Hub, connects the Chat through the composer's Connectors panel, chooses the requested
+mode with its Access radios and verifies that no read-consent card ever appears. It captures
+and persists the browser's actual canonical turn identity, checks the exact action textarea, and approves through the
 visible button. The rendered terminal state and independent Jira count must both confirm
 the write. Full access must display no write-approval card. Screenshots remain private in
 the session directory; an interrupted browser run retains the same reconciliation marker.
@@ -292,7 +293,7 @@ after the authenticated Chat settings request succeeds. The default is `dropdown
 Append `lifecycle` after the connection choice to additionally rename the same Pod, replace
 its PAT with the distinct synthetic editor identity, verify it again, and remove it through
 visible Hub controls. Independent public API reads confirm stable Pod identity, increased
-credential generation, invalidation of previously granted consent, credential removal and
+credential generation, supersession of the previously established read grant, credential removal and
 Chat disconnection; the workspace edge must disappear too. This optional group requires
 `seed.mjs`'s editor fixture and retains the completed write outcome after lifecycle changes.
 
@@ -307,8 +308,8 @@ node scripts/testing/jira-chat-lab/chat-read.mjs /absolute/private/session actua
 
 The harness serves that static build with its actual CSP, redeems a fresh
 launcher pairing fragment in Chromium, creates and verifies a Jira Pod in the
-Knowledge Hub, and connects an existing empty Chat through the visible controls.
-It sends a prompt through the normal composer, approves the read disclosure,
+Knowledge Hub, and connects an existing empty Chat through the Connectors panel.
+It sends a prompt through the normal composer, requires that no consent card is shown,
 and requires a completed canonical turn, the real project result and a final
 model answer. There are no mocked browser, model or Jira transports.
 
@@ -379,7 +380,7 @@ node scripts/testing/jira-chat-lab/browser-faults.mjs "$HOME/.local/share/keiko-
 
 Both cases use the existing real browser Hub/workspace/Chat journey in Ask for approval:
 keyboard connection for lost-response observation, native drag/drop for committed-503
-observation. The exact comment preview and read disclosure require visible decisions.
+observation. The exact comment preview requires a visible decision; the read needs none.
 The same production HTTP decorator described above injects the journal-visible observation
 after one real Jira comment succeeds; it does not cut the browser socket or claim that Jira
 itself returned 503. The browser must display `Jira outcome unknown`.
@@ -444,23 +445,23 @@ read-only before starting another group; never repeat a possibly executed mutati
 private receipt requires the entire selected group and the closing license check. Preparing or
 unit-testing this harness does not count as live acceptance.
 
-## Consent reuse after process restart and token replacement
+## Read-grant reuse after process restart and token replacement
 
 ```bash
 node scripts/testing/jira-chat-lab/consent-lifecycle.mjs /absolute/private/session actual-model-id
 ```
 
-This separate four-turn group uses one persisted Chat and one stable Jira Pod. It grants the first
-buffered read, closes the server, and starts a fresh Node process against the retained product store.
+This separate four-turn group uses one persisted Chat (set to Ask for approval) and one stable Jira
+Pod. The server establishes the grant for the first buffered read (no person decides it), closes the server, and starts a fresh Node process against the retained product store.
 The new process sends a **new** buffered read with a new canonical turn identity and proves an
 actual Jira request without another disclosure. It then replaces the credential through the normal
-authenticated API with the distinct seeded editor token, verifies that the old grant is unavailable,
-reverifies the Pod, and performs a streamed read with fresh consent. A final streamed comment reuses
+authenticated API with the distinct seeded editor token, verifies that the old grant belongs to a superseded authentication generation and that the retired
+consent route stays gone, reverifies the Pod, and performs a streamed read on a fresh server-established grant. A final streamed comment reuses
 that new grant and requires its own concrete action approval. Independent Jira reads prove exactly
 one comment and its editor author, demonstrating that the rotated credential was actually used.
 
 The common Chat observer follows the single newly admitted user row, excluding historical pending
-approvals. Consent reuse is explicit and checks the exact existing grant, Chat, Pod, both generations,
+approvals. Grant reuse is explicit and checks the exact existing grant, Chat, Pod, both generations,
 state and expiry before sending; a write rechecks the grant before approval. Unexpected new
 disclosure fails the reuse proof. Before and after artifact inventories must match, as for the other
 live groups. The private pending intent and product database survive failure; never invoke the
@@ -477,14 +478,15 @@ node scripts/testing/jira-chat-lab/browser-disconnect.mjs /absolute/private/sess
 Run this separate group after a fresh licensed HTTPS/read/write preflight, with other live groups
 stopped. Pin both the compiled runtime and the served `packages/keiko-ui/out` files, together with
 the browser helper closure, before and after the group. The browser creates and verifies a Pod in
-the Hub, connects the ordinary Chat through keyboard workspace ports, grants reading, and approves
-the exact comment preview. Jira receives one real request through the production HTTP port; its
+the Hub, connects the ordinary Chat through keyboard workspace ports (the lasso binds at once; the
+Connectors panel shows the confirmed binding), selects Ask for approval, reads without a consent
+step, and approves the exact comment preview. Jira receives one real request through the production HTTP port; its
 acknowledgement is preserved without injecting a Jira fault.
 
 A qualification-only listener on the actual BFF server intercepts the exact terminal SSE `done`
 frame. It first checks that the matching user turn and assistant answer are already committed in
 the real store, then destroys the actual HTTP response without transmitting that completion frame.
-The earlier read-grant and write-approval frames remain delivered. Chromium's failed-request metadata
+The earlier read-grant (granted, never pending) and write-approval frames remain delivered. Chromium's failed-request metadata
 must confirm the interruption. An existing canonical buffered fallback is permitted and counted;
 the driver never automatically replays a mutation.
 

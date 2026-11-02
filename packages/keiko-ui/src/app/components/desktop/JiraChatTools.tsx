@@ -1,64 +1,16 @@
 "use client";
 import type { ReactNode } from "react";
-import { useJiraDecision } from "./useJiraDecision";
-import { JiraDecisionActions } from "./JiraDecisionActions";
 import { JiraWriteApproval } from "./JiraWriteApproval";
-import type { ChatToolReadGrantView } from "@oscharko-dev/keiko-contracts";
 import type {
   ChatToolExchange,
   ChatToolTranscript,
   ChatTurnState,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import {
-  useOptionalWidgetTranslate as useTranslate,
-  type WidgetMessageKey,
-} from "@/lib/optional-widget-i18n";
-import { decideJiraChatReadConsent } from "@/lib/atlassian-connectors-api";
+import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import { jiraToolLabel, jiraToolState, jiraToolOutcomeHelp } from "./jira-tool-presentation";
 import styles from "./JiraChatTools.module.css";
-import { chatToolReadGrants } from "@/lib/chat-tool-events";
 import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
-const STATE_KEYS: Readonly<Record<ChatToolReadGrantView["state"], WidgetMessageKey>> = {
-  pending: "chat.jira.pending",
-  granted: "chat.jira.granted",
-  rejected: "chat.jira.rejected",
-  expired: "chat.jira.expired",
-  revoked: "chat.jira.revoked",
-};
-
-export function JiraReadConsent({
-  grant,
-  decide = decideJiraChatReadConsent,
-}: {
-  readonly grant: ChatToolReadGrantView;
-  readonly decide?: typeof decideJiraChatReadConsent;
-}): ReactNode {
-  const t = useTranslate();
-  const { view, busy, failed, submit } = useJiraDecision({
-    key: grant.grantId,
-    current: grant,
-    decide: (decision) => decide(grant, decision),
-  });
-  const mcp = grant.kind === "mcp-chat-read";
-  const title = mcp ? "chat.mcp.title" : "chat.jira.title";
-  return (
-    <section className={styles.cmpCard} aria-label={t(title)}>
-      <strong>{t(title)}</strong>
-      <p>{t(mcp ? "chat.mcp.disclosure" : "chat.jira.disclosure")}</p>
-      <output aria-live="polite">{t(busy ? "chat.jira.working" : STATE_KEYS[view.state])}</output>
-      {failed ? <p role="alert">{t("chat.jira.failed")}</p> : null}
-      {view.state === "pending" ? (
-        <JiraDecisionActions
-          disabled={busy}
-          approve={t("chat.jira.approve")}
-          reject={t("chat.jira.reject")}
-          submit={submit}
-        />
-      ) : null}
-    </section>
-  );
-}
 function hasPartialJiraResult(exchange: ChatToolExchange): boolean {
   return (
     !exchange.call.name.startsWith("mcp_") &&
@@ -113,9 +65,6 @@ export function JiraChatTools({
   if (transcript === undefined) return null;
   return (
     <div className={styles.cmpStack}>
-      {chatToolReadGrants(transcript).map((grant) => (
-        <JiraReadConsent key={grant.grantId} grant={grant} />
-      ))}
       {transcript.exchanges.map((exchange) => (
         <div key={exchange.call.id}>
           {exchange.approval === undefined ? null : (

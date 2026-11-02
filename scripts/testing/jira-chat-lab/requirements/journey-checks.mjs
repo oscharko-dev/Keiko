@@ -2,7 +2,7 @@
 // independent judgement of its effects. The live plumbing is injected through the context so the
 // grading is testable without Keiko or Jira:
 //   ctx.turn(chat, content)  -> { answer, failure, durationMs, toolCalls, toolExchanges,
-//                                 approvals: { reads, writes } }
+//                                 approvals: { writes, records } }
 //   ctx.search(query, fields) -> every matching Jira issue (admin read, all pages)
 //   ctx.refusals()           -> count of generation-changed refusals in the live log
 //   ctx.truth                -> generated ground truth of the report project

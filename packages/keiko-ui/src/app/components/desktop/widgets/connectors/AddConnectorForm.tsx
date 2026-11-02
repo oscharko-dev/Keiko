@@ -243,6 +243,12 @@ function ProviderSelect({
   );
 }
 
+/** A Jira Pod's token field carries the one PAT hint; no second paragraph repeats it. */
+function fieldHint(cfg: TextFieldConfig, jiraLive: boolean): { hintKey?: MessageKey } {
+  if (jiraLive && cfg.name === "token") return { hintKey: "atlassianConnectors.live.patHint" };
+  return cfg.hintKey === undefined ? {} : { hintKey: cfg.hintKey };
+}
+
 function EntryFieldsView({
   controller,
   prefix,
@@ -262,9 +268,6 @@ function EntryFieldsView({
           onChange={controller.setProvider}
         />
       ) : null}
-      {controller.jiraLive ? (
-        <p className="acx-hint">{t("atlassianConnectors.live.patHint")}</p>
-      ) : null}
       {TEXT_FIELDS.filter((cfg) => !controller.jiraLive || cfg.name !== "email").map((cfg) => (
         <TextField
           key={cfg.name}
@@ -281,7 +284,7 @@ function EntryFieldsView({
           autoComplete="off"
           disabled={busy}
           {...(cfg.type === undefined ? {} : { type: cfg.type })}
-          {...(cfg.hintKey === undefined ? {} : { hintKey: cfg.hintKey })}
+          {...fieldHint(cfg, controller.jiraLive)}
         />
       ))}
     </>
@@ -308,7 +311,13 @@ function EntryForm({
       ) : null}
       <div className="acx-actions">
         <button type="submit" className="lk-btn lk-btn-primary" disabled={busy}>
-          {busy ? t("atlassianConnectors.add.saving") : t("atlassianConnectors.add.submit")}
+          {busy
+            ? t("atlassianConnectors.add.saving")
+            : t(
+                controller.jiraLive
+                  ? "atlassianConnectors.live.add"
+                  : "atlassianConnectors.add.submit",
+              )}
         </button>
         <button type="button" className="lk-btn" onClick={onClose} disabled={busy}>
           {t("atlassianConnectors.add.cancel")}

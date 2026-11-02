@@ -1,7 +1,11 @@
+import { mcpChatConfigurationDigest, selectedMcpServers } from "./mcpChatSelection.js";
 import { randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { chatToolTurnBudget } from "../chat-tool-turn-budget.js";
-import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  CHAT_TOOL_DEFAULT_MODE,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { MCP_CHAT_READ_DISCLOSURE_VERSION } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import type {
   ChatToolAuthorityEnvelope,
@@ -57,14 +61,18 @@ function currentSubject(
     chat === undefined ||
     chat.status === "closed" ||
     actorDigest === undefined ||
-    settings?.servers.some(
-      (server) =>
-        server.enabled &&
-        (server.discovery === "automatic" || Object.keys(server.tools).length > 0),
-    ) !== true
+    settings === undefined ||
+    !selectedMcpServers(settings.servers, chat.mcpServers).some(
+      (server) => server.discovery === "automatic" || Object.keys(server.tools).length > 0,
+    )
   )
     return undefined;
-  return { kind: "configured-mcp", actorDigest, chatId, configurationDigest: settings.revision };
+  return {
+    kind: "configured-mcp",
+    actorDigest,
+    chatId,
+    configurationDigest: mcpChatConfigurationDigest(settings.revision, chat.mcpServers),
+  };
 }
 
 function validTurnLifetime(deps: McpChatAuthorityDeps, turn: AcceptedJiraChatTurn): boolean {
@@ -95,7 +103,7 @@ function envelopeFor(
   turn: AcceptedJiraChatTurn,
   subject: McpChatToolAuthoritySubject,
 ): McpChatAuthorityEnvelope {
-  const requestedMode = deps.store.findChatById(turn.chatId)?.toolMode ?? "governed-assist";
+  const requestedMode = deps.store.findChatById(turn.chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE;
   const deploymentCeiling = deps.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
   const runId = `chat-${sha256Hex(canonicalise({ chatId: turn.chatId, userMessageId: turn.userMessageId }))}`;
   return {
@@ -199,7 +207,7 @@ export function resolveCurrentMcpChatAuthority(
     );
   if (
     current.envelope.requestedMode !==
-    (deps.store.findChatById(chatId)?.toolMode ?? "governed-assist")
+    (deps.store.findChatById(chatId)?.toolMode ?? CHAT_TOOL_DEFAULT_MODE)
   )
     return recordChatAuthorityResult(
       "current-state",

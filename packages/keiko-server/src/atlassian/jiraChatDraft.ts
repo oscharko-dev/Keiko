@@ -78,6 +78,12 @@ export interface JiraChatDraftExecution {
    * draft is refused.
    */
   readonly openTrace?: (() => TraceSession) | undefined;
+  /**
+   * Whether a draft whose items name no requirement is returned once with guidance instead of run
+   * (S14, #4179). Asked only when the Chat's Pods hold requirement units; true claims the one
+   * advisory of this turn, so sending the same draft again runs it as it is.
+   */
+  readonly adviseUntraced?: (() => boolean) | undefined;
   /** Body-free progress and end-of-run counts for the Activity Log. */
   readonly activity?: ((activity: JiraDraftActivity) => void) | undefined;
   readonly now?: (() => number) | undefined;
@@ -616,6 +622,46 @@ function resolveItemTraces(
   return { traces, refused };
 }
 
+/**
+ * The words for a draft created in a Chat that holds requirements while no item names one. Without
+ * a reference the issues carry no source trace, and later requirement changes cannot reach them.
+ */
+export const JIRA_DRAFT_UNTRACED_GUIDANCE =
+  "Nothing was created. This Chat holds detected requirements, and no item of the draft names the requirements it derives from. " +
+  "If the items derive from them, read knowledge.requirements and put each unit's reference in requirementIds of the items that implement it, then send the draft again. " +
+  "If they do not, send the same draft again unchanged; it is then created as it is. Do not show this message.";
+
+/** No item that can run names a requirement. */
+function untracedRun(draft: JiraDraft, excluded: ReadonlySet<string>): boolean {
+  const runnable = draft.items.filter((item) => !excluded.has(item.ref));
+  return runnable.length > 0 && runnable.every((item) => item.requirementIds === undefined);
+}
+
+function untracedDraft(): ManagedMcpToolResult {
+  return {
+    data: {
+      outcome: "rejected",
+      reason: "field-validation",
+      requirementRefusal: "untraced",
+      guidance: JIRA_DRAFT_UNTRACED_GUIDANCE,
+      items: [],
+    },
+    isError: true,
+  };
+}
+
+/** The once-per-turn advisory applies only when the Chat's Pods actually hold requirement units. */
+function advisesUntraced(
+  input: JiraChatDraftExecution,
+  session: TraceSession | undefined,
+  draft: JiraDraft,
+  excluded: ReadonlySet<string>,
+): boolean {
+  if (input.adviseUntraced === undefined || session === undefined) return false;
+  if (!untracedRun(draft, excluded) || session.unitCount() === 0) return false;
+  return input.adviseUntraced();
+}
+
 function refusedDraft(
   refused: ReadonlyMap<string, Extract<TraceResolution, { ok: false }>>,
 ): ManagedMcpToolResult {
@@ -661,6 +707,7 @@ export async function executeJiraChatDraft(
       logTrace(input.intent.correlationId, "draft", tally);
       return refusedDraft(resolved.refused);
     }
+    if (advisesUntraced(input, session, draft, excluded)) return untracedDraft();
     const items = await runDraft(input, draft, resolved.traces, tally, excluded);
     logTrace(input.intent.correlationId, "draft", tally);
     return draftResult(input.connection.baseUrl, items);
