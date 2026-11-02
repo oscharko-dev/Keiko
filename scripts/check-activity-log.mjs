@@ -13,7 +13,8 @@
 import { spawnSync } from "node:child_process";
 import { performance } from "node:perf_hooks";
 
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 
 // The checks below load built package output (the registry vocabularies, the BFF the failure-path

@@ -20,7 +20,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");

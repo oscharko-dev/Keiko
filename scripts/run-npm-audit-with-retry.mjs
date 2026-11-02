@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 
 import { redact } from "@oscharko-dev/keiko-security";
 
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_ATTEMPTS = 3;

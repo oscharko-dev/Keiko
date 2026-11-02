@@ -15,7 +15,8 @@ import { Buffer } from "node:buffer";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 
 // SPDX IDs and names already present in the repo's resolved transitive graph plus a small
 // permissive set explicitly approved in spec D4. Adding a new license requires a deliberate edit

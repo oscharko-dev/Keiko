@@ -40,7 +40,8 @@ import { isDeepStrictEqual } from "node:util";
 
 import { runSecureWorkspaceReadBuild } from "./build-secure-workspace-read.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
 import {

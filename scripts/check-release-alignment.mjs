@@ -33,7 +33,8 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 
 const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
 const RELEASE_LINE = /^release\/(\d+\.\d+)$/u;

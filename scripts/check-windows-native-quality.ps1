@@ -429,6 +429,9 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
   node (Join-Path $root "native/secure-workspace-read/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "secure-workspace-read boundary qualification failed" }
 
+  node (Join-Path $root "scripts/testing/test-secure-read-windows-paths.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "secure-workspace-read Windows path qualification failed" }
+
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "runtime-supervisor Job Object qualification failed" }
 

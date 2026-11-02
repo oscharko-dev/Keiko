@@ -5,7 +5,8 @@ import { isDeepStrictEqual } from "node:util";
 import { catalogCloseoutHead } from "./check-tool-catalog-closeout.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { sha256, sha256File } from "./lib/digest.mjs";
-import { hostNpmInvocation, resolveHostExecutable } from "./lib/host-executable.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { hostNpmInvocation } from "./lib/host-npm-invocation.mjs";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
   TOOL_CATALOG_QUALIFICATION_COMPONENTS,
