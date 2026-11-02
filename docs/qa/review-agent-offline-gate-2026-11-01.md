@@ -55,6 +55,7 @@ pull request; the replay refuses that, and every row's `split` is `development`.
 | dev-6                                | product           | `912b930f5`: the counter-check wall time raised from 300 to 600 seconds.                                                                                                  | `7c5395d728e4`       | 3       | 33.3 % (1/3, Wilson 95 % interval 6.1 to 79.2 %; 13 presented, 10 unmatched)                 | 3                     | 11 budget-exhausted, 7 complete, 6 deadline-exceeded, 5 files-unprocessed, 1 model-failed          | 845 s            |
 | dev-6                                | counter-check-off | `0feabae3c` (review code as `912b930f5`): every Reviewer candidate is presented without a counter-check.                                                                  | `e7801d852044`       | 4       | 100.0 % (4/4, Wilson 95 % interval 51.0 to 100.0 %; 24 presented, 5 undecided, 15 unmatched) | 3                     | 13 budget-exhausted, 9 complete, 6 files-unprocessed, 1 deadline-exceeded, 1 model-failed          | 631 s            |
 | dev-6 (first attempt)                | roles-swapped     | `8982b14fd` (review code as `912b930f5`): Gemma as Reviewer, Qwen as Counter-checker. Stopped measuring after Gemma's server ran out of GPU memory.                       | `a216908b13b1`       | 0       | n/a                                                                                          | 0                     | 18 skipped/model-unavailable, 6 model-failed, 2 complete, 2 deadline-exceeded, 2 files-unprocessed | 2 s              |
+| dev-6                                | roles-swapped     | `8982b14fd` (review code as `912b930f5`), rerun with the memory bounds below: Gemma as Reviewer, Qwen as Counter-checker.                                                 | `a216908b13b1`       | 0       | n/a (no candidate reported)                                                                  | 0                     | 11 complete, 11 files-unprocessed, 8 deadline-exceeded                                             | 762 s            |
 
 Reading of the runs so far:
 
@@ -129,6 +130,13 @@ Reading of the runs so far:
   a request generates. KV quantization is not available for Gemma's sliding-window layers in
   mlx_lm 0.32.2. The lab runner restarts a server whose generation thread died and records each
   restart.
+- The roles-swapped rerun measured all 30 reviews, and no server needed a restart. Gemma as
+  Reviewer reported no candidate: no `keiko_review_report` call reached the tool. It made 103 tool
+  calls (71 reads, 24 searches, 8 discovers) and then ended its turn. In 12 reviews only one model
+  call completed. Its reviews averaged 74,780 prompt and 5,451 completion tokens, with a median
+  wall time of 762 seconds, and 8 reached the 20-minute run duration.
+- With no candidate, the roles-swapped variant has no rate to compare. The roles as decided (Qwen
+  as Reviewer, Gemma as Counter-checker) remain the holdout configuration.
 
 ## Final holdout run
 
