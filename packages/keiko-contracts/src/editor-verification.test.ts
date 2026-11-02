@@ -446,3 +446,133 @@ describe("isEditorVerificationCatalog", () => {
     ).toBe(false);
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const request = { kinds: ["typecheck"], targetPath: undefined, requestId: undefined };
+    const parsed = publicOwner.parseEditorVerificationRunRequest(request);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.kinds).toEqual(["typecheck"]);
+    expect(parsed.value.kinds).not.toBe(request.kinds);
+    expect(Object.hasOwn(parsed.value, "targetPath")).toBe(false);
+    expect(publicOwner.isVerificationKind("invented")).toBe(false);
+  });
+});
+
+describe.each([
+  ["source", parseEditorVerificationRunRequest],
+  ["public", publicOwner.parseEditorVerificationRunRequest],
+] as const)("3918 final verification kinds %s", (_surface, parse) => {
+  it("refuses an invalid final kind collection", () => {
+    let reads = 0;
+    const value = {
+      get kinds(): readonly string[] {
+        return ++reads === 1 ? ["typecheck"] : ["invented"];
+      },
+    };
+    expect(parse(value)).toEqual({
+      ok: false,
+      errors: [
+        `kinds must be a unique, non-empty array of up to ${String(EDITOR_VERIFICATION_MAX_KINDS)} verification kinds`,
+      ],
+    });
+    expect(reads).toBe(2);
+  });
+  it("preserves a changing valid kind collection and canonical copy", () => {
+    const later = ["lint"];
+    let reads = 0;
+    const value = {
+      get kinds(): readonly string[] {
+        return ++reads === 1 ? ["typecheck"] : later;
+      },
+    };
+    const parsed = parse(value);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) throw new Error("healthy changing kinds refused");
+    expect(parsed.value.kinds).toEqual(later);
+    expect(parsed.value.kinds).not.toBe(later);
+    expect(reads).toBe(2);
+  });
+});
+
+function callerKindEvery(entries: unknown[]): unknown[] {
+  Object.defineProperty(entries, "every", { value: (): boolean => true });
+  return entries;
+}
+function physicalCatalog(entries: unknown[]): unknown {
+  return {
+    schemaVersion: V,
+    projectId: "proj-1",
+    workspaceTrust: {
+      kind: "workspace-trust-status",
+      schemaVersion: WORKSPACE_TRUST_SCHEMA_VERSION,
+      projectId: "proj-1",
+      trust: "restricted",
+      decidedBy: "server",
+      reason: "state-unavailable",
+      revision: null,
+    },
+    kinds: entries,
+  };
+}
+function catalogMembers(): unknown[] {
+  return EDITOR_VERIFICATION_KINDS.map((kind) => ({
+    kind,
+    available: true,
+    trustState: "trusted",
+  }));
+}
+describe("#3918 forward verification physical admission", () => {
+  it("healthy original verification surfaces", () => {
+    for (const guard of [isEditorVerificationCatalog, publicOwner.isEditorVerificationCatalog])
+      expect(guard(physicalCatalog(catalogMembers()))).toBe(true);
+    for (const guard of [isEditorVerificationEvent, publicOwner.isEditorVerificationEvent])
+      expect(
+        guard({
+          schemaVersion: V,
+          kind: "run-started",
+          runId: "r1",
+          projectId: "proj-1",
+          kinds: ["test"],
+          startedAtMs: 10,
+        }),
+      ).toBe(true);
+  });
+  it.each([isEditorVerificationCatalog, publicOwner.isEditorVerificationCatalog])(
+    "finite catalog caller every refusal",
+    (guard) => {
+      const entries = catalogMembers();
+      entries[0] = {
+        kind: EDITOR_VERIFICATION_KINDS[0],
+        available: "invalid",
+        trustState: "invented",
+      };
+      expect(guard(physicalCatalog(callerKindEvery(entries)))).toBe(false);
+    },
+  );
+  it.each([isEditorVerificationEvent, publicOwner.isEditorVerificationEvent])(
+    "finite event caller every refusal",
+    (guard) => {
+      expect(
+        guard({
+          schemaVersion: V,
+          kind: "run-started",
+          runId: "r1",
+          projectId: "proj-1",
+          kinds: callerKindEvery(["invented"]),
+          startedAtMs: 10,
+        }),
+      ).toBe(false);
+    },
+  );
+  it.each([parseEditorVerificationRunRequest, publicOwner.parseEditorVerificationRunRequest])(
+    "disposition canonical request refuses overridden malformed kinds",
+    (parse) => {
+      expect(parse({ kinds: callerKindEvery(["invented"]) }).ok).toBe(false);
+    },
+  );
+});

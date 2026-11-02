@@ -196,6 +196,15 @@ export type EditorVerificationEvent =
 
 // ─── Guards + parser (hand-rolled, throw-free, deterministic) ────────────────────────
 
+const EDITOR_VERIFICATION_KINDS_ADMISSION_VALUES: readonly string[] = EDITOR_VERIFICATION_KINDS;
+const EDITOR_VERIFICATION_STATUSES_ADMISSION_VALUES: readonly string[] =
+  EDITOR_VERIFICATION_STATUSES;
+const EDITOR_VERIFICATION_RUN_STATES_ADMISSION_VALUES: readonly string[] =
+  EDITOR_VERIFICATION_RUN_STATES;
+const EDITOR_VERIFICATION_EVENT_KINDS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_VERIFICATION_EVENT_KINDS;
+const COMMAND_TASK_TRUST_STATES_ADMISSION_VALUES: readonly string[] = COMMAND_TASK_TRUST_STATES;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -216,7 +225,14 @@ function isDenseArray<T>(
   ) {
     return false;
   }
-  return value.every(guard);
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maxLength) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const entry: unknown = value[index];
+    if (!guard(entry)) return false;
+  }
+  return true;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -237,21 +253,16 @@ function isFiniteNonNegative(value: unknown): value is number {
 }
 
 export function isVerificationKind(value: unknown): value is VerificationKind {
-  return (
-    typeof value === "string" && (EDITOR_VERIFICATION_KINDS as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && EDITOR_VERIFICATION_KINDS_ADMISSION_VALUES.includes(value);
 }
 
 function isVerificationStatus(value: unknown): value is VerificationStatus {
-  return (
-    typeof value === "string" && (EDITOR_VERIFICATION_STATUSES as readonly string[]).includes(value)
-  );
+  return typeof value === "string" && EDITOR_VERIFICATION_STATUSES_ADMISSION_VALUES.includes(value);
 }
 
 export function isEditorVerificationRunState(value: unknown): value is EditorVerificationRunState {
   return (
-    typeof value === "string" &&
-    (EDITOR_VERIFICATION_RUN_STATES as readonly string[]).includes(value)
+    typeof value === "string" && EDITOR_VERIFICATION_RUN_STATES_ADMISSION_VALUES.includes(value)
   );
 }
 
@@ -259,8 +270,7 @@ export function isEditorVerificationEventKind(
   value: unknown,
 ): value is EditorVerificationEventKind {
   return (
-    typeof value === "string" &&
-    (EDITOR_VERIFICATION_EVENT_KINDS as readonly string[]).includes(value)
+    typeof value === "string" && EDITOR_VERIFICATION_EVENT_KINDS_ADMISSION_VALUES.includes(value)
   );
 }
 
@@ -327,16 +337,21 @@ export function parseEditorVerificationRunRequest(
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, value: canonicalRunRequest(input) };
+  return canonicalRunRequest(input);
 }
 
-function canonicalRunRequest(input: Record<string, unknown>): EditorVerificationRunRequest {
-  const kinds = [...(input.kinds as readonly VerificationKind[])];
-  return {
+function canonicalRunRequest(input: Record<string, unknown>): EditorVerificationRunRequestParse {
+  const observedKinds = input.kinds;
+  if (!Array.isArray(observedKinds)) return invalidCapturedKinds();
+  const observedMembers: readonly unknown[] = observedKinds;
+  const kinds = [...observedMembers];
+  const request = {
     kinds,
     ...(typeof input.targetPath === "string" ? { targetPath: input.targetPath } : {}),
     ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
   };
+  if (!isKindArray(kinds)) return invalidCapturedKinds();
+  return { ok: true, value: { ...request, kinds } };
 }
 
 function hasValidRunIdentity(value: Readonly<Record<string, unknown>>): boolean {
@@ -378,7 +393,7 @@ function isCatalogEntry(value: unknown): value is EditorVerificationCatalogEntry
     isVerificationKind(value.kind) &&
     typeof value.available === "boolean" &&
     typeof value.trustState === "string" &&
-    (COMMAND_TASK_TRUST_STATES as readonly string[]).includes(value.trustState)
+    COMMAND_TASK_TRUST_STATES_ADMISSION_VALUES.includes(value.trustState)
   );
 }
 
@@ -480,4 +495,13 @@ export function isEditorVerificationEvent(value: unknown): value is EditorVerifi
     default:
       return false;
   }
+}
+
+function invalidCapturedKinds(): EditorVerificationRunRequestParseFail {
+  return {
+    ok: false,
+    errors: [
+      `kinds must be a unique, non-empty array of up to ${String(EDITOR_VERIFICATION_MAX_KINDS)} verification kinds`,
+    ],
+  };
 }

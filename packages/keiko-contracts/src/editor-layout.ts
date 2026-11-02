@@ -244,7 +244,9 @@ function paneIdsFromTree(node: EditorLayoutNode, out: string[] = []): string[] {
 // and produce the "persisted white screen" class this repository has already paid for (#2802).
 // A null-prototype record closes both at the layer that owns the record, not per call site.
 function emptyPaneRecord(): Record<string, EditorPaneStateV2> {
-  return Object.create(null) as Record<string, EditorPaneStateV2>;
+  const record: Record<string, EditorPaneStateV2> = {};
+  Object.setPrototypeOf(record, null);
+  return record;
 }
 
 // A pane id that names a prototype member is REJECTED outright, not merely stored safely. A

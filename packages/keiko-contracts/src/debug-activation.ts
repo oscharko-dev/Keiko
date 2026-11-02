@@ -83,7 +83,8 @@ function isRecord(value: unknown): value is UnknownRecord {
 }
 
 function memberOf<T extends string>(value: unknown, values: readonly T[]): value is T {
-  return typeof value === "string" && values.includes(value as T);
+  const vocabulary: readonly string[] = values;
+  return typeof value === "string" && vocabulary.includes(value);
 }
 
 function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
@@ -124,21 +125,43 @@ export function parseDebugActivationInput(
     ].every(Boolean);
     if (!valid)
       return { ok: false, errors: ["activation input is invalid or contains unknown fields"] };
-    return {
-      ok: true,
-      value: {
-        schemaVersion: DEBUG_ACTIVATION_SCHEMA_VERSION,
-        adapterId: value.adapterId as DebugAdapterId,
-        revision: value.revision as number,
-        productSupport: value.productSupport as DebugProductSupport,
-        deploymentPolicy: value.deploymentPolicy as DebugDeploymentPolicy,
-        provisioning: value.provisioning as DebugProvisioning,
-        workspaceActivation: value.workspaceActivation as DebugWorkspaceActivation,
-      },
-    };
+    return canonicalActivationInput(value);
   } catch {
     return { ok: false, errors: ["activation input could not be inspected"] };
   }
+}
+
+function canonicalActivationInput(
+  value: UnknownRecord,
+): DebugActivationParseResult<DebugActivationInput> {
+  const adapterId = value.adapterId;
+  const revision = value.revision;
+  const productSupport = value.productSupport;
+  const deploymentPolicy = value.deploymentPolicy;
+  const provisioning = value.provisioning;
+  const workspaceActivation = value.workspaceActivation;
+  if (
+    !memberOf(adapterId, DEBUG_ADAPTER_IDS) ||
+    !isRevision(revision) ||
+    !memberOf(productSupport, PRODUCT_SUPPORT) ||
+    !memberOf(deploymentPolicy, DEPLOYMENT_POLICIES) ||
+    !memberOf(provisioning, PROVISIONING) ||
+    !memberOf(workspaceActivation, WORKSPACE_ACTIVATIONS)
+  ) {
+    return { ok: false, errors: ["activation input is invalid or contains unknown fields"] };
+  }
+  return {
+    ok: true,
+    value: {
+      schemaVersion: DEBUG_ACTIVATION_SCHEMA_VERSION,
+      adapterId,
+      revision,
+      productSupport,
+      deploymentPolicy,
+      provisioning,
+      workspaceActivation,
+    },
+  };
 }
 
 type ActivationRule = Readonly<{

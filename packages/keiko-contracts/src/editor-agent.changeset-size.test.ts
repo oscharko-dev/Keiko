@@ -1,3 +1,4 @@
+import * as publicEditor from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { describe, expect, it } from "vitest";
 import {
   CODING_RUNTIME_PATCH_BUDGET_BYTES,
@@ -132,3 +133,76 @@ describe("governed changeset size bounds", () => {
     expect(isEditorAgentAction(action("x".repeat(8 * MIB + 1)))).toBe(false);
   });
 });
+
+function consumedTextInputs(readText: () => unknown): {
+  readonly prepared: unknown;
+  readonly action: unknown;
+} {
+  const prepared = preparedWith("healthy");
+  if (!isEditorAgentPreparedChangeset(prepared)) throw new Error("healthy fixture was refused");
+  const edit = prepared.files[0]?.textEdits[0];
+  if (edit === undefined) throw new Error("healthy fixture has no edit");
+  Object.defineProperty(edit, "newText", { get: readText });
+  const { changeset: _changeset, ...identity } = changesetActionWith("");
+  return {
+    prepared,
+    action: { ...identity, type: "applyTextEdits", textEdits: [edit] },
+  };
+}
+
+function changingTextObservation(): {
+  readonly read: () => unknown;
+  readonly observe: () => { readonly reads: number; readonly coercions: number };
+} {
+  let reads = 0;
+  let coercions = 0;
+  return {
+    read: (): unknown => {
+      reads += 1;
+      if (reads === 1) return "healthy";
+      return {
+        length: 0,
+        toString(): string {
+          coercions += 1;
+          return "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1);
+        },
+      };
+    },
+    observe: () => ({ reads, coercions }),
+  };
+}
+
+describe.each([
+  ["source", isEditorAgentPreparedChangeset, isEditorAgentAction],
+  ["public", publicEditor.isEditorAgentPreparedChangeset, publicEditor.isEditorAgentAction],
+] as const)(
+  "#3918 consumed edit text remains primitive %s",
+  (_surface, parsePrepared, parseAction) => {
+    it("refuses a non-string reread while counting prepared text bytes", () => {
+      const observed = changingTextObservation();
+      const input = consumedTextInputs(observed.read);
+      expect(parsePrepared(input.prepared)).toBe(false);
+      expect(observed.observe()).toEqual({ reads: 2, coercions: 0 });
+    });
+
+    it("refuses a non-string reread while counting action text bytes", () => {
+      const observed = changingTextObservation();
+      const input = consumedTextInputs(observed.read);
+      expect(parseAction(input.action)).toBe(false);
+      expect(observed.observe()).toEqual({ reads: 2, coercions: 0 });
+    });
+
+    it("retains healthy strings with the existing two-read observation", () => {
+      let reads = 0;
+      const read = (): string => {
+        reads += 1;
+        return "healthy";
+      };
+      expect(parsePrepared(consumedTextInputs(read).prepared)).toBe(true);
+      expect(reads).toBe(2);
+      reads = 0;
+      expect(parseAction(consumedTextInputs(read).action)).toBe(true);
+      expect(reads).toBe(2);
+    });
+  },
+);

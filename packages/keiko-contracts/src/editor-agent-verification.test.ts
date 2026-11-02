@@ -1,3 +1,4 @@
+import { observeConsumedExtent } from "./__tests__/support/protocol-observation-mechanics.js";
 import { describe, expect, it } from "vitest";
 import {
   isEditorAgentVerificationResult,
@@ -353,4 +354,109 @@ describe("isEditorAgentVerificationResult", () => {
     expect(parsed).toEqual({ outcome: "completed", report: base });
     expect(JSON.stringify(parsed)).not.toContain("SECRET");
   });
+});
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const parsed = publicOwner.parseEditorAgentVerificationRunRequest(request());
+    expect(parsed).toEqual(parseEditorAgentVerificationRunRequest(request()));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.authorityRef).toEqual(AUTHORITY);
+    expect(parsed.value.authorityRef).not.toBe(AUTHORITY);
+    expect(
+      publicOwner.parseEditorAgentVerificationRunRequest(request({ kind: "invented" })).ok,
+    ).toBe(false);
+  });
+});
+
+describe("#3918 captured verification count admission hypothesis", () => {
+  it.each([
+    ["source", parseEditorAgentVerificationResult],
+    ["public", publicOwner.parseEditorAgentVerificationResult],
+  ])("%s refuses the second malformed count", (_surface, parse) => {
+    const redacted = toRedactedVerificationReport(report());
+    let reads = 0;
+    Object.defineProperty(redacted.counts, "failed", {
+      get: () => (++reads === 1 ? 1 : undefined),
+    });
+    expect(parse({ outcome: "completed", report: redacted })).toBeNull();
+    expect(reads).toBe(2);
+  });
+});
+
+describe.each([
+  ["source", parseEditorAgentVerificationResult],
+  ["public", publicOwner.parseEditorAgentVerificationResult],
+] as const)("3918 original-first final location file observation %s", (_surface, parse) => {
+  it("refuses an escaping final copied location", () => {
+    const base = toRedactedVerificationReport(report());
+    let reads = 0;
+    const location = {
+      get file(): string {
+        reads += 1;
+        return reads === 1 ? "src/a.ts" : "/outside/a.ts";
+      },
+      message: "TS2322",
+    };
+    expect(
+      parse({
+        outcome: "completed",
+        report: { ...base, steps: [{ ...base.steps[0], locations: [location] }] },
+      }),
+    ).toBeNull();
+  });
+  it("preserves a changed but valid final copied location", () => {
+    const base = toRedactedVerificationReport(report());
+    let reads = 0;
+    const location = {
+      get file(): string {
+        reads += 1;
+        return reads === 1 ? "src/a.ts" : "src/b.ts";
+      },
+      message: "TS2322",
+    };
+    const result = parse({
+      outcome: "completed",
+      report: { ...base, steps: [{ ...base.steps[0], locations: [location] }] },
+    });
+    expect(result).toMatchObject({
+      outcome: "completed",
+      report: {
+        steps: [{ locations: [{ file: "src/b.ts", message: "TS2322" }] }],
+      },
+    });
+  });
+});
+
+describe.each([
+  ["source", parseEditorAgentVerificationResult],
+  ["public", publicOwner.parseEditorAgentVerificationResult],
+] as const)("3918 consumed owning extent %s", (_surface, parse) => {
+  it("retains healthy native bounded observations", () => {
+    const observed = observeConsumedExtent([{ file: "src/a.ts", message: "TS2322" }], 1);
+    const redacted = toRedactedVerificationReport(report());
+    const value = {
+      outcome: "completed",
+      report: { ...redacted, steps: [{ ...redacted.steps[0], locations: observed.array }] },
+    };
+    expect(parse(value)).not.toBeNull();
+    expect(observed.snapshot().indexReads).toBeGreaterThan(0);
+  });
+  it.each([0.5, VERIFICATION_MAX_FAILURE_LOCATIONS + 1])(
+    "refuses actual consumed extent %s before member work",
+    (extent) => {
+      const observed = observeConsumedExtent([{ file: "src/a.ts", message: "TS2322" }], extent);
+      const redacted = toRedactedVerificationReport(report());
+      const value = {
+        outcome: "completed",
+        report: { ...redacted, steps: [{ ...redacted.steps[0], locations: observed.array }] },
+      };
+      expect(parse(value)).toBeNull();
+      expect(observed.snapshot().indexReads).toBe(0);
+    },
+  );
 });

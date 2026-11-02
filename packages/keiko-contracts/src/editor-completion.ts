@@ -18,6 +18,14 @@
 // packages. The item-kind set is reused from the language-service contract so the editor renders one
 // stable icon set across deterministic and model-assisted items.
 
+import { isOneOf } from "./contract-validation-primitives.js";
+import {
+  admitEditorRequestForCapture,
+  captureEditorRequestIdentity,
+  finalizeCapturedEditorRequest,
+  type CapturedEditorRequestCore,
+  collectEditorDocumentRequestErrors,
+} from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -28,12 +36,10 @@ import {
 import {
   buildContextSelectors,
   collectContextErrors,
-  collectEditorSessionIdError,
   isBoundedEditorSessionId,
   isCostClass,
   isNonEmptyString,
   isNonNegativeInteger,
-  isRecord,
 } from "./coding-context.js";
 import type { CompletionDegradeReason, CompletionInteractionMode, CostClass } from "./gateway.js";
 
@@ -173,27 +179,18 @@ export type EditorCompletionParse = EditorCompletionParseOk | EditorCompletionPa
 // coding-context.ts (KEIKO-0159): this file previously re-implemented all eight byte-for-byte
 // identically to editor-inline-completion.ts and (except isCostClass) editor-test-generation.ts.
 
+const EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_COMPLETION_WIRE_TRIGGER_KINDS;
+
 function isWireTriggerKind(value: unknown): value is EditorCompletionWireTriggerKind {
-  return (
-    typeof value === "string" &&
-    (EDITOR_COMPLETION_WIRE_TRIGGER_KINDS as readonly string[]).includes(value)
-  );
+  return isOneOf(value, EDITOR_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES);
 }
 
 // Collects every field-level invariant error in fixed order (kept separate from the assembly step so
 // the parser entry point stays low-complexity).
 function collectRequestErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (!isNonEmptyString(value.root)) {
-    errors.push("root must be a non-empty string");
-  }
-  collectEditorSessionIdError(value.editorSessionId, errors);
-  if (!isLanguageDocumentOverlay(value.document)) {
-    errors.push("document must be { path, languageId, text }");
-  }
-  if (!isLanguagePosition(value.position)) {
-    errors.push("position must be { line, character }");
-  }
+  collectEditorDocumentRequestErrors(value, errors);
   if (!isWireTriggerKind(value.triggerKind)) {
     errors.push(`triggerKind must be one of: ${EDITOR_COMPLETION_WIRE_TRIGGER_KINDS.join(", ")}`);
   }
@@ -213,31 +210,57 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
 // Validates an `unknown` payload into an EditorCompletionWireRequest, reporting one error per failed
 // invariant. The BFF uses this to reject a malformed request with 400 INVALID_REQUEST.
 export function parseEditorCompletionRequest(value: unknown): EditorCompletionParse {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["request must be an object"] };
-  }
-  const errors = collectRequestErrors(value);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
+  const admission = admitEditorRequestForCapture(value, collectRequestErrors);
+  if (!admission.ok) return admission;
+  const request = captureCompleteCompletionRequest(admission.value, admission.context);
+  return finalizeCapturedEditorRequest(request, isCompleteCompletionRequest, collectRequestErrors);
+}
+
+interface CapturedEditorCompletionWireRequest extends CapturedEditorRequestCore {
+  readonly schemaVersion: typeof EDITOR_COMPLETION_SCHEMA_VERSION;
+  readonly document: unknown;
+  readonly position: unknown;
+  readonly triggerKind: unknown;
+  readonly triggerCharacter?: string;
+  readonly maxCostClass?: CostClass;
+}
+
+function captureCompleteCompletionRequest(
+  value: Record<string, unknown>,
+  context: ReturnType<typeof buildContextSelectors> | undefined,
+): CapturedEditorCompletionWireRequest {
   return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
-      root: value.root as string,
-      ...(isBoundedEditorSessionId(value.editorSessionId)
-        ? { editorSessionId: value.editorSessionId }
-        : {}),
-      document: value.document as LanguageDocumentOverlay,
-      position: value.position as LanguagePosition,
-      triggerKind: value.triggerKind as EditorCompletionWireTriggerKind,
-      ...(typeof value.triggerCharacter === "string"
-        ? { triggerCharacter: value.triggerCharacter }
-        : {}),
-      contextBudgetBytes: value.contextBudgetBytes as number,
-      ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
-      ...(isCostClass(value.maxCostClass) ? { maxCostClass: value.maxCostClass } : {}),
-    },
+    schemaVersion: EDITOR_COMPLETION_SCHEMA_VERSION,
+    ...captureEditorRequestIdentity(value),
+    document: value.document,
+    position: value.position,
+    triggerKind: value.triggerKind,
+    ...(typeof value.triggerCharacter === "string"
+      ? { triggerCharacter: value.triggerCharacter }
+      : {}),
+    contextBudgetBytes: value.contextBudgetBytes,
+    ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
+    ...(isCostClass(value.maxCostClass) ? { maxCostClass: value.maxCostClass } : {}),
   };
+}
+
+function isCompleteCompletionRequest(
+  value: CapturedEditorCompletionWireRequest,
+): value is EditorCompletionWireRequest {
+  return (
+    validCompletionRequestCore(value) &&
+    (value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId)) &&
+    (value.triggerCharacter === undefined || typeof value.triggerCharacter === "string") &&
+    (value.maxCostClass === undefined || isCostClass(value.maxCostClass))
+  );
+}
+
+function validCompletionRequestCore(value: CapturedEditorCompletionWireRequest): boolean {
+  return (
+    isNonEmptyString(value.root) &&
+    isLanguageDocumentOverlay(value.document) &&
+    isLanguagePosition(value.position) &&
+    isWireTriggerKind(value.triggerKind) &&
+    isNonNegativeInteger(value.contextBudgetBytes)
+  );
 }

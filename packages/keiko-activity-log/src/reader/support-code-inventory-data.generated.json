@@ -216,6 +216,7 @@
     "keiko-contracts/editor-m7",
     "keiko-contracts/editor-patch-apply",
     "keiko-contracts/editor-problems",
+    "keiko-contracts/editor-request-validation",
     "keiko-contracts/editor-session",
     "keiko-contracts/editor-snippets",
     "keiko-contracts/editor-test-generation",

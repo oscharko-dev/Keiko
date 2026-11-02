@@ -24,6 +24,14 @@
 // source/mode/degrade vocabularies are reused from the sibling editor contracts so the inline tier
 // shares one stable, content-free provenance model with the completion gateway.
 
+import { isOneOf } from "./contract-validation-primitives.js";
+import {
+  admitEditorRequestForCapture,
+  captureEditorRequestIdentity,
+  finalizeCapturedEditorRequest,
+  type CapturedEditorRequestCore,
+  collectEditorDocumentRequestErrors,
+} from "./editor-request-validation.js";
 import {
   isLanguageDocumentOverlay,
   isLanguagePosition,
@@ -34,7 +42,6 @@ import {
 import {
   buildContextSelectors,
   collectContextErrors,
-  collectEditorSessionIdError,
   isBoundedEditorSessionId,
   isCostClass,
   isNonEmptyString,
@@ -168,31 +175,22 @@ export type EditorInlineCompletionParse =
 // identically to editor-completion.ts and (except isCostClass) editor-test-generation.ts.
 // isPositiveInteger stays local -- it is unique to this file's maxOutputTokens field.
 
+const EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS;
+
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value > 0;
 }
 
 function isWireTriggerKind(value: unknown): value is EditorInlineCompletionWireTriggerKind {
-  return (
-    typeof value === "string" &&
-    (EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS as readonly string[]).includes(value)
-  );
+  return isOneOf(value, EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS_ADMISSION_VALUES);
 }
 
 // Collects every field-level invariant error in fixed order (kept separate from the assembly step so
 // the parser entry point stays low-complexity).
 function collectRequestErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (!isNonEmptyString(value.root)) {
-    errors.push("root must be a non-empty string");
-  }
-  collectEditorSessionIdError(value.editorSessionId, errors);
-  if (!isLanguageDocumentOverlay(value.document)) {
-    errors.push("document must be { path, languageId, text }");
-  }
-  if (!isLanguagePosition(value.position)) {
-    errors.push("position must be { line, character }");
-  }
+  collectEditorDocumentRequestErrors(value, errors);
   if (!isWireTriggerKind(value.triggerKind)) {
     errors.push(
       `triggerKind must be one of: ${EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS.join(", ")}`,
@@ -214,33 +212,10 @@ function collectRequestErrors(value: Record<string, unknown>): string[] {
 // Validates an `unknown` payload into an EditorInlineCompletionWireRequest, reporting one error per
 // failed invariant. The BFF uses this to reject a malformed request with 400 INVALID_REQUEST.
 export function parseEditorInlineCompletionRequest(value: unknown): EditorInlineCompletionParse {
-  if (!isRecord(value)) {
-    return { ok: false, errors: ["request must be an object"] };
-  }
-  const errors = collectRequestErrors(value);
-  if (errors.length > 0) {
-    return { ok: false, errors };
-  }
-  const context = isRecord(value.context) ? buildContextSelectors(value.context) : undefined;
-  return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
-      root: value.root as string,
-      ...(isBoundedEditorSessionId(value.editorSessionId)
-        ? { editorSessionId: value.editorSessionId }
-        : {}),
-      document: value.document as LanguageDocumentOverlay,
-      position: value.position as LanguagePosition,
-      triggerKind: value.triggerKind as EditorInlineCompletionWireTriggerKind,
-      contextBudgetBytes: value.contextBudgetBytes as number,
-      ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
-      ...(isCostClass(value.maxCostClass) ? { maxCostClass: value.maxCostClass } : {}),
-      ...(isPositiveInteger(value.maxOutputTokens)
-        ? { maxOutputTokens: value.maxOutputTokens }
-        : {}),
-    },
-  };
+  const admission = admitEditorRequestForCapture(value, collectRequestErrors);
+  if (!admission.ok) return admission;
+  const request = captureCompleteInlineRequest(admission.value, admission.context);
+  return finalizeCapturedEditorRequest(request, isCompleteInlineRequest, collectRequestErrors);
 }
 
 export interface EditorInlineCompletionTelemetryParseOk {
@@ -293,27 +268,55 @@ function collectTelemetryErrors(value: Record<string, unknown>): string[] {
   return errors;
 }
 
-function telemetryMetric(value: Record<string, unknown>, field: string): number {
+interface CapturedTelemetryMetric {
+  readonly metric: number;
+  readonly supplied: boolean;
+}
+
+function telemetryMetric(value: Record<string, unknown>, field: string): CapturedTelemetryMetric {
   const metric = value[field];
-  return isNonNegativeInteger(metric) ? metric : 0;
+  return { metric: isNonNegativeInteger(metric) ? metric : 0, supplied: metric !== undefined };
 }
 
 function buildTelemetryReport(
   value: Record<string, unknown>,
-): EditorInlineCompletionTelemetryReport {
-  return {
+): EditorInlineCompletionTelemetryParse {
+  const counts = {
     schemaVersion: EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
-    root: value.root as string,
-    offered: value.offered as number,
-    shown: value.shown as number,
-    accepted: value.accepted as number,
-    rejected: value.rejected as number,
-    ignored: value.ignored as number,
-    partiallyAccepted: value.partiallyAccepted as number,
-    requestCount: telemetryMetric(value, "requestCount"),
-    requestLatencyMsP50: telemetryMetric(value, "requestLatencyMsP50"),
-    requestLatencyMsP95: telemetryMetric(value, "requestLatencyMsP95"),
+    root: value.root,
+    offered: value.offered,
+    shown: value.shown,
+    accepted: value.accepted,
+    rejected: value.rejected,
+    ignored: value.ignored,
+    partiallyAccepted: value.partiallyAccepted,
   };
+  const requestCount = telemetryMetric(value, "requestCount").metric;
+  const p50 = telemetryMetric(value, "requestLatencyMsP50");
+  const p95 = telemetryMetric(value, "requestLatencyMsP95");
+  const report = {
+    ...counts,
+    requestCount,
+    requestLatencyMsP50: p50.metric,
+    requestLatencyMsP95: p95.metric,
+  };
+  if (!isCapturedTelemetryReport(report)) {
+    return {
+      ok: false,
+      errors: collectTelemetryErrors({
+        ...report,
+        requestLatencyMsP50: p50.supplied ? p50.metric : undefined,
+        requestLatencyMsP95: p95.supplied ? p95.metric : undefined,
+      }),
+    };
+  }
+  if (p50.supplied && p95.supplied && report.requestLatencyMsP95 < report.requestLatencyMsP50) {
+    return {
+      ok: false,
+      errors: ["requestLatencyMsP95 must be greater than or equal to requestLatencyMsP50"],
+    };
+  }
+  return { ok: true, value: report };
 }
 
 // Validates an `unknown` payload into a content-free EditorInlineCompletionTelemetryReport. Every
@@ -330,5 +333,63 @@ export function parseEditorInlineCompletionTelemetry(
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return { ok: true, value: buildTelemetryReport(value) };
+  return buildTelemetryReport(value);
+}
+
+interface CapturedEditorInlineCompletionWireRequest extends CapturedEditorRequestCore {
+  readonly schemaVersion: typeof EDITOR_INLINE_COMPLETION_SCHEMA_VERSION;
+  readonly document: unknown;
+  readonly position: unknown;
+  readonly triggerKind: unknown;
+  readonly maxCostClass?: CostClass;
+  readonly maxOutputTokens?: number;
+}
+
+function captureCompleteInlineRequest(
+  value: Record<string, unknown>,
+  context: ReturnType<typeof buildContextSelectors> | undefined,
+): CapturedEditorInlineCompletionWireRequest {
+  return {
+    schemaVersion: EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
+    ...captureEditorRequestIdentity(value),
+    document: value.document,
+    position: value.position,
+    triggerKind: value.triggerKind,
+    contextBudgetBytes: value.contextBudgetBytes,
+    ...(context !== undefined && Object.keys(context).length > 0 ? { context } : {}),
+    ...(isCostClass(value.maxCostClass) ? { maxCostClass: value.maxCostClass } : {}),
+    ...(isPositiveInteger(value.maxOutputTokens) ? { maxOutputTokens: value.maxOutputTokens } : {}),
+  };
+}
+
+function isCompleteInlineRequest(
+  value: CapturedEditorInlineCompletionWireRequest,
+): value is EditorInlineCompletionWireRequest {
+  return (
+    validInlineRequestCore(value) &&
+    (value.editorSessionId === undefined || isBoundedEditorSessionId(value.editorSessionId)) &&
+    (value.maxCostClass === undefined || isCostClass(value.maxCostClass)) &&
+    (value.maxOutputTokens === undefined || isPositiveInteger(value.maxOutputTokens))
+  );
+}
+
+function isCapturedTelemetryReport(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & EditorInlineCompletionTelemetryReport {
+  return (
+    value.schemaVersion === EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION &&
+    isNonEmptyString(value.root) &&
+    TELEMETRY_COUNT_FIELDS.every((field): boolean => isNonNegativeInteger(value[field])) &&
+    TELEMETRY_LATENCY_FIELDS.every((field): boolean => isNonNegativeInteger(value[field]))
+  );
+}
+
+function validInlineRequestCore(value: CapturedEditorInlineCompletionWireRequest): boolean {
+  return (
+    isNonEmptyString(value.root) &&
+    isLanguageDocumentOverlay(value.document) &&
+    isLanguagePosition(value.position) &&
+    isWireTriggerKind(value.triggerKind) &&
+    isNonNegativeInteger(value.contextBudgetBytes)
+  );
 }

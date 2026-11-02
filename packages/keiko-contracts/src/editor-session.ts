@@ -126,12 +126,23 @@ export function parseEditorDocumentVersion(
   if (errors.length > 0) {
     return { ok: false, errors };
   }
-  return {
-    ok: true,
-    value: {
-      sizeBytes: value.sizeBytes as number,
-      modifiedAt: value.modifiedAt as number,
-      contentHash: value.contentHash as string,
-    },
+  const version = {
+    sizeBytes: value.sizeBytes,
+    modifiedAt: value.modifiedAt,
+    contentHash: value.contentHash,
   };
+  if (!isEditorDocumentVersion(version)) {
+    const observedErrors: string[] = [];
+    if (!isNonNegativeInteger(version.sizeBytes)) {
+      observedErrors.push("baseVersion.sizeBytes must be a non-negative integer");
+    }
+    if (!isFiniteNonNegativeNumber(version.modifiedAt)) {
+      observedErrors.push("baseVersion.modifiedAt must be a finite non-negative number");
+    }
+    if (!isSha256Hex(version.contentHash)) {
+      observedErrors.push("baseVersion.contentHash must be a lowercase hex SHA-256 string");
+    }
+    return { ok: false, errors: observedErrors };
+  }
+  return { ok: true, value: version };
 }

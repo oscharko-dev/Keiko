@@ -1083,3 +1083,147 @@ describe("M7 malformed input rejection paths", () => {
     });
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const defaults = publicOwner.defaultEditorM7Settings();
+    expect(defaults.fontSize).toBe(13);
+    expect(Object.isFrozen(defaults)).toBe(true);
+    expect(Object.keys(defaults)).toEqual(EDITOR_M7_SETTING_REGISTRY.map((row) => row.id));
+    expect(publicOwner.parseEditorM7SettingValue("wordWrap", "invented")).toEqual({
+      ok: false,
+      reasonCode: "VALUE_OUT_OF_BOUNDS",
+    });
+    expect(publicOwner.parseEditorM7SettingValue("wordWrap", "bounded")).toEqual({
+      ok: true,
+      value: "bounded",
+    });
+  });
+});
+
+function physicalWatchSnapshot(reasons: readonly unknown[]): unknown {
+  return {
+    schemaVersion: "1",
+    sequence: 1,
+    health: "healthy",
+    rootToken: "a".repeat(16),
+    nativeWatcherCount: 1,
+    subscriberCount: 1,
+    queueDepth: 0,
+    replayCapacity: 1,
+    replayOldestSequence: 0,
+    eventCount: 1,
+    requiresSnapshot: false,
+    degradedReasons: reasons,
+  };
+}
+describe.each([
+  ["source", parseEditorM7WatchSnapshot],
+  ["public", publicOwner.parseEditorM7WatchSnapshot],
+] as const)("#3918 stage2 watch physical reasons %s", (_surface, parse) => {
+  it("healthy reasons and ordinary invalid reasons", () => {
+    expect(parse(physicalWatchSnapshot(["native-watch-unavailable"])).ok).toBe(true);
+    expect(parse(physicalWatchSnapshot(["invented"]))).toEqual({
+      ok: false,
+      reasonCode: "INVALID_INPUT",
+    });
+  });
+  it("finite caller every cannot hide an invalid reason", () => {
+    const reasons: unknown[] = ["invented"];
+    Object.defineProperty(reasons, "every", { value: (): boolean => true });
+    expect(parse(physicalWatchSnapshot(reasons))).toEqual({
+      ok: false,
+      reasonCode: "INVALID_INPUT",
+    });
+  });
+});
+
+function copiedM7Observation(
+  input: unknown,
+  field: string,
+  phase: number,
+  healthy: unknown,
+  later: unknown,
+): {
+  readonly value: unknown;
+  readonly reads: () => number;
+} {
+  if (typeof input !== "object" || input === null)
+    throw new Error("expected owning fixture object");
+  let reads = 0;
+  Object.defineProperty(input, field, {
+    enumerable: true,
+    get: (): unknown => (++reads === phase ? later : healthy),
+  });
+  return { value: input, reads: (): number => reads };
+}
+const copiedM7Cases = [
+  ["settings numeric", "settings", "sequence", 2, 1, 2, 0.5],
+  ["settings discriminator", "settings", "kind", 2, "changed", "snapshot", "invented"],
+  ["settings collection", "settings", "settingIds", 4, ["fontSize"], ["tabSize"], [7]],
+  ["watch numeric", "watch", "sequence", 2, 1, 2, 0.5],
+  ["watch discriminator", "watch", "health", 2, "healthy", "degraded", "invented"],
+  [
+    "watch collection",
+    "watch",
+    "degradedReasons",
+    4,
+    ["native-watch-unavailable"],
+    ["shutdown"],
+    ["invented"],
+  ],
+] as const;
+describe.each([
+  ["source", parseEditorM7SettingsEvent, parseEditorM7WatchSnapshot],
+  ["public", publicOwner.parseEditorM7SettingsEvent, publicOwner.parseEditorM7WatchSnapshot],
+] as const)("#3918 stage2 copied facts %s", (_surface, settings, watch) => {
+  it.each(copiedM7Cases)(
+    "healthy changing captured fact %s",
+    (_name, owner, field, phase, first, healthy) => {
+      const observed = copiedM7Observation(
+        owner === "settings" ? { ...VALID_SETTINGS_EVENT } : physicalWatchSnapshot([]),
+        field,
+        phase,
+        first,
+        healthy,
+      );
+      expect((owner === "settings" ? settings : watch)(observed.value).ok).toBe(true);
+      expect(observed.reads()).toBe(phase);
+    },
+  );
+  it.each(copiedM7Cases)(
+    "finite copied fact refusal %s",
+    (_name, owner, field, phase, first, _healthy, invalid) => {
+      const observed = copiedM7Observation(
+        owner === "settings" ? { ...VALID_SETTINGS_EVENT } : physicalWatchSnapshot([]),
+        field,
+        phase,
+        first,
+        invalid,
+      );
+      expect((owner === "settings" ? settings : watch)(observed.value)).toEqual({
+        ok: false,
+        reasonCode: "INVALID_INPUT",
+      });
+      expect(observed.reads()).toBe(phase);
+    },
+  );
+  it("healthy setting ids and ordinary invalid setting ids", () => {
+    expect(settings({ ...VALID_SETTINGS_EVENT, settingIds: ["fontSize"] }).ok).toBe(true);
+    expect(settings({ ...VALID_SETTINGS_EVENT, settingIds: ["invented"] })).toEqual({
+      ok: false,
+      reasonCode: "UNKNOWN_SETTING",
+    });
+  });
+  it("finite settings caller every refusal", () => {
+    const ids: unknown[] = ["invented"];
+    Object.defineProperty(ids, "every", { value: (): boolean => true });
+    expect(settings({ ...VALID_SETTINGS_EVENT, settingIds: ids })).toEqual({
+      ok: false,
+      reasonCode: "UNKNOWN_SETTING",
+    });
+  });
+});

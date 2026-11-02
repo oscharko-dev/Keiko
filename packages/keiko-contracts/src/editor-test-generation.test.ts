@@ -11,6 +11,11 @@ import {
   parseEditorTestGenerationRequest,
 } from "./editor-test-generation.js";
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import {
+  registerCapturedRequestIdentity,
+  registerCapturedRootAdmission,
+  registerRequestContextProjection,
+} from "../../../tests/support/editor-request-parser-contract.js";
 
 const OVERLAY = { path: "src/a.ts", languageId: "typescript", text: "export const a = 1;\n" };
 const RANGE = { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } };
@@ -249,5 +254,121 @@ describe("notRunTestGenerationFunnel + constants", () => {
     expect(EDITOR_TEST_GENERATION_STATUSES).toContain("deferred");
     expect(EDITOR_TEST_GENERATION_GATE_STATES).toContain("not-run");
     expect(EDITOR_TEST_GENERATION_TARGET_KINDS).toContain("frontend-component");
+  });
+});
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const parsed = publicOwner.parseEditorTestGenerationRequest(fileRequest());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.target.kind).toBe("file");
+    if (parsed.value.target.kind === "file") expect(parsed.value.target.document).toBe(OVERLAY);
+    expect(publicOwner.notRunTestGenerationFunnel().executionEnabled).toBe(false);
+  });
+});
+
+// #3918 finite original-first observations.
+describe("#3918 captured output root admission", (): void => {
+  registerCapturedRootAdmission(
+    [
+      ["source", parseEditorTestGenerationRequest],
+      ["public", publicOwner.parseEditorTestGenerationRequest],
+    ],
+    fileRequest,
+  );
+});
+
+describe("#3918 frontend-component optional range shape hypothesis", () => {
+  it.each([
+    ["source", parseEditorTestGenerationRequest],
+    ["public", publicOwner.parseEditorTestGenerationRequest],
+  ])("%s refuses malformed optional range", (_surface, parse) => {
+    const input = fileRequest({
+      target: { kind: "frontend-component", document: OVERLAY, componentName: "Widget", range: {} },
+    });
+    expect(parse(input)).toEqual({
+      ok: false,
+      errors: ["target.range must be { start, end } when present for a frontend-component target"],
+    });
+  });
+});
+
+function callerOverlayEvery(): unknown[] {
+  const entries: unknown[] = [{}];
+  Object.defineProperty(entries, "every", { value: (): boolean => true });
+  return entries;
+}
+describe("#3918 forward overlay physical admission", () => {
+  it.each([parseEditorTestGenerationRequest, publicOwner.parseEditorTestGenerationRequest])(
+    "healthy overlays and ordinary refusal",
+    (parse) => {
+      expect(
+        parse(fileRequest({ target: { kind: "changed-file-set", documents: [OVERLAY] } })).ok,
+      ).toBe(true);
+      expect(parse(fileRequest({ target: { kind: "changed-file-set", documents: [{}] } }))).toEqual(
+        {
+          ok: false,
+          errors: ["target.documents must be a non-empty array of { path, languageId, text }"],
+        },
+      );
+    },
+  );
+  it.each([parseEditorTestGenerationRequest, publicOwner.parseEditorTestGenerationRequest])(
+    "finite overlay caller every refusal",
+    (parse) => {
+      expect(
+        parse(
+          fileRequest({ target: { kind: "changed-file-set", documents: callerOverlayEvery() } }),
+        ),
+      ).toEqual({
+        ok: false,
+        errors: ["target.documents must be a non-empty array of { path, languageId, text }"],
+      });
+    },
+  );
+});
+
+describe.each([
+  ["source", parseEditorTestGenerationRequest],
+  ["public", publicOwner.parseEditorTestGenerationRequest],
+] as const)("#3918 captured request identity through %s", (_surface, parse) => {
+  registerCapturedRequestIdentity(parse, fileRequest, "target");
+});
+
+describe.each([
+  ["source", parseEditorTestGenerationRequest],
+  ["public", publicOwner.parseEditorTestGenerationRequest],
+] as const)("%s parser admission and context projection", (_surface, parse): void => {
+  registerRequestContextProjection(parse, fileRequest, "target");
+  it("keeps ordered local errors and eager collection without projecting a refused request", (): void => {
+    const input = fileRequest({ schemaVersion: "foreign", root: "" });
+    const body = input.target;
+    const trace: string[] = [];
+    Object.defineProperty(input, "target", {
+      get(): unknown {
+        trace.push("target");
+        return body;
+      },
+    });
+    let reads = 0;
+    Object.defineProperty(input, "context", {
+      get(): unknown {
+        reads += 1;
+        trace.push("context");
+        if (reads > 1) throw new TypeError("refused request must not project context");
+        return {};
+      },
+    });
+    const parsed = parse(input);
+    expect(parsed).toEqual({
+      ok: false,
+      errors: ["schemaVersion must be 1", "root must be a non-empty string"],
+    });
+    expect(trace).toEqual(["target", "context"]);
+    expect(reads).toBe(1);
   });
 });

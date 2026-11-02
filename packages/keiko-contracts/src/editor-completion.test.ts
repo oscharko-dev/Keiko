@@ -7,6 +7,12 @@ import {
   parseEditorCompletionRequest,
 } from "./editor-completion.js";
 import { EDITOR_AGENT_SESSION_ID_MAX_BYTES } from "./editor-agent.js";
+import {
+  describeRequestParserSurfaces,
+  registerCapturedRootAdmission,
+  registerDocumentRequestPrefix,
+  registerTriggerMembership,
+} from "../../../tests/support/editor-request-parser-contract.js";
 
 function baseRequest(): Record<string, unknown> {
   return {
@@ -187,3 +193,74 @@ describe("parseEditorCompletionRequest — rejections", () => {
     );
   });
 });
+
+// #3918 original-first public contract controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-completion";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    const input = baseRequest();
+    const parsed = publicOwner.parseEditorCompletionRequest(input);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.document).toBe(input.document);
+    expect(parsed.value.position).toBe(input.position);
+    expect(parsed.value.triggerKind).toBe("invoked");
+    expect(Object.hasOwn(parsed.value, "editorSessionId")).toBe(false);
+  });
+});
+
+// #3918 finite original-first observations.
+describe("#3918 captured output root admission", (): void => {
+  registerCapturedRootAdmission(
+    [
+      ["source", parseEditorCompletionRequest],
+      ["public", publicOwner.parseEditorCompletionRequest],
+    ],
+    baseRequest,
+  );
+});
+
+describe("#3918 trigger membership boundaries", (): void => {
+  registerTriggerMembership(
+    [
+      ["source", parseEditorCompletionRequest],
+      ["public", publicOwner.parseEditorCompletionRequest],
+    ],
+    baseRequest,
+    EDITOR_COMPLETION_WIRE_TRIGGER_KINDS,
+    "automatic",
+    "triggerKind must be one of: invoked, trigger-character, incomplete",
+  );
+});
+
+describe.each([
+  ["source", parseEditorCompletionRequest],
+  ["public", publicOwner.parseEditorCompletionRequest],
+] as const)("#3918 eager document-request prefix through %s", (_surface, parse) => {
+  registerDocumentRequestPrefix(
+    parse,
+    baseRequest,
+    "triggerKind must be one of: invoked, trigger-character, incomplete",
+    [
+      "root",
+      "editorSessionId",
+      "document",
+      "position",
+      "triggerKind",
+      "triggerCharacter",
+      "contextBudgetBytes",
+      "maxCostClass",
+      "context",
+    ],
+  );
+});
+
+describeRequestParserSurfaces(
+  [
+    ["source", parseEditorCompletionRequest],
+    ["public", publicOwner.parseEditorCompletionRequest],
+  ],
+  baseRequest,
+  "document",
+);

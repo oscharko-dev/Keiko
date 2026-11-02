@@ -233,3 +233,64 @@ describe("M11 editor settings", () => {
     );
   });
 });
+
+// #3918 original-first public producer preservation controls.
+import * as publicOwner from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+
+describe("#3918 actual public owner preservation", () => {
+  it("retains the owning result and declared refusal", () => {
+    expect(publicOwner.validateEditorM11ProfileSettingsLayer(profileLayer()).ok).toBe(true);
+    const root = {
+      ...rootLayer(),
+      rootRef: checked("root-primary", publicPrimitives.isWorkspaceRootRef),
+      rootIdentityDigest: checked("a".repeat(64), publicPrimitives.isWorkspaceRootIdentityDigest),
+    };
+    const rows = publicOwner.resolveEditorM11Settings({ root });
+    const font = rows.find((row) => row.id === "fontSize");
+    expect(font?.rootRef).toBe(ROOT);
+    expect(font?.value).toBe(16);
+    expect(
+      publicOwner.validateEditorM11RootSettingsLayer({ ...rootLayer(), revision: -1 }).ok,
+    ).toBe(false);
+  });
+});
+
+function physicalM11Event(ids: readonly unknown[]): unknown {
+  return {
+    schemaVersion: "1",
+    sequence: 4,
+    kind: "changed",
+    revision: 1,
+    userRevision: 0,
+    workspaceRevision: 0,
+    rootRevision: 1,
+    scope: "root",
+    settingIds: ids,
+    storeState: "ready",
+  };
+}
+describe.each([
+  ["source", parseEditorM11SettingsEvent],
+  ["public", publicOwner.parseEditorM11SettingsEvent],
+] as const)("#3918 stage2 M11 physical ids %s", (_surface, parse) => {
+  it("healthy ids and ordinary invalid ids", () => {
+    expect(parse(physicalM11Event(["fontSize"])).ok).toBe(true);
+    expect(parse(physicalM11Event(["invented"]))).toEqual({ ok: false });
+  });
+  it("finite caller every cannot hide unknown id", () => {
+    const ids: unknown[] = ["invented"];
+    Object.defineProperty(ids, "every", { value: (): boolean => true });
+    expect(parse(physicalM11Event(ids))).toEqual({ ok: false });
+  });
+});
+
+import * as publicPrimitives from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+
+describe("#3918 canonical default profile producer", () => {
+  it("retains the fixed lexical profile reference", () => {
+    expect(publicOwner.EDITOR_M11_DEFAULT_PROFILE_REF).toBe("profile-default");
+    expect(publicPrimitives.isWorkspaceProfileRef(publicOwner.EDITOR_M11_DEFAULT_PROFILE_REF)).toBe(
+      true,
+    );
+  });
+});

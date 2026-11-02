@@ -131,16 +131,22 @@ const INDEX_KEYS = [
 
 type UnknownRecord = Readonly<Record<string, unknown>>;
 
+const EDITOR_LOCAL_HISTORY_ORIGINS_ADMISSION_VALUES: readonly unknown[] =
+  EDITOR_LOCAL_HISTORY_ORIGINS;
+
 function isNonNegativeInteger(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
+  const integer = Number.isSafeInteger(value);
+  return typeof value === "number" && integer && value >= 0;
 }
 
 function isPositiveBoundedInteger(value: unknown, maximum: number): value is number {
-  return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= maximum;
+  const integer = Number.isSafeInteger(value);
+  return typeof value === "number" && integer && value > 0 && value <= maximum;
 }
 
 function isNonNegativeBoundedInteger(value: unknown, maximum: number): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= maximum;
+  const integer = Number.isSafeInteger(value);
+  return typeof value === "number" && integer && value >= 0 && value <= maximum;
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -148,7 +154,7 @@ function isNonEmptyString(value: unknown): value is string {
 }
 
 function isHistoryOrigin(value: unknown): value is EditorLocalHistoryOrigin {
-  return (EDITOR_LOCAL_HISTORY_ORIGINS as readonly unknown[]).includes(value);
+  return EDITOR_LOCAL_HISTORY_ORIGINS_ADMISSION_VALUES.includes(value);
 }
 
 function isEncryptedContentRef(value: unknown): value is EditorLocalHistoryEncryptedContentRef {
@@ -282,21 +288,43 @@ function historyIndexFieldsAreValid(value: UnknownRecord): boolean {
 // documented per-workspace cap (512 entries) the per-entry deep guard therefore ran ~2048 times.
 // Compute the base result once and cache the narrowed entries array so downstream calls run at
 // most once per entry per validation invocation.
-function historyIndexEntriesAreValid(value: UnknownRecord): boolean {
-  if (!Array.isArray(value.entries)) return false;
+function admittedHistoryEntries(value: UnknownRecord): readonly EditorLocalHistoryEntry[] | null {
+  if (!Array.isArray(value.entries)) return null;
   const entries = value.entries;
+  return validHistoryEntries(entries, value) ? entries : null;
+}
+
+function validHistoryEntries(
+  entries: unknown,
+  value: UnknownRecord,
+): entries is readonly EditorLocalHistoryEntry[] {
+  if (!Array.isArray(entries)) return false;
   if (entries.length > EDITOR_LOCAL_HISTORY_MAX_ENTRIES) return false;
-  if (!entries.every(isHistoryEntry)) return false;
-  if (
-    !entries.every(
-      (entry): boolean => isWorkspaceRecord(entry) && entry.workspaceId === value.workspaceId,
-    )
-  ) {
-    return false;
-  }
+  if (!physicalHistoryMembers(entries)) return false;
+  if (!workspaceMembersMatch(entries, value)) return false;
   if (!entriesHaveUniqueIdentity(entries)) return false;
-  if (!versionsPerFileAreBounded(entries)) return false;
+  return versionsPerFileAreBounded(entries);
+}
+
+function physicalHistoryMembers(
+  entries: readonly unknown[],
+): entries is readonly EditorLocalHistoryEntry[] {
+  const extent = entries.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > EDITOR_LOCAL_HISTORY_MAX_ENTRIES)
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in entries) || !isHistoryEntry(entries[index])) return false;
+  }
   return true;
+}
+
+function laterHistoryEntries(
+  entries: unknown,
+  admitted: readonly EditorLocalHistoryEntry[],
+  value: UnknownRecord,
+): readonly EditorLocalHistoryEntry[] | null {
+  if (entries === admitted) return admitted;
+  return validHistoryEntries(entries, value) ? entries : null;
 }
 
 function historyIndexTotalsAreValid(
@@ -313,9 +341,10 @@ function historyIndexTotalsAreValid(
 function isHistoryIndex(value: unknown): value is EditorLocalHistoryIndex {
   if (!isWorkspaceRecord(value) || !hasOnlyWorkspaceKeys(value, INDEX_KEYS)) return false;
   if (!historyIndexFieldsAreValid(value)) return false;
-  if (!historyIndexEntriesAreValid(value)) return false;
-  const entries = value.entries as readonly EditorLocalHistoryEntry[];
-  return historyIndexTotalsAreValid(value, entries);
+  const admitted = admittedHistoryEntries(value);
+  if (admitted === null) return false;
+  const entries = laterHistoryEntries(value.entries, admitted, value);
+  return entries !== null && historyIndexTotalsAreValid(value, entries);
 }
 
 export function validateEditorLocalHistoryIndex(value: unknown): WorkspaceContractValidation {
@@ -373,4 +402,18 @@ export function planEditorLocalHistoryRetention(
         entryRefs: Object.freeze(selected),
         reason: "PINNED_CAPACITY_EXHAUSTED",
       };
+}
+
+function workspaceMembersMatch(
+  entries: readonly EditorLocalHistoryEntry[],
+  value: UnknownRecord,
+): boolean {
+  const extent = entries.length;
+  if (!isNonNegativeBoundedInteger(extent, EDITOR_LOCAL_HISTORY_MAX_ENTRIES)) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in entries)) return false;
+    const entry: unknown = entries[index];
+    if (!isWorkspaceRecord(entry) || entry.workspaceId !== value.workspaceId) return false;
+  }
+  return true;
 }

@@ -260,17 +260,43 @@ export function parseEditorPatchApplyRequest(value: unknown): EditorPatchApplyPa
   if (errors.length > 0) {
     return { ok: false, errors };
   }
+  const request = captureCompletePatchRequest(value);
+  if (!isCompletePatchRequest(request))
+    return { ok: false, errors: collectRequestErrors({ ...request }) };
+  return { ok: true, value: request };
+}
+
+interface CapturedEditorPatchApplyWireRequest {
+  readonly schemaVersion: typeof EDITOR_PATCH_APPLY_SCHEMA_VERSION;
+  readonly root: unknown;
+  readonly patchId: unknown;
+  readonly decision: unknown;
+  readonly diff: unknown;
+  readonly allowOverwrite?: boolean;
+}
+
+function captureCompletePatchRequest(
+  value: Record<string, unknown>,
+): CapturedEditorPatchApplyWireRequest {
   return {
-    ok: true,
-    value: {
-      schemaVersion: EDITOR_PATCH_APPLY_SCHEMA_VERSION,
-      root: value.root as string,
-      patchId: value.patchId as string,
-      decision: value.decision as EditorPatchApplyDecision,
-      diff: value.diff as string,
-      ...(typeof value.allowOverwrite === "boolean"
-        ? { allowOverwrite: value.allowOverwrite }
-        : {}),
-    },
+    schemaVersion: EDITOR_PATCH_APPLY_SCHEMA_VERSION,
+    root: value.root,
+    patchId: value.patchId,
+    decision: value.decision,
+    diff: value.diff,
+    ...(typeof value.allowOverwrite === "boolean" ? { allowOverwrite: value.allowOverwrite } : {}),
   };
+}
+
+function isCompletePatchRequest(
+  value: CapturedEditorPatchApplyWireRequest,
+): value is EditorPatchApplyWireRequest {
+  return (
+    isNonEmptyString(value.root) &&
+    isOpaquePatchId(value.patchId) &&
+    isDecision(value.decision) &&
+    typeof value.diff === "string" &&
+    (value.decision !== "apply" || value.diff.length > 0) &&
+    (value.allowOverwrite === undefined || typeof value.allowOverwrite === "boolean")
+  );
 }

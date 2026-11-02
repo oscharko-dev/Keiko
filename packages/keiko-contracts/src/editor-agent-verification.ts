@@ -104,6 +104,12 @@ export type EditorAgentVerificationResult =
 // message on a content-free-by-construction surface could mislead), so the redacted report this
 // function emits always round-trips through the agent-facing parser it is paired with.
 
+const VERIFICATION_STATUSES_ADMISSION_VALUES: readonly string[] = VERIFICATION_STATUSES;
+const EDITOR_AGENT_ACTION_DENY_REASONS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_AGENT_ACTION_DENY_REASONS;
+const EDITOR_AGENT_ACTION_REVIEW_REASONS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_AGENT_ACTION_REVIEW_REASONS;
+
 function projectLocation(
   location: VerificationFailureLocation,
 ): VerificationFailureLocation | null {
@@ -179,7 +185,7 @@ function isBoundedString(value: unknown, maxChars: number): value is string {
 }
 
 function isVerificationStatus(value: unknown): value is VerificationStatus {
-  return typeof value === "string" && (VERIFICATION_STATUSES as readonly string[]).includes(value);
+  return typeof value === "string" && VERIFICATION_STATUSES_ADMISSION_VALUES.includes(value);
 }
 
 function isFiniteNonNegative(value: unknown): value is number {
@@ -279,24 +285,28 @@ export function parseEditorAgentVerificationRunRequest(
   }
   const errors = [...requestFieldErrors(input), ...targetFieldErrors(input)];
   if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: canonicalRequest(input) };
+  return canonicalRequest(input);
 }
 
-function canonicalRequest(input: Record<string, unknown>): EditorAgentVerificationRunRequest {
-  const authorityRef = input.authorityRef as Record<string, unknown>;
-  return {
+function canonicalRequest(input: Record<string, unknown>): EditorAgentVerificationRunRequestParse {
+  const authorityRef = input.authorityRef;
+  if (!isRecord(authorityRef))
+    return { ok: false, errors: ["authorityRef must carry a bounded runId and envelopeDigest"] };
+  const request = {
     schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
-    sessionId: input.sessionId as string,
-    ...(input.rootBinding === undefined
-      ? {}
-      : { rootBinding: input.rootBinding as EditorAgentRootBinding }),
-    kind: input.kind as VerificationKind,
+    sessionId: input.sessionId,
+    ...(input.rootBinding === undefined ? {} : { rootBinding: input.rootBinding }),
+    kind: input.kind,
     ...(typeof input.targetPath === "string" ? { targetPath: input.targetPath } : {}),
     authorityRef: {
-      runId: authorityRef.runId as string,
-      envelopeDigest: authorityRef.envelopeDigest as string,
+      runId: authorityRef.runId,
+      envelopeDigest: authorityRef.envelopeDigest,
     },
   };
+  if (!isCapturedVerificationRequest(request)) {
+    return { ok: false, errors: [...requestFieldErrors(request), ...targetFieldErrors(request)] };
+  }
+  return { ok: true, value: request };
 }
 
 // Scalar-level rule (KEIKO-0424): factored out of hasValidLocationCoordinates so projectLocation can
@@ -334,24 +344,41 @@ function hasValidLocationText(
 function parseLocation(value: unknown): VerificationFailureLocation | null {
   if (!isRecord(value) || !isBoundedTargetPath(value.file)) return null;
   if (!hasValidLocationCoordinates(value) || !hasValidLocationText(value)) return null;
-  const line = value.line as number | undefined;
-  const column = value.column as number | undefined;
+  const line = value.line;
+  const column = value.column;
   const message = value.message;
   const ruleId = value.ruleId;
-  return {
-    file: value.file,
+  const file = value.file;
+  return capturedLocation(file, line, column, message, ruleId);
+}
+
+function capturedLocation(
+  file: unknown,
+  line: unknown,
+  column: unknown,
+  message: unknown,
+  ruleId: unknown,
+): VerificationFailureLocation | null {
+  if (!isBoundedTargetPath(file)) return null;
+  const location = {
+    file,
     ...(line === undefined ? {} : { line }),
     ...(column === undefined ? {} : { column }),
     message,
     ...(ruleId === undefined ? {} : { ruleId }),
   };
+  return hasValidLocationCoordinates(location) && hasValidLocationText(location) ? location : null;
 }
 
 function parseLocations(value: unknown): readonly VerificationFailureLocation[] | null {
   if (!Array.isArray(value) || value.length > VERIFICATION_MAX_FAILURE_LOCATIONS) return null;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > VERIFICATION_MAX_FAILURE_LOCATIONS)
+    return null;
   const projected: VerificationFailureLocation[] = [];
-  for (const candidate of value) {
-    const location = parseLocation(candidate);
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return null;
+    const location = parseLocation(value[index]);
     if (location === null) return null;
     projected.push(location);
   }
@@ -393,7 +420,7 @@ function parseCounts(
       return null;
     if (!countMatchesStatus(count, status, steps)) return null;
   }
-  return projectCounts(value as unknown as VerificationReport["counts"]);
+  return parseCapturedCounts(value, steps);
 }
 
 function isReportEnvelope(value: unknown): value is Record<string, unknown> & {
@@ -429,23 +456,27 @@ function parseNotRun(value: Record<string, unknown>): EditorAgentVerificationRes
   if (
     value.disposition === "denied" &&
     typeof value.reason === "string" &&
-    (EDITOR_AGENT_ACTION_DENY_REASONS as readonly string[]).includes(value.reason)
+    EDITOR_AGENT_ACTION_DENY_REASONS_ADMISSION_VALUES.includes(value.reason)
   ) {
+    const reason = value.reason;
+    if (!isDenyReason(reason)) return null;
     return {
       outcome: "not-run",
       disposition: "denied",
-      reason: value.reason as EditorAgentActionDenyReason,
+      reason,
     };
   }
   if (
     value.disposition === "review-required" &&
     typeof value.reason === "string" &&
-    (EDITOR_AGENT_ACTION_REVIEW_REASONS as readonly string[]).includes(value.reason)
+    EDITOR_AGENT_ACTION_REVIEW_REASONS_ADMISSION_VALUES.includes(value.reason)
   ) {
+    const reason = value.reason;
+    if (!isReviewReason(reason)) return null;
     return {
       outcome: "not-run",
       disposition: "review-required",
-      reason: value.reason as EditorAgentActionReviewReason,
+      reason,
     };
   }
   return null;
@@ -467,4 +498,58 @@ export function isEditorAgentVerificationResult(
   value: unknown,
 ): value is EditorAgentVerificationResult {
   return parseEditorAgentVerificationResult(value) !== null;
+}
+
+function parseCapturedCounts(
+  value: Record<string, unknown>,
+  steps: readonly RedactedVerificationStep[],
+): Readonly<Record<VerificationStatus, number>> | null {
+  const counts = {
+    passed: value.passed,
+    failed: value.failed,
+    skipped: value.skipped,
+    denied: value.denied,
+    "timed-out": value["timed-out"],
+    cancelled: value.cancelled,
+    "resource-exceeded": value["resource-exceeded"],
+  };
+  return isCapturedCounts(counts, steps) ? counts : null;
+}
+function isCapturedCounts(
+  value: Record<VerificationStatus, unknown>,
+  steps: readonly RedactedVerificationStep[],
+): value is Record<VerificationStatus, number> {
+  for (const status of VERIFICATION_STATUSES) {
+    const count = value[status];
+    if (!isSafeNonNegativeInteger(count) || count > EDITOR_AGENT_VERIFICATION_MAX_STEPS)
+      return false;
+    if (!countMatchesStatus(count, status, steps)) return false;
+  }
+  return true;
+}
+function isDenyReason(value: unknown): value is EditorAgentActionDenyReason {
+  return (
+    typeof value === "string" && EDITOR_AGENT_ACTION_DENY_REASONS_ADMISSION_VALUES.includes(value)
+  );
+}
+function isReviewReason(value: unknown): value is EditorAgentActionReviewReason {
+  return (
+    typeof value === "string" && EDITOR_AGENT_ACTION_REVIEW_REASONS_ADMISSION_VALUES.includes(value)
+  );
+}
+
+function isCapturedVerificationRequest(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & EditorAgentVerificationRunRequest {
+  return (
+    value.schemaVersion === EDITOR_VERIFICATION_SCHEMA_VERSION &&
+    isBoundedString(value.sessionId, EDITOR_AGENT_VERIFICATION_SESSION_ID_MAX_CHARS) &&
+    isVerificationKind(value.kind) &&
+    isAuthorityRef(value.authorityRef) &&
+    (value.rootBinding === undefined || isEditorAgentRootBinding(value.rootBinding)) &&
+    (value.targetPath === undefined || isBoundedTargetPath(value.targetPath)) &&
+    (value.kind === "targeted-test"
+      ? value.targetPath !== undefined
+      : value.targetPath === undefined)
+  );
 }

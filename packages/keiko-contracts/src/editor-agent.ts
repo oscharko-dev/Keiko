@@ -738,6 +738,15 @@ const EDITOR_AGENT_ACTION_TYPES: ReadonlySet<EditorAgentActionType> = new Set([
   "queryGit",
 ]);
 
+const GIT_STATUS_CODES_ADMISSION_VALUES: readonly string[] = GIT_STATUS_CODES;
+const EDITOR_AGENT_ACTION_ORIGINS_ADMISSION_VALUES: readonly string[] = EDITOR_AGENT_ACTION_ORIGINS;
+const EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS_ADMISSION_VALUES: readonly string[] =
+  EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS;
+const EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS_ADMISSION_VALUES: readonly unknown[] =
+  EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS;
+const EDITOR_AGENT_CONFLICT_CODES_ADMISSION_VALUES: readonly string[] = EDITOR_AGENT_CONFLICT_CODES;
+const EDITOR_AGENT_FAILURE_CODES_ADMISSION_VALUES: readonly string[] = EDITOR_AGENT_FAILURE_CODES;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -778,7 +787,8 @@ function utf8UnitBytes(value: string, index: number): 1 | 2 | 3 | 4 {
  * its way from the model to the file and may carry megabytes: encoding each copy would allocate
  * the whole payload again for every check, where a count needs no copy at all.
  */
-function utf8LengthUpTo(value: string, limit: number): number {
+function utf8LengthUpTo(value: unknown, limit: number): number {
+  if (typeof value !== "string") return Number.POSITIVE_INFINITY;
   let bytes = 0;
   for (let index = 0; index < value.length && bytes <= limit; index += 1) {
     const width = utf8UnitBytes(value, index);
@@ -811,7 +821,11 @@ function isBoundedResultMessage(value: unknown): value is string {
 }
 
 function isTargetPathArray(value: unknown, maxItems: number): value is readonly string[] {
-  return Array.isArray(value) && value.length <= maxItems && value.every(isBoundedTargetPath);
+  return (
+    Array.isArray(value) &&
+    value.length <= maxItems &&
+    physicalMembers(value, maxItems, isBoundedTargetPath)
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -875,7 +889,7 @@ export function isEditorAgentDiagnosticsDetail(
     isRecord(value) &&
     Array.isArray(value.items) &&
     value.items.length <= EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS &&
-    value.items.every(isEditorAgentDiagnostic) &&
+    physicalMembers(value.items, EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS, isEditorAgentDiagnostic) &&
     typeof value.truncated === "boolean"
   );
 }
@@ -972,7 +986,7 @@ function isUniqueNonEmptyStringArray(value: unknown, maxItems: number): value is
     Array.isArray(value) &&
     value.length > 0 &&
     value.length <= maxItems &&
-    value.every(isNonEmptyString) &&
+    physicalMembers(value, maxItems, isNonEmptyString) &&
     new Set(value).size === value.length
   );
 }
@@ -983,11 +997,14 @@ function selectedFilesBelongToChangeset(
 ): boolean {
   if (selectedFiles === undefined) return true;
   if (!isUniqueNonEmptyStringArray(selectedFiles, files.length)) return false;
-  if (!selectedFiles.every(isContainedAgentPath) || !normalizedPathsAreUnique(selectedFiles)) {
+  if (
+    !physicalMembers(selectedFiles, EDITOR_AGENT_CHANGESET_MAX_FILES, isContainedSelectionPath) ||
+    !normalizedPathsAreUnique(selectedFiles)
+  ) {
     return false;
   }
   const available = new Set(files.map((file) => normalizeAgentPath(file.file)));
-  return selectedFiles.every((file) => available.has(normalizeAgentPath(file)));
+  return selectedFilesAreAvailable(selectedFiles, available);
 }
 
 function isPreparedChangeKind(value: unknown): value is EditorAgentPreparedChangeKind {
@@ -998,7 +1015,7 @@ function isPreparedTextEditArray(value: unknown): value is readonly EditorAgentP
   return (
     Array.isArray(value) &&
     value.length > 0 &&
-    value.every(isTextEdit) &&
+    isCapturedTextEdits(value) &&
     validateAgentTextEdits(value) === null
   );
 }
@@ -1053,8 +1070,10 @@ export function isEditorAgentPreparedChangeset(
   // that the cap was going to reject anyway still paid for the full per-file work at a pre-authority
   // trust boundary. The count is read structurally here because the files are not yet validated.
   if (declaredEditCount(value.files) > EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS) return false;
-  if (!value.files.every(isEditorAgentPreparedChangesetFile)) return false;
-  const files = value.files as readonly EditorAgentPreparedChangesetFile[];
+  const validatedFiles = value.files;
+  if (!isPreparedChangesetFiles(validatedFiles)) return false;
+  const files = laterPreparedFiles(value.files, validatedFiles);
+  if (files === null) return false;
   const editCount = files.reduce((total, file) => total + file.textEdits.length, 0);
   return (
     normalizedPathsAreUnique(files.map((file) => file.file)) &&
@@ -1068,9 +1087,18 @@ export function isEditorAgentChangeset(value: unknown): value is EditorAgentChan
   if (!Array.isArray(value.files)) return false;
   if (value.files.length === 0 || value.files.length > EDITOR_AGENT_CHANGESET_MAX_FILES)
     return false;
-  if (!value.files.every(isEditorAgentChangesetFile)) return false;
-  const files = value.files as readonly EditorAgentChangesetFile[];
+  const validatedFiles = value.files;
+  if (!isChangesetFiles(validatedFiles)) return false;
+  const files = laterChangesetFiles(value.files, validatedFiles);
+  if (files === null) return false;
   if (!normalizedPathsAreUnique(files.map((file) => file.file))) return false;
+  return validChangesetPayload(value, files);
+}
+
+function validChangesetPayload(
+  value: Record<string, unknown>,
+  files: readonly EditorAgentChangesetFile[],
+): boolean {
   return (
     isNonEmptyString(value.patch) &&
     isUtf8StringWithin(value.patch, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES) &&
@@ -1133,7 +1161,7 @@ function isPaneSnapshotArray(value: unknown): value is readonly EditorAgentPaneS
   return (
     Array.isArray(value) &&
     value.length <= EDITOR_AGENT_SNAPSHOT_MAX_PANES &&
-    value.every(isPaneSnapshot)
+    physicalMembers(value, EDITOR_AGENT_SNAPSHOT_MAX_PANES, isPaneSnapshot)
   );
 }
 
@@ -1189,15 +1217,14 @@ export function isEditorAgentSessionSnapshot(value: unknown): value is EditorAge
   ].every(Boolean);
 }
 
+const EDITOR_AGENT_ACTION_TYPE_ADMISSION_VALUES: ReadonlySet<string> = EDITOR_AGENT_ACTION_TYPES;
+
 function isActionType(value: unknown): value is EditorAgentActionType {
-  return typeof value === "string" && EDITOR_AGENT_ACTION_TYPES.has(value as EditorAgentActionType);
+  return typeof value === "string" && EDITOR_AGENT_ACTION_TYPE_ADMISSION_VALUES.has(value);
 }
 
 export function isEditorAgentActionOrigin(value: unknown): value is EditorAgentActionOrigin {
-  return (
-    typeof value === "string" &&
-    EDITOR_AGENT_ACTION_ORIGINS.includes(value as EditorAgentActionOrigin)
-  );
+  return typeof value === "string" && EDITOR_AGENT_ACTION_ORIGINS_ADMISSION_VALUES.includes(value);
 }
 
 export function resolveEditorAgentActionOrigin(
@@ -1232,14 +1259,14 @@ function isBoundedStringArray(value: unknown, maxItems: number): value is readon
   return (
     Array.isArray(value) &&
     value.length <= maxItems &&
-    value.every((entry) => isNonEmptyString(entry) && entry.length <= 200)
+    physicalMembers(value, maxItems, isBoundedSearchGlob)
   );
 }
 
 function isNavigateSymbolOperation(value: unknown): value is EditorAgentNavigateSymbolOperation {
   return (
     typeof value === "string" &&
-    EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS.includes(value as EditorAgentNavigateSymbolOperation)
+    EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS_ADMISSION_VALUES.includes(value)
   );
 }
 
@@ -1247,9 +1274,7 @@ function isLanguageDiagnosticArray(value: unknown): value is readonly LanguageDi
   return (
     Array.isArray(value) &&
     value.length <= EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS &&
-    value.every(
-      (item) => isEditorAgentDiagnostic(item) && isRecord(item) && isNonEmptyString(item.source),
-    )
+    physicalMembers(value, EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS, isSourceDiagnostic)
   );
 }
 
@@ -1340,7 +1365,7 @@ function isQueryGitRequest(value: unknown): value is EditorAgentQueryGitRequest 
     Array.isArray(value.aspects) &&
     value.aspects.length > 0 &&
     value.aspects.length <= EDITOR_AGENT_GIT_ASPECTS.length &&
-    value.aspects.every(isGitAspect) &&
+    physicalMembers(value.aspects, EDITOR_AGENT_GIT_ASPECTS.length, isGitAspect) &&
     new Set(value.aspects).size === value.aspects.length
   );
 }
@@ -1373,7 +1398,7 @@ function isQueryGitCaps(value: unknown): value is EditorAgentQueryGitCaps {
 // GitStatusCode union already needed a shared runtime source of truth for; imported from there now
 // instead, so the two cannot silently drift.
 function isQueryGitStatusCode(value: unknown): value is GitStatusCode {
-  return typeof value === "string" && (GIT_STATUS_CODES as readonly string[]).includes(value);
+  return typeof value === "string" && GIT_STATUS_CODES_ADMISSION_VALUES.includes(value);
 }
 
 function isQueryGitStatusChange(value: unknown): value is EditorAgentQueryGitStatusChange {
@@ -1451,7 +1476,7 @@ function isQueryGitDiffFile(
 
 function hasValidQueryGitDiffContent(value: Readonly<Record<string, unknown>>): boolean {
   if (typeof value.binary !== "boolean") return false;
-  if (!Array.isArray(value.hunks) || !value.hunks.every(isGitEditorDiffHunk)) return false;
+  if (!Array.isArray(value.hunks) || !physicalQueryGitHunks(value.hunks)) return false;
   return !value.binary || value.hunks.length === 0;
 }
 
@@ -1478,7 +1503,7 @@ function isQueryGitDiffLayer(
   return (
     value.scope === expectedScope &&
     value.layer === expectedLayer &&
-    value.files.every((file) => isQueryGitDiffFile(file, expectedLayer)) &&
+    physicalQueryGitFiles(value.files, expectedLayer) &&
     hasValidQueryGitDiffTotals(value)
   );
 }
@@ -1497,7 +1522,9 @@ function queryGitDiffFiles(diff: EditorAgentQueryGitDiff): readonly EditorAgentQ
   return [...(diff.staged?.files ?? []), ...(diff.unstaged?.files ?? [])];
 }
 
-function isQueryGitDiff(value: unknown): value is EditorAgentQueryGitDiff {
+function hasQueryGitDiffLayers(
+  value: unknown,
+): value is Record<string, unknown> & EditorAgentQueryGitDiff {
   if (!isRecord(value) || !hasOnlyObjectKeys(value, ["staged", "unstaged"])) return false;
   if (value.staged === undefined && value.unstaged === undefined) return false;
   if (!isUndefinedOr(value.staged, (layer) => isQueryGitDiffLayer(layer, "staged", "staged"))) {
@@ -1508,8 +1535,12 @@ function isQueryGitDiff(value: unknown): value is EditorAgentQueryGitDiff {
   ) {
     return false;
   }
-  const diff = value as unknown as EditorAgentQueryGitDiff;
-  const files = queryGitDiffFiles(diff);
+  return true;
+}
+
+function isQueryGitDiff(value: unknown): value is EditorAgentQueryGitDiff {
+  if (!hasQueryGitDiffLayers(value)) return false;
+  const files = queryGitDiffFiles(value);
   return (
     files.length <= GIT_AGENT_CONTEXT_MAX_FILES &&
     files.reduce((total, file) => total + file.hunks.length, 0) <= GIT_AGENT_CONTEXT_MAX_HUNKS
@@ -1532,7 +1563,7 @@ function hasValidQueryGitBlameLines(value: Readonly<Record<string, unknown>>): b
   return (
     Array.isArray(value.lines) &&
     value.lines.length <= GIT_AGENT_CONTEXT_MAX_BLAME_LINES &&
-    value.lines.every(isGitEditorBlameLine)
+    physicalMembers(value.lines, GIT_AGENT_CONTEXT_MAX_BLAME_LINES, isGitEditorBlameLine)
   );
 }
 
@@ -1563,18 +1594,18 @@ function isQueryGitOmission(value: unknown): value is EditorAgentQueryGitOmissio
     isGitAspect(value.aspect) &&
     (value.scope === undefined ||
       (value.aspect === "diff" && (value.scope === "staged" || value.scope === "unstaged"))) &&
-    EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS.includes(
-      value.reason as EditorAgentQueryGitOmissionReason,
-    ) &&
+    EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS_ADMISSION_VALUES.includes(value.reason) &&
     isUndefinedOr(value.machineReason, (reason) =>
-      EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS.includes(reason as EditorAgentQueryGitMachineReason),
+      EDITOR_AGENT_QUERY_GIT_MACHINE_REASONS_ADMISSION_VALUES.includes(reason),
     )
   );
 }
 
 function isQueryGitOmissions(value: unknown): value is readonly EditorAgentQueryGitOmission[] {
-  if (!Array.isArray(value) || value.length > 5 || !value.every(isQueryGitOmission)) return false;
-  const keys = value.map((entry) => `${entry.aspect}:${entry.scope ?? "all"}`);
+  if (!Array.isArray(value) || value.length > 5) return false;
+  const entries: unknown = value;
+  if (!physicalMembers(entries, 5, isQueryGitOmission)) return false;
+  const keys = entries.map((entry) => `${entry.aspect}:${entry.scope ?? "all"}`);
   return new Set(keys).size === keys.length;
 }
 
@@ -1585,20 +1616,26 @@ function queryGitDataWithinByteCap(value: Readonly<Record<string, unknown>>): bo
   );
 }
 
-function parseEditorAgentQueryGitDataUnsafe(
-  value: unknown,
-): EditorAgentParse<EditorAgentQueryGitData> {
-  if (!isRecord(value)) return { ok: false, errors: ["queryGit data must be an object"] };
-  const valid =
+function isCompleteQueryGitData(
+  value: Record<string, unknown>,
+): value is Record<string, unknown> & EditorAgentQueryGitData {
+  return (
     hasOnlyObjectKeys(value, ["schemaVersion", "target", "caps", "aspects", "omissions"]) &&
     value.schemaVersion === EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION &&
     isQueryGitTarget(value.target) &&
     isQueryGitCaps(value.caps) &&
     isQueryGitAspects(value.aspects) &&
     isQueryGitOmissions(value.omissions) &&
-    queryGitDataWithinByteCap(value);
-  return valid
-    ? { ok: true, value: value as unknown as EditorAgentQueryGitData }
+    queryGitDataWithinByteCap(value)
+  );
+}
+
+function parseEditorAgentQueryGitDataUnsafe(
+  value: unknown,
+): EditorAgentParse<EditorAgentQueryGitData> {
+  if (!isRecord(value)) return { ok: false, errors: ["queryGit data must be an object"] };
+  return isCompleteQueryGitData(value)
+    ? { ok: true, value }
     : { ok: false, errors: ["queryGit data is malformed or exceeds agent caps"] };
 }
 
@@ -1638,8 +1675,8 @@ function isTextEditArray(
   if (!Array.isArray(value) || value.length > EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS) {
     return false;
   }
-  if (!value.every(isTextEdit)) return false;
-  const edits = value as readonly { readonly range: LanguageRange; readonly newText: string }[];
+  const edits: unknown = value;
+  if (!isCapturedTextEdits(edits)) return false;
   const bytes = edits.reduce(
     (total, edit) => total + utf8LengthUpTo(edit.newText, EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES),
     0,
@@ -1717,19 +1754,23 @@ export const EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES: readonly EditorAgentAction
   "applyPatch",
 ] as const;
 
+const EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES_ADMISSION_VALUES: readonly string[] =
+  EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES;
+const EDITOR_AGENT_WRITE_ACTION_TYPES_ADMISSION_VALUES: readonly string[] =
+  EDITOR_AGENT_WRITE_ACTION_TYPES;
+
 export function isEditorAgentActiveBufferActionType(
   value: unknown,
 ): value is EditorAgentActionType {
   return (
     typeof value === "string" &&
-    EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES.includes(value as EditorAgentActionType)
+    EDITOR_AGENT_ACTIVE_BUFFER_ACTION_TYPES_ADMISSION_VALUES.includes(value)
   );
 }
 
 export function isEditorAgentWriteActionType(value: unknown): value is EditorAgentActionType {
   return (
-    typeof value === "string" &&
-    EDITOR_AGENT_WRITE_ACTION_TYPES.includes(value as EditorAgentActionType)
+    typeof value === "string" && EDITOR_AGENT_WRITE_ACTION_TYPES_ADMISSION_VALUES.includes(value)
   );
 }
 
@@ -1794,8 +1835,10 @@ export function isEditorAgentFileActionResult(
 function isEditorAgentFileActionResultArray(value: unknown): boolean {
   if (value === undefined) return true;
   if (!Array.isArray(value) || value.length > EDITOR_AGENT_CHANGESET_MAX_FILES) return false;
-  if (!value.every(isEditorAgentFileActionResult)) return false;
-  return new Set(value.map((result) => result.file)).size === value.length;
+  const entries: unknown = value;
+  if (!physicalMembers(entries, EDITOR_AGENT_CHANGESET_MAX_FILES, isEditorAgentFileActionResult))
+    return false;
+  return new Set(entries.map((result) => result.file)).size === value.length;
 }
 
 // Issue #1392 — a failure detail, when present, mirrors the conflict-detail guard against the
@@ -1834,17 +1877,11 @@ export function isEditorAgentActionResult(value: unknown): value is EditorAgentA
 }
 
 export function isEditorAgentConflictCode(value: unknown): value is EditorAgentConflictCode {
-  return (
-    typeof value === "string" &&
-    EDITOR_AGENT_CONFLICT_CODES.includes(value as EditorAgentConflictCode)
-  );
+  return typeof value === "string" && EDITOR_AGENT_CONFLICT_CODES_ADMISSION_VALUES.includes(value);
 }
 
 export function isEditorAgentFailureCode(value: unknown): value is EditorAgentFailureCode {
-  return (
-    typeof value === "string" &&
-    EDITOR_AGENT_FAILURE_CODES.includes(value as EditorAgentFailureCode)
-  );
+  return typeof value === "string" && EDITOR_AGENT_FAILURE_CODES_ADMISSION_VALUES.includes(value);
 }
 
 // Issue #1391 — structural guard over the full editor-agent event union. Validates the shared
@@ -2090,7 +2127,7 @@ export function isEditorBufferSafetySnapshot(value: unknown): value is EditorAge
     value.selection === null &&
     value.diagnosticsSummary === null &&
     Object.keys(value).every((key) => BUFFER_SNAPSHOT_KEYS.has(key)) &&
-    value.panes.every((pane) => Object.keys(pane).every((key) => BUFFER_PANE_KEYS.has(key)))
+    bufferPaneKeysAreClosed(value.panes)
   );
 }
 
@@ -2503,4 +2540,116 @@ export function isEditorAgentBridgeDecisionCapability(value: unknown): value is 
     value.length === EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS &&
     /^[A-Za-z0-9_-]+$/u.test(value)
   );
+}
+
+function isPreparedChangesetFiles(
+  value: unknown,
+): value is readonly EditorAgentPreparedChangesetFile[] {
+  return physicalMembers(
+    value,
+    EDITOR_AGENT_CHANGESET_MAX_FILES,
+    isEditorAgentPreparedChangesetFile,
+  );
+}
+
+function isChangesetFiles(value: unknown): value is readonly EditorAgentChangesetFile[] {
+  return physicalMembers(value, EDITOR_AGENT_CHANGESET_MAX_FILES, isEditorAgentChangesetFile);
+}
+
+function isCapturedTextEdits(value: unknown): value is readonly EditorAgentPreparedTextEdit[] {
+  return physicalMembers(value, EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS, isTextEdit);
+}
+
+const EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS_ADMISSION_VALUES: readonly unknown[] =
+  EDITOR_AGENT_QUERY_GIT_OMISSION_REASONS;
+
+function physicalMembers<T>(
+  value: unknown,
+  maximum: number,
+  guard: (value: unknown) => value is T,
+): value is readonly T[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > maximum) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value)) return false;
+    const member: unknown = value[index];
+    if (!guard(member)) return false;
+  }
+  return true;
+}
+
+function laterPreparedFiles(
+  value: unknown,
+  previous: readonly EditorAgentPreparedChangesetFile[],
+): readonly EditorAgentPreparedChangesetFile[] | null {
+  if (value === previous) return previous;
+  return isPreparedChangesetFiles(value) ? value : null;
+}
+
+function laterChangesetFiles(
+  value: unknown,
+  previous: readonly EditorAgentChangesetFile[],
+): readonly EditorAgentChangesetFile[] | null {
+  if (value === previous) return previous;
+  return isChangesetFiles(value) ? value : null;
+}
+
+function selectedFilesAreAvailable(
+  files: readonly string[],
+  available: ReadonlySet<string>,
+): boolean {
+  const extent = files.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > EDITOR_AGENT_CHANGESET_MAX_FILES)
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    const file = files[index];
+    if (file === undefined || !available.has(normalizeAgentPath(file))) return false;
+  }
+  return true;
+}
+
+function isBoundedSearchGlob(value: unknown): value is string {
+  return isNonEmptyString(value) && value.length <= 200;
+}
+
+function isSourceDiagnostic(value: unknown): value is LanguageDiagnostic {
+  return isEditorAgentDiagnostic(value) && isRecord(value) && isNonEmptyString(value.source);
+}
+
+function physicalQueryGitHunks(value: unknown): value is readonly GitEditorDiffHunk[] {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0) return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isGitEditorDiffHunk(value[index])) return false;
+  }
+  return true;
+}
+
+function physicalQueryGitFiles(value: unknown, layer: GitEditorDiffLayer): boolean {
+  if (!Array.isArray(value)) return false;
+  const extent = value.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > GIT_AGENT_CONTEXT_MAX_FILES)
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    if (!(index in value) || !isQueryGitDiffFile(value[index], layer)) return false;
+  }
+  return true;
+}
+
+function bufferPaneKeysAreClosed(panes: readonly EditorAgentPaneSnapshot[]): boolean {
+  const extent = panes.length;
+  if (!Number.isSafeInteger(extent) || extent < 0 || extent > EDITOR_AGENT_SNAPSHOT_MAX_PANES)
+    return false;
+  for (let index = 0; index < extent; index += 1) {
+    const pane = panes[index];
+    if (pane === undefined || !Object.keys(pane).every((key) => BUFFER_PANE_KEYS.has(key)))
+      return false;
+  }
+  return true;
+}
+
+function isContainedSelectionPath(value: unknown): value is string {
+  return typeof value === "string" && isContainedAgentPath(value);
 }

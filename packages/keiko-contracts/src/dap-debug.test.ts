@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import {
+  installIgnoredProtocolMetadata,
+  itPreservesCapturedExtent,
+  protocolEnumerationInput,
+} from "./__tests__/support/protocol-observation-mechanics.js";
 
 import {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
@@ -786,3 +791,235 @@ describe("UTF-8-safe debug projections", () => {
     expect(event.kind).toBe("output");
   });
 });
+
+import {
+  parseDebugBootstrapRequest as publicBootstrap,
+  parseSetWatchesRequest as publicWatches,
+  parseScopesRequest as publicScopes,
+  parseVariablesRequest as publicVariables,
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
+
+describe.each([
+  [
+    "source",
+    parseDebugBootstrapRequest,
+    parseSetWatchesRequest,
+    parseScopesRequest,
+    parseVariablesRequest,
+  ],
+  ["public", publicBootstrap, publicWatches, publicScopes, publicVariables],
+] as const)(
+  "3918 DAP canonical construction %s",
+  (_surface, parseBootstrap, parseWatches, parseScopes, parseVariables) => {
+    it("copies the healthy bootstrap and keeps the reference key separation", () => {
+      const input = { schemaVersion, workspaceId };
+      const result = parseBootstrap(input);
+      expect(result).toEqual({ ok: true, value: input });
+      if (result.ok) expect(result.value).not.toBe(input);
+      const scopes = parseScopes({
+        schemaVersion,
+        sessionId: opaqueId,
+        pauseGeneration: 0,
+        frameRef: "frame_1",
+      });
+      expect(scopes.ok).toBe(true);
+      if (scopes.ok) {
+        expect(scopes.value.frameRef).toBe("frame_1");
+        expect(Object.hasOwn(scopes.value, "variableRef")).toBe(false);
+      }
+      expect(
+        parseVariables({
+          schemaVersion,
+          sessionId: opaqueId,
+          pauseGeneration: 0,
+          frameRef: "frame_1",
+        }).ok,
+      ).toBe(false);
+    });
+    it("refuses a malformed workspace identity in the canonical output phase", () => {
+      let reads = 0;
+      const input = {
+        schemaVersion,
+        get workspaceId(): unknown {
+          reads += 1;
+          return reads === 1 ? workspaceId : 42;
+        },
+      };
+      expect(parseBootstrap(input)).toEqual({
+        ok: false,
+        errors: ["debug bootstrap request is invalid or contains unknown fields"],
+      });
+      expect(reads).toBe(2);
+    });
+    it("refuses malformed physical watches concealed by caller every and map", () => {
+      const watches = [{}];
+      Object.defineProperty(watches, "every", { value: (): boolean => true });
+      Object.defineProperty(watches, "map", { value: (): unknown[] => [{}] });
+      expect(parseWatches({ schemaVersion, workspaceId, expectedRevision: 0, watches })).toEqual({
+        ok: false,
+        errors: ["set watches request is invalid or contains unknown fields"],
+      });
+    });
+    it("preserves healthy canonical watch copies and optional absence", () => {
+      const watches = [watch];
+      const result = parseWatches({ schemaVersion, workspaceId, expectedRevision: 0, watches });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.watches).not.toBe(watches);
+      expect(result.value.watches[0]).not.toBe(watch);
+      expect(result.value.watches[0]?.expression).toBe(watch.expression);
+    });
+  },
+);
+
+describe.each([
+  ["source", parseSetWatchesRequest],
+  ["public", publicWatches],
+] as const)("3918 dap-debug captured extent %s", (_surface, parse) => {
+  itPreservesCapturedExtent({
+    member: watch,
+    bound: DEFAULT_DEBUG_PAYLOAD_LIMITS.maxWatches,
+    admit: (observed) =>
+      parse({ schemaVersion, workspaceId, expectedRevision: 0, watches: observed }).ok,
+  });
+});
+
+import * as debugPublic from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
+
+function debugInspectionInput(failure: unknown): unknown {
+  return new Proxy(
+    {},
+    {
+      ownKeys(): never {
+        throwDebugInspection(failure);
+      },
+      get(): never {
+        throwDebugInspection(failure);
+      },
+    },
+  );
+}
+
+function throwDebugInspection(value: unknown): never {
+  throw value;
+}
+
+function debugCaughtFailure(kind: "name" | "revoked" | "private"): unknown {
+  if (kind === "revoked") {
+    const value = Proxy.revocable({}, {});
+    value.revoke();
+    return value.proxy;
+  }
+  const error = new Error("private-debug-message");
+  error.stack = "";
+  if (kind === "private") error.name = "private-debug-name";
+  else
+    Object.defineProperty(error, "name", {
+      get(): never {
+        throw new Error("private-debug-name-inspection");
+      },
+    });
+  return error;
+}
+
+const publicDebugParsers = [
+  debugPublic.parseDebugBootstrapRequest,
+  debugPublic.parseDebugSessionStartRequest,
+  debugPublic.parseDebugSessionControlRequest,
+  debugPublic.parseSetBreakpointsRequest,
+  debugPublic.parseSetExceptionBreakpointsRequest,
+  debugPublic.parseStackTraceRequest,
+  debugPublic.parseScopesRequest,
+  debugPublic.parseVariablesRequest,
+  debugPublic.parseSetVariableRequest,
+  debugPublic.parseSetWatchesRequest,
+  debugPublic.parseEvaluateWatchRequest,
+] as const;
+
+for (const [index, [name, source, healthy]] of validRequests.entries()) {
+  const publicParser = publicDebugParsers[index];
+  if (publicParser === undefined) throw new TypeError("matching public debug parser required");
+  describe.each([
+    { surface: "source", parse: source },
+    { surface: "public", parse: publicParser },
+  ])(`closed DAP inspection: ${name} $surface`, ({ parse }) => {
+    it.each([
+      { kind: "name", expected: "unknown" },
+      { kind: "revoked", expected: "unknown" },
+      { kind: "private", expected: "Error" },
+    ] as const)("contains hostile caught $kind", ({ kind, expected }) => {
+      const result = parse(debugInspectionInput(debugCaughtFailure(kind)));
+      expect(result).toEqual({
+        ok: false,
+        errors: [`payload could not be inspected: ${expected}`],
+      });
+      expect(JSON.stringify(result)).not.toContain("private");
+    });
+
+    it.each([
+      { failure: new TypeError("private"), expected: "TypeError" },
+      { failure: new RangeError("private"), expected: "RangeError" },
+      { failure: "private", expected: "unknown" },
+    ])("keeps ordinary caught $expected classification", ({ failure, expected }) => {
+      expect(parse(debugInspectionInput(failure))).toEqual({
+        ok: false,
+        errors: [`payload could not be inspected: ${expected}`],
+      });
+    });
+
+    it("preserves healthy construction and ordinary malformed-input refusal", () => {
+      expect(parse(healthy).ok).toBe(true);
+      expect(parse(null).ok).toBe(false);
+    });
+  });
+}
+
+for (const surface of ["source", "public"] as const) {
+  it(`${surface}: preserves protocol key enumeration before closed-field refusal`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./dap-debug.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/dap-debug");
+    const trace: string[] = [];
+    const value = protocolEnumerationInput(trace);
+    expect(module.parseDebugSessionControlRequest(value)).toEqual({
+      ok: false,
+      errors: ["debug session control request is invalid or contains unknown fields"],
+    });
+    expect(trace).toEqual(["ownKeys", "descriptor:unexpected", "descriptor:schemaVersion"]);
+  });
+
+  it(`${surface}: retains ignored symbol and non-enumerable protocol metadata`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./dap-debug.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/dap-debug");
+    const value = { schemaVersion, sessionId: opaqueId, pauseGeneration: 0, action: "continue" };
+    let reads = 0;
+    installIgnoredProtocolMetadata(value, (): void => {
+      reads += 1;
+    });
+    expect(module.parseDebugSessionControlRequest(value).ok).toBe(true);
+    expect(reads).toBe(0);
+  });
+
+  it(`${surface}: rejects a non-string protocol vocabulary member without coercion`, async () => {
+    const module =
+      surface === "source"
+        ? await import("./dap-debug.js")
+        : await import("@oscharko-dev/keiko-contracts/runtime/dap-debug");
+    let coercions = 0;
+    const foreign = {
+      toString: (): never => {
+        coercions += 1;
+        throw new TypeError("Protocol enum coercion");
+      },
+    };
+    const value = { schemaVersion, sessionId: opaqueId, pauseGeneration: 0, action: foreign };
+    expect(module.parseDebugSessionControlRequest(value)).toEqual({
+      ok: false,
+      errors: ["debug session control request is invalid or contains unknown fields"],
+    });
+    expect(coercions).toBe(0);
+  });
+}
