@@ -7,17 +7,15 @@ import type {
   ChatTurnState,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
-import { jiraToolLabel, jiraToolState, jiraToolOutcomeHelp } from "./jira-tool-presentation";
+import {
+  jiraToolLabel,
+  jiraToolState,
+  jiraToolOutcomeHelp,
+  jiraToolPartialNotice,
+} from "./jira-tool-presentation";
 import styles from "./JiraChatTools.module.css";
 import { JiraReportCard } from "./JiraReportCard";
 import { jiraReportView } from "./jira-report-view";
-function hasPartialJiraResult(exchange: ChatToolExchange): boolean {
-  return (
-    !exchange.call.name.startsWith("mcp_") &&
-    exchange.result?.status === "completed" &&
-    exchange.result.page.truncated
-  );
-}
 function jiraReportOf(exchange: ChatToolExchange): ReturnType<typeof jiraReportView> {
   return exchange.call.name === "jira_report" ? jiraReportView(exchange.result?.data) : undefined;
 }
@@ -35,15 +33,14 @@ function JiraToolExchange({
   const state = jiraToolState(exchange, turnState);
   const help = jiraToolOutcomeHelp(state);
   const report = jiraReportOf(exchange);
+  const partial = jiraToolPartialNotice(exchange);
   return (
     <section className={styles.cmpCard} aria-label={t(mcp ? "chat.mcp.tool" : "chat.jira.tool")}>
       <strong>{mcp ? exchange.call.name : t(jiraToolLabel(exchange))}</strong>
       <output>{t(state)}</output>
       {help === undefined ? null : <p>{t(help)}</p>}
       {report === undefined ? null : <JiraReportCard view={report} chatId={chatId} />}
-      {report === undefined && hasPartialJiraResult(exchange) ? (
-        <p>{t("chat.jira.partial")}</p>
-      ) : null}
+      {report === undefined && partial !== undefined ? <p>{t(partial)}</p> : null}
       {exchange.result?.data == null ? null : (
         <details>
           <summary>{t(mcp ? "chat.mcp.details" : "chat.jira.details")}</summary>

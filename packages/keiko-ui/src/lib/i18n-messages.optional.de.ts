@@ -82,6 +82,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
 
   "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
   "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+  "chat.requirements.tool": "Anforderungen",
+  "chat.requirements.partial": "Teilliste. Nicht alle Anforderungen sind enthalten.",
   "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
   "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
   "chat.jira.write.succeeded": "Jira-Änderung bestätigt",

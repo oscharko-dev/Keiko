@@ -78,6 +78,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
 
   "chat.jira.resultUnavailable": "Result unavailable",
   "chat.jira.partial": "Partial Jira result. Some available data is not included.",
+  "chat.requirements.tool": "Requirements",
+  "chat.requirements.partial": "Partial list. Some requirements are not included.",
   "chat.jira.write.notDispatched": "Not sent to Jira",
   "chat.jira.write.rejected": "Jira action rejected",
   "chat.jira.write.succeeded": "Jira change confirmed",
