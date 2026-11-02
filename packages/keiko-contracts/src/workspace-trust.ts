@@ -1,6 +1,6 @@
 // Canonical per-root Workspace Trust. Records are server-owned facts; browser input cannot mint one.
 
-import type { CommandTaskTrustState } from "./command-runner.js";
+import type { CommandTaskTrustState } from "./command-task-trust.js";
 import { strictestCodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 import type { CodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 import {
