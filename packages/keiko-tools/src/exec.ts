@@ -522,39 +522,41 @@ function waitForWindowsSlot(
   signal: AbortSignal,
   maxWaitMs: number,
 ): Promise<WindowsTerminationReservation | undefined> {
-  return new Promise((resolve, reject) => {
-    if (signal.aborted) {
-      resolve(undefined);
-      return;
-    }
-    const leave = (): void => {
-      const index = waiters.indexOf(waiter);
-      if (index >= 0) waiters.splice(index, 1);
-      clearTimeout(timer);
-      signal.removeEventListener("abort", expire);
-    };
-    const expire = (): void => {
-      leave();
-      resolve(undefined);
-    };
-    const waiter: WindowsSlotWaiter = {
-      processEnv,
-      admit: (reserve) => {
+  return new Promise(
+    (resolve, reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1]) => {
+      if (signal.aborted) {
+        resolve(undefined);
+        return;
+      }
+      const leave = (): void => {
+        const index = waiters.indexOf(waiter);
+        if (index >= 0) waiters.splice(index, 1);
+        clearTimeout(timer);
+        signal.removeEventListener("abort", expire);
+      };
+      const expire = (): void => {
         leave();
-        // A throwing admission rejects this wait, never the release that is draining the queue.
-        try {
-          resolve(reserve());
-        } catch (error) {
-          if (error instanceof Error) reject(error);
-          else reject(new Error("Windows termination capacity admission failed"));
-        }
-      },
-    };
-    waiters.push(waiter);
-    const timer = setTimeout(expire, maxWaitMs);
-    timer.unref();
-    signal.addEventListener("abort", expire, { once: true });
-  });
+        resolve(undefined);
+      };
+      const waiter: WindowsSlotWaiter = {
+        processEnv,
+        admit: (reserve) => {
+          leave();
+          // A throwing admission rejects this wait, never the release that is draining the queue.
+          try {
+            resolve(reserve());
+          } catch (error) {
+            if (error instanceof Error) reject(error);
+            else reject(new Error("Windows termination capacity admission failed"));
+          }
+        },
+      };
+      waiters.push(waiter);
+      const timer = setTimeout(expire, maxWaitMs);
+      timer.unref();
+      signal.addEventListener("abort", expire, { once: true });
+    },
+  );
 }
 const TREE_KILLS_PER_RUN = 2;
 
