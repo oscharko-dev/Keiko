@@ -210,6 +210,16 @@ describe("generated field construction preservation", () => {
     }
   });
 
+  it("marks the constructed registry as one pure call so an unread registry can be dropped", () => {
+    // The first-load UI chunk imports observability without reading the registry. Without this
+    // marker the constructor calls kept the whole registry in that chunk, over its gzip ceiling.
+    const source = runtimeOperationsModule(catalog.typedRegistry);
+    const start = "export const ACTIVITY_LOG_OPERATION_REGISTRY = /*#__PURE__*/ (() => [";
+    expect(source.split(start).length - 1).toBe(1);
+    expect(source.trimEnd().endsWith("] as const)();")).toBe(true);
+    expect(source.slice(0, source.indexOf(start))).not.toContain("ACTIVITY_LOG_OPERATION_REGISTRY");
+  });
+
   it("retains independent descriptor and enum occurrences with ordinary mutable properties", () => {
     withGeneratedRuntime(
       ({ inspection }) => {
