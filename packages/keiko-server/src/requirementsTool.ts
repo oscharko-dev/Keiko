@@ -627,7 +627,7 @@ const NO_IDS_FOR_REPORT =
 const CUT_FOR_REPORT =
   "The Chat's Knowledge Pods hold more requirements than Keiko can list at once. Pass requirementIds yourself.";
 
-/** The explicit identifiers of a collection, or the plain-words reason Keiko cannot list them. */
+/** The identifiers of a collection, explicit and derived, or the plain-words reason Keiko cannot list them. */
 function reportRequirementIds(collection: RequirementCollection): JiraReportRequirementIds {
   const refusal = collection.refusals[0];
   if (collection.units.length === 0 && refusal !== undefined)
@@ -637,14 +637,9 @@ function reportRequirementIds(collection: RequirementCollection): JiraReportRequ
     };
   if (collection.cutReasons.length > 0 || collection.unitsOmitted > 0)
     return { ok: false, message: CUT_FOR_REPORT };
-  // A derived identifier is Keiko's own handle; no issue can name it, so it can never be covered.
-  const ids = [
-    ...new Set(
-      collection.units
-        .filter((unit) => unit.entry.idOrigin === "explicit")
-        .map((unit) => unit.entry.id),
-    ),
-  ];
+  // Derived identifiers are stable handles an issue can name (trace footer, `keiko-req-` label);
+  // leaving them out would shrink the denominator and report them covered.
+  const ids = [...new Set(collection.units.map((unit) => unit.entry.id))];
   return ids.length === 0 ? { ok: false, message: NO_IDS_FOR_REPORT } : { ok: true, ids };
 }
 

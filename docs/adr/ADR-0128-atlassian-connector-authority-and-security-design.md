@@ -1108,9 +1108,10 @@ field list was not read, makes the report incomplete with reason `template-unrea
 compliance `checker: unavailable` instead of zero deviations), and coverage of declared `requirementIds`
 (a requirement is covered by an issue naming its identifier in summary, labels or description;
 items traced through the covering issue's descendants and, for a container, its linked issues).
-`requirementsFromPods: true` makes Keiko list the explicit requirement identifiers of the Chat's
-Knowledge Pods itself (the read `knowledge.requirements` serves; derived handles are left out because
-no issue can name them) and merge them with any `requirementIds` the model named, so a model with a
+`requirementsFromPods: true` makes Keiko list the requirement identifiers of the Chat's
+Knowledge Pods itself (the read `knowledge.requirements` serves; stable derived `DRV-` handles are
+listed with the explicit ones, because an issue can name them in a trace footer or `keiko-req-` label
+and leaving them out would shrink the coverage denominator) and merge them with any `requirementIds` the model named, so a model with a
 small window never copies dozens of identifiers into a call. A Chat without a readable list, a Pod
 that is not ready, a cut list or more than 1000 identifiers is refused as
 `requirements-unavailable` with a plain-words `message` that names the fix (pass `requirementIds`
