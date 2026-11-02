@@ -25,6 +25,12 @@ import {
   type GitDeliveryMergeStrategy,
 } from "@/lib/api";
 import { Icons } from "../../Icons";
+import {
+  GovernedEmpty,
+  GovernedField,
+  GovernedFieldRow,
+  GovernedPolicyFacts,
+} from "./governed-delivery-shared";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const GitIcon = Icons.git;
@@ -285,28 +291,21 @@ interface FieldsProps {
 function MergeBranchFields({ form, busy, onChange }: FieldsProps): ReactNode {
   const t = useOptionalWidgetTranslate();
   return (
-    <div style={ROW_STYLE}>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        {t("governedDelivery.ui.baseBranch")}{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.baseBranchName}
-          disabled={busy}
-          onChange={(e) => onChange("baseBranchName", e.target.value)}
-          aria-label={t("governedDelivery.ui.baseBranch")}
-        />
-      </label>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        {t("governedDelivery.ui.headBranch")}{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.headBranchName}
-          disabled={busy}
-          onChange={(e) => onChange("headBranchName", e.target.value)}
-          aria-label={t("governedDelivery.ui.headBranch")}
-        />
-      </label>
-    </div>
+    <GovernedFieldRow
+      disabled={busy}
+      fields={[
+        {
+          label: t("governedDelivery.ui.baseBranch"),
+          value: form.baseBranchName,
+          onChange: (v) => onChange("baseBranchName", v),
+        },
+        {
+          label: t("governedDelivery.ui.headBranch"),
+          value: form.headBranchName,
+          onChange: (v) => onChange("headBranchName", v),
+        },
+      ]}
+    />
   );
 }
 
@@ -320,15 +319,12 @@ function MergeTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
         <GitIcon size={12} /> {t("governedDelivery.ui.mergeTarget")}
       </h3>
       <div style={ROW_STYLE}>
-        <label style={{ ...LABEL_STYLE, flex: 1 }}>
-          {t("governedDelivery.ui.repository")}{" "}
-          <input
-            style={FIELD_STYLE}
-            value={form.ownerAndRepo}
-            disabled={busy}
-            onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-          />
-        </label>
+        <GovernedField
+          label={t("governedDelivery.ui.repository")}
+          value={form.ownerAndRepo}
+          disabled={busy}
+          onChange={(v) => onChange("ownerAndRepo", v)}
+        />
         <label style={{ ...LABEL_STYLE, flex: 1 }}>
           {t("governedDelivery.ui.prNumber")}{" "}
           <input
@@ -446,13 +442,11 @@ function MergeReadinessPanel({
           ),
         })}
       </p>
-      <p style={KV_LABEL} data-field="recommendation">
-        {tUi("governedDelivery.ui.recommendation", { value: preview.recommendation })}
-      </p>
-      <p style={KV_LABEL} data-field="policy">
-        {tUi("governedDelivery.ui.policy", { value: preview.policyOutcome })}
-        {preview.policyBlockReason !== undefined ? ` (${preview.policyBlockReason})` : ""}
-      </p>
+      <GovernedPolicyFacts
+        recommendation={preview.recommendation}
+        policyOutcome={preview.policyOutcome}
+        policyBlockReason={preview.policyBlockReason}
+      />
       <p style={KV_LABEL} data-field="risk">
         {tUi("governedDelivery.ui.riskSeverity", {
           riskClass: preview.riskClass,
@@ -773,16 +767,7 @@ export function GovernedMergeCard({
   const liveId = useId();
   const t = useOptionalWidgetTranslate();
   if (projectId === undefined || projectId === "") {
-    return (
-      <div
-        data-testid="gm-empty"
-        style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
-      >
-        <p>
-          <GitIcon size={13} /> {t("governedDelivery.ui.selectProjectMerge")}
-        </p>
-      </div>
-    );
+    return <GovernedEmpty testId="gm-empty" text={t("governedDelivery.ui.selectProjectMerge")} />;
   }
   return (
     <GovernedMergeBody

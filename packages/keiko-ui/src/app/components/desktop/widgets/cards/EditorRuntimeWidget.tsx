@@ -1694,6 +1694,7 @@ function EditorRuntimeWidget({
   const languageIntelligenceT = useEditorLanguageIntelligenceTranslate();
   const locale = useLocale();
   const t = useEditorAgentTranslate();
+  const tUi = useOptionalWidgetTranslate();
   const editorSettings = useEditorSettings(root);
   const debugActivation = editorSettings.snapshot?.debugging;
   const debugEnabled = debugActivation?.state === "available";
@@ -4505,7 +4506,7 @@ function EditorRuntimeWidget({
             aria-label={`Compare external changes for ${definedOr(file, "this file")}`}
             style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
           >
-            <span className="sr-only">{t("editor.ui.srExternal")}</span>
+            <span className="sr-only">{tUi("editor.ui.srExternal")}</span>
             <EditorDiffSurface
               model={externalDiffModel}
               loadState={{ status: "ready" }}
@@ -4519,18 +4520,18 @@ function EditorRuntimeWidget({
               className="ed-save"
               onClick={keepExternalLocal}
             >
-              {t("editor.ui.keepLocal")}
+              {tUi("editor.ui.keepLocal")}
             </button>
             <button
               type="button"
               className="ed-reload"
-              aria-label={t("editor.ui.reloadExternal")}
+              aria-label={tUi("editor.ui.reloadExternal")}
               onClick={reloadExternalChange}
             >
-              {t("editor.ui.reload")}
+              {tUi("editor.ui.reload")}
             </button>
             <button type="button" className="ed-icon-action" onClick={closeExternalCompare}>
-              {t("editor.ui.closeCompare")}
+              {tUi("editor.ui.closeCompare")}
             </button>
           </div>
         </div>
@@ -4552,7 +4553,7 @@ function EditorRuntimeWidget({
             aria-label={`Compare recovered changes for ${definedOr(file, "this file")}`}
             style={EDITOR_REVIEW_DIFF_GROUP_STYLE}
           >
-            <span className="sr-only">{t("editor.ui.srRecovery")}</span>
+            <span className="sr-only">{tUi("editor.ui.srRecovery")}</span>
             <EditorDiffSurface
               model={recoveryDiffModel}
               loadState={{ status: "ready" }}
@@ -4566,13 +4567,13 @@ function EditorRuntimeWidget({
               className="ed-save"
               onClick={restoreRecovery}
             >
-              {t("editor.ui.keepLocal")}
+              {tUi("editor.ui.keepLocal")}
             </button>
             <button type="button" className="ed-reload" onClick={discardRecovery}>
-              {t("editor.ui.useDisk")}
+              {tUi("editor.ui.useDisk")}
             </button>
             <button type="button" className="ed-icon-action" onClick={closeRecoveryCompare}>
-              {t("editor.ui.closeCompare")}
+              {tUi("editor.ui.closeCompare")}
             </button>
           </div>
         </div>
@@ -4739,7 +4740,7 @@ function EditorRuntimeWidget({
         </div>
       );
     } else if (hasTarget) {
-      panel = <output className="ed-host-loading">{t("editor.ui.loadingFile")}</output>;
+      panel = <output className="ed-host-loading">{tUi("editor.ui.loadingFile")}</output>;
     } else {
       panel = (
         <div className="ed-empty" role="note">
@@ -4931,7 +4932,7 @@ function EditorRuntimeWidget({
       <div
         className={runtimeStyles.tabRow}
         role="tablist"
-        aria-label={t("editor.ui.openDocuments")}
+        aria-label={tUi("editor.ui.openDocuments")}
       >
         {visibleTabs.length > 0 ? (
           visibleTabs.map((path) => renderOpenDocumentTab(path))
@@ -4971,7 +4972,7 @@ function EditorRuntimeWidget({
           <div
             className="ed-tab-summary-panel"
             id={summaryMenuId}
-            aria-label={t("editor.ui.hiddenDocuments")}
+            aria-label={tUi("editor.ui.hiddenDocuments")}
           >
             {summaryTabs.map((path) => renderSummaryTabItem(path))}
           </div>
@@ -5121,19 +5122,19 @@ function EditorRuntimeWidget({
           <span className="spacer" />
           {externalChangeCanCompare(externalChange) ? (
             <button type="button" className="ed-reload" onClick={compareExternalChange}>
-              {t("editor.ui.compare")}
+              {tUi("editor.ui.compare")}
             </button>
           ) : null}
           <button type="button" className="ed-save" onClick={keepExternalLocal}>
-            {t("editor.ui.keepLocal")}
+            {tUi("editor.ui.keepLocal")}
           </button>
           <button
             type="button"
             className="ed-reload"
-            aria-label={t("editor.ui.reloadExternal")}
+            aria-label={tUi("editor.ui.reloadExternal")}
             onClick={reloadExternalChange}
           >
-            {t("editor.ui.reload")}
+            {tUi("editor.ui.reload")}
           </button>
         </output>
       ) : null}
@@ -5145,19 +5146,21 @@ function EditorRuntimeWidget({
       {recoverySnapshot !== null && !recoveryCompare ? (
         <output className="ed-recovery">
           <span>
-            {recoveryDiskChanged ? t("editor.ui.recoveredDiskChanged") : t("editor.ui.recovered")}
+            {recoveryDiskChanged
+              ? tUi("editor.ui.recoveredDiskChanged")
+              : tUi("editor.ui.recovered")}
           </span>
           <span className="spacer" />
           {recoveryDiskChanged ? (
             <button type="button" className="ed-reload" onClick={compareRecovery}>
-              {t("editor.ui.compare")}
+              {tUi("editor.ui.compare")}
             </button>
           ) : null}
           <button type="button" className="ed-save" onClick={restoreRecovery}>
-            {recoveryDiskChanged ? t("editor.ui.keepLocal") : t("editor.ui.restoreUnsaved")}
+            {recoveryDiskChanged ? tUi("editor.ui.keepLocal") : tUi("editor.ui.restoreUnsaved")}
           </button>
           <button type="button" className="ed-reload" onClick={discardRecovery}>
-            {recoveryDiskChanged ? t("editor.ui.useDisk") : t("editor.ui.discard")}
+            {recoveryDiskChanged ? tUi("editor.ui.useDisk") : tUi("editor.ui.discard")}
           </button>
           {recoveryDiskChanged ? (
             <button
@@ -5169,7 +5172,7 @@ function EditorRuntimeWidget({
                 setRecoveryDiskBaseline(null);
               }}
             >
-              {t("editor.ui.cancel")}
+              {tUi("editor.ui.cancel")}
             </button>
           ) : null}
         </output>
@@ -5190,19 +5193,21 @@ function EditorRuntimeWidget({
           tabIndex={-1}
           style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
         >
-          <h2 id="editor-reload-confirm-title">{t("editor.ui.discardTitle")}</h2>
+          <h2 id="editor-reload-confirm-title">{tUi("editor.ui.discardTitle")}</h2>
           <p>
-            {t("editor.ui.reloadWarning", {
+            {tUi("editor.ui.reloadWarning", {
               location:
-                file !== undefined && file.length > 0 ? ` ${t("editor.ui.inFile", { file })}` : "",
+                file !== undefined && file.length > 0
+                  ? ` ${tUi("editor.ui.inFile", { file })}`
+                  : "",
             })}
           </p>
           <div className="ed-dialog-actions">
             <button type="button" className="ed-reload" onClick={confirmReloadDiscard}>
-              {t("editor.ui.discardReload")}
+              {tUi("editor.ui.discardReload")}
             </button>
             <button type="button" className="ed-icon-action" onClick={cancelReloadDiscard}>
-              {t("editor.ui.cancel")}
+              {tUi("editor.ui.cancel")}
             </button>
           </div>
         </dialog>

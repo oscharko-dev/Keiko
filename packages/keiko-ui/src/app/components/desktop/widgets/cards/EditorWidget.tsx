@@ -1,11 +1,14 @@
 "use client";
 
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
 import { discardEditorBufferSafetyFiles } from "./useEditorBufferSafety";
 import EditorSurfaceLoading from "./EditorSurfaceLoading";
 
 import { startFilesNavigationEvidence } from "@/lib/files-navigation-evidence";
 import { useTranslate } from "@/lib/i18n";
-import { useEditorAgentTranslate, type EditorAgentTranslate } from "./editor-agent-i18n";
 import type {
   EditorDirtyCloseIntent,
   EditorLayoutNode,
@@ -314,7 +317,7 @@ function DirtyCloseDialog(props: {
   readonly onDiscard: () => void;
   readonly onCancel: () => void;
 }): ReactNode {
-  const t = useEditorAgentTranslate();
+  const tUi = useOptionalWidgetTranslate();
   const titleId = "editor-dirty-close-title";
   const dialogRef = useRef<HTMLDialogElement>(null);
   useDialogTabTrap(dialogRef);
@@ -339,8 +342,8 @@ function DirtyCloseDialog(props: {
         tabIndex={-1}
         style={{ position: "relative", inset: "auto", margin: 0, color: "inherit" }}
       >
-        <h2 id={titleId}>{t("editor.ui.unsavedTitle")}</h2>
-        <p>{t("editor.ui.unsavedHint")}</p>
+        <h2 id={titleId}>{tUi("editor.ui.unsavedTitle")}</h2>
+        <p>{tUi("editor.ui.unsavedHint")}</p>
         <ul>
           {props.pending.dirtyFiles.map((file) => (
             <li key={file}>{file}</li>
@@ -354,7 +357,7 @@ function DirtyCloseDialog(props: {
             onClick={props.onSave}
             disabled={props.pending.saving}
           >
-            {props.pending.saving ? t("editor.ui.saving") : t("editor.ui.save")}
+            {props.pending.saving ? tUi("editor.ui.saving") : tUi("editor.ui.save")}
           </button>
           <button
             type="button"
@@ -362,7 +365,7 @@ function DirtyCloseDialog(props: {
             onClick={props.onDiscard}
             disabled={props.pending.saving}
           >
-            {t("editor.ui.discard")}
+            {tUi("editor.ui.discard")}
           </button>
           <button
             type="button"
@@ -370,7 +373,7 @@ function DirtyCloseDialog(props: {
             onClick={props.onCancel}
             disabled={props.pending.saving}
           >
-            {t("editor.ui.cancel")}
+            {tUi("editor.ui.cancel")}
           </button>
         </div>
       </dialog>
@@ -387,14 +390,16 @@ function renderPaneActions(
   showClose: boolean,
   splitPane: (paneId: string, direction: EditorSplitDirection) => void,
   closePane: (paneId: string) => void,
-  t: EditorAgentTranslate,
+  tUi: OptionalWidgetTranslate,
 ): ReactNode {
   return (
-    <span className="ed-pane-actions" aria-label={t("editor.ui.splitControls")}>
+    <span className="ed-pane-actions" aria-label={tUi("editor.ui.splitControls")}>
       <button
         type="button"
         className="ed-icon-action"
-        aria-label={t("editor.ui.splitRight", { file: pane.activeFile || t("editor.ui.editor") })}
+        aria-label={tUi("editor.ui.splitRight", {
+          file: pane.activeFile || tUi("editor.ui.editor"),
+        })}
         onClick={() => splitPane(pane.id, "row")}
       >
         <SplitIcon size={14} />
@@ -402,7 +407,9 @@ function renderPaneActions(
       <button
         type="button"
         className="ed-icon-action"
-        aria-label={t("editor.ui.splitDown", { file: pane.activeFile || t("editor.ui.editor") })}
+        aria-label={tUi("editor.ui.splitDown", {
+          file: pane.activeFile || tUi("editor.ui.editor"),
+        })}
         onClick={() => splitPane(pane.id, "column")}
       >
         <PanelDownIcon size={14} />
@@ -411,7 +418,9 @@ function renderPaneActions(
         <button
           type="button"
           className="ed-icon-action"
-          aria-label={t("editor.ui.closeSplit", { file: pane.activeFile || t("editor.ui.editor") })}
+          aria-label={tUi("editor.ui.closeSplit", {
+            file: pane.activeFile || tUi("editor.ui.editor"),
+          })}
           onClick={() => closePane(pane.id)}
         >
           <CloseIcon size={14} />
@@ -634,7 +643,7 @@ export function EditorWidget({
   ...props
 }: EditorWidgetProps): ReactNode {
   const t = useTranslate();
-  const tEditor = useEditorAgentTranslate();
+  const tUi = useOptionalWidgetTranslate();
   const initialRoot = root?.trim() ?? "";
   const initialConfiguredFile = normalizeEditorFile(initialRoot, file);
   const initialOpenFiles = normalizeEditorOpenFiles(
@@ -1905,7 +1914,7 @@ export function EditorWidget({
         onSelectOpenFile: (file: string) => selectOpenFile(paneId, file),
         onCloseOpenFile: (path: string) => closeOpenFile(paneId, path),
         onDirtyChange: (path: string, dirty: boolean) => markDirty(paneId, path, dirty),
-        toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane, tEditor),
+        toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane, tUi),
         // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
         // pane-memoized closure) instead of as a per-render inline closure in renderPane,
         // so its identity is stable and does not defeat React.memo(EditorRuntimeWidget).
@@ -1954,7 +1963,7 @@ export function EditorWidget({
     handleTabKeyDown,
     beginTabPointerDrag,
     suppressTabClickAfterPointerDrag,
-    tEditor,
+    tUi,
   ]);
 
   if (workspaceRoot.length === 0) {
@@ -2023,7 +2032,7 @@ export function EditorWidget({
               className={`ed-pane-drop-zone ${zone}`}
               key={zone}
               tabIndex={-1}
-              aria-label={tEditor("editor.ui.dropTab", { zone })}
+              aria-label={tUi("editor.ui.dropTab", { zone })}
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => dropTab(pane.id, zone, event)}
             />
@@ -2050,7 +2059,7 @@ export function EditorWidget({
         <hr
           tabIndex={0}
           className={splitResizerClassName(node.direction)}
-          aria-label={tEditor("editor.ui.resizeSplit")}
+          aria-label={tUi("editor.ui.resizeSplit")}
           aria-orientation={node.direction === "row" ? "vertical" : "horizontal"}
           aria-valuemin={MIN_SPLIT_RATIO}
           aria-valuemax={MAX_SPLIT_RATIO}
@@ -2113,21 +2122,21 @@ export function EditorWidget({
         <button
           type="button"
           className="ed-sidebar-restore ui-tip"
-          aria-label={tEditor("editor.ui.showTree")}
-          data-tip={tEditor("editor.ui.showTree")}
+          aria-label={tUi("editor.ui.showTree")}
+          data-tip={tUi("editor.ui.showTree")}
           onClick={toggleSidebar}
         >
           <SidebarIcon size={15} />
         </button>
       ) : (
         <>
-          <aside className="ed-sidebar" aria-label={tEditor("editor.ui.files")}>
+          <aside className="ed-sidebar" aria-label={tUi("editor.ui.files")}>
             <div className="ed-sidebar-chrome">
               <button
                 type="button"
                 className="ed-icon-action ui-tip"
-                aria-label={tEditor("editor.ui.hideTree")}
-                data-tip={tEditor("editor.ui.hideTree")}
+                aria-label={tUi("editor.ui.hideTree")}
+                data-tip={tUi("editor.ui.hideTree")}
                 onClick={toggleSidebar}
               >
                 <SidebarIcon size={14} />
@@ -2155,7 +2164,7 @@ export function EditorWidget({
           <hr
             tabIndex={0}
             className="ed-sidebar-resizer"
-            aria-label={tEditor("editor.ui.resizeTree")}
+            aria-label={tUi("editor.ui.resizeTree")}
             aria-orientation="vertical"
             aria-valuemin={EDITOR_SIDEBAR_MIN_WIDTH}
             aria-valuemax={EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH}

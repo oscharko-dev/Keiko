@@ -1127,6 +1127,36 @@ function reportedModelCount(result: GatewaySetupResponse): number {
   );
 }
 
+interface GatewayPreservableFieldProps {
+  readonly preserveExisting: boolean;
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+interface GatewayValueFieldProps {
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+function GatewayFieldShell({
+  className,
+  label,
+  children,
+}: {
+  readonly className: string;
+  readonly label: ReactNode;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <label className={className}>
+      <span>{label}</span>
+      {children}
+    </label>
+  );
+}
+
 interface GatewayBaseUrlFieldProps {
   readonly preserveExisting: boolean;
   readonly value: string;
@@ -1158,13 +1188,17 @@ function GatewayBaseUrlField({
 }: GatewayBaseUrlFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field gw-span-2">
-      <span>
-        {t("gatewaySetup.ui.baseUrl")}{" "}
-        {preserveExisting ? (
-          <span className="dlg-opt">{t("gatewaySetup.ui.leaveBlankToKeep")}</span>
-        ) : null}
-      </span>
+    <GatewayFieldShell
+      className="gw-field gw-span-2"
+      label={
+        <>
+          {t("gatewaySetup.ui.baseUrl")}{" "}
+          {preserveExisting ? (
+            <span className="dlg-opt">{t("gatewaySetup.ui.leaveBlankToKeep")}</span>
+          ) : null}
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         value={value}
@@ -1183,15 +1217,8 @@ function GatewayBaseUrlField({
             : (event): void => pasteCredentialWithoutWhitespace(event, onChange)
         }
       />
-    </label>
+    </GatewayFieldShell>
   );
-}
-
-interface GatewayApiKeyFieldProps {
-  readonly preserveExisting: boolean;
-  readonly value: string;
-  readonly disabled: boolean;
-  readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
 function GatewayApiKeyField({
@@ -1199,16 +1226,20 @@ function GatewayApiKeyField({
   value,
   disabled,
   onChange,
-}: GatewayApiKeyFieldProps): ReactNode {
+}: GatewayPreservableFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.ui.apiToken")}{" "}
-        {preserveExisting ? (
-          <span className="dlg-opt">{t("gatewaySetup.ui.leaveBlankToKeep")}</span>
-        ) : null}
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.ui.apiToken")}{" "}
+          {preserveExisting ? (
+            <span className="dlg-opt">{t("gatewaySetup.ui.leaveBlankToKeep")}</span>
+          ) : null}
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         type="password"
@@ -1227,15 +1258,8 @@ function GatewayApiKeyField({
             : (event): void => pasteCredentialWithoutWhitespace(event, onChange)
         }
       />
-    </label>
+    </GatewayFieldShell>
   );
-}
-
-interface GatewayApiKeyHeaderFieldProps {
-  readonly preserveExisting: boolean;
-  readonly value: string;
-  readonly disabled: boolean;
-  readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
 function GatewayApiKeyHeaderField({
@@ -1243,13 +1267,18 @@ function GatewayApiKeyHeaderField({
   value,
   disabled,
   onChange,
-}: GatewayApiKeyHeaderFieldProps): ReactNode {
+}: GatewayPreservableFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.ui.apiKeyHeader")} <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.ui.apiKeyHeader")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         value={value}
@@ -1260,14 +1289,8 @@ function GatewayApiKeyHeaderField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
-}
-
-interface GatewayApiVersionFieldProps {
-  readonly value: string;
-  readonly disabled: boolean;
-  readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
 // #3638: manual twin of VoiceApiVersionField for the generic (chat/embedding) connection. A
@@ -1276,18 +1299,18 @@ interface GatewayApiVersionFieldProps {
 // binding (onChange is wired to setChatApiVersion, not the raw state setter), or a value stated
 // after the Base URL was edited away from the uploaded one stayed gated on the stale upload
 // (review findings on PR #3625).
-function GatewayApiVersionField({
-  value,
-  disabled,
-  onChange,
-}: GatewayApiVersionFieldProps): ReactNode {
+function GatewayApiVersionField({ value, disabled, onChange }: GatewayValueFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.gateway.apiVersion.label")}{" "}
-        <span className="dlg-opt">{t("gatewaySetup.gateway.apiVersion.azureOnly")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.gateway.apiVersion.label")}{" "}
+          <span className="dlg-opt">{t("gatewaySetup.gateway.apiVersion.azureOnly")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input"
         value={value}
@@ -1295,15 +1318,8 @@ function GatewayApiVersionField({
         placeholder="2025-04-01-preview"
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
-}
-
-interface GatewayTimeoutFieldProps {
-  readonly preserveExisting: boolean;
-  readonly value: string;
-  readonly disabled: boolean;
-  readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
 function GatewayTimeoutField({
@@ -1311,14 +1327,18 @@ function GatewayTimeoutField({
   value,
   disabled,
   onChange,
-}: GatewayTimeoutFieldProps): ReactNode {
+}: GatewayPreservableFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.ui.requestTimeout")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.ui.requestTimeout")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         inputMode="numeric"
@@ -1328,21 +1348,15 @@ function GatewayTimeoutField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
-}
-
-interface GatewayDeploymentNamesFieldProps {
-  readonly value: string;
-  readonly disabled: boolean;
-  readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
 function GatewayDeploymentNamesField({
   value,
   disabled,
   onChange,
-}: GatewayDeploymentNamesFieldProps): ReactNode {
+}: GatewayValueFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
     <label className="gw-field">
@@ -1359,24 +1373,22 @@ function GatewayDeploymentNamesField({
   );
 }
 
-interface GatewayImageInputModelsFieldProps {
-  readonly value: string;
-  readonly disabled: boolean;
-  readonly onChange: Dispatch<SetStateAction<string>>;
-}
-
 function GatewayImageInputModelsField({
   value,
   disabled,
   onChange,
-}: GatewayImageInputModelsFieldProps): ReactNode {
+}: GatewayValueFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.ui.imageInputModels")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.ui.imageInputModels")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
+        </>
+      }
+    >
       <textarea
         className="gw-input gw-textarea mono"
         value={value}
@@ -1385,11 +1397,11 @@ function GatewayImageInputModelsField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
-interface GatewayWorkflowEligibleModelsFieldProps extends GatewayImageInputModelsFieldProps {
+interface GatewayWorkflowEligibleModelsFieldProps extends GatewayValueFieldProps {
   readonly t: GatewaySetupTranslate;
 }
 
@@ -1400,11 +1412,15 @@ function GatewayWorkflowEligibleModelsField({
   onChange,
 }: GatewayWorkflowEligibleModelsFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.workflowEligibleModels")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.workflowEligibleModels")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
+        </>
+      }
+    >
       <textarea
         className="gw-input gw-textarea mono"
         value={value}
@@ -1413,7 +1429,7 @@ function GatewayWorkflowEligibleModelsField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -1718,6 +1734,37 @@ function VoiceGuidanceNote({
   );
 }
 
+interface VoiceTextFieldProps {
+  readonly label: string;
+  readonly hint: string;
+  readonly placeholder: string;
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+function VoiceTextField(props: VoiceTextFieldProps): ReactNode {
+  return (
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {props.label} <span className="dlg-opt">{props.hint}</span>
+        </>
+      }
+    >
+      <input
+        className="gw-input mono"
+        value={props.value}
+        placeholder={props.placeholder}
+        autoComplete="off"
+        disabled={props.disabled}
+        onChange={(event) => props.onChange(event.target.value)}
+      />
+    </GatewayFieldShell>
+  );
+}
+
 interface VoiceDictateDeploymentFieldProps {
   readonly t: GatewaySetupTranslate;
   readonly value: string;
@@ -1725,27 +1772,14 @@ interface VoiceDictateDeploymentFieldProps {
   readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
-function VoiceDictateDeploymentField({
-  t,
-  value,
-  disabled,
-  onChange,
-}: VoiceDictateDeploymentFieldProps): ReactNode {
+function VoiceDictateDeploymentField({ t, ...rest }: VoiceDictateDeploymentFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.dictateDeployment")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
-      <input
-        className="gw-input mono"
-        value={value}
-        placeholder="your-transcription-deployment"
-        autoComplete="off"
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
+    <VoiceTextField
+      {...rest}
+      label={t("gatewaySetup.voice.dictateDeployment")}
+      hint={t("common.optional")}
+      placeholder="your-transcription-deployment"
+    />
   );
 }
 
@@ -1765,11 +1799,15 @@ function VoiceRealtimeDeploymentField({
   onBlur,
 }: VoiceRealtimeDeploymentFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.realtimeDeployment")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.voice.realtimeDeployment")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         value={value}
@@ -1779,7 +1817,7 @@ function VoiceRealtimeDeploymentField({
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -1831,11 +1869,15 @@ function VoiceSpeechOutputDeploymentField({
   onBlur,
 }: VoiceSpeechOutputDeploymentFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.speechOutputDeployment")}{" "}
-        <span className="dlg-opt">{t("common.optional")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.voice.speechOutputDeployment")}{" "}
+          <span className="dlg-opt">{t("common.optional")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         value={value}
@@ -1845,7 +1887,7 @@ function VoiceSpeechOutputDeploymentField({
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -1856,27 +1898,14 @@ interface VoiceOutputVoiceFieldProps {
   readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
-function VoiceOutputVoiceField({
-  t,
-  value,
-  disabled,
-  onChange,
-}: VoiceOutputVoiceFieldProps): ReactNode {
+function VoiceOutputVoiceField({ t, ...rest }: VoiceOutputVoiceFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.outputVoice")}{" "}
-        <span className="dlg-opt">{t("gatewaySetup.voice.outputVoiceHint")}</span>
-      </span>
-      <input
-        className="gw-input mono"
-        value={value}
-        placeholder="provider-voice-id"
-        autoComplete="off"
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value)}
-      />
-    </label>
+    <VoiceTextField
+      {...rest}
+      label={t("gatewaySetup.voice.outputVoice")}
+      hint={t("gatewaySetup.voice.outputVoiceHint")}
+      placeholder="provider-voice-id"
+    />
   );
 }
 
@@ -1980,11 +2009,15 @@ interface VoiceApiVersionFieldProps {
 function VoiceApiVersionField({ value, disabled, onChange }: VoiceApiVersionFieldProps): ReactNode {
   const t = useGatewaySetupTranslate();
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.apiVersion.label")}{" "}
-        <span className="dlg-opt">{t("gatewaySetup.voice.apiVersion.azureOnly")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.voice.apiVersion.label")}{" "}
+          <span className="dlg-opt">{t("gatewaySetup.voice.apiVersion.azureOnly")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input"
         value={value}
@@ -1992,7 +2025,7 @@ function VoiceApiVersionField({ value, disabled, onChange }: VoiceApiVersionFiel
         placeholder="2025-04-01-preview"
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -2014,13 +2047,17 @@ function VoiceEndpointUrlField({
   onBlur,
 }: VoiceEndpointUrlFieldProps): ReactNode {
   return (
-    <label className="gw-field gw-span-2">
-      <span>
-        {t("gatewaySetup.voice.endpointUrl")}{" "}
-        {preserveExisting ? (
-          <span className="dlg-opt">{t("gatewaySetup.voice.preserveExistingHint")}</span>
-        ) : null}
-      </span>
+    <GatewayFieldShell
+      className="gw-field gw-span-2"
+      label={
+        <>
+          {t("gatewaySetup.voice.endpointUrl")}{" "}
+          {preserveExisting ? (
+            <span className="dlg-opt">{t("gatewaySetup.voice.preserveExistingHint")}</span>
+          ) : null}
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         value={value}
@@ -2034,7 +2071,7 @@ function VoiceEndpointUrlField({
         onChange={(event) => onChange(event.target.value)}
         onBlur={onBlur}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -2054,13 +2091,17 @@ function VoiceCredentialField({
   onChange,
 }: VoiceCredentialFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.credential")}{" "}
-        {preserveExisting ? (
-          <span className="dlg-opt">{t("gatewaySetup.voice.preserveExistingHint")}</span>
-        ) : null}
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.voice.credential")}{" "}
+          {preserveExisting ? (
+            <span className="dlg-opt">{t("gatewaySetup.voice.preserveExistingHint")}</span>
+          ) : null}
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         type="password"
@@ -2074,7 +2115,7 @@ function VoiceCredentialField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -2094,10 +2135,15 @@ function VoiceAuthHeaderField({
   onChange,
 }: VoiceAuthHeaderFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.authHeader")} <span className="dlg-opt">{t("common.advanced")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.voice.authHeader")}{" "}
+          <span className="dlg-opt">{t("common.advanced")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         value={value}
@@ -2108,7 +2154,7 @@ function VoiceAuthHeaderField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -2128,10 +2174,14 @@ function VoiceTimeoutField({
   onChange,
 }: VoiceTimeoutFieldProps): ReactNode {
   return (
-    <label className="gw-field">
-      <span>
-        {t("gatewaySetup.voice.timeout")} <span className="dlg-opt">{t("common.advanced")}</span>
-      </span>
+    <GatewayFieldShell
+      className="gw-field"
+      label={
+        <>
+          {t("gatewaySetup.voice.timeout")} <span className="dlg-opt">{t("common.advanced")}</span>
+        </>
+      }
+    >
       <input
         className="gw-input mono"
         inputMode="numeric"
@@ -2143,7 +2193,7 @@ function VoiceTimeoutField({
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
-    </label>
+    </GatewayFieldShell>
   );
 }
 
@@ -2545,10 +2595,15 @@ function FigmaSection({
           <p>{t("gatewaySetup.ui.figmaHint")}</p>
         </div>
       </div>
-      <label className="gw-field">
-        <span>
-          {t("gatewaySetup.ui.figmaToken")} <span className="dlg-opt">{t("common.optional")}</span>
-        </span>
+      <GatewayFieldShell
+        className="gw-field"
+        label={
+          <>
+            {t("gatewaySetup.ui.figmaToken")}{" "}
+            <span className="dlg-opt">{t("common.optional")}</span>
+          </>
+        }
+      >
         <input
           className="gw-input mono"
           type="password"
@@ -2563,7 +2618,7 @@ function FigmaSection({
           ref={figmaAccessTokenRef}
           onChange={(event) => setFigmaAccessToken(event.target.value)}
         />
-      </label>
+      </GatewayFieldShell>
     </section>
   );
 }

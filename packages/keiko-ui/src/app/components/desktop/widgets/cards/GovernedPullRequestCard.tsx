@@ -49,6 +49,7 @@ import {
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 
 import { Icons } from "../../Icons";
+import { GovernedEmpty, GovernedField, GovernedPolicyFacts } from "./governed-delivery-shared";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const GitIcon = Icons.git;
@@ -327,29 +328,24 @@ interface FieldsProps {
   readonly onChange: <K extends keyof PrForm>(key: K, value: PrForm[K]) => void;
 }
 
-function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
+function PrTargetFields(props: FieldsProps): ReactNode {
   const t = useTranslate();
+  const { form, busy } = props;
+  const change = props.onChange;
   return (
     <div style={ROW_STYLE}>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Repository (owner/repo){" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.ownerAndRepo}
-          disabled={busy}
-          onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-        />
-      </label>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        {t("governedDelivery.ui.baseBranch")}{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.baseBranchName}
-          disabled={busy}
-          onChange={(e) => onChange("baseBranchName", e.target.value)}
-          aria-label={t("governedDelivery.ui.baseBranch")}
-        />
-      </label>
+      <GovernedField
+        label={t("governedDelivery.ui.repository")}
+        value={form.ownerAndRepo}
+        disabled={busy}
+        onChange={(v) => change("ownerAndRepo", v)}
+      />
+      <GovernedField
+        label={t("governedDelivery.ui.baseBranch")}
+        value={form.baseBranchName}
+        disabled={busy}
+        onChange={(v) => change("baseBranchName", v)}
+      />
     </div>
   );
 }
@@ -604,13 +600,11 @@ function PrReadinessFacts({
           ),
         })}
       </p>
-      <p style={KV_LABEL} data-field="recommendation">
-        {tUi("governedDelivery.ui.recommendation", { value: preview.recommendation })}
-      </p>
-      <p style={KV_LABEL} data-field="policy">
-        {tUi("governedDelivery.ui.policy", { value: preview.policyOutcome })}
-        {preview.policyBlockReason !== undefined ? ` (${preview.policyBlockReason})` : ""}
-      </p>
+      <GovernedPolicyFacts
+        recommendation={preview.recommendation}
+        policyOutcome={preview.policyOutcome}
+        policyBlockReason={preview.policyBlockReason}
+      />
       <p style={KV_LABEL} data-field="risk">
         {tUi("governedDelivery.ui.riskNarrative", {
           riskClass: preview.riskClass,
@@ -1140,16 +1134,12 @@ function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
   // (owner/repo)", so the two fields never share an ambiguous accessible name.
   return (
     <div style={ROW_STYLE}>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        {t("governedPullRequestCard.description.field.repositoryAria")}{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.ownerAndRepo}
-          disabled={busy}
-          onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-          aria-label={t("governedPullRequestCard.description.field.repositoryAria")}
-        />
-      </label>
+      <GovernedField
+        label={t("governedPullRequestCard.description.field.repositoryAria")}
+        value={form.ownerAndRepo}
+        disabled={busy}
+        onChange={(v) => onChange("ownerAndRepo", v)}
+      />
       <PrDescriptionPrNumberField {...props} />
       <PrDescriptionLanguageField {...props} />
     </div>
@@ -1821,16 +1811,7 @@ export function GovernedPullRequestCard({
   const titleId = useId();
   const liveId = useId();
   if (projectId === undefined || projectId === "") {
-    return (
-      <div
-        data-testid="gpr-empty"
-        style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
-      >
-        <p>
-          <GitIcon size={13} /> {t("governedDelivery.ui.selectProjectPr")}
-        </p>
-      </div>
-    );
+    return <GovernedEmpty testId="gpr-empty" text={t("governedDelivery.ui.selectProjectPr")} />;
   }
   return (
     <GovernedPullRequestBody

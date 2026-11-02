@@ -1,7 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { ReactNode } from "react";
-import { useEditorAgentTranslate } from "./editor-agent-i18n";
 import type { EditorDocumentSymbol } from "@oscharko-dev/keiko-editor";
 
 import type { EditorOutlineNode } from "./editorOutlineModel";
@@ -19,9 +19,9 @@ function basename(path: string | undefined): string {
 }
 
 export function EditorBreadcrumbBar(props: EditorBreadcrumbBarProps): ReactNode {
-  const t = useEditorAgentTranslate();
+  const tUi = useOptionalWidgetTranslate();
   return (
-    <nav className={styles.breadcrumbs} aria-label={t("editor.ui.breadcrumbs")}>
+    <nav className={styles.breadcrumbs} aria-label={tUi("editor.ui.breadcrumbs")}>
       <span className={styles.breadcrumbFile}>{basename(props.filePath)}</span>
       {props.path.map((node) => (
         <span key={node.id} className={styles.breadcrumbSegment}>
