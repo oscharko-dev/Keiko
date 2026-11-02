@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { expectRetainedWithRefusal } from "./__tests__/support/checked-envelope.js";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import {
+  knowledgeCapturedExtentMembers,
+  knowledgeFinalExtentFailureMembers,
+} from "./__tests__/support/protocol-observation-mechanics.js";
+import type {
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "./local-knowledge.js";
 import {
@@ -372,4 +381,153 @@ describe("validateKnowledgePodRetrievalActivity", () => {
       ]),
     );
   });
+});
+
+import { validateKnowledgePodRetrievalActivity as publicValidateActivity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
+type ActivityAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicActivity(input: unknown): void {
+  const result = publicValidateActivity(input);
+  if (result.ok) {
+    const count: number = result.value.summary.citationCount;
+    const privacy: false = result.value.privacy.rawQueryExposed;
+    const _concrete: ActivityAny<typeof result.value> = false;
+    for (const pod of result.value.pods) {
+      const state: "searched" | "skipped" | "degraded" | "denied" | "unavailable" | "not-selected" =
+        pod.state;
+      const podCount: number = pod.counts.sourceCount;
+      const _concreteState: ActivityAny<typeof pod.state> = false;
+      const id: string = pod.podId;
+      const expected = happyActivity().pods.find((candidate) => candidate.podId === id);
+      expect(expected).toBeDefined();
+      expect(state).toBe(expected?.state);
+      expect(podCount).toBe(expected?.counts.sourceCount);
+    }
+    expect(result.value).toBe(input);
+    expect(count).toBe(happyActivity().summary.citationCount);
+    expect(privacy).toBe(false);
+  }
+}
+it("public retrieval consumer retains closed privacy/state/count declarations", () => {
+  const input = happyActivity();
+  consumePublicActivity(input);
+  expectRetainedWithRefusal(publicValidateActivity, input, "pods", {
+    ...input,
+    privacy: { ...input.privacy, rawQueryExposed: true },
+  });
+});
+
+import type { LocalKnowledgeValidation as PublicKnowledgeValidation } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import type { KnowledgePodRetrievalActivity as PublicRetrievalActivity } from "@oscharko-dev/keiko-contracts";
+
+export function parsePublicKnowledgeActivity(
+  input: unknown,
+): PublicKnowledgeValidation<PublicRetrievalActivity> {
+  const result = publicValidateActivity(input);
+  return result;
+}
+
+describe("Knowledge retrieval activity public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf<
+      LibraryParserAcceptedFacts<
+        typeof validateKnowledgePodRetrievalActivity,
+        typeof publicValidateActivity,
+        typeof parsePublicKnowledgeActivity,
+        [
+          PublicRetrievalActivity["pods"],
+          PublicRetrievalActivity["summary"]["citationCount"],
+          PublicRetrievalActivity["privacy"]["rawQueryExposed"],
+        ]
+      >
+    >().toEqualTypeOf<
+      LibraryParserAcceptedExpected<
+        LocalKnowledgeValidation<KnowledgePodRetrievalActivity>,
+        PublicKnowledgeValidation<PublicRetrievalActivity>,
+        PublicRetrievalActivity
+      >
+    >();
+    expect(parsePublicKnowledgeActivity(happyActivity()).ok).toBe(true);
+  });
+});
+
+describe("Knowledge retrieval activity public responsibility (#3918)", () => {
+  it("preserves all participation states counts privacy and original pod references", () => {
+    const input = happyActivity();
+    const result = parsePublicKnowledgeActivity(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.pods).toBe(input.pods);
+    expect(result.value.summary).toBe(input.summary);
+    expect(result.value.privacy).toBe(input.privacy);
+    for (const pod of result.value.pods) {
+      expectTypeOf(pod).not.toBeAny();
+      expectTypeOf(pod.state).toEqualTypeOf<
+        "searched" | "skipped" | "degraded" | "denied" | "unavailable" | "not-selected"
+      >();
+      expectTypeOf(pod.counts.sourceCount).toEqualTypeOf<number>();
+      expectTypeOf(pod.counts.sourceCount).not.toBeAny();
+      expect(input.pods).toContain(pod);
+    }
+    expectTypeOf(result.value.privacy.rawQueryExposed).toEqualTypeOf<false>();
+  });
+  it("refuses malformed activity counts privacy state and closed metadata", () => {
+    for (const input of [
+      null,
+      { ...happyActivity(), schemaVersion: "unsupported" },
+      { ...happyActivity(), privacy: { ...happyActivity().privacy, rawQueryExposed: true } },
+      { ...happyActivity(), summary: { ...happyActivity().summary, citationCount: -1 } },
+      { ...happyActivity(), pods: [{ ...happyPod(), state: "unknown" }] },
+      {
+        ...happyActivity(),
+        pods: [{ ...happyPod(), counts: { ...happyPod().counts, sourceCount: -1 } }],
+      },
+      { ...happyActivity(), summary: { ...happyActivity().summary, rawQuery: "fixture-private" } },
+    ])
+      expect(parsePublicKnowledgeActivity(input).ok).toBe(false);
+  });
+});
+
+import type { LocalKnowledgeValidation } from "./local-knowledge-validation.js";
+
+it.each(["source", "public"])("preserves captured extent observations through %s", (surface) => {
+  const validate =
+    surface === "source" ? validateKnowledgePodRetrievalActivity : publicValidateActivity;
+  for (const state of ["stable", "growth", "shrink", "invalid"]) {
+    const trace: string[] = [];
+    const members = knowledgeCapturedExtentMembers([happyPod()], trace, state);
+    const input = { ...happyActivity(), pods: members };
+    const result = validate(input);
+    if (state === "stable") {
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toBe(input);
+    } else {
+      expect(result).toEqual({
+        ok: false,
+        errors: [
+          state !== "invalid"
+            ? "activity.pods must not change length during validation"
+            : "activity.pods must have a valid array length",
+        ],
+      });
+    }
+    expect(trace).toEqual(state === "invalid" ? ["length"] : ["length", "0", "length"]);
+  }
+});
+
+it.each(["source", "public"])("propagates final extent getter failure through %s", (surface) => {
+  const validate =
+    surface === "source" ? validateKnowledgePodRetrievalActivity : publicValidateActivity;
+  const trace: string[] = [];
+  const refusal = new TypeError("fixture-final-extent");
+  const members = knowledgeFinalExtentFailureMembers([happyPod()], trace, refusal);
+  const input = { ...happyActivity(), pods: members };
+  let observed: unknown;
+  try {
+    validate(input);
+  } catch (error) {
+    observed = error;
+  }
+  expect(observed).toBe(refusal);
+  expect(trace).toEqual(["length", "0", "length"]);
 });

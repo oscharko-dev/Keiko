@@ -245,11 +245,11 @@ export const CAPSULE_REINDEX_MODES: readonly CapsuleReindexMode[] = [
 
 export interface CapsuleReindexRequest {
   readonly capsuleId: KnowledgeCapsuleId;
-  readonly mode?: CapsuleReindexMode;
-  readonly force?: boolean;
+  readonly mode?: CapsuleReindexMode | undefined;
+  readonly force?: boolean | undefined;
   // Opaque precondition for resuming an abandoned indexing job. The server accepts it only with
   // mode "resume" and only while the exact durable job remains resumable.
-  readonly resumeJobId?: string;
+  readonly resumeJobId?: string | undefined;
 }
 
 // Job-level error codes whose meaning is "embedding stopped before the corpus was covered".

@@ -531,7 +531,8 @@ function validateSharedRequest(value: unknown, reasons: string[]): void {
     return;
   }
   validateRoot(value.root, reasons);
-  if (!WORKSPACE_SEARCH_MODES.includes(value.mode as WorkspaceSearchMode)) {
+  const modes: readonly unknown[] = WORKSPACE_SEARCH_MODES;
+  if (!modes.includes(value.mode)) {
     reasons.push("mode invalid");
   }
   validateQuery(value.query, value.mode, reasons);

@@ -3,7 +3,12 @@
 // precisely at the broken invariant — the same mutation-robust pattern used by
 // connected-context.test.ts and workflow-handoff.test.ts.
 
-import { describe, it, expect } from "vitest";
+import type { OptionalFieldPair } from "./__tests__/support/library-parser-type-facts.js";
+import { describe, it, expect, expectTypeOf } from "vitest";
+import type {
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import {
   CAPSULE_ANSWER_GROUNDING_POLICIES,
   CAPSULE_CONTEXTUAL_RETRIEVAL_DOCUMENT_CONTEXT_MAX_CHARS_MAX,
@@ -25,6 +30,10 @@ import {
 } from "./local-knowledge-records.js";
 import type {
   CapsuleSet,
+  EmbeddingModelIdentity,
+  EmbeddingVectorNormalization,
+  CapsuleContextualRetrievalSettings,
+  ConnectorGraphState,
   ChunkId,
   DocumentId,
   KnowledgeCapsuleId,
@@ -42,6 +51,7 @@ import type {
   VectorRecord,
 } from "./local-knowledge-records.js";
 import {
+  type LocalKnowledgeValidation,
   isSafeDisplaySummary,
   validateCapsuleSet,
   validateCapsuleContextualRetrievalSettings,
@@ -1190,4 +1200,470 @@ describe("mutation-robustness anchors", () => {
   it("capsuleSet non-empty check: empty array must reject", () => {
     expect(validateCapsuleSet({ ...happyCapsuleSet(), capsuleIds: [] }).ok).toBe(false);
   });
+});
+
+import {
+  validateCapsuleSet as publicValidateSet,
+  validateEmbeddingModelIdentity as publicValidateEmbeddingIdentity,
+  validateCapsuleContextualRetrievalSettings as publicValidateContextualRetrieval,
+  validateCapsuleReindexRequest as publicValidateReindex,
+  validateConnectorGraphState as publicValidateGraph,
+  type LocalKnowledgeValidation as PublicKnowledgeValidation,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
+import type {
+  CapsuleSet as PublicCapsuleSet,
+  EmbeddingModelIdentity as PublicEmbeddingModelIdentity,
+  CapsuleContextualRetrievalSettings as PublicContextualRetrieval,
+  CapsuleReindexRequest as PublicReindexRequest,
+  ConnectorGraphState as PublicGraphState,
+  KnowledgeCapsuleId as PublicKnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
+
+export function parsePublicKnowledgeSet(
+  input: unknown,
+): PublicKnowledgeValidation<PublicCapsuleSet> {
+  const result = publicValidateSet(input);
+  return result;
+}
+
+describe("Knowledge capsule set public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf<
+      LibraryParserAcceptedFacts<
+        typeof validateCapsuleSet,
+        typeof publicValidateSet,
+        typeof parsePublicKnowledgeSet,
+        [
+          PublicCapsuleSet["id"],
+          PublicCapsuleSet["capsuleIds"],
+          PublicCapsuleSet["tags"],
+          PublicCapsuleSet["description"],
+        ]
+      >
+    >().toEqualTypeOf<
+      LibraryParserAcceptedExpected<
+        LocalKnowledgeValidation<CapsuleSet>,
+        PublicKnowledgeValidation<PublicCapsuleSet>,
+        PublicCapsuleSet
+      >
+    >();
+    expect(parsePublicKnowledgeSet(happyCapsuleSet()).ok).toBe(true);
+  });
+});
+
+export function parsePublicKnowledgeReindex(
+  input: unknown,
+): PublicKnowledgeValidation<PublicReindexRequest> {
+  const result = publicValidateReindex(input);
+  return result;
+}
+
+describe("Knowledge reindex public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf<
+      LibraryParserAcceptedFacts<
+        typeof validateCapsuleReindexRequest,
+        typeof publicValidateReindex,
+        typeof parsePublicKnowledgeReindex,
+        [
+          PublicReindexRequest["capsuleId"],
+          PublicReindexRequest["mode"],
+          PublicReindexRequest["force"],
+          PublicReindexRequest["resumeJobId"],
+        ]
+      >
+    >().toEqualTypeOf<
+      LibraryParserAcceptedExpected<
+        LocalKnowledgeValidation<CapsuleReindexRequest>,
+        PublicKnowledgeValidation<PublicReindexRequest>,
+        PublicReindexRequest
+      >
+    >();
+    expect(
+      parsePublicKnowledgeReindex({
+        capsuleId: "cap-1",
+        mode: "resume",
+        force: true,
+        resumeJobId: "job-1",
+      }).ok,
+    ).toBe(true);
+  });
+});
+
+export function parsePublicKnowledgeGraph(
+  input: unknown,
+): PublicKnowledgeValidation<PublicGraphState> {
+  const result = publicValidateGraph(input);
+  return result;
+}
+
+describe("Knowledge graph public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf<
+      LibraryParserAcceptedFacts<
+        typeof validateConnectorGraphState,
+        typeof publicValidateGraph,
+        typeof parsePublicKnowledgeGraph,
+        [PublicGraphState["nodes"], PublicGraphState["edges"], PublicGraphState["updatedAt"]]
+      >
+    >().toEqualTypeOf<
+      LibraryParserAcceptedExpected<
+        LocalKnowledgeValidation<ConnectorGraphState>,
+        PublicKnowledgeValidation<PublicGraphState>,
+        PublicGraphState
+      >
+    >();
+    expect(parsePublicKnowledgeGraph(happyGraph()).ok).toBe(true);
+  });
+});
+
+describe("Knowledge capsule set public responsibility (#3918)", () => {
+  it("preserves set identity optional presence and nominal capsule lineage", () => {
+    for (const state of ["omitted", "undefined", "present"]) {
+      const input = happyCapsuleSet();
+      if (state !== "omitted") input.description = state === "undefined" ? undefined : "fixture";
+      const result = parsePublicKnowledgeSet(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.capsuleIds).toBe(input.capsuleIds);
+      expect(result.value.tags).toBe(input.tags);
+      expect(Object.hasOwn(result.value, "description")).toBe(state !== "omitted");
+      expectTypeOf(result.value.capsuleIds).toEqualTypeOf<PublicCapsuleSet["capsuleIds"]>();
+      expectTypeOf(result.value.id).toEqualTypeOf<PublicCapsuleSet["id"]>();
+    }
+  });
+  it("refuses malformed set fields and checks physical collection positions", () => {
+    const replaced = Object.defineProperty([0], "every", { value: (): boolean => true });
+    for (const input of [
+      null,
+      [],
+      { ...happyCapsuleSet(), id: "" },
+      { ...happyCapsuleSet(), displayName: "" },
+      { ...happyCapsuleSet(), capsuleIds: [] },
+      { ...happyCapsuleSet(), capsuleIds: replaced },
+      { ...happyCapsuleSet(), capsuleIds: new Array<unknown>(1) },
+      { ...happyCapsuleSet(), composedAt: Number.POSITIVE_INFINITY },
+      { ...happyCapsuleSet(), tags: ["bad\u0000tag"] },
+    ])
+      expect(parsePublicKnowledgeSet(input).ok).toBe(false);
+    const inherited = new Array<unknown>(1);
+    Object.setPrototypeOf(inherited, ["cap-1"]);
+    const input = { ...happyCapsuleSet(), capsuleIds: inherited };
+    const result = parsePublicKnowledgeSet(input);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.capsuleIds).toBe(inherited);
+  });
+});
+
+describe("Knowledge reindex public responsibility (#3918)", () => {
+  it("preserves reindex identity and optional presence without adding defaults", () => {
+    for (const state of ["omitted", "undefined", "present"]) {
+      const input: Record<string, unknown> = { capsuleId: "cap-1" };
+      if (state !== "omitted") {
+        input.mode = state === "undefined" ? undefined : "resume";
+        input.force = state === "undefined" ? undefined : true;
+        input.resumeJobId = state === "undefined" ? undefined : "job-1";
+      }
+      const result = parsePublicKnowledgeReindex(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      for (const field of ["mode", "force", "resumeJobId"])
+        expect(Object.hasOwn(result.value, field)).toBe(state !== "omitted");
+      expectTypeOf(result.value.capsuleId).toEqualTypeOf<PublicKnowledgeCapsuleId>();
+    }
+  });
+  it("refuses invalid mode force and resume preconditions", () => {
+    for (const input of [
+      null,
+      {},
+      { capsuleId: "", mode: "changed-files" },
+      { capsuleId: "cap-1", mode: "all-files" },
+      { capsuleId: "cap-1", force: "yes" },
+      { capsuleId: "cap-1", mode: "resume", resumeJobId: " " },
+      { capsuleId: "cap-1", mode: "changed-files", resumeJobId: "job-1" },
+    ])
+      expect(parsePublicKnowledgeReindex(input).ok).toBe(false);
+  });
+});
+
+describe("Knowledge graph public responsibility (#3918)", () => {
+  it("preserves graph node edge target identities and nominal lineage", () => {
+    const input = happyGraph();
+    const result = parsePublicKnowledgeGraph(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value).toBe(input);
+    expect(result.value.nodes).toBe(input.nodes);
+    expect(result.value.edges).toBe(input.edges);
+    for (const node of result.value.nodes) {
+      expectTypeOf(node).not.toBeAny();
+      if (node.kind === "local-knowledge" && node.target.kind === "capsule") {
+        expectTypeOf(node.target.capsuleId).toEqualTypeOf<PublicKnowledgeCapsuleId>();
+        expect(node.target.capsuleId).toBe("cap-1");
+      }
+    }
+  });
+  it("refuses invalid graph references discriminants and nested target fields", () => {
+    for (const input of [
+      null,
+      { ...happyGraph(), schemaVersion: "unsupported" },
+      { ...happyGraph(), nodes: [{ kind: "unknown", nodeId: "n-1" }] },
+      {
+        ...happyGraph(),
+        nodes: [
+          { kind: "local-knowledge", nodeId: "n-1", target: { kind: "capsule", capsuleId: 1 } },
+        ],
+      },
+      {
+        ...happyGraph(),
+        edges: [
+          {
+            from: { nodeId: "missing", kind: "files-window" },
+            to: { nodeId: "n-2", kind: "local-knowledge" },
+            createdAt: 1,
+          },
+        ],
+      },
+      { ...happyGraph(), updatedAt: Number.NaN },
+    ])
+      expect(parsePublicKnowledgeGraph(input).ok).toBe(false);
+  });
+});
+
+describe("Knowledge graph public responsibility (#3918)", () => {
+  it("revalidates actual endpoint reads before admitting graph edges", () => {
+    for (const replacement of [undefined, null, 1]) {
+      let reads = 0;
+      const endpoint = { nodeId: "n-1", kind: "files-window" };
+      const edge = {
+        get from(): unknown {
+          reads += 1;
+          return reads === 1 ? endpoint : replacement;
+        },
+        to: { nodeId: "n-2", kind: "local-knowledge" },
+        createdAt: 1,
+      };
+      expect(parsePublicKnowledgeGraph({ ...happyGraph(), edges: [edge] })).toEqual({
+        ok: false,
+        errors: ["graph.edges entry must have from/to objects"],
+      });
+      expect(reads).toBe(2);
+    }
+  });
+});
+
+function assertSetPresentUndefinedTypes(): void {
+  expectTypeOf<OptionalFieldPair<CapsuleSet, PublicCapsuleSet, "description">>().toEqualTypeOf<
+    readonly [string | undefined, string | undefined]
+  >();
+}
+
+it("preserves source and public Set option presence with truthful types", (): void => {
+  assertSetPresentUndefinedTypes();
+  for (const validate of [validateCapsuleSet, publicValidateSet]) {
+    const input = { ...happyCapsuleSet(), description: undefined };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["description"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("description" in result.value) {
+      expectTypeOf(result.value.description).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertReindexPresentUndefinedTypes(): void {
+  expectTypeOf<
+    OptionalFieldPair<CapsuleReindexRequest, PublicReindexRequest, "mode">
+  >().toEqualTypeOf<
+    readonly [
+      (typeof CAPSULE_REINDEX_MODES)[number] | undefined,
+      (typeof CAPSULE_REINDEX_MODES)[number] | undefined,
+    ]
+  >();
+  expectTypeOf<
+    OptionalFieldPair<CapsuleReindexRequest, PublicReindexRequest, "force">
+  >().toEqualTypeOf<readonly [boolean | undefined, boolean | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<CapsuleReindexRequest, PublicReindexRequest, "resumeJobId">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+}
+
+it("preserves source and public Reindex option presence with truthful types", (): void => {
+  assertReindexPresentUndefinedTypes();
+  for (const validate of [validateCapsuleReindexRequest, publicValidateReindex]) {
+    const input = { capsuleId: "cap-1", mode: undefined, force: undefined, resumeJobId: undefined };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of ["mode", "force", "resumeJobId"] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("mode" in result.value) {
+      expectTypeOf(result.value.mode).toEqualTypeOf<
+        (typeof CAPSULE_REINDEX_MODES)[number] | undefined
+      >();
+    }
+    if ("force" in result.value) {
+      expectTypeOf(result.value.force).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("resumeJobId" in result.value) {
+      expectTypeOf(result.value.resumeJobId).toEqualTypeOf<string | undefined>();
+    }
+  }
+});
+
+function assertEmbeddingIdentityPresentUndefinedTypes(): void {
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "modelRevision">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "normalization">
+  >().toEqualTypeOf<
+    readonly [EmbeddingVectorNormalization | undefined, EmbeddingVectorNormalization | undefined]
+  >();
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "instructionVersion">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      EmbeddingModelIdentity,
+      PublicEmbeddingModelIdentity,
+      "embeddingSpaceFingerprint"
+    >
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<EmbeddingModelIdentity, PublicEmbeddingModelIdentity, "dimensionsParam">
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
+}
+
+it("preserves source and public EmbeddingIdentity option presence with truthful types", (): void => {
+  assertEmbeddingIdentityPresentUndefinedTypes();
+  const fixture = validateEmbeddingModelIdentity(happyEmbeddingIdentity());
+  if (!fixture.ok) throw new TypeError("Expected healthy embedding fixture");
+  for (const validate of [validateEmbeddingModelIdentity, publicValidateEmbeddingIdentity]) {
+    const input = {
+      ...fixture.value,
+      modelRevision: undefined,
+      normalization: undefined,
+      instructionVersion: undefined,
+      embeddingSpaceFingerprint: undefined,
+      dimensionsParam: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "modelRevision",
+      "normalization",
+      "instructionVersion",
+      "embeddingSpaceFingerprint",
+      "dimensionsParam",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("modelRevision" in result.value) {
+      expectTypeOf(result.value.modelRevision).toEqualTypeOf<string | undefined>();
+    }
+    if ("normalization" in result.value) {
+      expectTypeOf(result.value.normalization).toEqualTypeOf<
+        EmbeddingVectorNormalization | undefined
+      >();
+    }
+    if ("instructionVersion" in result.value) {
+      expectTypeOf(result.value.instructionVersion).toEqualTypeOf<string | undefined>();
+    }
+    if ("embeddingSpaceFingerprint" in result.value) {
+      expectTypeOf(result.value.embeddingSpaceFingerprint).toEqualTypeOf<string | undefined>();
+    }
+    if ("dimensionsParam" in result.value) {
+      expectTypeOf(result.value.dimensionsParam).toEqualTypeOf<number | undefined>();
+    }
+  }
+});
+
+function assertContextualRetrievalPresentUndefinedTypes(): void {
+  expectTypeOf<
+    OptionalFieldPair<CapsuleContextualRetrievalSettings, PublicContextualRetrieval, "modelId">
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      CapsuleContextualRetrievalSettings,
+      PublicContextualRetrieval,
+      "promptVersion"
+    >
+  >().toEqualTypeOf<readonly [string | undefined, string | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<CapsuleContextualRetrievalSettings, PublicContextualRetrieval, "strict">
+  >().toEqualTypeOf<readonly [boolean | undefined, boolean | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      CapsuleContextualRetrievalSettings,
+      PublicContextualRetrieval,
+      "maxContextChars"
+    >
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
+  expectTypeOf<
+    OptionalFieldPair<
+      CapsuleContextualRetrievalSettings,
+      PublicContextualRetrieval,
+      "documentContextMaxChars"
+    >
+  >().toEqualTypeOf<readonly [number | undefined, number | undefined]>();
+}
+
+it("preserves source and public ContextualRetrieval option presence with truthful types", (): void => {
+  assertContextualRetrievalPresentUndefinedTypes();
+  for (const validate of [
+    validateCapsuleContextualRetrievalSettings,
+    publicValidateContextualRetrieval,
+  ]) {
+    const input = {
+      enabled: true,
+      modelId: undefined,
+      promptVersion: undefined,
+      strict: undefined,
+      maxContextChars: undefined,
+      documentContextMaxChars: undefined,
+    };
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "modelId",
+      "promptVersion",
+      "strict",
+      "maxContextChars",
+      "documentContextMaxChars",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("modelId" in result.value) {
+      expectTypeOf(result.value.modelId).toEqualTypeOf<string | undefined>();
+    }
+    if ("promptVersion" in result.value) {
+      expectTypeOf(result.value.promptVersion).toEqualTypeOf<string | undefined>();
+    }
+    if ("strict" in result.value) {
+      expectTypeOf(result.value.strict).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("maxContextChars" in result.value) {
+      expectTypeOf(result.value.maxContextChars).toEqualTypeOf<number | undefined>();
+    }
+    if ("documentContextMaxChars" in result.value) {
+      expectTypeOf(result.value.documentContextMaxChars).toEqualTypeOf<number | undefined>();
+    }
+  }
 });

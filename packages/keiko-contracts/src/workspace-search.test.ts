@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import type {
   ValidationResult,
   WorkspaceReplaceApplyRequest,
@@ -458,3 +458,388 @@ describe("workspace search/replace guard coverage", () => {
     ).toBe(false);
   });
 });
+
+import {
+  isWorkspaceSearchResultMatch as publicSearchResultMatch,
+  validateWorkspaceSearchRequest as publicSearchRequest,
+  validateWorkspaceSymbolSearchRequest as publicSymbolRequest,
+  validateWorkspaceReplacePreviewRequest as publicPreviewRequest,
+  validateWorkspaceReplaceApplyRequest as publicApplyRequest,
+  WORKSPACE_SEARCH_MAX_RESULTS,
+  WORKSPACE_REPLACE_MAX_FILES,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
+
+describe.each([
+  ["source", validateWorkspaceSearchRequest],
+  ["public", publicSearchRequest],
+])("%s arbitrary search mode membership preservation", (_label, validate) => {
+  it("keeps both mode observations and healthy requests", () => {
+    let reads = 0;
+    const input = {
+      ...searchRequest(),
+      get mode(): string {
+        reads++;
+        return "literal";
+      },
+    };
+    expect(validate(input)).toEqual({ ok: true });
+    expect(reads).toBe(2);
+  });
+  it("refuses malformed vocabulary without coercing it", () => {
+    for (const mode of [null, undefined, 0, Symbol("mode"), "future", {}])
+      expect(validate({ ...searchRequest(), mode })).toEqual({
+        ok: false,
+        reasons: ["mode invalid"],
+      });
+    const mode = {
+      [Symbol.toPrimitive](): never {
+        throw new Error("unexpected coercion");
+      },
+    };
+    expect(validate({ ...searchRequest(), mode })).toEqual({
+      ok: false,
+      reasons: ["mode invalid"],
+    });
+  });
+});
+
+it("retains public search's explicit refusal reasons", () => {
+  expectTypeOf<
+    Extract<ReturnType<typeof publicSearchRequest>, { ok: false }>["reasons"]
+  >().toEqualTypeOf<readonly string[]>();
+});
+
+describe("Connected primitive production consumer", () => {
+  it("admits the public result and refuses malformed scope paths and line ranges", () => {
+    const match = {
+      path: "src/index.ts",
+      lineRange: { startLine: 1, endLine: 5 },
+      snippet: "match",
+      score: 0.5,
+    };
+    expect(publicSearchResultMatch(match)).toBe(true);
+    expect(isWorkspaceSearchResultMatch(match)).toBe(true);
+    for (const path of ["../escape", "/absolute", "~/secrets", "src\\file.ts"])
+      expect(publicSearchResultMatch({ ...match, path })).toBe(false);
+    for (const lineRange of [
+      null,
+      { startLine: 0, endLine: 1 },
+      { startLine: 5, endLine: 4 },
+      { startLine: 1, endLine: Number.POSITIVE_INFINITY },
+    ])
+      expect(publicSearchResultMatch({ ...match, lineRange })).toBe(false);
+    expect(match.lineRange).toEqual({ startLine: 1, endLine: 5 });
+  });
+});
+
+import type { ValidationResult as PublicValidationResult } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+
+type ExpectedDiagnosticResult =
+  { readonly ok: true } | { readonly ok: false; readonly reasons: readonly string[] };
+
+type ExpectedDiagnosticContract = [
+  (input: unknown) => ExpectedDiagnosticResult,
+  (input: unknown) => ExpectedDiagnosticResult,
+  (input: unknown) => number,
+  ExpectedDiagnosticResult,
+  ExpectedDiagnosticResult,
+];
+
+function expectHealthyDiagnosticInput(
+  input: unknown,
+  validateSource: (input: unknown) => ExpectedDiagnosticResult,
+  validatePublic: (input: unknown) => ExpectedDiagnosticResult,
+  countDiagnostics: (input: unknown) => number,
+): void {
+  const before = structuredClone(input);
+  expect(validateSource(input)).toEqual({ ok: true });
+  expect(validatePublic(input)).toEqual({ ok: true });
+  expect(countDiagnostics(input)).toBe(0);
+  expect(input).toEqual(before);
+}
+
+function expectRefusedDiagnosticInputs(
+  entries: readonly WorkspaceDiagnosticRefusal[],
+  validateSource: (input: unknown) => ExpectedDiagnosticResult,
+  validatePublic: (input: unknown) => ExpectedDiagnosticResult,
+  countDiagnostics: (input: unknown) => number,
+): void {
+  for (const entry of entries) {
+    expect(validateSource(entry.input)).toEqual({
+      ok: false,
+      reasons: entry.reasons,
+    });
+    expect(validatePublic(entry.input)).toEqual({ ok: false, reasons: entry.reasons });
+    expect(countDiagnostics(entry.input)).toBe(entry.reasons.length);
+  }
+}
+
+export function countPublicWorkspaceSearchDiagnostics(input: unknown): number {
+  const result = publicSearchRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace search diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      [
+        typeof validateWorkspaceSearchRequest,
+        typeof publicSearchRequest,
+        typeof countPublicWorkspaceSearchDiagnostics,
+        ValidationResult,
+        PublicValidationResult,
+      ]
+    >().toEqualTypeOf<ExpectedDiagnosticContract>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = searchRequest();
+    expectHealthyDiagnosticInput(
+      input,
+      validateWorkspaceSearchRequest,
+      publicSearchRequest,
+      countPublicWorkspaceSearchDiagnostics,
+    );
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    expectRefusedDiagnosticInputs(
+      workspaceSearchRefusals(),
+      validateWorkspaceSearchRequest,
+      publicSearchRequest,
+      countPublicWorkspaceSearchDiagnostics,
+    );
+  });
+});
+
+export function countPublicWorkspaceSymbolSearchDiagnostics(input: unknown): number {
+  const result = publicSymbolRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace symbol diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      [
+        typeof validateWorkspaceSymbolSearchRequest,
+        typeof publicSymbolRequest,
+        typeof countPublicWorkspaceSymbolSearchDiagnostics,
+        ValidationResult,
+        PublicValidationResult,
+      ]
+    >().toEqualTypeOf<ExpectedDiagnosticContract>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = symbolRequest();
+    expectHealthyDiagnosticInput(
+      input,
+      validateWorkspaceSymbolSearchRequest,
+      publicSymbolRequest,
+      countPublicWorkspaceSymbolSearchDiagnostics,
+    );
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    expectRefusedDiagnosticInputs(
+      workspaceSymbolSearchRefusals(),
+      validateWorkspaceSymbolSearchRequest,
+      publicSymbolRequest,
+      countPublicWorkspaceSymbolSearchDiagnostics,
+    );
+  });
+});
+
+export function countPublicWorkspaceReplacePreviewDiagnostics(input: unknown): number {
+  const result = publicPreviewRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace preview diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      [
+        typeof validateWorkspaceReplacePreviewRequest,
+        typeof publicPreviewRequest,
+        typeof countPublicWorkspaceReplacePreviewDiagnostics,
+        ValidationResult,
+        PublicValidationResult,
+      ]
+    >().toEqualTypeOf<ExpectedDiagnosticContract>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = replaceRequest();
+    expectHealthyDiagnosticInput(
+      input,
+      validateWorkspaceReplacePreviewRequest,
+      publicPreviewRequest,
+      countPublicWorkspaceReplacePreviewDiagnostics,
+    );
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    expectRefusedDiagnosticInputs(
+      workspaceReplacePreviewRefusals(),
+      validateWorkspaceReplacePreviewRequest,
+      publicPreviewRequest,
+      countPublicWorkspaceReplacePreviewDiagnostics,
+    );
+  });
+});
+
+export function countPublicWorkspaceReplaceApplyDiagnostics(input: unknown): number {
+  const result = publicApplyRequest(input);
+  return result.ok ? 0 : result.reasons.length;
+}
+
+describe("workspace apply diagnostic public proof", () => {
+  it("retains exact unknown and closed diagnostic types", () => {
+    expectTypeOf<
+      [
+        typeof validateWorkspaceReplaceApplyRequest,
+        typeof publicApplyRequest,
+        typeof countPublicWorkspaceReplaceApplyDiagnostics,
+        ValidationResult,
+        PublicValidationResult,
+      ]
+    >().toEqualTypeOf<ExpectedDiagnosticContract>();
+  });
+  it("admits healthy input without mutating it", () => {
+    const input = applyRequest();
+    expectHealthyDiagnosticInput(
+      input,
+      validateWorkspaceReplaceApplyRequest,
+      publicApplyRequest,
+      countPublicWorkspaceReplaceApplyDiagnostics,
+    );
+  });
+  it("refuses malformed input with ordered reasons and numeric counts", () => {
+    expectRefusedDiagnosticInputs(
+      workspaceReplaceApplyRefusals(),
+      validateWorkspaceReplaceApplyRequest,
+      publicApplyRequest,
+      countPublicWorkspaceReplaceApplyDiagnostics,
+    );
+  });
+});
+
+type WorkspaceDiagnosticRefusal = Readonly<{ input: unknown; reasons: readonly string[] }>;
+
+function workspaceSearchRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    {
+      input: {
+        ...searchRequest(),
+        root: "",
+        query: "",
+        mode: "future",
+        caseSensitive: "yes",
+        includeGlobs: null,
+        excludeGlobs: null,
+      },
+      reasons: [
+        "root empty",
+        "mode invalid",
+        "query empty",
+        "caseSensitive invalid",
+        "includeGlobs invalid",
+        "excludeGlobs invalid",
+      ],
+    },
+    {
+      input: {
+        ...searchRequest(),
+        maxResults: WORKSPACE_SEARCH_MAX_RESULTS + 1,
+        wholeWord: "yes",
+        scopePath: "../escape",
+      },
+      reasons: ["maxResults invalid", "wholeWord invalid", "scopePath invalid"],
+    },
+    {
+      input: { ...searchRequest(), includeGlobs: ["../escape"], excludeGlobs: ["/absolute"] },
+      reasons: ["includeGlobs invalid", "excludeGlobs invalid"],
+    },
+  ];
+}
+
+function workspaceSymbolSearchRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    {
+      input: {
+        ...symbolRequest(),
+        root: "",
+        query: "",
+        maxResults: WORKSPACE_SEARCH_MAX_RESULTS + 1,
+        scopePath: "../escape",
+      },
+      reasons: ["root empty", "query empty", "maxResults invalid", "scopePath invalid"],
+    },
+  ];
+}
+
+function workspaceReplacePreviewRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    {
+      input: {
+        ...replaceRequest(),
+        root: "",
+        query: "",
+        mode: "future",
+        caseSensitive: "yes",
+        includeGlobs: null,
+        excludeGlobs: null,
+        replacement: null,
+        maxFiles: WORKSPACE_REPLACE_MAX_FILES + 1,
+      },
+      reasons: [
+        "root empty",
+        "mode invalid",
+        "query empty",
+        "caseSensitive invalid",
+        "includeGlobs invalid",
+        "excludeGlobs invalid",
+        "replacement invalid",
+        "maxFiles invalid",
+      ],
+    },
+  ];
+}
+
+function workspaceReplaceApplyRefusals(): readonly WorkspaceDiagnosticRefusal[] {
+  return [
+    { input: null, reasons: ["request invalid"] },
+    { input: { ...applyRequest(), root: "", files: [] }, reasons: ["root empty", "files invalid"] },
+    {
+      input: {
+        ...applyRequest(),
+        files: Array.from(
+          { length: WORKSPACE_REPLACE_MAX_FILES + 1 },
+          () => applyRequest().files[0],
+        ),
+      },
+      reasons: ["files too many"],
+    },
+    {
+      input: {
+        ...applyRequest(),
+        files: [
+          {
+            path: "../escape",
+            baseContentHash: "invalid",
+            edits: [
+              {
+                range: { startLine: 2, startColumn: 1, endLine: 1, endColumn: 1 },
+                originalText: null,
+                newText: null,
+              },
+            ],
+          },
+        ],
+      },
+      reasons: [
+        "file path invalid",
+        "file baseContentHash invalid",
+        "edit range invalid",
+        "edit text invalid",
+      ],
+    },
+  ];
+}

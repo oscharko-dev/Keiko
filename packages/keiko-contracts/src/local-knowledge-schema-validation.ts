@@ -39,44 +39,65 @@ function isFiniteNonNegative(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
-// Field-check table keeps the per-field cyclomatic complexity inside the loop instead of
-// the validator's signature. Adding a column to the row shape adds one row here, not one
-// new `if` branch in `validateCapsuleRowShape`.
-type RowFieldCheck = readonly [
-  field: keyof CapsuleRowShape,
-  guard: (value: unknown) => boolean,
-  errorSuffix: string,
-];
+function admitsCapsuleRow(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & CapsuleRowShape {
+  let valid = true;
+  if (!isNonEmptyString(input.id)) {
+    errors.push("capsuleRow.id must be a non-empty string");
+    valid = false;
+  }
+  if (!isNonEmptyString(input.displayName)) {
+    errors.push("capsuleRow.displayName must be a non-empty string");
+    valid = false;
+  }
+  if (!isNonEmptyString(input.vectorMetric)) {
+    errors.push("capsuleRow.vectorMetric must be a non-empty string");
+    valid = false;
+  }
+  if (!isNonEmptyString(input.embeddingModelProvider)) {
+    errors.push("capsuleRow.embeddingModelProvider must be a non-empty string");
+    valid = false;
+  }
+  if (!isNonEmptyString(input.embeddingModelId)) {
+    errors.push("capsuleRow.embeddingModelId must be a non-empty string");
+    valid = false;
+  }
+  if (!isNonEmptyString(input.lifecycleState)) {
+    errors.push("capsuleRow.lifecycleState must be a non-empty string");
+    valid = false;
+  }
+  if (!isNonEmptyString(input.storageReference)) {
+    errors.push("capsuleRow.storageReference must be a non-empty string");
+    valid = false;
+  }
+  const numbers = admitsRowNumbers(input, errors);
+  return valid && numbers;
+}
 
-const NON_EMPTY_STRING_FIELDS: readonly RowFieldCheck[] = [
-  ["id", isNonEmptyString, "must be a non-empty string"],
-  ["displayName", isNonEmptyString, "must be a non-empty string"],
-  ["vectorMetric", isNonEmptyString, "must be a non-empty string"],
-  ["embeddingModelProvider", isNonEmptyString, "must be a non-empty string"],
-  ["embeddingModelId", isNonEmptyString, "must be a non-empty string"],
-  ["lifecycleState", isNonEmptyString, "must be a non-empty string"],
-  ["storageReference", isNonEmptyString, "must be a non-empty string"],
-];
-
-const ROW_FIELD_CHECKS: readonly RowFieldCheck[] = [
-  ...NON_EMPTY_STRING_FIELDS,
-  ["vectorDimensions", isFinitePositiveInt, "must be a positive integer"],
-  ["createdAt", isFiniteNonNegative, "must be a finite non-negative number"],
-  ["updatedAt", isFiniteNonNegative, "must be a finite non-negative number"],
-];
+function admitsRowNumbers(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (!isFinitePositiveInt(input.vectorDimensions)) {
+    errors.push("capsuleRow.vectorDimensions must be a positive integer");
+    valid = false;
+  }
+  if (!isFiniteNonNegative(input.createdAt)) {
+    errors.push("capsuleRow.createdAt must be a finite non-negative number");
+    valid = false;
+  }
+  if (!isFiniteNonNegative(input.updatedAt)) {
+    errors.push("capsuleRow.updatedAt must be a finite non-negative number");
+    valid = false;
+  }
+  return valid;
+}
 
 export function validateCapsuleRowShape(input: unknown): LocalKnowledgeValidation<CapsuleRowShape> {
-  if (!isRecord(input)) {
-    return { ok: false, errors: ["capsuleRow must be an object"] };
-  }
+  if (!isRecord(input)) return { ok: false, errors: ["capsuleRow must be an object"] };
   const errors: string[] = [];
-  for (const [field, guard, errorSuffix] of ROW_FIELD_CHECKS) {
-    if (!guard(input[field])) {
-      errors.push(`capsuleRow.${field} ${errorSuffix}`);
-    }
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  return { ok: true, value: input as unknown as CapsuleRowShape };
+  if (!admitsCapsuleRow(input, errors)) return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
 // ─── Diagnostic path redaction ───────────────────────────────────────────────────

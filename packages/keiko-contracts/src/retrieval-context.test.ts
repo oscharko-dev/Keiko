@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   CODING_CONTEXT_BUDGETS,
   CODING_CONTEXT_PURPOSES,
@@ -182,4 +182,85 @@ describe("isRetrievalContextCitation", () => {
       );
     }
   });
+});
+
+import { isValidContextCitation } from "./retrieval-context.js";
+import {
+  isValidContextCitation as publicContextCitation,
+  isRetrievalContextPurpose as publicRetrievalPurpose,
+} from "@oscharko-dev/keiko-contracts/runtime/retrieval-context";
+
+describe.each([
+  ["source", isValidContextCitation],
+  ["public", publicContextCitation],
+])("%s citation kind admission", (_label, check) => {
+  const kinds = ["repo-search"] as const;
+  const tiers = {
+    "repo-search": "first-party-workspace",
+    foreign: "first-party-workspace",
+  } as const;
+
+  it("preserves the caller-owned kind and tier correlation", () => {
+    const input = {
+      sourceKind: "repo-search",
+      sourceTier: "first-party-workspace",
+      id: "citation-1",
+      score: 0.5,
+      rank: 0,
+      byteCount: 8,
+      truncated: false,
+    };
+    expect(check(input, kinds, tiers)).toBe(true);
+    expect(check({ ...input, sourceTier: "retained-memory" }, kinds, tiers)).toBe(false);
+    expect(check({ ...input, sourceKind: "foreign" }, kinds, tiers)).toBe(false);
+  });
+
+  it("refuses an unadmitted kind used by a later caller-tier lookup", () => {
+    let reads = 0;
+    const input = {
+      get sourceKind(): string {
+        reads += 1;
+        return reads === 1 ? "repo-search" : "foreign";
+      },
+      sourceTier: "first-party-workspace",
+      id: "citation-1",
+      score: 0.5,
+      rank: 0,
+      byteCount: 8,
+      truncated: false,
+    };
+    expect(check(input, kinds, tiers)).toBe(false);
+  });
+});
+
+describe.each([
+  ["source", isRetrievalContextPurpose],
+  ["public", publicRetrievalPurpose],
+])("%s retrieval purpose vocabulary", (_label, check) => {
+  it("retains every published purpose and refuses non-vocabulary primitives", () => {
+    for (const purpose of RETRIEVAL_CONTEXT_PURPOSES) expect(check(purpose)).toBe(true);
+    for (const invalid of [null, undefined, 0, Symbol("purpose"), "future-purpose", {}])
+      expect(check(invalid)).toBe(false);
+  });
+});
+
+it("retains the public caller-owned citation primitive and vocabulary guarantees", () => {
+  const input: unknown = {
+    sourceKind: "repo-search",
+    sourceTier: "first-party-workspace",
+    id: "citation-1",
+    score: 0.5,
+    rank: 0,
+    byteCount: 8,
+    truncated: false,
+  };
+  expect(
+    publicContextCitation(input, ["repo-search"], { "repo-search": "first-party-workspace" }),
+  ).toBe(true);
+  if (publicContextCitation(input, ["repo-search"], { "repo-search": "first-party-workspace" })) {
+    expectTypeOf(input.sourceKind).toEqualTypeOf<"repo-search">();
+    expectTypeOf(input.sourceTier).toEqualTypeOf<"first-party-workspace">();
+    expectTypeOf(input.id).toEqualTypeOf<string>();
+    expectTypeOf(input.score).toEqualTypeOf<number>();
+  }
 });

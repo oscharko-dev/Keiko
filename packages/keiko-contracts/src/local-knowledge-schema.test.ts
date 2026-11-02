@@ -1396,3 +1396,104 @@ describe("validateCapsuleRowShape", () => {
     }
   });
 });
+
+import { validateCapsuleRowShape as publicValidateRow } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema-validation";
+type RowAny<T> = 0 extends 1 & T ? true : false;
+function consumePublicRow(input: unknown): void {
+  const result = publicValidateRow(input);
+  if (result.ok) {
+    const id: string = result.value.id;
+    const dimensions: number = result.value.vectorDimensions;
+    const timestamp: number = result.value.updatedAt;
+    const _concrete: RowAny<typeof result.value> = false;
+    const _concreteDimensions: RowAny<typeof result.value.vectorDimensions> = false;
+    expect(result.value).toBe(input);
+    expect(id).toBe("capsule");
+    expect(dimensions).toBe(4);
+    expect(timestamp).toBe(1);
+  }
+}
+it("public row consumer retains the intentionally narrow primitive shape", () => {
+  const input = {
+    id: "capsule",
+    displayName: "Capsule",
+    vectorDimensions: 4,
+    vectorMetric: "cosine",
+    embeddingModelProvider: "local",
+    embeddingModelId: "embed",
+    lifecycleState: "ready",
+    storageReference: "capsules/capsule",
+    createdAt: 0,
+    updatedAt: 1,
+  };
+  consumePublicRow(input);
+  expect(publicValidateRow(input)).toEqual({ ok: true, value: input });
+  expect(publicValidateRow({ ...input, vectorDimensions: "4" }).ok).toBe(false);
+});
+
+function admittedRowFixture(): Record<string, unknown> {
+  return {
+    id: "capsule",
+    displayName: "Capsule",
+    vectorDimensions: 4,
+    vectorMetric: "cosine",
+    embeddingModelProvider: "local",
+    embeddingModelId: "embed",
+    lifecycleState: "ready",
+    storageReference: "capsules/capsule",
+    createdAt: 0,
+    updatedAt: 1,
+  };
+}
+const rowRequiredRefusals = [
+  ["id", "", "capsuleRow.id must be a non-empty string"],
+  ["displayName", null, "capsuleRow.displayName must be a non-empty string"],
+  ["vectorMetric", false, "capsuleRow.vectorMetric must be a non-empty string"],
+  ["embeddingModelProvider", 4, "capsuleRow.embeddingModelProvider must be a non-empty string"],
+  ["embeddingModelId", undefined, "capsuleRow.embeddingModelId must be a non-empty string"],
+  ["lifecycleState", [], "capsuleRow.lifecycleState must be a non-empty string"],
+  ["storageReference", {}, "capsuleRow.storageReference must be a non-empty string"],
+  ["vectorDimensions", 0, "capsuleRow.vectorDimensions must be a positive integer"],
+  ["createdAt", -1, "capsuleRow.createdAt must be a finite non-negative number"],
+  [
+    "updatedAt",
+    Number.POSITIVE_INFINITY,
+    "capsuleRow.updatedAt must be a finite non-negative number",
+  ],
+] as const;
+describe.each([
+  ["source", validateCapsuleRowShape],
+  ["public", publicValidateRow],
+])("%s required row admissions", (_surface, validate) => {
+  it.each(rowRequiredRefusals)("refuses malformed %s", (field, value, error) => {
+    expect(validate({ ...admittedRowFixture(), [field]: value })).toEqual({
+      ok: false,
+      errors: [error],
+    });
+  });
+  it("retains the healthy row reference", () => {
+    const input = admittedRowFixture();
+    const result = validate(input);
+    if (!result.ok) throw new Error("expected admitted row");
+    expect(result.value).toBe(input);
+  });
+  it("reports every malformed field in the original eager order", () => {
+    const input = admittedRowFixture();
+    for (const [field, value] of rowRequiredRefusals) input[field] = value;
+    expect(validate(input)).toEqual({
+      ok: false,
+      errors: [
+        "capsuleRow.id must be a non-empty string",
+        "capsuleRow.displayName must be a non-empty string",
+        "capsuleRow.vectorMetric must be a non-empty string",
+        "capsuleRow.embeddingModelProvider must be a non-empty string",
+        "capsuleRow.embeddingModelId must be a non-empty string",
+        "capsuleRow.lifecycleState must be a non-empty string",
+        "capsuleRow.storageReference must be a non-empty string",
+        "capsuleRow.vectorDimensions must be a positive integer",
+        "capsuleRow.createdAt must be a finite non-negative number",
+        "capsuleRow.updatedAt must be a finite non-negative number",
+      ],
+    });
+  });
+});

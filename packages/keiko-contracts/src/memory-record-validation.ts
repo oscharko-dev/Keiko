@@ -33,27 +33,41 @@ import {
   validateTags,
 } from "./memory-internal.js";
 
-function validateRecordSchemaVersion(input: Record<string, unknown>, errors: string[]): void {
-  if (input.schemaVersion !== MEMORY_SCHEMA_VERSION) {
-    errors.push(`record.schemaVersion must be the literal "${MEMORY_SCHEMA_VERSION}"`);
-  }
+interface MemoryObservationDiagnostics {
+  errors: string[];
 }
 
-function validateRecordEnums(input: Record<string, unknown>, errors: string[]): void {
+function validateRecordSchemaVersion(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
+  if (input.schemaVersion !== MEMORY_SCHEMA_VERSION) {
+    errors.push(`record.schemaVersion must be the literal "${MEMORY_SCHEMA_VERSION}"`);
+    valid = false;
+  }
+  return valid;
+}
+
+function validateRecordEnums(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isMember(input.type, MEMORY_TYPES)) {
     errors.push(`record.type must be one of ${MEMORY_TYPES.join("|")}`);
+    valid = false;
   }
   if (!isMember(input.status, MEMORY_STATUSES)) {
     errors.push(`record.status must be one of ${MEMORY_STATUSES.join("|")}`);
+    valid = false;
   }
+  return valid;
 }
 
-function validateRecordTimestamps(input: Record<string, unknown>, errors: string[]): void {
+function validateRecordTimestamps(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isFiniteNonNegativeNumber(input.createdAt)) {
     errors.push("record.createdAt must be a finite non-negative number");
+    valid = false;
   }
   if (!isFiniteNonNegativeNumber(input.updatedAt)) {
     errors.push("record.updatedAt must be a finite non-negative number");
+    valid = false;
   }
   if (
     isFiniteNonNegativeNumber(input.createdAt) &&
@@ -61,54 +75,86 @@ function validateRecordTimestamps(input: Record<string, unknown>, errors: string
     input.updatedAt < input.createdAt
   ) {
     errors.push("record.updatedAt must be greater than or equal to record.createdAt");
+    valid = false;
   }
+  return valid;
 }
 
-function validateRecordCoreShape(input: Record<string, unknown>, errors: string[]): void {
+function validateRecordCoreShape(input: Record<string, unknown>, errors: string[]): boolean {
+  let valid = true;
   if (!isNonEmptyTrimmedString(input.id)) {
     errors.push("record.id must be a non-empty string");
+    valid = false;
   }
   if (!isSafeText(input.body, MEMORY_BODY_MAX_CHARS)) {
     errors.push("record.body must be a bounded control-free non-empty string");
+    valid = false;
   }
   if (typeof input.pinned !== "boolean") {
     errors.push("record.pinned must be a boolean");
+    valid = false;
   }
   if (input.staleReason !== undefined && !isSafeText(input.staleReason, MEMORY_REASON_MAX_CHARS)) {
     errors.push("record.staleReason must be a bounded control-free string when set");
+    valid = false;
   }
-  validateRecordEnums(input, errors);
-  validateRecordTimestamps(input, errors);
+  const enumsOk = validateRecordEnums(input, errors);
+  const timestampsOk = validateRecordTimestamps(input, errors);
+  return valid && enumsOk && timestampsOk;
 }
 
-function validateRecordRetentionHint(input: Record<string, unknown>, errors: string[]): void {
+function validateRecordRetentionHint(input: Record<string, unknown>, errors: string[]): boolean {
   const hint = input.retentionHint;
   if (hint === undefined) {
-    return;
+    return true;
   }
-  validateRetentionHint("record.retentionHint", hint, errors);
+  return validateRetentionHint("record.retentionHint", hint, errors);
 }
 
 // ─── validateMemoryRecord ─────────────────────────────────────────────────────
-export function validateMemoryRecord(input: unknown): MemoryValidation<MemoryRecord> {
+function observeMemoryRecord(
+  input: unknown,
+  diagnostics: MemoryObservationDiagnostics,
+): input is MemoryRecord {
   if (!isRecord(input)) {
-    return { ok: false, errors: ["record must be an object"] };
+    diagnostics.errors = ["record must be an object"];
+    return false;
   }
-  const errors: string[] = [];
-  validateRecordSchemaVersion(input, errors);
-  pushNestedErrors("record", validateMemoryScope(input.scope), errors);
-  validateRecordCoreShape(input, errors);
+  const errors = diagnostics.errors;
+  const schemaOk = validateRecordSchemaVersion(input, errors);
+  const scope = validateMemoryScope(input.scope);
+  pushNestedErrors("record", scope, errors);
+  const coreOk = validateRecordCoreShape(input, errors);
+  let payloadOk = true;
   if (input.payload !== undefined) {
-    pushNestedErrors("record", validateMemoryStructuredPayload(input.payload), errors);
+    const payload = validateMemoryStructuredPayload(input.payload);
+    pushNestedErrors("record", payload, errors);
+    payloadOk = payload.ok;
   }
-  pushNestedErrors("record", validateMemoryProvenance(input.provenance), errors);
-  pushNestedErrors("record", validateMemoryValidityInterval(input.validity), errors);
-  validateTags("record.tags", input.tags, errors);
-  validateRecordRetentionHint(input, errors);
-  if (errors.length > 0) {
-    return { ok: false, errors };
+  const provenance = validateMemoryProvenance(input.provenance);
+  pushNestedErrors("record", provenance, errors);
+  const validity = validateMemoryValidityInterval(input.validity);
+  pushNestedErrors("record", validity, errors);
+  const tagsOk = validateTags("record.tags", input.tags, errors);
+  const retentionOk = validateRecordRetentionHint(input, errors);
+  return (
+    schemaOk &&
+    scope.ok &&
+    coreOk &&
+    payloadOk &&
+    provenance.ok &&
+    validity.ok &&
+    tagsOk &&
+    retentionOk
+  );
+}
+
+export function validateMemoryRecord(input: unknown): MemoryValidation<MemoryRecord> {
+  const diagnostics: MemoryObservationDiagnostics = { errors: [] };
+  if (!observeMemoryRecord(input, diagnostics)) {
+    return { ok: false, errors: diagnostics.errors };
   }
-  return { ok: true, value: input as unknown as MemoryRecord };
+  return { ok: true, value: input };
 }
 
 // ─── Predicates ───────────────────────────────────────────────────────────────

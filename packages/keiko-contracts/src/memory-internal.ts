@@ -1,18 +1,20 @@
 // Internal helpers shared by the memory contract validators (Epic #204, Issue #205).
-// NOT part of the public package surface. Other validator modules in this directory
-// import from here so primitive guards, bounded-text caps, and the control-character
-// safety gate stay defined exactly once.
+// Not a package subpath. The supported memory barrel re-exports the canonical count bounds;
+// primitive helpers and other caps remain internal. Validator modules import from here so
+// primitive guards, bounded-text caps, and the control-character safety gate stay defined once.
 
 // Bounded text caps. Chosen to keep audit summaries and rationales safe to ship to a
 // browser surface without truncation, and to keep the body cap aligned with a comfortable
 // MemoriaViva card without scrolling.
 import { hasControlCharacter, stripUnsafeFormatChars } from "./text-safety.js";
+import type { MemoryRetentionHint } from "./memory-records.js";
 
 export const MEMORY_BODY_MAX_CHARS = 4096;
 export const MEMORY_RATIONALE_MAX_CHARS = 1024;
 export const MEMORY_REASON_MAX_CHARS = 1024;
 export const MEMORY_TAG_MAX_CHARS = 64;
 export const MEMORY_TAGS_MAX_COUNT = 32;
+export const MEMORY_STRUCTURED_PAYLOAD_MAX_ENTRIES = 128;
 export const MEMORY_SUMMARY_MAX_CHARS = 512;
 
 // Intentional control-range match — this is the safety gate. `no-control-regex` guards
@@ -41,11 +43,15 @@ export function isUnitInterval(value: unknown): value is number {
 }
 
 export function isStringArray(value: unknown): value is readonly string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+  if (!Array.isArray(value)) return false;
+  // Preserve the original lookup observation, but never delegate admission to its value.
+  const _observedEvery = value.every;
+  return Array.prototype.every.call(value, (entry: unknown) => typeof entry === "string");
 }
 
 export function isMember<T extends string>(value: unknown, allowed: readonly T[]): value is T {
-  return typeof value === "string" && (allowed as readonly string[]).includes(value);
+  const values: readonly string[] = allowed;
+  return typeof value === "string" && values.includes(value);
 }
 
 export function isSafeText(value: unknown, maxChars: number): value is string {
@@ -58,46 +64,81 @@ export function isSafeText(value: unknown, maxChars: number): value is string {
   return !FORBIDDEN_CONTROL_RE.test(value);
 }
 
-export function validateTags(field: string, input: unknown, errors: string[]): void {
+export function validateTags(
+  field: string,
+  input: unknown,
+  errors: string[],
+): input is readonly string[] {
   if (!isStringArray(input)) {
     errors.push(`${field} must be a string array`);
-    return;
+    return false;
   }
   if (input.length > MEMORY_TAGS_MAX_COUNT) {
     errors.push(`${field} must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
-    return;
+    return false;
   }
-  for (const tag of input) {
+  // Keep the original iterator lookup and native physical read phase. The existing tag
+  // cap also bounds a growing native traversal; caller-owned iterators cannot certify tags.
+  const _observedIterator = input[Symbol.iterator];
+  let inspected = 0;
+  for (const observed of Array.prototype.values.call(input)) {
+    inspected += 1;
+    if (inspected > MEMORY_TAGS_MAX_COUNT) {
+      errors.push(`${field} must have at most ${String(MEMORY_TAGS_MAX_COUNT)} entries`);
+      return false;
+    }
+    const tag: unknown = observed;
+    if (typeof tag !== "string") {
+      errors.push(`${field} must be a string array`);
+      return false;
+    }
     if (tag.length === 0 || tag.length > MEMORY_TAG_MAX_CHARS || FORBIDDEN_CONTROL_RE.test(tag)) {
       errors.push(`${field} entry must be a non-empty bounded control-free string`);
-      return;
+      return false;
     }
   }
+  return true;
 }
 
-export function validateRetentionHint(field: string, input: unknown, errors: string[]): void {
+export function validateRetentionHint(
+  field: string,
+  input: unknown,
+  errors: string[],
+): input is MemoryRetentionHint {
+  let valid = true;
   if (!isRecord(input)) {
     errors.push(`${field} must be an object when set`);
-    return;
+    return false;
   }
   if (!isNonEmptyTrimmedString(input.policyKey)) {
     errors.push(`${field}.policyKey must be a non-empty string`);
+    valid = false;
   }
   if (input.retainUntil !== undefined && !isFiniteNonNegativeNumber(input.retainUntil)) {
     errors.push(`${field}.retainUntil must be a finite non-negative number when set`);
+    valid = false;
   }
   if (input.notes !== undefined && !isSafeText(input.notes, MEMORY_REASON_MAX_CHARS)) {
     errors.push(`${field}.notes must be a bounded control-free string when set`);
+    valid = false;
   }
+  return valid;
 }
 
-export function validateOptionalReference(field: string, value: unknown, errors: string[]): void {
+export function validateOptionalReference(
+  field: string,
+  value: unknown,
+  errors: string[],
+): boolean {
+  let valid = true;
   if (value === undefined) {
-    return;
+    return true;
   }
   if (!isNonEmptyTrimmedString(value)) {
     errors.push(`${field} must be a non-empty string when set`);
+    valid = false;
   }
+  return valid;
 }
 
 // Shared helpers used by both record-validation and operation-validation modules. Lifted
@@ -108,13 +149,18 @@ export interface NestedValidation {
   readonly errors?: readonly string[];
 }
 
-export function pushNestedErrors(prefix: string, result: NestedValidation, errors: string[]): void {
+export function pushNestedErrors(
+  prefix: string,
+  result: NestedValidation,
+  errors: string[],
+): boolean {
   if (result.ok) {
-    return;
+    return true;
   }
   for (const reason of result.errors ?? []) {
     errors.push(`${prefix}.${reason}`);
   }
+  return false;
 }
 
 // Memory ids are branded identifiers that reach the memory store, evidence exports and the browser,
@@ -125,8 +171,7 @@ export function pushNestedErrors(prefix: string, result: NestedValidation, error
 const MEMORY_ID_MAX_LENGTH = 256;
 const MEMORY_ID_FORBIDDEN_FRAGMENTS: readonly string[] = ["..", "/", "\\"];
 
-function memoryIdReason(value: unknown): string | null {
-  if (typeof value !== "string") return "must be a non-empty string";
+function memoryIdReason(value: string): string | null {
   if (value.length === 0 || value.trim().length === 0) return "must be a non-empty string";
   if (value !== value.trim()) return "must not have leading or trailing whitespace";
   if (value.length > MEMORY_ID_MAX_LENGTH) {
@@ -145,18 +190,26 @@ function memoryIdReason(value: unknown): string | null {
   return null;
 }
 
-export function validateMemoryIdString(field: string, value: unknown, errors: string[]): void {
-  const reason = memoryIdReason(value);
+export function validateMemoryIdString(
+  field: string,
+  value: unknown,
+  errors: string[],
+): value is string {
+  const reason = typeof value === "string" ? memoryIdReason(value) : "must be a non-empty string";
   if (reason !== null) {
     errors.push(`${field} ${reason}`);
+    return false;
   }
+  return true;
 }
 
 export function validateSchemaVersionLiteral(
   input: Record<string, unknown>,
   errors: string[],
-): void {
+): input is Record<string, unknown> & { readonly schemaVersion: "1" } {
   if (input.schemaVersion !== "1") {
     errors.push('schemaVersion must be the literal "1"');
+    return false;
   }
+  return true;
 }

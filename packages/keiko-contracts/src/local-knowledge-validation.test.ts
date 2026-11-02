@@ -20,16 +20,32 @@
 // behaviorally (the retained private copy is exercised through its real production entry point and
 // must still agree with the canonical implementation on the exact rejection message).
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
+import { capsuleInput } from "./__tests__/support/knowledge-array-fixtures.js";
+import type {
+  LibraryParserAcceptedExpected,
+  LibraryParserAcceptedFacts,
+} from "./__tests__/support/library-parser-type-facts.js";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { validateOnlyKeys } from "./local-knowledge-validation.js";
+import {
+  validateConnectorGraphState,
+  validateKnowledgeCapsule,
+  validateOnlyKeys,
+  type LocalKnowledgeValidation,
+} from "./local-knowledge-validation.js";
 import {
   standardPodModelUsePolicy,
   validateKnowledgePodModelUsePolicy,
 } from "./local-knowledge-model-use-policy.js";
+
+import {
+  validateConnectorGraphState as publicValidateGraph,
+  validateKnowledgeCapsule as publicValidateKnowledgeCapsule,
+  type LocalKnowledgeValidation as PublicKnowledgeValidation,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = resolve(HERE, ".");
@@ -144,4 +160,363 @@ describe("validateOnlyKeys is the single canonical allowlist-key validator", () 
     if (result.ok) throw new Error("expected invalid model-use policy");
     expect(result.errors).toEqual(["modelUsePolicy must not include unexpectedKey"]);
   });
+});
+
+for (const [name, validate] of [
+  ["source", validateKnowledgeCapsule],
+  ["public", publicValidateKnowledgeCapsule],
+] as const) {
+  describe(`${name} optional alwaysQuery admission`, () => {
+    it.each(["yes", 1, null, {}, []])("rejects nonboolean %j", (alwaysQuery) => {
+      const input = { ...capsuleInput(), alwaysQuery };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["capsule.alwaysQuery must be a boolean when set"],
+      });
+    });
+    it.each(["omitted", "own-undefined", "true", "false"] as const)("preserves %s", (state) => {
+      const input = capsuleInput();
+      if (state !== "omitted")
+        input.alwaysQuery = state === "own-undefined" ? undefined : state === "true";
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.embeddingModelIdentity).toBe(input.embeddingModelIdentity);
+      expect(Object.hasOwn(result.value, "alwaysQuery")).toBe(state !== "omitted");
+      expect(result.value.alwaysQuery).toBe(
+        state === "true" ? true : state === "false" ? false : undefined,
+      );
+    });
+  });
+}
+
+for (const [entry, validate] of [
+  ["source", validateConnectorGraphState],
+  ["public", publicValidateGraph],
+] as const) {
+  describe(`${entry} current graph endpoint admission`, () => {
+    it.each([undefined, null, 1])("refuses endpoint substituted with %j", (replacement) => {
+      let reads = 0;
+      const endpoint = { nodeId: "n1", kind: "conversation-center" };
+      const edge = {
+        get from(): unknown {
+          reads += 1;
+          return reads === 1 ? endpoint : replacement;
+        },
+        to: endpoint,
+        createdAt: 1,
+      };
+      const input = {
+        schemaVersion: "1",
+        nodes: [
+          {
+            kind: "conversation-center",
+            nodeId: "n1",
+            conversationId: "c1",
+            route: "chat",
+          },
+        ],
+        edges: [edge],
+        updatedAt: 1,
+      };
+      expect(validate(input)).toEqual({
+        ok: false,
+        errors: ["graph.edges entry must have from/to objects"],
+      });
+      expect(reads).toBe(2);
+    });
+    it("preserves healthy repeated endpoint references", () => {
+      let reads = 0;
+      const endpoint = { nodeId: "n1", kind: "conversation-center" };
+      const edge = {
+        get from(): unknown {
+          reads += 1;
+          return endpoint;
+        },
+        to: endpoint,
+        createdAt: 1,
+      };
+      const input = {
+        schemaVersion: "1",
+        nodes: [
+          {
+            kind: "conversation-center",
+            nodeId: "n1",
+            conversationId: "c1",
+            route: "chat",
+          },
+        ],
+        edges: [edge],
+        updatedAt: 1,
+      };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.edges[0]).toBe(edge);
+      expect(reads).toBe(2);
+    });
+  });
+}
+
+for (const [entry, validate] of [
+  ["source", validateKnowledgeCapsule],
+  ["public", publicValidateKnowledgeCapsule],
+] as const) {
+  describe(`${entry} physical capsule array admission`, () => {
+    it.each(["tags", "sourceIds"] as const)("refuses hidden malformed %s positions", (field) => {
+      const members = [42];
+      Object.defineProperty(members, Symbol.iterator, {
+        value: function* () {
+          yield "healthy";
+        },
+      });
+      const result = validate({ ...capsuleInput(), [field]: members });
+      expect(result.ok).toBe(false);
+    });
+    it.each(["tags", "sourceIds"] as const)("refuses sparse %s positions", (field) => {
+      const members = new Array<unknown>(1);
+      expect(validate({ ...capsuleInput(), [field]: members }).ok).toBe(false);
+    });
+    it.each(["tags", "sourceIds"] as const)("admits inherited healthy %s positions", (field) => {
+      const members = new Array<unknown>(1);
+      Object.setPrototypeOf(members, ["healthy"]);
+      const input = { ...capsuleInput(), [field]: members };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value[field]).toBe(members);
+    });
+    it.each(["tags", "sourceIds"] as const)("preserves healthy %s positions", (field) => {
+      const members = ["healthy"];
+      const input = { ...capsuleInput(), [field]: members };
+      const result = validate(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value[field]).toBe(members);
+    });
+  });
+}
+
+type CapsuleAny<T> = 0 extends 1 & T ? true : false;
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  KnowledgeCapsule as PublicKnowledgeCapsule,
+} from "@oscharko-dev/keiko-contracts";
+
+function consumePublicCapsule(input: unknown): void {
+  const result = publicValidateKnowledgeCapsule(input);
+  if (result.ok) {
+    const id: KnowledgeCapsuleId = result.value.id;
+    const sourceIds: readonly KnowledgeSourceId[] = result.value.sourceIds;
+    const optional: boolean | undefined = result.value.alwaysQuery;
+    const dimensions: number = result.value.embeddingModelIdentity.vectorDimensions;
+    const metric: "cosine" | "euclidean" | "dot" = result.value.embeddingModelIdentity.vectorMetric;
+    const _concrete: CapsuleAny<typeof result.value> = false;
+    const _concreteOptional: CapsuleAny<typeof result.value.alwaysQuery> = false;
+    // @ts-expect-error Capsule and source phantom IDs must stay distinct.
+    const _sourceId: KnowledgeSourceId = result.value.id;
+    expect(result.value).toBe(input);
+    expect(id).toBe("cap-1");
+    expect(sourceIds).toEqual(["src-1"]);
+    expect(optional).toBeUndefined();
+    expect(dimensions).toBe(1536);
+    expect(metric).toBe("cosine");
+  }
+}
+
+it("public capsule consumer retains primitives and nominal separation after revalidation", () => {
+  const input = capsuleInput();
+  consumePublicCapsule(input);
+  input.alwaysQuery = 42;
+  expect(publicValidateKnowledgeCapsule(input).ok).toBe(false);
+});
+
+for (const [entry, validate] of [
+  ["source", validateKnowledgeCapsule],
+  ["public", publicValidateKnowledgeCapsule],
+] as const) {
+  describe(`${entry} bounded capsule array growth`, () => {
+    it.each(["tags", "sourceIds"] as const)("refuses malformed appended %s member", (field) => {
+      const members: unknown[] = ["healthy"];
+      Object.defineProperty(members, "0", {
+        get(): string {
+          members.push(42);
+          return "healthy";
+        },
+      });
+      expect(validate({ ...capsuleInput(), [field]: members }).ok).toBe(false);
+    });
+  });
+}
+
+export function parsePublicKnowledgeCapsule(
+  input: unknown,
+): PublicKnowledgeValidation<PublicKnowledgeCapsule> {
+  const result = publicValidateKnowledgeCapsule(input);
+  return result;
+}
+
+describe("Knowledge capsule public responsibility (#3918)", () => {
+  it("pins exact unknown inputs checked results and nested declarations", () => {
+    expectTypeOf<
+      LibraryParserAcceptedFacts<
+        typeof validateKnowledgeCapsule,
+        typeof publicValidateKnowledgeCapsule,
+        typeof parsePublicKnowledgeCapsule,
+        [
+          PublicKnowledgeCapsule["id"],
+          PublicKnowledgeCapsule["sourceIds"],
+          PublicKnowledgeCapsule["embeddingModelIdentity"],
+          PublicKnowledgeCapsule["embeddingModelIdentity"]["vectorDimensions"],
+          PublicKnowledgeCapsule["alwaysQuery"],
+        ]
+      >
+    >().toEqualTypeOf<
+      LibraryParserAcceptedExpected<
+        LocalKnowledgeValidation<SourceKnowledgeCapsule>,
+        PublicKnowledgeValidation<PublicKnowledgeCapsule>,
+        PublicKnowledgeCapsule
+      >
+    >();
+    expect(parsePublicKnowledgeCapsule(capsuleInput()).ok).toBe(true);
+  });
+});
+
+describe("Knowledge capsule public responsibility (#3918)", () => {
+  it("preserves admitted identity optional presence and nested references", () => {
+    for (const state of ["omitted", "undefined", "true", "false"]) {
+      const input = capsuleInput();
+      if (state !== "omitted")
+        input.alwaysQuery = state === "undefined" ? undefined : state === "true";
+      const result = parsePublicKnowledgeCapsule(input);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value).toBe(input);
+      expect(result.value.sourceIds).toBe(input.sourceIds);
+      expect(result.value.embeddingModelIdentity).toBe(input.embeddingModelIdentity);
+      expect(Object.hasOwn(result.value, "alwaysQuery")).toBe(state !== "omitted");
+      expect(result.value.alwaysQuery).toBe(input.alwaysQuery);
+    }
+  });
+  it("refuses malformed concrete fields and physical collection members", () => {
+    for (const input of [
+      null,
+      [],
+      { ...capsuleInput(), displayName: "" },
+      { ...capsuleInput(), metadata: { fixture: 1 } },
+      { ...capsuleInput(), sourceIds: [0] },
+      { ...capsuleInput(), tags: new Array<unknown>(1) },
+      { ...capsuleInput(), embeddingModelIdentity: {} },
+      { ...capsuleInput(), alwaysQuery: "yes" },
+      { ...capsuleInput(), createdAt: Number.NaN },
+    ])
+      expect(parsePublicKnowledgeCapsule(input).ok).toBe(false);
+  });
+});
+
+import type {
+  KnowledgeCapsule as SourceKnowledgeCapsule,
+  CapsuleContextualRetrievalSettings,
+} from "./local-knowledge.js";
+import type { KnowledgePodModelUsePolicy } from "./local-knowledge-model-use-policy.js";
+
+function assertCapsulePresentUndefinedTypes(): void {
+  expectTypeOf<Required<SourceKnowledgeCapsule>["description"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["description"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["sourceRoutingInstructions"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["sourceRoutingInstructions"]>().toEqualTypeOf<
+    string | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["alwaysQuery"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["alwaysQuery"]>().toEqualTypeOf<
+    boolean | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["contextualRetrieval"]>().toEqualTypeOf<
+    CapsuleContextualRetrievalSettings | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["contextualRetrieval"]>().toEqualTypeOf<
+    CapsuleContextualRetrievalSettings | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["modelUsePolicy"]>().toEqualTypeOf<
+    KnowledgePodModelUsePolicy | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["modelUsePolicy"]>().toEqualTypeOf<
+    KnowledgePodModelUsePolicy | undefined
+  >();
+  expectTypeOf<Required<SourceKnowledgeCapsule>["metadata"]>().toEqualTypeOf<
+    Readonly<Record<string, string>> | undefined
+  >();
+  expectTypeOf<Required<PublicKnowledgeCapsule>["metadata"]>().toEqualTypeOf<
+    Readonly<Record<string, string>> | undefined
+  >();
+}
+
+function capsuleWithOwnUndefinedOptions(): Record<string, unknown> {
+  return {
+    ...capsuleInput(),
+    description: undefined,
+    sourceRoutingInstructions: undefined,
+    alwaysQuery: undefined,
+    contextualRetrieval: undefined,
+    modelUsePolicy: undefined,
+    metadata: undefined,
+  };
+}
+
+it("preserves source and public capsule option presence with truthful types", (): void => {
+  assertCapsulePresentUndefinedTypes();
+  for (const validate of [validateKnowledgeCapsule, publicValidateKnowledgeCapsule]) {
+    const input = capsuleWithOwnUndefinedOptions();
+    const result = validate(input);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new TypeError("Expected admitted own-undefined options");
+    expect(result.value).toBe(input);
+    for (const field of [
+      "description",
+      "sourceRoutingInstructions",
+      "alwaysQuery",
+      "contextualRetrieval",
+      "modelUsePolicy",
+      "metadata",
+    ] as const) {
+      expect(Object.hasOwn(result.value, field)).toBe(true);
+      expect(result.value[field]).toBeUndefined();
+    }
+    if ("description" in result.value) {
+      expectTypeOf(result.value.description).toEqualTypeOf<string | undefined>();
+    }
+    if ("sourceRoutingInstructions" in result.value) {
+      expectTypeOf(result.value.sourceRoutingInstructions).toEqualTypeOf<string | undefined>();
+    }
+    if ("alwaysQuery" in result.value) {
+      expectTypeOf(result.value.alwaysQuery).toEqualTypeOf<boolean | undefined>();
+    }
+    if ("contextualRetrieval" in result.value) {
+      expectTypeOf(result.value.contextualRetrieval).toEqualTypeOf<
+        CapsuleContextualRetrievalSettings | undefined
+      >();
+    }
+    if ("modelUsePolicy" in result.value) {
+      expectTypeOf(result.value.modelUsePolicy).toEqualTypeOf<
+        KnowledgePodModelUsePolicy | undefined
+      >();
+    }
+    if ("metadata" in result.value) {
+      expectTypeOf(result.value.metadata).toEqualTypeOf<
+        Readonly<Record<string, string>> | undefined
+      >();
+    }
+  }
 });

@@ -75,6 +75,69 @@ function observeCapturedExtent(
   };
 }
 
+export function knowledgeCapturedExtentMembers(
+  values: unknown[],
+  trace: string[],
+  state: string,
+): unknown[] {
+  let lengthReads = 0;
+  return new Proxy(values, {
+    get(target, key): unknown {
+      if (key === "length") {
+        trace.push("length");
+        lengthReads += 1;
+        if (state === "invalid") return Number.NaN;
+        if (lengthReads > 1 && state === "growth") return 2;
+        if (lengthReads > 1 && state === "shrink") return 0;
+        return 1;
+      }
+      if (key === "0") trace.push("0");
+      const value: unknown = Reflect.get(target, key);
+      return value;
+    },
+  });
+}
+
+export function knowledgeFinalExtentFailureMembers(
+  values: unknown[],
+  trace: string[],
+  refusal: Error,
+): unknown[] {
+  let lengthReads = 0;
+  return new Proxy(values, {
+    get(target, key): unknown {
+      if (key === "length") {
+        trace.push("length");
+        lengthReads += 1;
+        if (lengthReads === 2) throw refusal;
+      }
+      if (key === "0") trace.push("0");
+      const value: unknown = Reflect.get(target, key);
+      return value;
+    },
+  });
+}
+
+export function knowledgeRejectedTextMembers(
+  values: unknown[],
+  trace: string[],
+  finalExtentRefusal: string,
+): unknown[] {
+  let lengthReads = 0;
+  return new Proxy(values, {
+    get(target, key, receiver): unknown {
+      trace.push(`get:${String(key)}`);
+      if (key === "length" && ++lengthReads === 2) throw new TypeError(finalExtentRefusal);
+      const value: unknown = Reflect.get(target, key, receiver);
+      return value;
+    },
+    has(target, key): boolean {
+      trace.push(`has:${String(key)}`);
+      return Reflect.has(target, key);
+    },
+  });
+}
+
 export interface CapturedExtentSubject {
   /** One healthy collection member. */
   readonly member: unknown;

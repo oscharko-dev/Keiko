@@ -69,10 +69,7 @@ function skipSpaces(text: string, from: number): number {
   return position;
 }
 
-function readDigits(
-  text: string,
-  from: number,
-): { readonly digits: string; readonly next: number } {
+function readDigits(text: string, from: number): ItemScan {
   let next = from;
   while (isAsciiDigit(text.charAt(next))) next += 1;
   return { digits: text.slice(from, next), next };

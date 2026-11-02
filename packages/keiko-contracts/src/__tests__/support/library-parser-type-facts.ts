@@ -6,7 +6,7 @@ type LibraryInput<F extends Callable> = Parameters<
   Parameters<ExpectTypeOf<F, { positive: true }>["parameters"]["map"]>[0]
 >[0][0];
 
-type LibraryOutput<F extends Callable> = Parameters<
+export type LibraryOutput<F extends Callable> = Parameters<
   Parameters<ExpectTypeOf<F, { positive: true }>["returns"]["map"]>[0]
 >[0];
 
@@ -50,6 +50,14 @@ export type LibraryParserTripleExpected<SOutput, POutput, WOutput> = readonly [
   true,
 ];
 
+export type LibraryContextDiagnosticFacts<F extends Callable, Reasons, Element> = readonly [
+  Parameters<F>,
+  MatcherPass<ExpectTypeOf<ReturnType<F>, { positive: true }>["not"]["toBeAny"]>,
+  ReturnType<F>,
+  Reasons,
+  MatcherPass<ExpectTypeOf<Element, { positive: true }>["not"]["toBeAny"]>,
+];
+
 /** The public and forwarding stages also return exactly the source stage's result. */
 export type LibraryParserTripleIdentityFacts<
   S extends Callable,
@@ -70,9 +78,29 @@ type AcceptedValue<F extends Callable> =
       : never
     : never;
 
+// A union containing `any` is `any` and one containing `unknown` is `unknown`, so one pair of
+// matchers covers the accepted value and every listed member type.
 type ConcreteFacts<T> = readonly [
   MatcherPass<ExpectTypeOf<T, { positive: true }>["not"]["toBeAny"]>,
   MatcherPass<ExpectTypeOf<T, { positive: true }>["not"]["toBeUnknown"]>,
+];
+
+/** The triple facts, the forwarding stage's accepted value, and its listed member types. */
+export type LibraryParserAcceptedFacts<
+  S extends Callable,
+  P extends Callable,
+  W extends Callable,
+  Members extends readonly unknown[],
+> = readonly [
+  LibraryParserTripleFacts<S, P, W>,
+  AcceptedValue<W>,
+  ConcreteFacts<AcceptedValue<W> | Members[number]>,
+];
+
+export type LibraryParserAcceptedExpected<SOutput, POutput, Value> = readonly [
+  LibraryParserTripleExpected<SOutput, POutput, POutput>,
+  Value,
+  readonly [true, true],
 ];
 
 type ResultOk<F extends Callable> =
@@ -93,3 +121,41 @@ export type CheckedResultFacts<F extends Callable> = readonly [
 ];
 
 export type CheckedResultExpected = readonly [boolean, readonly string[], readonly [true, true]];
+
+type DiagnosticReasons<F extends Callable> =
+  ReturnType<F> extends infer R
+    ? R extends { readonly ok: false; readonly reasons: infer Reasons }
+      ? Reasons
+      : never
+    : never;
+
+type ContextDiagnosticFacts<F extends Callable> = LibraryContextDiagnosticFacts<
+  F,
+  DiagnosticReasons<F>,
+  DiagnosticReasons<F> extends readonly (infer Element)[] ? Element : never
+>;
+
+/** Source and public diagnostics share one closed result type; the witness counts reasons. */
+export type ContextDiagnosticTripleFacts<
+  S extends Callable,
+  P extends Callable,
+  Count extends Callable,
+> = readonly [
+  ContextDiagnosticFacts<S>,
+  ContextDiagnosticFacts<P>,
+  Parameters<Count>,
+  ReturnType<Count>,
+];
+
+export type ContextDiagnosticTripleExpected<Result> = readonly [
+  readonly [[unknown], true, Result, readonly string[], true],
+  readonly [[unknown], true, Result, readonly string[], true],
+  [unknown],
+  number,
+];
+
+/** A source and public declaration of the same optional field, with presence made required. */
+export type OptionalFieldPair<Source, Public, Key extends keyof Source & keyof Public> = readonly [
+  Required<Source>[Key],
+  Required<Public>[Key],
+];

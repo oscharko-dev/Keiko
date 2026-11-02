@@ -3325,6 +3325,10 @@ export type {
   KnowledgePodSetReadinessSummary,
   KnowledgePodSourceKind,
   KnowledgePodSummary,
+  KnowledgePodCatalogSummary,
+  LegacyKnowledgePodCatalogSummary,
+  LocalKnowledgeCapsulesCatalogResponse,
+  LocalKnowledgeCapsuleSetsCatalogResponse,
   KnowledgePodSummaryKind,
   LocalKnowledgeCapsuleListEntry,
   LocalKnowledgeCapsuleSetListEntry,
@@ -3336,6 +3340,8 @@ export type {
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
   validateKnowledgePodSummary,
+  parseLocalKnowledgeCapsulesResponse,
+  parseLocalKnowledgeCapsuleSetsResponse,
 } from "./local-knowledge-pods.js";
 export type {
   KnowledgePodRetrievalActivity,

@@ -69,6 +69,16 @@ const STANDARD_OPERATIONS: KnowledgePodResolvedModelUsePolicyOperations = {
   evidencePersistence: "allow",
 } as const;
 
+function combineAdmissions(previous: boolean, current: boolean): boolean {
+  return previous && current;
+}
+
+// A refusal records the original diagnostic and actual failed field evidence.
+function reject(errors: string[], ...reasons: string[]): false {
+  errors.push(...reasons);
+  return false;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -97,18 +107,20 @@ function onlyKeys(
   }
 }
 
-function validateOperations(value: unknown, errors: string[]): void {
+function validateOperations(value: unknown, errors: string[]): boolean {
+  let valid = true;
   if (!isRecord(value)) {
-    errors.push("modelUsePolicy.operations must be an object");
-    return;
+    valid = reject(errors, "modelUsePolicy.operations must be an object");
+    return valid;
   }
   onlyKeys(value, OPERATIONS_KEYS, "modelUsePolicy.operations", errors);
   for (const operation of OPERATIONS_KEYS) {
-    if (!KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS.includes(value[operation] as never)) {
-      errors.push(`modelUsePolicy.operations.${operation} is invalid`);
-      return;
+    if (!KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS_ADMISSION.includes(value[operation])) {
+      valid = reject(errors, `modelUsePolicy.operations.${operation} is invalid`);
+      return valid;
     }
   }
+  return valid;
 }
 
 function resolvedDefaultForMode(
@@ -169,22 +181,31 @@ export function standardPodModelUsePolicy(): KnowledgePodModelUsePolicy {
   };
 }
 
+function admitsKnowledgePodModelUsePolicy(
+  input: Record<string, unknown>,
+  errors: string[],
+): input is Record<string, unknown> & KnowledgePodModelUsePolicy {
+  let valid = true;
+  onlyKeys(input, POLICY_KEYS, "modelUsePolicy", errors);
+  if (input.schemaVersion !== KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION) {
+    valid = reject(errors, "modelUsePolicy.schemaVersion is invalid");
+  }
+  if (!KNOWLEDGE_POD_MODEL_USE_POLICY_MODES_ADMISSION.includes(input.mode)) {
+    valid = reject(errors, "modelUsePolicy.mode is invalid");
+  }
+  valid = combineAdmissions(valid, validateOperations(input.operations, errors));
+
+  return valid;
+}
+
 export function validateKnowledgePodModelUsePolicy(
   input: unknown,
 ): LocalKnowledgeValidation<KnowledgePodModelUsePolicy> {
   if (!isRecord(input)) return { ok: false, errors: ["modelUsePolicy must be an object"] };
   const errors: string[] = [];
-  onlyKeys(input, POLICY_KEYS, "modelUsePolicy", errors);
-  if (input.schemaVersion !== KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION) {
-    errors.push("modelUsePolicy.schemaVersion is invalid");
-  }
-  if (!KNOWLEDGE_POD_MODEL_USE_POLICY_MODES.includes(input.mode as never)) {
-    errors.push("modelUsePolicy.mode is invalid");
-  }
-  validateOperations(input.operations, errors);
-  return errors.length > 0
-    ? { ok: false, errors }
-    : { ok: true, value: input as unknown as KnowledgePodModelUsePolicy };
+  if (!admitsKnowledgePodModelUsePolicy(input, errors) || errors.length > 0)
+    return { ok: false, errors };
+  return { ok: true, value: input };
 }
 
 export function resolveKnowledgePodModelUsePolicy(
@@ -210,3 +231,8 @@ export function isKnowledgePodModelUseOperationAllowed(
 ): boolean {
   return policy.operations[operation] === "allow";
 }
+
+const KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS_ADMISSION: readonly unknown[] =
+  KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS;
+const KNOWLEDGE_POD_MODEL_USE_POLICY_MODES_ADMISSION: readonly unknown[] =
+  KNOWLEDGE_POD_MODEL_USE_POLICY_MODES;

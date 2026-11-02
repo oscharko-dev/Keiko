@@ -26,3 +26,39 @@ export function expectIndependentFailures(
   expect(second).not.toBe(first);
   if (!first.ok && !second.ok) expect(second.errors).not.toBe(first.errors);
 }
+
+/** Admits a proxy of `target` that checks every read's receiver, and returns the field reads. */
+export function receiverCheckedReads<T extends object>(
+  validate: (input: T) => CheckedEnvelope,
+  target: T,
+): readonly string[] {
+  const reads: string[] = [];
+  const input: T = new Proxy(target, {
+    get(original, key, receiver): unknown {
+      expect(receiver).toBe(input);
+      reads.push(String(key));
+      return Reflect.get(original, key, receiver);
+    },
+  });
+  expectAcceptedReference(validate, input);
+  return reads;
+}
+
+/** Admits `input` as itself with `member` intact, then refuses the `refused` variant. */
+export function expectRetainedWithRefusal<T extends object, V extends object>(
+  validate: (
+    input: object,
+  ) =>
+    | { readonly ok: true; readonly value: V }
+    | { readonly ok: false; readonly errors: readonly string[] },
+  input: T,
+  member: keyof T & keyof V,
+  refused: object,
+): void {
+  const result = validate(input);
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value).toBe(input);
+  expect(result.value[member]).toBe(input[member]);
+  expect(validate(refused).ok).toBe(false);
+}

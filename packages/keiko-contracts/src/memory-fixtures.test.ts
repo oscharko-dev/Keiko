@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import { FIXED_NOW_MS, makeMemoryRecord } from "./memory-fixtures.js";
 import { validateMemoryRecord } from "./memory-record-validation.js";
 
@@ -34,4 +34,41 @@ describe("makeMemoryRecord (GEN-DX-001)", () => {
     expect(record.status).toBe("accepted");
     expect(validateMemoryRecord(record).ok).toBe(true);
   });
+});
+
+import { makeMemoryRecord as publicMemoryRecord } from "@oscharko-dev/keiko-contracts/memory-fixtures";
+
+type PublicMemoryRecord = ReturnType<typeof publicMemoryRecord>;
+type PublicUserScope = Extract<PublicMemoryRecord["scope"], { kind: "user" }>;
+
+it("retains distinct genuine Memory and User nominal domains at the public builder", () => {
+  expectTypeOf<PublicMemoryRecord["id"]>().toExtend<string>();
+  expectTypeOf<PublicMemoryRecord["id"]>().not.toEqualTypeOf<string>();
+  expectTypeOf<PublicUserScope["userId"]>().toExtend<string>();
+  expectTypeOf<PublicUserScope["userId"]>().not.toEqualTypeOf<string>();
+  expectTypeOf<PublicMemoryRecord["id"]>().not.toExtend<PublicUserScope["userId"]>();
+  expectTypeOf<PublicMemoryRecord["createdAt"]>().toEqualTypeOf<number>();
+});
+
+describe.each([
+  ["source", makeMemoryRecord],
+  ["public", publicMemoryRecord],
+])("%s actual nominal fixture preservation", (_label, build) => {
+  it("keeps validated defaults, override identity and nested references", () => {
+    const initial = build();
+    expect(validateMemoryRecord(initial).ok).toBe(true);
+    expect(initial.id).toBe("m-1");
+    expect(initial.scope).toEqual({ kind: "user", userId: "u-1" });
+    const overrides = { tags: ["owned"] };
+    const output = build(overrides);
+    expect(output.tags).toBe(overrides.tags);
+    expect(validateMemoryRecord(output).ok).toBe(true);
+  });
+});
+
+it("preserves genuinely public nested override references", () => {
+  const provenance = publicMemoryRecord().provenance;
+  const output = publicMemoryRecord({ provenance });
+  expect(output.provenance).toBe(provenance);
+  expect(validateMemoryRecord(output).ok).toBe(true);
 });

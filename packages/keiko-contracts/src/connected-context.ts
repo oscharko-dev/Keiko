@@ -6,6 +6,7 @@
 // rather than mutating "1". Leaf-package rule (ADR-0019 direction 1) means no
 // `@oscharko-dev/keiko-*` imports may appear in this module.
 
+import { isOneOf } from "./contract-validation-primitives.js";
 import type { ContextBudget } from "./context-engineering.js";
 import type { GroundedRerankerDiagnostics } from "./bff-wire.js";
 import { validateContextBudget } from "./context-engineering-validation.js";
@@ -413,9 +414,22 @@ export function connectedContextOmittedCounts(
   pack: Pick<ConnectedContextPack, "omitted" | "omittedCounts">,
 ): ContextOmissionCounts {
   if (pack.omittedCounts !== undefined) return pack.omittedCounts;
-  const counts = Object.fromEntries(
-    CANDIDATE_OMISSION_REASONS.map((reason) => [reason, 0]),
-  ) as Record<CandidateOmissionReason, number>;
+  const counts: Record<CandidateOmissionReason, number> = {
+    "outside-scope": 0,
+    binary: 0,
+    generated: 0,
+    ignored: 0,
+    "size-exceeded": 0,
+    "near-duplicate": 0,
+    "low-relevance": 0,
+    "redacted-only": 0,
+    "budget-exhausted": 0,
+    "tool-unavailable": 0,
+    "unsupported-format": 0,
+    "no-text-layer": 0,
+    "malformed-document": 0,
+    "encrypted-document": 0,
+  };
   for (const entry of pack.omitted) counts[entry.reason] += 1;
   return counts;
 }
@@ -745,30 +759,26 @@ function appendPrefixedReasons(result: ValidationResult, prefix: string, reasons
 }
 
 function isRuntimeSelectedScope(value: unknown): value is SelectedScope {
+  const allowed: readonly unknown[] = SELECTED_SCOPE_KINDS;
   if (!isRecord(value)) {
     return false;
   }
-  if (!SELECTED_SCOPE_KINDS.includes(value.kind as SelectedScopeKind)) {
+  if (!allowed.includes(value.kind)) {
     return false;
   }
   return hasStringArray(value.relativePaths);
 }
 
 function isCandidateOmissionReason(value: unknown): value is CandidateOmissionReason {
-  return (
-    typeof value === "string" &&
-    CANDIDATE_OMISSION_REASONS.includes(value as CandidateOmissionReason)
-  );
+  return isOneOf(value, CANDIDATE_OMISSION_REASONS);
 }
 
 function isConnectedFileRole(value: unknown): value is ConnectedFileRole {
-  return typeof value === "string" && CONNECTED_FILE_ROLES.includes(value as ConnectedFileRole);
+  return isOneOf(value, CONNECTED_FILE_ROLES);
 }
 
 function isUncertaintyMarkerKind(value: unknown): value is UncertaintyMarkerKind {
-  return (
-    typeof value === "string" && UNCERTAINTY_MARKER_KINDS.includes(value as UncertaintyMarkerKind)
-  );
+  return isOneOf(value, UNCERTAINTY_MARKER_KINDS);
 }
 
 function validateScopeKindPaths(scope: SelectedScope, reasons: string[]): void {
@@ -833,7 +843,7 @@ export function validateSelectedScope(scope: SelectedScope): ValidationResult {
   return buildResult(reasons);
 }
 
-function validateLedgerRef(ref: EvidenceLedgerRef, reasons: string[], prefix: string): void {
+function validateLedgerRef(ref: unknown, reasons: string[], prefix: string): void {
   if (!isRecord(ref)) {
     reasons.push(`${prefix}.ledgerRef invalid`);
     return;
@@ -870,15 +880,12 @@ function validateEvidenceEdgeEndpoint(endpoint: unknown, reasons: string[], pref
 }
 
 function validateEvidenceEdge(edge: unknown, reasons: string[]): void {
+  const allowed: readonly unknown[] = EVIDENCE_EDGE_KINDS;
   if (!isRecord(edge)) {
     reasons.push("atom.edge invalid");
     return;
   }
-  pushIf(
-    reasons,
-    !EVIDENCE_EDGE_KINDS.includes(edge.kind as EvidenceEdgeKind),
-    "atom.edge.kind invalid",
-  );
+  pushIf(reasons, !allowed.includes(edge.kind), "atom.edge.kind invalid");
   pushIf(
     reasons,
     edge.confidence !== "resolved" && edge.confidence !== "heuristic",
@@ -898,15 +905,12 @@ function isScoreInUnitInterval(score: unknown): score is number {
 }
 
 function validateEvidenceProvenance(provenance: unknown, reasons: string[]): void {
+  const allowed: readonly unknown[] = EVIDENCE_ATOM_PROVENANCE_KINDS;
   if (!isRecord(provenance)) {
     reasons.push("atom.provenance missing");
     return;
   }
-  pushIf(
-    reasons,
-    !EVIDENCE_ATOM_PROVENANCE_KINDS.includes(provenance.kind as EvidenceAtomProvenanceKind),
-    "atom.provenance.kind invalid",
-  );
+  pushIf(reasons, !allowed.includes(provenance.kind), "atom.provenance.kind invalid");
   pushIf(reasons, !isNonEmptyTrimmed(provenance.tool), "atom.provenance.tool empty");
   pushIf(
     reasons,
@@ -915,10 +919,7 @@ function validateEvidenceProvenance(provenance: unknown, reasons: string[]): voi
   );
 }
 
-function validateEvidenceAtomMetrics(
-  metrics: EvidenceAtomMetrics | undefined,
-  reasons: string[],
-): void {
+function validateEvidenceAtomMetrics(metrics: unknown, reasons: string[]): void {
   if (metrics === undefined) {
     return;
   }
@@ -950,6 +951,11 @@ function validateEvidenceAtomMetrics(
 }
 
 export function validateEvidenceAtom(atom: EvidenceAtom): ValidationResult {
+  return validateEvidenceAtomInput(atom);
+}
+
+function validateEvidenceAtomInput(atom: unknown): ValidationResult {
+  const allowedRedactionStates: readonly unknown[] = EVIDENCE_ATOM_REDACTION_STATES;
   const reasons: string[] = [];
   if (!isRecord(atom)) {
     return buildResult(["atom invalid"]);
@@ -976,7 +982,7 @@ export function validateEvidenceAtom(atom: EvidenceAtom): ValidationResult {
   validateEvidenceAtomMetrics(atom.metrics, reasons);
   pushIf(
     reasons,
-    !EVIDENCE_ATOM_REDACTION_STATES.includes(atom.redactionState),
+    !allowedRedactionStates.includes(atom.redactionState),
     "atom.redactionState invalid",
   );
   pushIf(reasons, !isFiniteNonNegativeInteger(atom.emittedAtMs), "atom.emittedAtMs invalid");
@@ -1056,7 +1062,7 @@ function validatePackExcerptAtom(
   if (atomScopePath !== entryScopePath) {
     reasons.push("pack.files excerpt atom.scopePath does not match parent scopePath");
   }
-  appendPrefixedReasons(validateEvidenceAtom(atom as EvidenceAtom), "pack.files excerpt ", reasons);
+  appendPrefixedReasons(validateEvidenceAtomInput(atom), "pack.files excerpt ", reasons);
   if (
     typeof atomScopePath === "string" &&
     !isPathWithinSelectedScope(scope, scopePaths, atomScopePath)
@@ -1105,7 +1111,8 @@ function collectPackAtomIds(files: unknown): ReadonlySet<string> {
   if (!Array.isArray(files)) {
     return atomIds;
   }
-  for (const entry of files as readonly unknown[]) {
+  const entries: readonly unknown[] = files;
+  for (const entry of entries) {
     if (!isRecord(entry) || !Array.isArray(entry.excerpts)) {
       continue;
     }
@@ -1134,7 +1141,8 @@ function validatePackFiles(
     reasons.push("pack.files invalid");
     return { actualExcerptBytes, selectedPaths: selectedPaths.paths };
   }
-  for (const entry of files as readonly unknown[]) {
+  const entries: readonly unknown[] = files;
+  for (const entry of entries) {
     validatePackFileEntry(entry, scope, selectedPaths, scopePaths, reasons);
     if (!isRecord(entry)) {
       continue;
@@ -1494,7 +1502,8 @@ function isCandidateSignal(value: unknown): value is CandidateSignal {
 }
 
 function isContextCoverageReason(value: unknown): value is ContextCoverageTruncationReason {
-  return CONTEXT_COVERAGE_TRUNCATION_REASONS.includes(value as ContextCoverageTruncationReason);
+  const allowed: readonly unknown[] = CONTEXT_COVERAGE_TRUNCATION_REASONS;
+  return allowed.includes(value);
 }
 
 function validatePackDiagnostics(diagnostics: ContextPackDiagnostics, reasons: string[]): void {

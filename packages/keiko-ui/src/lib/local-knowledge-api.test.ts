@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  type ClientDiagnosticMeta,
+} from "./client-diagnostics";
 import { LOCAL_KNOWLEDGE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
 import {
   resolveKnowledgePodModelUsePolicy,
@@ -167,7 +172,107 @@ function manualRefreshSummary(
 describe("local knowledge BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    resetClientDiagnosticWriter();
   });
+
+  it.each([
+    ["capsules", fetchCapsules],
+    ["capsuleSets", fetchCapsuleSets],
+  ])("refuses malformed %s catalog responses at the actual GET boundary", async (_field, read) => {
+    for (const body of [null, "malformed", {}, { [_field]: [null] }]) {
+      const request = vi.fn().mockResolvedValue(jsonResponse(body));
+      vi.stubGlobal("fetch", request);
+      await expect(read()).rejects.toMatchObject({
+        code: "CONTRACT_VALIDATION_FAILED",
+        status: 502,
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it.each([
+    ["capsules", fetchCapsules],
+    ["capsuleSets", fetchCapsuleSets],
+  ])("refuses a body-free 204 %s catalog with response correlation", async (_field, read) => {
+    const request = vi.fn().mockResolvedValue(
+      new Response(null, {
+        status: 204,
+        headers: { "X-Keiko-Correlation-Id": "catalog-204-before-control" },
+      }),
+    );
+    vi.stubGlobal("fetch", request);
+    await expect(read()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+      correlationId: "catalog-204-before-control",
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["capsules", fetchCapsules],
+    ["capsuleSets", fetchCapsuleSets],
+  ])(
+    "returns admitted %s current and legacy references without normalizing the response",
+    async (field, read) => {
+      const { modelUsePolicy: _omitted, ...legacy } = podSummary(
+        "catalog-id" as KnowledgeCapsuleId,
+        "pod",
+        "Catalog pod",
+      );
+      for (const summary of [
+        podSummary("catalog-id" as KnowledgeCapsuleId, "pod", "Catalog pod"),
+        legacy,
+        { ...legacy, modelUsePolicy: undefined },
+      ]) {
+        const input = { [field]: [], knowledgePods: [summary] };
+        const response = jsonResponse(input);
+        vi.spyOn(response, "json").mockResolvedValue(input);
+        const request = vi.fn().mockResolvedValue(response);
+        vi.stubGlobal("fetch", request);
+        const result = await read({ includeKnowledgePods: true });
+        expect(result).toBe(input);
+        expect(result.knowledgePods?.[0]).toBe(summary);
+        expect(request).toHaveBeenCalledTimes(1);
+      }
+    },
+  );
+
+  it.each([fetchCapsules, fetchCapsuleSets])(
+    "reports each actual catalog request refusal once with correlation",
+    async (read) => {
+      for (const phase of ["malformed200", "empty204", "same-code502", "transport", "json-parse"]) {
+        const diagnostics: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+        setClientDiagnosticWriter((message, meta) => diagnostics.push({ message, meta }));
+        const response =
+          phase === "empty204"
+            ? new Response(null, { status: 204 })
+            : jsonResponse(
+                phase === "same-code502"
+                  ? { error: { code: "CONTRACT_VALIDATION_FAILED", message: "private-response" } }
+                  : null,
+                phase === "same-code502" ? 502 : 200,
+              );
+        if (phase === "json-parse")
+          vi.spyOn(response, "json").mockRejectedValue(new SyntaxError("private-response"));
+        const request = vi.fn((_path: RequestInfo | URL, _init?: RequestInit): Promise<Response> =>
+          phase === "transport"
+            ? Promise.reject(new TypeError("private-response"))
+            : Promise.resolve(response),
+        );
+        vi.stubGlobal("fetch", request);
+        await expect(read()).rejects.toBeInstanceOf(Error);
+        expect(request).toHaveBeenCalledTimes(1);
+        expect(diagnostics).toHaveLength(1);
+        const sentCorrelation = new Headers(request.mock.calls[0]?.[1]?.headers).get(
+          "X-Keiko-Correlation-Id",
+        );
+        expect(diagnostics[0]?.meta?.correlationId).toBe(sentCorrelation);
+        expect(JSON.stringify(diagnostics)).not.toContain("private-response");
+        expect(JSON.stringify(diagnostics)).not.toContain("/api/");
+      }
+    },
+  );
 
   it("uses redacted Knowledge Pod summary names for UI list labels when available", () => {
     const capsuleId = "cap-private" as KnowledgeCapsuleId;
@@ -689,8 +794,7 @@ describe("local knowledge BFF boundary helpers", () => {
   it("normalizes legacy Knowledge Pod summaries with omitted model-use policy", () => {
     const capsuleId = "cap-legacy-policy" as KnowledgeCapsuleId;
     const legacySummary = podSummary(capsuleId, "pod", "Legacy policy");
-    const legacyWire = { ...legacySummary } as Record<string, unknown>;
-    delete legacyWire.modelUsePolicy;
+    const { modelUsePolicy: _omitted, ...legacyWire } = legacySummary;
 
     const capsule = capsulesForKnowledgePodUi({
       capsules: [
@@ -702,7 +806,7 @@ describe("local knowledge BFF boundary helpers", () => {
           updatedAt: 1,
         },
       ],
-      knowledgePods: [legacyWire as unknown as KnowledgePodSummary],
+      knowledgePods: [legacyWire],
     })[0];
 
     expect(capsule?.knowledgePod).toMatchObject({
@@ -845,9 +949,13 @@ describe("local knowledge BFF boundary helpers", () => {
   });
 
   it("encodes capsule list, composition, metadata, connection, indexing, and repair routes", async () => {
-    const fetchMock = vi.fn(() =>
-      Promise.resolve(jsonResponse({ ok: true, capsule: { id: "cap 1" } })),
-    );
+    const fetchMock = vi.fn((path: RequestInfo | URL) => {
+      if (typeof path === "string" && path.startsWith("/api/local-knowledge/capsule-sets"))
+        return Promise.resolve(jsonResponse({ capsuleSets: [] }));
+      if (typeof path === "string" && /^\/api\/local-knowledge\/capsules(?:\?|$)/u.test(path))
+        return Promise.resolve(jsonResponse({ capsules: [] }));
+      return Promise.resolve(jsonResponse({ ok: true, capsule: { id: "cap 1" } }));
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const capsuleId = "cap 1" as KnowledgeCapsuleId;

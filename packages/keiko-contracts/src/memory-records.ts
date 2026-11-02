@@ -42,7 +42,7 @@ import type {
 export interface MemoryModelIdentity {
   readonly provider: string;
   readonly modelId: string;
-  readonly modelRevision?: string;
+  readonly modelRevision?: string | undefined;
 }
 
 // ─── Provenance ───────────────────────────────────────────────────────────────
@@ -58,18 +58,18 @@ export interface MemoryModelIdentity {
 // are deliberate so a reader is forced to disambiguate.
 export interface MemoryProvenance {
   readonly sourceKind: MemorySourceKind;
-  readonly sourceConversationId?: ConversationId;
-  readonly sourceWorkflowRunId?: WorkflowRunId;
-  readonly sourceEvidenceManifestId?: EvidenceManifestId;
+  readonly sourceConversationId?: ConversationId | undefined;
+  readonly sourceWorkflowRunId?: WorkflowRunId | undefined;
+  readonly sourceEvidenceManifestId?: EvidenceManifestId | undefined;
   readonly capturedAt: number;
-  readonly modelIdentity?: MemoryModelIdentity;
+  readonly modelIdentity?: MemoryModelIdentity | undefined;
   readonly confidence: number;
   readonly sensitivity: MemorySensitivity;
   // Optional free-form rationale the reviewer or capture heuristic wrote when proposing
   // the memory. Bounded length is enforced at the validator boundary; the type only pins
   // the shape. Carrying rationale here (and NOT inside `body`) keeps the searchable body
   // free of meta-commentary.
-  readonly captureRationale?: string;
+  readonly captureRationale?: string | undefined;
 }
 
 // ─── Validity interval ────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ export interface MemoryProvenance {
 // `staleReason` field on the record (e.g. when its source workflow was rejected).
 export interface MemoryValidityInterval {
   readonly validFrom: number;
-  readonly validUntil?: number;
+  readonly validUntil?: number | undefined;
 }
 
 // ─── Retention hint ───────────────────────────────────────────────────────────
@@ -89,8 +89,8 @@ export interface MemoryValidityInterval {
 // require a contract version bump.
 export interface MemoryRetentionHint {
   readonly policyKey: string;
-  readonly retainUntil?: number;
-  readonly notes?: string;
+  readonly retainUntil?: number | undefined;
+  readonly notes?: string | undefined;
 }
 
 // ─── Memory record ────────────────────────────────────────────────────────────
@@ -113,7 +113,7 @@ export interface MemoryRecord {
   // memory types (e.g. tabular preference grids) can be added without widening `body`.
   // Kept narrow at this layer: only "string-list" and "key-value" are pinned; richer
   // payloads are deferred to a future contract version.
-  readonly payload?: MemoryStructuredPayload;
+  readonly payload?: MemoryStructuredPayload | undefined;
   readonly provenance: MemoryProvenance;
   readonly validity: MemoryValidityInterval;
   readonly status: MemoryStatus;
@@ -122,8 +122,8 @@ export interface MemoryRecord {
   // conflict resolution). Independent of the validity interval: a memory can still be
   // within `validFrom..validUntil` and yet be flagged stale (e.g. its source workflow was
   // later marked invalid). Retrieval is expected to deprioritize stale records.
-  readonly staleReason?: string;
-  readonly retentionHint?: MemoryRetentionHint;
+  readonly staleReason?: string | undefined;
+  readonly retentionHint?: MemoryRetentionHint | undefined;
   // Optional human-readable tags. The validator rejects NUL bytes and empty entries.
   readonly tags: readonly string[];
   readonly createdAt: number;
@@ -182,6 +182,6 @@ export interface MemoryEdge {
   readonly toMemoryId: MemoryId;
   readonly kind: MemoryEdgeKind;
   readonly createdAt: number;
-  readonly confidence?: number;
-  readonly provenanceSummary?: string;
+  readonly confidence?: number | undefined;
+  readonly provenanceSummary?: string | undefined;
 }

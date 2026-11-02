@@ -4,7 +4,14 @@
 // All routes hit the same-origin BFF; the CSRF header is added for mutating methods.
 
 import { ApiError } from "./api";
-import { bffFetchJson } from "./http";
+import { bffFetchJson, bffRequestErrorKind, newClientCorrelationId } from "./http";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { clientErrorEvidence } from "./client-error-evidence";
+import { correlationIdOf } from "./client-error-summary";
+import {
+  parseLocalKnowledgeCapsulesResponse,
+  parseLocalKnowledgeCapsuleSetsResponse,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import type {
   CapsuleSetId,
   CapsuleContextualRetrievalSettings,
@@ -21,9 +28,10 @@ import type {
   IndexingJobRecord,
   LocalKnowledgeCapsuleListEntry as CapsuleListEntryBase,
   LocalKnowledgeCapsuleSetListEntry as CapsuleSetListEntryBase,
-  LocalKnowledgeCapsuleSetsResponse as CapsuleSetsResponse,
-  LocalKnowledgeCapsulesResponse as CapsulesResponse,
+  LocalKnowledgeCapsuleSetsCatalogResponse as CapsuleSetsResponse,
+  LocalKnowledgeCapsulesCatalogResponse as CapsulesResponse,
   KnowledgePodSummary,
+  KnowledgePodCatalogSummary,
   KnowledgePodSetReadinessReasonCode,
   KnowledgePodModelUseOperation,
   KnowledgePodModelUsePolicy,
@@ -107,17 +115,19 @@ export type CapsuleSetListEntry = CapsuleSetListEntryBase & {
 export type { CapsuleSetsResponse, CapsulesResponse };
 
 function summariesById(
-  summaries: readonly KnowledgePodSummary[] | undefined,
+  summaries: readonly KnowledgePodCatalogSummary[] | undefined,
   kind: KnowledgePodSummary["kind"],
-): ReadonlyMap<string, KnowledgePodSummary> {
-  const byId = new Map<string, KnowledgePodSummary>();
+): ReadonlyMap<string, KnowledgePodCatalogSummary> {
+  const byId = new Map<string, KnowledgePodCatalogSummary>();
   for (const summary of summaries ?? []) {
     if (summary.kind === kind) byId.set(String(summary.id), summary);
   }
   return byId;
 }
 
-function guidanceForSummary(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+function guidanceForSummary(
+  summary: KnowledgePodCatalogSummary,
+): KnowledgePodUiGuidance | undefined {
   const status = summary.retrieval.embeddingCompatibilityStatus;
   const scope = summary.kind;
   if (status === "incompatible") return { code: "embedding-mismatch", scope, tone: "danger" };
@@ -133,11 +143,11 @@ function isHtmlManualSourceKind(sourceKind: string): boolean {
   return sourceKind === "html-manual-local" || sourceKind === "html-manual-http";
 }
 
-function isHtmlManualSummary(summary: KnowledgePodSummary): boolean {
+function isHtmlManualSummary(summary: KnowledgePodCatalogSummary): boolean {
   return summary.sourceKinds.length > 0 && summary.sourceKinds.every(isHtmlManualSourceKind);
 }
 
-function manualDetail(summary: KnowledgePodSummary): KnowledgePodUiManualDetail {
+function manualDetail(summary: KnowledgePodCatalogSummary): KnowledgePodUiManualDetail {
   return {
     documentCount: summary.counts.documentCount,
     chunkCount: summary.counts.chunkCount,
@@ -146,7 +156,9 @@ function manualDetail(summary: KnowledgePodSummary): KnowledgePodUiManualDetail 
   };
 }
 
-function guidanceForHtmlManual(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+function guidanceForHtmlManual(
+  summary: KnowledgePodCatalogSummary,
+): KnowledgePodUiGuidance | undefined {
   if (!isHtmlManualSummary(summary)) return undefined;
   const scope = summary.kind;
   const manual = manualDetail(summary);
@@ -173,7 +185,9 @@ function hasSetReadinessReason(
   return candidates.some((candidate) => reasonCodes.has(candidate));
 }
 
-function guidanceForSetReadiness(summary: KnowledgePodSummary): KnowledgePodUiGuidance | undefined {
+function guidanceForSetReadiness(
+  summary: KnowledgePodCatalogSummary,
+): KnowledgePodUiGuidance | undefined {
   if (summary.kind !== "pod-set" || summary.setReadiness === undefined) return undefined;
 
   const reasonCodes = new Set(summary.setReadiness.reasonCodes);
@@ -220,7 +234,7 @@ function deniedModelOperations(
 }
 
 function isSealedPolicy(
-  summary: KnowledgePodSummary,
+  summary: KnowledgePodCatalogSummary,
   modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
 ): boolean {
   return (
@@ -234,7 +248,7 @@ function isSealedPolicy(
 // keiko-local-knowledge/src/knowledge-pods.ts compute. Keep this in sync with those if either
 // changes (see AUDIT-E1819-003).
 function guidanceForPolicy(
-  summary: KnowledgePodSummary,
+  summary: KnowledgePodCatalogSummary,
   modelUsePolicy: KnowledgePodSummary["modelUsePolicy"],
 ): KnowledgePodUiGuidance | undefined {
   const operations = modelUsePolicy.operations;
@@ -249,15 +263,13 @@ function guidanceForPolicy(
 }
 
 function resolvedModelUsePolicyForSummary(
-  summary: KnowledgePodSummary,
+  summary: KnowledgePodCatalogSummary,
 ): KnowledgePodSummary["modelUsePolicy"] {
-  const raw = (summary as { readonly modelUsePolicy?: KnowledgePodSummary["modelUsePolicy"] })
-    .modelUsePolicy;
-  return raw ?? resolveKnowledgePodModelUsePolicy(undefined);
+  return summary.modelUsePolicy ?? resolveKnowledgePodModelUsePolicy(undefined);
 }
 
 function metadataForSummary(
-  summary: KnowledgePodSummary | undefined,
+  summary: KnowledgePodCatalogSummary | undefined,
 ): KnowledgePodUiMetadata | undefined {
   if (summary === undefined) return undefined;
   const modelUsePolicy = resolvedModelUsePolicyForSummary(summary);
@@ -309,7 +321,7 @@ export function capsuleSetsForKnowledgePodUi(
   }));
 }
 
-function metadataProperty(summary: KnowledgePodSummary | undefined): {
+function metadataProperty(summary: KnowledgePodCatalogSummary | undefined): {
   readonly knowledgePod?: KnowledgePodUiMetadata;
 } {
   const knowledgePod = metadataForSummary(summary);
@@ -381,16 +393,84 @@ function listPath(path: string, options: LocalKnowledgeListOptions | undefined):
   return options?.includeKnowledgePods === true ? `${path}?includeKnowledgePods=1` : path;
 }
 
+function reportCatalogRequestFailure(
+  list: "capsules" | "capsule-sets",
+  error: unknown,
+  correlationId: string,
+  validationFailed: boolean,
+): void {
+  reportClientDiagnostic(`Keiko knowledge catalog load failed (list=${list}).`, {
+    correlationId: correlationIdOf(error) ?? correlationId,
+    errorKind: validationFailed ? "validation-failed" : bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+  });
+}
+
 export async function fetchCapsules(
   options?: LocalKnowledgeListOptions,
 ): Promise<CapsulesResponse> {
-  return fetchJson<CapsulesResponse>(listPath("/api/local-knowledge/capsules", options));
+  const correlationId = newClientCorrelationId();
+  let validationFailed = false;
+  let emptyBodyRefused = false;
+  try {
+    return await bffFetchJson<CapsulesResponse>(
+      listPath("/api/local-knowledge/capsules", options),
+      undefined,
+      {
+        correlationId,
+        parseFailureMessage: friendlyParseFailureMessage,
+        validator: (_path, value) => {
+          const result = parseLocalKnowledgeCapsulesResponse(value);
+          if (result.ok) return result.value;
+          validationFailed = true;
+          emptyBodyRefused = value === undefined;
+          throw new ApiError(
+            "CONTRACT_VALIDATION_FAILED",
+            "Knowledge catalog response failed contract validation.",
+            502,
+          );
+        },
+      },
+    );
+  } catch (error) {
+    // Only this invocation's actual absent-body refusal has already been reported by shared HTTP.
+    if (!emptyBodyRefused)
+      reportCatalogRequestFailure("capsules", error, correlationId, validationFailed);
+    throw error;
+  }
 }
 
 export async function fetchCapsuleSets(
   options?: LocalKnowledgeListOptions,
 ): Promise<CapsuleSetsResponse> {
-  return fetchJson<CapsuleSetsResponse>(listPath("/api/local-knowledge/capsule-sets", options));
+  const correlationId = newClientCorrelationId();
+  let validationFailed = false;
+  let emptyBodyRefused = false;
+  try {
+    return await bffFetchJson<CapsuleSetsResponse>(
+      listPath("/api/local-knowledge/capsule-sets", options),
+      undefined,
+      {
+        correlationId,
+        parseFailureMessage: friendlyParseFailureMessage,
+        validator: (_path, value) => {
+          const result = parseLocalKnowledgeCapsuleSetsResponse(value);
+          if (result.ok) return result.value;
+          validationFailed = true;
+          emptyBodyRefused = value === undefined;
+          throw new ApiError(
+            "CONTRACT_VALIDATION_FAILED",
+            "Knowledge catalog response failed contract validation.",
+            502,
+          );
+        },
+      },
+    );
+  } catch (error) {
+    if (!emptyBodyRefused)
+      reportCatalogRequestFailure("capsule-sets", error, correlationId, validationFailed);
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

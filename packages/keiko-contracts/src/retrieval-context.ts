@@ -269,6 +269,19 @@ function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
+function matchesContextCitationTier<
+  Kind extends RetrievalContextSourceKind,
+  Tier extends RetrievalContextSourceTier,
+>(
+  sourceTier: unknown,
+  sourceKind: unknown,
+  sourceKinds: readonly Kind[],
+  tierByKind: Readonly<Record<Kind, Tier>>,
+): boolean {
+  const admittedKind = sourceKinds.find((kind) => kind === sourceKind);
+  return admittedKind !== undefined && sourceTier === tierByKind[admittedKind];
+}
+
 // Shared citation-shape validator, parameterized by which PROFILE's sourceKind set and tier
 // authority apply — the neutral profile supplies RETRIEVAL_CONTEXT_SOURCE_KINDS /
 // RETRIEVAL_CONTEXT_SOURCE_TIER_BY_KIND, the coding profile supplies its own narrower kind set and
@@ -291,15 +304,18 @@ export function isValidContextCitation<
 ): value is RetrievalContextCitation<Kind, Tier> {
   if (!isRecord(value)) return false;
   if ("text" in value || "excerpt" in value || "content" in value) return false;
-  const sourceKindValid = sourceKinds.includes(value.sourceKind as Kind);
+  const allowedKinds: readonly unknown[] = sourceKinds;
+  const allowedTiers: readonly unknown[] = RETRIEVAL_CONTEXT_SOURCE_TIERS;
+  const sourceKindValid = allowedKinds.includes(value.sourceKind);
   return [
     sourceKindValid,
-    RETRIEVAL_CONTEXT_SOURCE_TIERS.includes(value.sourceTier as RetrievalContextSourceTier),
+    allowedTiers.includes(value.sourceTier),
     // The two membership checks above are independent, so a citation could claim a sourceKind whose
     // canonical tier is `retained-memory` while carrying `first-party-workspace` — misrepresenting
     // its own trust tier to any consumer that reads sourceTier instead of re-deriving it. The tier
     // is not an independent field: the caller's own `tierByKind` is its only authority.
-    !sourceKindValid || value.sourceTier === tierByKind[value.sourceKind as Kind],
+    !sourceKindValid ||
+      matchesContextCitationTier(value.sourceTier, value.sourceKind, sourceKinds, tierByKind),
     typeof value.id === "string",
     typeof value.score === "number",
     typeof value.rank === "number",
@@ -310,9 +326,8 @@ export function isValidContextCitation<
 }
 
 export function isRetrievalContextPurpose(value: unknown): value is RetrievalPurpose {
-  return (
-    typeof value === "string" && RETRIEVAL_CONTEXT_PURPOSES.includes(value as RetrievalPurpose)
-  );
+  const allowed: readonly string[] = RETRIEVAL_CONTEXT_PURPOSES;
+  return typeof value === "string" && allowed.includes(value);
 }
 
 export function tierForRetrievalContextSource(
