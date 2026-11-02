@@ -110441,7 +110441,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2348",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2349",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

@@ -1382,7 +1382,8 @@ cancellation, or still uncited, leaves the complete answer standing
   them apart, so the tool never calls it "new". A report that is incomplete (`baseline.complete`
   false) cannot prove a requirement untraced, and the scope of the report is the scope of the
   comparison. `jira.report` runs on Jira Data Center; on Cloud the `change-queries` view remains.
-  Edits are proposed as a backlog draft.
+  Proposing the edits as one backlog draft needs edit items in `jira.draft`, which creates issues only
+  today; that part is tracked in #4196.
 - _Quality._ The existing requirement-quality checks run over every unit and add the closed code
   `missing-acceptance-criteria`; the codes reach the tool result and the footer.
 - _Evidence on the log._ `knowledge.requirements.read` records each call (view, closed disposition

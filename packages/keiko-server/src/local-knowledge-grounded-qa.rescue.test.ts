@@ -7,6 +7,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { FinishReason } from "@oscharko-dev/keiko-contracts";
 import type {
   ChunkId,
   CapsuleSetId,
@@ -852,7 +853,7 @@ function weakSupportReply(
     readonly judgeVerdict: "supported" | "unsupported" | undefined;
     readonly repair: AskOptions["repair"];
   },
-): { readonly content: string; readonly finishReason: "stop" | "length" } {
+): { readonly content: string; readonly finishReason: FinishReason } {
   if (kind === "query-transform")
     return { content: '{"queries":["release"]}', finishReason: "stop" };
   if (kind === "judge")
@@ -865,7 +866,7 @@ interface AskOptions {
   // Receives the system prompt of every answer-generation call.
   readonly systemPrompts?: string[];
   // What the model answers a citation repair with; absent repeats the first answer.
-  readonly repair?: { readonly content: string; readonly finishReason: "stop" | "length" };
+  readonly repair?: { readonly content: string; readonly finishReason: FinishReason };
 }
 
 function lexicalSupports(answer: GroundedAnswer): readonly ("weak" | undefined)[] {
