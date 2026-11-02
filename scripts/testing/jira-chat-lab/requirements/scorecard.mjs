@@ -21,6 +21,7 @@ import { SCENARIOS } from "./catalog.mjs";
 import { ensureLicenseWindow } from "./license-window.mjs";
 import { registerLane } from "./lab-lanes.mjs";
 import { scenarioVerdict } from "./coverage.mjs";
+import { scorecardMarkdown } from "./scorecard-markdown.mjs";
 import { JOURNEY_IDS, runJourneys } from "./journeys.mjs";
 import { PROBES } from "./probes.mjs";
 
@@ -56,26 +57,8 @@ async function runChecks(scenario, journeys) {
   }
   if (journeys[scenario.id] !== undefined)
     checks.push({ layer: "journey", ...journeys[scenario.id] });
-  const { status, covered, uncovered } = scenarioVerdict(scenario, checks);
-  return { ...scenario, status, covered, uncovered, checks };
-}
-
-function markdown(report) {
-  const icon = { green: "🟢", red: "🔴", partial: "🟠", "probe-only": "🟡", unchecked: "⚪" };
-  const rows = report.results.map(
-    (result) =>
-      `| ${result.id} | ${icon[result.status]} ${result.status} | ${result.requirement} | #${result.issue} | ${result.title} | ${[...result.checks.map((check) => `${check.layer}: ${check.detail}`), ...(result.uncovered.length > 0 && result.checks.length > 0 ? [`uncovered: ${result.uncovered.join(", ")}`] : [])].join("<br>") || "no check yet"} |`,
-  );
-  return [
-    `# Jira requirements scorecard — ${report.startedAt}${report.model ? ` — ${report.model}` : ""}`,
-    "",
-    `Green ${report.counts.green} · red ${report.counts.red} · partial ${report.counts.partial} · probe-only ${report.counts["probe-only"]} · unchecked ${report.counts.unchecked} of ${report.results.length}`,
-    "",
-    "| Scenario | Status | Requirement | Issue | Title | Evidence |",
-    "| --- | --- | --- | --- | --- | --- |",
-    ...rows,
-    "",
-  ].join("\n");
+  const { status, covered, uncovered, deferred } = scenarioVerdict(scenario, checks);
+  return { ...scenario, status, covered, uncovered, deferred, checks };
 }
 
 registerLane(directory);
@@ -109,7 +92,7 @@ const output = join(session.directory, "requirements-scorecard");
 mkdirSync(output, { recursive: true, mode: 0o700 });
 const stamp = report.startedAt.replaceAll(":", "-");
 writeFileSync(join(output, `${stamp}.json`), JSON.stringify(report, null, 2), { mode: 0o600 });
-writeFileSync(join(output, "latest.md"), markdown(report), { mode: 0o600 });
+writeFileSync(join(output, "latest.md"), scorecardMarkdown(report), { mode: 0o600 });
 const trend = join(output, "trend.tsv");
 const TREND_HEADER = "startedAt\tmodel\tgreen\tred\tpartial\tprobeOnly\tunchecked\n";
 // An older trend file has no partial column; keep it aside instead of mixing column layouts.
@@ -122,4 +105,4 @@ appendFileSync(
   trend,
   `${report.startedAt}\t${report.model ?? "-"}\t${green}\t${red}\t${report.counts.partial}\t${report.counts["probe-only"]}\t${unchecked}\n`,
 );
-console.log(markdown(report));
+console.log(scorecardMarkdown(report));

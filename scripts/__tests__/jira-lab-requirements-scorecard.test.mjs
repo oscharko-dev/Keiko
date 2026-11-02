@@ -1,7 +1,11 @@
 import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 import { SCENARIOS } from "../testing/jira-chat-lab/requirements/catalog.mjs";
-import { scenarioVerdict } from "../testing/jira-chat-lab/requirements/coverage.mjs";
+import {
+  deferredObligations,
+  scenarioVerdict,
+} from "../testing/jira-chat-lab/requirements/coverage.mjs";
+import { scorecardMarkdown } from "../testing/jira-chat-lab/requirements/scorecard-markdown.mjs";
 import { STRUCTURE_RULES, buildCorpus } from "../testing/jira-chat-lab/requirements/corpus.mjs";
 import {
   gradeCatalogRefresh,
@@ -1060,12 +1064,74 @@ describe("S17 human obligations of #4175", () => {
   });
 });
 
+describe("a deferred obligation (owner decision 2026-11-02, #4196)", () => {
+  const s14 = () => scenario("S14");
+  const green = {
+    layer: "journey",
+    status: "green",
+    covers: ["changes-detected", "affected-issues"],
+  };
+
+  it("is declared only for S14, with its issue number", () => {
+    const withDeferred = SCENARIOS.filter((entry) => entry.deferred !== undefined);
+    expect(withDeferred.map((entry) => entry.id)).toEqual(["S14"]);
+    expect(s14().deferred).toEqual([{ obligation: "edits-proposed-as-draft", issue: 4196 }]);
+    expect(s14().obligations).not.toContain("edits-proposed-as-draft");
+  });
+
+  it("keeps S14 green without crediting the deferred obligation as covered", () => {
+    const verdict = scenarioVerdict(s14(), [green]);
+    expect(verdict.status).toBe("green");
+    expect(verdict.covered).not.toContain("edits-proposed-as-draft");
+    expect(verdict.deferred).toEqual([{ obligation: "edits-proposed-as-draft", issue: 4196 }]);
+  });
+
+  it("refuses a check that claims the deferred obligation", () => {
+    expect(() =>
+      scenarioVerdict(s14(), [{ ...green, covers: [...green.covers, "edits-proposed-as-draft"] }]),
+    ).toThrow(/unknown obligations edits-proposed-as-draft/);
+  });
+
+  it("names #4196 in the scorecard text of a green S14, and in every other state", () => {
+    for (const checks of [[green], []]) {
+      const verdict = scenarioVerdict(s14(), checks);
+      const report = {
+        startedAt: "2026-11-02T00:00:00Z",
+        model: null,
+        counts: { green: 0, red: 0, partial: 0, "probe-only": 0, unchecked: 0 },
+        results: [{ ...s14(), ...verdict, checks }],
+      };
+      const row = scorecardMarkdown(report)
+        .split("\n")
+        .find((line) => line.startsWith("| S14 "));
+      expect(row).toContain("deferred to #4196: edits-proposed-as-draft");
+    }
+  });
+
+  it("shows no deferral for a scenario that defers nothing", () => {
+    expect(scenario("S15").deferred).toBeUndefined();
+    expect(scenarioVerdict(scenario("S15"), []).deferred).toEqual([]);
+  });
+
+  it.each([
+    [{ obligation: "x" }],
+    [{ obligation: "x", issue: 0 }],
+    [{ obligation: "x", issue: "4196" }],
+    [{ obligation: "x", issue: 4196.5 }],
+    [{ issue: 4196 }],
+    [{ obligation: "changes-detected", issue: 4196 }],
+  ])("may be deferred only with a name and an issue number: %j", (entry) => {
+    expect(() =>
+      deferredObligations({ id: "S99", obligations: ["changes-detected"], deferred: [entry] }),
+    ).toThrow(TypeError);
+  });
+});
+
 describe("catalog obligations of the human criteria that no journey exercises yet", () => {
   // #4179: S14 proposes edits as a backlog draft, S15 attaches findings to epic drafts, S16 uses the
   // format its template defines. Their journeys check only the answer-level parts, so a journey that
   // covers every other obligation leaves the scenario partial, never green.
   it.each([
-    ["S14", ["changes-detected", "affected-issues"], ["edits-proposed-as-draft"]],
     [
       "S15",
       ["vague-wording-findings", "missing-acceptance-findings"],

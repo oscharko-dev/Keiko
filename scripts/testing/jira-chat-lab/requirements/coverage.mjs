@@ -3,6 +3,41 @@
 // by a passing check and an end-to-end journey took part.
 
 /**
+ * The obligations a scenario defers to a follow-up issue. An obligation may be deferred only with
+ * the number of that issue, and never while the scenario still lists it as its own.
+ */
+export function deferredObligations(scenario) {
+  const deferred = scenario.deferred ?? [];
+  for (const entry of deferred) {
+    if (typeof entry?.obligation !== "string" || entry.obligation === "") {
+      throw new TypeError(`${scenario.id}: a deferred obligation needs a name`);
+    }
+    if (!Number.isSafeInteger(entry.issue) || entry.issue <= 0) {
+      throw new TypeError(
+        `${scenario.id}: ${entry.obligation} is deferred without an issue number`,
+      );
+    }
+    if (scenario.obligations.includes(entry.obligation)) {
+      throw new TypeError(`${scenario.id}: ${entry.obligation} is both required and deferred`);
+    }
+  }
+  return deferred.map(({ obligation, issue }) => ({ obligation, issue }));
+}
+
+/** The scorecard's evidence cell lines of one scenario result: checks, uncovered, deferred. */
+export function evidenceLines(result) {
+  return [
+    ...result.checks.map((check) => `${check.layer}: ${check.detail}`),
+    ...(result.uncovered.length > 0 && result.checks.length > 0
+      ? [`uncovered: ${result.uncovered.join(", ")}`]
+      : []),
+    ...(result.deferred ?? []).map(
+      ({ obligation, issue }) => `deferred to #${issue}: ${obligation}`,
+    ),
+  ];
+}
+
+/**
  * Grades one scenario from its checks.
  *  - unchecked:  no check exists
  *  - red:        any check failed
@@ -13,8 +48,9 @@
  * A check lists the obligations it verifies in `covers`; unknown names fail closed.
  */
 export function scenarioVerdict(scenario, checks) {
+  const deferred = deferredObligations(scenario);
   if (checks.length === 0) {
-    return { status: "unchecked", covered: [], uncovered: [...scenario.obligations] };
+    return { status: "unchecked", covered: [], uncovered: [...scenario.obligations], deferred };
   }
   const known = new Set(scenario.obligations);
   const unknown = checks.flatMap((check) =>
@@ -27,7 +63,7 @@ export function scenarioVerdict(scenario, checks) {
     checks.filter((check) => check.status === "green").flatMap((check) => check.covers ?? []),
   );
   const uncovered = scenario.obligations.filter((name) => !covered.has(name));
-  const base = { covered: [...covered].sort(), uncovered };
+  const base = { covered: [...covered].sort(), uncovered, deferred };
   if (checks.some((check) => check.status === "red")) return { status: "red", ...base };
   if (!checks.some((check) => check.layer === "journey")) return { status: "probe-only", ...base };
   return { status: uncovered.length === 0 ? "green" : "partial", ...base };

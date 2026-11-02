@@ -1,6 +1,8 @@
 // Scenario catalog of epic #4173. The text is the acceptance contract; checks only grow stricter.
 // `obligations` lists what a scenario must demonstrate. A check names the obligations it covers
 // (`covers`), and a scenario is green only when every obligation is covered by a passing check.
+// `deferred` names an obligation the owner moved to a follow-up issue: it is not an obligation of the
+// scenario until then, and it is printed with its issue number wherever the scenario is reported.
 export const SCENARIOS = Object.freeze([
   {
     id: "S01",
@@ -103,7 +105,11 @@ export const SCENARIOS = Object.freeze([
     requirement: "beyond",
     issue: 4179,
     title: "Change impact of a new document version",
-    obligations: ["changes-detected", "affected-issues", "edits-proposed-as-draft"],
+    obligations: ["changes-detected", "affected-issues"],
+    // Owner decision 2026-11-02: proposing the edits as a backlog draft needs the draft edit items of
+    // a later merge. The scorecard states the deferral next to the scenario, so its green never
+    // reads as covering the obligation.
+    deferred: [{ obligation: "edits-proposed-as-draft", issue: 4196 }],
   },
   {
     id: "S15",
