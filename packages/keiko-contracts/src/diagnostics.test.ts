@@ -1495,6 +1495,7 @@ describe("client module and markdown identity boundaries", () => {
     "widget-locale",
     "browser-approval",
     "update-startup",
+    "command-runner",
   ])("accepts the closed module %s", (moduleLoadFailure) => {
     expect(isClientDiagnosticIngestRequest({ ...base, moduleLoadFailure })).toBe(true);
   });
