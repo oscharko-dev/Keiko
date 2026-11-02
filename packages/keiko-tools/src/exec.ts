@@ -522,7 +522,7 @@ function waitForWindowsSlot(
   signal: AbortSignal,
   maxWaitMs: number,
 ): Promise<WindowsTerminationReservation | undefined> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     if (signal.aborted) {
       resolve(undefined);
       return;
@@ -542,11 +542,12 @@ function waitForWindowsSlot(
       admit: (reserve) => {
         leave();
         // A throwing admission rejects this wait, never the release that is draining the queue.
-        resolve(
-          new Promise((admitted) => {
-            admitted(reserve());
-          }),
-        );
+        try {
+          resolve(reserve());
+        } catch (error) {
+          if (error instanceof Error) reject(error);
+          else reject(new Error("Windows termination capacity admission failed"));
+        }
       },
     };
     waiters.push(waiter);
