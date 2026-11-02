@@ -213,3 +213,40 @@
     transition: none;
   }
 }
+/* Forced Colors drops backgrounds and shadows, so the switch states itself with system colors: an
+   outlined empty track with a text-colored knob at the start is off; a filled Highlight track with
+   a HighlightText knob at the end is on. The mode segments mark the selected one the same way. */
+@media (forced-colors: active) {
+  .cmpSwitch {
+    box-sizing: border-box;
+    border: 1px solid ButtonText;
+    background: Canvas;
+  }
+  .cmpSwitch::after {
+    top: 1px;
+    left: 1px;
+    background: ButtonText;
+    box-shadow: none;
+  }
+  .cmpRow[aria-checked="true"] .cmpSwitch {
+    border-color: Highlight;
+    background: Highlight;
+  }
+  .cmpRow[aria-checked="true"] .cmpSwitch::after {
+    background: HighlightText;
+  }
+  .cmpRow:disabled .cmpSwitch {
+    border-color: GrayText;
+  }
+  .cmpRow:disabled .cmpSwitch::after {
+    background: GrayText;
+  }
+  .cmpMode {
+    border: 1px solid transparent;
+  }
+  .cmpMode[aria-checked="true"] {
+    border-color: Highlight;
+    color: HighlightText;
+    background: Highlight;
+  }
+}
