@@ -312,6 +312,21 @@ it("leaves unsupported descriptor keys, class combinations and ordering as exact
   );
 });
 
+it("escapes characters JSON leaves raw before it embeds a registry value in source", () => {
+  const base = catalog.typedRegistry.operations[0];
+  const values = ["</script>", "line\u2028separator", "paragraph\u2029separator"];
+  const fields = {
+    unusual: { type: "string", dataClass: "safe-platform-class", required: false, values },
+  };
+  const registry = { ...catalog.typedRegistry, operations: [{ ...base, fields }] };
+  const source = runtimeOperationsModule(registry);
+  for (const raw of ["</script>", "\u2028", "\u2029"]) expect(source).not.toContain(raw);
+  expect(source).toContain("\\u003C/script\\u003E");
+  withGeneratedRuntime(({ identity }) => {
+    expect(identity.ACTIVITY_LOG_OPERATION_REGISTRY[0].fields.unusual.values).toEqual(values);
+  }, registry);
+});
+
 it.each([{ values: ["404"] }, { values: ["provider:model"] }])(
   "constructs supported enum field vocabularies using their existing grammar: $values",
   ({ values }) => {
