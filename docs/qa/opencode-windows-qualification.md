@@ -984,10 +984,20 @@ helper-source approval pin and D12 reference evidence were later released withou
 `keiko gateway-service` now owns install, repair, status and removal (ADR-0043 D19). On the Windows
 11 host, without administrator rights: the status command reports `absent` (exit 10) and a malformed
 pin is refused (exit 27) for status and install; the install rules test passes, and the supervisor
-builds under the production flags. Install, repair, uninstall, digest refusal and the service
-configuration run only on the disposable runner, through `test-windows-gateway-scm.ps1`; that run is
-their first execution and is pending. This host has not run them, and no customer installation is
-qualified.
+builds under the production flags.
+
+[Windows Server 2025 run 41499437534](https://github.com/oscharko-dev/Keiko/actions/runs/41499437534)
+on head `86b594c20` installed through the product path in an elevated context. A foreign pin was
+refused without creating the service; install and repeated install succeeded; status reported ready,
+image mismatch against another pin, and stopped; repair recovered a stopped service; the service
+configuration, image digest and protected folder rules matched. The installed broker then admitted
+and refused WFP requests, the adapter refused a mismatched image, and the confined root reached the
+permitted port with the hostile port refused (10013). Uninstall, repeated uninstall and status after
+removal passed their step's checks; the step prints no separate line for them.
+
+Not exercised: the UAC relaunch (the runner is already elevated), repair during a live run, removal
+with a remaining durable deny guard, and a real package or model-backed task. This host has not run
+the elevated path, and no customer installation is qualified.
 
 Known limits: uninstall refuses while a durable deny guard remains; a launch refused for a missing
 or stale service does not yet tell the Workbench user to run `repair`; `keiko uninstall` does not
