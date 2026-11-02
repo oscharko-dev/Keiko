@@ -1872,11 +1872,34 @@ function fieldDescriptorArguments(name, descriptor) {
     : [descriptor.required];
 }
 
+// The generated module embeds registry values as JSON text. JSON.stringify leaves "<", ">" and the
+// line and paragraph separators unescaped; escape them too, so no registry value can change the
+// meaning of the generated source.
+const UNSAFE_CODE_CHARACTERS = Object.freeze({
+  "<": String.raw`\u003C`,
+  ">": String.raw`\u003E`,
+  "\b": String.raw`\b`,
+  "\f": String.raw`\f`,
+  "\n": String.raw`\n`,
+  "\r": String.raw`\r`,
+  "\t": String.raw`\t`,
+  "\0": String.raw`\0`,
+  "\u2028": String.raw`\u2028`,
+  "\u2029": String.raw`\u2029`,
+});
+
+function codeLiteral(value) {
+  return JSON.stringify(value).replace(
+    /[<>\b\f\n\r\t\0\u2028\u2029]/gu,
+    (character) => UNSAFE_CODE_CHARACTERS[character],
+  );
+}
+
 function renderedFieldDescriptor(descriptor) {
   for (const [name, construct] of Object.entries(GLOBAL_FIELD_CONSTRUCTORS)) {
     if (equalDescriptor(descriptor, construct())) return `${name}()`;
   }
-  if (!isBooleanValue(descriptor.required)) return JSON.stringify(descriptor);
+  if (!isBooleanValue(descriptor.required)) return codeLiteral(descriptor);
   for (const [name, construct] of Object.entries(FIELD_CONSTRUCTORS)) {
     const args = fieldDescriptorArguments(name, descriptor);
     if (!validFieldConstructorArguments(name, args)) continue;
@@ -1884,18 +1907,18 @@ function renderedFieldDescriptor(descriptor) {
       const callee = Object.hasOwn(BOUNDED_FIELD_CONSTRUCTORS, name)
         ? `fieldContracts.${name}`
         : name;
-      return `${callee}(${args.map((argument) => JSON.stringify(argument)).join(", ")})`;
+      return `${callee}(${args.map((argument) => codeLiteral(argument)).join(", ")})`;
     }
   }
-  return JSON.stringify(descriptor);
+  return codeLiteral(descriptor);
 }
 
 function renderedFieldRun(run) {
   const [[, call]] = run;
   const match = FIELD_RUN_CALL.exec(call);
   if (match === null || run.length < FIELD_RUN_MIN)
-    return run.map(([name, value]) => `${JSON.stringify(name)}: ${value}`);
-  const names = run.map(([name]) => JSON.stringify(name)).join(", ");
+    return run.map(([name, value]) => `${codeLiteral(name)}: ${value}`);
+  const names = run.map(([name]) => codeLiteral(name)).join(", ");
   return [`...${FIELD_RUN_CONSTRUCTORS[match[1]]}(${match[2]}, [${names}])`];
 }
 
@@ -2026,12 +2049,12 @@ function renderedRuntimeFields(operation, fields) {
 function renderedRuntimeOperation(operation, sharedFields) {
   return `{${Object.entries(runtimeOperationContract(operation))
     .map(([key, value]) => {
-      let rendered = JSON.stringify(value);
+      let rendered = codeLiteral(value);
       if (key === "fields") {
         const fields = renderedRuntimeFields(operation, value);
         rendered = sharedFields.has(fields) ? `${sharedFields.get(fields)}()` : fields;
       }
-      return `${JSON.stringify(key)}: ${rendered}`;
+      return `${codeLiteral(key)}: ${rendered}`;
     })
     .join(",")}}`;
 }
