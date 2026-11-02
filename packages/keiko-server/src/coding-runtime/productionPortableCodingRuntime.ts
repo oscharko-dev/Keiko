@@ -188,6 +188,19 @@ export function releasedWindowsGatewayHelperPin(runtime: {
     : undefined;
 }
 
+/** Asks the attested helper for the broker state; null when it did not run to an exit (#4068). */
+export function readWindowsGatewayServiceStatus(
+  helperPath: string,
+  helperSha256: string,
+): number | null {
+  return spawnSync(helperPath, ["--gateway-service-status", helperSha256], {
+    stdio: "ignore",
+    windowsHide: true,
+    shell: false,
+    timeout: 2_000,
+  }).status;
+}
+
 /** The helper `keiko gateway-service` may install: only the bytes a launch would accept (#4068). */
 export function discoverReleasedWindowsGatewayHelper(
   input: PortableOpenCodeDiscoveryInput,

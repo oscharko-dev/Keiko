@@ -71,6 +71,7 @@ import { createPackagedSecureWorkspaceTextReadPort } from "./packagedSecureWorks
 import type { ProductionCodingRuntimeResolverInput } from "./productionCodingRuntimeResolver.js";
 import {
   discoverQualifiedPortableOpenCode,
+  readWindowsGatewayServiceStatus,
   releasedWindowsGatewayHelperPin,
 } from "./productionPortableCodingRuntime.js";
 import {
@@ -439,6 +440,7 @@ function windowsGatewayServiceFacts(
           helperPath: portable.nativeHelperPath,
           helperSha256,
           activityLog: input.activityLog ?? processServerLogSink(),
+          runStatus: readWindowsGatewayServiceStatus,
         }),
       };
 }

@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   activityLogEvent,
@@ -59,7 +58,6 @@ const UNAVAILABLE_REASONS: Readonly<
 };
 
 const PROBE_TTL_MS = 3_000;
-const PROBE_TIMEOUT_MS = 2_000;
 
 export interface WindowsGatewayServiceProbe {
   /** undefined when the broker is ready; otherwise the closed reason the Workbench names. */
@@ -71,30 +69,20 @@ export interface WindowsGatewayServiceProbeInput {
   readonly helperSha256: string;
   readonly activityLog: ServerLogSink;
   /** Returns the helper's exit code, or null when it did not run to an exit. */
-  readonly runStatus?: (helperPath: string, helperSha256: string) => number | null;
+  readonly runStatus: (helperPath: string, helperSha256: string) => number | null;
   readonly now?: () => number;
-}
-
-function defaultRunStatus(helperPath: string, helperSha256: string): number | null {
-  return spawnSync(helperPath, ["--gateway-service-status", helperSha256], {
-    stdio: "ignore",
-    windowsHide: true,
-    shell: false,
-    timeout: PROBE_TIMEOUT_MS,
-  }).status;
 }
 
 export function createWindowsGatewayServiceProbe(
   input: WindowsGatewayServiceProbeInput,
 ): WindowsGatewayServiceProbe {
-  const runStatus = input.runStatus ?? defaultRunStatus;
   const now = input.now ?? Date.now;
   let cached: { readonly state: WindowsGatewayServiceState; readonly at: number } | undefined;
 
   const read = (): WindowsGatewayServiceState => {
     const at = now();
     if (cached !== undefined && at - cached.at < PROBE_TTL_MS) return cached.state;
-    const exitCode = runStatus(input.helperPath, input.helperSha256);
+    const exitCode = input.runStatus(input.helperPath, input.helperSha256);
     const state = (exitCode === null ? undefined : NATIVE_STATES[exitCode]) ?? "state-unknown";
     // A status poll must not write a line per read: only a change is evidence.
     if (cached?.state !== state) {

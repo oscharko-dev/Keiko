@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "72d1706e6d5c065414f427c8da5fc414d5b4d75ccd956dc9118bfa0fcfef4f8a",
+    "catalogDigest": "6f2acb4ebbddae33bea08dfdcecebba95b9d145fa610cd8cd8b0ce0c8cfbf949",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8710,9 +8710,9 @@
         "failureClasses": ["coding-runtime-dev-lane"],
         "proofIds": ["coding-runtime.dev-lane.activated.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:87",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:88",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:521"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:523"
         ]
       },
       {
@@ -8762,9 +8762,9 @@
         "failureClasses": ["coding-runtime-dev-lane"],
         "proofIds": ["coding-runtime.dev-lane.refused.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:134",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:135",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:540"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:542"
         ]
       },
       {
@@ -15537,9 +15537,9 @@
         "failureClasses": ["windows-gateway-service"],
         "proofIds": ["coding-runtime.windows-gateway-service.real-sink-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:16",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:15",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:102"
+          "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:90"
         ]
       },
       {
@@ -32348,9 +32348,9 @@
         "failureClasses": ["portable-native-helper-binding"],
         "proofIds": ["portable.runtime.native-helper-bound.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:226",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:239",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:261"
+          "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:274"
         ]
       },
       {
@@ -106525,13 +106525,13 @@
     {
       "op": "coding-runtime.dev-lane.activated",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:90",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:91",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.dev-lane.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:137",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts:138",
       "package": "keiko-server"
     },
     {
@@ -107244,7 +107244,7 @@
     {
       "op": "coding-runtime.windows-gateway-service",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:19",
+      "site": "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.ts:18",
       "package": "keiko-server"
     },
     {
@@ -107369,7 +107369,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:216",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:229",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -108699,7 +108699,7 @@
     {
       "op": "portable.runtime.native-helper-bound",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:229",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:242",
       "package": "keiko-server"
     },
     {
