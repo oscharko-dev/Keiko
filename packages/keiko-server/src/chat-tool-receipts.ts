@@ -43,14 +43,16 @@ function draftReceipt(value: unknown): ChatToolDraftReceipt | undefined {
   };
 }
 
-/** The compact result's exact key ranges, each as one receipt that names its whole range. */
+/**
+ * The compact result's exact key ranges, each token as one receipt that names its whole range. An
+ * entry packs several comma-separated tokens; a token that is neither a key nor a range is dropped.
+ */
 function rangeReceipts(state: "created" | "existing", ranges: unknown): ChatToolDraftReceipt[] {
   if (!Array.isArray(ranges)) return [];
-  return ranges
-    .filter(
-      (range): range is string =>
-        typeof range === "string" && (ISSUE_KEY.test(range) || ISSUE_KEY_RANGE.test(range)),
-    )
+  return (ranges as unknown[])
+    .filter((entry): entry is string => typeof entry === "string")
+    .flatMap((entry) => entry.split(","))
+    .filter((token) => ISSUE_KEY.test(token) || ISSUE_KEY_RANGE.test(token))
     .map((issueKey) => ({ state, issueKey }));
 }
 

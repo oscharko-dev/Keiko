@@ -12,6 +12,7 @@ import type {
   CatalogJsonObject,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { catalogJsonBytes, validateToolResultEnvelope } from "@oscharko-dev/keiko-tool-catalog";
+import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js";
 import { JIRA_REJECTED_GUIDANCE, jiraAttemptToolResult } from "./jiraMutationResult.js";
 
@@ -78,6 +79,27 @@ it("accepts the compact result of a draft with thousands of created items", () =
       createdRanges: ["REQ-1..REQ-4990", "REQ-4995..REQ-5004"],
       existingRanges: [],
       pendingCount: 0,
+    },
+    0,
+  );
+  expect(validateToolResultEnvelope(compact, binding)).toMatchObject({ status: "completed" });
+});
+
+it("accepts the packed key lists of a draft whose created keys are scattered, and the count of unlisted keys", () => {
+  const binding = { descriptor: draftDescriptor(), projectionDigest: PROJECTION };
+  const entry = Array.from({ length: 60 }, (_, index) => `REQ-${String(index * 2 + 1001)}`)
+    .join(",")
+    .slice(0, KEY_RANGE_ENTRY_CHARS);
+  const compact = completedDraft(
+    90_000,
+    {
+      compact: true,
+      omittedRowCount: 0,
+      createdRanges: Array.from({ length: 350 }, () => entry),
+      existingRanges: [],
+      pendingCount: 0,
+      rangesTruncated: true,
+      unlistedKeyCount: 30_000,
     },
     0,
   );

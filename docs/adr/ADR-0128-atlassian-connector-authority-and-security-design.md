@@ -799,11 +799,16 @@ never an item, key or ref.
 `JIRA_DRAFT_RESULT_ROWS_MAX`), which bounds the report, not the draft. A draft whose item rows fit
 150 KiB is reported item by item as before. A larger one is reported compactly (`compact: true`):
 one row for each item that needs attention (failed, uncertain, skipped, pending), the created and
-the reconciled issues as exact key ranges (`createdRanges`, `existingRanges`, such as
-`SYN-3..SYN-940`, one entry for every consecutive run), and the counts for everything else; rows
-that did not fit are counted in `omittedRowCount`, and `rangesTruncated` is set if the ranges
-themselves did not fit. The model-history receipts and the partial answer of an ended turn read
-the same ranges, so created keys are never lost to compaction. Barriers are unchanged: an `unknown` or
+the reconciled issues as exact key ranges (`createdRanges`, `existingRanges`; a consecutive run is
+one range such as `SYN-3..SYN-940`, and several keys or ranges are packed comma-separated into one
+entry of at most 600 characters, so keys that are not consecutive, because other people create issues
+while the draft runs, cannot exhaust the catalog's 1,000-entry array ceiling before the byte bound),
+and the counts for everything else; rows that did not fit are counted in `omittedRowCount`. The key
+lists share the bytes the rows leave (about 250 KiB in all), so tens of thousands of scattered keys
+are still listed exactly. Only when even that does not fit, `rangesTruncated` is set with
+`unlistedKeyCount` (the keys not listed) and a fixed guidance sentence tells the model to state the
+counts and name only the keys shown. The model-history receipts and the partial answer of an ended
+turn read each token of the same ranges, so created keys are never lost to compaction. Barriers are unchanged: an `unknown` or
 `succeeded-unconfirmed` record or an in-flight write blocks every further write of the turn, batch
 or not, so an uncertain item still stops the draft (#2953).
 

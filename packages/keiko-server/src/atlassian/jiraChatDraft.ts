@@ -38,7 +38,7 @@ import type {
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { jiraDraftProblemGuidance } from "./jiraChatDraftArguments.js";
-import { compactIssueKeys } from "./jiraDraftKeyRanges.js";
+import { listIssueKeys } from "./jiraDraftKeyRanges.js";
 import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import {
   logTrace,
@@ -483,6 +483,13 @@ export const JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE =
   "Correct the fields named in each failed item's fieldErrors or messages, then send the corrected draft once: " +
   "issues already in Jira are recognised, so nothing is created twice. " +
   "Tell the user in plain language which issues were created and which item Jira refused and why.";
+/**
+ * Created or found issues whose keys the bounded result could not list: the model states the counts
+ * and only the keys shown, never a guessed one.
+ */
+export const JIRA_DRAFT_UNLISTED_GUIDANCE =
+  "Not every created or found key fits this result: createdRanges and existingRanges list the keys that fit and unlistedKeyCount counts the rest. " +
+  "Tell the user in plain language how many issues were created (createdCount) and name only the keys shown; never guess a key. Do not show this message.";
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
 function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
   if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
@@ -505,7 +512,9 @@ function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
 // reported item by item; a larger one is reported compactly (#4178): the items that need attention
 // as rows, everything created or found as exact key ranges, and the rest by count.
 const RESULT_ROWS_BYTES = 150 * 1024;
-const RESULT_RANGES_BYTES = 40 * 1024;
+// What the result's key lists may use: the catalog's byte bound less the counts, guidance and
+// envelope, and less the rows already reported. A list that still does not fit says so (below).
+const RESULT_DATA_BYTES = 250 * 1024;
 interface ProjectedRows {
   readonly rows: readonly CatalogJsonObject[];
   readonly compact: boolean;
@@ -537,29 +546,26 @@ function projectRows(baseUrl: string, items: readonly DraftItemResult[]): Projec
   const rows = withinBudget(attention, RESULT_ROWS_BYTES, JIRA_DRAFT_RESULT_ROWS_MAX);
   return { rows, compact: true, omitted: attention.length - rows.length };
 }
-function keyRanges(
-  items: readonly DraftItemResult[],
-  state: "created" | "existing",
-): { readonly ranges: readonly string[]; readonly truncated: boolean } {
-  const keys = items.flatMap((item) =>
+function keysOf(items: readonly DraftItemResult[], state: "created" | "existing"): string[] {
+  return items.flatMap((item) =>
     item.state === state && item.issueKey !== undefined ? [item.issueKey] : [],
   );
-  const all = compactIssueKeys(keys);
-  const ranges = withinBudget(all, RESULT_RANGES_BYTES, JIRA_DRAFT_RESULT_ROWS_MAX);
-  return { ranges, truncated: ranges.length < all.length };
 }
 function compactData(
   items: readonly DraftItemResult[],
   projected: ProjectedRows,
 ): CatalogJsonObject {
-  const created = keyRanges(items, "created");
-  const existing = keyRanges(items, "existing");
+  const listed = listIssueKeys(
+    { created: keysOf(items, "created"), existing: keysOf(items, "existing") },
+    RESULT_DATA_BYTES - jsonBytes(projected.rows),
+    JIRA_DRAFT_RESULT_ROWS_MAX,
+  );
   return {
     compact: true,
     omittedRowCount: projected.omitted,
-    createdRanges: [...created.ranges],
-    existingRanges: [...existing.ranges],
-    ...(created.truncated || existing.truncated ? { rangesTruncated: true } : {}),
+    createdRanges: listed.created.map((entry) => entry.text),
+    existingRanges: listed.existing.map((entry) => entry.text),
+    ...(listed.unlisted === 0 ? {} : { rangesTruncated: true, unlistedKeyCount: listed.unlisted }),
   };
 }
 function draftResult(baseUrl: string, items: readonly DraftItemResult[]): ManagedMcpToolResult {
@@ -575,14 +581,17 @@ function draftResult(baseUrl: string, items: readonly DraftItemResult[]): Manage
   // already existing or deselected — so a rerun that finds everything in place writes nothing and
   // is still no error. An item that did not land (failed, uncertain, skipped, pending) makes it one.
   const complete = items.every((item) => SETTLED_STATES.has(item.state));
-  const guidance = draftGuidance(items);
   const projected = projectRows(baseUrl, items);
+  const compact = projected.compact ? compactData(items, projected) : {};
+  const guidance =
+    draftGuidance(items) ??
+    (compact.rangesTruncated === true ? JIRA_DRAFT_UNLISTED_GUIDANCE : undefined);
   return {
     data: {
       outcome,
       ...(guidance === undefined ? {} : { guidance }),
       items: [...projected.rows],
-      ...(projected.compact ? compactData(items, projected) : {}),
+      ...compact,
       ...counts,
     },
     ...(complete ? {} : { isError: true }),

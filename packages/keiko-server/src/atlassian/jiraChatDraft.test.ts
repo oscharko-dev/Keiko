@@ -21,6 +21,9 @@ import {
   type SyntheticJira,
 } from "../../../../tests/support/jira-synthetic-draft-remote.js";
 import { createGatewayAtlassianHttpBodyPort } from "./httpPort.js";
+import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { chatToolTurnPartialAnswer } from "../chat-tool-turn-ending.js";
+import { jiraMutationToolId } from "./jiraMutationToolId.js";
 import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
 import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
 import type { TraceSession } from "../requirement-trace.js";
@@ -554,6 +557,80 @@ describe("executeJiraChatDraft (#4178)", () => {
       // Within the tool catalog's 256 KiB result ceiling, however many items were created.
       expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(262_144);
     });
+
+    // Review (#4175, #4178): other people create issues while a draft runs, so the keys it created
+    // are not consecutive. Every created key must survive the bounded result, one range per entry
+    // would cut the list at the catalog's 1,000-entry array ceiling.
+    const keysOf = (entries: unknown): string[] =>
+      (entries as string[]).flatMap((entry) =>
+        entry.split(",").flatMap((token) => {
+          const [from, to] = token.split("..");
+          if (to === undefined) return [token];
+          const project = (from ?? "").slice(0, (from ?? "").lastIndexOf("-"));
+          const first = Number((from ?? "").slice(project.length + 1));
+          const last = Number(to.slice(project.length + 1));
+          return Array.from(
+            { length: last - first + 1 },
+            (_, i) => `${project}-${String(first + i)}`,
+          );
+        }),
+      );
+    const interleaved = (jira: SyntheticJira): SyntheticJira => ({
+      ...jira,
+      fetch: vi.fn<typeof fetch>(async (input, init) => {
+        const response = await jira.fetch(input, init);
+        const created = (init?.method ?? "GET") === "POST" && response.status === 201;
+        // An unrelated issue of someone else takes the next key after every create of the draft.
+        if (
+          created &&
+          new URL(input instanceof Request ? input.url : String(input)).pathname.endsWith("/issue")
+        )
+          jira.issues.push({
+            key: `SYN-${String(jira.issues.length + 1)}`,
+            id: String(10001 + jira.issues.length),
+            fields: { summary: "Unrelated" },
+          });
+        return response;
+      }),
+    });
+    it.each([1000, 1001, 1500])(
+      "lists every key of a %i-item draft whose keys are not consecutive",
+      async (count) => {
+        const jira = syntheticJira();
+        const flat = {
+          items: Array.from({ length: count }, (_, index) => item(`flat${String(index)}`)),
+        } as unknown as CatalogJsonObject;
+        const result = await executeJiraChatDraft(execution(interleaved(jira), flat));
+        const labelled = jira.issues
+          .filter((issue) => issue.fields.labels !== undefined)
+          .map((issue) => issue.key);
+        expect(labelled).toHaveLength(count);
+        expect(result.data).toMatchObject({ outcome: "succeeded", createdCount: count });
+        expect(result.data.rangesTruncated).toBeUndefined();
+        const rows = (result.data.items as { state: string; issueKey?: string }[]).flatMap((row) =>
+          row.state === "created" && row.issueKey !== undefined ? [row.issueKey] : [],
+        );
+        const listed = [...rows, ...keysOf(result.data.createdRanges ?? [])];
+        expect(listed.sort()).toEqual([...labelled].sort());
+        expect(Buffer.byteLength(JSON.stringify(result.data))).toBeLessThan(262_144);
+        // The stopped-turn answer reads the very keys the result lists, the last one included.
+        const answer = chatToolTurnPartialAnswer(
+          [
+            {
+              call: { id: "draft", name: "jira_draft", arguments: {} },
+              mutationOutcome: "succeeded",
+              result: {
+                status: "completed",
+                data: result.data,
+                toolRef: { canonicalId: jiraMutationToolId("jira.draft"), contractVersion: 3 },
+              },
+            } as unknown as ChatToolExchange,
+          ],
+          "deadline",
+        );
+        expect(answer).toContain(`${labelled.at(-1) ?? "none"} (created)`);
+      },
+    );
 
     it("creates zero new issues when the executed 1,200-item draft is run again", async () => {
       const jira = syntheticJira();

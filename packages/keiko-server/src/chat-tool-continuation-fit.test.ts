@@ -101,6 +101,39 @@ describe("fitToolContinuation", () => {
     });
   });
 
+  it("keeps every key of a compact draft whose created keys are scattered", () => {
+    const draft = exchange(
+      5,
+      {
+        status: "completed",
+        toolRef: { canonicalId: "keiko.jira.draft", contractVersion: 3 },
+        data: {
+          outcome: "succeeded",
+          compact: true,
+          items: [],
+          createdRanges: ["SYN-1,SYN-3,SYN-5..SYN-9", "SYN-2001"],
+          summary: BULK,
+        },
+      },
+      "succeeded",
+    );
+    const newest = EXCHANGES.at(-1);
+    if (newest === undefined) throw new Error("Missing newest exchange");
+    const exchanges = [draft, newest];
+    const fitted = fitToolContinuation(continuationOf(exchanges), exchanges, 0);
+    expect(JSON.parse(fitted.messages[1]?.content ?? "")).toEqual({
+      elided: true,
+      status: "completed",
+      mutationOutcome: "succeeded",
+      items: [
+        { state: "created", issueKey: "SYN-1" },
+        { state: "created", issueKey: "SYN-3" },
+        { state: "created", issueKey: "SYN-5..SYN-9" },
+        { state: "created", issueKey: "SYN-2001" },
+      ],
+    });
+  });
+
   it("never compacts a read's draft-shaped items into write receipts", () => {
     const read = exchange(5, {
       status: "completed",

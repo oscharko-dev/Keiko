@@ -59,6 +59,26 @@ describe("draft receipts of a large draft (#4178)", () => {
     expect(chatToolDraftReceipts(exchange({ items }))).toHaveLength(1200);
   });
 
+  it("reads every token of a packed entry, whatever the keys' gaps", () => {
+    const receipts = chatToolDraftReceipts(
+      exchange({
+        compact: true,
+        createdRanges: ["SYN-1,SYN-3,SYN-5..SYN-9,not a key,SYN-2001", "SYN-2003"],
+        existingRanges: ["SYN-10,SYN-12"],
+        items: [],
+      }),
+    );
+    expect(receipts).toEqual([
+      { state: "created", issueKey: "SYN-1" },
+      { state: "created", issueKey: "SYN-3" },
+      { state: "created", issueKey: "SYN-5..SYN-9" },
+      { state: "created", issueKey: "SYN-2001" },
+      { state: "created", issueKey: "SYN-2003" },
+      { state: "existing", issueKey: "SYN-10" },
+      { state: "existing", issueKey: "SYN-12" },
+    ]);
+  });
+
   it("names the exact created and found key ranges of a compact result, and its pending rows", () => {
     const receipts = chatToolDraftReceipts(
       exchange({

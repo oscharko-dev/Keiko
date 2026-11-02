@@ -27,6 +27,7 @@ import {
   JIRA_METADATA_MAX_UPDATES,
   JIRA_REQUIREMENT_IDS_MAX,
 } from "@oscharko-dev/keiko-connectors";
+import { KEY_RANGE_ENTRY_CHARS } from "./jiraDraftKeyRanges.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
 
 const ISSUE_KEY = { ...text(128), minLength: 1 };
@@ -235,8 +236,13 @@ export const JIRA_VIOLATIONS_SCHEMA = {
   ),
 };
 const DRAFT_COUNT = { type: "integer", minimum: 0 };
-// Exact key ranges such as `PROJ-3..PROJ-40`: what a large draft created or found, in a few bytes.
-const KEY_RANGES = { type: "array", maxItems: JIRA_DRAFT_RESULT_ROWS_MAX, items: text(600) };
+// Exact key ranges such as `PROJ-3..PROJ-40`, packed comma-separated several to an entry: what a
+// large draft created or found, in a few bytes, however scattered the keys.
+const KEY_RANGES = {
+  type: "array",
+  maxItems: JIRA_DRAFT_RESULT_ROWS_MAX,
+  items: text(KEY_RANGE_ENTRY_CHARS),
+};
 const DRAFT_RESULT_SCHEMA = object(
   {
     outcome: { type: "string", enum: JIRA_MUTATION_RESULT_STATES },
@@ -287,6 +293,8 @@ const DRAFT_RESULT_SCHEMA = object(
     createdRanges: KEY_RANGES,
     existingRanges: KEY_RANGES,
     rangesTruncated: { type: "boolean" },
+    // Created or found keys the lists could not carry; present only with rangesTruncated.
+    unlistedKeyCount: DRAFT_COUNT,
   },
   ["outcome"],
 );
