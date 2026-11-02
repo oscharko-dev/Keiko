@@ -116,6 +116,9 @@ const JIRA_REPORT_OPERATION = defineActivityLogOperation({
     hierarchyRejectedFieldCount: { type: "integer", dataClass: "count", required: false },
     byteCount: { type: "integer", dataClass: "count", required: false },
     invalidArgumentCount: { type: "integer", dataClass: "count", required: false },
+    sectionItemCount: { type: "integer", dataClass: "count", required: false },
+    sectionItemTotal: { type: "integer", dataClass: "count", required: false },
+    sectionByteFitted: { type: "boolean", dataClass: "closed-enum", required: false },
     ruleIds: {
       type: "string-array",
       dataClass: "opaque-id",
@@ -190,6 +193,9 @@ interface JiraReportLine {
   readonly hierarchyRejectedFieldCount?: number;
   readonly byteCount?: number;
   readonly invalidArgumentCount?: number;
+  readonly sectionItemCount?: number;
+  readonly sectionItemTotal?: number;
+  readonly sectionByteFitted?: boolean;
   readonly ruleIds?: readonly string[];
 }
 
@@ -220,6 +226,21 @@ function invalidArguments(input: JiraReportActivity): Pick<JiraReportLine, "inva
     : { invalidArgumentCount: input.invalidArgumentCount };
 }
 
+// A section page: how many entries it returned of how many, and whether the byte fit cut it short
+// of the page size (S12 of epic #4173).
+function sectionPageOf(
+  input: JiraReportActivity,
+): Pick<JiraReportLine, "sectionItemCount" | "sectionItemTotal" | "sectionByteFitted"> {
+  const page = input.sectionPage;
+  return page === undefined
+    ? {}
+    : {
+        sectionItemCount: page.itemCount,
+        sectionItemTotal: page.total,
+        sectionByteFitted: page.byteFitted,
+      };
+}
+
 function lineOf(input: JiraReportLogInput): JiraReportLine {
   if (input.phase === "export")
     return {
@@ -248,6 +269,7 @@ function lineOf(input: JiraReportLogInput): JiraReportLine {
     requirementCount: input.requirementCount,
     ...hierarchyOf(input),
     ...invalidArguments(input),
+    ...sectionPageOf(input),
     ruleIds: input.ruleIds,
   };
 }

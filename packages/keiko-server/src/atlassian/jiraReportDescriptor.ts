@@ -4,6 +4,7 @@ import {
   JIRA_REPORT_ID_PATTERN,
   JIRA_REPORT_REQUIREMENT_ID_CHARS_MAX,
   JIRA_REPORT_REQUIREMENT_ID_MAX,
+  JIRA_REPORT_RESULT_BYTES_MAX,
   JIRA_REPORT_SECTIONS,
   JIRA_REPORT_STATUSES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -77,7 +78,7 @@ export const JIRA_REPORT_DECLARATION: ManagedMcpToolDeclaration = Object.freeze(
     handlerRequirement: { id: "jira.report", contractVersion: 1 },
     bounds: {
       maxArgumentBytes: 65536,
-      maxResultBytes: 262144,
+      maxResultBytes: JIRA_REPORT_RESULT_BYTES_MAX,
       maxResultCount: 100,
       maxDurationMs: 30000,
     },

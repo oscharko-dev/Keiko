@@ -5,12 +5,14 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   JIRA_REPORT_EXPORT_FORMATS,
+  JIRA_REPORT_RESULT_BYTES_MAX,
   JIRA_REPORT_RESULT_LIST_MAX,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   CatalogJsonObject,
   CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { Buffer } from "node:buffer";
 import { jiraReportCommentText } from "./jira-report-export.js";
 import { jiraReportFigures } from "./jira-report-figures.js";
 import type { JiraReport, JiraReportProgress } from "./jira-report-types.js";
@@ -211,6 +213,29 @@ function sectionItems(report: JiraReport, section: JiraReportSection): readonly 
       return [];
   }
 }
+/** Serialized bytes the items of one section page may take; the rest is the result's envelope. */
+export const JIRA_REPORT_SECTION_PAGE_BYTES_MAX = JIRA_REPORT_RESULT_BYTES_MAX / 2;
+
+/**
+ * The entries of one section page: at most `maxResults` from `startAt`, ending before the one that
+ * would take the page past `budgetBytes` (always at least one, so paging advances). The page's
+ * `nextStartAt` then continues where the fit stopped.
+ */
+export function fittedSectionItems<Item extends CatalogJsonValue>(
+  all: readonly Item[],
+  startAt: number,
+  maxResults: number,
+  budgetBytes = JIRA_REPORT_SECTION_PAGE_BYTES_MAX,
+): readonly Item[] {
+  const candidates = all.slice(startAt, startAt + maxResults);
+  let bytes = 2;
+  for (const [index, item] of candidates.entries()) {
+    bytes += Buffer.byteLength(JSON.stringify(item)) + 1;
+    if (index > 0 && bytes > budgetBytes) return candidates.slice(0, index);
+  }
+  return candidates;
+}
+
 /** One page of a list of the finished report; `nextStartAt` is present while more remains. */
 export function jiraReportSectionPage(
   report: JiraReport,
@@ -220,7 +245,7 @@ export function jiraReportSectionPage(
 ): CatalogJsonObject {
   if (section === "comment") return { name: section, text: jiraReportCommentText(report) };
   const all = sectionItems(report, section);
-  const items = all.slice(startAt, startAt + maxResults);
+  const items = fittedSectionItems(all, startAt, maxResults);
   return {
     name: section,
     total: all.length,

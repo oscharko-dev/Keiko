@@ -248,6 +248,30 @@ describe("Jira report activity", () => {
     });
   });
 
+  it("records the size of a section page and whether its byte budget cut it (S12 of #4173)", () => {
+    const logs = createBufferedServerLogSink();
+    recordJiraReportActivity(logs, "correlation-5", {
+      phase: "section",
+      status: "complete",
+      scopeKind: "report",
+      continued: true,
+      issuesRead: 181,
+      pageCount: 4,
+      issuesWithDeviations: 0,
+      deviationCount: 0,
+      ruleIds: [],
+      requirementCount: 41,
+      sectionPage: { itemCount: 41, total: 41, byteFitted: false },
+      durationMs: 3,
+    });
+    expect(expectActivityLogProof("atlassian.jira-report.line", onlyLine(logs))).toMatchObject({
+      phase: "section",
+      sectionItemCount: 41,
+      sectionItemTotal: 41,
+      sectionByteFitted: false,
+    });
+  });
+
   it("records how many arguments a refused call named wrongly, never the names (#4181)", () => {
     const logs = createBufferedServerLogSink();
     recordJiraReportActivity(logs, "correlation-3", {

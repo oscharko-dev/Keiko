@@ -20,6 +20,7 @@ import { invalidJiraReportArguments, parseJiraReportArgs } from "./jira-report-a
 import { reportJql, stripJqlOrdering } from "./jira-report-session.js";
 import { createJiraReportStore } from "./jira-report-store.js";
 import { executeJiraReportTool } from "./jira-report-tool.js";
+import { fittedSectionItems } from "./jira-report-result.js";
 import type { JiraReport, JiraReportComplianceChecker } from "./jira-report-types.js";
 
 // ─── The independent oracle: plain loops over the seeded specification ───────────────────────────
@@ -525,10 +526,19 @@ describe("arguments", () => {
     expect(invalidJiraReportArguments(args as CatalogJsonObject)).toEqual(invalid);
   });
 
+  it("cuts a section page before the entry that would pass its byte budget", () => {
+    const items = ["a".repeat(40), "b".repeat(40), "c".repeat(40)];
+    // Each entry serializes to 42 bytes plus a separator; the brackets take 2.
+    expect(fittedSectionItems(items, 0, 100, 2 + 43 * 2)).toEqual(items.slice(0, 2));
+    expect(fittedSectionItems(items, 1, 100, 2 + 43 * 2)).toEqual(items.slice(1, 3));
+    expect(fittedSectionItems(items, 0, 100, 10)).toEqual(items.slice(0, 1));
+    expect(fittedSectionItems(items, 0, 2)).toEqual(items.slice(0, 2));
+  });
+
   it("accepts a section and paging on a new report", () => {
     expect(
       parseJiraReportArgs({ projectKey: "REP", section: "deviations", startAt: 25 }),
-    ).toMatchObject({ kind: "new", section: "deviations", startAt: 25, maxResults: 25 });
+    ).toMatchObject({ kind: "new", section: "deviations", startAt: 25, maxResults: 100 });
     expect(invalidJiraReportArguments({ projectKey: "REP", section: "epics" })).toEqual([]);
   });
 

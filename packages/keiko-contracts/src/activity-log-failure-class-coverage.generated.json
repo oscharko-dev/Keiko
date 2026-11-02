@@ -1858,6 +1858,24 @@
               "required": true
             },
             {
+              "name": "sectionByteFitted",
+              "type": "boolean",
+              "dataClass": "closed-enum",
+              "required": false
+            },
+            {
+              "name": "sectionItemCount",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
+              "name": "sectionItemTotal",
+              "type": "integer",
+              "dataClass": "count",
+              "required": false
+            },
+            {
               "name": "status",
               "type": "string",
               "dataClass": "closed-enum",

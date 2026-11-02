@@ -1370,6 +1370,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      sectionItemCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sectionItemTotal: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      sectionByteFitted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
       ruleIds: {
         type: "string-array",
         dataClass: "opaque-id",

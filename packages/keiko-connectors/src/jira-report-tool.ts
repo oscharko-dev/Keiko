@@ -69,7 +69,15 @@ export interface JiraReportActivity {
   readonly hierarchy?: JiraReport["hierarchy"];
   /** How many arguments a refused call named wrongly; never their values. */
   readonly invalidArgumentCount?: number;
+  /** The section page a call returned: its entries, the section's size, and a byte-fit cut. */
+  readonly sectionPage?: JiraReportSectionPageActivity;
   readonly durationMs: number;
+}
+
+export interface JiraReportSectionPageActivity {
+  readonly itemCount: number;
+  readonly total: number;
+  readonly byteFitted: boolean;
 }
 
 /**
@@ -207,10 +215,21 @@ function readView(session: JiraReportSession, elapsedMs: number): ManagedMcpTool
   }
   return { data };
 }
-function sectionView(session: JiraReportSession, args: JiraReportPage): ManagedMcpToolResult {
+function sectionPageActivity(
+  section: CatalogJsonObject,
+  args: JiraReportPage,
+): JiraReportSectionPageActivity | undefined {
+  const { items, total } = section;
+  if (!Array.isArray(items) || typeof total !== "number") return undefined;
+  const requested = Math.min(args.maxResults, Math.max(0, total - args.startAt));
+  return { itemCount: items.length, total, byteFitted: items.length < requested };
+}
+function sectionView(
+  session: JiraReportSession,
+  section: CatalogJsonObject | undefined,
+): ManagedMcpToolResult {
   const { report } = session;
-  if (report === undefined) return readView(session, 0);
-  const section = jiraReportSectionPage(report, args.section, args.startAt, args.maxResults);
+  if (report === undefined || section === undefined) return readView(session, 0);
   return {
     data: {
       outcome: "succeeded",
@@ -269,16 +288,25 @@ async function runSession<Context extends ManagedMcpInvocationContext>(
   const startedAt = now();
   await advance(session, context, connection, deps, now);
   // A new report that names a section returns that page once it is complete in this call.
-  const section = args.section !== "summary" && session.report !== undefined;
+  const section =
+    args.section === "summary" || session.report === undefined
+      ? undefined
+      : jiraReportSectionPage(session.report, args.section, args.startAt, args.maxResults);
+  const page = section === undefined ? undefined : sectionPageActivity(section, args);
   deps.activity?.(
-    sessionActivity(session, {
-      phase: section ? "section" : "read",
-      continued: args.kind === "continue",
-      durationMs: now() - startedAt,
-    }),
+    {
+      ...sessionActivity(session, {
+        phase: section === undefined ? "read" : "section",
+        continued: args.kind === "continue",
+        durationMs: now() - startedAt,
+      }),
+      ...(page === undefined ? {} : { sectionPage: page }),
+    },
     context,
   );
-  return section ? sectionView(session, args) : readView(session, now() - session.startedAt);
+  return section === undefined
+    ? readView(session, now() - session.startedAt)
+    : sectionView(session, section);
 }
 
 type NewArgs = Extract<JiraReportArgs, { readonly kind: "new" }>;

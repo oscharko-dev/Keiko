@@ -1614,6 +1614,7 @@ export {
   JIRA_REPORT_FAILURE_REASONS,
   JIRA_REPORT_ESTIMATE_UNITS,
   JIRA_REPORT_RESULT_LIST_MAX,
+  JIRA_REPORT_RESULT_BYTES_MAX,
   type JiraReportFailureReason,
   type JiraReportEstimateUnit,
   type JiraReportExportFormat,

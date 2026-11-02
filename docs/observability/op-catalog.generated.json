@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6b1d1629208023b38dfda4e26ce4d974eab5d30432cac3a4e5b5cd451113833a",
+    "catalogDigest": "608923c4b1c26c1d03a0ae4c553ed9aa9314142a8dbd203a9e2c9bde98ab8136",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1431,6 +1431,21 @@
             "dataClass": "count",
             "required": false
           },
+          "sectionItemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sectionItemTotal": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sectionByteFitted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
           "ruleIds": {
             "type": "string-array",
             "dataClass": "opaque-id",
@@ -1451,7 +1466,7 @@
         "proofIds": ["atlassian.jira-report.line"],
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:26",
-        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:264"]
+        "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:286"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -57453,6 +57468,24 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "sectionByteFitted",
+                  "type": "boolean",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "sectionItemCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
+                },
+                {
+                  "name": "sectionItemTotal",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": false
                 },
                 {
                   "name": "status",

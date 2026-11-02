@@ -98,6 +98,24 @@ describe("requirements listed by Keiko (requirementsFromPods, #4181)", () => {
     });
   });
 
+  it("returns a whole section in one page when the model names no maxResults (S12 of #4173)", async () => {
+    // Qwen paged a 41-row coverage list as 15 + 25 rows, never read the last row and reasoned
+    // until its output was exhausted.
+    const ids = Array.from(
+      { length: 41 },
+      (_, index) => `REQ-${String(index + 1).padStart(3, "0")}`,
+    );
+    const h = harness({ issues: syntheticProject(60) }, { requirements: () => LISTED(ids) });
+    const first = await h.run({ projectKey: "REP", requirementsFromPods: true });
+    const page = await h.run({ reportId: idOf(first), section: "requirements" });
+    expect(requirementItems(page.data).map((item) => item.id)).toEqual(ids);
+    expect(record(page.data.section)).not.toHaveProperty("nextStartAt");
+    expect(h.activity.at(-1)).toMatchObject({
+      phase: "section",
+      sectionPage: { itemCount: 41, total: 41, byteFitted: false },
+    });
+  });
+
   it("does not list requirements for a continuation of a report", async () => {
     let calls = 0;
     const h = harness(

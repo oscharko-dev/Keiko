@@ -70,6 +70,8 @@ export const JIRA_REPORT_ESTIMATE_UNITS = ["seconds", "custom-field"] as const;
 export type JiraReportEstimateUnit = (typeof JIRA_REPORT_ESTIMATE_UNITS)[number];
 /** Entries of a covering-issue or type list in a bounded result; the export carries all. */
 export const JIRA_REPORT_RESULT_LIST_MAX = 25;
+/** Serialized bytes of one jira.report tool result (the descriptor's result bound). */
+export const JIRA_REPORT_RESULT_BYTES_MAX = 262_144;
 
 /** Body of the browser download; the server returns the exact file text it produced. */
 export interface JiraReportExportResponse {

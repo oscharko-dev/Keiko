@@ -1115,6 +1115,12 @@ quotes a line states exactly what the report holds instead of reshaping JSON (la
 list beyond 300 lines says how many it left out); the full lists are paged through `section` (`statuses`,
 `epics`, `deviations`, `orphans`, `uncovered`, `requirements`) and `section: "comment"` returns the
 exact numbers-and-keys text for `jira.comment`, so posting the report stays a normal approved write.
+A section page the model does not size is the largest one (100 entries), and every page is cut
+before the entry that would take its items past half of the tool's result bound; `nextStartAt`
+continues from there. Each further page is another model round over a growing context: in lab S12
+(2026-11-02) Qwen paged a 41-row coverage list as 15 + 25 rows, never read the last row and reasoned
+until its output was exhausted. The `section` line of `atlassian.jira-report` records
+`sectionItemCount`, `sectionItemTotal` and `sectionByteFitted`.
 A new report may name the `section` (with `startAt`/`maxResults`) it wants; once the report
 completes in that call the page is returned with the `reportId`, otherwise the call reports
 `reading` as before. Every section page also carries `report` with only the report's identity:

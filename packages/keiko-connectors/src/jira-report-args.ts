@@ -13,8 +13,12 @@ import { jqlClause } from "./jira-report-jql.js";
 import { compareCodePoints } from "./jira-report-order.js";
 import type { JiraReportRequest } from "./jira-report-session.js";
 
-export const JIRA_REPORT_SECTION_PAGE_DEFAULT = 25;
 export const JIRA_REPORT_SECTION_PAGE_MAX = 100;
+// A page the model does not size is the largest one: every further page is another model round
+// over a growing context (S12 of epic #4173: Qwen paged a 41-row coverage list in 15 + 25 rows,
+// never read the last row and reasoned until its output was exhausted). The byte fit of
+// jiraReportSectionPage keeps any page within the tool result bound.
+const JIRA_REPORT_SECTION_PAGE_DEFAULT = JIRA_REPORT_SECTION_PAGE_MAX;
 export const JIRA_REPORT_PARENT_FIELDS_MAX = 4;
 
 /** The view a call asks for; a new report may name it too, so one call can read and page. */
