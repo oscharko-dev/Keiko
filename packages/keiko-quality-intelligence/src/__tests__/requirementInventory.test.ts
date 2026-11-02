@@ -418,6 +418,53 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
   });
 
   it.each([
+    ["English", "Should a connection fail, the gateway must retry the request."],
+    ["German", "Sollte die Verbindung abbrechen, muss das System den Vorgang wiederholen."],
+  ])("keeps a %s conditional obligation that names its subject", (_language, sentence) => {
+    const [entry] = detect([sentence]).entries;
+
+    expect(entry).toMatchObject({
+      idOrigin: "derived",
+      unitKind: "statement",
+      statement: sentence,
+    });
+  });
+
+  it.each([
+    ["English", "The gateway must retry the request should a connection fail."],
+    ["German", "Das System muss den Vorgang wiederholen, sollte die Verbindung abbrechen."],
+  ])("keeps the %s subject-first wording of the same obligation", (_language, sentence) => {
+    expect(detect([sentence]).entries.map((entry) => entry.statement)).toEqual([sentence]);
+  });
+
+  it.each([
+    ["English", "- Should a connection fail, the gateway must retry the request."],
+    ["German", "- Sollte die Verbindung abbrechen, muss das System den Vorgang wiederholen."],
+  ])("derives the same %s conditional obligation as a bulleted line", (_language, line) => {
+    expect(detect([line]).entries).toHaveLength(1);
+  });
+
+  it("keeps a conditional obligation under an explicit identifier", () => {
+    const [entry] = detect([
+      "### FR-9 Wiederholung",
+      "",
+      "Sollte die Verbindung abbrechen, muss das System den Vorgang wiederholen.",
+    ]).entries;
+
+    expect(entry).toMatchObject({ id: "FR-9", idOrigin: "explicit" });
+    expect(entry?.statement).toContain("Sollte die Verbindung abbrechen");
+  });
+
+  it.each([
+    "- Should be linked to the epic, falls das Ticket offen ist.",
+    "Soll vor dem Absenden, falls nötig, geprüft werden.",
+    "- Sollte dokumentiert sein, ohne Ausnahme",
+    "Should it fail, retry.",
+  ])("still drops a conditional fragment without a main clause: %s", (line) => {
+    expect(detect([line]).entries).toEqual([]);
+  });
+
+  it.each([
     "Il faut chiffrer les données au repos.",
     "È necessario cifrare i dati a riposo.",
     "- Das Portal muss die Kundennummer prüfen.",

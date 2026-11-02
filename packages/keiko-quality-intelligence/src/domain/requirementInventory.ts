@@ -797,12 +797,25 @@ function paragraphsOf(context: Context, covered: ReadonlySet<number>): readonly 
   return found;
 }
 
+/**
+ * Whether a sentence that opens with an obligation phrase is a conditional with its own subject:
+ * the opening clause names a subject and a predicate (at least two words) and the main clause after
+ * the comma states the obligation. A checklist fragment (`Muss dem Epic zugeordnet sein`) has no
+ * such main clause.
+ */
+function conditionalObligation(vocabulary: CompiledVocabulary, statement: string): boolean {
+  const match = vocabulary.conditionalLead.exec(statement);
+  const clause = match?.[1];
+  const main = match?.[2];
+  if (clause === undefined || main === undefined) return false;
+  return clause.trim().split(/\s+/u).length >= 2 && vocabulary.modal.test(main);
+}
+
 /** A sentence that states an obligation of a named subject (ISO/IEC/IEEE 29148 form). */
 function obligationStatement(vocabulary: CompiledVocabulary, statement: string): boolean {
+  if (statement.length < STATEMENT_MIN_CHARS || !vocabulary.modal.test(statement)) return false;
   return (
-    statement.length >= STATEMENT_MIN_CHARS &&
-    vocabulary.modal.test(statement) &&
-    !vocabulary.subjectlessModal.test(statement)
+    !vocabulary.subjectlessModal.test(statement) || conditionalObligation(vocabulary, statement)
   );
 }
 

@@ -27,6 +27,12 @@ export interface RequirementVocabulary {
    * fragment (`Muss dem Epic zugeordnet sein`), not a requirement statement.
    */
   readonly impersonalModalVerbs: readonly string[];
+  /**
+   * Obligation phrases that may open a conditional clause with its own subject
+   * (`Should a connection fail, the gateway must retry…`, `Sollte die Verbindung abbrechen, muss
+   * das System…`): the sentence then states its obligation in the main clause that follows.
+   */
+  readonly conditionalModalVerbs: readonly string[];
   /** Identifier prefixes that name a standard or a technology, never a requirement. */
   readonly reservedPrefixes: readonly string[];
   /** Table header names per column role. */
@@ -179,6 +185,7 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "è richiesto",
   ],
   impersonalModalVerbs: ["il faut", "è necessario", "è richiesto"],
+  conditionalModalVerbs: ["should", "sollte", "sollten"],
   reservedPrefixes: [
     "AC",
     "TC",
@@ -267,6 +274,11 @@ export interface CompiledVocabulary {
   readonly modal: RegExp;
   /** A sentence that opens with a personal obligation phrase, so it names no subject. */
   readonly subjectlessModal: RegExp;
+  /**
+   * A conditional clause opened by a conditional obligation phrase, then the main clause:
+   * group 1 is the clause (its own subject and predicate), group 2 the rest after the comma.
+   */
+  readonly conditionalLead: RegExp;
   /** A bracketed or parenthesized priority tag, e.g. `(MUSS)` or `[Must]`. */
   readonly priorityTag: RegExp;
   readonly priorityValues: ReadonlySet<string>;
@@ -319,6 +331,7 @@ export function mergeRequirementVocabulary(
     statementKeys: merge(base.statementKeys, extra.statementKeys),
     modalVerbs: merge(base.modalVerbs, extra.modalVerbs),
     impersonalModalVerbs: merge(base.impersonalModalVerbs, extra.impersonalModalVerbs),
+    conditionalModalVerbs: merge(base.conditionalModalVerbs, extra.conditionalModalVerbs),
     reservedPrefixes: merge(base.reservedPrefixes, extra.reservedPrefixes),
     tableColumns: {
       id: columns("id"),
@@ -367,6 +380,10 @@ export function compileRequirementVocabulary(
       "iu",
     ),
     subjectlessModal: new RegExp(String.raw`^(?:${personalModals(vocabulary)})(?=\s)`, "iu"),
+    conditionalLead: new RegExp(
+      String.raw`^(?:${alternation(vocabulary.conditionalModalVerbs)})\s+([^,]+),\s*(.+)$`,
+      "iu",
+    ),
     priorityTag: new RegExp(String.raw`[(\[]\s*(${values})\s*[)\]]`, "iu"),
     priorityValues: new Set(vocabulary.priorityValues.map((value) => foldTerm(value))),
     reservedPrefixes: new Set(vocabulary.reservedPrefixes.map((prefix) => prefix.toUpperCase())),

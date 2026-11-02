@@ -1276,7 +1276,10 @@ citation; a repair cut at its output limit or still uncited leaves the complete 
   29148): one that opens with a personal obligation phrase is a checklist fragment, not a
   requirement (lab S14, 2026-11-01: the Jira structure guide's "- Muss dem Epic der Anforderung
   zugeordnet sein" was reported twice as an untraced requirement). Impersonal phrases that carry
-  their own subject (`il faut`, `è necessario`) may open one; that list is vocabulary data too.
+  their own subject (`il faut`, `è necessario`) may open one, and so may a conditional clause with
+  its own subject and predicate whose main clause states the obligation (`Should a connection fail,
+  the gateway must retry the request.`, `Sollte die Verbindung abbrechen, muss das System den
+  Vorgang wiederholen.`); those lists are vocabulary data too.
   The same specification yields the same
   identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word,
   PowerPoint, PDF (one extracted line per statement line) and Excel extraction
