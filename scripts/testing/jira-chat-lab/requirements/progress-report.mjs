@@ -117,6 +117,20 @@ export function progressTruth(issues, fieldIds = {}, estimate = undefined) {
   };
 }
 
+const estimateLine = (estimate) =>
+  estimate.unit === "seconds"
+    ? `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe der ursprünglichen Schätzung (${estimate.label}) in Stunden über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`
+    : `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe des Feldes ${estimate.label} über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`;
+
+/** The S10 prompt; `estimate` names the field the instance estimates with (none: no line asked). */
+export const progressPrompt = (estimate, project = "RPT") =>
+  [
+    `Werte den Fortschritt des Jira-Projekts ${project} aus. Antworte ausschließlich mit Zeilen in genau diesen Formaten, ohne weitere Zeilen:`,
+    "ANZAHL;<Vorgangstyp>;<Status>;<Anzahl> - eine Zeile je Kombination aus Vorgangstyp und Status, die im Projekt vorkommt (alle Vorgänge des Projekts, auch Epics).",
+    "EPIC;<Epic-Schlüssel>;<Anzahl>;<davon erledigt> - eine Zeile je Epic des Projekts: die Anzahl aller dem Epic zugeordneten Vorgänge (Tasks, Bugs und deren Sub-Tasks, ohne das Epic selbst) und wie viele davon in der Statuskategorie Done sind.",
+    ...(estimate === undefined ? [] : [estimateLine(estimate)]),
+  ].join("\n");
+
 // ---------- the answer ----------
 
 const NUMBER = String.raw`(\d+(?:[.,]\d+)?)`;

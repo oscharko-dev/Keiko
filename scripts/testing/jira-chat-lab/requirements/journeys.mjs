@@ -277,6 +277,15 @@ async function jql(session, query, fields = "summary") {
   }
 }
 
+/** The number of issues a JQL query matches (admin read, no issue is transferred). */
+async function jqlCount(session, query) {
+  const path = `/rest/api/2/search?jql=${encodeURIComponent(query)}&maxResults=0`;
+  const page = await labRequest(session, "GET", path, basicAuth(session, "admin"));
+  if (page.status !== 200 || !Number.isSafeInteger(page.value?.total))
+    throw new TypeError(`Oracle count failed (${page.status})`);
+  return page.value.total;
+}
+
 /** Every comment of one issue (admin read), as { id, body }. */
 async function issueComments(session, key) {
   const path = `/rest/api/2/issue/${encodeURIComponent(key)}/comment?maxResults=1000`;
@@ -356,6 +365,7 @@ function journeyContext(live, session, truth) {
     truth,
     turn: (chat, content, options) => chatTurn(ctx, chat, content, options),
     search: (query, fields) => jql(session, query, fields),
+    count: (query) => jqlCount(session, query),
     http: (name, path, body, method = "POST") => api(ctx, name, path, body, method),
     deselectSkill: (chat) => deselectSkill(ctx, chat),
     comments: (key) => issueComments(session, key),

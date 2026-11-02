@@ -77,7 +77,12 @@ export const SCENARIOS = Object.freeze([
     requirement: "AC3",
     issue: 4181,
     title: "Progress for a project of any size",
-    obligations: ["counts-by-type-status", "per-epic-progress", "estimate-totals"],
+    obligations: [
+      "counts-by-type-status",
+      "per-epic-progress",
+      "estimate-totals",
+      "large-project-report",
+    ],
   },
   {
     id: "S11",

@@ -623,7 +623,16 @@ S14's `edits-proposed-as-draft` is moved to follow-up #4196 by owner decision: t
 it under `deferred` with the issue number, `coverage.mjs` accepts a deferral only with an issue
 number, and the scorecard row prints "deferred to #4196" so a green S14 never reads as covering it. S10 asks for three strict line formats
 (`ANZAHL;type;status;n`, `EPIC;key;members;done`, `SCHÄTZUNG;total;done;remaining`) and grades them
-against the issues Jira holds. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
+against the issues Jira holds.
+Its fourth obligation, `large-project-report`, runs a second turn in a fresh Chat for the report
+project LRG (`large-project.mjs`): 45 epics with their tasks and bugs, 2,490 issues in all, seeded
+with a deterministic status spread. The oracle counts what Jira holds by JQL alone (total, per
+status category, per type, per type and status, per epic through its Epic Link) and requires the
+completed `jira.report` of LRG (its progress figures, the type/status rows, the epic count and
+every epic, from the summary, the epic pages or the plain figure lines) and the answer's
+`ANZAHL`/`EPIC` lines to equal it exactly. No product size limit is encoded. A laboratory without
+LRG, a turn without a complete report of LRG, or a project that no longer holds what the seed
+recorded leaves the part `unverified`: it covers nothing and S10 stays `partial`. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
 that name each requirement (tokenised like the product) and requires the complete `jira.report`
 result of the turn to state the same. S13 exports the finished report through the report card's
 route (CSV must list exactly the issues Jira holds, both files must carry the tool's digest) and
@@ -643,6 +652,12 @@ with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mj
 ```sh
 # Once per session: the empty work project REQ and the report project RPT with known ground truth
 node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session
+
+# A laboratory seeded before LRG existed gets the large project added without a reset: it makes
+# about 2,500 issues and 1,600 transitions, leaves REQ, RPT and the other entries of
+# requirements-truth.json untouched, and does nothing when LRG is already recorded. A project LRG
+# that holds issues the truth does not record (an interrupted run) is refused: delete it first.
+node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session --only LRG
 
 # Once per session, after the seed: a real estimate for RPT. Story Points where Jira offers the
 # field on Task create and edit (found by schema, put on the project's screens); otherwise Jira's

@@ -4,6 +4,7 @@
 //   ctx.turn(chat, content)  -> { answer, failure, durationMs, toolCalls, toolExchanges,
 //                                 approvals: { writes, records } }
 //   ctx.search(query, fields) -> every matching Jira issue (admin read, all pages)
+//   ctx.count(query)         -> the number of issues a JQL query matches (admin read, S10 large project)
 //   ctx.refusals()           -> count of generation-changed refusals in the live log
 //   ctx.truth                -> generated ground truth of the report project
 //   ctx.http(name, path, body, method) -> JSON of an ordinary Keiko route (skill library, exports)
@@ -51,6 +52,7 @@ import {
   complianceFieldIds,
   estimateOf,
   gradeProgress,
+  progressPrompt,
   progressTruth,
 } from "./progress-report.mjs";
 import {
@@ -63,6 +65,7 @@ import {
 } from "./report-export.mjs";
 import { aggregateParts, countsOf, NO_TURN, result, snapshotBefore } from "./journey-support.mjs";
 import { draftFindingsPart } from "./draft-findings.mjs";
+import { largeProjectPart } from "./large-project.mjs";
 import { templateTestCasesPart } from "./template-test-cases.mjs";
 import {
   epicTemplateConforms,
@@ -231,22 +234,8 @@ const PROGRESS_FIELDS = (fieldIds) =>
     .filter((field) => field !== undefined)
     .join(",");
 
-const estimateLine = (estimate) =>
-  estimate.unit === "seconds"
-    ? `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe der ursprünglichen Schätzung (${estimate.label}) in Stunden über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`
-    : `SCHÄTZUNG;<gesamt>;<erledigt>;<offen> - genau eine Zeile: die Summe des Feldes ${estimate.label} über alle Vorgänge des Projekts, davon in der Statuskategorie Done, und die Differenz.`;
-
-/** The S10 prompt; `estimate` names the field the instance estimates with (none: no line asked). */
-const PROGRESS_PROMPT = (estimate) =>
-  [
-    "Werte den Fortschritt des Jira-Projekts RPT aus. Antworte ausschließlich mit Zeilen in genau diesen Formaten, ohne weitere Zeilen:",
-    "ANZAHL;<Vorgangstyp>;<Status>;<Anzahl> - eine Zeile je Kombination aus Vorgangstyp und Status, die im Projekt vorkommt (alle Vorgänge des Projekts, auch Epics).",
-    "EPIC;<Epic-Schlüssel>;<Anzahl>;<davon erledigt> - eine Zeile je Epic des Projekts: die Anzahl aller dem Epic zugeordneten Vorgänge (Tasks, Bugs und deren Sub-Tasks, ohne das Epic selbst) und wie viele davon in der Statuskategorie Done sind.",
-    ...(estimate === undefined ? [] : [estimateLine(estimate)]),
-  ].join("\n");
-
 async function projectProgress(ctx, chat) {
-  const turn = await ctx.turn(chat, PROGRESS_PROMPT(estimateOf(ctx.truth)));
+  const turn = await ctx.turn(chat, progressPrompt(estimateOf(ctx.truth)));
   const issues = await ctx.search("project = RPT", PROGRESS_FIELDS(ctx.truth.fieldIds));
   const truth = progressTruth(issues, ctx.truth.fieldIds, ctx.truth.estimate);
   const grade = gradeProgress(turn.answer, truth);
@@ -257,12 +246,14 @@ async function projectProgress(ctx, chat) {
   ].filter(([, part]) => part.graded);
   const failed = parts.filter(([, part]) => !part.ok);
   const ungraded = [grade.epics, grade.estimate].filter((part) => !part.graded).length;
-  return result(
-    failed.length === 0 ? "green" : "red",
-    turn,
-    `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}`,
-    parts.map(([name]) => name),
-  );
+  const answer = {
+    label: "answer",
+    status: failed.length === 0 ? "green" : "red",
+    covers: parts.map(([name]) => name),
+    detail: `${issues.length} issues; type/status counts ${grade.counts.matched}/${grade.counts.expected} exact (${grade.counts.extra} extra), epics ${grade.epics.graded ? `${grade.epics.matched}/${grade.epics.expected}` : "not gradable"}, estimate ${grade.estimate.graded ? (grade.estimate.ok ? "exact" : "wrong") : "not gradable"}, ${grade.conflicts} conflicting lines${ungraded > 0 ? "; ungradable parts are not credited" : ""}`,
+  };
+  const large = await largeProjectPart(ctx);
+  return aggregateParts([answer, large.part], [turn, large.turn]);
 }
 
 // ---------- S12 ----------
