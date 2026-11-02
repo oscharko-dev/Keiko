@@ -215,26 +215,14 @@ function receiptEntries(lines) {
   });
 }
 
-// Scanner 8.1 builds before 8.1.0.6389 print `… UDG data from directory "<dir>"`; 8.1.0.6389
-// prints `… UDG data from "<dir>"`. Both name the same single read, so both are receipts.
-const UDG_READ_MARKER = "Reading SonarArchitecture UDG data from ";
-const UDG_READ_DIRECTORY_WORD = "directory ";
-
-function architectureUdgReadTarget(line) {
-  const markerAt = line.indexOf(UDG_READ_MARKER);
-  if (markerAt < 0) return undefined;
-  const target = line.slice(markerAt + UDG_READ_MARKER.length);
-  return target.startsWith(UDG_READ_DIRECTORY_WORD)
-    ? target.slice(UDG_READ_DIRECTORY_WORD.length)
-    : target;
-}
-
 function architectureUdgReadLanguage(line) {
-  const target = architectureUdgReadTarget(line);
-  if (target === undefined) return undefined;
+  const marker = "Reading SonarArchitecture UDG data from directory";
+  const markerAt = line.indexOf(marker);
+  if (markerAt < 0) return undefined;
   // Scanner 8.1 quotes the directory it reads ("…/architecture/js"); the language is the last
   // path segment either way.
-  const segments = target
+  const segments = line
+    .slice(markerAt + marker.length)
     .trim()
     .replaceAll('"', "")
     .replaceAll("\\", "/")
@@ -258,9 +246,7 @@ function architectureSensorEvidence(lines, specification) {
     body,
     `Found 1 potential Udg file location(s) for "${specification.language}"`,
   );
-  const reads = body.flatMap((line, index) =>
-    architectureUdgReadTarget(line) === undefined ? [] : [index],
-  );
+  const reads = indexesIncluding(body, "Reading SonarArchitecture UDG data from directory");
   const matchingReads = body.flatMap((line, index) =>
     architectureUdgReadLanguage(line) === specification.language ? [index] : [],
   );
