@@ -54,6 +54,7 @@ function record(wallTimeMs: number, settlement: GateReviewRecord["settlement"]):
     reviewer: { promptTokens: 1_000, completionTokens: 100, durationMs: wallTimeMs / 2 },
     counterChecker: { promptTokens: 500, completionTokens: 50, durationMs: wallTimeMs / 4 },
     wallTimeMs,
+    resumed: false,
   };
 }
 
