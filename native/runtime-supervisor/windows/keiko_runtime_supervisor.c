@@ -264,14 +264,32 @@ failure:
   return NULL;
 }
 
+/* Variables the supervisor resolves itself; a launch request can never set them. */
+static int environment_name_is_pinned(const char *name, const wchar_t *appdata) {
+  return _stricmp(name, "SystemRoot") == 0 || (appdata && _stricmp(name, "LOCALAPPDATA") == 0);
+}
+
+static wchar_t *append_pinned_variable(wchar_t *cursor, const wchar_t *prefix, const wchar_t *value) {
+  size_t prefix_length = wcslen(prefix), value_length = wcslen(value);
+  memcpy(cursor, prefix, prefix_length * sizeof(*cursor));
+  memcpy(cursor + prefix_length, value, (value_length + 1) * sizeof(*cursor));
+  return cursor + prefix_length + value_length + 1;
+}
+
 static wchar_t *environment_block(const struct launch_request *request, const wchar_t *appdata) {
   wchar_t *block, *cursor;
+  wchar_t system_root[MAX_PATH];
   size_t length = 1, index;
   const wchar_t prefix[] = L"LOCALAPPDATA=";
-  size_t required = appdata ? wcslen(prefix) + wcslen(appdata) + 1 : 0;
-  length += required;
+  const wchar_t system_root_prefix[] = L"SystemRoot=";
+  /* Winsock loads its providers through SystemRoot: without it socket() fails with 10106 and a
+   * confined root cannot reach even its attested gateway (#4068 W11). Ask the OS, not the packet. */
+  UINT system_root_length = GetSystemWindowsDirectoryW(system_root, MAX_PATH);
+  if (system_root_length == 0 || system_root_length >= MAX_PATH) return NULL;
+  length += wcslen(system_root_prefix) + system_root_length + 1;
+  if (appdata) length += wcslen(prefix) + wcslen(appdata) + 1;
   for (index = 0; index < request->environment_count; ++index) {
-    if (appdata && _stricmp(request->environment_names[index], "LOCALAPPDATA") == 0) continue;
+    if (environment_name_is_pinned(request->environment_names[index], appdata)) continue;
     int name = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
                                    request->environment_names[index], -1, NULL, 0);
     int value = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
@@ -281,14 +299,10 @@ static wchar_t *environment_block(const struct launch_request *request, const wc
   }
   block = calloc(length + 1, sizeof(wchar_t));
   if (block == NULL) return NULL;
-  cursor = block;
-  if (appdata) {
-    memcpy(cursor, prefix, wcslen(prefix) * sizeof(*cursor));
-    memcpy(cursor + wcslen(prefix), appdata, (wcslen(appdata) + 1) * sizeof(*cursor));
-    cursor += required;
-  }
+  cursor = append_pinned_variable(block, system_root_prefix, system_root);
+  if (appdata) cursor = append_pinned_variable(cursor, prefix, appdata);
   for (index = 0; index < request->environment_count; ++index) {
-    if (appdata && _stricmp(request->environment_names[index], "LOCALAPPDATA") == 0) continue;
+    if (environment_name_is_pinned(request->environment_names[index], appdata)) continue;
     int name = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
                                    request->environment_names[index], -1, cursor,
                                    (int)(length - (size_t)(cursor - block)));

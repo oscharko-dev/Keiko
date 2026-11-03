@@ -952,6 +952,45 @@ describe("coding runtime manager", () => {
     expect(harness.captures[0]?.env).not.toHaveProperty("KEIKO_CODING_DEPLOYMENT_CEILING");
   });
 
+  it("keeps host proxy, CA, OpenSSL and credential settings out of a mapped launch (#4068 W11)", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    let spawnedEnv: Record<string, string> | undefined;
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor((executable, args, env) => {
+        spawnedEnv = env;
+        return harness.spawn(executable, args, env);
+      }),
+      processEnv: {
+        PATH: "/usr/bin",
+        HTTPS_PROXY: "http://user:proxy-password@proxy.example.test:8080",
+        http_proxy: "http://proxy.example.test:8080",
+        ALL_PROXY: "socks5://proxy.example.test:1080",
+        NO_PROXY: "*",
+        SSL_CERT_FILE: "/host/ca.pem",
+        NODE_EXTRA_CA_CERTS: "/host/extra-ca.pem",
+        OPENSSL_CONF: "/host/openssl.cnf",
+        OPENSSL_MODULES: "/host/ossl-modules",
+        NODE_OPTIONS: "--force-fips",
+        OPENAI_API_KEY: "host-api-key-value",
+        AZURE_OPENAI_API_KEY: "host-azure-key-value",
+        GITHUB_TOKEN: "host-github-token-value",
+      },
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+
+    expect(spawnedEnv?.PATH).toBe("/usr/bin");
+    const names = Object.keys(spawnedEnv ?? {});
+    expect(names.filter((name) => !name.startsWith("KEIKO_") && name !== "PATH")).toEqual([]);
+    const values = JSON.stringify(spawnedEnv);
+    for (const hostValue of ["proxy-password", "proxy.example.test", "/host/", "host-api-key"]) {
+      expect(values).not.toContain(hostValue);
+    }
+  });
+
   it("refuses a child env value that equals a credential-named host value (#3897)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
