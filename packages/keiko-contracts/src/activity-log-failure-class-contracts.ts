@@ -3292,6 +3292,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       state: [
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
+        "coding-runtime.native-mcp-local.refused",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-step.changed",
@@ -3304,6 +3305,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredCausalOperations: [
       "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
+      "coding-runtime.native-mcp-local.refused",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
       "coding-runtime.native-step.changed",
@@ -3313,6 +3315,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: [
       "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
+      "coding-runtime.native-mcp-local.refused",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
       "coding-runtime.native-step.changed",
@@ -3322,6 +3325,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredResourceOperations: [
       "coding-runtime.native-external-roots.resolved",
       "coding-runtime.native-formatter.bound",
+      "coding-runtime.native-mcp-local.refused",
       "coding-runtime.native-narrowing.refused",
       "coding-runtime.native-policy.decided",
       "coding-runtime.native-step.changed",

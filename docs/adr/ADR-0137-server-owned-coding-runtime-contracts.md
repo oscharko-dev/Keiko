@@ -1324,7 +1324,12 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   starts through `/usr/bin/env -i` with a fixed `PATH`, the run's private `HOME` and its own
   variables only. It runs inside the run's sandbox; its executable's install prefix is opened for
   reading under the same toolchain rule as the launcher's `PATH`, and the supervisor's resource
-  coalition reaps it with the tree. A remote server is written only for Full access; without an
+  coalition reaps it with the tree. Only a darwin or linux host has that env-scrubbing launcher; on any
+  other platform (Windows today, #4068 W10) `openCodeNativeMcpAdmission` omits every local server not
+  reached through the relay, with its tools and grants, rather than start it with the inherited
+  environment, and `coding-runtime.native-mcp-local.refused` records the refused count only. This is a
+  static refusal, not a Windows launcher and not a Windows qualification pass. A remote server is
+  written only for Full access; without an
   operator-named issuer its OAuth stays off.
   The runtime exposes MCP tools through Code Mode, and every nested call reaches the policy as
   `<server>_<tool>`: a named local `read` tool is a vetted command (Ask for approval asks,

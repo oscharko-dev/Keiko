@@ -729,6 +729,7 @@ interface StartBridgeControl {
   /** The managed MCP relay and the servers the human chose for the run (a Jira Pod). */
   readonly mcpRelay?: NonNullable<OpenCodeRuntimeCompositionInput["mcpRelay"]>;
   readonly mcpGrantedServers?: ReadonlySet<string>;
+  readonly mcpPlatform?: NodeJS.Platform;
   /** The native AGENTS.md copy the composition is handed (#3900 AC3). */
   readonly repositoryInstructions?: InstructionsCopyPort;
   /** The managed owner for an approved Code Mode `worktree_create` (#3903 AC4). */
@@ -1073,6 +1074,12 @@ function optionalMcp(control: StartBridgeControl | undefined): {
       ? {}
       : { mcpGrantedServers: control.mcpGrantedServers }),
   };
+}
+
+function optionalMcpPlatform(control: StartBridgeControl | undefined): {
+  readonly mcpPlatform?: NodeJS.Platform;
+} {
+  return control?.mcpPlatform === undefined ? {} : { mcpPlatform: control.mcpPlatform };
 }
 
 function optionalOperatorPlugins(control: StartBridgeControl | undefined): {
@@ -1532,6 +1539,7 @@ async function startBridgeFixture(
     ...optionalRepositoryItems(control),
     ...optionalOperatorPlugins(control),
     ...optionalMcp(control),
+    ...optionalMcpPlatform(control),
     ...optionalRepositoryInstructions(control),
     ...optionalNativeWorktrees(control),
     ...optionalToolResultCorrelation(control),
@@ -4272,6 +4280,51 @@ describe("native policy asks on the tool bridge (#3897 review)", () => {
       }
     },
   );
+
+  // #4068 W10: a platform without an env-scrubbing launcher admits no local MCP server, and the
+  // refusal is recorded as a count only. This is a static refusal, not a Windows pass.
+  it("leaves local MCP servers out without an env-scrubbing launcher and records the count", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const fixture = await startBridgeFixture(facadeWith(admitWith(CHARGED)), undefined, {
+      mode: "autonomous-delivery",
+      readToolProfile: () => "native",
+      activityLog,
+      mcpPlatform: "win32",
+      mcpServers: () => [
+        {
+          name: "docs",
+          description: undefined,
+          enabled: true,
+          transport: { kind: "local", command: ["docs-mcp"], environment: {} },
+          tools: { search: "read" },
+        },
+      ],
+    });
+    try {
+      const raw = fixture.preparation.env.OPENCODE_CONFIG_CONTENT ?? "null";
+      expect(raw).not.toContain("/usr/bin/env");
+      const config = JSON.parse(raw) as {
+        readonly mcp?: { readonly servers?: Readonly<Record<string, unknown>> };
+      };
+      expect(config.mcp?.servers).toEqual({});
+      const refused = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.native-mcp-local.refused",
+      );
+      expect(refused).toHaveLength(1);
+      expect(refused[0]).toMatchObject({ correlationId: FIXTURE_RUN_ID });
+      expect(refused[0]?.extra).toMatchObject({
+        runId: FIXTURE_RUN_ID,
+        reason: "no-env-scrubbing-launcher",
+        refusedServerCount: 1,
+      });
+      expectActivityLogProof(
+        "coding-runtime.native-mcp-local.refused.emitted-line",
+        formatActivityLogProofLine(refused[0] ?? {}),
+      );
+    } finally {
+      await fixture.stop();
+    }
+  });
 
   // #3903 AC1: the further gateway models and the configured per-agent overrides reach the binding,
   // and one body-free line records their counts.
