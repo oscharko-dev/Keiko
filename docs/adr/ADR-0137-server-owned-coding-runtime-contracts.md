@@ -1706,7 +1706,11 @@ standalone. Keiko is the foundation around it, not a replacement for its parts. 
   composer shows a Build | Plan switch only where that list offers `plan`, keeps it operable
   between turns (idle, paused) and fixed while a turn runs, sends the selection with every start,
   retry and follow-up (`build` included, so a follow-up can switch back), and names the plan agent
-  in the run status line and information panel.
+  in the run status line and information panel. The snapshot of a run its server process started
+  states that run's `modelId` and latest accepted `agent`; readiness states the closed `toolProfile`
+  (`native`, or `mapped` for anything else). A reloaded window adopts the run's identity once, and a
+  live run's facts never fall back to the browser's selection: an absent value reads as not reported
+  (#4068 W12).
 - **The prompt takes a message while a turn runs and the files its text references.** A follow-up
   may carry `delivery` (`steer` or `queue`, the closed `CODING_WORKBENCH_PROMPT_DELIVERIES`
   vocabulary) and `references` (at most 16 `{ path }` entries relative to the run's workspace root;

@@ -630,6 +630,50 @@ describe("Coding Workbench runtime API contracts", () => {
     }
   });
 
+  it("admits a run's own model and agent on its snapshot and refuses malformed ones (#4068 W12)", () => {
+    const snapshot = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+      modelId: "gemma-4-31b-it",
+      agent: "plan",
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toMatchObject({ ok: true });
+    for (const malformed of [
+      { modelId: "" },
+      { modelId: "line\nbreak" },
+      { modelId: 7 },
+      { agent: "../escape" },
+      { agent: "general" },
+    ]) {
+      expect(validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, ...malformed })).toMatchObject({
+        ok: false,
+      });
+    }
+  });
+
+  it("admits only the closed tool profile on readiness (#4068 W12)", () => {
+    const readiness = {
+      schemaVersion: "1",
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      effectiveMode: "governed-assist",
+      runtimeAvailable: false,
+      runtimeUnavailableReason: "runtime-unqualified",
+      selectableAgents: ["build"],
+    };
+    for (const toolProfile of ["native", "mapped"]) {
+      expect(validateCodingWorkbenchRuntimeReadiness({ ...readiness, toolProfile })).toMatchObject({
+        ok: true,
+      });
+    }
+    expect(
+      validateCodingWorkbenchRuntimeReadiness({ ...readiness, toolProfile: "direct" }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("projects a content-free runtime snapshot with no authority details", () => {
     const snapshot = {
       schemaVersion: "1",

@@ -30,6 +30,10 @@ import type {
 import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { taskWorkspaceProvisioningSource } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   isDeliveredDraftDeliveryPhase,
@@ -310,6 +314,13 @@ const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
       required: false,
       maxLength: 128,
     },
+    primaryAgent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["build", "plan", "custom"],
+    },
+    modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -1317,12 +1328,60 @@ function recordApprovalExpiryFailure(
   );
 }
 
+/** The live run's model and primary agent, held by the process that started it (#4068 W12). */
+interface RuntimeRunIdentity {
+  readonly runId: string;
+  readonly modelId?: string;
+  readonly agent: CodingWorkbenchAgent;
+}
+
+function startedRunIdentity(
+  runId: string,
+  request: CodingWorkbenchRuntimeStartRequest,
+): RuntimeRunIdentity {
+  return {
+    runId,
+    ...(request.modelId ? { modelId: request.modelId } : {}),
+    agent: request.agent ?? DEFAULT_CODING_WORKBENCH_AGENT,
+  };
+}
+
+function withRunAgent(
+  identity: RuntimeRunIdentity | undefined,
+  runId: string,
+  agent: CodingWorkbenchAgent,
+): RuntimeRunIdentity | undefined {
+  return identity?.runId === runId ? { ...identity, agent } : identity;
+}
+
+function publicRunIdentity(
+  identity: RuntimeRunIdentity | undefined,
+  runId: string,
+): Pick<PublicSnapshot, "modelId" | "agent"> | undefined {
+  if (identity?.runId !== runId) return undefined;
+  const { modelId, agent } = identity;
+  return { ...(modelId === undefined ? {} : { modelId }), agent };
+}
+
+function runIdentityLogFields(identity: RuntimeRunIdentity | undefined): {
+  readonly primaryAgent?: "build" | "plan" | "custom";
+  readonly modelIdDigest?: string;
+} {
+  if (identity === undefined) return {};
+  const { agent, modelId } = identity;
+  return {
+    primaryAgent: isCodingWorkbenchBuiltInAgent(agent) ? agent : "custom",
+    ...(modelId === undefined ? {} : { modelIdDigest: DIGEST(modelId) }),
+  };
+}
+
 function recordRuntimeRunStarted(
   activityLog: ServerLogSink | undefined,
   snapshot: CodingRuntimeSnapshot,
   effectiveMode: CodingWorkbenchMode,
   predecessorSelectionReason: PredecessorSelectionReason,
   taskIntent: string,
+  identity?: RuntimeRunIdentity,
 ): void {
   activityLog?.write(
     activityLogEvent(
@@ -1342,6 +1401,7 @@ function recordRuntimeRunStarted(
         ...(snapshot.predecessorRunId === undefined
           ? {}
           : { predecessorRunId: snapshot.predecessorRunId }),
+        ...runIdentityLogFields(identity),
       },
     ),
   );
@@ -1968,6 +2028,7 @@ export class CodingRuntimeOrchestrator {
    */
   private settledRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
+  private runIdentity: RuntimeRunIdentity | undefined;
   // F66: how many delivery continuations each live run has been given (at most
   // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
   private readonly deliveryContinuations = new Map<string, number>();
@@ -2012,6 +2073,8 @@ export class CodingRuntimeOrchestrator {
         this.approvals.get(runId)?.permission,
       effectiveMode: (runId: string): CodingWorkbenchMode | undefined =>
         this.activeRunId === runId ? this.activeEffectiveMode : undefined,
+      runIdentity: (runId: string): Pick<PublicSnapshot, "modelId" | "agent"> | undefined =>
+        publicRunIdentity(this.runIdentity, runId),
       ...(deps.contextUsage ? { contextUsage: deps.contextUsage } : {}),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
@@ -2020,6 +2083,9 @@ export class CodingRuntimeOrchestrator {
       advanceRevision: (current, eventKind): CodingRuntimeOrchestratorResult =>
         this.advanceRevision(current, eventKind),
       publicSnapshot: (current): PublicSnapshot => this.publicSnapshotWithDescription(current),
+      recordRunAgent: (runId, agent): void => {
+        this.runIdentity = withRunAgent(this.runIdentity, runId, agent);
+      },
       taskDispatcher: deps.taskDispatcher,
       resumePaused: (current): Promise<CodingRuntimeOrchestratorResult> =>
         this.resumePausedForFollowUp(current),
@@ -3915,6 +3981,7 @@ export class CodingRuntimeOrchestrator {
     const selection = this.selectStartPredecessor(initialSnapshot, predecessorRunId);
     const snapshot = selection.snapshot;
     this.deps.snapshots.create(snapshot);
+    this.runIdentity = startedRunIdentity(runId, request);
     this.activateStartedRun(runId, launch, selection, request.taskIntent);
     this.recordIssueAdmission(request, runId, issue.attachment);
     if (predecessorRunId !== undefined) this.settlePredecessorRecovery(predecessorRunId);
@@ -3976,6 +4043,7 @@ export class CodingRuntimeOrchestrator {
       launch.effectiveMode,
       selection.reason,
       taskIntent,
+      this.runIdentity,
     );
   }
 

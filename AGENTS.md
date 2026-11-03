@@ -1087,7 +1087,10 @@ windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `
 never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
 run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
 `notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
-`editor-bridge`; #3880). These were warn/unknown
+`editor-bridge`; #3880). `run-identity-observed` records once per live run whether the server
+reported the run's model and agent (`modelReported`, `agentReported`) and its closed `toolProfile`
+(`native`, `mapped`, `unreported`); `coding-runtime.run.started` carries the started run's closed
+`primaryAgent` and `modelIdDigest`, never a model or custom agent name (#4068 W12). These were warn/unknown
 `client.diagnostic` notes before and buried the rare real browser failures. The server side of
 that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
 `refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or

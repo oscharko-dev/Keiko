@@ -49,6 +49,7 @@ import type {
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchAgent,
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
@@ -99,6 +100,7 @@ import {
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
 import {
+  codingWorkbenchVisibleIdentity,
   offeredCodingWorkbenchAgents,
   offeredCodingWorkbenchPromptInputs,
   type CodingWorkbenchClientError,
@@ -198,6 +200,7 @@ import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
+import { useCodingWorkbenchIdentityEvidence } from "./useCodingWorkbenchIdentityEvidence";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
 import { useCodingWorkbenchJiraPod } from "./useCodingWorkbenchJiraPod";
@@ -940,6 +943,7 @@ export function CodingWorkbenchWindow({
   const { state: runtimeState, actions } = useCodingWorkbenchRuntime({
     workspace: activeWorkspace,
   });
+  useCodingWorkbenchIdentityEvidence(runtimeState);
   const [taskIntent, setTaskIntent] = useState("");
   const history = useCodingTaskSession({
     snapshot: runtimeState.run.value,
@@ -2138,6 +2142,42 @@ function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchIn
   ];
 }
 
+// A custom primary agent (#3903 AC1) is shown by its own name.
+function agentFactValue(
+  agent: CodingWorkbenchAgent | null,
+  unstated: string,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (agent === null) return unstated;
+  return isCodingWorkbenchBuiltInAgent(agent)
+    ? t(`codingWorkbench.composer.agent.${agent}`)
+    : agent;
+}
+
+function runtimeIdentityFacts(
+  state: CodingWorkbenchRuntimeState,
+  agent: CodingWorkbenchAgent | null,
+  unstated: string,
+  t: CodingWorkbenchTranslate,
+): readonly CodingWorkbenchInfoFact[] {
+  const facts: CodingWorkbenchInfoFact[] = [];
+  // The primary agent is stated only where the server offers a choice (#3897).
+  if (offeredCodingWorkbenchAgents(state).length > 1) {
+    facts.push({
+      label: t("codingWorkbench.info.agent"),
+      value: agentFactValue(agent, unstated, t),
+    });
+  }
+  // A mapped profile says so plainly: it is never presented as native parity (#4068 W12).
+  if (state.runtimePreference === "managed-gateway" && state.toolProfile !== null) {
+    facts.push({
+      label: t("codingWorkbench.info.toolProfile"),
+      value: t(`codingWorkbench.info.toolProfile.${state.toolProfile}`),
+    });
+  }
+  return facts;
+}
+
 function sessionRunFacts(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -2145,6 +2185,8 @@ function sessionRunFacts(
   const snapshot = state.run.value;
   const issue = snapshot?.issueBinding;
   const none = t("codingWorkbench.info.none");
+  const identity = codingWorkbenchVisibleIdentity(state);
+  const unstated = identity.source === "run" ? t("codingWorkbench.info.notReported") : none;
   const facts: CodingWorkbenchInfoFact[] = [
     {
       label: t("codingWorkbench.info.runState"),
@@ -2152,7 +2194,7 @@ function sessionRunFacts(
     },
     {
       label: t("codingWorkbench.info.model"),
-      value: valueOrNone(state.selectedModelId, none),
+      value: valueOrNone(identity.modelId, unstated),
       primary: true,
     },
     {
@@ -2160,16 +2202,7 @@ function sessionRunFacts(
       value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
     },
   ];
-  // The primary agent is stated only where the server offers a choice (#3897).
-  if (offeredCodingWorkbenchAgents(state).length > 1) {
-    facts.push({
-      label: t("codingWorkbench.info.agent"),
-      // A custom primary agent (#3903 AC1) is shown by its own name.
-      value: isCodingWorkbenchBuiltInAgent(state.agent)
-        ? t(`codingWorkbench.composer.agent.${state.agent}`)
-        : state.agent,
-    });
-  }
+  facts.push(...runtimeIdentityFacts(state, identity.agent, unstated, t));
   if (issue !== undefined) {
     facts.push({
       primary: true,
