@@ -14,8 +14,13 @@
 //   * Units come from blocks (an identifier line or recorded section heading plus its body), table
 //     rows, and statements: a sentence with an obligation phrase and no identifier.
 //   * A block ends at the next identifier, a heading or section boundary and, in flat text, at a
-//     blank line unless the next line is a key line (priority, criteria, metadata) or the block has no
-//     body yet. Wrapped lines of a paragraph are merged before sentences are read.
+//     blank line unless the next line is a key line (priority, criteria, metadata), the block has no
+//     body yet, the next paragraph leads into a key line, or an unfinished sentence goes on: a PDF
+//     page break is a blank line anywhere in a block. Wrapped lines of a paragraph are merged before
+//     sentences are read.
+//   * Flat text has no recorded headings, so a short line without a closing mark is a chapter heading
+//     and not this block's body: directly ahead of the next unit after a finished line, or behind the
+//     block's closing field (priority, metadata, a criteria list) whatever follows it.
 //   * When an identifier is defined several times (table of contents, then the section), the
 //     definition with a body, priority or criteria wins; an empty listing never displaces it. Two
 //     bodies with different content are reported as conflicting, never resolved silently.
@@ -159,6 +164,11 @@ const SENTENCE_BREAK = /(?<=[.!?])\s+(?=\p{Lu})/u;
 const TITLE_FALLBACK_CHARS = 80;
 const STATEMENT_MIN_CHARS = 12;
 const STATEMENT_MAX_CHARS = 4000;
+const CLOSING_MARK = /[.!?:;]$/u;
+const LOWER_CASE_START = /^\p{Ll}/u;
+const HEADING_START = /^[\p{Lu}\d]/u;
+const HEADING_MAX_CHARS = 80;
+const NUMBERED_ITEM = /^\s*\d+[.)]\s+/u;
 
 interface Context {
   readonly lines: readonly Line[];
@@ -370,42 +380,112 @@ function nextNonBlank(lines: readonly Line[], from: number, limit: number): numb
   return -1;
 }
 
-/** In flat text a blank line ends the block unless a key line, list item or first body follows. */
-function continuesAfterBlank(context: Context, scan: Scan, from: number, limit: number): boolean {
-  const next = nextNonBlank(context.lines, from, limit);
+/** The paragraph at `from` runs straight into a key line, which has no unit of its own to join. */
+function leadsIntoKeyLine(context: Context, from: number, limit: number): boolean {
+  for (let index = from; index <= limit; index += 1) {
+    const text = bare(lineAt(context.lines, index).text);
+    if (text.length === 0) return false;
+    if (isKeyLine(text, context.vocabulary)) return true;
+  }
+  return false;
+}
+
+/** A line without a closing mark, then one starting in lower case: one sentence around a break. */
+function sentenceGoesOn(context: Context, blank: number, next: number): boolean {
+  const before = bare(lineAt(context.lines, blank - 1).text);
+  return (
+    before.length > 0 &&
+    !CLOSING_MARK.test(before) &&
+    LOWER_CASE_START.test(bare(lineAt(context.lines, next).text))
+  );
+}
+
+/** In flat text a blank line ends the block unless the block evidently goes on behind it. */
+function continuesAfterBlank(context: Context, scan: Scan, blank: number, limit: number): boolean {
+  const next = nextNonBlank(context.lines, blank + 1, limit);
   if (next < 0) return false;
   const raw = lineAt(context.lines, next).text;
   if (isKeyLine(bare(raw), context.vocabulary) || !scan.hasBody) return true;
-  return scan.inCriteria && LIST_MARKER.test(raw);
+  if (scan.inCriteria && LIST_MARKER.test(raw)) return true;
+  return sentenceGoesOn(context, blank, next) || leadsIntoKeyLine(context, next, limit);
+}
+
+function isHeadingShaped(raw: string, before: string, context: Context): boolean {
+  const text = bare(raw);
+  if (text.length > HEADING_MAX_CHARS || CLOSING_MARK.test(text)) return false;
+  if (!HEADING_START.test(text) || isKeyLine(text, context.vocabulary)) return false;
+  return NUMBERED_ITEM.test(raw) ? !NUMBERED_ITEM.test(before) : !LIST_MARKER.test(raw);
+}
+
+/** What precedes a chapter heading is finished: a closed sentence, a list item or a key value. */
+function isFinishedLine(raw: string, vocabulary: CompiledVocabulary): boolean {
+  const text = bare(raw);
+  if (vocabulary.criteriaKey.test(text)) return false;
+  return CLOSING_MARK.test(text) || LIST_MARKER.test(raw) || isKeyLine(text, vocabulary);
+}
+
+/** Behind the closing field of a block a heading opens a chapter of its own, whatever follows it. */
+function startsChapter(context: Context, scan: Scan, line: string, last: number): boolean {
+  if (!scan.hasBody) return false;
+  const before = lineAt(context.lines, last).text;
+  const closed = scan.inCriteria
+    ? LIST_MARKER.test(before)
+    : isKeyLine(bare(before), context.vocabulary);
+  return closed && isHeadingShaped(line, before, context);
+}
+
+/** The chapter headings flat text leaves between this block's body and the next unit. */
+function withoutTrailingHeadings(context: Context, candidate: Candidate, last: number): number {
+  let end = last;
+  while (end > candidate.line + 1) {
+    const before = lineAt(context.lines, end - 1).text;
+    const line = lineAt(context.lines, end).text;
+    if (!isFinishedLine(before, context.vocabulary)) break;
+    if (!isHeadingShaped(line, before, context)) break;
+    end -= 1;
+  }
+  return end;
 }
 
 function endsStructuredBlock(line: Line, starts: readonly number[]): boolean {
   return MARKDOWN_HEADING.test(line.text) || startsSection(starts, line);
 }
 
-function lastLineOf(context: Context, candidate: Candidate, limit: number): number {
+function leavesBlock(context: Context, candidate: Candidate, line: Line): boolean {
   const sectionEnd = candidate.section?.characterEnd;
-  const structured = sectionEnd !== undefined || candidate.kind === "heading";
+  return sectionEnd === undefined
+    ? endsStructuredBlock(line, context.starts)
+    : line.start >= sectionEnd;
+}
+
+function endsFlatBlock(
+  context: Context,
+  scan: Scan,
+  positions: { readonly index: number; readonly last: number; readonly limit: number },
+): boolean {
+  const { index, last, limit } = positions;
+  const raw = lineAt(context.lines, index).text;
+  return bare(raw).length === 0
+    ? !continuesAfterBlank(context, scan, index, limit)
+    : startsChapter(context, scan, raw, last);
+}
+
+function lastLineOf(context: Context, candidate: Candidate, limit: number): number {
   if (candidate.kind === "row") return candidate.line;
+  const structured = candidate.section?.characterEnd !== undefined || candidate.kind === "heading";
   const scan: Scan = { hasBody: false, inCriteria: false };
   let last = candidate.line;
   for (let index = candidate.line + 1; index <= limit; index += 1) {
     const line = lineAt(context.lines, index);
-    if (
-      sectionEnd === undefined
-        ? endsStructuredBlock(line, context.starts)
-        : line.start >= sectionEnd
-    )
-      break;
+    if (leavesBlock(context, candidate, line)) break;
+    if (!structured && endsFlatBlock(context, scan, { index, last, limit })) break;
     const text = bare(line.text);
-    if (text.length === 0) {
-      if (!structured && !continuesAfterBlank(context, scan, index + 1, limit)) break;
-      continue;
+    if (text.length > 0) {
+      advanceScan(scan, text, context.vocabulary);
+      last = index;
     }
-    advanceScan(scan, text, context.vocabulary);
-    last = index;
   }
-  return last;
+  return structured ? last : withoutTrailingHeadings(context, candidate, last);
 }
 
 function buildBlocks(context: Context, candidates: readonly Candidate[]): readonly Block[] {

@@ -1,5 +1,5 @@
 // #4179: the requirement inventory reads the same business content from every supported format.
-// The lab corpus is rendered as Word, Excel and PowerPoint by the existing writer, parsed by the
+// The lab corpus is rendered as Word, Excel, PowerPoint and PDF by the existing writer, parsed by the
 // production parsers, and compared with the Markdown control: identifiers, priorities, criteria and
 // content digests must be equal, so a format conversion never looks like a requirement change.
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import { join } from "node:path";
 import {
   buildParserOptions,
   docxParser,
+  pdfParser,
   pptxParser,
   xlsxParser,
 } from "@oscharko-dev/keiko-local-knowledge";
@@ -22,7 +23,7 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
 });
 
-const PARSERS = { docx: docxParser, xlsx: xlsxParser, pptx: pptxParser };
+const PARSERS = { docx: docxParser, xlsx: xlsxParser, pptx: pptxParser, pdf: pdfParser };
 
 async function inventoryOf(extension, path) {
   const result = await PARSERS[extension].parseAsync(
@@ -72,7 +73,7 @@ describe.each([1, 2])("the lab corpus in every format (version %i)", (version) =
     return { paths, control };
   }
 
-  it.each(["docx", "xlsx", "pptx"])(
+  it.each(["docx", "xlsx", "pptx", "pdf"])(
     "finds every requirement of the %s rendering with the Markdown control's content",
     async (extension) => {
       const { paths, control } = await renderings();

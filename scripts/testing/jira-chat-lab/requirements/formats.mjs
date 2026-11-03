@@ -37,9 +37,24 @@ function unfilteredPages(exchanges) {
 const hasName = (item, extension) =>
   typeof item.documentName === "string" && item.documentName.toLowerCase().endsWith(extension);
 
+/** The requirements whose priority or number of acceptance criteria the format lost or changed. */
+function changedFields(explicit, truth) {
+  const byId = new Map(explicit.map((item) => [item.id, item]));
+  return truth
+    .filter((item) => {
+      const entry = byId.get(item.id);
+      if (entry === undefined) return false;
+      const criteria = Array.isArray(entry.acceptanceCriteria) ? entry.acceptanceCriteria : [];
+      return entry.priority !== item.priority || criteria.length !== item.acceptanceCount;
+    })
+    .map((item) => item.id);
+}
+
 /**
  * Grades one format from the turn's tool exchanges. `green`: the unfiltered, fully paged result
- * lists every requirement of the truth exactly from a document of that format and invents none.
+ * lists every requirement of the truth exactly from a document of that format, with its priority
+ * and its acceptance criteria, and invents none: the corpus states no requirement without an
+ * identifier, so a derived unit is a misread one (a PDF page break once made one of a priority line).
  * `unverified`: no complete unfiltered read of the inventory, so the product was not shown to have
  * been asked for the whole list (a filtered read or an unfinished paging proves nothing).
  */
@@ -64,6 +79,8 @@ export function gradeFormatInventory({ exchanges, truth, extension }) {
   const known = new Set(truth.map((item) => item.id));
   const missing = truth.filter((item) => !found.has(item.id)).map((item) => item.id);
   const invented = [...found].filter((id) => !known.has(id));
+  const changed = changedFields(explicit, truth);
+  const derived = items.length - explicit.length;
   const totals = pages.at(-1).totals;
   const notExtracted = isRecord(totals) ? totals.documentsNotExtracted : undefined;
   const titles = truth.filter((item) =>
@@ -77,9 +94,15 @@ export function gradeFormatInventory({ exchanges, truth, extension }) {
   ).length;
   const detail =
     `${found.size - invented.length}/${truth.length} requirements from ${extension} documents` +
-    `, ${missing.length} missing, ${invented.length} invented, ${items.length - explicit.length} derived units` +
+    `, ${missing.length} missing, ${invented.length} invented, ${derived} derived units` +
+    `, ${changed.length} with a changed priority or criteria count` +
     `, ${titles} titles verbatim, ${notExtracted ?? "?"} documents not text-extracted`;
-  const ok = items.length > 0 && missing.length === 0 && invented.length === 0;
+  const ok =
+    items.length > 0 &&
+    missing.length === 0 &&
+    invented.length === 0 &&
+    derived === 0 &&
+    changed.length === 0;
   return { status: ok ? "green" : "red", detail };
 }
 

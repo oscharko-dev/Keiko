@@ -180,6 +180,7 @@ const unit = (item, extension, overrides = {}) => ({
   idOrigin: "explicit",
   title: item.title,
   priority: item.priority,
+  acceptanceCriteria: item.acceptance.map((text) => ({ text })),
   documentName: `Lastenheft${extension}`,
   ...overrides,
 });
@@ -284,6 +285,21 @@ describe("S03 every project document format is usable", () => {
       const result = grade([inventoryPage([...units(".docx"), extra, derived])]);
       expect(result.status).toBe("red");
       expect(result.detail).toContain("1 invented");
+      expect(result.detail).toContain("1 derived units");
+    });
+
+    it("is red when a format loses a priority or an acceptance criterion", () => {
+      const [first, ...rest] = units(".pdf");
+      const lost = { ...first, priority: undefined, acceptanceCriteria: [] };
+      const result = grade([inventoryPage([lost, ...rest])], ".pdf");
+      expect(result.status).toBe("red");
+      expect(result.detail).toContain("1 with a changed priority or criteria count");
+    });
+
+    it("is red for a derived unit alone: the corpus states none without an identifier", () => {
+      const phantom = unit(TRUTH[0], ".pdf", { id: "DRV-ABCDEFGH", idOrigin: "derived" });
+      const result = grade([inventoryPage([...units(".pdf"), phantom])], ".pdf");
+      expect(result.status).toBe("red");
       expect(result.detail).toContain("1 derived units");
     });
 

@@ -1321,7 +1321,13 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   vocabulary, never code branches. A definition with a body wins over a table-of-contents mention of
   the same identifier; two different bodies under one identifier in one document are reported as
   conflicting, never merged. Blocks end at the next heading or blank line, wrapped paragraphs are
-  merged, and an extractor-flattened HTML block is read from its inline keys. A statement with a
+  merged, and an extractor-flattened HTML block is read from its inline keys. A PDF text layer has no
+  recorded headings and turns a page break into a blank line anywhere in a block, so in flat text a
+  blank line does not end a block when an unfinished sentence goes on behind it or the next paragraph
+  leads into a key line, and a short line without a closing mark counts as a chapter heading ahead of
+  the next unit or behind the block's closing field (lab corpus as PDF, 2026-11-03: a requirement
+  crossing a page lost its priority and criteria to a phantom unit `Priorität: Soll.`, and chapter
+  headings ended up in the statement before). A statement with a
   modal verb and no identifier gets `DRV-<8 letters>`, the SHA-256 of the document identity and the
   normalized statement (plus an occurrence index for exact repeats), so it survives insertion and
   renumbering and is not shared between documents. Such a statement names its subject (ISO/IEC/IEEE
@@ -1335,8 +1341,9 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   The same specification yields the same
   identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word,
   PowerPoint, PDF (one extracted line per statement line) and Excel extraction
-  (`requirement-inventory-formats.integration`); PDF line wrapping is only as stable as its
-  extracted lines. Scanned documents (OCR) are not read. The result is a set of
+  (`requirement-inventory-formats.integration`, and the lab corpus through the production parsers in
+  `jira-lab-corpus-requirement-parity`, PDF included); PDF line wrapping is only as stable as its
+  extracted lines. Page headers and footers a real PDF repeats are not recognized as such. Scanned documents (OCR) are not read. The result is a set of
   _detected units_, never claimed to be complete: the detector can miss or over-read, and says so.
 - _Reading._ The tool takes `{ view?, documents?, query?, ids?, priorities?, cursor?, limit?, reportId?, projectKey? }`.
   Units are paged in document order under an item bound (25, at most 50) and a byte bound (24,000

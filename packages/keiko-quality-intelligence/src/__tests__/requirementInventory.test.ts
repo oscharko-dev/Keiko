@@ -145,6 +145,115 @@ describe("deriveRequirementInventory — structure", () => {
     expect(content("text")).toEqual(reference);
   });
 
+  describe("flat text without recorded headings (a PDF text layer)", () => {
+    const CLOSED = ["Abnahmekriterien:", "• Der Ort ist verfügbar.", "Priorität: Soll."];
+    type Inventory = ReturnType<typeof deriveRequirementInventory>;
+    const inventoryOf = (...lines: readonly string[]): Inventory =>
+      deriveRequirementInventory({ text: lines.join("\n"), documentKey: KEY });
+    const only = (inventory: Inventory): Inventory["entries"][number] => {
+      const [entry] = inventory.entries;
+      if (entry === undefined) throw new Error("expected one requirement");
+      return entry;
+    };
+
+    it("reads one block across a page break inside a sentence", () => {
+      const inventory = inventoryOf(
+        "LH-1: Erfassung Ort",
+        "Das Portal erfasst den Ort; die Bearbeitung ist",
+        "",
+        "innerhalb von 10 Minuten abgeschlossen.",
+        ...CLOSED,
+      );
+
+      expect(inventory.totalCount).toBe(1);
+      expect(only(inventory)).toMatchObject({
+        statement:
+          "Das Portal erfasst den Ort; die Bearbeitung ist innerhalb von 10 Minuten abgeschlossen.",
+        priority: "Soll",
+        acceptanceCriteria: [{ text: "Der Ort ist verfügbar." }],
+      });
+    });
+
+    it("reads one block across a page break between two sentences", () => {
+      const inventory = inventoryOf(
+        "LH-1: Erfassung Ort",
+        "Das Portal erfasst den Ort.",
+        "",
+        "Der Ort wird geprüft.",
+        ...CLOSED,
+      );
+
+      expect(inventory.totalCount).toBe(1);
+      expect(only(inventory)).toMatchObject({
+        statement: "Das Portal erfasst den Ort. Der Ort wird geprüft.",
+        priority: "Soll",
+      });
+    });
+
+    it("still ends a block at a blank line ahead of an unrelated paragraph", () => {
+      const inventory = inventoryOf(
+        "LH-1: Erfassung Ort",
+        "Das Portal erfasst den Ort.",
+        "",
+        "Ein Absatz zu etwas anderem.",
+      );
+
+      expect(only(inventory).statement).toBe("Das Portal erfasst den Ort.");
+    });
+
+    it.each(["4. Statusverfolgung", "Datenschutz"])(
+      "leaves the chapter heading %s out of the block ahead of the next unit",
+      (heading) => {
+        const inventory = inventoryOf(
+          "LH-1: Erfassung Ort",
+          "Das Portal erfasst den Ort.",
+          heading,
+          "LH-2: Status Anzeige",
+          "Das Portal zeigt den Status.",
+        );
+
+        expect(inventory.entries.map((entry) => entry.statement)).toEqual([
+          "Das Portal erfasst den Ort.",
+          "Das Portal zeigt den Status.",
+        ]);
+      },
+    );
+
+    it("ends the block at a chapter heading behind its closing field, whatever follows", () => {
+      const inventory = inventoryOf(
+        "LH-1: Erfassung Ort",
+        "Das Portal erfasst den Ort.",
+        ...CLOSED,
+        "Abgrenzung",
+        "Nicht Bestandteil: die Zahlung.",
+      );
+
+      expect(only(inventory).statement).toBe("Das Portal erfasst den Ort.");
+    });
+
+    it("keeps numbered criteria and a statement that follows a leading priority", () => {
+      const numbered = inventoryOf(
+        "LH-1: Erfassung Ort",
+        "Das Portal erfasst den Ort.",
+        "Abnahmekriterien:",
+        "1. Der Ort ist verfügbar",
+        "2. Fehler werden gemeldet",
+      );
+      const leading = inventoryOf(
+        "LH-1: Erfassung Ort",
+        "Priorität: Soll",
+        "Ortserfassung",
+        "Das Portal erfasst den Ort.",
+      );
+
+      expect(only(numbered).acceptanceCriteria.map((item) => item.text)).toEqual([
+        "Der Ort ist verfügbar",
+        "Fehler werden gemeldet",
+      ]);
+      expect(only(leading).statement).toBe("Ortserfassung Das Portal erfasst den Ort.");
+    });
+  });
+
   it("keeps the digest to normalized content: no location, no detector version", () => {
     const [entry] = deriveRequirementInventory({ ...render("markdown"), documentKey: KEY }).entries;
 

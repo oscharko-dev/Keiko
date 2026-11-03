@@ -26,6 +26,10 @@ import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import {
+  captureConversationReadinessAdmission,
+  validateConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -564,9 +568,11 @@ describe("handleGatewaySetup", () => {
     gatewayConfig.recordVerifiedCapability(
       "model/turn",
       { conversationReady: true, toolCalling: true },
-      "2026-10-31T14:34:43.000Z",
+      new Date().toISOString(),
       admitted,
     );
+    const admission = captureConversationReadinessAdmission(deps, "model/turn");
+    if ("status" in admission) throw new Error("expected an admitted conversation");
 
     const result = await handleApplyGatewayVerifiedCapabilities(
       { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "model%2Fturn" } },
@@ -582,6 +588,8 @@ describe("handleGatewaySetup", () => {
       fields: { conversationReady: true },
       generation: admitted,
     });
+    // The 2026-10-31 refusal: this catalog refresh during an admitted turn ended it as not ready.
+    expect(validateConversationReadinessAdmission(deps, admission, "model/turn")).toBeUndefined();
     const current = requiredGatewayConfig(deps);
     expect(
       gatewayConfig.replaceCatalog(
@@ -597,6 +605,9 @@ describe("handleGatewaySetup", () => {
     ).toBe(true);
     expect(gatewayConfig.generation()).toBe(admitted + 1);
     expect(gatewayConfig.verifiedCapability("model/turn")).toBeUndefined();
+    expect(validateConversationReadinessAdmission(deps, admission, "model/turn")).toMatchObject({
+      status: 400,
+    });
     deps.store.close();
   });
 
