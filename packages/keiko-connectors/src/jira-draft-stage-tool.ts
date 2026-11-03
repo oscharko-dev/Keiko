@@ -9,7 +9,13 @@ import type {
   ManagedMcpInvocationContext,
   ManagedMcpToolResult,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
-import { isJiraDraftItem, unresolvedJiraDraftRefs } from "./jira-draft.js";
+import {
+  isJiraDraftItem,
+  JIRA_DRAFT_STAND_IN_KEY,
+  jiraDraftStagedItem,
+  unresolvedJiraDraftRefs,
+  type JiraDraftItem,
+} from "./jira-draft.js";
 import {
   jiraDraftDigest,
   type JiraDraftStore,
@@ -18,7 +24,12 @@ import {
 } from "./jira-draft-store.js";
 import type { JiraManagedConnection } from "./jira-managed-connection.js";
 import { jiraReadFailure } from "./jira-managed-metadata.js";
-import { checkJiraManagedMutationTemplates } from "./jira-managed-mutations.js";
+import { jiraTemplateViolationGuidance } from "./jira-issue-template-check.js";
+import {
+  checkJiraManagedMutationTemplates,
+  jiraDraftFieldRefusals,
+  type JiraDraftFieldRefusal,
+} from "./jira-managed-mutations.js";
 import { connectionFingerprint } from "./jira-report-tool.js";
 
 export type JiraDraftRefusal =
@@ -28,7 +39,8 @@ export type JiraDraftRefusal =
   | "connection-changed"
   | "duplicate-ref"
   | "too-large"
-  | "template-violation";
+  | "template-violation"
+  | "invalid-fields";
 
 /** Body-free facts about one staging call; the composing server maps them to its log. */
 export interface JiraDraftActivity {
@@ -94,7 +106,6 @@ function parseStageArgs(raw: CatalogJsonObject): StageArgs | undefined {
 }
 
 /** The key a relation to another draft item stands for until that item exists. */
-const STAND_IN_KEY = "DRAFT-1";
 function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
   const links: unknown = item.links;
   if (!Array.isArray(links)) return [];
@@ -103,7 +114,7 @@ function standInLinks(item: StagedJiraDraftItem): readonly CatalogJsonObject[] {
       ({
         type: link.type,
         direction: link.direction,
-        issueKey: typeof link.issueKey === "string" ? link.issueKey : STAND_IN_KEY,
+        issueKey: typeof link.issueKey === "string" ? link.issueKey : JIRA_DRAFT_STAND_IN_KEY,
       }) as CatalogJsonObject,
   );
 }
@@ -122,7 +133,7 @@ export function jiraDraftTemplateSource(item: StagedJiraDraftItem): CatalogJsonO
     issueTypeId: item.issueTypeId,
     fields: {
       ...fields,
-      ...(parentFieldId === undefined ? {} : { [parentFieldId]: STAND_IN_KEY }),
+      ...(parentFieldId === undefined ? {} : { [parentFieldId]: JIRA_DRAFT_STAND_IN_KEY }),
     },
     ...(links.length === 0 ? {} : { links }),
   } as CatalogJsonObject;
@@ -229,15 +240,46 @@ function refuseStage<Context extends ManagedMcpInvocationContext>(
   return { ...failure, data: { ...failure.data, ...guidanceOf(refusal) } };
 }
 function templateRefusalResult(refusal: JiraDraftTemplateRefusal): ManagedMcpToolResult {
+  const guidance = jiraTemplateViolationGuidance(refusal.violations);
   return {
     isError: true,
     data: {
       outcome: "rejected",
       reason: "field-validation",
       ref: refusal.ref,
+      ...(guidance === undefined ? {} : { guidance }),
       violations: refusal.violations.map((violation) => ({ ...violation })),
     },
   };
+}
+
+function fieldRefusalResult(refusal: JiraDraftFieldRefusal): ManagedMcpToolResult {
+  return {
+    isError: true,
+    data: {
+      outcome: "rejected",
+      reason: "field-validation",
+      ref: refusal.ref,
+      ...(refusal.detail.fieldId === undefined ? {} : { fieldId: refusal.detail.fieldId }),
+      ...(refusal.detail.validation === undefined ? {} : { validation: refusal.detail.validation }),
+      ...(refusal.detail.messages === undefined ? {} : { messages: [...refusal.detail.messages] }),
+    },
+  };
+}
+/**
+ * The field check a create passes, while the item is being written: a large draft that a later
+ * approval would refuse would have to be staged again. An item's identity needs the whole draft, so
+ * a staged item is not looked up; one that exists already corrects its fields and still reconciles.
+ */
+function pageFieldRefusals(
+  items: readonly StagedJiraDraftItem[],
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): ReturnType<typeof jiraDraftFieldRefusals> {
+  const parsed = items
+    .map((item) => jiraDraftStagedItem(item))
+    .filter((item): item is JiraDraftItem => item !== undefined);
+  return jiraDraftFieldRefusals(parsed, context, connection, { reconcile: false });
 }
 
 /** `jira.draft-stage`: append a page of validated items to a draft; it changes nothing in Jira. */
@@ -262,6 +304,12 @@ export async function executeJiraDraftStageTool<Context extends ManagedMcpInvoca
       violationCount: template.violations.length,
     });
     return templateRefusalResult(template);
+  }
+  const fields = await pageFieldRefusals(args.items, context, connection);
+  const firstField = fields.refusals[0];
+  if (firstField !== undefined) {
+    refuseStage(run, "invalid-fields", args.items.length, { violationCount: fields.total });
+    return fieldRefusalResult(firstField);
   }
   const appended = deps.store.append(
     deps.owner(context),

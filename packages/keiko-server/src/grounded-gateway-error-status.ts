@@ -1,4 +1,4 @@
-import type { GatewayError } from "@oscharko-dev/keiko-model-gateway";
+import { GatewayError } from "@oscharko-dev/keiko-model-gateway";
 
 /**
  * The HTTP status of a gateway failure on the grounded answer routes (Knowledge Pod, connected
@@ -11,4 +11,9 @@ export function gatewayErrorStatus(error: GatewayError): number {
   if (error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return 403;
   if (error.retryable) return 503;
   return 502;
+}
+
+/** Only the grant refused an optional call: nothing reached the provider and nothing failed. */
+export function isGatewayAdmissionRefusal(error: unknown): boolean {
+  return error instanceof GatewayError && error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED";
 }

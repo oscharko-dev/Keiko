@@ -269,6 +269,7 @@ const DRAFT_RESULT_SCHEMA = object(
           messages: JIRA_FAILURE_MESSAGES_SCHEMA,
           ...LINK_RESULT,
           violations: JIRA_VIOLATIONS_SCHEMA,
+          replayed: { type: "boolean" },
           trace: TRACE_RESULT,
           // A skipped item: the refs of the items it waits for that were not created.
           blockedBy: {

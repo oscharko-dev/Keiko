@@ -12,7 +12,8 @@ export interface ChatTurnSerializer {
     operation: () => T | Promise<T>,
     generation?: AbortController,
   ) => Promise<T | typeof CHAT_TURN_WAIT_CANCELLED>;
-  readonly interruptGenerations: (chatId: string) => number;
+  /** `keepRunning` spares the Chat's running turn, which has taken the interruption itself. */
+  readonly interruptGenerations: (chatId: string, keepRunning?: boolean) => number;
   readonly hasGenerations: (chatId: string) => boolean;
 }
 
@@ -96,7 +97,8 @@ export function createChatTurnSerializer(): ChatTurnSerializer {
   };
   return {
     runExclusive,
-    interruptGenerations: (chatId): number => interruptGenerations(generations.get(chatId)),
+    interruptGenerations: (chatId, keepRunning = false): number =>
+      interruptGenerations(generations.get(chatId), keepRunning),
     hasGenerations: (chatId): boolean => activeGenerations(generations.get(chatId)).length > 0,
   };
 }
@@ -124,9 +126,14 @@ function activeGenerations(
   return [...(generations ?? [])].filter(({ signal }) => !signal.aborted);
 }
 
-function interruptGenerations(generations: ReadonlySet<PendingChatGeneration> | undefined): number {
+function interruptGenerations(
+  generations: ReadonlySet<PendingChatGeneration> | undefined,
+  keepRunning: boolean,
+): number {
   const pending = activeGenerations(generations);
-  for (const { controller } of pending) controller.abort("connected sources changed");
+  // Turns of one Chat run in the order they registered, so the first unaborted one is running.
+  for (const { controller } of pending.slice(keepRunning ? 1 : 0))
+    controller.abort("connected sources changed");
   return pending.length;
 }
 
@@ -176,6 +183,27 @@ export function interruptChatGenerations(deps: ChatTurnSerializationDeps, chatId
   return (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(chatId);
 }
 
+type ChatTurnInterruption = () => boolean;
+const turnInterruptions = new WeakMap<UiStore, Map<string, ChatTurnInterruption>>();
+
+/**
+ * Lets the Chat's running tool turn take a change of the Chat's scope itself: the handler returns
+ * true when the turn ends with its own answer. Returns the release for when the turn stops listening.
+ */
+export function onChatScopeInterruption(
+  deps: Pick<ChatTurnSerializationDeps, "store">,
+  chatId: string,
+  interruption: ChatTurnInterruption,
+): () => void {
+  const interruptions =
+    turnInterruptions.get(deps.store) ?? new Map<string, ChatTurnInterruption>();
+  turnInterruptions.set(deps.store, interruptions);
+  interruptions.set(chatId, interruption);
+  return (): void => {
+    if (interruptions.get(chatId) === interruption) interruptions.delete(chatId);
+  };
+}
+
 export function hasChatGenerations(deps: ChatTurnSerializationDeps, chatId: string): boolean {
   return (deps.chatTurnSerializer ?? serializerForStore(deps.store)).hasGenerations(chatId);
 }
@@ -192,7 +220,11 @@ export function interruptChangedChatGenerations(
     deriveChatGroundingScopeIdentity(previous) === deriveChatGroundingScopeIdentity(current)
   )
     return;
-  const count = interruptChatGenerations(deps, current.id);
+  const keepRunning = turnInterruptions.get(deps.store)?.get(current.id)?.() === true;
+  const count = (deps.chatTurnSerializer ?? serializerForStore(deps.store)).interruptGenerations(
+    current.id,
+    keepRunning,
+  );
   if (count > 0)
     logChatScopeUpdate("cancellation-requested", previous, current, patch, correlationId, count);
 }

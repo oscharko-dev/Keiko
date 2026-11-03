@@ -197,12 +197,23 @@ async function generateGroundedAnswerText(
   if (deps.answerGenerator.repairAvailable?.() === false)
     return { ...generated, citationRepair: "skipped-budget" };
   const generatedComplete = lastAnswerComplete(deps);
-  const repairedText = await deps.answerGenerator.generate({
-    ...answerInput,
-    citationRepair: true,
-  });
+  const repairedText = await repairedAnswer(deps, answerInput);
+  if (repairedText === undefined) return { ...generated, citationRepair: "skipped-budget" };
   const repaired = attachGenerated(deps, answerInput, repairedText);
   return settledRepair(generated, generatedComplete, repaired, lastAnswerComplete(deps));
+}
+
+/** The repaired text, or undefined when the optional call was only refused. */
+async function repairedAnswer(
+  deps: GroundedAnswerDependencies,
+  answerInput: AnswerGeneratorInput,
+): Promise<string | undefined> {
+  try {
+    return await deps.answerGenerator.generate({ ...answerInput, citationRepair: true });
+  } catch (error) {
+    if (deps.answerGenerator.repairRefused?.(error) === true) return undefined;
+    throw error;
+  }
 }
 
 function lastAnswerComplete(deps: GroundedAnswerDependencies): boolean {

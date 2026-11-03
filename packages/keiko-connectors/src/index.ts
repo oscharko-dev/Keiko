@@ -228,7 +228,9 @@ export {
 export {
   executeJiraDraftItem,
   findJiraDraftItem,
+  jiraDraftFieldRefusals,
   readJiraAttachmentLimit,
+  type JiraDraftFieldRefusal,
 } from "./jira-managed-mutations.js";
 export { jiraBrowseUrl } from "./jira-browse-url.js";
 export {
@@ -239,6 +241,7 @@ export {
   jiraTemplateValueText,
   matchingJiraIssueTemplates,
   resolveJiraTemplateFieldIds,
+  jiraTemplateViolationGuidance,
   validateJiraIssueTemplateAgainstInstance,
   type JiraFieldCatalogEntry,
   type JiraTemplateFinding,
@@ -254,7 +257,7 @@ export {
   type JiraTemplateGateResult,
 } from "./jira-managed-template-gate.js";
 export {
-  checkJiraManagedMutationTemplates,
+  checkJiraManagedMutation,
   requestFor as createJiraReadRequest,
 } from "./jira-managed-mutations.js";
 export {

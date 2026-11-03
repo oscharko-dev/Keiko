@@ -183,6 +183,59 @@ const succeeded = (exchanges) =>
     .map((exchange) => exchange.result.data)
     .filter((data) => isRecord(data) && data.outcome === "succeeded" && data.status === "complete");
 
+const totalOf = (rows) => rows.reduce((sum, row) => sum + row.total, 0);
+
+/** What a summary states about the project and its types, from its type and status rows. */
+function progressOfRows(rows) {
+  const ofCategory = (category) => totalOf(rows.filter((row) => row.category === category));
+  const types = [...new Set(rows.map((row) => row.typeName))];
+  return {
+    project: {
+      total: totalOf(rows),
+      new: ofCategory("new"),
+      indeterminate: ofCategory("indeterminate"),
+      done: ofCategory("done"),
+    },
+    byType: types.map((typeName) => {
+      const ofType = rows.filter((row) => row.typeName === typeName);
+      const done = totalOf(ofType.filter((row) => row.category === "done"));
+      return { typeName, total: totalOf(ofType), done };
+    }),
+    byStatus: { items: rows },
+  };
+}
+
+const sectionPages = (results, reportId, name) =>
+  results.filter((data) => data.reportId === reportId && data.section?.name === name);
+
+/**
+ * The report of a turn that read the project's status and epic sections without its summary. A page
+ * names its report by id, and the call that opened the report names the project. Every figure a
+ * summary would state is then derived from those rows and graded the same way.
+ */
+function sectionReportOfTurn(exchanges) {
+  const scoped = (Array.isArray(exchanges) ? exchanges : [])
+    .filter((exchange) => completedToolExchange(exchange, "jira.report"))
+    .filter((exchange) => exchange.call?.arguments?.projectKey === LARGE_PROJECT)
+    .map((exchange) => exchange.result.data);
+  const results = succeeded(exchanges);
+  const latest = (name) => scoped.filter((data) => data.section?.name === name).at(-1)?.reportId;
+  const statuses = sectionPages(results, latest("statuses"), "statuses");
+  const pages = sectionPages(results, latest("epics"), "epics");
+  if (statuses.length === 0 || pages.length === 0) return undefined;
+  const rows = statuses.flatMap((page) => records(page.section.items));
+  return {
+    summary: {
+      report: {
+        completeness: statuses[0].report?.completeness,
+        progress: progressOfRows(rows),
+        epics: { total: pages[0].section.total, items: [] },
+      },
+    },
+    pages,
+  };
+}
+
 /**
  * The last completed summary of the project in the turn, and the epic section pages that belong to
  * that very report (a page names its report by digest, not by scope).
@@ -192,7 +245,7 @@ function reportOfTurn(exchanges) {
   const summary = results
     .filter((data) => isRecord(data.report) && data.report.scope?.projectKey === LARGE_PROJECT)
     .at(-1);
-  if (summary === undefined) return undefined;
+  if (summary === undefined) return sectionReportOfTurn(exchanges);
   const pages = results.filter(
     (data) =>
       isRecord(data.section) &&

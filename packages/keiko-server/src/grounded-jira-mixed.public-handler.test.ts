@@ -690,6 +690,80 @@ it("retains acknowledged mutation uncertainty after deletion through the real cu
   expect(realCustodyOwner(f).custody.getMetadata(credential.authRef)).toBeUndefined();
 });
 
+// Leaves the productive model request number `round` open until the turn aborts it.
+function holdModelRound(calls: readonly string[], round: number): () => boolean {
+  const answer = globalThis.fetch;
+  let reached = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn<typeof fetch>(async (url, init) => {
+      const before = calls.length;
+      const response = await answer(url, init);
+      if (calls.length === before || calls.length !== round) return response;
+      reached = true;
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          "abort",
+          () => {
+            reject(new DOMException("Aborted", "AbortError"));
+          },
+          { once: true },
+        );
+      });
+    }),
+  );
+  return () => reached;
+}
+async function changeOwnedMode(f: ReturnType<typeof runtime>, chatId: string): Promise<void> {
+  const existing = f.deps.store.findChatById(chatId);
+  if (existing === undefined) throw new Error("Missing existing Chat");
+  const response = await handleUpdateChat(
+    {
+      ...context({
+        toolMode: "supervised-coding",
+        expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(existing),
+      }),
+      url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(chatId)}`),
+    },
+    f.deps,
+  );
+  expect(response.status).toBe(200);
+}
+
+// S17 of #4173: a mode change ended the turn with a bare cancellation after it had written to Jira.
+it("names the writes of a turn that a change of the Chat's mode ended", async () => {
+  const f = await ownedRuntime(true);
+  const calls = provider(["write", "answer"]);
+  const reached = holdModelRound(calls, 2);
+  const pending = startOwnedTurn(f, f.chatId);
+  await vi.waitFor(() => {
+    expect(reached()).toBe(true);
+  });
+  await changeOwnedMode(f, f.chatId);
+  const result = await pending;
+  expect(result.status).toBe(200);
+  expect(ownedExchange(f, f.chatId).mutationOutcome).toBe("succeeded");
+  const answer = f.deps.store.listMessages(f.chatId).at(-1);
+  expect(answer?.role).toBe("assistant");
+  expect(answer?.content).toContain("the Chat's mode, sources or connection changed");
+  expect(answer?.content).toContain("jira_comment");
+  expect(f.deps.store.findChatById(f.chatId)?.toolMode).toBe("supervised-coding");
+  expect(calls).toHaveLength(2);
+});
+
+it("keeps the cancellation of a read-only turn that a change of the Chat's mode ended", async () => {
+  const f = await ownedRuntime(false);
+  const calls = provider(["tool", "answer"]);
+  const reached = holdModelRound(calls, 2);
+  const pending = startOwnedTurn(f, f.chatId);
+  await vi.waitFor(() => {
+    expect(reached()).toBe(true);
+  });
+  await changeOwnedMode(f, f.chatId);
+  expect((await pending).status).toBe(499);
+  expect(f.deps.store.listMessages(f.chatId).some(({ role }) => role === "assistant")).toBe(false);
+});
+
 function configure(deps: UiHandlerDeps, modelRetries = 0, contextWindow = 32768): void {
   const provider = {
     modelId: MODEL,
@@ -1522,6 +1596,26 @@ it("keeps a complete Data-Pod answer when the input grant cannot fund its citati
   expect(requests).toHaveLength(2);
   expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
 });
+
+// S11: the repair sends the tool results again, so a grant that fits its bare prompt cannot fund it.
+it.each([29_000, 29_500, 30_000, 30_500, 31_000])(
+  "keeps a complete Data-Pod answer when the tool results leave no grant for a repair (%i)",
+  async (promptTokens) => {
+    const f = runtime();
+    await connectDataPod(f, "Feature returns true. Feature is a function.");
+    const uncited = "Jira tool result: project SYN is visible, and Feature is a plain function.";
+    const requests = provider(["tool", "answer"], uncited, undefined, {
+      usage: { prompt_tokens: promptTokens, completion_tokens: 1 },
+    });
+    const result = await handleGroundedAsk(
+      context({ chatId: f.chatId, content: "What is Feature? List Jira too.", modelId: MODEL }),
+      f.deps,
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(requests).toHaveLength(2);
+    expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
+  },
+);
 
 it("preserves Data-only desktop refusal and tool-free grounded synthesis", async () => {
   const f = runtime();

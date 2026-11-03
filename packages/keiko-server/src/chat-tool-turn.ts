@@ -31,11 +31,14 @@ import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/ru
 import { chatToolTurnLimits } from "./chat-tool-turn-budget.js";
 import {
   chatToolTurnEndReason,
+  chatToolTurnHoldsWrite,
   chatToolTurnPartialAnswer,
   recordChatToolTurnContextFitted,
   recordChatToolTurnCorrected,
   recordChatToolTurnEnded,
+  type ChatToolTurnEndReason,
 } from "./chat-tool-turn-ending.js";
+import { onChatScopeInterruption } from "./chat-turn-serializer.js";
 import { estimateGatewayMessageTokens, fitToolContinuation } from "./chat-tool-continuation-fit.js";
 import {
   omittedReportFindingKeys,
@@ -137,6 +140,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   private envelopeRefusedAttempt = false;
   /** The transcript-built answer of a turn that ended early; it may outlive the turn's signal. */
   private endedAnswer: NormalizedResponse | undefined;
+  /** A change of the Chat's scope ended the turn, and its answer names the writes it made. */
+  private scopeChangeEnded = false;
   private readonly abortController = new AbortController();
   private promptTokens = 0;
   private completionTokens = 0;
@@ -504,6 +509,8 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     };
     signal.addEventListener("abort", cancel, { once: true });
     if (signal.aborted) cancel();
+    const { deps, message } = this.options;
+    const release = onChatScopeInterruption(deps, message.chatId, () => this.endForScopeChange());
     try {
       return await this.runRounds(model, request, signal, observeRound);
     } catch (error) {
@@ -513,8 +520,23 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       if (partial === undefined) throw error;
       return partial;
     } finally {
+      release();
       signal.removeEventListener("abort", cancel);
     }
+  }
+
+  /**
+   * A write the turn made must not vanish behind a bare cancellation when the Chat's mode or sources
+   * change: the turn stops at once and answers from its transcript (#4175). A turn with nothing
+   * to report stays a cancellation.
+   */
+  private endForScopeChange(): boolean {
+    const { deps, message } = this.options;
+    const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
+    if (this.context.signal.aborted || !chatToolTurnHoldsWrite(exchanges)) return false;
+    this.scopeChangeEnded = true;
+    this.abortController.abort();
+    return true;
   }
 
   private transcriptExchangeCount(): number {
@@ -550,9 +572,7 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
     const { deps, message, correlationId, budget } = this.options;
     const expired = Date.now() >= Date.parse(this.context.authorityExpiresAt);
     if ((signal.aborted || this.options.context.signal.aborted) && !expired) return undefined;
-    const reason = expired
-      ? "deadline"
-      : chatToolTurnEndReason(error, { envelopeRefusedAttempt: this.envelopeRefusedAttempt });
+    const reason = this.endReason(error, expired);
     // Unsettled calls stay in the answer: one may have reached Jira before bookkeeping failed.
     const exchanges = deps.store.findMessageById(message.id)?.toolTranscript?.exchanges ?? [];
     if (reason === undefined || !exchanges.some((exchange) => exchange.result !== undefined))
@@ -579,6 +599,17 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       },
     };
     return this.endedAnswer;
+  }
+
+  private endReason(error: unknown, expired: boolean): ChatToolTurnEndReason | undefined {
+    if (expired) return "deadline";
+    if (this.scopeChangeEnded) return "authority-invalid";
+    return chatToolTurnEndReason(error, { envelopeRefusedAttempt: this.envelopeRefusedAttempt });
+  }
+
+  /** True once a change of the Chat's scope ended this turn; its answer must reach the human. */
+  public get answersAfterScopeChange(): boolean {
+    return this.scopeChangeEnded;
   }
 
   /**
@@ -802,6 +833,7 @@ export type ChatToolTurnPort = Pick<
   | "signal"
   | "deadlineAtMs"
   | "answersAtDeadline"
+  | "answersAfterScopeChange"
   | "endedEarly"
 >;
 

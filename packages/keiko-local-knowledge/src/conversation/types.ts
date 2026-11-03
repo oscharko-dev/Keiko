@@ -136,6 +136,12 @@ export interface AnswerGenerator {
    */
   readonly repairAvailable?: () => boolean;
   /**
+   * Whether a citation repair's failure is only the refusal of the optional call. Whether it fits
+   * can be estimated in advance, so the refusal itself must not fail the turn either: the completed
+   * answer is kept. Absent means no failure is such a refusal.
+   */
+  readonly repairRefused?: (error: unknown) => boolean;
+  /**
    * Whether the last `generate` call's answer ended on its own rather than at its output limit. A
    * citation repair cut at that limit never replaces the complete answer it was asked to cite.
    * Absent means complete.

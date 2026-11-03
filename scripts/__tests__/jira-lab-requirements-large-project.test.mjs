@@ -328,6 +328,70 @@ describe("the figures of the completed report", () => {
   });
 });
 
+// S10, Gemma: a turn that opened the report with its status and epic sections and read no summary.
+describe("the figures of a report read through its sections", () => {
+  const world = worldOf(SMALL);
+  const report = productReport(world.issues);
+  const jiraOf = () => largeJiraFigures(countOf(world.issues), world.large);
+  const sectionExchange = (name, { projectKey = LARGE_PROJECT, mutate = (page) => page } = {}) => ({
+    ...exchange({
+      report: { completeness: jiraReportSummary(report).completeness, digest: report.digest },
+      section: mutate(jiraReportSectionPage(report, name, 0, 100)),
+    }),
+    call: { id: `call-${name}`, name: "jira_report", arguments: { projectKey, section: name } },
+  });
+
+  it("equal Jira when both sections are the product's own for the project", async () => {
+    const graded = gradeReportFigures(
+      [sectionExchange("statuses"), sectionExchange("epics")],
+      await jiraOf(),
+    );
+    expect(graded.problems).toEqual([]);
+    expect(graded.epicsStated).toBe(SMALL.epics);
+  });
+
+  it("credit nothing without both sections of this project", async () => {
+    const jira = await jiraOf();
+    expect(gradeReportFigures([sectionExchange("statuses")], jira)).toBeUndefined();
+    expect(gradeReportFigures([sectionExchange("epics")], jira)).toBeUndefined();
+    const other = { projectKey: "RPT" };
+    expect(
+      gradeReportFigures(
+        [sectionExchange("statuses", other), sectionExchange("epics", other)],
+        jira,
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["a wrong status total", "statuses", 0, (item) => ({ ...item, total: item.total + 1 })],
+    ["a wrong epic count", "epics", 0, (item) => ({ ...item, members: { total: 99, done: 0 } })],
+  ])("differ for %s", async (_name, section, index, change) => {
+    const mutate = (page) => ({
+      ...page,
+      items: page.items.map((item, position) => (position === index ? change(item) : item)),
+    });
+    const exchanges = ["statuses", "epics"].map((name) =>
+      sectionExchange(name, name === section ? { mutate } : {}),
+    );
+    expect(gradeReportFigures(exchanges, await jiraOf()).problems.length).toBeGreaterThan(0);
+  });
+
+  it("differ when a row is missing", async () => {
+    const mutate = (page) => ({ ...page, items: page.items.slice(1) });
+    const graded = gradeReportFigures(
+      [sectionExchange("statuses", { mutate }), sectionExchange("epics")],
+      await jiraOf(),
+    );
+    expect(graded.problems.join(" ")).toContain("type/status rows");
+    const withoutEpic = gradeReportFigures(
+      [sectionExchange("statuses"), sectionExchange("epics", { mutate })],
+      await jiraOf(),
+    );
+    expect(withoutEpic.problems.join(" ")).toContain("not stated");
+  });
+});
+
 describe("the large-project step", () => {
   const world = worldOf(SMALL);
   const exchanges = [summaryExchange(productReport(world.issues))];

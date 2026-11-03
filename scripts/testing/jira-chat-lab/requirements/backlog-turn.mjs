@@ -66,7 +66,7 @@ export function gradeCatalogRefresh({ induced, refused, failure }) {
  */
 export function gradeInterruption({ induced, ended, created, answer }) {
   const covers = ["interrupted-turn-reports-created-keys"];
-  if (induced === undefined || !induced.ok || !induced.turnOpen) {
+  if (induced === undefined || !induced.ok || !induced.startedOpen) {
     return {
       status: "unverified",
       covers,

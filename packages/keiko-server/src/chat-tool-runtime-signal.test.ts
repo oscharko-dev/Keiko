@@ -10,6 +10,7 @@ afterEach(() => {
 interface FakeTurn {
   readonly controller: AbortController;
   settled: boolean;
+  scopeChangeEnded: boolean;
   readonly port: Parameters<typeof chatToolTurnCancellationSignal>[1];
 }
 
@@ -23,11 +24,15 @@ function fakeTurn(settled: boolean): FakeTurn {
   const turn: FakeTurn = {
     controller,
     settled,
+    scopeChangeEnded: false,
     port: {
       signal: controller.signal,
       deadlineAtMs,
       get answersAtDeadline(): boolean {
         return turn.settled;
+      },
+      get answersAfterScopeChange(): boolean {
+        return turn.scopeChangeEnded;
       },
     },
   };
@@ -49,7 +54,7 @@ function install(settled: boolean): {
   });
   const turn = fakeTurn(settled);
   const human = new AbortController();
-  return { turn, human, signal: chatToolTurnCancellationSignal(human.signal, turn.port) };
+  return { turn, human, signal: chatToolTurnCancellationSignal(human.signal, turn.port, "c-1") };
 }
 
 describe("chatToolTurnCancellationSignal", () => {
@@ -89,11 +94,41 @@ describe("chatToolTurnCancellationSignal", () => {
     expect(signal.aborted).toBe(true);
   });
 
+  it("does not cancel the answer of a turn that a change of the Chat's scope ended", async () => {
+    const { signal, turn, human } = install(true);
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS / 2);
+    turn.scopeChangeEnded = true;
+    turn.controller.abort();
+    expect(signal.aborted).toBe(false);
+    human.abort();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("cancels instead of ending the process when the turn's state cannot be read", async () => {
+    // The lab lost a whole run this way: a deadline fired after the store had closed.
+    const { turn, human } = install(true);
+    const signal = chatToolTurnCancellationSignal(
+      human.signal,
+      {
+        ...turn.port,
+        get answersAfterScopeChange(): boolean {
+          return false;
+        },
+        get answersAtDeadline(): boolean {
+          throw new Error("database is not open");
+        },
+      },
+      "c-1",
+    );
+    await vi.advanceTimersByTimeAsync(DEADLINE_MS + 1);
+    expect(signal.aborted).toBe(true);
+  });
+
   it("starts cancelled when the human signal is already aborted", () => {
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     const turn = fakeTurn(true);
     const human = new AbortController();
     human.abort();
-    expect(chatToolTurnCancellationSignal(human.signal, turn.port).aborted).toBe(true);
+    expect(chatToolTurnCancellationSignal(human.signal, turn.port, "c-1").aborted).toBe(true);
   });
 });

@@ -1,11 +1,15 @@
 import {
   JIRA_DRAFT_ID_PATTERN,
   JIRA_DRAFT_PAGE_ITEMS_MAX,
+  JIRA_FIELD_VALIDATION_FAILURES,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ManagedMcpToolDeclaration } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import { createToolDescriptor, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import { object, text } from "./jiraManagedSchemas.js";
-import { JIRA_VIOLATIONS_SCHEMA } from "./jiraManagedMutationDescriptors.js";
+import {
+  JIRA_FAILURE_MESSAGES_SCHEMA,
+  JIRA_VIOLATIONS_SCHEMA,
+} from "./jiraManagedMutationDescriptors.js";
 
 const DESCRIPTION =
   "Write a backlog draft larger than jira.draft takes in pages of up to " +
@@ -56,6 +60,9 @@ export const JIRA_DRAFT_STAGE_DECLARATION: ManagedMcpToolDeclaration = Object.fr
         unresolvedRefs: { type: "array", maxItems: 32, items: text(32) },
         ref: text(32),
         violations: JIRA_VIOLATIONS_SCHEMA,
+        fieldId: text(64),
+        validation: { type: "string", enum: JIRA_FIELD_VALIDATION_FAILURES },
+        messages: JIRA_FAILURE_MESSAGES_SCHEMA,
       },
       ["outcome"],
     ),

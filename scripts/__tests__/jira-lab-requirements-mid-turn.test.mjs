@@ -21,7 +21,7 @@ describe("startDuring", () => {
     expect(startDuring(during, [], idle)).toBeUndefined();
     expect(runs).toBe(0);
     const started = startDuring(during, [exchange("jira.search", "completed")], idle);
-    await expect(started).resolves.toEqual({ ok: true, turnOpen: true });
+    await expect(started).resolves.toEqual({ ok: true, startedOpen: true, turnOpen: true });
     expect(runs).toBe(1);
   });
 
@@ -31,6 +31,23 @@ describe("startDuring", () => {
     expect(startDuring(during, [exchange("jira.create", "failed")], idle)).toBeUndefined();
     expect(startDuring(during, [exchange("jira.create", "completed")], idle)).toBeDefined();
     expect(startDuring(during, [exchange("jira.draft", "completed")], idle)).toBeDefined();
+  });
+
+  it("tells a turn that settled during the action from one that had settled before it", async () => {
+    let settled = false;
+    const during = {
+      when: "first-write",
+      run: () => {
+        settled = true;
+        return Promise.resolve();
+      },
+    };
+    await expect(
+      startDuring(during, [exchange("jira.draft", "completed")], () => settled),
+    ).resolves.toEqual({ ok: true, startedOpen: true, turnOpen: false });
+    await expect(
+      startDuring(during, [exchange("jira.draft", "completed")], () => settled),
+    ).resolves.toEqual({ ok: true, startedOpen: false, turnOpen: false });
   });
 
   it("does nothing without an action", () => {

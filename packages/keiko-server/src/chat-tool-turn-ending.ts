@@ -39,7 +39,7 @@ const REASONS: readonly ChatToolTurnEndReason[] = [
 const REASON_TEXT: Readonly<Record<ChatToolTurnEndReason, string>> = {
   "budget-exhausted": "this turn used up its tool-call or prompt budget",
   deadline: "this turn reached its time limit",
-  "authority-invalid": "the turn's authority changed (mode, binding or consent)",
+  "authority-invalid": "the Chat's mode, sources or connection changed",
   "tool-failure": "a tool call could not be settled",
   "output-exhausted": "the model ran out of output budget",
   "context-overflow": "the conversation no longer fits the model's context window",
@@ -134,6 +134,11 @@ function tally(exchanges: readonly ChatToolExchange[]): Tally {
   };
   for (const exchange of exchanges) count(result, exchange);
   return result;
+}
+/** The turn acknowledged a write, or may have: its answer has something to report. */
+export function chatToolTurnHoldsWrite(exchanges: readonly ChatToolExchange[]): boolean {
+  const { succeeded, unconfirmed } = tally(exchanges);
+  return succeeded.length + unconfirmed.length > 0;
 }
 function bullets(title: string, entries: readonly string[]): string[] {
   return entries.length === 0 ? [] : [title, ...entries.map((entry) => `- ${entry}`), ""];

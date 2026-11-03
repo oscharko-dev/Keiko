@@ -148,19 +148,23 @@ function prepareMutation(
   return { current, intent, shared };
 }
 
-/** The turns already advised about an untraced draft, oldest first; bounded like a cache. */
-const ADVISED_TURNS_MAX = 256;
-function untracedAdvisory(
+/**
+ * The drafts already advised about in a turn, oldest first; bounded like a cache. A draft is its
+ * items: correcting them and sending them again is that same choice, a draft of other items is not.
+ */
+const ADVISED_DRAFTS_MAX = 256;
+export function untracedAdvisory(
   deps: UiHandlerDeps,
   advised: Set<string>,
   context: CatalogHandlerContext<JiraChatCatalogConsumer>,
   draftItemCount: number,
-): () => boolean {
-  return (): boolean => {
-    const key = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
+): (refs: readonly string[]) => boolean {
+  return (refs): boolean => {
+    const turn = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
+    const key = `${turn}\u0000${JSON.stringify([...refs].sort((a, b) => a.localeCompare(b)))}`;
     if (advised.has(key)) return false;
     advised.add(key);
-    if (advised.size > ADVISED_TURNS_MAX) advised.delete(advised.values().next().value ?? key);
+    if (advised.size > ADVISED_DRAFTS_MAX) advised.delete(advised.values().next().value ?? key);
     recordJiraDraftActivity(deps.activityLog, context.correlationId, {
       phase: "refused",
       refusal: "requirements-untraced",

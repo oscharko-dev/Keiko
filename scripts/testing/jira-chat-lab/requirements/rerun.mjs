@@ -16,9 +16,9 @@ export const RERUN_REQUIREMENTS = Object.freeze(["LH-019", "LH-024"]);
  * so an unrelated leftover cannot make it red, and only an epic a run touched can make it green.
  *  - red: a requirement has more than one touched epic after the second run, or the second run
  *    created a new epic or a second issue under an existing draft identity;
- *  - unverified: the first run touched no epic for a requirement, or the second run's own draft did
- *    not report the existing epic of every requested requirement as reconciled (no write, a refused
- *    or failed write, or a write about something else), so the product's reconciliation was never
+ *  - unverified: the first run touched no epic for a requirement, or the second run's own writes did
+ *    not name the existing epic of every requested requirement as reconciled (no write, another
+ *    refusal or failure, or a write about something else), so the product's reconciliation was never
  *    shown to recognise the duplicate;
  *  - green: exactly one touched epic per requirement after both runs, no new issue from the second,
  *    and the second run reconciled onto each requirement's existing epic.

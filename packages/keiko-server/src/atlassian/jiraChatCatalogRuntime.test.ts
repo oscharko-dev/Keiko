@@ -11,7 +11,7 @@ import {
 } from "../../../../tests/support/activity-log-proof.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import * as managedProvider from "../tool-catalog/managedProviderCatalog.js";
-import { createJiraChatCatalogRuntime } from "./jiraChatCatalogRuntime.js";
+import { createJiraChatCatalogRuntime, untracedAdvisory } from "./jiraChatCatalogRuntime.js";
 
 const cleanups: (() => Promise<void>)[] = [];
 function releaseGate(): { promise: Promise<void>; release: () => void } {
@@ -160,5 +160,32 @@ describe("application-owned Jira catalog initialization", () => {
     await expect(closing).rejects.toBe(failure);
     await expect(f.runtime.get()).rejects.toMatchObject({ reason: "handler-unavailable" });
     expect(close).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the advice about a draft that names no requirement (S16 of #4173)", () => {
+  const turn = (userMessageId: string): Parameters<typeof untracedAdvisory>[2] =>
+    ({ chatId: "chat-1", userMessageId, correlationId: "c-1" }) as Parameters<
+      typeof untracedAdvisory
+    >[2];
+  const deps = { activityLog: undefined } as unknown as Parameters<typeof untracedAdvisory>[0];
+
+  it("lets the same items pass once advised and advises about other items of the turn", () => {
+    const advised = new Set<string>();
+    const advise = untracedAdvisory(deps, advised, turn("m-1"), 2);
+    expect(advise(["epic", "task-1", "task-2"])).toBe(true);
+    expect(advise(["task-2", "task-1", "epic"])).toBe(false);
+    expect(advise(["task-1", "task-2"])).toBe(true);
+    expect(advise(["task-1", "task-2"])).toBe(false);
+    // A separate turn asks again; item names cannot run together across a separator.
+    expect(untracedAdvisory(deps, advised, turn("m-2"), 2)(["task-1", "task-2"])).toBe(true);
+    expect(advise(["task-1,task-2"])).toBe(true);
+  });
+
+  it("stays bounded however many drafts a long session advises about", () => {
+    const advised = new Set<string>();
+    const advise = untracedAdvisory(deps, advised, turn("m-1"), 1);
+    for (let index = 0; index < 400; index += 1) advise([`item-${String(index)}`]);
+    expect(advised.size).toBe(256);
   });
 });

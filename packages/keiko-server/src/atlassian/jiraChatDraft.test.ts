@@ -26,7 +26,11 @@ import { JIRA_MUTATION_DECLARATIONS } from "./jiraManagedMutationDescriptors.js"
 import type { ChatToolExchange } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { chatToolTurnPartialAnswer } from "../chat-tool-turn-ending.js";
 import { jiraMutationToolId } from "./jiraMutationToolId.js";
-import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
+import {
+  JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_REJECTED_GUIDANCE,
+  JIRA_UNCERTAIN_GUIDANCE,
+} from "./jiraMutationResult.js";
 import { jiraChatDraftConnection } from "./jiraChatCatalogRuntime.js";
 import type { TraceSession } from "../requirement-trace.js";
 import {
@@ -267,6 +271,27 @@ describe("executeJiraChatDraft (#4178)", () => {
         expect.objectContaining({ ref: "story", state: "created", issueKey: "SYN-2" }),
       ]),
     );
+  });
+
+  it("says an unchanged draft cannot pass when an item it resends was refused (S16 of #4173)", async () => {
+    const jira = syntheticJira();
+    const args = {
+      items: [{ ...item("epic"), fields: { summary: "Item epic", customfield_99999: "unknown" } }],
+    } as unknown as CatalogJsonObject;
+    const input = execution(jira, args);
+    const first = await executeJiraChatDraft(input);
+    expect(itemsOf(first)).toEqual([
+      expect.objectContaining({ ref: "epic", state: "failed", reason: "field-validation" }),
+    ]);
+    const again = await executeJiraChatDraft(input);
+    expect(itemsOf(again)).toEqual([{ ref: "epic", state: "failed", replayed: true }]);
+    expect(again.data.guidance).toBe(JIRA_ALREADY_REFUSED_GUIDANCE);
+    expect(jira.posts()).toHaveLength(0);
+    // The row is within what the catalog lets through; otherwise the model reads a bare failure.
+    const declared = JIRA_MUTATION_DECLARATIONS.find((entry) => entry.name === "jira.draft");
+    expect(
+      describeCatalogSchemaMismatch(declared?.descriptor.resultSchema ?? {}, again.data),
+    ).toBeUndefined();
   });
 
   it("leaves out the deselected items and every item that depends on them", async () => {

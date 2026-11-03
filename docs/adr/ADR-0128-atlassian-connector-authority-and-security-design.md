@@ -542,7 +542,10 @@ credential generation, or after retaining a durable deletion intent and before r
 This also covers the direct credential-management routes. The existing UI store atomically advances every matching Chat's
 binding generation, retaining its Pod association on credential invalidation and disconnecting on
 removal. Older/repeated generation notifications are harmless. The existing Chat turn serializer
-then interrupts affected generations; other Pods' Chats remain untouched. Applied scope changes
+then interrupts affected generations; other Pods' Chats remain untouched. A running tool turn that
+already holds a write takes a scope change itself (2026-11-03, S17): it stops at once and answers from
+its transcript, naming those writes, with `authority-invalid` on `chat.tool-turn.ended`. A turn with
+no write to report, a human stop and queued turns stay cancellations. Applied scope changes
 and requested cancellation use the registered `chat.scope.update` event. Request correlation passes
 through custody and invalidation, linking the HTTP result, binding effects and cancellation; only
 operations outside a request mint a fresh server correlation. Cleanup failure cannot restore access: incomplete token replacement
@@ -756,8 +759,10 @@ item count and the `unresolvedRefs` still to be written. Its item schema only po
 schema is the only place a model learns of the trace argument (lab S14, 2026-11-02: a model staged
 four epics without `requirementIds`, so none traced its requirement and the later change comparison
 found no baseline). Every appended item first passes the
-customer-template dry run of a create (#4177); a violating page is refused whole with the violations
-and nothing of it is staged. When the draft is complete the model calls `jira.draft` once with only
+customer-template dry run of a create (#4177), then Keiko's own validation of the fields its create
+will send (2026-11-03, S05); a violating page is refused whole, naming the violations or the first
+invalid item and its field, and nothing of it is staged. An item's identity needs the whole draft, so
+staging does not look the item up; the check before approval below does. When the draft is complete the model calls `jira.draft` once with only
 `{draftId, draftDigest}` (a call may instead carry one page of `items` itself). The call's arguments
 are those two members, so the action digest the approval is bound to commits to the digest of the
 whole item list: a draft extended after its digest was read resolves to nothing (`draft-changed`),
@@ -790,6 +795,11 @@ authority and template checks stay server-enforced whatever the model reads.
 *One approval, one batch.* The draft itself is never dispatched. The server runs each selected
 item, in dependency order, as its own journaled `jira.create` under a child identity derived from
 the draft's invocation and action digest, so an item already sent is never sent again on replay.
+The journal keeps no arguments or results, so a replayed refusal cannot repeat its reasons: it says that
+the same request was already refused and cannot pass (2026-11-03, S16, where a model resent a refused
+draft and read bare `failed` rows). A template refusal says how to correct it; a section is a line of
+its own, `h2. Title`. The advice about a draft that names no requirement applies once per set of item
+refs in a turn: corrected items pass as sent, a draft of other items is advised again.
 The draft's one approval is claimed once at the first item's dispatch and covers its remaining
 items; Full access admits the draft under its envelope exactly as it admits a single create. The
 journal's bound of 32 single writes per turn counts records that may have reached Jira and does not
@@ -1063,7 +1073,13 @@ the approval.
   relations the item proposes (a link to another draft item stands in as a placeholder key): a draft
   with a violating item is refused with that item's ref and violations before a human is asked, and
   the gate still refuses each item individually at dispatch. Assignment (`jira.assign`) changes the
-  `assignee` field and is dry-run and gated as an edit of that field.
+  `assignee` field and is dry-run and gated as an edit of that field. Keiko's own field validation
+  takes the same place (2026-11-03, S05, where a human approved a draft whose required Epic Name was
+  missing, and approved it again after the correction): a proposed write the validation refuses, or a
+  draft with such items, is refused before a human is asked, in the shape the write reports it. A
+  draft names up to 25 such items and `omittedRowCount`; an item that already exists is not refused,
+  because a run only reconciles it. Only the create fields of each issue type the draft uses are read,
+  whatever its size, and items are looked up only once they fail. A failed read decides nothing.
 - **Settings surface.** `GET /api/skills/jira-templates` lists templates; `POST
   /api/skills/jira-templates/validate` validates a template against the live instance through a
   Pod the caller owns (unknown project, issue type, field, ambiguous field name, link type or
@@ -1074,7 +1090,11 @@ the approval.
 - **Evidence.** `jira.template.admission` (warn, stage `pre-approval` or `dispatch`) records the
   operation, the violation count and the closed rule ids under the write's correlation id. It
   never records a field name, section title, label or value; `ruleIds` is a closed vocabulary and
-  the registration is pinned to the contract's `JIRA_TEMPLATE_RULE_IDS` by a test. The skill
+  the registration is pinned to the contract's `JIRA_TEMPLATE_RULE_IDS` by a test.
+  `chat.tool-authority.operation` records a repeated guard's allowed decision once per correlation
+  and phase until it changes (2026-11-03: a large report's unchanged decisions were 67% of a lab's log
+  bytes); every refusal is written. `jira.field.admission` records a pre-approval refusal by Keiko's own field validation: the
+  operation, the refused count and the closed validation classes, never a field or a value. The skill
   library lines gain the actions `jira-template-list`, `-validate` and `-propose`.
 - **Scope.** Comments carry no field state and are not governed; an assignment is an edit of the
   `assignee` field and is. Organization-wide
@@ -1259,6 +1279,9 @@ it replaces a complete first answer only when it finished with the natural `stop
 least one citation; a repair interrupted at its output limit, by a content filter, an error or a
 cancellation, or still uncited, leaves the complete answer standing
 (lab S12, Gemma: a repair with the remaining output grant cut a 41-row coverage matrix at row 28).
+A repair sends the turn's tool results again, so whether it fits is judged by the last measured prompt;
+one the input grant refuses at admission keeps the completed answer too (lab S11, Qwen: a finished
+answer over 200 issues became a 403 because only the repair's bare prompt had been counted).
 `search.citations.reconciled` records the outcome in `citationRepairDisposition`
 (`rejected-truncated` for every interrupted repair, `rejected-uncited`, `applied`,
 `skipped-budget`, `not-needed`).

@@ -6,6 +6,8 @@ import { findMessageById as readStoredMessage } from "../store/messages.js";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { handleDecideChatWriteApproval } from "./chatWriteApprovalRoutes.js";
 import { handleSendDesktopChatStream } from "../chat-stream-handlers.js";
+import { handleUpdateChat } from "../store-handlers.js";
+import { deriveChatGroundingScopeIdentity } from "../store/chat-grounding-scope-identity.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -479,6 +481,47 @@ it.each([false, true])(
     expect(assistant?.content).toContain("this turn reached its time limit");
     const named = [...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort();
     expect(named).toEqual(inJira);
+  },
+);
+
+// S17 of #4173: the same list when a person changes the Chat's mode while the model is answering.
+it.each([false, true])(
+  "names exactly the keys Jira created when the Chat's mode changes after a draft (stream=%s)",
+  async (stream) => {
+    const f = fixture(true, undefined, true, false, true);
+    stallAfterFirstRound(f);
+    const response = mockResponse({ captureBody: true });
+    const ctx = { ...sendContext(f, `mode-draft-${String(stream)}`), res: response.res };
+    const pending = stream
+      ? handleSendDesktopChatStream(ctx, f.deps)
+      : handleSendDesktopChat(ctx, f.deps);
+    void pending.catch(() => undefined);
+    await awaitReadGrantedForWrite(f);
+    await decidePendingWrite(f, "approve");
+    await vi.waitFor(() => {
+      expect(firstToolExchange(f).mutationOutcome).toBe("succeeded");
+    });
+    const chat = f.deps.store.findChatById(f.chatId);
+    if (chat === undefined) throw new Error("Missing Chat");
+    const patched = await handleUpdateChat(
+      {
+        ...context({
+          toolMode: "autonomous-delivery",
+          expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(chat),
+        }),
+        url: new URL(`http://127.0.0.1/api/chats?id=${encodeURIComponent(f.chatId)}`),
+      },
+      f.deps,
+    );
+    expect(patched.status).toBe(200);
+    await pending;
+    const [, assistant] = f.deps.store.listMessages(f.chatId);
+    expect(assistant?.content).toContain("the Chat's mode, sources or connection changed");
+    const inJira = f.jira.issues.map((issue) => issue.key).sort();
+    expect(inJira.length).toBeGreaterThan(0);
+    expect([...new Set(assistant?.content.match(/SYN-\d+/gu) ?? [])].sort()).toEqual(inJira);
+    if (stream) expect(response.body()).toContain("event: done");
+    expect(f.deps.store.findChatById(f.chatId)?.toolMode).toBe("autonomous-delivery");
   },
 );
 

@@ -1,10 +1,13 @@
 import {
   isSafeAtlassianIdentifier,
+  type AtlassianConnectorWriteFailureReason,
   type JiraFieldValidationFailure,
   type JiraMutationAttempt,
   type JiraMutationOperation,
   type JiraFieldMetadata,
   type JiraMutationReceipt,
+  type JiraMutationFailureDetail,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -44,8 +47,10 @@ import {
   type JiraTemplateGateResult,
 } from "./jira-managed-template-gate.js";
 import {
+  jiraDraftDependencies,
   jiraDraftIdentity,
   jiraDraftParentKey,
+  JIRA_DRAFT_STAND_IN_KEY,
   parseJiraDraft,
   reconcileJiraDraftItem,
   resolveJiraDraftItem,
@@ -1017,15 +1022,142 @@ export async function executeJiraDraftItem(
   );
   if (found.kind === "existing") return existingItemWithLinks(request, found.attempt, links);
   if (found.kind !== "absent") return found.attempt;
-  const identified = withJiraDraftIdentity(fields, metadata.fields, jiraDraftIdentity(item));
-  const traced =
-    trace === undefined ? identified : traceCreateFields(identified, metadata.fields, trace);
   return createWithMetadata(
     request,
-    { projectId: item.projectId, issueTypeId: item.issueTypeId, fields: traced, links },
+    {
+      projectId: item.projectId,
+      issueTypeId: item.issueTypeId,
+      fields: draftItemCreateFields(item, fields, metadata.fields, trace),
+      links,
+    },
     metadata.fields,
     { templates: connection.issueTemplates, check: false },
   );
+}
+/** The fields a draft item's create sends: with its draft identity, and traced when it is. */
+function draftItemCreateFields(
+  item: JiraDraftItem,
+  fields: Readonly<Record<string, unknown>>,
+  metadata: readonly JiraFieldMetadata[],
+  trace: JiraTraceRequest | undefined,
+): Readonly<Record<string, unknown>> {
+  const identified = withJiraDraftIdentity(fields, metadata, jiraDraftIdentity(item));
+  return trace === undefined ? identified : traceCreateFields(identified, metadata, trace);
+}
+
+/** One draft item the field validation of its create refuses, in that validation's own words. */
+export interface JiraDraftFieldRefusal {
+  readonly ref: string;
+  readonly detail: JiraMutationFailureDetail;
+}
+export interface JiraDraftFieldRefusals {
+  readonly refusals: readonly JiraDraftFieldRefusal[];
+  /** The items refused, and those found invalid beyond the bound that were not looked up. */
+  readonly total: number;
+}
+/** How many refused items one result names: the correction of those usually repairs the others. */
+const DRAFT_FIELD_REFUSALS_MAX = 25;
+/** A requirement reference adds a trace to the create; only that it adds one matters here. */
+const STAND_IN_TRACE: JiraTraceRequest = {
+  labels: [],
+  footer: "-",
+  footerStart: "-",
+  footerEnd: "-",
+  replaceLabelPrefixes: [],
+};
+function draftItemFieldFailure(
+  item: JiraDraftItem,
+  metadata: readonly JiraFieldMetadata[],
+): JiraMutationFailureDetail | undefined {
+  const keys = new Map(jiraDraftDependencies(item).map((ref) => [ref, JIRA_DRAFT_STAND_IN_KEY]));
+  const trace = item.requirementIds === undefined ? undefined : STAND_IN_TRACE;
+  const input = draftItemInput(item, keys, trace);
+  if (!input.ok) return undefined;
+  const validated = validateJiraFieldChanges(
+    createContextFields(metadata),
+    {
+      ...draftItemCreateFields(item, input.fields, metadata, trace),
+      project: { id: item.projectId },
+      issuetype: { id: item.issueTypeId },
+    },
+    "create",
+    "data-center",
+  );
+  return validated.ok ? undefined : validationFailure(validated).detail;
+}
+const draftTypeKey = (item: JiraDraftItem): string => `${item.projectId}/${item.issueTypeId}`;
+/** The create fields of each issue type a draft uses, so its size costs no further read. */
+async function draftItemMetadata(
+  request: JiraMutationRequest,
+  items: readonly JiraDraftItem[],
+): Promise<ReadonlyMap<string, readonly JiraFieldMetadata[]>> {
+  const types = [...new Map(items.map((item) => [draftTypeKey(item), item])).values()];
+  const read = await Promise.all(
+    types.map((item) => jiraCreateMutationMetadata(request, item.projectId, item.issueTypeId)),
+  );
+  return new Map(
+    types.flatMap((item, index) => {
+      const metadata = read[index];
+      return metadata?.ok === true ? [[draftTypeKey(item), metadata.fields] as const] : [];
+    }),
+  );
+}
+interface DraftFieldCandidate extends JiraDraftFieldRefusal {
+  readonly item: JiraDraftItem;
+  readonly metadata: readonly JiraFieldMetadata[];
+}
+/** A run only reconciles an item that exists, so only an absent one can fail its validation. */
+async function absentDraftItems(
+  request: JiraMutationRequest,
+  candidates: readonly DraftFieldCandidate[],
+  index = 0,
+  absent: readonly JiraDraftFieldRefusal[] = [],
+): Promise<JiraDraftFieldRefusals> {
+  const candidate = candidates[index];
+  if (candidate === undefined || absent.length === DRAFT_FIELD_REFUSALS_MAX)
+    return { refusals: absent, total: absent.length + candidates.length - index };
+  const found = await reconcileJiraDraftItem(
+    request,
+    candidate.item,
+    candidate.metadata,
+    jiraDraftParentKey(candidate.item, new Map()),
+  );
+  const { ref, detail } = candidate;
+  return absentDraftItems(
+    request,
+    candidates,
+    index + 1,
+    found.kind === "absent" ? [...absent, { ref, detail }] : absent,
+  );
+}
+/**
+ * The items a draft's run would refuse by its own field validation, read-only (S05 of #4173), so a
+ * human is never asked to approve them. A read that fails decides nothing: the run still validates.
+ */
+export async function jiraDraftFieldRefusals(
+  items: readonly JiraDraftItem[],
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+  options: { readonly reconcile: boolean },
+): Promise<JiraDraftFieldRefusals> {
+  if (connection.deployment !== "data-center") return { refusals: [], total: 0 };
+  const request = requestFor(connection, context);
+  const metadata = await draftItemMetadata(request, items);
+  const candidates = items.flatMap((item): readonly DraftFieldCandidate[] => {
+    const fields = metadata.get(draftTypeKey(item));
+    const detail = fields === undefined ? undefined : draftItemFieldFailure(item, fields);
+    return fields === undefined || detail === undefined
+      ? []
+      : [{ ref: item.ref, detail, item, metadata: fields }];
+  });
+  if (!options.reconcile)
+    return {
+      refusals: candidates
+        .slice(0, DRAFT_FIELD_REFUSALS_MAX)
+        .map(({ ref, detail }) => ({ ref, detail })),
+      total: candidates.length,
+    };
+  return absentDraftItems(request, candidates);
 }
 
 /**
@@ -1129,21 +1261,55 @@ const TEMPLATE_CHECKED: ReadonlySet<JiraMutationOperation> = new Set([
  * a draft that violates an active template is refused instead of being put in front of a person.
  * It reads and validates only; it never issues a POST or PUT.
  */
+/** The operations a proposal is checked for; comments carry no field state to check. */
+function checkedAttempt(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationAttempt> {
+  // The check mode must never reach any write.
+  if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
+    return Promise.resolve({ ok: true, receipt: {} });
+  return dispatchMutation(operation, structuredClone(source), requestFor(connection, context), {
+    templates: connection.issueTemplates,
+    check: true,
+  });
+}
 export async function checkJiraManagedMutationTemplates(
   operation: JiraMutationOperation,
   source: CatalogJsonObject,
   context: ManagedMcpInvocationContext,
   connection: JiraManagedConnection,
 ): Promise<JiraTemplateGateResult> {
-  // Comments carry no field state; the check mode must never reach any write.
-  if (connection.deployment !== "data-center" || !TEMPLATE_CHECKED.has(operation))
-    return { ok: true };
-  const attempt = await dispatchMutation(
-    operation,
-    structuredClone(source),
-    requestFor(connection, context),
-    { templates: connection.issueTemplates, check: true },
-  );
+  const attempt = await checkedAttempt(operation, source, context, connection);
   if (attempt.ok || attempt.violations === undefined) return { ok: true };
   return { ok: false, reason: attempt.reason, violations: attempt.violations };
+}
+export type JiraMutationCheckResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly reason: AtlassianConnectorWriteFailureReason;
+      readonly violations?: readonly JiraTemplateViolation[];
+      readonly detail?: JiraMutationFailureDetail;
+    };
+/**
+ * What a human would otherwise approve in vain: the templates, and Keiko's own validation of the
+ * proposed fields (S05 of #4173), which decides the same way when the write runs. Every other
+ * failure is left to the executor.
+ */
+export async function checkJiraManagedMutation(
+  operation: JiraMutationOperation,
+  source: CatalogJsonObject,
+  context: ManagedMcpInvocationContext,
+  connection: JiraManagedConnection,
+): Promise<JiraMutationCheckResult> {
+  const attempt = await checkedAttempt(operation, source, context, connection);
+  if (attempt.ok) return { ok: true };
+  if (attempt.violations !== undefined)
+    return { ok: false, reason: attempt.reason, violations: attempt.violations };
+  return attempt.reason === "field-validation" && attempt.detail?.validation !== undefined
+    ? { ok: false, reason: attempt.reason, detail: attempt.detail }
+    : { ok: true };
 }

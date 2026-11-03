@@ -138,6 +138,7 @@ import {
 } from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import { gatewayErrorStatus } from "./grounded-gateway-error-status.js";
 import {
@@ -767,13 +768,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
     this.lastInput = input;
-    // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
-    // window, the retry fits the references into it (gateway-context-window.ts).
-    const response = await withAdoptedContextWindowRetry(
-      this.context.deps,
-      { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
-      () => this.callWithinWindow(input),
-    );
+    const response = await this.answerResponse(input);
     const occurredAt = Date.now();
     for (const usage of summariseReferenceUsage(this.sentReferences)) {
       if (!capsuleAllowsEvidencePersistence(getCapsule(this.store, usage.capsuleId))) continue;
@@ -794,6 +789,32 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
+  }
+
+  private async answerResponse(input: AnswerGeneratorInput): Promise<NormalizedResponse> {
+    const { renderedNumericEvidence, sentReferences, sent, measuredPromptTokens } = this;
+    try {
+      // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
+      // window, the retry fits the references into it (gateway-context-window.ts).
+      return await withAdoptedContextWindowRetry(
+        this.context.deps,
+        { modelId: this.modelId, surface: "grounded", correlationId: this.context.correlationId },
+        () => this.callWithinWindow(input),
+      );
+    } catch (error) {
+      // The answer that stands was built from the prompt before this refused repair.
+      if (input.citationRepair === true && this.repairRefused(error)) {
+        this.renderedNumericEvidence = renderedNumericEvidence;
+        this.sentReferences = sentReferences;
+        this.sent = sent;
+        this.measuredPromptTokens = measuredPromptTokens;
+      }
+      throw error;
+    }
+  }
+
+  public repairRefused(error: unknown): boolean {
+    return isGatewayAdmissionRefusal(error);
   }
 
   public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
@@ -830,7 +851,11 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
       this.limits,
       this.selectedSkill(),
     ).messages;
-    const promptTokens = countGatewayPromptTokens({ messages }, limits.tokenAccounting);
+    // A repair sends the tool results again, which only the last measured prompt counts (S11).
+    const promptTokens = Math.max(
+      countGatewayPromptTokens({ messages }, limits.tokenAccounting),
+      this.measuredPromptTokens,
+    );
     return promptTokens <= limits.effectiveInputBudget - pending.promptTokens;
   }
 

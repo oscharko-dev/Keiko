@@ -3467,7 +3467,11 @@ async function executeGroundedAskInTurn(
         ? admitted
         : {
             ...admitted,
-            signal: chatToolTurnCancellationSignal(admitted.signal, toolTurn),
+            signal: chatToolTurnCancellationSignal(
+              admitted.signal,
+              toolTurn,
+              admitted.correlationId,
+            ),
           },
       scoped,
       runner,

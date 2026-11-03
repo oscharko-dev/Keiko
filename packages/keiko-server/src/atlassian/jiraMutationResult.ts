@@ -1,3 +1,4 @@
+import { jiraTemplateViolationGuidance } from "@oscharko-dev/keiko-connectors";
 import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   JIRA_TEMPLATE_RULE_IDS,
@@ -165,6 +166,9 @@ export const JIRA_REJECTED_GUIDANCE =
   "Jira refused this change and nothing was changed. Correct the fields named in fieldErrors (fieldId, fieldName, message) or messages, then send the corrected change once. If Jira refuses it again, tell the user in plain language which field is the problem and what Jira said.";
 export const JIRA_EXISTING_GUIDANCE =
   "Nothing was written: the issue under the issueKey of this result already exists or already holds this, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
+/** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
+export const JIRA_ALREADY_REFUSED_GUIDANCE =
+  "This exact request was refused earlier in this Chat and nothing was changed, so sending it again cannot succeed. Change what the earlier result named, then send the corrected request.";
 export const JIRA_UNCERTAIN_GUIDANCE =
   "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check the issue in Jira before deciding whether to try again.";
 
@@ -193,7 +197,9 @@ function jiraExplained(detail: JiraMutationFailureDetail | undefined): boolean {
   return (detail?.fieldErrors?.length ?? 0) > 0 || (detail?.messages?.length ?? 0) > 0;
 }
 
-function detailData(detail: JiraMutationFailureDetail | undefined): Record<string, unknown> {
+export function jiraFailureDetailData(
+  detail: JiraMutationFailureDetail | undefined,
+): Record<string, unknown> {
   if (detail === undefined) return {};
   return {
     ...(detail.fieldId === undefined ? {} : { fieldId: detail.fieldId }),
@@ -213,7 +219,11 @@ export function jiraMutationToolResult(
   links?: JiraMutationLinkAccount,
   violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
-  const guidance = jiraResultGuidance(outcome, reason, detail, receipt);
+  const guidance =
+    replayed && outcome === "rejected"
+      ? JIRA_ALREADY_REFUSED_GUIDANCE
+      : (jiraResultGuidance(outcome, reason, detail, receipt) ??
+        jiraTemplateViolationGuidance(violations ?? []));
   return {
     data: {
       ...receipt,
@@ -221,7 +231,7 @@ export function jiraMutationToolResult(
       ...(guidance === undefined ? {} : { guidance }),
       ...(reason === undefined ? {} : { reason }),
       ...(replayed ? { replayed: true } : {}),
-      ...detailData(detail),
+      ...jiraFailureDetailData(detail),
       ...linkData(links),
       ...(violations === undefined ? {} : { violations: violations.map((item) => ({ ...item })) }),
     },

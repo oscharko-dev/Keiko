@@ -403,6 +403,43 @@ describe("current ordinary Chat Jira authority facts", () => {
   });
 });
 
+it("writes an unchanged allowed decision once however many requests a tool makes (S11 of #4173)", () => {
+  const sink = createFileServerLogSink(project, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    for (let request = 0; request < 40; request += 1) expect(resolve().ok).toBe(true);
+    updatePod({ verificationInProgress: true });
+    for (let request = 0; request < 2; request += 1) expect(resolve().ok).toBe(false);
+    updatePod({ verificationInProgress: false });
+    for (let request = 0; request < 2; request += 1) expect(resolve().ok).toBe(true);
+    // Another operation under the same chat has its own record of what it was allowed.
+    resolveCurrentJiraChatAuthority(
+      deps,
+      chat.id,
+      reference,
+      CHAT_AUTHORITY_TEST_NOW,
+      "other-state-proof",
+    );
+    sink.close?.();
+    const current = persistedActivityLogLines(
+      readPersistedActivityLog(project),
+      "chat.tool-authority.operation",
+    )
+      .map((line) => expectActivityLogProof("chat.tool-authority.operation.current-state", line))
+      .filter((entry) => entry.phase === "current-state");
+    expect(current.map((entry) => [entry.correlationId, entry.readiness])).toEqual([
+      ["fresh-state-proof", "ready"],
+      // A refusal is never folded: each one denied a real request.
+      ["fresh-state-proof", "verification-required"],
+      ["fresh-state-proof", "verification-required"],
+      ["fresh-state-proof", "ready"],
+      ["other-state-proof", "ready"],
+    ]);
+  } finally {
+    resetServerLogger();
+  }
+});
+
 it("records closed current-state reasons through the real Activity Log without private metadata", () => {
   const sink = createFileServerLogSink(project, { level: "debug" });
   setServerLogger(createServerLogger({ sink, level: "debug" }));

@@ -934,7 +934,7 @@ describe("S17 human obligations of #4175", () => {
   const SOLL = TRUTH.filter((item) => item.priority === "Soll").map((item) => item.id);
   const journeyVerdict = (check) =>
     scenarioVerdict(scenario("S17"), [{ layer: "journey", ...check }]);
-  const settled = { ok: true, turnOpen: true };
+  const settled = { ok: true, startedOpen: true, turnOpen: true };
 
   it("keeps S17 partial for a correct backlog without a refresh or an interruption", async () => {
     // The auditor's counterexample at f47e7f0fa: 25 correctly mapped epics, every key in the answer
@@ -996,6 +996,12 @@ describe("S17 human obligations of #4175", () => {
       expect(grade({}).status).toBe("green");
     });
 
+    it("grades a mode change that the product acknowledged after ending the turn", () => {
+      const induced = { ok: true, startedOpen: true, turnOpen: false };
+      expect(grade({ induced }).status).toBe("green");
+      expect(grade({ induced, answer: "Completed: jira_create REQ-1" }).status).toBe("red");
+    });
+
     it.each([
       ["omits a created key", { answer: "Completed: jira_create REQ-1" }],
       ["names a key Jira does not show", { answer: "REQ-1, REQ-2, REQ-77" }],
@@ -1006,8 +1012,11 @@ describe("S17 human obligations of #4175", () => {
 
     it.each([
       ["the mode was not changed mid-turn", { induced: undefined }],
-      ["the mode change failed", { induced: { ok: false, error: "409", turnOpen: true } }],
-      ["the mode change came after the turn settled", { induced: { ok: true, turnOpen: false } }],
+      ["the mode change failed", { induced: { ok: false, error: "409", startedOpen: true } }],
+      [
+        "the mode change came after the turn settled",
+        { induced: { ok: true, startedOpen: false, turnOpen: false } },
+      ],
       ["the turn did not end early", { ended: false }],
       ["nothing had been written yet", { created: [], answer: "" }],
     ])("is unverified when %s", (_name, overrides) => {

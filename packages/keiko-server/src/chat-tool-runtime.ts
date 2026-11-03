@@ -5,6 +5,7 @@ import { createJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
 import { createMcpChatToolTurn } from "./mcp/mcpChatToolTurn.js";
 import { createChatSourcesToolTurn } from "./chat-tool-sources-turn.js";
 import { correlationIdOrUnknown } from "./correlation.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 export type { ChatToolTurnPort } from "./chat-tool-turn.js";
 
 /** Both normal and grounded Chat enter the same bounded orchestration before model work. */
@@ -41,24 +42,56 @@ export function scopeChatToolTurn(
   };
 }
 
+type CancellableTurn = Pick<
+  ChatToolTurnPort,
+  "signal" | "deadlineAtMs" | "answersAtDeadline" | "answersAfterScopeChange"
+>;
+/**
+ * Runs inside an abort listener, where a throw is uncaught and ends the process, and possibly long
+ * after the request settled: a turn whose state cannot be read has no answer to give.
+ */
+function turnAnswers(
+  signal: AbortSignal,
+  turn: CancellableTurn,
+  correlationId: string | undefined,
+): boolean {
+  try {
+    const deadlineOnly = !signal.aborted && Date.now() >= turn.deadlineAtMs;
+    return turn.answersAfterScopeChange || (deadlineOnly && turn.answersAtDeadline);
+  } catch (error) {
+    emitServerDiagnostic(
+      undefined,
+      serverDiagnosticFromError({
+        correlationId: correlationIdOrUnknown(correlationId),
+        operation: "chat.tool-turn.state-unreadable",
+        source: "chat-tool-runtime",
+        error,
+        redact: () => "server-operation-failed",
+      }),
+    );
+    return false;
+  }
+}
+
 /**
  * The cancellation signal for work that follows an accepted tool turn (#4175). A human stop or an
  * authority revocation cancels at once. The turn's deadline cancels too, except when the turn
  * already settled an exchange: it then answers from its transcript, and that deterministic answer
- * must reach the human instead of a cancellation. The deadline still bounds every provider dispatch
- * through the turn's own signal and the synthesis grants.
+ * must reach the human instead of a cancellation, like the answer of a turn that a change of the
+ * Chat's scope ended after a write. The deadline still bounds every provider dispatch through the
+ * turn's own signal and the synthesis grants.
  */
 export function chatToolTurnCancellationSignal(
   signal: AbortSignal,
-  turn: Pick<ChatToolTurnPort, "signal" | "deadlineAtMs" | "answersAtDeadline">,
+  turn: CancellableTurn,
+  correlationId: string | undefined,
 ): AbortSignal {
   const controller = new AbortController();
   const cancel = (reason: unknown): void => {
     if (!controller.signal.aborted) controller.abort(reason);
   };
   const onTurnAbort = (): void => {
-    const deadlineOnly = !signal.aborted && Date.now() >= turn.deadlineAtMs;
-    if (!deadlineOnly || !turn.answersAtDeadline) cancel(turn.signal.reason);
+    if (!turnAnswers(signal, turn, correlationId)) cancel(turn.signal.reason);
   };
   const deadline = AbortSignal.timeout(Math.max(0, turn.deadlineAtMs - Date.now()));
   signal.addEventListener(

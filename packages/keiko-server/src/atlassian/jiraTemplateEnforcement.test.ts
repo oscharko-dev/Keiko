@@ -2,12 +2,16 @@ import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  JIRA_FIELD_VALIDATION_FAILURES,
   JIRA_TEMPLATE_RULE_IDS,
   parseJiraIssueTemplate,
   type JiraMutationAttempt,
   type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
+import {
+  jiraTemplateViolationGuidance,
+  type AtlassianHttpBodyPort,
+} from "@oscharko-dev/keiko-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
@@ -33,9 +37,19 @@ import {
 } from "../../../../tests/support/jira-managed-remote.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
-import { jiraAttemptToolResult, validJiraMutationAttempt } from "./jiraMutationResult.js";
+import {
+  JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_UNCERTAIN_GUIDANCE,
+  jiraAttemptToolResult,
+  jiraMutationToolResult,
+  validJiraMutationAttempt,
+} from "./jiraMutationResult.js";
 import { createJiraChatTemplatePreflight } from "./jiraChatTemplatePreflight.js";
-import { jiraIssueTemplateSource, recordJiraTemplateRefusal } from "./jiraTemplateLog.js";
+import {
+  jiraIssueTemplateSource,
+  recordJiraFieldRefusal,
+  recordJiraTemplateRefusal,
+} from "./jiraTemplateLog.js";
 
 vi.mock("./jiraChatAuthority.js", () => ({
   resolveCurrentJiraChatAuthority: (): unknown => ({
@@ -104,9 +118,37 @@ describe("the model-facing refusal", () => {
       violations: [VIOLATION],
     };
     expect(jiraAttemptToolResult("rejected", attempt)).toEqual({
-      data: { outcome: "rejected", reason: "field-validation", violations: [VIOLATION] },
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        violations: [VIOLATION],
+        guidance: jiraTemplateViolationGuidance([VIOLATION]),
+      },
       isError: true,
     });
+  });
+
+  it("says how a section is written only when a section is what the template misses (S16 of #4173)", () => {
+    const words = (ruleId: JiraTemplateViolation["ruleId"]): string | undefined =>
+      jiraTemplateViolationGuidance([{ ruleId, subject: "Schritte", template: "SYN/Task" }]);
+    expect(words("section-missing")).toContain("h2. Title");
+    expect(words("section-empty")).toContain("h2. Title");
+    expect(words("summary-pattern")).not.toContain("h2.");
+    expect(words("summary-pattern")).toContain("violations");
+    expect(jiraTemplateViolationGuidance([])).toBeUndefined();
+  });
+
+  it("tells a repeated refusal that sending it again cannot help (S16 of #4173)", () => {
+    expect(jiraMutationToolResult("rejected", undefined, {}, true).data).toMatchObject({
+      outcome: "rejected",
+      replayed: true,
+      guidance: JIRA_ALREADY_REFUSED_GUIDANCE,
+    });
+    // A replayed success or an uncertain write keeps what it always said.
+    expect(jiraMutationToolResult("succeeded", undefined, {}, true).data.guidance).toBeUndefined();
+    expect(jiraMutationToolResult("unknown", undefined, {}, true).data.guidance).toBe(
+      JIRA_UNCERTAIN_GUIDANCE,
+    );
   });
 
   it("registers every rule id the contract defines", () => {
@@ -118,6 +160,17 @@ describe("the model-facing refusal", () => {
     });
     expect(sink.events).toHaveLength(1);
     expect(sink.events[0]?.extra?.ruleIds).toEqual([...JIRA_TEMPLATE_RULE_IDS]);
+  });
+
+  it("registers every field validation the contract defines", () => {
+    const sink = logs();
+    recordJiraFieldRefusal("c-1", {
+      operation: "jira.draft",
+      refusedCount: JIRA_FIELD_VALIDATION_FAILURES.length,
+      validations: JIRA_FIELD_VALIDATION_FAILURES,
+    });
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]?.extra?.validations).toEqual([...JIRA_FIELD_VALIDATION_FAILURES]);
   });
 });
 
@@ -182,6 +235,7 @@ describe("a refused write through the Chat mutation journal", () => {
     expect(result.data).toEqual({
       outcome: "rejected",
       reason: "field-validation",
+      guidance: expect.stringContaining("h2. Title"),
       violations: [VIOLATION],
     });
     expect(http).not.toHaveBeenCalled();
@@ -308,6 +362,11 @@ describe("the dry run before approval", () => {
     templateText: string,
     args: Record<string, unknown> | undefined,
     tool: "jira.create" | "jira.draft" = "jira.create",
+    jira: {
+      readonly fields?: readonly unknown[];
+      readonly existing?: readonly unknown[];
+      readonly metadataFails?: boolean;
+    } = {},
   ): {
     run: () => Promise<unknown>;
     http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
@@ -328,11 +387,22 @@ describe("the dry run before approval", () => {
       if (path.endsWith("/project/10000")) return Promise.resolve(response({ key: "SYN" }));
       if (path.endsWith("/issuetype/10001"))
         return Promise.resolve(response({ id: "10001", name: "Story" }));
+      if (path.endsWith("/search")) {
+        const issues = jira.existing ?? [];
+        return Promise.resolve(
+          response({ issues, startAt: 0, maxResults: 100, total: issues.length }),
+        );
+      }
+      if (jira.metadataFails === true) return Promise.resolve(response({}, 503));
+      const extra = jira.fields ?? [];
+      const overridden = (id: string): boolean =>
+        extra.some((candidate) => (candidate as { fieldId?: unknown }).fieldId === id);
       const values = [
         field("project", "project", true),
         field("issuetype", "issuetype", true),
         field("summary", "string", true),
-        field("description", "string"),
+        ...(overridden("description") ? [] : [field("description", "string")]),
+        ...extra,
       ];
       return Promise.resolve(
         response({ values, start: 0, size: values.length, last: true, total: values.length }),
@@ -365,6 +435,7 @@ describe("the dry run before approval", () => {
     expect(await f.run()).toEqual({
       outcome: "rejected",
       reason: "field-validation",
+      guidance: expect.stringContaining("h2. Title"),
       violations: [
         { ruleId: "section-missing", subject: "Acceptance criteria", template: "SYN/Story" },
       ],
@@ -409,6 +480,7 @@ describe("the dry run before approval", () => {
       expect(await f.run()).toEqual({
         outcome: "rejected",
         reason: "field-validation",
+        guidance: expect.stringContaining("h2. Title"),
         items: [
           {
             ref: "story",
@@ -464,10 +536,147 @@ describe("the dry run before approval", () => {
       expect(await f.run()).toBeUndefined();
     });
 
-    it("reads nothing from Jira when no template governs a create", async () => {
-      const f = preflight("# Ordinary skill\n", { items: [item("epic", "nothing")] }, "jira.draft");
+    it("reads one issue type's fields once however large the draft, and no item", async () => {
+      const f = preflight(
+        "# Ordinary skill\n",
+        { items: [item("epic", "nothing"), item("story", "nothing"), item("bug", "nothing")] },
+        "jira.draft",
+      );
       expect(await f.run()).toBeUndefined();
-      expect(f.http).not.toHaveBeenCalled();
+      expect(f.http).toHaveBeenCalledTimes(1);
+    });
+
+    describe("an item Keiko itself would refuse (S05 of #4173)", () => {
+      const EPIC_NAME = field("customfield_10103", "string", true);
+      const ORDINARY = "# Ordinary skill\n";
+
+      it("names every such item before any approval and never writes", async () => {
+        const sink = logs();
+        const f = preflight(
+          ORDINARY,
+          { items: [item("one", "text"), item("two", "text")] },
+          "jira.draft",
+          { fields: [EPIC_NAME] },
+        );
+        const row = (ref: string): Record<string, unknown> => ({
+          ref,
+          state: "failed",
+          reason: "field-validation",
+          fieldId: "customfield_10103",
+          validation: "required-field",
+        });
+        expect(await f.run()).toEqual({
+          outcome: "rejected",
+          reason: "field-validation",
+          failedCount: 2,
+          items: [row("one"), row("two")],
+        });
+        expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+        const drafts = sink.events.filter((event) => event.op === "atlassian.jira-draft");
+        expect(drafts.at(-1)?.extra).toMatchObject({
+          phase: "refused",
+          refusal: "invalid-fields",
+          violationCount: 2,
+        });
+        const events = sink.events.filter((event) => event.op === "jira.field.admission");
+        expect(events.map((event) => event.correlationId)).toEqual(["preflight-1"]);
+        expect(events[0]?.extra).toMatchObject({
+          operation: "jira.draft",
+          refusedCount: 2,
+          validations: ["required-field"],
+        });
+        expectActivityLogProof(
+          "jira.field.admission.line",
+          formatActivityLogProofLine(events[0] ?? {}),
+        );
+        expect(JSON.stringify(events)).not.toMatch(/customfield_10103|Item one/u);
+      });
+
+      it("does not refuse an item that already exists, which a rerun only reconciles", async () => {
+        const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
+          fields: [EPIC_NAME, field("labels", "array")],
+          existing: [{ key: "SYN-7", id: "7", fields: { summary: "Item one" } }],
+        });
+        expect(await f.run()).toBeUndefined();
+      });
+
+      it("counts a required relation another item of the draft will fill", async () => {
+        const f = preflight(
+          ORDINARY,
+          {
+            items: [
+              item("epic", "text"),
+              {
+                ...item("story", "text"),
+                parent: { fieldId: "customfield_10101", ref: "epic" },
+              },
+            ],
+          },
+          "jira.draft",
+          { fields: [field("customfield_10101", "string")] },
+        );
+        expect(await f.run()).toBeUndefined();
+        const required = preflight(
+          ORDINARY,
+          { items: [{ ...item("story", "text") }] },
+          "jira.draft",
+          { fields: [field("customfield_10101", "string", true)] },
+        );
+        expect(await required.run()).toMatchObject({ failedCount: 1 });
+      });
+
+      it("counts the labels and the trace a create adds itself", async () => {
+        const traced = {
+          ...item("story", "text"),
+          fields: { summary: "Item story" },
+          requirementIds: ["LH-001"],
+        };
+        const f = preflight(ORDINARY, { items: [traced] }, "jira.draft", {
+          fields: [
+            {
+              ...field("labels", "array", true),
+              schema: { type: "array", items: "string", system: "labels" },
+            },
+            field("description", "string", true),
+          ],
+        });
+        expect(await f.run()).toBeUndefined();
+      });
+
+      it("names at most a bounded number of items and says how many it left out", async () => {
+        const items = Array.from({ length: 30 }, (_, index) => item(`i${String(index)}`, "text"));
+        const f = preflight(ORDINARY, { items }, "jira.draft", { fields: [EPIC_NAME] });
+        const refused = (await f.run()) as { items: unknown[]; failedCount: number };
+        expect(refused.items).toHaveLength(25);
+        expect(refused).toMatchObject({ failedCount: 30, omittedRowCount: 5 });
+      });
+
+      it("leaves the decision to the write when Jira cannot be read", async () => {
+        const f = preflight(ORDINARY, { items: [item("one", "text")] }, "jira.draft", {
+          metadataFails: true,
+        });
+        expect(await f.run()).toBeUndefined();
+      });
+    });
+  });
+
+  it("refuses a single write Keiko itself would refuse before any approval", async () => {
+    const sink = logs();
+    const f = preflight("# Ordinary skill\n", CREATE, "jira.create", {
+      fields: [field("customfield_10103", "string", true)],
+    });
+    expect(await f.run()).toEqual({
+      outcome: "rejected",
+      reason: "field-validation",
+      fieldId: "customfield_10103",
+      validation: "required-field",
+    });
+    expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+    const events = sink.events.filter((event) => event.op === "jira.field.admission");
+    expect(events[0]?.extra).toMatchObject({
+      operation: "jira.create",
+      refusedCount: 1,
+      validations: ["required-field"],
     });
   });
 });
@@ -587,6 +796,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     expect(result.data).toEqual({
       outcome: "rejected",
       reason: "field-validation",
+      guidance: expect.stringContaining("h2. Title"),
       violations: [
         { ruleId: "section-missing", subject: "Acceptance criteria", template: "SYN/Story" },
       ],

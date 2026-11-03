@@ -3864,6 +3864,7 @@
     "jira.attachment.source-log-failed",
     "jira.attachment.source-read-failed",
     "jira.create",
+    "jira.draft",
     "jira.mutation-execution-failed",
     "jira.template-preflight-failed",
     "json",

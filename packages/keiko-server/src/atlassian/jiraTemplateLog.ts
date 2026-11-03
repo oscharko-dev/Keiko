@@ -1,5 +1,6 @@
 import type { JiraIssueTemplateSource } from "@oscharko-dev/keiko-connectors";
 import {
+  type JiraFieldValidationFailure,
   type JiraMutationAttempt,
   type JiraTemplateRuleId,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
@@ -84,6 +85,46 @@ const TEMPLATE_ADMISSION = defineActivityLogOperation({
   releaseImpact: "minor",
 });
 
+const FIELD_ADMISSION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "jira.field.admission",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "atlassian.jiraTemplateLog.recordJiraFieldRefusal",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["jira.create", "jira.edit", "jira.transition", "jira.assign", "jira.draft"],
+    },
+    refusedCount: { type: "integer", dataClass: "count", required: true },
+    validations: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      // Literal on purpose (the registry reads a closed literal); a test pins it to the contract.
+      values: [
+        "required-field",
+        "unsupported-field",
+        "invalid-field",
+        "invalid-operation",
+        "bounds-exceeded",
+      ],
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["atlassian-action-execution"],
+  proofIds: ["jira.field.admission.line"],
+  releaseImpact: "minor",
+});
+
 export type JiraTemplateOperation = "jira.create" | "jira.edit" | "jira.transition" | "jira.assign";
 
 function templateOperation(value: string): JiraTemplateOperation | undefined {
@@ -115,6 +156,30 @@ export function recordJiraTemplateRefusal(
         stage: input.stage,
         violationCount: input.violations.length,
         ruleIds: [...new Set(input.violations.map((violation) => violation.ruleId))],
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+/** A proposed write Keiko's own validation refused before a human was asked: closed words, counts. */
+export function recordJiraFieldRefusal(
+  correlationId: string | undefined,
+  input: {
+    readonly operation: JiraTemplateOperation | "jira.draft";
+    readonly refusedCount: number;
+    readonly validations: readonly (JiraFieldValidationFailure | undefined)[];
+  },
+): void {
+  processServerLogSink().write(
+    activityLogEvent(
+      FIELD_ADMISSION,
+      { correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, level: "info" },
+      {
+        operation: input.operation,
+        refusedCount: input.refusedCount,
+        validations: [...new Set(input.validations.filter((value) => value !== undefined))],
         completeness: "complete",
         loss: "none",
       },

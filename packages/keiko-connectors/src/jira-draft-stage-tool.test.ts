@@ -29,6 +29,7 @@ const CREATE_FIELDS = [
   field("project", "project", true),
   field("issuetype", "issuetype", true),
   { ...field("summary", "string", true), name: "Summary" },
+  field("parent", "issuelink"),
   {
     ...field("description", "string", false),
     name: "Description",
@@ -55,6 +56,7 @@ function template(...frontMatter: readonly string[]): JiraIssueTemplate {
 }
 function connection(
   templates?: JiraIssueTemplateSet,
+  fields: readonly unknown[] = CREATE_FIELDS,
 ): Parameters<typeof executeJiraDraftStageTool>[2] {
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const path = new URL(request.url).pathname;
@@ -64,11 +66,11 @@ function connection(
     if (path.includes("createmeta"))
       return Promise.resolve(
         response({
-          values: CREATE_FIELDS,
+          values: fields,
           start: 0,
           size: 100,
           last: true,
-          total: CREATE_FIELDS.length,
+          total: fields.length,
         }),
       );
     return Promise.resolve(response({}, 404));
@@ -90,6 +92,7 @@ function harness(
   readonly stage: (
     args: CatalogJsonObject,
     owner?: string,
+    fields?: readonly unknown[],
   ) => ReturnType<typeof executeJiraDraftStageTool>;
 } {
   const store = createJiraDraftStore(storeOptions);
@@ -102,8 +105,8 @@ function harness(
   return {
     activity,
     deps: base,
-    stage: (args, owner = "chat-1") =>
-      executeJiraDraftStageTool(args, CONTEXT, connection(templates), {
+    stage: (args, owner = "chat-1", fields) =>
+      executeJiraDraftStageTool(args, CONTEXT, connection(templates, fields), {
         ...base,
         owner: () => owner,
       }),
@@ -117,6 +120,9 @@ function item(ref: string, extra: Record<string, unknown> = {}): Record<string, 
     fields: { summary: `Item ${ref}`, description: "## Acceptance criteria\n* works" },
     ...extra,
   };
+}
+function pageOf(...refs: readonly string[]): CatalogJsonObject {
+  return { items: refs.map((ref) => item(ref)) } as unknown as CatalogJsonObject;
 }
 function page(from: number, count: number): CatalogJsonObject[] {
   return Array.from(
@@ -233,6 +239,30 @@ describe("jira.draft-stage (#4178)", () => {
       refusal: "template-violation",
       violationCount: 1,
     });
+  });
+
+  it("refuses a page whose item Keiko would refuse, naming it and the field (S05 of #4173)", async () => {
+    const h = harness();
+    const required = [...CREATE_FIELDS, field("customfield_10103", "string", true)];
+    const result = await h.stage(pageOf("one", "two"), "chat-1", required);
+    expect(result).toEqual({
+      isError: true,
+      data: {
+        outcome: "rejected",
+        reason: "field-validation",
+        ref: "one",
+        fieldId: "customfield_10103",
+        validation: "required-field",
+      },
+    });
+    expect(h.activity.at(-1)).toMatchObject({
+      phase: "refused",
+      refusal: "invalid-fields",
+      pageItemCount: 2,
+      violationCount: 2,
+    });
+    const staged = await h.stage(pageOf("one"));
+    expect(staged.data).toMatchObject({ newDraft: true, itemCount: 1 });
   });
 
   describe("a template that requires a link (parentLink)", () => {

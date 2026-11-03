@@ -253,6 +253,18 @@ function parseItem(value: unknown): ParsedJiraDraftItem | JiraDraftProblem {
 export function isJiraDraftItem(value: unknown): boolean {
   return typeof parseItem(value) !== "string";
 }
+/** The key a relation to a draft item stands for while that item has no key yet. */
+export const JIRA_DRAFT_STAND_IN_KEY = "DRAFT-1";
+/** One staged item as a run would read it; its real identity needs the whole draft. */
+export function jiraDraftStagedItem(value: unknown): JiraDraftItem | undefined {
+  const item = parseItem(value);
+  if (typeof item === "string") return undefined;
+  return {
+    ...item,
+    identity: `${JIRA_DRAFT_IDENTITY_PREFIX}${"0".repeat(20)}`,
+    unlabelledTwin: false,
+  };
+}
 /** Refs that staged items name as parent or link target but no staged item carries yet. */
 export function unresolvedJiraDraftRefs(items: readonly unknown[]): readonly string[] {
   const parsed = items

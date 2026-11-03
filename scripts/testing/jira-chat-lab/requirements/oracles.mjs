@@ -99,6 +99,25 @@ function draftReportedKeys(exchanges) {
   );
 }
 
+/**
+ * The issue keys a turn's `jira.create` was refused onto. A create that finds its twin writes nothing
+ * and names the issue (`conflict` with `issueKey`): the same reconciliation as a draft's `existing`.
+ * Any other refusal names no issue this turn stands behind.
+ */
+function createReconciledKeys(exchanges) {
+  return (Array.isArray(exchanges) ? exchanges : [])
+    .filter((exchange) => toolExchangeOf(exchange, "jira.create"))
+    .map((exchange) => exchange.result.data)
+    .filter(
+      (data) =>
+        isRecord(data) &&
+        data.outcome === "rejected" &&
+        data.reason === "conflict" &&
+        typeof data.issueKey === "string",
+    )
+    .map((data) => data.issueKey);
+}
+
 /** The deterministic draft identity label of an issue, or undefined. */
 export const draftIdentity = (issue) =>
   (issue.fields?.labels ?? []).find((label) => DRAFT_IDENTITY.test(label));
@@ -106,12 +125,12 @@ export const draftIdentity = (issue) =>
 /**
  * The issues a turn produced, from the search after the turn. Credited are the issues new since the
  * turn began (a draft's `created` items and single creates alike) and the issues the turn's own
- * draft reported; an issue that existed before and that the draft did not report is not credited.
+ * draft reported or its create was refused onto; any other issue that existed before is not credited.
  * `reconciled` are the credited issues that existed before the turn. `duplicates` are the new issues
  * whose draft identity label already belonged to another issue.
  */
 export function turnIssues({ before, issues, exchanges }) {
-  const reported = draftReportedKeys(exchanges);
+  const reported = new Set([...draftReportedKeys(exchanges), ...createReconciledKeys(exchanges)]);
   const credited = issues.filter((issue) => !before.keys.has(issue.key) || reported.has(issue.key));
   const seen = new Set(before.identities);
   const duplicates = [];

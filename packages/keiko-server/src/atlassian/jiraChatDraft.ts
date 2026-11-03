@@ -5,6 +5,7 @@ import {
   findJiraDraftItem,
   jiraBrowseUrl,
   jiraDraftDependencies,
+  jiraTemplateViolationGuidance,
   parseJiraDraft,
   type AtlassianHttpBodyPort,
   type JiraDraft,
@@ -19,6 +20,7 @@ import {
   type JiraMutationAttempt,
   type JiraMutationOutcome,
   type JiraMutationResultState,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type {
   CatalogJsonObject,
@@ -39,7 +41,11 @@ import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 import { executeJiraChatMutation } from "./jiraChatMutation.js";
 import { jiraDraftProblemGuidance } from "./jiraChatDraftArguments.js";
 import { listIssueKeys } from "./jiraDraftKeyRanges.js";
-import { JIRA_REJECTED_GUIDANCE, JIRA_UNCERTAIN_GUIDANCE } from "./jiraMutationResult.js";
+import {
+  JIRA_ALREADY_REFUSED_GUIDANCE,
+  JIRA_REJECTED_GUIDANCE,
+  JIRA_UNCERTAIN_GUIDANCE,
+} from "./jiraMutationResult.js";
 import {
   logTrace,
   newTally,
@@ -83,7 +89,7 @@ export interface JiraChatDraftExecution {
    * (S14, #4179). Asked only when the Chat's Pods hold requirement units; true claims the one
    * advisory of this turn, so sending the same draft again runs it as it is.
    */
-  readonly adviseUntraced?: (() => boolean) | undefined;
+  readonly adviseUntraced?: ((refs: readonly string[]) => boolean) | undefined;
   /** Body-free progress and end-of-run counts for the Activity Log. */
   readonly activity?: ((activity: JiraDraftActivity) => void) | undefined;
   readonly now?: (() => number) | undefined;
@@ -141,6 +147,7 @@ const DETAIL_KEYS = [
   "fieldErrors",
   "messages",
   "violations",
+  "replayed",
   // A created item whose further links did not all land (#4176): which are missing.
   "linksRequested",
   "linksCreated",
@@ -490,17 +497,25 @@ export const JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE =
 export const JIRA_DRAFT_UNLISTED_GUIDANCE =
   "Not every created or found key fits this result: createdRanges and existingRanges list the keys that fit and unlistedKeyCount counts the rest. " +
   "Tell the user in plain language how many issues were created (createdCount) and name only the keys shown; never guess a key. Do not show this message.";
+/** What failed items without Jira's own words need: why, or that the same request cannot help. */
+function refusedAgainGuidance(failed: readonly DraftItemResult[]): string | undefined {
+  if (failed.some((item) => item.detail?.replayed === true)) return JIRA_ALREADY_REFUSED_GUIDANCE;
+  return jiraTemplateViolationGuidance(
+    failed.flatMap(
+      (item) => (item.detail?.violations ?? []) as unknown as readonly JiraTemplateViolation[],
+    ),
+  );
+}
 /** An uncertain item outranks a refused one: the model must stop and tell the user first. */
 function draftGuidance(items: readonly DraftItemResult[]): string | undefined {
   if (items.some((item) => item.state === "uncertain")) return JIRA_UNCERTAIN_GUIDANCE;
-  if (
-    items.some(
-      (item) => item.state === "failed" && (item.detail?.fieldErrors ?? item.detail?.messages),
-    )
-  )
+  const failed = items.filter((item) => item.state === "failed");
+  if (failed.some((item) => item.detail?.fieldErrors ?? item.detail?.messages))
     return items.some((item) => item.issueKey !== undefined)
       ? JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE
       : JIRA_REJECTED_GUIDANCE;
+  const refused = refusedAgainGuidance(failed);
+  if (refused !== undefined) return refused;
   if (items.some((item) => item.state === "pending")) return JIRA_DRAFT_PENDING_GUIDANCE;
   const reconciledOnly =
     items.some((item) => item.state === "existing") &&
@@ -668,7 +683,7 @@ function advisesUntraced(
 ): boolean {
   if (input.adviseUntraced === undefined || session === undefined) return false;
   if (!untracedRun(draft, excluded) || session.unitCount() === 0) return false;
-  return input.adviseUntraced();
+  return input.adviseUntraced(draft.items.map((item) => item.ref));
 }
 
 function refusedDraft(

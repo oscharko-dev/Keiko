@@ -212,6 +212,53 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.citationRepair).toBe("skipped-budget");
   });
 
+  it("keeps the completed answer when the repair is refused at admission (S11 of #4173)", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-refused" });
+    const refusal = new Error("input grant exhausted");
+    const calls: AnswerGeneratorInput[] = [];
+    const generator: AnswerGenerator = {
+      generate: (input): Promise<string> => {
+        calls.push(input);
+        return calls.length === 1
+          ? Promise.resolve("A finished answer without a marker.")
+          : Promise.reject(refusal);
+      },
+      repairRefused: (error) => error === refusal,
+    };
+
+    const result = await runGroundedAnswer(
+      { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+      { conversationId: "conv-repair-refused", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+
+    expect(calls).toHaveLength(2);
+    expect(result.answer).toBe("A finished answer without a marker.");
+    expect(result.citationRepair).toBe("skipped-budget");
+  });
+
+  it("still fails the turn on a repair error that is no refusal", async () => {
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair-broken" });
+    let calls = 0;
+    const generator: AnswerGenerator = {
+      generate: (): Promise<string> => {
+        calls += 1;
+        return calls === 1
+          ? Promise.resolve("A finished answer without a marker.")
+          : Promise.reject(new Error("provider failed"));
+      },
+      repairRefused: () => false,
+    };
+
+    await expect(
+      runGroundedAnswer(
+        { retrieval: { store, embeddingAdapter: scriptedAdapter() }, answerGenerator: generator },
+        { conversationId: "conv-repair-broken", capsuleId: seeded.capsuleId, text: "alpha" },
+      ),
+    ).rejects.toThrow("provider failed");
+  });
+
   it("retries once with citationRepair when the model omits markers", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-repair" });

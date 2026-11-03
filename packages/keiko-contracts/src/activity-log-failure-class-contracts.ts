@@ -138,7 +138,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {
       start: [],
-      state: ["atlassian.jira-draft", "atlassian.jira-report", "jira.attachment.source"],
+      state: [
+        "atlassian.jira-draft",
+        "atlassian.jira-report",
+        "jira.attachment.source",
+        "jira.field.admission",
+      ],
       end: ["atlassian.action.outcome"],
       failure: [],
       loss: [],
@@ -148,6 +153,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.jira-draft",
       "atlassian.jira-report",
       "jira.attachment.source",
+      "jira.field.admission",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -155,6 +161,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.jira-draft",
       "atlassian.jira-report",
       "jira.attachment.source",
+      "jira.field.admission",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
@@ -162,6 +169,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "atlassian.jira-draft",
       "atlassian.jira-report",
       "jira.attachment.source",
+      "jira.field.admission",
     ],
     requiredEvidenceClasses: [
       "closed-enum",

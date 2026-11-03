@@ -390,3 +390,24 @@ export function validateJiraIssueTemplateAgainstInstance(
     ...transitionFindings(template, instance),
   ];
 }
+
+const SECTION_RULES: ReadonlySet<JiraTemplateViolation["ruleId"]> = new Set([
+  "section-missing",
+  "section-empty",
+]);
+/**
+ * Fixed words for a refusal that names template rules, never derived from remote text. The rule ids
+ * alone do not say how a section is written, so a model would otherwise guess at its heading form.
+ */
+export function jiraTemplateViolationGuidance(
+  violations: readonly JiraTemplateViolation[],
+): string | undefined {
+  if (violations.length === 0) return undefined;
+  const sections = violations.some((violation) => SECTION_RULES.has(violation.ruleId))
+    ? " A section is a line of its own, h2. Title, with its text below; subject is its title."
+    : "";
+  return (
+    "Nothing was changed: this breaks the issue template of the project. " +
+    `Correct what violations name (ruleId, subject), then send it again.${sections}`
+  );
+}

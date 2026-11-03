@@ -1,12 +1,18 @@
 import {
-  checkJiraManagedMutationTemplates,
+  checkJiraManagedMutation,
   firstJiraDraftTemplateRefusal,
+  jiraDraftFieldRefusals,
+  jiraTemplateViolationGuidance,
+  parseJiraDraft,
+  type JiraDraftFieldRefusal,
   type JiraDraftTemplateRefusal,
   type JiraManagedConnection,
 } from "@oscharko-dev/keiko-connectors";
-import type {
-  JiraDraftRefusalReason,
-  JiraMutationOperation,
+import {
+  sanitizeJiraMutationFailureDetail,
+  type JiraFieldValidationFailure,
+  type JiraMutationOperation,
+  type JiraTemplateViolation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { ManagedMcpInvocationContext } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
@@ -17,14 +23,19 @@ import type {
   JiraChatCatalogAction,
   JiraChatCatalogContext,
 } from "./jiraChatCatalogConsumer.js";
-import { jiraMutationToolResult } from "./jiraMutationResult.js";
+import { jiraFailureDetailData, jiraMutationToolResult } from "./jiraMutationResult.js";
 import { recordJiraDraftActivity } from "./jiraDraftActivity.js";
 import { draftRefusalData, readableChatDraft } from "./jiraChatDraftArguments.js";
 import { resolveCurrentJiraChatAuthority } from "./jiraChatAuthority.js";
-import { jiraIssueTemplateSource, recordJiraTemplateRefusal } from "./jiraTemplateLog.js";
+import {
+  jiraIssueTemplateSource,
+  recordJiraFieldRefusal,
+  recordJiraTemplateRefusal,
+} from "./jiraTemplateLog.js";
 
 /** The writes that change issue fields, which is what an issue template describes. */
-function fieldOperation(tool: string): JiraMutationOperation | undefined {
+type JiraFieldOperation = "jira.create" | "jira.edit" | "jira.transition" | "jira.assign";
+function fieldOperation(tool: string): JiraFieldOperation | undefined {
   return tool === "jira.create" ||
     tool === "jira.edit" ||
     tool === "jira.transition" ||
@@ -125,38 +136,18 @@ function itemsOf(args: CatalogJsonObject): readonly Readonly<Record<string, unkn
   return Array.isArray(items) ? (items as readonly Readonly<Record<string, unknown>>[]) : [];
 }
 
-/**
- * The first item of a draft that an active template would refuse when it is created (#4178): each
- * item runs the check its create will run, so a human is never asked to approve known-invalid
- * items. Per-item checks also ran when an item was staged; templates may have changed since, and an
- * inline draft was never staged.
- */
-async function draftTemplateRefusal(
-  ports: JiraChatTemplatePreflightPorts,
-  action: JiraChatCatalogAction,
-  context: JiraChatCatalogContext,
-  draftArguments: CatalogJsonObject,
-): Promise<JiraDraftTemplateRefusal | undefined> {
-  if (!templatesGovernCreate(ports.deps.store)) return undefined;
-  const access = dryRunAccess(ports, context);
-  if (access === undefined) return undefined;
-  const target = dryRunTarget(ports, action, context, access.factory, access.current);
-  try {
-    return await firstJiraDraftTemplateRefusal(
-      itemsOf(draftArguments),
-      target.invocation,
-      target.connection,
-    );
-  } catch (error) {
-    recordPreflightFailure(context.correlationId, error);
-    return undefined;
-  }
+/** Why the items of a readable draft are not put in front of a human. */
+interface DraftItemsRefusal {
+  readonly reason: "template-violation" | "invalid-fields";
+  readonly violationCount: number;
+  readonly data: CatalogJsonObject;
 }
-
 /** The structured refusal the model corrects: the item and the exact rules it violates. */
 function draftTemplateRefusalData(refusal: JiraDraftTemplateRefusal): CatalogJsonObject {
+  const guidance = jiraTemplateViolationGuidance(refusal.violations);
   return {
     ...jiraMutationToolResult("rejected", "field-validation").data,
+    ...(guidance === undefined ? {} : { guidance }),
     items: [
       {
         ref: refusal.ref,
@@ -167,20 +158,88 @@ function draftTemplateRefusalData(refusal: JiraDraftTemplateRefusal): CatalogJso
     ],
   };
 }
-
-/** Why the draft is not put in front of a human, in the Activity Log's closed words. */
-function refusalReason(
-  draft: ReturnType<typeof readableChatDraft>,
-  refusal: JiraDraftTemplateRefusal | undefined,
-): "template-violation" | JiraDraftRefusalReason | undefined {
-  if (!draft.ok) return draft.reason;
-  return refusal === undefined ? undefined : "template-violation";
+/** The items as a run of this draft reports them, so the model corrects them the same way. */
+function draftFieldRefusalData(
+  refusals: readonly JiraDraftFieldRefusal[],
+  total: number,
+): CatalogJsonObject {
+  return {
+    ...jiraMutationToolResult("rejected", "field-validation").data,
+    failedCount: total,
+    ...(total > refusals.length ? { omittedRowCount: total - refusals.length } : {}),
+    items: refusals.map(({ ref, detail }) => ({
+      ref,
+      state: "failed",
+      reason: "field-validation",
+      ...jiraFailureDetailData(sanitizeJiraMutationFailureDetail(detail)),
+    })),
+  };
+}
+/**
+ * Every item of a draft runs the checks its create will run, so a human is never asked to approve
+ * known-invalid items: the templates active for its creation (#4178; each item reads Jira, so only
+ * while one can govern), then the field validation (S05 of #4173; its size costs no further read).
+ * Per-item checks also ran when an item was staged; templates may have changed since, and an inline
+ * draft was never staged.
+ */
+async function draftItemsRefusal(
+  ports: JiraChatTemplatePreflightPorts,
+  action: JiraChatCatalogAction,
+  context: JiraChatCatalogContext,
+  draftArguments: CatalogJsonObject,
+): Promise<DraftItemsRefusal | undefined> {
+  const access = dryRunAccess(ports, context);
+  if (access === undefined) return undefined;
+  const { invocation, connection } = dryRunTarget(
+    ports,
+    action,
+    context,
+    access.factory,
+    access.current,
+  );
+  try {
+    const template = templatesGovernCreate(ports.deps.store)
+      ? await firstJiraDraftTemplateRefusal(itemsOf(draftArguments), invocation, connection)
+      : undefined;
+    if (template !== undefined) return templateDraftRefusal(template, context.correlationId);
+    const items = parseJiraDraft(draftArguments)?.items ?? [];
+    const fields = await jiraDraftFieldRefusals(items, invocation, connection, { reconcile: true });
+    if (fields.refusals.length === 0) return undefined;
+    recordJiraFieldRefusal(context.correlationId, {
+      operation: "jira.draft",
+      refusedCount: fields.total,
+      validations: fields.refusals.map((refusal) => refusal.detail.validation),
+    });
+    return {
+      reason: "invalid-fields",
+      violationCount: fields.total,
+      data: draftFieldRefusalData(fields.refusals, fields.total),
+    };
+  } catch (error) {
+    recordPreflightFailure(context.correlationId, error);
+    return undefined;
+  }
+}
+function templateDraftRefusal(
+  refusal: JiraDraftTemplateRefusal,
+  correlationId: string,
+): DraftItemsRefusal {
+  recordJiraTemplateRefusal(correlationId, {
+    operation: "jira.create",
+    stage: "pre-approval",
+    violations: refusal.violations,
+  });
+  return {
+    reason: "template-violation",
+    violationCount: refusal.violations.length,
+    data: draftTemplateRefusalData(refusal),
+  };
 }
 
 /**
  * A draft is judged before any human is asked: the staged draft it names must exist unchanged and
  * be runnable (every relation known, no cycle, within the resource bound), and every item must pass
- * the templates active for its creation. The refusal is the structured result the model corrects.
+ * what its creation will check. The refusal is the structured result the model corrects.
  */
 async function draftPreflight(
   ports: JiraChatTemplatePreflightPorts,
@@ -190,31 +249,41 @@ async function draftPreflight(
   const args = ports.writeArguments(action);
   if (args === undefined) return undefined;
   const startedAt = Date.now();
-  const { jiraDraftStore, activityLog } = ports.deps;
+  const { jiraDraftStore } = ports.deps;
   const draft = readableChatDraft(jiraDraftStore, context.chatId, args);
   const refusal = draft.ok
-    ? await draftTemplateRefusal(ports, action, context, draft.arguments)
+    ? await draftItemsRefusal(ports, action, context, draft.arguments)
     : undefined;
-  const reason = refusalReason(draft, refusal);
-  recordJiraDraftActivity(activityLog, context.correlationId, {
+  recordDraftPreflight(ports, context, {
+    reason: draft.ok ? refusal?.reason : draft.reason,
+    sizes: draftSizes(jiraDraftStore, context.chatId, args, draft),
+    violationCount: refusal?.violationCount ?? 0,
+    startedAt,
+  });
+  if (refusal !== undefined) return refusal.data;
+  return draft.ok ? undefined : draftRefusalData(draft);
+}
+function recordDraftPreflight(
+  ports: JiraChatTemplatePreflightPorts,
+  context: JiraChatCatalogContext,
+  outcome: {
+    readonly reason: Parameters<typeof recordJiraDraftActivity>[2]["refusal"];
+    readonly sizes: ReturnType<typeof draftSizes>;
+    readonly violationCount: number;
+    readonly startedAt: number;
+  },
+): void {
+  const { reason, sizes, violationCount, startedAt } = outcome;
+  recordJiraDraftActivity(ports.deps.activityLog, context.correlationId, {
     phase: reason === undefined ? "submitted" : "refused",
     ...(reason === undefined ? {} : { refusal: reason }),
     newDraft: false,
     pageItemCount: 0,
-    ...draftSizes(jiraDraftStore, context.chatId, args, draft),
+    ...sizes,
     unresolvedRefCount: 0,
-    violationCount: refusal?.violations.length ?? 0,
+    violationCount,
     durationMs: Date.now() - startedAt,
   });
-  if (refusal !== undefined) {
-    recordJiraTemplateRefusal(context.correlationId, {
-      operation: "jira.create",
-      stage: "pre-approval",
-      violations: refusal.violations,
-    });
-    return draftTemplateRefusalData(refusal);
-  }
-  return draft.ok ? undefined : draftRefusalData(draft);
 }
 /** The counts of the staged draft a call names (zero for an inline or unavailable draft). */
 function draftSizes(
@@ -238,35 +307,49 @@ async function dryRun(
   args: CatalogJsonObject,
   correlationId: string,
 ): Promise<CatalogJsonObject | undefined> {
-  const result = await checkJiraManagedMutationTemplates(
+  const result = await checkJiraManagedMutation(
     operation,
     args,
     target.invocation,
     target.connection,
   );
-  if (result.ok || result.violations === undefined) return undefined;
-  recordJiraTemplateRefusal(correlationId, {
-    operation,
-    stage: "pre-approval",
-    violations: result.violations,
-  });
+  if (result.ok) return undefined;
+  recordDryRunRefusal(correlationId, operation, result.violations, result.detail?.validation);
   return jiraMutationToolResult(
     "rejected",
     result.reason,
     {},
     false,
-    undefined,
+    sanitizeJiraMutationFailureDetail(result.detail),
     undefined,
     result.violations,
   ).data;
 }
+function recordDryRunRefusal(
+  correlationId: string,
+  operation: JiraMutationOperation,
+  violations: readonly JiraTemplateViolation[] | undefined,
+  validation: JiraFieldValidationFailure | undefined,
+): void {
+  if (violations !== undefined) {
+    recordJiraTemplateRefusal(correlationId, { operation, stage: "pre-approval", violations });
+    return;
+  }
+  const refused = fieldOperation(operation);
+  if (refused !== undefined)
+    recordJiraFieldRefusal(correlationId, {
+      operation: refused,
+      refusedCount: 1,
+      validations: [validation],
+    });
+}
 
 /**
- * Runs the template admission of a proposed create, edit, assignment or transition, and of every
- * item of a backlog draft, before Chat asks a human to approve it, using the same pipeline as the
- * write itself. A refusal is the structured tool result the model corrects; a write that violates
- * an active template is never put in front of a person. The gate in front of the Jira request stays
- * authoritative in every autonomy mode.
+ * Runs the admission of a proposed create, edit, assignment or transition, and of every item of a
+ * backlog draft, before Chat asks a human to approve it, using the same pipeline as the write
+ * itself. A refusal is the structured tool result the model corrects; a write that violates an
+ * active template or that Keiko's own field validation refuses is never put in front of a person.
+ * The gate in front of the Jira request stays authoritative in every autonomy mode.
  */
 export function createJiraChatTemplatePreflight(
   ports: JiraChatTemplatePreflightPorts,

@@ -14,12 +14,14 @@ const reachedPoint = (when, exchanges) =>
 /**
  * Starts the lab's mid-turn action (`during.run`) once, when the stored tool transcript first shows
  * the point it waits for, and returns the promise of what it observed. It is not awaited here, so
- * the supervision keeps deciding approvals while it runs; `turnOpen` records whether the turn was
- * still unsettled when it finished.
+ * the supervision keeps deciding approvals while it runs; `startedOpen` records whether the turn was
+ * unsettled when it started, `turnOpen` whether it still was when it finished. The product answers a
+ * mode change only after the turn it interrupts has settled, so that finish says nothing about it.
  */
 export function startDuring(during, exchanges, isSettled) {
   if (during === undefined || !reachedPoint(during.when, exchanges)) return undefined;
-  const finished = (outcome) => ({ ...outcome, turnOpen: !isSettled() });
+  const startedOpen = !isSettled();
+  const finished = (outcome) => ({ ...outcome, startedOpen, turnOpen: !isSettled() });
   return Promise.resolve()
     .then(during.run)
     .then(

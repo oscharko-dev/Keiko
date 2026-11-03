@@ -770,6 +770,44 @@ describe("S19 no duplicates on re-run", () => {
     }
   });
 
+  it("is green when the second run's single creates are refused onto the existing epics", async () => {
+    const twin = (key) => ({
+      call: { id: `call-${key}`, name: "jira_create", arguments: {} },
+      result: {
+        toolRef: { canonicalId: "keiko.jira.create", contractVersion: 3 },
+        status: "failed",
+        data: { outcome: "rejected", reason: "conflict", issueKey: key },
+      },
+    });
+    const check = await JOURNEYS.S19(
+      setup(() => ({ toolExchanges: [twin("REQ-1"), twin("REQ-2")] })),
+      CHAT,
+    );
+    expect(check.status).toBe("green");
+  });
+
+  it("credits a refused single create only when it names the existing issue", async () => {
+    const refusal = (data) => ({
+      call: { id: "call-create", name: "jira_create", arguments: {} },
+      result: {
+        toolRef: { canonicalId: "keiko.jira.create", contractVersion: 3 },
+        status: "failed",
+        data,
+      },
+    });
+    for (const data of [
+      { outcome: "rejected", reason: "conflict" },
+      { outcome: "rejected", reason: "field-validation", issueKey: "REQ-1" },
+      { outcome: "unknown", reason: "conflict", issueKey: "REQ-1" },
+    ]) {
+      const check = await JOURNEYS.S19(
+        setup(() => ({ toolExchanges: [refusal(data)] })),
+        CHAT,
+      );
+      expect(check.status).toBe("unverified");
+    }
+  });
+
   it("credits nothing when the first run created no epic to repeat", async () => {
     const ctx = context({ act: () => ({ toolExchanges: [draftExchange([])] }) });
     const check = await JOURNEYS.S19(ctx, CHAT);

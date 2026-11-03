@@ -436,6 +436,7 @@
   "indexing.start.accepted": "memory-knowledge",
   "indexing.start.refused": "memory-knowledge",
   "jira.attachment.source": "bff",
+  "jira.field.admission": "bff",
   "jira.template.admission": "bff",
   "knowledge.log.sink-failed": "memory-knowledge",
   "knowledge.requirement-trace.applied": "memory-knowledge",
