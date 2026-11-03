@@ -241,7 +241,13 @@ describe("SonarCloud PR quality gate", () => {
       if (path.includes("project_pull_requests"))
         return {
           pullRequests: [
-            { commit: { sha: headSha }, key: "2490", status: { qualityGateStatus: "OK" } },
+            {
+              base: "dev",
+              target: "dev",
+              commit: { sha: headSha },
+              key: "2490",
+              status: { qualityGateStatus: "OK" },
+            },
           ],
         };
       if (path.includes("issues/search")) return { total: 0 };
@@ -260,6 +266,7 @@ describe("SonarCloud PR quality gate", () => {
     };
     await expect(
       runSonarPullRequestGate({
+        baseRef: "dev",
         base: "b".repeat(40),
         execute: () => "M\tREADME.md",
         headSha,
@@ -325,7 +332,13 @@ describe("SonarCloud PR quality gate", () => {
       if (path.includes("project_pull_requests"))
         return {
           pullRequests: [
-            { commit: { sha: headSha }, key: "2316", status: { qualityGateStatus: "OK" } },
+            {
+              base: "dev",
+              target: "dev",
+              commit: { sha: headSha },
+              key: "2316",
+              status: { qualityGateStatus: "OK" },
+            },
           ],
         };
       if (path.includes("issues/search")) return { total: 0 };
@@ -351,6 +364,7 @@ describe("SonarCloud PR quality gate", () => {
     };
     await expect(
       runSonarPullRequestGate({
+        baseRef: "dev",
         headSha,
         load,
         log: (message) => logs.push(message),
@@ -386,10 +400,17 @@ describe("SonarCloud PR quality gate", () => {
   it("adapts exact-head runtime variables and reports missing variables", async () => {
     const runs = [];
     await runSonarPullRequestGateCli({
-      env: { SONAR_HEAD_SHA: "head", SONAR_PULL_REQUEST: "2316", SONAR_TOKEN: "token" },
+      env: {
+        SONAR_BASE_REF: "dev",
+        SONAR_HEAD_SHA: "head",
+        SONAR_PULL_REQUEST: "2316",
+        SONAR_TOKEN: "token",
+      },
       run: async (input) => runs.push(input),
     });
-    expect(runs).toEqual([{ headSha: "head", pullRequest: "2316", token: "token" }]);
+    expect(runs).toEqual([
+      { baseRef: "dev", headSha: "head", pullRequest: "2316", token: "token" },
+    ]);
 
     const errors = [];
     const exitCodes = [];
@@ -417,17 +438,21 @@ describe("SonarCloud PR quality gate", () => {
 
   it("uses process runtime variables and default CLI error reporting", async () => {
     const previous = {
+      baseRef: process.env.SONAR_BASE_REF,
       head: process.env.SONAR_HEAD_SHA,
       pullRequest: process.env.SONAR_PULL_REQUEST,
       token: process.env.SONAR_TOKEN,
     };
     const runs = [];
+    process.env.SONAR_BASE_REF = "dev";
     process.env.SONAR_HEAD_SHA = "head";
     process.env.SONAR_PULL_REQUEST = "2316";
     delete process.env.SONAR_TOKEN;
     try {
       await runSonarPullRequestGateCli({ run: async (input) => runs.push(input) });
-      expect(runs).toEqual([{ headSha: "head", pullRequest: "2316", token: undefined }]);
+      expect(runs).toEqual([
+        { baseRef: "dev", headSha: "head", pullRequest: "2316", token: undefined },
+      ]);
     } finally {
       restoreEnvironment(previous);
     }
@@ -449,6 +474,8 @@ describe("SonarCloud PR quality gate", () => {
 });
 
 function restoreEnvironment(previous) {
+  if (previous.baseRef === undefined) delete process.env.SONAR_BASE_REF;
+  else process.env.SONAR_BASE_REF = previous.baseRef;
   if (previous.head === undefined) delete process.env.SONAR_HEAD_SHA;
   else process.env.SONAR_HEAD_SHA = previous.head;
   if (previous.pullRequest === undefined) delete process.env.SONAR_PULL_REQUEST;
