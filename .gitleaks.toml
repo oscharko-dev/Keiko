@@ -219,3 +219,12 @@ paths = ['''^packages/keiko-security/src/redaction-diff-credential-floor\.test\.
 targetRules = ["private-key", "generic-api-key"]
 regexTarget = "match"
 regexes = ['''MIIEowIBAAKCAQEAuZ9b5XyQfloorfixture''']
+
+[[allowlists]]
+description = "PR #4230: a synthetic 40-character hexadecimal token in one memory-lab corpus test proved that the blueprint validator refuses long-token shapes. It is test data, not a credential; the fixture was rewritten to be assembled at runtime in the next commit, and this branch is never force-pushed, so the one history commit stays exempted by file, rule and exact line."
+condition = "AND"
+commits = ["eaf6f80a9df68298ced7c47c7bf2633e00077577"]
+paths = ['''scripts/__tests__/memory-lab-corpus-focused\.test\.mjs''']
+targetRules = ["generic-api-key"]
+regexTarget = "line"
+regexes = ['''^\s*const secret = "a1b2c3d4e5f6[a-f0-9]{30}";$''']
