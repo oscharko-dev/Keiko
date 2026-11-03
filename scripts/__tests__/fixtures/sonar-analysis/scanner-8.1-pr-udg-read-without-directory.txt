@@ -1,0 +1,328 @@
+13:49:51.552 INFO  Scanner configuration file: <redacted>/work/_temp/sonar-scanner-8.1.0.6389-linux-x64/conf/sonar-scanner.properties
+13:49:51.555 INFO  Project root configuration file: <redacted>/work/Keiko/Keiko/sonar-project.properties
+13:49:51.573 INFO  SonarScanner CLI 8.1.0.6389
+13:49:51.579 INFO  Linux 7.0.0-1017-azure amd64
+13:49:54.634 INFO  Communicating with SonarQube Cloud
+13:49:54.635 INFO  JRE provisioning: os[linux], arch[x86_64]
+13:49:57.901 INFO  Starting SonarScanner Engine...
+13:49:57.902 INFO  Java 21.0.13 Eclipse Adoptium (64-bit)
+13:50:01.008 INFO  Load global settings
+13:50:01.659 INFO  Load global settings (done) | time=651ms
+13:50:01.665 INFO  Server id: 1BD809FA-AWHW8ct9-T_TB3XqouNu
+13:50:01.674 INFO  Found an active CI vendor: 'Github Actions'
+13:50:01.986 INFO  Loading required plugins
+13:50:01.987 INFO  Load plugins index
+13:50:02.160 INFO  Load plugins index (done) | time=171ms
+13:50:02.241 INFO  Load/download plugins
+13:50:03.105 INFO  Load/download plugins (done) | time=863ms
+13:50:03.214 INFO  Loaded core extensions: sca, a3s, architecture
+13:50:03.474 INFO  Load project settings for component key: 'oscharko-dev_Keiko'
+13:50:03.723 INFO  Load project settings for component key: 'oscharko-dev_Keiko' (done) | time=248ms
+13:50:04.001 INFO  Process project properties
+13:50:04.022 INFO  Project key: oscharko-dev_Keiko
+13:50:04.022 INFO  Base dir: <redacted>/work/Keiko/Keiko
+13:50:04.022 INFO  Working dir: <redacted>
+13:50:04.053 INFO  Check ALM binding of project 'oscharko-dev_Keiko'
+13:50:04.216 INFO  Detected project binding: BOUND
+13:50:04.216 INFO  Check ALM binding of project 'oscharko-dev_Keiko' (done) | time=163ms
+13:50:04.223 INFO  Load branch configuration
+13:50:04.223 INFO  Github event: pull_request
+13:50:04.234 INFO  Auto-configuring pull request '4203'
+13:50:05.507 INFO  Load branch configuration (done) | time=1285ms
+13:50:05.513 INFO  Create analysis
+13:50:05.770 INFO  Pull request 4203 for merge into dev from claude/lint-heap-14gb
+13:50:05.770 INFO  Create analysis (done) | time=257ms
+13:50:06.154 INFO  Load quality profiles
+13:50:06.517 INFO  Load quality profiles (done) | time=364ms
+13:50:06.540 INFO  Load active rules
+13:50:07.237 INFO  Load active rules (done) | time=698ms
+13:50:07.405 INFO  Organization key: oscharko-dev
+13:50:07.447 INFO  Preprocessing files...
+13:50:17.449 INFO  
+13:50:20.327 INFO  9 languages detected in 8292 preprocessed files (done) | time=12880ms
+13:50:20.327 INFO  70301 files ignored because of inclusion/exclusion patterns
+13:50:20.327 INFO  35 directories skipped because of exclusion patterns (content not counted)
+13:50:20.327 INFO  4145 files ignored because of scm ignore settings
+13:50:20.346 INFO  Loading plugins for detected languages
+13:50:20.346 INFO  Load/download plugins
+13:50:21.639 INFO  Load/download plugins (done) | time=1292ms
+13:50:21.874 INFO  Load project repositories
+13:50:22.888 INFO  Load project repositories (done) | time=1012ms
+13:50:22.890 INFO  SCM collecting changed files in the branch
+13:50:23.029 INFO  Merge base sha1: 7bbca2e34e04e4bf322e0d8f58366244d984bb16
+13:50:23.060 INFO  SCM collecting changed files in the branch (done) | time=167ms
+13:50:23.094 INFO  Indexing files...
+13:50:23.096 INFO  Project configuration:
+13:50:23.096 INFO    Excluded sources: tests/**, **/__tests__/**, **/testing/**, **/*.test.*, **/*.spec.*, **/*.bench.*, **/_support.*, **/test-support.*, **/test-support/**, **/test-fixtures.*, **/testing.*, **/dist/**, **/node_modules/**, **/coverage/**, **/.next/**, **/out/**, **/.keiko/**, **/.codex/**, **/.claude/**, **/.portable-runtime/**, docs/design-system/evidence/**, native/portable-launcher/**, scripts/native-quality/**, scripts/windows-portable-rfc3161.cs, scripts/arch-check-negative.mjs, native/secure-workspace-read/secure_workspace_read.c, native/runtime-supervisor/windows/keiko_runtime_supervisor.c, native/runtime-supervisor/windows/qualification_fixture.c, native/runtime-attestation/windows/keiko_runtime_attestation.c, native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h, native/runtime-supervisor/macos/keiko_runtime_supervisor.c, native/runtime-supervisor/macos/qualification_fixture.c, native/runtime-supervisor/macos/system-extension/keiko_runtime_monitor.m, native/runtime-supervisor/macos/system-extension/keiko_system_extension_manager.m, native/secure-workspace-read/test-protocol.mjs, native/runtime-supervisor/test-protocol.mjs, native/runtime-supervisor/macos/test-protocol.mjs, native/runtime-supervisor/protocol-harness.mjs, native/lib/c-source-scanner.mjs, **/*.c, **/*.cc, **/*.cxx, **/*.h, **/*.hh, **/*.m, **/*.mm, **/*.cs, **/*.d.ts, **/*.d.mts, **/*.d.cts, **/*.generated.*, **/*.min.*, **/*.7z, **/*.aiff, **/*.avi, **/*.bin, **/*.bmp, **/*.class, **/*.dll, **/*.dmg, **/*.dylib, **/*.eot, **/*.exe, **/*.gif, **/*.gz, **/*.icns, **/*.ico, **/*.jpg, **/*.jpeg, **/*.m4a, **/*.map, **/*.mov, **/*.mp3, **/*.mp4, **/*.obj, **/*.ogg, **/*.otf, **/*.pdf, **/*.png, **/*.so, **/*.svg, **/*.tar, **/*.tgz, **/*.tif, **/*.tiff, **/*.ttf, **/*.wasm, **/*.wav, **/*.webm, **/*.webp, **/*.woff, **/*.woff2, **/*.zip, **/build-wrapper-dump.json, tests/**, **/__tests__/**, **/testing/**, **/*.test.*, **/*.spec.*, **/*.bench.*, **/_support.*, **/test-support.*, **/test-support/**, **/test-fixtures.*, **/testing.*, native/secure-workspace-read/test-protocol.mjs, native/runtime-supervisor/test-protocol.mjs, native/runtime-supervisor/macos/test-protocol.mjs, native/runtime-supervisor/protocol-harness.mjs, native/lib/c-source-scanner.mjs
+13:50:23.098 INFO    Included tests: tests/**, **/__tests__/**, **/testing/**, **/*.test.*, **/*.spec.*, **/*.bench.*, **/_support.*, **/test-support.*, **/test-support/**, **/test-fixtures.*, **/testing.*, native/secure-workspace-read/test-protocol.mjs, native/runtime-supervisor/test-protocol.mjs, native/runtime-supervisor/macos/test-protocol.mjs, native/runtime-supervisor/protocol-harness.mjs, native/lib/c-source-scanner.mjs
+13:50:23.101 INFO    Excluded tests: native/portable-launcher/**, scripts/native-quality/**, packages/keiko-quality-intelligence/src/export/__tests__/textSafety.test.ts, tests/fixtures/coding-workbench-lab/ledger-lab/**, tests/fixtures/coding-workbench-lab/inventory-py/**, **/*.c, **/*.cc, **/*.cxx, **/*.h, **/*.hh, **/*.m, **/*.mm, **/*.cs, **/*.7z, **/*.aiff, **/*.avi, **/*.bin, **/*.bmp, **/*.class, **/*.dll, **/*.dmg, **/*.dylib, **/*.eot, **/*.exe, **/*.gif, **/*.gz, **/*.icns, **/*.ico, **/*.jpg, **/*.jpeg, **/*.m4a, **/*.map, **/*.mov, **/*.mp3, **/*.mp4, **/*.obj, **/*.ogg, **/*.otf, **/*.pdf, **/*.png, **/*.so, **/*.svg, **/*.tar, **/*.tgz, **/*.tif, **/*.tiff, **/*.ttf, **/*.wasm, **/*.wav, **/*.webm, **/*.webp, **/*.woff, **/*.woff2, **/*.zip
+13:50:23.101 INFO    Excluded sources for coverage: packages/keiko-ui/public/**, scripts/arch-check-negative.mjs, **/*.sh, **/*.ps1
+13:50:23.101 INFO    Excluded sources for duplication: packages/keiko-ui/src/lib/i18n-messages.*.ts, packages/keiko-ui/src/**/*-i18n.ts, packages/keiko-ui/src/**/*-i18n.de.ts, packages/keiko-ui/src/**/*-i18n.en.ts, scripts/__tests__/windows-rfc3161-fixtures.ps1, scripts/__tests__/windows-native-policy-fixtures.ps1, packages/keiko-evaluations/src/**/fixtures.ts, packages/keiko-evaluations/src/**/fixtures/**, packages/keiko-contracts/src/activity-log-failure-class-contracts.ts
+13:50:23.664 INFO  8292 files indexed (done) | time=569ms
+13:50:23.666 INFO  Quality profile for css: Sonar way comprehensive
+13:50:23.666 INFO  Quality profile for docker: Sonar way comprehensive
+13:50:23.666 INFO  Quality profile for js: Sonar way comprehensive
+13:50:23.666 INFO  Quality profile for json: Sonar way comprehensive
+13:50:23.667 INFO  Quality profile for powershell: Sonar way comprehensive
+13:50:23.667 INFO  Quality profile for shell: Sonar way comprehensive
+13:50:23.667 INFO  Quality profile for ts: Sonar way comprehensive
+13:50:23.667 INFO  Quality profile for web: Sonar way comprehensive
+13:50:23.667 INFO  Quality profile for yaml: Sonar way comprehensive
+13:50:23.883 INFO  Dependency analysis skipped
+13:50:23.883 INFO  ------------- Run sensors on module Keiko
+13:50:23.929 INFO  Load metrics repository
+13:50:24.053 INFO  Load metrics repository (done) | time=124ms
+13:50:24.508 INFO  Reflections took 88 ms to scan 1 urls, producing 30 keys and 313 values
+13:50:25.213 INFO  Sensor IaC YAML File Type Classification Sensor [iac]
+13:50:25.738 INFO  Sensor IaC YAML File Type Classification Sensor [iac] (done) | time=524ms
+13:50:25.740 INFO  Sensor Scan Manifest Module Properties Collector [commona3scontextcollector]
+13:50:26.423 INFO  Sensor Scan Manifest Module Properties Collector [commona3scontextcollector] (done) | time=685ms
+13:50:26.424 INFO  Sensor HTML [web]
+13:50:26.424 INFO  Sensor HTML is restricted to changed files only
+13:50:31.234 INFO  Sensor HTML [web] (done) | time=4810ms
+13:50:31.235 INFO  Sensor JasminFileCollectorSensor [jasmin]
+13:50:31.242 INFO  Sensor JasminFileCollectorSensor [jasmin] (done) | time=7ms
+13:50:31.243 INFO  Sensor IaC CloudFormation Sensor [iac]
+13:50:31.243 INFO  There are no files to be analyzed for the CloudFormation language
+13:50:31.243 INFO  Sensor IaC CloudFormation Sensor [iac] (done) | time=0ms
+13:50:31.244 INFO  Sensor IaC cfn-lint report Sensor [iac]
+13:50:31.245 INFO  Sensor IaC cfn-lint report Sensor [iac] (done) | time=0ms
+13:50:31.245 INFO  Sensor IaC Kustomization Sensor [iac]
+13:50:31.245 INFO  Sensor IaC Kustomization Sensor [iac] (done) | time=0ms
+13:50:31.245 INFO  Sensor IaC hadolint report Sensor [iac]
+13:50:31.246 INFO  Sensor IaC hadolint report Sensor [iac] (done) | time=0ms
+13:50:31.246 INFO  Sensor IaC Azure Resource Manager Sensor [iac]
+13:50:31.246 INFO  Sensor IaC Azure Resource Manager Sensor is restricted to changed files only
+13:50:31.249 INFO  There are no files to be analyzed for the Azure Resource Manager language
+13:50:31.249 INFO  Sensor IaC Azure Resource Manager Sensor [iac] (done) | time=2ms
+13:50:31.249 INFO  Sensor Java Config Sensor [iac]
+13:50:31.249 INFO  There are no files to be analyzed for the Java language
+13:50:31.249 INFO  Sensor Java Config Sensor [iac] (done) | time=0ms
+13:50:31.250 INFO  Sensor IaC Docker Sensor [iac]
+13:50:31.250 INFO  Sensor IaC Docker Sensor is restricted to changed files only
+13:50:31.258 INFO  There are no files to be analyzed for the Docker language
+13:50:31.258 INFO  Sensor IaC Docker Sensor [iac] (done) | time=8ms
+13:50:31.258 INFO  Sensor IaC Ansible Sensor [iac]
+13:50:31.258 INFO  There are no files to be analyzed for the Ansible language
+13:50:31.259 INFO  Sensor IaC Ansible Sensor [iac] (done) | time=0ms
+13:50:31.259 INFO  Sensor IaC ansible-lint report Sensor [iac]
+13:50:31.259 INFO  Sensor IaC ansible-lint report Sensor [iac] (done) | time=0ms
+13:50:31.259 INFO  Sensor IaC spectral report Sensor [iac]
+13:50:31.261 INFO  Sensor IaC spectral report Sensor [iac] (done) | time=2ms
+13:50:31.262 INFO  Sensor IaC GitHub Actions Sensor [iac]
+13:50:31.286 INFO  21 source files to be parsed
+13:50:32.154 INFO  21/21 source files have been parsed
+13:50:32.155 INFO  21 source files to be analyzed
+13:50:32.280 INFO  21/21 source files have been analyzed
+13:50:32.281 INFO  21 source files to be checked
+13:50:32.595 INFO  21/21 source files have been checked
+13:50:32.595 INFO  Sensor IaC GitHub Actions Sensor [iac] (done) | time=1333ms
+13:50:32.596 INFO  Sensor IaC actionlint report Sensor [iac]
+13:50:32.596 INFO  Sensor IaC actionlint report Sensor [iac] (done) | time=0ms
+13:50:32.596 INFO  Sensor IaC Azure Pipelines Sensor [iac]
+13:50:32.596 INFO  There are no files to be analyzed for the Azure Pipelines language
+13:50:32.596 INFO  Sensor IaC Azure Pipelines Sensor [iac] (done) | time=0ms
+13:50:32.597 INFO  Sensor IaC Shell Sensor [iac]
+13:50:32.601 INFO  12 source files to be analyzed
+13:50:33.083 INFO  12/12 source files have been analyzed
+13:50:33.086 INFO  Sensor IaC Shell Sensor [iac] (done) | time=489ms
+13:50:33.086 INFO  Sensor JavaScript/TypeScript module configuration [javascript]
+13:50:33.088 INFO  Sensor JavaScript/TypeScript module configuration [javascript] (done) | time=2ms
+13:50:33.089 INFO  Sensor JavaScript/TypeScript Coverage [javascript]
+13:50:33.094 INFO  Analysing [<redacted>/work/Keiko/Keiko/coverage/scripts/lcov.info, <redacted>/work/Keiko/Keiko/packages/keiko-ui/coverage/lcov.info, <redacted>/work/Keiko/Keiko/coverage/packages/lcov.info]
+13:50:34.741 INFO  Sensor JavaScript/TypeScript Coverage [javascript] (done) | time=1651ms
+13:50:34.742 INFO  Sensor IaC Kubernetes Sensor [iac]
+13:50:34.830 INFO  There are no files to be analyzed for the Kubernetes language
+13:50:34.831 INFO  Sensor IaC Kubernetes Sensor [iac] (done) | time=88ms
+13:50:34.831 INFO  Sensor IaC YAML Sensor [iac]
+13:50:34.832 INFO  Sensor for language "YAML" is disabled by a feature flag. You can enable it by setting "sonar.featureflag.cloud-security-enable-generic-yaml-and-json-analyzer" to true.
+13:50:34.832 INFO  Sensor IaC YAML Sensor [iac] (done) | time=0ms
+13:50:34.832 INFO  Sensor IaC JSON Sensor [iac]
+13:50:34.832 INFO  Sensor for language "JSON" is disabled by a feature flag. You can enable it by setting "sonar.featureflag.cloud-security-enable-generic-yaml-and-json-analyzer" to true.
+13:50:34.832 INFO  Sensor IaC JSON Sensor [iac] (done) | time=0ms
+13:50:34.833 INFO  Sensor EnterpriseTextAndSecretsSensor [textenterprise]
+13:50:34.833 INFO  Sensor EnterpriseTextAndSecretsSensor is restricted to changed files only
+13:50:34.855 INFO  Available processors: 4
+13:50:34.856 INFO  Using 4 threads for analysis.
+13:50:35.312 INFO  The following rules are activated in the quality profile but will not raise any issue, because they are being rolled out progressively: secrets:S8135, secrets:S8136. You can enable it by setting: sonar.featureflag.cloud-security-enable-secrets-S8135, sonar.featureflag.cloud-security-enable-secrets-S8136 to true.
+13:50:35.380 INFO  Start fetching files for the text and secrets analysis
+13:50:35.387 INFO  Using Git CLI to retrieve dirty files
+13:50:35.414 INFO  Retrieving language associated files and files included via "sonar.text.inclusions" that are tracked by git
+13:50:35.416 INFO  Starting the text and secrets analysis
+13:50:35.417 INFO  3 source files to be analyzed for the text and secrets analysis
+13:50:35.620 INFO  3/3 source files have been analyzed for the text and secrets analysis
+13:50:35.622 INFO  Start fetching files for the binary file analysis
+13:50:35.624 INFO  There are no files to be analyzed for the binary file analysis
+13:50:35.631 INFO  Sensor EnterpriseTextAndSecretsSensor [textenterprise] (done) | time=799ms
+13:50:35.642 INFO  ------------- Run sensors on project
+13:50:36.118 INFO  Sensor Scan Manifest A3S Context Collector [commona3scontextcollector]
+13:50:36.119 INFO  Sensor Scan Manifest A3S Context Collector [commona3scontextcollector] (done) | time=0ms
+13:50:36.119 INFO  Sensor Deterministic Rule Engine for PowerShell [dre]
+13:50:36.121 INFO  Sensor Deterministic Rule Engine for PowerShell is restricted to changed files only
+13:50:36.140 INFO  Sensor Deterministic Rule Engine for PowerShell [dre] (done) | time=21ms
+13:50:36.140 INFO  Sensor SQL Dialect Detection [dre]
+13:50:36.203 INFO  Sensor SQL Dialect Detection [dre] (done) | time=62ms
+13:50:36.203 INFO  Sensor DRE Project Telemetry [dre]
+13:50:36.204 INFO  Sensor DRE Project Telemetry [dre] (done) | time=0ms
+13:50:36.204 INFO  Sensor Architecture JS/TS UDG cache [architecturejavascriptfrontend]
+13:50:36.204 INFO  Sensor Architecture JS/TS UDG cache [architecturejavascriptfrontend] (done) | time=0ms
+13:50:36.204 INFO  Sensor JavaScript/TypeScript/CSS analysis [javascript]
+13:50:36.511 INFO  Detected os: Linux arch: amd64 alpine: false. Platform: LINUX_X64
+13:50:36.512 INFO  Deploy location <redacted>/.sonar/js/node-runtime, tagetRuntime: <redacted>/.sonar/js/node-runtime/node,  version: <redacted>/.sonar/js/node-runtime/version.txt
+13:50:39.568 INFO  Configured Node.js --max-old-space-size=10240.
+13:50:39.569 INFO  Using embedded Node.js runtime.
+13:50:39.569 INFO  Using Node.js executable: '<redacted>/.sonar/js/node-runtime/node'.
+13:50:41.693 INFO  Memory configuration: OS (15983 MB), Node.js (10432 MB).
+13:50:41.703 INFO  gRPC analyze-project server listening on 127.0.0.1:38447
+13:50:41.837 INFO  Plugin version: [14.3.0.46350]
+13:50:45.178 INFO  Some of the project files were automatically excluded because they looked like generated code. Enable debug logging to see which files were excluded. You can disable bundle detection by setting sonar.javascript.detectBundles=false
+13:50:46.478 INFO  Resolving provided TSConfig files using '<redacted>/work/Keiko/Keiko/tsconfig.json,<redacted>/work/Keiko/Keiko/packages/*/tsconfig.json,<redacted>/work/Keiko/Keiko/tests/e2e/servers/tsconfig.json'
+13:50:47.117 INFO  Found 30 tsconfig.json file(s): [<redacted>/work/Keiko/Keiko/packages/keiko-workspace/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-model-gateway/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-git/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-local-knowledge/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-sandbox/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-memory-governance/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-sdk/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-editor/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-memory-vault/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-quality-intelligence/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-harness/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-connectors/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-cli/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-mcp/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-tools/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-ui/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-verification/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-tool-catalog/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-activity-log/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-memory-capture/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-security/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-memory-retrieval/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-evidence/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-evaluations/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-contracts/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-memory-consolidation/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-server/tsconfig.json, <redacted>/work/Keiko/Keiko/packages/keiko-workflows/tsconfig.json, <redacted>/work/Keiko/Keiko/tsconfig.json, <redacted>/work/Keiko/Keiko/tests/e2e/servers/tsconfig.json]
+13:52:01.550 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:52:09.598 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:53:59.094 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:53:59.234 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:54:07.389 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:54:11.387 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:54:27.542 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:54:30.201 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:54:34.370 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:54:40.163 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:04.738 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:04.969 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:07.467 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:07.636 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:25.882 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:30.547 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:55:30.839 ERROR Failed to deserialize Protobuf message: Protocol message had invalid UTF-8.
+13:56:19.498 INFO  7269 source files to be analyzed
+13:56:19.498 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-workspace/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.498 INFO  Analyzing 85 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-workspace/tsconfig.json (280 total files in program)
+13:56:19.499 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-model-gateway/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.502 INFO  Analyzing 61 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-model-gateway/tsconfig.json (248 total files in program)
+13:56:19.512 INFO  JasminAstConsumer done
+13:56:19.512 INFO  Hit the cache for 0 out of 7178
+13:56:19.512 INFO  Miss the cache for 7178 out of 7178: FILE_CHANGED [7178/7178]
+13:56:19.512 INFO  Sensor JavaScript/TypeScript/CSS analysis [javascript] (done) | time=343303ms
+13:56:19.512 INFO  Sensor IaC Project Sensor [iac]
+13:56:19.538 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-git/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.539 INFO  Analyzing 8 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-git/tsconfig.json (195 total files in program)
+13:56:19.543 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-local-knowledge/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.543 INFO  Analyzing 134 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-local-knowledge/tsconfig.json (377 total files in program)
+13:56:19.543 INFO  Sensor IaC Project Sensor [iac] (done) | time=34ms
+13:56:19.543 INFO  Sensor JsSecuritySensorV2 [jasmin]
+13:56:19.548 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-sandbox/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.548 INFO  Analyzing 18 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-sandbox/tsconfig.json (205 total files in program)
+13:56:19.548 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-memory-governance/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.548 INFO  Analyzing 12 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-memory-governance/tsconfig.json (199 total files in program)
+13:56:19.553 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-sdk/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.554 INFO  Analyzing 3 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-sdk/tsconfig.json (190 total files in program)
+13:56:19.554 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-editor/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.554 INFO  Analyzing 80 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-editor/tsconfig.json (281 total files in program)
+13:56:19.554 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-memory-vault/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.554 INFO  Analyzing 23 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-memory-vault/tsconfig.json (210 total files in program)
+13:56:19.554 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-quality-intelligence/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.554 INFO  Analyzing 69 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-quality-intelligence/tsconfig.json (256 total files in program)
+13:56:19.560 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-harness/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.560 INFO  Analyzing 32 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-harness/tsconfig.json (219 total files in program)
+13:56:19.560 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-connectors/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.560 INFO  Analyzing 33 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-connectors/tsconfig.json (220 total files in program)
+13:56:19.566 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-cli/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.566 INFO  Analyzing 65 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-cli/tsconfig.json (252 total files in program)
+13:56:19.566 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-mcp/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.566 INFO  Analyzing 12 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-mcp/tsconfig.json (310 total files in program)
+13:56:19.571 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-tools/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.571 INFO  Analyzing 71 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-tools/tsconfig.json (314 total files in program)
+13:56:19.571 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-ui/tsconfig.json [lib: lib.dom.d.ts, lib.dom.iterable.d.ts, lib.es2022.d.ts, lib.es2023.array.d.ts]
+13:56:19.571 INFO  Analyzing 1236 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-ui/tsconfig.json (2546 total files in program)
+13:56:19.636 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-verification/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.636 INFO  Analyzing 16 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-verification/tsconfig.json (203 total files in program)
+13:56:19.636 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-tool-catalog/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.640 INFO  Analyzing 20 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-tool-catalog/tsconfig.json (257 total files in program)
+13:56:19.640 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-activity-log/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.643 INFO  Analyzing 37 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-activity-log/tsconfig.json (228 total files in program)
+13:56:19.643 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-memory-capture/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.643 INFO  Analyzing 16 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-memory-capture/tsconfig.json (203 total files in program)
+13:56:19.643 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-security/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.644 INFO  Analyzing 47 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-security/tsconfig.json (279 total files in program)
+13:56:19.645 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-memory-retrieval/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.645 INFO  Analyzing 14 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-memory-retrieval/tsconfig.json (201 total files in program)
+13:56:19.645 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-evidence/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.645 INFO  Analyzing 35 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-evidence/tsconfig.json (222 total files in program)
+13:56:19.650 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-evaluations/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.651 INFO  Analyzing 84 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-evaluations/tsconfig.json (271 total files in program)
+13:56:19.651 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-contracts/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.651 INFO  Analyzing 254 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-contracts/tsconfig.json (452 total files in program)
+13:56:19.651 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-memory-consolidation/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.651 INFO  Analyzing 12 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-memory-consolidation/tsconfig.json (199 total files in program)
+13:56:19.651 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-server/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.652 INFO  Analyzing 986 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-server/tsconfig.json (1222 total files in program)
+13:56:19.677 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/packages/keiko-workflows/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.679 INFO  Analyzing 81 file(s) from tsconfig <redacted>/work/Keiko/Keiko/packages/keiko-workflows/tsconfig.json (268 total files in program)
+13:56:19.679 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.679 INFO  Analyzing 2782 file(s) from tsconfig <redacted>/work/Keiko/Keiko/tsconfig.json (5797 total files in program)
+13:56:19.700 INFO  Creating TypeScript(6.0.3) program with configuration file <redacted>/work/Keiko/Keiko/tests/e2e/servers/tsconfig.json [lib: lib.es2022.d.ts, lib.dom.d.ts]
+13:56:19.700 INFO  No files to analyze from tsconfig <redacted>/work/Keiko/Keiko/tests/e2e/servers/tsconfig.json
+13:56:19.700 INFO  Analyzing 821 file(s) using merged compiler options [lib: lib.es2024.d.ts, lib.dom.d.ts]
+13:56:19.707 INFO  7269/7269 source files have been analyzed
+13:56:19.791 INFO  Unchanged files can be skipped in the current context and all relevant files are unchanged. Skipping taint analysis.
+13:56:19.792 INFO  Sensor JsSecuritySensorV2 [jasmin] (done) | time=248ms
+13:56:19.794 INFO  Sensor JsArchitectureSensor [architecture]
+13:56:19.794 INFO  Architecture analysis is enabled.
+13:56:19.905 INFO  Found 1 potential Udg file location(s) for "js" in "<redacted>"
+13:56:19.906 INFO  - <redacted>/architecture/js
+13:56:20.075 INFO  * Protobuf reading starting | memory total=2698 | free=788 | used=1909 (MB)
+13:56:20.075 INFO  * Reading SonarArchitecture UDG data from "<redacted>/architecture/js"
+13:56:20.329 INFO  * Files successfully loaded: "288" out of "288"
+13:56:20.331 INFO  * Purging externals (components not scanned) from graphs
+13:56:20.342 INFO  * Purging excluded nodes from graphs
+13:56:21.116 INFO  * Protobuf reading complete | memory total=2698 | free=611 | used=2086 (MB)
+13:56:21.212 INFO  * Build architecture.graph.js.file_graph.default_perspective hierarchy graph complete (filtered=false) | memory total=2698 | free=592 | used=2105 (MB)
+13:56:21.301 INFO  No directives configured
+13:56:21.308 INFO  * No intended architecture defined or detected, using an empty model
+13:56:21.600 INFO  Boundary detection is disabled.
+13:56:21.643 INFO  Sensor JsArchitectureSensor [architecture] (done) | time=1850ms
+13:56:21.644 INFO  Sensor TsArchitectureSensor [architecture]
+13:56:21.644 INFO  Architecture analysis is enabled.
+13:56:21.723 INFO  Found 1 potential Udg file location(s) for "ts" in "<redacted>"
+13:56:21.724 INFO  - <redacted>/architecture/ts
+13:56:21.739 INFO  * Protobuf reading starting | memory total=2698 | free=506 | used=2191 (MB)
+13:56:21.739 INFO  * Reading SonarArchitecture UDG data from "<redacted>/architecture/ts"
+13:56:22.547 INFO  * Files successfully loaded: "2936" out of "2936"
+13:56:22.547 INFO  * Purging externals (components not scanned) from graphs
+13:56:22.608 INFO  * Purging excluded nodes from graphs
+13:56:32.492 INFO  * Protobuf reading complete | memory total=2888 | free=691 | used=2196 (MB)
+13:56:32.796 INFO  * Build architecture.graph.ts.file_graph.default_perspective hierarchy graph complete (filtered=false) | memory total=2888 | free=450 | used=2437 (MB)
+13:56:32.939 INFO  No directives configured
+13:56:32.939 INFO  * No intended architecture defined or detected, using an empty model
+13:56:34.065 INFO  Boundary detection is disabled.
+13:56:34.239 INFO  Sensor TsArchitectureSensor [architecture] (done) | time=12595ms
+13:56:34.240 INFO  Sensor Architecture Agentic Analysis Context [architecture]
+13:56:34.241 INFO  Sensor Architecture Agentic Analysis Context [architecture] (done) | time=0ms
+13:56:34.241 INFO  Sensor Zero Coverage Sensor
+13:56:34.281 INFO  Sensor Zero Coverage Sensor (done) | time=40ms
+13:56:34.281 INFO  Sensor Architecture Telemetry [architecture]
+13:56:34.282 INFO  Sensor Architecture Telemetry [architecture] (done) | time=0ms
+13:56:34.285 INFO  ------------- Gather SCA dependencies on project
+13:56:35.216 INFO  CPD Executor 234 files had no CPD blocks
+13:56:35.216 INFO  CPD Executor Calculating CPD for 3034 files
+13:56:36.717 INFO  CPD Executor CPD calculation finished (done) | time=1500ms
+13:56:36.727 INFO  SCM Publisher SCM provider for this project is: git
+13:56:36.728 INFO  SCM Publisher 2 source files to be analyzed
+13:56:37.098 INFO  SCM Publisher 2/2 source files have been analyzed (done) | time=369ms
+13:56:37.107 INFO  SCM revision ID '1a91686173c91c01421f0065b1942f8a8ed0753b'
+13:56:37.519 INFO  SCM writing changed lines
+13:56:37.531 INFO  Merge base sha1: 7bbca2e34e04e4bf322e0d8f58366244d984bb16
+13:56:37.615 INFO  SCM writing changed lines (done) | time=96ms
+13:56:40.409 INFO  Analysis report generated in 3205ms, dir size=11 MB
+13:56:43.731 INFO  Analysis report compressed in 3321ms, zip size=6 MB
+13:56:53.863 INFO  Analysis report uploaded in 10132ms
+13:56:53.864 INFO  ------------- Upload SCA dependency files
+13:56:56.201 INFO  Successfully sent architecture data
+13:56:56.204 INFO  ------------- Check Quality Gate status
+13:56:56.208 INFO  Waiting for the analysis report to be processed (max 300s)
+13:57:01.744 INFO  QUALITY GATE STATUS: PASSED - View details on <redacted>
+13:57:04.526 INFO  Analysis total time: 7:06.573 min
+13:57:04.569 INFO  SonarScanner Engine completed successfully
+13:57:04.847 INFO  EXECUTION SUCCESS
+13:57:04.848 INFO  Total time: 7:13.298s
