@@ -124,13 +124,20 @@ ADR-0168 temporarily superseded the rollback's installation state and restored G
 quota-tolerant reviewer. ADR-0169 supersedes that later state as well: the provider, App,
 configuration, and review authority are fully retired.
 
-### D6 — Anti-slop findings ratchet on `dev` (owner decision, 2026-10-30)
+### D6 — Anti-slop findings ratchet (owner decisions, 2026-10-30 and 2026-11-03)
 
 Epic #3914 built a repository-owned code-quality engine: Oxlint 1.78.0 running
 `oxlint-plugin-anti-slop` with 22 noncosmetic rules under `scripts/code-quality-policy.json`. Its
 complete enforcement depends on responsibility qualifications that remain on the epic branch until
-#3991. The owner's "Delivery amendment 2" to #3914 (2026-10-30) lands the engine on `dev` first,
-under #4145, as a ratchet rather than as complete enforcement:
+#3991. The owner's "Delivery amendment 2" to #3914 (2026-10-30) landed the engine first, under
+#4145, as a ratchet rather than as complete enforcement. That amendment targeted `dev`.
+
+The owner changed the target on 2026-11-03. The rollout to `dev` is postponed to a date the owner
+sets later. Until then, the epic's delivery goes to the epic branch `codex/epic-anti-slop-quality`,
+and no epic pull request stays open against `dev`. The epic branch's tree is the `dev` snapshot
+`7bbca2e34`. The ratchet (#4145) lands there first. Each later slice carries its own register and
+ledger update and passes the ratchet. The owner integrates every pull request into the epic branch.
+The rules below apply on the epic branch now and on `dev` after the rollout:
 
 - `npm run check:code-quality-policy -- --mode ratchet` scans the whole repository and counts
   findings per (file, rule). The required `ci` context runs it on every pull request.
@@ -144,8 +151,8 @@ under #4145, as a ratchet rather than as complete enforcement:
 - The ratchet does not run the epic's responsibility qualifications and therefore does not claim
   that any rule is qualified or fully enforced. Rule dispositions, thresholds, required contexts,
   review loops and integration authority are unchanged.
-- Baseline on `dev` `7bbca2e34`: 7,239 files and 46,618 findings. Epic workstreams and ordinary
-  `dev` work prune the register; #3991 removes it at zero and activates full enforcement.
+- Baseline on the `dev` snapshot `7bbca2e34`: 7,239 files and 46,618 findings. Epic workstreams
+  prune the register; #3991 removes it at zero and activates full enforcement.
 
 Known limitation: counts are per file and rule, so fixing one finding and adding another of the same
 rule in the same file nets out. This is accepted for the bridge period and closes when #3991
@@ -173,7 +180,8 @@ over counting only enforceable findings and over landing the slices before #4145
   needs one entry that the change adds; an entry the base already holds cannot approve a new raise.
   An added entry that matches no raise is stale, and a removed or changed base entry is rewritten
   history. Both fail. A CI comparison without a base fails, and CI still refuses register writes.
-- The ledger started empty on `dev`. Entries accumulate as reviewed history in later slice PRs.
+- The ledger started empty at `7bbca2e34`. Entries accumulate as reviewed history in later slice
+  PRs.
 
 ## Consequences
 
@@ -186,12 +194,13 @@ over counting only enforceable findings and over landing the slices before #4145
 - The longest deterministic jobs still dominate pull-request latency; the new gates run alongside
   them instead of serially extending the path.
 - Hosted services remain replaceable supplemental producers and are represented honestly as such.
-- Existing anti-slop findings on `dev` can only decrease until #3991 activates full enforcement (D6).
+- Existing anti-slop findings on the epic branch can only decrease until #3991 activates full
+  enforcement (D6). The same holds on `dev` after the owner's rollout.
 
 ## References
 
 - [Autonomous quality gates](../qa/autonomous-quality-gates.md)
-- [Code-quality policy and dev ratchet](../qa/code-quality-policy.md)
+- [Code-quality policy and ratchet](../qa/code-quality-policy.md)
 - [External quality-gate runbook](../qa/external-quality-gates.md)
 - [Review standards](../qa/review-standards.md)
 - [CodSpeed benchmark variance](https://codspeed.io/docs/instruments/cpu/regression-causes)

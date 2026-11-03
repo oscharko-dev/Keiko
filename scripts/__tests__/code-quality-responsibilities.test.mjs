@@ -3234,8 +3234,8 @@ it${mode === "skip" ? ".skip" : ""}("actual public canonical decoder admission",
 }
 
 describe("raw canonical JSON decoder fresh semantic qualification (#3918)", () => {
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this qualification binds
-  // epic-migrated contracts source that is not on dev yet. #3991 restores it unchanged.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this qualification binds
+  // epic-migrated contracts source, absent from the dev snapshot. #3991 restores it unchanged.
   it.skip("grants only the exact return after fresh public admission proofs pass", async () => {
     const own = await canonicalDecoderSemanticFixture();
     const pending = await executeCodeQualityPolicy(

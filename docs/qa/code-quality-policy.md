@@ -2,11 +2,15 @@
 
 Epic #3914 defines a noncosmetic code-quality policy that supplements the existing TypeScript,
 typed ESLint, UI lint, Prettier, Sonar, coverage, security and architecture gates. The source of
-truth is `scripts/code-quality-policy.json`; naming and spacing rules are excluded. On `dev` the
-policy runs as a shrink-only ratchet (ADR-0167 D6). Complete enforcement, including the epic's
+truth is `scripts/code-quality-policy.json`; naming and spacing rules are excluded. The policy
+runs as a shrink-only ratchet (ADR-0167 D6). Complete enforcement, including the epic's
 responsibility qualifications, arrives with #3991.
 
-## Dev ratchet
+The ratchet runs on the epic branch `codex/epic-anti-slop-quality`, whose tree is the `dev`
+snapshot `7bbca2e34`. On 2026-11-03 the owner postponed the rollout to `dev` to a date the owner
+sets later.
+
+## Ratchet
 
 **What runs.** The required `ci` context runs:
 
@@ -99,13 +103,14 @@ count needs one entry that this change adds, with the same path, rule, `from` an
 that the base already holds cannot approve a new raise. An added entry that matches no raise fails
 as stale. Entries are history: a change may add entries but never remove or change one. A CI run
 without a base fails closed, and CI still refuses to write the register. To run the same review
-locally, set the variable to a full commit id:
+locally, set the variable to the full commit id of your pull request's base branch. Until the `dev`
+rollout, that is the epic branch:
 
 ```bash
-KEIKO_CODE_QUALITY_BASE_SHA="$(git rev-parse origin/dev)" npm run check:code-quality-policy -- --mode ratchet
+KEIKO_CODE_QUALITY_BASE_SHA="$(git rev-parse origin/codex/epic-anti-slop-quality)" npm run check:code-quality-policy -- --mode ratchet
 ```
 
-The ledger started empty on `dev`; #4145 adds no entry.
+The ledger started empty at `7bbca2e34`; #4145 adds no entry.
 
 **Limits.**
 
@@ -114,8 +119,8 @@ The ledger started empty on `dev`; #4145 adds no entry.
   register (`packages/keiko-ui/eslint-suppressions.json`).
 - The ratchet does not run the epic's responsibility qualifications. A green ratchet means "no new
   findings", not "this code is qualified" or "this rule is enforced".
-- The baseline on `dev` `7bbca2e34` was 46,618 findings. Epic workstreams and ordinary `dev` work
-  prune the register; #3991 removes it at zero and activates full enforcement.
+- The baseline on the `dev` snapshot `7bbca2e34` was 46,618 findings. Epic workstreams prune the
+  register; #3991 removes it at zero and activates full enforcement.
 
 ## Engine
 

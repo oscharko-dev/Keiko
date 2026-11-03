@@ -104,8 +104,8 @@ describe("production code-quality invocation wiring (#3915)", () => {
     ]);
   });
 
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip.each([
     [
@@ -150,8 +150,8 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(assess().result.violations).toEqual([]);
   });
 
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip("rejects native contracts reflection outside the qualified observation coordinate", async () => {
     const root = contractsAssertionFixture();
@@ -193,8 +193,8 @@ describe("production code-quality invocation wiring (#3915)", () => {
     );
   });
 
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip.each([
     ["anti-slop/no-unknown-returns", "src/index.ts"],
@@ -488,8 +488,8 @@ describe("production code-quality invocation wiring (#3915)", () => {
     }
   }, 60_000);
 
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip("retains full local lint and requires hosted policy before typed Core lint", () => {
     const manifest = JSON.parse(read("package.json"));
@@ -528,8 +528,8 @@ describe("production code-quality invocation wiring (#3915)", () => {
     expect(core.steps.filter((step) => step.run === "npm run lint")).toHaveLength(0);
   });
 
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip("runs bounded CLI integration then complete qualification in both required hosted ARM policy legs", async () => {
     const workflow = parse(read(".github/workflows/ci.yml"));
@@ -1103,14 +1103,14 @@ describe("complete production qualification owner", () => {
     expect(owner).toContain("maxBuffer: 32 * 1024 * 1024");
     expect(owner).not.toContain("timeout:");
   });
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip("requires serial mandatory fixture full qualification and raw reader", () => {
     assertPolicyOperationOrder(parse(read(".github/workflows/ci.yml")).jobs["code-quality-policy"]);
   });
-  // Skipped on dev under #4145 (ratchet, Delivery amendment 2 to #3914): this pin binds
-  // epic-migrated source or the epic's qualification CI chain, neither of which is on dev yet.
+  // Skipped under #4145 (ratchet, owner decision 2026-11-03 on #3914): this pin binds
+  // epic-migrated source or the epic's qualification CI chain, absent from the dev snapshot.
   // #3991 restores it unchanged when full enforcement lands; the ratchet governs dev until then.
   it.skip.each(["missing", "conditional", "continued", "partial"])(
     "refuses %s qualification workflow mutation",
