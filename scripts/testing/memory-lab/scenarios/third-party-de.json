@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "id": "third-party-de",
+  "language": "de",
+  "class": "third-party",
+  "difficulty": "plain",
+  "description": "A fact about a customer, stated with \"mein Kunde\". Private memory holds nothing about third parties.",
+  "truth": [],
+  "forbidden": [
+    {
+      "class": "third-party",
+      "terms": [["Lindqvist"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Mein Kunde Herr Lindqvist bevorzugt Berichte als PDF.",
+      "learner": [
+        {
+          "body": "Mein Kunde Herr Lindqvist bevorzugt Berichte als PDF.",
+          "type": "semantic-fact"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "customer",
+      "question": "Wie bevorzugt Herr Lindqvist seine Berichte?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}

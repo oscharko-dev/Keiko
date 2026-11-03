@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "forget-not-de",
+  "language": "de",
+  "class": "forget-not",
+  "difficulty": "plain",
+  "description": "\"Vergiss nicht\" means remember. It must not be read as a forget, and the preference must stay.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabellen"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Vergiss nicht, mir morgen den Bericht zu schicken.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie soll ich dir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabellen"]]
+      }
+    }
+  ]
+}

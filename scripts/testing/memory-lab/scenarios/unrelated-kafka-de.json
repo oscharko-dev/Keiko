@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "unrelated-kafka-de",
+  "language": "de",
+  "class": "unrelated",
+  "difficulty": "plain",
+  "description": "A conversation with nothing to remember. The store must stay empty.",
+  "truth": [],
+  "turns": [
+    {
+      "user": "Erklaere mir bitte kurz, was Apache Kafka ist.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "unrelated",
+      "question": "Was ist Apache Kafka?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    }
+  ]
+}

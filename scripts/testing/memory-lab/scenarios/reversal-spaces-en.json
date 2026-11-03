@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "reversal-spaces-en",
+  "language": "en",
+  "class": "reversal",
+  "difficulty": "plain",
+  "description": "A reversal with almost identical wording. Pins the duplicate gate that treats the opposite statement as the same fact.",
+  "truth": [
+    {
+      "key": "indentation",
+      "seed": "I prefer spaces over tabs.",
+      "must": true,
+      "private": true,
+      "terms": [["spaces over tabs"]]
+    }
+  ],
+  "superseded": [
+    {
+      "terms": [["tabs over spaces"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I prefer tabs over spaces.",
+      "learner": [
+        {
+          "body": "I prefer tabs over spaces.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "I prefer spaces over tabs.",
+      "learner": [
+        {
+          "body": "I prefer spaces over tabs.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Tabs or spaces for my code?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["spaces over tabs"]],
+        "forbidden": [["tabs over spaces"]]
+      }
+    }
+  ]
+}

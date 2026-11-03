@@ -1,0 +1,53 @@
+{
+  "schemaVersion": 1,
+  "id": "update-lists-de",
+  "language": "de",
+  "class": "update",
+  "difficulty": "plain",
+  "description": "A preference is stated and then changed. Only the newer value may survive; the older one is stale.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ab jetzt bevorzuge ich Listen.",
+      "must": true,
+      "private": true,
+      "terms": [["Listen"]]
+    }
+  ],
+  "superseded": [
+    {
+      "terms": [["Tabellen"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Ab jetzt bevorzuge ich Listen.",
+      "learner": [
+        {
+          "body": "Ab jetzt bevorzuge ich Listen.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie soll ich dir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Listen"]],
+        "forbidden": [["Tabellen"]]
+      }
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "id": "preference-tables-en",
+  "language": "en",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "The English twin of preference-tables-de.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "I prefer tables when you show me numbers.",
+      "must": true,
+      "private": true,
+      "terms": [["tables"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I prefer tables when you show me numbers.",
+      "learner": [
+        {
+          "body": "I prefer tables when you show me numbers.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "How should I show you numbers?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["tables"]]
+      }
+    },
+    {
+      "id": "related-no-overlap",
+      "question": "Summarize the quarterly results for me.",
+      "expect": {
+        "kind": "answer",
+        "terms": [["tables"]]
+      }
+    },
+    {
+      "id": "unrelated",
+      "question": "What is Apache Kafka?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    },
+    {
+      "id": "unknown",
+      "question": "What is my favourite colour?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}

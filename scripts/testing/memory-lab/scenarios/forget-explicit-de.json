@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "forget-explicit-de",
+  "language": "de",
+  "class": "forget",
+  "difficulty": "plain",
+  "description": "A stated preference is forgotten with a bare \"Vergiss das\". Nothing may survive, and the next chat must abstain.",
+  "truth": [],
+  "forgotten": [
+    {
+      "terms": [["Tabellen"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Vergiss das.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie soll ich dir Zahlen zeigen?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}
