@@ -242,3 +242,14 @@ references and 108 running-app captures completed without errors. The seven-mode
 proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
 assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
 fixtures; they do not qualify model behavior.
+
+## Lint heap ceiling input refresh — 2026-11-03
+
+Raising the root lint heap ceiling to 14336 MiB (#4203, #4202) changes the `lint` script in
+`package.json`, which these producers bind. All four original producers were rerun against that
+source on macOS arm64, Node 24.18.0. Component and editor fidelity passed with zero gated differences
+and no missing selectors; all 14 editor references and 108 running-app captures completed without
+errors. The seven-mode accessibility proof has zero serious/critical violations and zero unresolved
+incomplete findings. The source-input regression passes all 281 tests. No producer assertion,
+tolerance, budget or source stylesheet changed. These remain synthetic historical fixtures; they do
+not qualify model behavior.
