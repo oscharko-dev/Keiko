@@ -262,6 +262,22 @@ describe("recordChatToolTurnCorrected", () => {
     expect(line).not.toContain("message-private-id");
   });
 
+  it("records a round the model completed with nothing, as a registered correction", () => {
+    const logs = createBufferedServerLogSink();
+    recordChatToolTurnCorrected(logs, {
+      correlationId: "turn-empty-proof",
+      messageId: "message-private-id",
+      settledExchangeCount: 1,
+      correctionKind: "empty-answer",
+    });
+    const event = logs.events.find((entry) => entry.op === "chat.tool-turn.corrected");
+    expect(event).toMatchObject({
+      level: "warn",
+      extra: { settledExchangeCount: 1, correctionKind: "empty-answer" },
+    });
+    expect(formatActivityLogProofLine(event ?? {})).not.toContain("message-private-id");
+  });
+
   it("counts the findings an answer left out, never naming them", () => {
     const logs = createBufferedServerLogSink();
     recordChatToolTurnCorrected(logs, {

@@ -972,6 +972,12 @@ its transcript answer as before. Every round stays inside the Authority Envelope
 prompt budget, the rejected call executed nothing, and a later synthesis pass of the same turn never
 inherits the correction. `chat.tool-turn.corrected` records each such round with the turn's settled
 exchange count and `correctionKind` `tool-schema`.
+A round the model completes with no text, no tool call and no reasoning takes the same path with
+`correctionKind` `empty-answer` and its own fixed sentence (S07 and S19 of epic #4173: Gemma ended a
+round so after a settled read, and the whole request ended as "the model request failed"). The
+gateway still surfaces such an answer as the model's final word (ADR-0003, #3610), so a caller
+without a next round is unchanged. The allowance is the same streak allowance, and an answer whose
+steered repair already failed gets no further round.
 An answer that leaves out issues the turn's `jira.report` finding pages list (`deviations`,
 `orphans`) gets one further round in the same way (S11 of epic #4173: Gemma's compliance answer
 dropped all seven estimate deviations the report had listed). Keiko compares the issue keys of

@@ -3352,7 +3352,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["tool-schema", "report-omission", "report-coverage", "unsupported-issue-key"],
+        values: [
+          "tool-schema",
+          "empty-answer",
+          "report-omission",
+          "report-coverage",
+          "unsupported-issue-key",
+        ],
       },
       omittedFindingCount: {
         type: "integer",

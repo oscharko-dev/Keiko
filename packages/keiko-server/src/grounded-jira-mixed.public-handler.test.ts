@@ -845,7 +845,15 @@ function finalContent(step: ProviderStep, steps: readonly ProviderStep[]): strin
   return steps.includes("uncited") ? "Feature returns true [src/Feature.ts:1]." : CITED;
 }
 type ProviderStep =
-  "tool" | "write" | "malformed" | "answer" | "uncited" | "overflow" | "exhausted";
+  | "tool"
+  | "write"
+  | "malformed"
+  | "answer"
+  | "uncited"
+  | "overflow"
+  | "exhausted"
+  | "empty"
+  | "empty-after-reasoning";
 interface ProviderOptions {
   readonly toolCount?: number;
   readonly usage?: { readonly prompt_tokens: number; readonly completion_tokens: number };
@@ -871,8 +879,29 @@ function exhaustedOutputResponse(): Response {
     usage: reportedProviderUsage({ prompt_tokens: 1, completion_tokens: 4096 }),
   });
 }
+// A model that completed with nothing usable: no text, no tool call.
+function emptyAnswerResponse(reasoning?: string): Response {
+  return Response.json({
+    id: "mixed-response",
+    model: MODEL,
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          ...(reasoning === undefined ? {} : { reasoning_content: reasoning }),
+        },
+        finish_reason: "stop",
+      },
+    ],
+    usage: reportedProviderUsage(),
+  });
+}
 function failedStepResponse(step: ProviderStep): Response | undefined {
   if (step === "exhausted") return exhaustedOutputResponse();
+  if (step === "empty") return emptyAnswerResponse();
+  if (step === "empty-after-reasoning") return emptyAnswerResponse("thinking");
   if (step !== "overflow") return undefined;
   return Response.json(
     {
@@ -1427,6 +1456,71 @@ it("ends a tool turn whose corrected round is rejected again without progress", 
   expect(requests[3]).toContain("rejected before execution");
   expect(requests[5]).not.toContain("rejected before execution");
   expect(f.jiraRequests).toEqual(["GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("the model request failed");
+});
+
+// S07 and S19 of epic #4173: Gemma completed a round with nothing at all after a settled read, and
+// the whole request ended as "the model request failed". The gateway keeps surfacing that answer
+// as the model's final word (#3610); the turn gives its next round one correction.
+const EMPTY_ANSWER_CORRECTED = "Your previous answer was empty.";
+it("continues a tool turn whose model answered with nothing", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "empty", "tool", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests).toHaveLength(4);
+  expect(requests[1]).not.toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[2]).toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[3]).not.toContain(EMPTY_ANSWER_CORRECTED);
+  expect(f.jiraRequests).toEqual(["GET", "GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("[src/Feature.ts:1]");
+});
+
+it("ends a tool turn whose corrected round is empty again without progress", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "empty", "empty", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  // The fourth is the grounded answer's own later synthesis pass, which inherits no correction.
+  expect(requests).toHaveLength(4);
+  expect(requests[2]).toContain(EMPTY_ANSWER_CORRECTED);
+  expect(requests[3]).not.toContain(EMPTY_ANSWER_CORRECTED);
+  expect(f.jiraRequests).toEqual(["GET"]);
+  expect((response.body as GroundedAnswer).content).toContain("the model request failed");
+});
+
+it("adds no round after the gateway's own repair of an empty answer failed", async () => {
+  const f = runtime();
+  configure(f.deps, 1);
+  const requests = provider(["tool", "empty-after-reasoning", "empty", "answer"]);
+  const response = await handleGroundedAsk(
+    context({
+      chatId: f.chatId,
+      content: "Explain src/Feature.ts and list Jira projects.",
+      modelId: MODEL,
+    }),
+    f.deps,
+  );
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
+  expect(requests).toHaveLength(4);
+  expect(requests[2]).toContain("ended after reasoning");
+  for (const request of requests) expect(request).not.toContain(EMPTY_ANSWER_CORRECTED);
   expect((response.body as GroundedAnswer).content).toContain("the model request failed");
 });
 

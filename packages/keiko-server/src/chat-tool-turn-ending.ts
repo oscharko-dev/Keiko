@@ -300,7 +300,13 @@ const CORRECTED = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["tool-schema", "report-omission", "report-coverage", "unsupported-issue-key"],
+      values: [
+        "tool-schema",
+        "empty-answer",
+        "report-omission",
+        "report-coverage",
+        "unsupported-issue-key",
+      ],
     },
     omittedFindingCount: { type: "integer", dataClass: "count", required: false },
     mismatchedRequirementCount: { type: "integer", dataClass: "count", required: false },
@@ -318,7 +324,8 @@ const CORRECTED = defineActivityLogOperation({
 
 /**
  * Recorded when a turn gets one further round carrying a correction instead of ending: a tool call
- * the gateway rejected again after its own schema correction (`tool-schema`), or an answer that left
+ * the gateway rejected again after its own schema correction (`tool-schema`), a round the model
+ * completed with nothing at all (`empty-answer`), or an answer that left
  * out findings the turn's report pages list (`report-omission`, with their count; never the keys),
  * an answer that gave requirements other issues than the report's requirement pages state
  * (`report-coverage`, with the requirement count; never the ids or keys), or an answer that named issue keys no tool result showed (`unsupported-issue-key`, with their
@@ -331,7 +338,11 @@ export function recordChatToolTurnCorrected(
     readonly messageId: string;
     readonly settledExchangeCount: number;
     readonly correctionKind:
-      "tool-schema" | "report-omission" | "report-coverage" | "unsupported-issue-key";
+      | "tool-schema"
+      | "empty-answer"
+      | "report-omission"
+      | "report-coverage"
+      | "unsupported-issue-key";
     readonly omittedFindingCount?: number;
     readonly mismatchedRequirementCount?: number;
     readonly unsupportedKeyCount?: number;

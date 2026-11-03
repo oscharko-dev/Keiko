@@ -25,6 +25,7 @@ import type {
 import { gatewayMessagesForToolExchange } from "./conversation-gateway.js";
 import { parseJiraDraft } from "@oscharko-dev/keiko-connectors";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import { ProviderEmptyAnswerError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { createHarnessCatalogBudget, type ModelPort } from "@oscharko-dev/keiko-harness";
 import type { HarnessLimits } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { ChatToolAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
@@ -777,10 +778,11 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
   /**
    * A tool call the gateway rejected again after its own schema correction ends neither the turn nor
    * the settled work behind it (S08 of epic #4173: Gemma's second `jira.create` without
-   * `links[].type` ended the turn as a model failure). The next round carries the same body-free
+   * `links[].type` ended the turn as a model failure), and neither does a round the model completed
+   * with nothing at all (S07 and S19: Gemma, after a settled read). The next round carries a body-free
    * correction, once per streak: a round that dispatches a tool call restores the allowance, and a
-   * second rejection without progress ends the turn as before. Every round stays inside the
-   * Authority Envelope's model-call and prompt budget; nothing was executed for the rejected call.
+   * second such round without progress ends the turn as before. Every round stays inside the
+   * Authority Envelope's model-call and prompt budget; nothing was executed for the unusable round.
    */
   private async callRound(
     model: ModelPort,
@@ -792,26 +794,43 @@ export abstract class ChatToolTurn<Context extends ToolConsumerContext = ToolCon
       this.correctionAdmissionPending = false;
       return response;
     } catch (error) {
-      const correction =
-        error instanceof GatewayToolCatalogError && !this.correctedSinceProgress
-          ? error.correction()
-          : undefined;
+      const correction = this.correctedSinceProgress ? undefined : unusableRoundCorrection(error);
       // The turn ends here: a later synthesis pass that reuses it never inherits the correction.
       this.correction = undefined;
       this.correctionAdmissionPending = false;
       if (correction === undefined || this.context.signal.aborted) throw error;
-      this.correction = { role: "system", content: correction };
+      this.correction = { role: "system", content: correction.content };
       this.correctedSinceProgress = true;
       this.correctionAdmissionPending = true;
       recordChatToolTurnCorrected(processServerLogSink(), {
         correlationId: this.options.correlationId,
         messageId: this.options.message.id,
         settledExchangeCount: this.settledExchanges.length,
-        correctionKind: "tool-schema",
+        correctionKind: correction.kind,
       });
       return undefined;
     }
   }
+}
+
+const EMPTY_ROUND_CORRECTION =
+  "Your previous answer was empty. Call the next tool now, or give the final answer.";
+
+/**
+ * What the next round tells the model after a round the turn could not use. The gateway leaves an
+ * answer with nothing in it as the model's final word (#3610), and a turn has a next round to give;
+ * one whose steered repair already failed has had its correction.
+ */
+function unusableRoundCorrection(
+  error: unknown,
+): { readonly content: string; readonly kind: "tool-schema" | "empty-answer" } | undefined {
+  if (error instanceof GatewayToolCatalogError) {
+    const content = error.correction();
+    return content === undefined ? undefined : { content, kind: "tool-schema" };
+  }
+  return error instanceof ProviderEmptyAnswerError && error.outputRepair === undefined
+    ? { content: EMPTY_ROUND_CORRECTION, kind: "empty-answer" }
+    : undefined;
 }
 
 /** Tool rounds are withheld until their complete result identifies final text or an invocation. */
