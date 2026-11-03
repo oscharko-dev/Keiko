@@ -69,7 +69,6 @@ function typeFacts(type) {
     return {
       kind: "union",
       members: type.types.length,
-      containsUnknown: type.types.some((member) => (member.flags & ts.TypeFlags.Unknown) !== 0),
       ...(indexes.length ? { indexes } : {}),
     };
   }
@@ -609,7 +608,12 @@ function arrayDiagnosticBinding(compiler, request, producer) {
   const { context, source } = ownedSource(compiler, request.consumerPath, true);
   const callable = diagnosticCallable(context, source, request.exportName);
   const result = callable && diagnosticResult(callable);
-  if (!result || !directDiagnosticProducer(compiler, context, result.call, producer))
+  // Like the other bindings, the proof must reach the producer by its public specifier.
+  if (
+    !result ||
+    !parserImport(context, result.call, request.specifier) ||
+    !directDiagnosticProducer(compiler, context, result.call, producer)
+  )
     return { bound: false };
   const { local, call, argument } = result;
   if (
@@ -888,9 +892,10 @@ function parserEnvelope(context, type, call) {
   if (!success || !failure || !validParserFailure(context, failure, call))
     return { status: "incomplete" };
   const value = typeFacts(parserProperty(context, success, "value", call));
+  // The structural check reads the value's own type and index signatures. Deeper unknown members
+  // stay structural-ready, and their semantic proof decides them (the nested-unknown pin).
   const unsafe =
     ["unknown", "any"].includes(value.kind) ||
-    value.containsUnknown ||
     value.indexes?.some((index) => ["unknown", "any"].includes(index.kind));
   return { status: unsafe ? "invalid" : "ready", value };
 }
@@ -1253,13 +1258,16 @@ function typedTableUse(owned, domain, node) {
   );
 }
 
+// A shorthand property reads the parameter through referenceValueSymbol, and `arguments` can reach
+// it without naming it, so both count as uses that must pass the checks below (REVIEW-3918-046).
 function typedParameterUses(owned, nodes, domain, witness) {
+  const body = (node) =>
+    ts.isIdentifier(node) &&
+    node.getStart() >= owned.callable.body.getStart() &&
+    node.end <= owned.callable.body.end;
+  if (nodes.some((node) => body(node) && node.text === "arguments")) return false;
   const uses = nodes.filter(
-    (node) =>
-      ts.isIdentifier(node) &&
-      node.getStart() >= owned.callable.body.getStart() &&
-      node.end <= owned.callable.body.end &&
-      owned.context.checker.getSymbolAtLocation(node) === domain.symbol,
+    (node) => body(node) && referenceValueSymbol(owned.context, node) === domain.symbol,
   );
   if (writtenSymbol(owned.context, nodes, domain.symbol)) return false;
   return uses.every(
@@ -1807,10 +1815,12 @@ function canonicalDecoderFacts(compiler, identity, canonicalizer) {
   return {
     producer: identity,
     canonicalizer,
+    // decoderShapePreflight proves the call to a same-file checkJsonShape(text: string): void before
+    // JSON.parse, not that its body bounds the shape, so the fact names the call (REVIEW-3918-047).
     preflight: [
       "text-length",
       "utf8-bytes",
-      "json-shape",
+      "json-shape-call",
       "builtin-json-parse",
       "canonical-comparison",
     ],
@@ -1946,6 +1956,9 @@ function canonicalDecoderOperations(compiler) {
   };
 }
 
+// describeAt, incomingUses and expressionFactsAt have no production caller. They are the symbols
+// suite's seams onto shared production paths: owned-source program loading, eviction and source
+// budgets; invocationSymbol and qualifiedMemberReceiver, which consumerCalls uses; and typeFacts.
 function describeAt(compiler, request) {
   const { context, source } = ownedSource(compiler, request.path);
   const node = compilerNodeAt(compiler, source, request.offset);
@@ -2116,7 +2129,11 @@ function scanUses(compiler, path, identity, result) {
   const { context, source } = owned;
   visitCompilerNodes(compiler.state, source, (node) => {
     if (!referenceNode(node)) return;
-    const symbol = expressionSymbol(compiler, context, node);
+    // A shorthand property's name resolves to the property; its value is the local binding.
+    const symbol =
+      ts.isIdentifier(node) && ts.isShorthandPropertyAssignment(node.parent)
+        ? referenceValueSymbol(context, node)
+        : expressionSymbol(compiler, context, node);
     if (!symbol) {
       result.unresolved += 1;
       return;
@@ -3103,13 +3120,25 @@ function privateIncomingRelevant(state, index, entry) {
   );
 }
 
+// A shorthand property or export specifier names the local value, not the property, so identifier
+// comparisons resolve through referenceValueSymbol (REVIEW-3918-046).
 function containsSymbol(context, node, symbol) {
-  if (ts.isIdentifier(node) && context.checker.getSymbolAtLocation(node) === symbol) return true;
+  if (ts.isIdentifier(node) && referenceValueSymbol(context, node) === symbol) return true;
   return Boolean(ts.forEachChild(node, (child) => containsSymbol(context, child, symbol)));
+}
+
+// A for...of or for...in statement without a declaration list rebinds its initializer targets.
+function loopTargetWrite(context, node, symbol) {
+  return (
+    (ts.isForOfStatement(node) || ts.isForInStatement(node)) &&
+    !ts.isVariableDeclarationList(node.initializer) &&
+    containsSymbol(context, node.initializer, symbol)
+  );
 }
 
 function writtenSymbol(context, nodes, symbol) {
   return nodes.some((node) => {
+    if (loopTargetWrite(context, node, symbol)) return true;
     if (ts.isBinaryExpression(node)) {
       const kind = node.operatorToken.kind;
       return (
@@ -3278,8 +3307,15 @@ function rawCallEdges(state, states, queue, stateLimit = state.compiler.state.li
   }
 }
 
+// An argument maps to the parameter at its position only before the first spread, which makes
+// every later position unknown (REVIEW-3918-049).
+function positionalArguments(call) {
+  const spread = call.arguments.findIndex((argument) => ts.isSpreadElement(argument));
+  return spread === -1 ? [...call.arguments] : call.arguments.slice(0, spread);
+}
+
 function rawCallArguments(state, target, call, states, queue, stateLimit) {
-  for (const [index, argument] of call.arguments.entries()) {
+  for (const [index, argument] of positionalArguments(call).entries()) {
     const edge = rawEdgeCandidate(state, target, index, argument);
     if (!edge) continue;
     const { candidate, origin } = edge;
@@ -3444,7 +3480,7 @@ function rawPredicateSlots(state, states, qualified) {
     const predicate = signature && state.context.checker.getTypePredicateOfSignature(signature);
     if (predicate?.kind !== ts.TypePredicateKind.Identifier) return [];
     const key = `${target.identity.producer.start}:${predicate.parameterIndex}`;
-    const argument = call.arguments[predicate.parameterIndex];
+    const argument = positionalArguments(call)[predicate.parameterIndex];
     const origin = argument && rawOrigin(state, argument);
     if (!states.has(key) || !qualified.has(key) || !origin || rawErasure(state.context, argument))
       return [];

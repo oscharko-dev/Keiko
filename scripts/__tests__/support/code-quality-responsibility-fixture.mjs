@@ -965,6 +965,13 @@ function rawHelperSource(variant) {
         "validate(input: unknown, unrelated: unknown = 42)",
       ),
     "other-api": () => source,
+    // A spread shifts every later argument to an unknown parameter (REVIEW-3918-049).
+    "spread-shift": () =>
+      source.replace(
+        "  if (!finite(input)) return { ok: false };",
+        "  const pair: readonly [unknown, unknown] = [0, 0];\n  if (!finite(input) || !shifted(...pair, input)) return { ok: false };",
+      ) +
+      'function shifted(_first: unknown, second: unknown, _third: unknown): boolean {\n  return typeof second === "number";\n}\n',
     "literal-erasure": () => source + "const known = 42; const erased: unknown = known;\n",
     "unrelated-typeof": () => source + "const unrelated = typeof 42;\n",
     unicode: () => "/* λ boundary */\n" + source.replaceAll("finite", "πεπερασμένο"),
@@ -1364,6 +1371,23 @@ function dictionaryOwnershipVariants(source) {
       "input = {}; return typeof input.value",
     ),
     "root-write": source.replace("if (!record(input)", "input = { value: 1 }; if (!record(input)"),
+    // Writes that are not assignment expressions (REVIEW-3918-046).
+    "root-for-of": source.replace(
+      "if (!record(input)",
+      "for (input of [{ value: 1 }]); if (!record(input)",
+    ),
+    "root-for-in": source.replace(
+      "if (!record(input)",
+      "for (input in { value: 1 }); if (!record(input)",
+    ),
+    "root-for-of-pattern": source.replace(
+      "if (!record(input)",
+      "for ([input] of [[{ value: 1 }]]); if (!record(input)",
+    ),
+    "root-shorthand": source.replace(
+      "if (!record(input)",
+      "({ input } = { input: { value: 1 } }); if (!record(input)",
+    ),
   };
 }
 
@@ -1505,6 +1529,18 @@ function typedRecheckOwnerMutation(source, variant) {
     source =
       source.replace("return TABLE[from].includes(to);", "return consume(from);") +
       'function consume(value: unknown): boolean { return value === "ready"; }\n';
+  // Escapes that bypass the parameter's own symbol (REVIEW-3918-046).
+  if (variant === "shorthand-escape")
+    source =
+      source.replace(
+        "return TABLE[from].includes(to);",
+        "return sink({ from }) && TABLE[from].includes(to);",
+      ) + 'function sink(value: { from: State }): boolean { return value.from === "ready"; }\n';
+  if (variant === "arguments-escape")
+    source = source.replace(
+      "return TABLE[from].includes(to);",
+      "return TABLE[from].includes(to) && arguments.length === 2;",
+    );
   if (variant === "captured-tail")
     source = source.replace(
       "return TABLE[from].includes(to);",

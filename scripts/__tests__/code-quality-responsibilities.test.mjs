@@ -2965,7 +2965,7 @@ describe("typed finite entry responsibilities (#3918)", () => {
       }
       expect(
         legacyResolver.callableSlots(roles.input.identities[0]).parameters[0].type,
-      ).toMatchObject({ kind: "union", members: 2, containsUnknown: false });
+      ).toMatchObject({ kind: "union", members: 2 });
       const binding = legacyResolver.consumerCalls(
         roles.consumer.identities[0],
         roles.transform.identities[0],

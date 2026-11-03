@@ -489,6 +489,20 @@ describe("configured canonical symbol resolver interface (#3918)", () => {
       ]),
     );
   }, 15_000);
+  it("does not map an argument after a spread to the parameter at its position", async () => {
+    const own = createRawHelperEnforcementFixture("spread-shift");
+    fixtures.push(own);
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root));
+    const identity = own.resolver.resolveExport(own.record.input).identities[0];
+    const source = readFileSync(join(own.root, "packages/alpha/src/owner.ts"), "utf8");
+    const line = source.split("\n").indexOf('  return typeof second === "number";') + 1;
+    expect(line).toBeGreaterThan(0);
+    const slots = own.resolver.rawCheckingSlots(identity, 0);
+    expect(
+      slots.some((slot) => slot.rule === "anti-slop/no-runtime-typeof" && slot.line === 2),
+    ).toBe(true);
+    expect(slots.filter((slot) => slot.line === line)).toEqual([]);
+  }, 15_000);
   it("reuses guarded raw checking facts without exposing a mutable cache or surviving source changes", async () => {
     const own = createRawHelperEnforcementFixture("aliases");
     fixtures.push(own);
@@ -1216,6 +1230,24 @@ export function untyped(input: any): any { return input; }
     expect(facts.uses.filter((use) => use.kind === "call")).toHaveLength(3);
   });
 
+  it("records a shorthand property that passes the producer on (REVIEW-3918-051)", async () => {
+    const own = createSymbolFixture();
+    fixtures.push(own);
+    own.put(
+      "src/shorthand-consumer.ts",
+      'import { parse } from "alpha"; function register(value: { parse: unknown }): unknown { return value; } export const registered = register({ parse });\n',
+    );
+    own.subject = await collectPolicySubject(own.root);
+    own.resolver = createSymbolResolver(own.subject);
+    const identity = own.resolver.resolveExport(reference).identities[0];
+    const text = readFileSync(join(own.root, "src/shorthand-consumer.ts"), "utf8");
+    const start = text.indexOf("({ parse })") + "({ ".length;
+    const uses = own.resolver
+      .incomingUses(identity)
+      .uses.filter((use) => use.path === "src/shorthand-consumer.ts" && use.start === start);
+    expect(uses.map((use) => use.kind)).toEqual(["reference"]);
+  });
+
   it.each([
     "let alias = ns.parse; export const result = alias(1);",
     "const { parse: alias } = ns; export const result = alias(1);",
@@ -1760,6 +1792,25 @@ describe("diagnostic proof guard challenges (#3918)", () => {
     expect(actual.producer.path).toBe("packages/alpha/src/owner.ts");
     expect(own.resolver.diagnosticBinding(own.record.consumer, actual).bound).toBe(false);
   });
+  it("rejects a proof that reaches the producer through an internal relative import", async () => {
+    const own = createDiagnosticFixture();
+    fixtures.push(own);
+    const path = "packages/alpha/src/proof.test.ts";
+    const source = readFileSync(join(own.root, path), "utf8");
+    // The public-api proof must import the producer by its public specifier (REVIEW-3918-048).
+    own.put(
+      path,
+      source.replace(
+        'import { parse as check } from "alpha";',
+        'import { parse } from "alpha";\nimport { parse as check } from "./index.js";\nexport const publicParse = parse;',
+      ),
+    );
+    own.resolver = createSymbolResolver(await collectPolicySubject(own.root), {}, [
+      { owner: "packages/alpha", paths: own.record.proofs },
+    ]);
+    const producer = own.resolver.resolveProofExport(own.record.input).identities[0];
+    expect(own.resolver.diagnosticBinding(own.record.consumer, producer).bound).toBe(false);
+  });
   it("rejects stale original input before returning a cached proof Program", async () => {
     const own = createDiagnosticFixture();
     fixtures.push(own);
@@ -2054,6 +2105,10 @@ describe("dictionary bounded refusal controls (#3918)", () => {
     ["return-escape", 1],
     ["helper-write", 1],
     ["root-write", 0],
+    ["root-for-of", 0],
+    ["root-for-in", 0],
+    ["root-for-of-pattern", 0],
+    ["root-shorthand", 0],
     ["unused", 1],
     ["deferred", 1],
     ["computed", 1],
@@ -4525,6 +4580,8 @@ describe("typed finite public recheck symbols (#3918)", () => {
     "mutated-tail",
     "asserted",
     "rebound",
+    "shorthand-escape",
+    "arguments-escape",
     "generic",
     "foreign",
     "foreign-domain",
@@ -4679,7 +4736,7 @@ describe("raw canonical JSON decoder symbols (#3918)", () => {
     expect(facts.preflight).toEqual([
       "text-length",
       "utf8-bytes",
-      "json-shape",
+      "json-shape-call",
       "builtin-json-parse",
       "canonical-comparison",
     ]);
