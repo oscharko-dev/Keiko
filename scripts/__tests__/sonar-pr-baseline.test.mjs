@@ -75,6 +75,12 @@ describe("Sonar PR comparison baseline (#3915)", () => {
     await expect(runSonarPullRequestGate(fixture(input))).rejects.toThrow(/baseline/iu);
   });
 
+  it("does not accept an unaccepted target as its own comparison branch", async () => {
+    await expect(
+      runSonarPullRequestGate(fixture({ baseRef: "feature/unaccepted" })),
+    ).rejects.toThrow("SonarCloud baseline comparison branch is missing or unaccepted.");
+  });
+
   it.each([
     [{ new_coverage: 82 }, "New-code coverage condition failed at 82%."],
     [
