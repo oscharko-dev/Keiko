@@ -21,11 +21,11 @@ const sonarEpicBranch = "codex/epic-anti-slop-quality";
 function pullRequestBaselineFailures(analysis, baseRef) {
   const { base, target } = analysis ?? {};
   const failures = [];
-  if (baseRef !== SONAR_MAIN_BRANCH && baseRef !== sonarEpicBranch)
-    failures.push("SonarCloud baseline has no accepted GitHub target branch.");
+  const acceptedTarget = baseRef === SONAR_MAIN_BRANCH || baseRef === sonarEpicBranch;
+  if (!acceptedTarget) failures.push("SonarCloud baseline has no accepted GitHub target branch.");
   if (target !== baseRef)
     failures.push("SonarCloud baseline target differs from the GitHub target branch.");
-  const sameTarget = base === baseRef && typeof baseRef === "string";
+  const sameTarget = acceptedTarget && base === baseRef;
   const epicComparison = baseRef === sonarEpicBranch && base === SONAR_MAIN_BRANCH;
   if (!sameTarget && !epicComparison)
     failures.push("SonarCloud baseline comparison branch is missing or unaccepted.");
