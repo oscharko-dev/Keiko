@@ -237,6 +237,11 @@ export async function runScenario(scenario, instance, context) {
   const learnedAt = Date.now();
   const memories = await listMemories(instance);
   const probes = await runProbes(scenario, instance, context);
+  // Learning runs on probe questions too (memory is one switch for recall and learning), so a
+  // question the product turns into a memory is counted here instead of passing as recall.
+  const afterProbes = await listMemories(instance);
+  const known = new Set(memories.map((memory) => memory.id));
+  const probeCaptures = afterProbes.filter((memory) => !known.has(memory.id)).length;
   const captures = await readCaptures(instance);
   return {
     scenario: scenario.id,
@@ -256,6 +261,7 @@ export async function runScenario(scenario, instance, context) {
       status: capture.currentStatus ?? null,
     })),
     probes,
+    probeCaptures,
     timing: { learnMs: learnedAt - startedAt, probeMs: Date.now() - learnedAt },
     requests: context.fixture === undefined ? [] : context.fixture.requests(),
   };

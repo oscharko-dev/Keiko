@@ -1,6 +1,6 @@
 // Negative tests for the lab's guards: weakened configuration and stale evidence must be refused
 // before any instance starts. Nothing here forks the product.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -43,6 +43,22 @@ describe("memory lab option guards", () => {
     expect(options.arms).toEqual(["product"]);
     expect(options.graceMs).toBe(3000);
     expect(options.brokenLearner).toBeUndefined();
+  });
+
+  it("refuses an output directory behind a symbolic link that points into the checkout", () => {
+    directory = mkdtempSync(join(tmpdir(), "memory-lab-link-"));
+    const link = join(directory, "into-checkout");
+    symlinkSync(REPO_ROOT, link);
+    expect(() => normalizeOptions(values({ out: join(link, "lab-out", "run") }))).toThrow(
+      /outside the checkout/u,
+    );
+  });
+
+  it("parses the pre-PR hard-counter switch", () => {
+    expect(normalizeOptions(values()).failOnHardCounters).toBe(false);
+    expect(normalizeOptions(values({ "fail-on-hard-counters": true })).failOnHardCounters).toBe(
+      true,
+    );
   });
 
   it("refuses an output directory inside the checkout", () => {
@@ -113,27 +129,68 @@ function ledgerInstance(counts) {
 }
 
 describe("memory lab learning wait", () => {
-  it("waits through the grace period when no pending-work signal exists", async () => {
+  it("returns after the quiet period when no signal exists", async () => {
+    const started = Date.now();
+    const settled = await awaitLearning(ledgerInstance([0]), {
+      quietMs: 30,
+      graceMs: 5000,
+      maxMs: 5000,
+    });
+    expect(settled.captures).toBe(0);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("bounds the lab's expectation by the grace period when the product never calls the learner", async () => {
     const started = Date.now();
     const settled = await awaitLearning(ledgerInstance([0]), {
       quietMs: 10,
       graceMs: 150,
       maxMs: 5000,
+      pendingLearner: () => 1,
+      openCalls: async () => 0,
     });
     expect(settled.captures).toBe(0);
     expect(Date.now() - started).toBeGreaterThanOrEqual(140);
   });
 
-  it("returns after the quiet period once every queued extraction was served", async () => {
+  it("returns after the quiet period once every queued reply was served", async () => {
     const started = Date.now();
     const settled = await awaitLearning(ledgerInstance([1]), {
       quietMs: 20,
       graceMs: 5000,
       maxMs: 5000,
       pendingLearner: () => 0,
+      openCalls: async () => 0,
     });
     expect(settled.captures).toBe(1);
     expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it("never cuts an open product call short, whatever the grace period says", async () => {
+    await expect(
+      awaitLearning(ledgerInstance([0]), {
+        quietMs: 10,
+        graceMs: 20,
+        maxMs: 150,
+        openCalls: async () => 1,
+      }),
+    ).rejects.toThrow(/did not settle/u);
+  });
+
+  it("ends the wait when the last open call completes", async () => {
+    let reads = 0;
+    const openCalls = async () => {
+      reads += 1;
+      return reads < 4 ? 1 : 0;
+    };
+    const settled = await awaitLearning(ledgerInstance([0]), {
+      quietMs: 10,
+      graceMs: 5,
+      maxMs: 5000,
+      openCalls,
+    });
+    expect(settled.captures).toBe(0);
+    expect(reads).toBeGreaterThanOrEqual(4);
   });
 
   it("fails closed when the ledger never settles in time", async () => {

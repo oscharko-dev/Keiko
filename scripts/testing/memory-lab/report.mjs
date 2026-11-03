@@ -34,6 +34,7 @@ function recordStore(card, prefix, result) {
     metric("stored", store.stored),
     metric("live", store.live),
     metric("parked", store.parked),
+    metric("probeCaptures", result.probeCaptures ?? 0),
     ...HARD_COUNTERS.map((name) => metric(name, store.counters[name] ?? 0)),
   ]);
 }
@@ -94,18 +95,45 @@ function groupBy(results, keyOf) {
     .map(([key, rows]) => ({ key, ...aggregate(rows) }));
 }
 
+const NOISE_METRICS = Object.freeze(["precision", "recall", "answerAccuracy"]);
+
+function halfRange(values) {
+  const present = values.filter((value) => typeof value === "number");
+  if (present.length < 2) return null;
+  return Math.round(((Math.max(...present) - Math.min(...present)) / 2) * 10000) / 10000;
+}
+
+// The noise band of an arm: half the range of each metric across repetitions. One repetition has
+// no band, and the summary says so instead of showing zero.
+function noiseByArm(results) {
+  const arms = [...new Set(results.map((result) => result.arm))].toSorted();
+  return arms.map((arm) => {
+    const perRepetition = groupBy(
+      results.filter((result) => result.arm === arm),
+      (result) => `r${String(result.repetition)}`,
+    );
+    const band = Object.fromEntries(
+      NOISE_METRICS.map((metric) => [metric, halfRange(perRepetition.map((row) => row[metric]))]),
+    );
+    return { arm, repetitions: perRepetition.length, ...band };
+  });
+}
+
 /** Group rows per arm, per arm and language, per arm and class, plus the overall hard counters. */
 export function summarizeLabRun(results) {
-  // The off arm learns nothing; a violation in the product or the oracle arm is the product's doing.
-  const learned = results.filter((result) => result.arm !== "off");
-  const counters = aggregate(learned).counters;
+  // The headline is the product arm. The oracle store is curated through the explicit route, so its
+  // counters show that route's defects (today: project scope) and are reported apart.
+  const counters = aggregate(results.filter((result) => result.arm === "product")).counters;
+  const oracleCounters = aggregate(results.filter((result) => result.arm === "oracle")).counters;
   return {
     schemaVersion: 1,
     runs: results.length,
     byArm: groupBy(results, (result) => result.arm),
     byArmAndLanguage: groupBy(results, (result) => `${result.arm}/${result.language}`),
     byArmAndClass: groupBy(results, (result) => `${result.arm}/${result.class}`),
+    noise: noiseByArm(results),
     hardCountersViolated: hardCountersViolated(counters),
+    oracleCountersViolated: hardCountersViolated(oracleCounters),
     oraclePreconditionFailures: results
       .filter((result) => result.oracle !== undefined && !result.oracle.preconditionMet)
       .map((result) => result.scenario),
@@ -135,6 +163,21 @@ function groupTable(title, rows) {
   return lines.join("\n");
 }
 
+function noiseTable(rows) {
+  const lines = [
+    "### Noise band (half range across repetitions)",
+    "",
+    "| Arm | Repetitions | Precision | Recall | Answer accuracy |",
+    "| --- | --- | --- | --- | --- |",
+  ];
+  for (const row of rows)
+    lines.push(
+      `| ${row.arm} | ${String(row.repetitions)} | ${cell(row.precision)} | ${cell(row.recall)} | ${cell(row.answerAccuracy)} |`,
+    );
+  lines.push("", "A difference inside the band is noise; one repetition has no band (n/a).");
+  return lines.join("\n");
+}
+
 /** The Markdown a person reads: what was measured, per group, and what was not. */
 export function renderLabSummary(summary, manifest, metadata) {
   return [
@@ -142,7 +185,7 @@ export function renderLabSummary(summary, manifest, metadata) {
     "",
     `Mode: ${metadata.mode}. Product head: ${metadata.productHead}. Corpus: ${manifest.count} scenarios, set digest \`${manifest.setDigest}\`. Arms: ${metadata.arms.join(", ")}. Repetitions: ${String(metadata.repetitions)}. Memory mode: ${metadata.memoryMode}, ceiling: ${metadata.ceiling}.`,
     "",
-    `Hard counters in the learned arms: ${summary.hardCountersViolated ? "VIOLATED" : "all zero"}.`,
+    `Hard counters in the product arm: ${summary.hardCountersViolated ? "VIOLATED" : "all zero"}. Oracle arm: ${summary.oracleCountersViolated ? "VIOLATED (the explicit route's own doing)" : "all zero"}.`,
     summary.oraclePreconditionFailures.length === 0
       ? "Oracle precondition: met for every scenario."
       : `Oracle precondition failed for: ${summary.oraclePreconditionFailures.join(", ")}.`,
@@ -152,6 +195,8 @@ export function renderLabSummary(summary, manifest, metadata) {
     groupTable("By arm and language", summary.byArmAndLanguage),
     "",
     groupTable("By arm and class", summary.byArmAndClass),
+    "",
+    noiseTable(summary.noise),
     "",
     "### Not measured in this run",
     "",
@@ -165,7 +210,10 @@ export function passFailLine(summary) {
   const hard = summary.hardCountersViolated ? "hard-counters=violated" : "hard-counters=zero";
   const oracle =
     summary.oraclePreconditionFailures.length === 0 ? "oracle=ok" : "oracle=precondition-failed";
-  return `PASS memory-lab runs=${String(summary.runs)} ${hard} ${oracle}`;
+  const oracleHard = summary.oracleCountersViolated
+    ? "oracle-counters=violated"
+    : "oracle-counters=zero";
+  return `PASS memory-lab runs=${String(summary.runs)} ${hard} ${oracleHard} ${oracle}`;
 }
 
 export { serializeScorecard };

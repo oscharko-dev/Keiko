@@ -63,7 +63,9 @@ describe("memory lab offline run", () => {
       const lines = [];
       const first = await runLab(options(root, "first", scenarios), (line) => lines.push(line));
       expect(first.runs).toBe(SCENARIOS.length);
-      expect(lines.at(-1)).toMatch(/^PASS memory-lab runs=2 hard-counters=\S+ oracle=ok$/u);
+      expect(lines.at(-1)).toMatch(
+        /^PASS memory-lab runs=2 hard-counters=\S+ oracle-counters=\S+ oracle=ok$/u,
+      );
       expect(existsSync(join(root, "first", "summary.md"))).toBe(true);
       expect(existsSync(join(root, "first", "state"))).toBe(false);
       await runLab(options(root, "second", scenarios), () => undefined);

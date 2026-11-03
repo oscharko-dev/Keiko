@@ -31,6 +31,8 @@ export const SCENARIO_CLASSES = Object.freeze([
   "edit-after-learn",
   "entrenchment",
   "unrelated",
+  "anchor-real",
+  "anchor-benchmark",
 ]);
 const SCENARIO_DIFFICULTIES = Object.freeze(["plain", "embedded", "split", "noisy"]);
 const FORBIDDEN_CLASSES = Object.freeze([

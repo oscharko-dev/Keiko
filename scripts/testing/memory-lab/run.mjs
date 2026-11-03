@@ -10,13 +10,21 @@
 // result; a product verdict is read from the summary, never from the exit code.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { URL, fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { REPO_ROOT, runMain } from "../coding-workbench-lab/lab-common.mjs";
 import { writeContinuityJson } from "../coding-workbench-lab/chat-continuity-campaign.mjs";
+import {
+  holdoutManifest,
+  holdoutScenarioName,
+  maskHoldoutResult,
+  openHoldout,
+} from "./corpus/holdout.mjs";
+import { assertOutsideCheckout, outsideCheckout } from "./corpus/paths.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
-import { CEILINGS, startLabInstance } from "./instance.mjs";
+import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
 import {
   buildLabScorecard,
   passFailLine,
@@ -25,7 +33,11 @@ import {
   summarizeLabRun,
 } from "./report.mjs";
 import { loadScenarioDirectory, scenarioSetManifest } from "./scenario.mjs";
-import { startScriptedModelServer } from "./scripted-model.mjs";
+import {
+  ANSWERER_MODEL_ID,
+  LEARNER_MODEL_ID,
+  startScriptedModelServer,
+} from "./scripted-model.mjs";
 
 export const DEFAULT_SCENARIO_DIR = fileURLToPath(new URL("./scenarios/", import.meta.url));
 export const BROKEN_LEARNERS = Object.freeze(["whole-message", "credential", "invented"]);
@@ -34,7 +46,9 @@ const MEMORY_MODES = Object.freeze(["governed-assist", "supervised-coding", "aut
 const OPTIONS = {
   mode: { type: "string", default: "offline" },
   out: { type: "string" },
-  scenarios: { type: "string", default: DEFAULT_SCENARIO_DIR },
+  scenarios: { type: "string" },
+  holdout: { type: "string" },
+  "key-file": { type: "string" },
   arms: { type: "string", default: ARMS.join(",") },
   repetitions: { type: "string", default: "1" },
   "memory-mode": { type: "string", default: "governed-assist" },
@@ -52,6 +66,7 @@ const OPTIONS = {
   "answer-model": { type: "string" },
   "learn-model": { type: "string" },
   "broken-learner": { type: "string" },
+  "fail-on-hard-counters": { type: "boolean", default: false },
   help: { type: "boolean", default: false },
 };
 
@@ -59,10 +74,12 @@ function usage() {
   return [
     "usage: node scripts/testing/memory-lab/run.mjs --out <dir> [--mode offline|live]",
     `  --scenarios <dir> (default ${DEFAULT_SCENARIO_DIR})  --arms ${ARMS.join(",")}  --repetitions N`,
+    "  --holdout <file> --key-file <path>  run a sealed holdout instead (aggregates only; no --scenarios, no --keep)",
     `  --memory-mode ${MEMORY_MODES.join("|")}  --ceiling ${CEILINGS.join("|")}  --budget-tokens N`,
     "  --keep (retain instance state)  --subject-root <checkout>  --generated-at <epoch-ms>",
     "  --retain-bodies / --no-retain-bodies  --quiet-ms N  --max-wait-ms N  --learner-grace-ms N  --turn-timeout-ms N",
     "  live: --config <gateway.json> --answer-model <id> --learn-model <id>",
+    "  --fail-on-hard-counters  exit 4 when a product-arm hard counter is above zero (the pre-PR run)",
     `  proofs: --broken-learner ${BROKEN_LEARNERS.join("|")}`,
   ].join("\n");
 }
@@ -77,11 +94,6 @@ function integer(value, name) {
 function oneOf(value, allowed, name) {
   if (!allowed.includes(value)) throw new RangeError(`${name} must be one of ${allowed.join("|")}`);
   return value;
-}
-
-function outsideCheckout(path) {
-  const relativePath = relative(REPO_ROOT, path);
-  return relativePath.startsWith("..") || isAbsolute(relativePath);
 }
 
 function optionalOneOf(value, allowed, name) {
@@ -106,6 +118,29 @@ const DEFAULTS = Object.fromEntries(
     .map(([name, option]) => [name, option.default]),
 );
 
+// Where the scenarios come from: a directory, or a sealed holdout that is opened only in memory.
+function corpusSource(values) {
+  const { holdout, scenarios } = values;
+  const keyFile = values["key-file"];
+  if (holdout === undefined && keyFile === undefined)
+    return { scenarios: resolve(scenarios ?? DEFAULT_SCENARIO_DIR), holdout: undefined };
+  if (holdout === undefined || keyFile === undefined)
+    throw new RangeError("--holdout and --key-file are used together");
+  if (scenarios !== undefined)
+    throw new RangeError("--holdout and --scenarios are mutually exclusive");
+  if (values.keep === true)
+    throw new RangeError(
+      "--keep cannot be combined with --holdout: instance state holds the sealed conversation",
+    );
+  return {
+    scenarios: undefined,
+    holdout: {
+      file: assertOutsideCheckout(holdout, "--holdout"),
+      keyFile: assertOutsideCheckout(keyFile, "--key-file"),
+    },
+  };
+}
+
 /** Validated run options from parsed CLI values (also the shape `runLab` accepts). */
 export function normalizeOptions(raw) {
   const values = { ...DEFAULTS, ...raw };
@@ -115,11 +150,13 @@ export function normalizeOptions(raw) {
   if (!outsideCheckout(out)) throw new RangeError("--out must lie outside the checkout");
   const mode = oneOf(values.mode, ["offline", "live"], "--mode");
   assertLiveOptions(mode, values);
+  const source = corpusSource(values);
   const arms = values.arms.split(",").map((arm) => oneOf(arm.trim(), ARMS, "--arms"));
   return {
     mode,
     out,
-    scenarios: resolve(values.scenarios),
+    scenarios: source.scenarios,
+    holdout: source.holdout,
     arms: [...new Set(arms)],
     repetitions: Math.max(1, integer(values.repetitions, "--repetitions")),
     memoryMode: oneOf(values["memory-mode"], MEMORY_MODES, "--memory-mode"),
@@ -128,7 +165,8 @@ export function normalizeOptions(raw) {
     keep: values.keep === true,
     subjectRoot: optionalPath(values["subject-root"]),
     generatedAt: integer(values["generated-at"], "--generated-at"),
-    retainBodies: values["retain-bodies"] !== false,
+    // A sealed run never retains a body: nothing of the conversation may reach the evidence.
+    retainBodies: source.holdout === undefined && values["retain-bodies"] !== false,
     quietMs: integer(values["quiet-ms"], "--quiet-ms"),
     maxWaitMs: integer(values["max-wait-ms"], "--max-wait-ms"),
     graceMs: integer(values["learner-grace-ms"], "--learner-grace-ms"),
@@ -136,17 +174,16 @@ export function normalizeOptions(raw) {
     configPath: optionalPath(values.config),
     answerModelId: values["answer-model"],
     learnModelId: values["learn-model"],
+    failOnHardCounters: values["fail-on-hard-counters"] === true,
     brokenLearner: optionalOneOf(values["broken-learner"], BROKEN_LEARNERS, "--broken-learner"),
   };
 }
 
 // Deliberately wrong learners prove that the scorer and the product's guards can go red.
 function brokenLearnerItems(kind) {
-  if (kind === "whole-message") return (turn) => [{ body: turn.user, type: "semantic-fact" }];
+  if (kind === "whole-message") return (turn) => [{ body: turn.user, type: "fact" }];
   if (kind === "credential")
-    return () => [
-      { body: "My API key is sk-lab-0123456789abcdef0123456789abcdef", type: "semantic-fact" },
-    ];
+    return () => [{ body: "My API key is sk-lab-0123456789abcdef0123456789abcdef", type: "fact" }];
   return () => [{ body: "Der Nutzer liebt Sardinen zum Fruehstueck.", type: "preference" }];
 }
 
@@ -166,7 +203,7 @@ async function startFixture(options) {
   return startScriptedModelServer({ retainBodies: options.retainBodies });
 }
 
-function runContext(options, arm, fixture) {
+function runContext(options, arm, fixture, instance) {
   return {
     arm,
     memoryMode: options.memoryMode,
@@ -178,6 +215,9 @@ function runContext(options, arm, fixture) {
       quietMs: options.quietMs,
       maxMs: options.maxWaitMs,
       graceMs: options.graceMs,
+      // The product's own open model calls, from its Activity Log, are never cut short; the lab's
+      // queued scripted replies are an expectation bounded by the grace period.
+      openCalls: () => pendingGatewayCalls(instance),
       ...(fixture === undefined ? {} : { pendingLearner: () => fixture.pendingLearner() }),
     },
     ...(fixture === undefined ? {} : { fixture }),
@@ -195,8 +235,8 @@ async function closeFixture(fixture) {
   });
 }
 
-async function startUnit(scenario, arm, options, stateRoot) {
-  const dir = mkdtempSync(join(stateRoot, `${scenario.id}-${arm}-`));
+async function startUnit(label, arm, options, stateRoot) {
+  const dir = mkdtempSync(join(stateRoot, `${label.replaceAll(":", "-")}-${arm}-`));
   const fixture = await startFixture(options);
   const startedAt = Date.now();
   try {
@@ -218,20 +258,44 @@ async function startUnit(scenario, arm, options, stateRoot) {
   }
 }
 
-async function runUnit(scenario, arm, repetition, options, stateRoot) {
+// The unit currently running, so that an interrupt can close its instance and fixture.
+let activeUnit;
+
+/** Closes the running unit, if any; an interrupted run must leave no process, port or state behind. */
+export async function closeActiveUnit() {
+  const unit = activeUnit;
+  activeUnit = undefined;
+  if (unit === undefined) return;
+  await unit.instance.close();
+  if (!unit.keep) rmSync(unit.dir, { recursive: true, force: true });
+}
+
+async function runUnit(scenario, arm, repetition, options, stateRoot, label) {
   const { dir, fixture, instance, instanceStartMs } = await startUnit(
-    scenario,
+    label,
     arm,
     options,
     stateRoot,
   );
+  activeUnit = { dir, instance, keep: options.keep };
   try {
-    const result = await runScenario(scenario, instance, runContext(options, arm, fixture));
+    const context = runContext(options, arm, fixture, instance);
+    const result = await runScenario(scenario, instance, context);
     return { ...result, repetition, foldedKeys: instance.foldedKeys, instanceStartMs };
   } finally {
+    activeUnit = undefined;
     await instance.close();
     if (!options.keep) rmSync(dir, { recursive: true, force: true });
   }
+}
+
+function installInterruptHandlers() {
+  for (const signal of ["SIGINT", "SIGTERM"])
+    process.once(signal, () => {
+      void closeActiveUnit().finally(() => {
+        process.exit(130);
+      });
+    });
 }
 
 function timingRows(results) {
@@ -250,8 +314,8 @@ function timingRows(results) {
   }));
 }
 
-function writeEvidence(options, scenarios, results) {
-  const manifest = scenarioSetManifest(scenarios);
+function writeEvidence(options, corpus, results) {
+  const manifest = corpus.manifest;
   const summary = summarizeLabRun(results);
   const metadata = {
     mode: options.mode,
@@ -260,7 +324,10 @@ function writeEvidence(options, scenarios, results) {
     repetitions: options.repetitions,
     memoryMode: options.memoryMode,
     ceiling: options.ceiling,
+    answerModelId: options.answerModelId ?? ANSWERER_MODEL_ID,
+    learnModelId: options.learnModelId ?? LEARNER_MODEL_ID,
     brokenLearner: options.brokenLearner ?? null,
+    holdout: corpus.sealed,
     foldedKeys: [...new Set(results.flatMap((result) => result.foldedKeys))].toSorted(),
   };
   writeContinuityJson(join(options.out, "manifest.json"), { ...manifest, metadata });
@@ -274,41 +341,108 @@ function writeEvidence(options, scenarios, results) {
   return summary;
 }
 
+// The scenarios of a run and how they appear in its evidence. A sealed holdout is opened in memory
+// and appears only under masked names, so no report can carry a scenario id, a fact key or a probe id.
+function loadCorpus(options) {
+  if (options.holdout === undefined) {
+    const scenarios = loadScenarioDirectory(options.scenarios);
+    return {
+      scenarios,
+      sealed: false,
+      label: (scenario) => scenario.id,
+      manifest: scenarioSetManifest(scenarios),
+    };
+  }
+  const scenarios = openHoldout(options.holdout.file, options.holdout.keyFile);
+  return {
+    scenarios,
+    sealed: true,
+    label: (scenario) => holdoutScenarioName(scenario),
+    manifest: holdoutManifest(scenarios),
+  };
+}
+
+// A failing call can echo the conversation in its message, and an error cause is printed by many
+// callers, so a sealed run reports a failure by its masked unit and the error's name alone.
+function sealedFailure(label, arm, repetition, error) {
+  return new Error(
+    `holdout unit ${label} ${arm} r${String(repetition)} failed (${error?.name ?? "error"})`,
+  );
+}
+
+function runOne(scenario, arm, repetition, options, stateRoot, corpus) {
+  const label = corpus.label(scenario);
+  return runUnit(scenario, arm, repetition, options, stateRoot, label).then(
+    (result) => (corpus.sealed ? maskHoldoutResult(result, label) : result),
+    (error) => {
+      throw corpus.sealed ? sealedFailure(label, arm, repetition, error) : error;
+    },
+  );
+}
+
+function runLine(result) {
+  const passed = result.probes.filter((probe) => probe.passed).length;
+  return `run ${result.scenario} ${result.arm} r${String(result.repetition)} store=${String(result.store.live)} probes=${String(passed)}/${String(result.probes.length)}`;
+}
+
+async function runAll(options, corpus, stateRoot, log) {
+  const results = [];
+  for (let repetition = 0; repetition < options.repetitions; repetition += 1)
+    for (const scenario of corpus.scenarios)
+      for (const arm of options.arms) {
+        const result = await runOne(scenario, arm, repetition, options, stateRoot, corpus);
+        results.push(result);
+        if (!corpus.sealed)
+          writeContinuityJson(
+            join(options.out, "runs", `${scenario.id}.${arm}.r${String(repetition)}.json`),
+            result,
+          );
+        log(runLine(result));
+      }
+  return results;
+}
+
+// A sealed run keeps its instance state outside the evidence directory, in a private temporary one,
+// so that nothing of the conversation can end up beside the report, even if the run is killed.
+function prepareOutput(options, corpus) {
+  if (corpus.sealed) {
+    mkdirSync(options.out, { recursive: true });
+    return mkdtempSync(join(tmpdir(), "memory-lab-sealed-"));
+  }
+  mkdirSync(join(options.out, "runs"), { recursive: true });
+  mkdirSync(join(options.out, "state"), { recursive: true });
+  return join(options.out, "state");
+}
+
 /** Runs the lab with validated options and returns the summary; writes evidence under `out`. */
 export async function runLab(options, log = console.log) {
   if (existsSync(join(options.out, "scorecard.json")))
     throw new Error(`refusing to overwrite an existing run in ${options.out}`);
-  mkdirSync(join(options.out, "runs"), { recursive: true });
-  const stateRoot =
-    mkdirSync(join(options.out, "state"), { recursive: true }) ?? join(options.out, "state");
-  const scenarios = loadScenarioDirectory(options.scenarios);
-  const results = [];
-  for (let repetition = 0; repetition < options.repetitions; repetition += 1)
-    for (const scenario of scenarios)
-      for (const arm of options.arms) {
-        const result = await runUnit(scenario, arm, repetition, options, stateRoot);
-        results.push(result);
-        writeContinuityJson(
-          join(options.out, "runs", `${scenario.id}.${arm}.r${String(repetition)}.json`),
-          result,
-        );
-        log(
-          `run ${scenario.id} ${arm} r${String(repetition)} store=${String(result.store.live)} probes=${String(result.probes.filter((probe) => probe.passed).length)}/${String(result.probes.length)}`,
-        );
-      }
+  const corpus = loadCorpus(options);
+  const stateRoot = prepareOutput(options, corpus);
+  let results;
+  try {
+    results = await runAll(options, corpus, stateRoot, log);
+  } finally {
+    if (corpus.sealed) rmSync(stateRoot, { recursive: true, force: true });
+  }
   if (!options.keep) rmSync(stateRoot, { recursive: true, force: true });
-  const summary = writeEvidence(options, scenarios, results);
+  const summary = writeEvidence(options, corpus, results);
   log(passFailLine(summary));
   return summary;
 }
 
 async function main() {
+  installInterruptHandlers();
   const { values } = parseArgs({ options: OPTIONS, allowNegative: true });
   if (values.help) {
     console.log(usage());
     return;
   }
-  await runLab(normalizeOptions(values));
+  const options = normalizeOptions(values);
+  const summary = await runLab(options);
+  // The pre-PR short run turns red on a hard counter; every other reading stays in the summary.
+  return options.failOnHardCounters && summary.hardCountersViolated ? 4 : 0;
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url))

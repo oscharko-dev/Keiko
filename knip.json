@@ -18,6 +18,8 @@
         "scripts/*.mjs!",
         "scripts/testing/coding-workbench-lab/*.mjs",
         "scripts/testing/memory-lab/run.mjs",
+        "scripts/testing/memory-lab/rhythm.mjs",
+        "scripts/testing/memory-lab/usage.mjs",
         "scripts/testing/chat-skills-lab/run.mjs",
         "scripts/testing/chat-skills-lab/serve.mjs",
         "scripts/testing/chat-skills-lab/verify-tests.mjs",

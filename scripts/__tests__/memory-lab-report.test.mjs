@@ -85,7 +85,7 @@ describe("memory lab report", () => {
     const summary = summarizeLabRun([oracle, result()]);
     expect(summary.oraclePreconditionFailures).toEqual(["preference-tables-de"]);
     expect(passFailLine(summary)).toBe(
-      "PASS memory-lab runs=2 hard-counters=zero oracle=precondition-failed",
+      "PASS memory-lab runs=2 hard-counters=zero oracle-counters=zero oracle=precondition-failed",
     );
   });
 
@@ -102,7 +102,8 @@ describe("memory lab report", () => {
       "product/de",
     ]);
     expect(summary.byArmAndClass[0].key).toBe("off/preference");
-    expect(summary.hardCountersViolated).toBe(true);
+    expect(summary.hardCountersViolated).toBe(false);
+    expect(summary.oracleCountersViolated).toBe(true);
     const markdown = renderLabSummary(
       summary,
       { count: 1, setDigest: "abc" },
@@ -115,8 +116,36 @@ describe("memory lab report", () => {
         ceiling: "governed-assist",
       },
     );
-    expect(markdown).toContain("Hard counters in the learned arms: VIOLATED");
+    expect(markdown).toContain("Hard counters in the product arm: all zero. Oracle arm: VIOLATED");
     expect(markdown).toContain("| product/de |");
     expect(markdown).toContain("### Not measured in this run");
+  });
+
+  it("reports the noise band as the half range across repetitions, and n/a for one repetition", () => {
+    const summary = summarizeLabRun([
+      result(),
+      result({ repetition: 1, store: { ...result().store, precision: 0.5 } }),
+      result({ repetition: 2, store: { ...result().store, precision: 0.9 } }),
+      result({ arm: "oracle" }),
+    ]);
+    const product = summary.noise.find((row) => row.arm === "product");
+    expect(product.repetitions).toBe(3);
+    expect(product.precision).toBe(0.25);
+    expect(product.recall).toBe(0);
+    expect(summary.noise.find((row) => row.arm === "oracle").precision).toBeNull();
+    const markdown = renderLabSummary(
+      summary,
+      { count: 1, setDigest: "abc" },
+      {
+        mode: "offline",
+        productHead: "head",
+        arms: ["product", "oracle"],
+        repetitions: 3,
+        memoryMode: "m",
+        ceiling: "c",
+      },
+    );
+    expect(markdown).toContain("| product | 3 | 0.25 | 0 | 0 |");
+    expect(markdown).toContain("| oracle | 1 | n/a | n/a | n/a |");
   });
 });

@@ -18,7 +18,7 @@
       "learner": [
         {
           "body": "Mein Kunde Herr Lindqvist bevorzugt Berichte als PDF.",
-          "type": "semantic-fact"
+          "type": "fact"
         }
       ]
     }

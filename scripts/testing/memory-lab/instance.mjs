@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { REPO_ROOT, importBuilt } from "../coding-workbench-lab/lab-common.mjs";
+import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
 import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
 import { ANSWERER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
 
@@ -168,6 +169,7 @@ export async function startLabInstance(options) {
   );
   return {
     dir: options.dir,
+    logDirectory: join(prepared.env.KEIKO_STATE_DIR, "logs"),
     project: prepared.project,
     foldedKeys: prepared.foldedKeys,
     answerModelId,
@@ -204,10 +206,36 @@ export async function listMemories(instance) {
 
 // Without a pending-work signal (live mode) the learner's call is invisible until its capture
 // lands, so the grace period is always waited through; with the signal, served queues end it early.
-function learnerDone(options, startedAt) {
-  const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
-  if (Date.now() - startedAt >= graceMs) return true;
-  return options.pendingLearner !== undefined && options.pendingLearner() === 0;
+// Two signals end the wait. `openCalls` is the product's own evidence (model calls it started and
+// has not completed) and is never cut short. `pendingLearner` is the lab's expectation (queued
+// scripted replies) and is bounded by the grace period, because a turn the product handles without
+// its learner, an explicit statement or a refused one, would otherwise wait forever.
+async function learnerDone(options, startedAt) {
+  if (options.openCalls !== undefined && (await options.openCalls()) > 0) return false;
+  if (options.pendingLearner === undefined) return true;
+  if ((await options.pendingLearner()) === 0) return true;
+  return Date.now() - startedAt >= (options.graceMs ?? DEFAULT_GRACE_MS);
+}
+
+const GATEWAY_STARTED = "gateway.chat.started";
+const GATEWAY_COMPLETED = new Set(["gateway.chat.completed", "gateway.stream.completed"]);
+
+/**
+ * Model calls the product has started and not completed, read from the instance's own Activity
+ * Log. While the lab waits for learning no chat turn is in flight, so every open call is a learning
+ * call; this is the live-mode counterpart of the scripted model's queue.
+ */
+export async function pendingGatewayCalls(instance) {
+  const events = await readActivityEvents(instance.logDirectory);
+  const started = new Set();
+  const completed = new Set();
+  for (const event of events) {
+    if (event.op === GATEWAY_STARTED) started.add(event.correlationId);
+    else if (GATEWAY_COMPLETED.has(event.op)) completed.add(event.correlationId);
+  }
+  let open = 0;
+  for (const id of started) if (!completed.has(id)) open += 1;
+  return open;
 }
 
 function observeLedger(state, count) {
@@ -217,10 +245,10 @@ function observeLedger(state, count) {
 }
 
 /**
- * Waits until learning has settled: the capture ledger stays unchanged for `quietMs`, and, when the
- * caller can count queued extractions, until every one was served or `graceMs` passed without the
- * product asking for one (an explicit turn or a refused turn never calls the learner). Fails after
- * `maxMs`.
+ * Waits until learning has settled: the capture ledger stays unchanged for `quietMs`, no model call
+ * the product started is still open (`openCalls`, read from the instance's own Activity Log by
+ * `pendingGatewayCalls`), and every scripted reply the lab queued was served or the grace period
+ * passed (`pendingLearner`). Fails after `maxMs`.
  */
 export async function awaitLearning(instance, options = {}) {
   const quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
@@ -231,7 +259,7 @@ export async function awaitLearning(instance, options = {}) {
     const count = (await readCaptures(instance)).length;
     observeLedger(state, count);
     const quiet = Date.now() - state.quietSince >= quietMs;
-    if (quiet && learnerDone(options, startedAt)) return { captures: count };
+    if (quiet && (await learnerDone(options, startedAt))) return { captures: count };
     if (Date.now() - startedAt > maxMs) throw new Error("learning did not settle in time");
     await delay(POLL_MS);
   }
