@@ -998,4 +998,7 @@ export const DE_MESSAGES = {
     "Retrieval-Embedding: bestanden (Modellidentität in diesem Bericht nicht verfügbar)",
   "settings.models.retrievalEmbeddingIdentity": "Retrieval-Embedding-Modell: {modelId}{shape}",
   "settings.models.retrievalEmbeddingDimensions": " ({dimensions} Dimensionen)",
+  "permControl.keikoMode": "Keiko-Modus",
+  "permControl.zeroStandingRights": "Keine Dauerrechte · Keiko steuert",
+  "permControl.legacyAccessMode": "Älterer Zugriffsmodus",
 } satisfies MessageCatalog;

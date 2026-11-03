@@ -1,6 +1,6 @@
 "use client";
 
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { useTranslate } from "@/lib/i18n";
 
 import type { ReactNode } from "react";
 
@@ -32,7 +32,7 @@ function resolveAccessNote(keiko: boolean, access: AccessMode): string {
 }
 
 export function PermControl({ cfg, set }: PermControlProps): ReactNode {
-  const tUi = useOptionalWidgetTranslate();
+  const tUi = useTranslate();
   const keiko = cfg["keikoMode"] !== false;
   const access: AccessMode = cfg["access"] === "full" ? "full" : "ask";
   const note = resolveAccessNote(keiko, access);
@@ -52,8 +52,8 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
         <img className="perm-orca" src="/keiko-logo.svg" alt="" />
         <span className="perm-tt">
-          <span className="perm-name">{tUi("permControl.ui.keikoMode")}</span>
-          <span className="perm-desc">{tUi("permControl.ui.zeroStandingRightsKeikoGoverns")}</span>
+          <span className="perm-name">{tUi("permControl.keikoMode")}</span>
+          <span className="perm-desc">{tUi("permControl.zeroStandingRights")}</span>
         </span>
         <span className={"perm-sw" + (keiko ? " on" : "")}>
           <span />
@@ -66,7 +66,7 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         <div
           className="perm-legacy"
           role="radiogroup"
-          aria-label={tUi("permControl.ui.legacyAccessMode")}
+          aria-label={tUi("permControl.legacyAccessMode")}
         >
           {LEGACY_OPTIONS.map(([a, lbl]) => (
             <button

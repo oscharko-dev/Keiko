@@ -971,6 +971,9 @@ export const EN_MESSAGES = {
     "Retrieval embedding: passed (model identity unavailable in this report)",
   "settings.models.retrievalEmbeddingIdentity": "Retrieval embedding model: {modelId}{shape}",
   "settings.models.retrievalEmbeddingDimensions": " ({dimensions} dimensions)",
+  "permControl.keikoMode": "Keiko-Mode",
+  "permControl.zeroStandingRights": "Zero standing rights · Keiko governs",
+  "permControl.legacyAccessMode": "Legacy access mode",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

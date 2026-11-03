@@ -3585,9 +3585,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Bei Stummschaltung kann Keiko Ihr Mikrofon nicht hören, bis Sie die Stummschaltung aufheben.",
   "workflowHandoff.ui.workflowResultActions": "Aktionen für das Workflow-Ergebnis",
   "workflowHandoff.ui.openResult": "Ergebnis öffnen",
-  "permControl.ui.keikoMode": "Keiko-Modus",
-  "permControl.ui.zeroStandingRightsKeikoGoverns": "Keine Dauerrechte · Keiko steuert",
-  "permControl.ui.legacyAccessMode": "Älterer Zugriffsmodus",
   "runtimeHub.ui.projectPath": "Projektpfad",
   "runtimeHub.ui.runtimeActions": "Runtime-Aktionen",
   "runtimeHub.ui.addAProjectPathTo":
