@@ -42,7 +42,7 @@ one persisted line — the report's total and per-step durations and statuses, t
 duration, the isolation backend and egress policy that applied, and the bootstrap's outcome —
 without recording a command, argument, path or output (2026-10-06).
 
-1.8 — #4068 adds D19: governed repository verification on Windows stays container-backed (2026-11-03).
+1.8 — #4068 adds D20: governed repository verification on Windows stays container-backed (2026-11-03).
 
 ## Context
 
@@ -825,7 +825,7 @@ timed out (10060) before the exemption.
 
 ## Addendum — Windows governed verification stays container-backed (2026-11-03)
 
-### D19 — No Windows-native execution-root boundary for repository verification
+### D20 — No Windows-native execution-root boundary for repository verification
 
 Decided on 2026-11-03 by the #4068 assignee, @HendrikD2005; integration into `dev` remains the
 repository owner's approval. Repository verification always requests the execution-root boundary (D9).
