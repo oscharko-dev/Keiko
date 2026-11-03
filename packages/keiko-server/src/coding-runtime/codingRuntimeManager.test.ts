@@ -955,12 +955,8 @@ describe("coding runtime manager", () => {
   it("keeps host proxy, CA, OpenSSL and credential settings out of a mapped launch (#4068 W11)", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
-    let spawnedEnv: Record<string, string> | undefined;
     const manager = createTestCodingRuntimeManager({
-      supervisor: testSupervisor((executable, args, env) => {
-        spawnedEnv = env;
-        return harness.spawn(executable, args, env);
-      }),
+      supervisor: testSupervisor(harness.spawn),
       processEnv: {
         PATH: "/usr/bin",
         HTTPS_PROXY: "http://user:proxy-password@proxy.example.test:8080",
@@ -982,8 +978,9 @@ describe("coding runtime manager", () => {
       launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
     );
 
-    expect(spawnedEnv?.PATH).toBe("/usr/bin");
-    const names = Object.keys(spawnedEnv ?? {});
+    const spawnedEnv = harness.captures[0]?.env ?? {};
+    expect(spawnedEnv.PATH).toBe("/usr/bin");
+    const names = Object.keys(spawnedEnv);
     expect(names.filter((name) => !name.startsWith("KEIKO_") && name !== "PATH")).toEqual([]);
     const values = JSON.stringify(spawnedEnv);
     for (const hostValue of ["proxy-password", "proxy.example.test", "/host/", "host-api-key"]) {
