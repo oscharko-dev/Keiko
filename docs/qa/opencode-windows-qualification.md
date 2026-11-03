@@ -673,7 +673,7 @@ no unfinished implementation or its results were imported as this branch's quali
 | W5 — Platform lanes                  | PARTIAL. The Windows reference runner builds the actual supervisor, tests SCM admission and executes the MCP harness. Feature pushes also require a real gateway TCP connection. Required product CI and full hardware qualification remain open. On 2026-11-01 the full coding-runtime suite ran on a Windows 11 host and its failures were repaired at the owning layer (see below).                                                                                                                                                         |
 | W6 — Three-mode task comparison      | BLOCKED by the missing Windows runtime package approval (W3/W4) and the missing live model/Gateway qualification. The comparison needs real model turns in all three modes, so no component substitutes for it. No task or mode counted as passed                                                                                                                                                                                                                                                                                              |
 | W7 — Windows paths / filesystem      | PARTIAL. Git reparse, checkout binding, portable discovery, and source-built/staged secure-read paths and races pass, including Unicode, case aliases, long paths, ADS and namespace refusal. Full instruction/media/external-root and linked-worktree move/watcher qualification remains open                                                                                                                                                                                                                                                 |
-| W8 — Shell / real repair             | PARTIAL. On native Windows the project's own Vitest runs red, green after the repair and red on a regression through the real `npm.cmd`, `npx.cmd` and `vitest.cmd`, and hostile arguments arrive byte for byte. This runs below the execution-root boundary. BLOCKED: the governed verifier has no native Windows path, see the 2026-11-03 section. Yarn, Java/Maven/Gradle and the three-mode model loop remain open; none is installed or admitted on this host                                                                             |
+| W8 — Shell / real repair             | PARTIAL. On native Windows the project's own Vitest runs red, green after the repair and red on a regression through the real `npm.cmd`, `npx.cmd` and `vitest.cmd`, and hostile arguments arrive byte for byte. This qualifies the shell path only. Governed verification stays container-backed by decision (ADR-0043 D19), and that loop is not yet qualified. Yarn, Java/Maven/Gradle and the three-mode model loop remain open; none is installed or admitted on this host                                                                |
 | W9 — Persisted sessions / locks      | PARTIAL. Synthetic-schema SQLite WAL snapshots, exclusive-lock failure/recovery, retained-state integrity, history/export/import and Windows junction refusal executed. Four retention observations remain; original-runtime Workbench restart/resume/fork remain unqualified. Owner-private operator inputs now use a handle-bound DACL check (ADR-0182); retained-session ACL isolation is not covered by it The memory vault now closes its SQLite handle on dispose and failed initialization (WAL checkpoint, removable state directory). |
 | W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP still constructs `/usr/bin/env -i`; no native Windows MCP execution claim. The MCP, plugin and remote-skill registries and global configuration, previously always refused on Windows, are now read through the DACL check (component only)                                                                                                                                                                                                   |
 | W11 — Network / environment          | PARTIAL. On the installed path the attested IPv4 TCP port connects under the per-run exemption (ADR-0043 D18) and the hostile port is denied. Proxy/CA/OpenSSL/FIPS, inbound sidecar control, long-running requests and a model-backed task remain open.                                                                                                                                                                                                                                                                                       |
@@ -1000,14 +1000,17 @@ and reports no pass, and `cmd`, `powershell` and a literal `npm.cmd` as steps le
 the boundary, `runCommand` runs the project's Vitest red, green and red again through the real shims,
 carries hostile arguments byte for byte, and refuses a `%` argument before running anything.
 
-**Open blocker, W8: the governed verifier has no native Windows execution path.** It always requests
-the execution-root boundary. Windows offers that only through a container runtime (ADR-0043): with
-Docker Desktop the steps run in a Linux container, without one they are refused. A first attempt on
-this host did run the fixture's steps in `node:24.18.0-slim`, pulled that image and failed because
-the Linux shell found no `vitest` next to the `.cmd` shim. That attempt is not evidence, a Linux
-container does not certify the native kernel, and the boundary was not weakened to obtain a pass. A
-native governed loop needs an owner decision: a Windows-native execution-root boundary, or a recorded
-decision that Windows verification stays container-backed with the native proof scoped accordingly.
+**Decision, W8: governed verification on Windows stays container-backed
+([ADR-0043 D19](../adr/ADR-0043-enforced-execution-isolation.md)).** The verifier always requests the
+execution-root boundary, which Windows offers only through a container runtime: with Docker Desktop
+the steps run in a Linux container, without one they are refused. The native proof above is therefore
+scoped to the Windows shell path. It does not certify governed verification, and a container run does
+not certify the native kernel.
+
+**Open, W8: the container-backed governed loop is not qualified.** A first attempt on this host ran
+the fixture's steps in `node:24.18.0-slim`, pulled that image and failed because the Linux shell found
+no `vitest` next to the `.cmd` shim. That attempt is not evidence. A real loop from a Windows checkout,
+with dependencies installed for the container's target, has not run.
 
 **W6/W15.** Both need real model turns, so neither is claimed. The hermetic suites naming Markdown
 skills ran here: 1,234 passed and 4 failed. All four are grounded-QA cases outside skill execution;

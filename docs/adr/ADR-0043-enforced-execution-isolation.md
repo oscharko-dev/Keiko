@@ -42,6 +42,8 @@ one persisted line — the report's total and per-step durations and statuses, t
 duration, the isolation backend and egress policy that applied, and the bootstrap's outcome —
 without recording a command, argument, path or output (2026-10-06).
 
+1.8 — #4068 adds D19: governed repository verification on Windows stays container-backed (2026-11-03).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -820,3 +822,25 @@ reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 
 is the qualification evidence for this decision. It passed on 2026-11-01 (head `9b851924a`, Windows Server 2025): the confined root connected to
 the permitted gateway port and the hostile port stayed refused (10013), where the same probe had
 timed out (10060) before the exemption.
+
+## Addendum — Windows governed verification stays container-backed (2026-11-03)
+
+### D19 — No Windows-native execution-root boundary for repository verification
+
+Decided on 2026-11-03 by the #4068 assignee, @HendrikD2005; integration into `dev` remains the
+repository owner's approval. Repository verification always requests the execution-root boundary (D9).
+Windows has no native unprivileged backend for it, so the verifier keeps its present behaviour there:
+its steps run in a container when a runtime is available and are refused when none is. Keiko does not
+build a Windows-native execution-root boundary for verification, and it does not run these steps
+unconfined on the host.
+
+- **Evidence stays separate.** A container run qualifies the container-backed path. It does not
+  certify the native Windows kernel, and it satisfies no acceptance item that requires native
+  execution. The native proof in `windows-verification-loop.real.test.ts` qualifies the Windows shell
+  path below the boundary and does not certify governed verification.
+- **Refusal stays truthful.** A Windows host without a container runtime cannot run governed
+  verification. Such a run is denied and reports no pass.
+- **Scope.** This decides repository verification only. It does not decide the Windows tool profile
+  or the runtime confinement of D11 and D18, and D13 still holds.
+- **Open.** The container-backed loop from a Windows checkout, with dependencies installed for the
+  container's target, is not yet qualified (#4068 W8).
