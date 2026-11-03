@@ -3,6 +3,7 @@
 // no seed, turn text or question of the holdout reaches any file the run writes.
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -26,6 +27,7 @@ import {
   holdoutScenarioName,
   maskHoldoutResult,
   openHoldout,
+  openSealedHoldout,
   sealHoldout,
 } from "../testing/memory-lab/corpus/holdout.mjs";
 import { DEFAULT_SCENARIO_DIR, normalizeOptions, runLab } from "../testing/memory-lab/run.mjs";
@@ -281,24 +283,87 @@ describe("sealed holdout file", () => {
 });
 
 describe("what a sealed run may show", () => {
-  it("names a scenario by its class, language and a hash of its id", () => {
+  const MASKING_KEY = Buffer.alloc(32, 7);
+
+  it("names a scenario by its class, language and a keyed hash of its id", () => {
     const scenario = loadScenarioDirectory(DEFAULT_SCENARIO_DIR).find(
       (entry) => entry.id === "preference-tables-de",
     );
-    const name = holdoutScenarioName(scenario);
+    const name = holdoutScenarioName(scenario, MASKING_KEY);
     expect(name).toMatch(/^holdout:preference:de:[0-9a-f]{12}$/u);
-    expect(name).toBe(holdoutScenarioName(scenario));
+    expect(name).toBe(holdoutScenarioName(scenario, MASKING_KEY));
     expect(name).not.toContain("tables");
-    expect(holdoutScenarioName({ ...scenario, id: "another-id" })).not.toBe(name);
+    expect(holdoutScenarioName({ ...scenario, id: "another-id" }, MASKING_KEY)).not.toBe(name);
+  });
+
+  it("cannot be checked against a guessed id without the key", () => {
+    // The failure this pins: the digest was sha256(id), and ids are short and guessable, so anyone
+    // who could read a report could confirm which scenario a masked name stood for.
+    const scenario = loadScenarioDirectory(DEFAULT_SCENARIO_DIR).find(
+      (entry) => entry.id === "preference-tables-de",
+    );
+    const unkeyed = createHash("sha256").update(scenario.id).digest("hex").slice(0, 12);
+    const name = holdoutScenarioName(scenario, MASKING_KEY);
+    expect(name.endsWith(`:${unkeyed}`)).toBe(false);
+    const other = holdoutScenarioName(scenario, Buffer.alloc(32, 8));
+    expect(other).not.toBe(name);
+  });
+
+  it("refuses to name a scenario without a masking key", () => {
+    const scenario = loadScenarioDirectory(DEFAULT_SCENARIO_DIR)[0];
+    expect(() => holdoutScenarioName(scenario)).toThrow(HoldoutError);
+    expect(() => holdoutScenarioName(scenario, Buffer.alloc(8))).toThrow(/masking key/u);
+  });
+
+  it("derives the masking key from the holdout key, so one key file masks one holdout", () => {
+    const root = mkdtempSync(join(tmpdir(), "memory-lab-holdout-mask-"));
+    try {
+      const scenarios = join(root, "scenarios");
+      mkdirSync(scenarios);
+      writeFileSync(join(scenarios, "leak.json"), JSON.stringify(leakScenario()));
+      sealHoldout({
+        scenarios,
+        out: join(root, "sealed", "holdout.json"),
+        keyFile: join(root, "keys", "a.key"),
+      });
+      sealHoldout({
+        scenarios,
+        out: join(root, "sealed", "other.json"),
+        keyFile: join(root, "keys", "b.key"),
+      });
+      const first = openSealedHoldout(
+        join(root, "sealed", "holdout.json"),
+        join(root, "keys", "a.key"),
+      );
+      const again = openSealedHoldout(
+        join(root, "sealed", "holdout.json"),
+        join(root, "keys", "a.key"),
+      );
+      const second = openSealedHoldout(
+        join(root, "sealed", "other.json"),
+        join(root, "keys", "b.key"),
+      );
+      expect(first.maskingKey).toHaveLength(32);
+      expect(first.maskingKey.equals(again.maskingKey)).toBe(true);
+      expect(first.maskingKey.equals(second.maskingKey)).toBe(false);
+      expect(holdoutScenarioName(first.scenarios[0], first.maskingKey)).not.toBe(
+        holdoutScenarioName(second.scenarios[0], second.maskingKey),
+      );
+      expect(readFileSync(join(root, "keys", "a.key"), "utf8")).not.toContain(
+        first.maskingKey.toString("base64"),
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("masks every id in the manifest and keeps counts and one-way digests", () => {
     const scenarios = loadScenarioDirectory(DEFAULT_SCENARIO_DIR);
-    const manifest = holdoutManifest(scenarios);
+    const manifest = holdoutManifest(scenarios, MASKING_KEY);
     expect(manifest.count).toBe(scenarios.length);
     expect(manifest.setDigest).toMatch(/^[0-9a-f]{64}$/u);
     for (const [index, entry] of manifest.entries.entries()) {
-      expect(entry.id).toBe(holdoutScenarioName(scenarios[index]));
+      expect(entry.id).toBe(holdoutScenarioName(scenarios[index], MASKING_KEY));
       expect(entry.digest).toBe(scenarioDigest(scenarios[index]));
     }
     expect(JSON.stringify(manifest)).not.toContain("preference-tables");
@@ -455,10 +520,9 @@ describe("a sealed run against the real product", () => {
       expect(lines.at(-1)).toMatch(
         /^PASS memory-lab runs=2 hard-counters=\S+ oracle-counters=\S+ oracle=\S+$/u,
       );
-      for (const line of lines.slice(0, -1))
-        expect(line).toMatch(
-          /^run holdout:preference:de:[0-9a-f]{12} (product|oracle) r0 store=\d+ probes=\d\/3$/u,
-        );
+      // The failure this pins: a sealed run printed `probes=x/y` for every unit, so a watcher saw
+      // the result of each hidden conversation one by one. It shows that a unit finished, no more.
+      expect(lines.slice(0, -1)).toEqual(["holdout unit 1 done", "holdout unit 2 done"]);
       expect(lines.join("\n").toLowerCase()).not.toContain("zebrafink");
 
       const report = join(root, "report");
@@ -470,12 +534,26 @@ describe("a sealed run against the real product", () => {
         "timing.json",
       ]);
       expect(leaks(report)).toEqual([]);
+      // A hidden conversation's length must not show: no per-turn latencies, no call counts.
+      const timing = JSON.parse(readFileSync(join(report, "timing.json"), "utf8"));
+      expect(timing).toHaveLength(2);
+      for (const row of timing) {
+        expect(Object.keys(row).toSorted()).toEqual([
+          "arm",
+          "instanceStartMs",
+          "learnMs",
+          "probeMs",
+          "repetition",
+          "scenario",
+        ]);
+      }
       const card = JSON.parse(readFileSync(join(report, "scorecard.json"), "utf8"));
       const names = card.scenarios.map((entry) => entry.name);
       expect(names.every((name) => name.startsWith("holdout:preference:de:"))).toBe(true);
       expect(names.some((name) => name.endsWith(":probe:probe-1"))).toBe(true);
       const manifest = JSON.parse(readFileSync(join(report, "manifest.json"), "utf8"));
       expect(manifest.metadata.holdout).toBe(true);
+      expect(manifest.metadata.sealed).toBe(true);
       expect(manifest.entries[0].id).toMatch(/^holdout:preference:de:[0-9a-f]{12}$/u);
       const markdown = readFileSync(join(report, "summary.md"), "utf8");
       expect(markdown).toContain("| product/preference |");
@@ -499,7 +577,7 @@ describe("a sealed run against the real product", () => {
   );
 
   it(
-    "fails with the masked unit and the error's name when a sealed unit cannot run",
+    "records a sealed unit that cannot run by its masked name and the error's name alone",
     async () => {
       const scenarios = join(root, "scenarios");
       mkdirSync(scenarios);
@@ -509,13 +587,24 @@ describe("a sealed run against the real product", () => {
       sealHoldout({ scenarios, out: holdout, keyFile });
       const options = runOptions("failing", { holdout, "key-file": keyFile, arms: "product" });
       const failing = { ...options, subjectRoot: join(root, "no-such-checkout") };
-      const error = await runLab(failing, () => undefined).catch((caught) => caught);
-      expect(error).toBeInstanceOf(Error);
-      expect(error.message).toMatch(
-        /^holdout unit holdout:preference:de:[0-9a-f]{12} product r0 failed \(\w+\)$/u,
+      const lines = [];
+      const summary = await runLab(failing, (line) => lines.push(line));
+      expect(summary.failedUnits).toBe(1);
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toMatch(/^holdout unit 1 failed \(\w+\)$/u);
+      expect(lines[1]).toMatch(/^FAIL memory-lab runs=1 .* failed-units=1$/u);
+      const report = join(root, "failing");
+      expect(leaks(report)).toEqual([]);
+      expect(lines.join("\n").toLowerCase()).not.toContain("zebrafink");
+      const card = JSON.parse(readFileSync(join(report, "scorecard.json"), "utf8"));
+      expect(card.scenarios).toHaveLength(1);
+      expect(card.scenarios[0].name).toMatch(
+        /^holdout:preference:de:[0-9a-f]{12}:product:r0:store$/u,
       );
-      expect(error.cause).toBeUndefined();
-      expect(error.message.toLowerCase()).not.toContain("zebrafink");
+      expect(card.scenarios[0]).toMatchObject({ passed: false });
+      expect(card.scenarios[0].evidence).toMatch(/^unit-failed:\w+$/u);
+      const unit = summary.failedUnitList[0];
+      expect(unit.scenario).toMatch(/^holdout:preference:de:[0-9a-f]{12}$/u);
       expect(sealedStateDirectories(temporary)).toEqual([]);
     },
     RUN_TIMEOUT_MS,

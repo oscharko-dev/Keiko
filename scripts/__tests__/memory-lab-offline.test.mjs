@@ -1,6 +1,10 @@
 // The offline lab against the real product: a forked BFF and Gateway per run, the scripted model on
 // loopback, no network. This proves the harness, not the product: the run completes, two runs
-// serialize byte-identically, and a deliberately broken learner turns a store red. Product scores
+// serialize byte-identically, and a deliberately broken learner turns a store red where the correct
+// learner of the same scenario turns it green (a pair: a proof that cannot fail proves nothing).
+// Both are measured in Full access, the configuration in which a learned fact is stored at all; in
+// Ask for approval every fact is parked as proposed, recall is zero for any learner, and "the broken
+// learner turns the store red" would hold for a correct learner too. Product scores beyond the pair
 // are evidence in the written summary, never assertions here.
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -10,7 +14,7 @@ import { REPO_ROOT } from "../testing/coding-workbench-lab/lab-common.mjs";
 import { DEFAULT_SCENARIO_DIR, normalizeOptions, runLab } from "../testing/memory-lab/run.mjs";
 
 const RUN_TIMEOUT_MS = 180_000;
-const SCENARIOS = ["preference-tables-de", "reversal-spaces-en"];
+const SCENARIOS = ["preference-tables-de", "reversal-spaces-en", "hypothetical-en"];
 
 function requireBuiltServer() {
   const built = join(REPO_ROOT, "packages", "keiko-server", "dist", "index.js");
@@ -33,8 +37,8 @@ function options(root, name, scenarios, extra = {}) {
     scenarios,
     arms: "product",
     repetitions: "1",
-    "memory-mode": "governed-assist",
-    ceiling: "governed-assist",
+    "memory-mode": "autonomous-delivery",
+    ceiling: "autonomous-delivery",
     "budget-tokens": "1200",
     keep: false,
     "generated-at": "0",
@@ -46,8 +50,28 @@ function options(root, name, scenarios, extra = {}) {
   });
 }
 
+function metric(entry, name) {
+  return entry.metrics.find((item) => item.name === name)?.value;
+}
+
+// The other half of the pair: the scenarios a wrong learner turns red below are green, with the
+// related question answered, when the learner is right.
+function assertCorrectLearnerIsGreen(entries) {
+  for (const id of ["preference-tables-de", "hypothetical-en"]) {
+    const store = entries.find((entry) => entry.name === `${id}:product:r0:store`);
+    expect(store, id).toBeDefined();
+    expect(store.passed, `${id} ${store.evidence}`).toBe(true);
+    expect(metric(store, "precision")).toBe(1);
+    expect(metric(store, "recall")).toBe(1);
+    const related = entries.find((entry) => entry.name === `${id}:product:r0:probe:related`);
+    expect(related.passed, `${id} ${related.evidence}`).toBe(true);
+  }
+}
+
 describe("memory lab offline run", () => {
   let root;
+  const scorecardEntries = (name) =>
+    JSON.parse(readFileSync(join(root, name, "scorecard.json"), "utf8")).scenarios;
   beforeAll(() => {
     requireBuiltServer();
     root = mkdtempSync(join(tmpdir(), "memory-lab-offline-"));
@@ -63,8 +87,9 @@ describe("memory lab offline run", () => {
       const lines = [];
       const first = await runLab(options(root, "first", scenarios), (line) => lines.push(line));
       expect(first.runs).toBe(SCENARIOS.length);
+      expect(first.failedUnits).toBe(0);
       expect(lines.at(-1)).toMatch(
-        /^PASS memory-lab runs=2 hard-counters=\S+ oracle-counters=\S+ oracle=ok$/u,
+        /^PASS memory-lab runs=3 hard-counters=\S+ oracle-counters=\S+ oracle=not-run$/u,
       );
       expect(existsSync(join(root, "first", "summary.md"))).toBe(true);
       expect(existsSync(join(root, "first", "state"))).toBe(false);
@@ -76,24 +101,28 @@ describe("memory lab offline run", () => {
       expect(card.scenarios.map((entry) => entry.name)).toContain(
         "preference-tables-de:product:r0:probe:related",
       );
+      assertCorrectLearnerIsGreen(card.scenarios);
     },
     RUN_TIMEOUT_MS,
   );
 
   it(
-    "turns a store red when the learner stores the whole message",
+    "turns the same store red when the learner stores the whole message",
     async () => {
       const scenarios = scenarioSet(join(root, "broken"), ["hypothetical-en"]);
       await runLab(
         options(root, "broken-run", scenarios, { "broken-learner": "whole-message" }),
         () => undefined,
       );
-      const card = JSON.parse(readFileSync(join(root, "broken-run", "scorecard.json"), "utf8"));
-      const store = card.scenarios.find(
+      const store = scorecardEntries("broken-run").find(
         (entry) => entry.name === "hypothetical-en:product:r0:store",
       );
       expect(store).toBeDefined();
       expect(store.passed).toBe(false);
+      // The whole message was stored and it is not the fact: nothing stored is right.
+      expect(metric(store, "live")).toBe(1);
+      expect(metric(store, "precision")).toBe(0);
+      expect(store.evidence).toContain("correct=0");
     },
     RUN_TIMEOUT_MS,
   );

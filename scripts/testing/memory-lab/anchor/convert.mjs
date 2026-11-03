@@ -2,7 +2,7 @@
 //
 //   node scripts/testing/memory-lab/anchor/convert.mjs --in <fetch dir> --out <target dir> \
 //        [--set wildchat-de,oasst2-de,longmemeval] [--sample N] [--max-turns N]
-//   node scripts/testing/memory-lab/run.mjs --scenarios <target dir>/scenarios --no-retain-bodies ...
+//   node scripts/testing/memory-lab/run.mjs --scenarios <target dir>/scenarios ...
 //
 // Both directories must lie outside every git work tree (private-files.mjs). Scenarios land in
 // `<target>/scenarios/<id>.json`, so the lab loads that directory as it is; `<target>/manifest.json`
@@ -28,7 +28,9 @@
 //   `turns` = the user turns of the haystack sessions in their order, capped by --max-turns (default
 //   200): the evidence sessions (`answer_session_ids`, or any turn flagged `has_answer`) are kept
 //   whole, and filler sessions are admitted in their original order while they still fit, so the
-//   latest fillers are dropped first. Truth: one fact with key = question_id, `seed` = the answer,
+//   latest fillers are dropped first. Truth: one fact with key = question_id, `seed` = the question and
+//   the answer (`<question> <answer>`: the oracle arm stores the seed as a memory and retrieval
+//   finds it by the words it shares with the question, which a bare answer never would),
 //   `must: true`, `terms: [[answer]]` (the full answer as one alternative, never split into words).
 //   The probe `question` expects `answer` with the same terms.
 //   An abstention question (question_id ending in `_abs`, or question_type `abstention`) has no truth

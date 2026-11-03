@@ -6,11 +6,47 @@
 // Every pattern is bounded (no unbounded nested quantifier), so the pass is linear in the text, and
 // each stays small enough to read. Several patterns may share one counted kind, and a rule may
 // carry an `accept` check that keeps a lookalike (a match without enough digits) unredacted.
+//
+// The kinds are the manifest's vocabulary and stay six: PEM private keys and `name=value` secrets
+// count as `token`, credentials inside a URL (`scheme://user:secret@host`) as `bearer`.
 const REDACTED = "[redacted]";
 const MIN_IBAN_DIGITS = 8;
 
-// Order matters: a token is replaced before the generic hex and digit rules could eat part of it.
+// A secret assigned to a name (`password=...`, `"api_key": "..."`, `token: ...`, `Passwort: ...`):
+// the whole assignment goes, the value being a quoted string or a run of four or more characters.
+// The name must start at a boundary, so `compass=north` is not a `pass` assignment.
+const SECRET_ASSIGNMENT = new RegExp(
+  [
+    String.raw`(?<![A-Za-z0-9])`,
+    String.raw`(?:pass(?:word|wd|wort|phrase)?|pwd|kennwort|secret|token|`,
+    String.raw`(?:client|api|access|auth|refresh|private|session)[_-]?(?:secret|key|token))`,
+    String.raw`["']?\s{0,3}[:=]\s{0,3}`,
+    String.raw`(?:"[^"\r\n]{1,200}"|'[^'\r\n]{1,200}'|[^\s"'<>]{4,200})`,
+  ].join(""),
+  "giu",
+);
+
+// Order matters: a token is replaced before the generic hex and digit rules could eat part of it, a
+// whole assignment before the token inside it is counted a second time, and URL credentials before
+// the e-mail rule could take `secret@host` for an address.
 const RULES = Object.freeze([
+  // A PEM private key block, whole when its end marker follows, else its marker and the base64 lines.
+  {
+    kind: "token",
+    pattern:
+      /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----[\s\S]{0,16384}?-----END [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----/gu,
+  },
+  {
+    kind: "token",
+    pattern:
+      /-----BEGIN [A-Z0-9 ]{0,40}PRIVATE KEY(?: BLOCK)?-----(?:\s{1,3}[A-Za-z0-9+/=]{16,200}){0,300}/gu,
+  },
+  // The user and password of `scheme://user:password@host`; the scheme and host stay readable.
+  {
+    kind: "bearer",
+    pattern: /(?<=\b[a-z][a-z0-9+.-]{1,15}:\/\/)[^\s/@:]{1,64}:[^\s/@]{1,128}(?=@)/giu,
+  },
+  { kind: "token", pattern: SECRET_ASSIGNMENT },
   // sk-/ghp_/xox-prefixed tokens and other well-known key shapes.
   { kind: "token", pattern: /\bsk-[A-Za-z0-9_-]{16,}/gu },
   { kind: "token", pattern: /\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}/gu },

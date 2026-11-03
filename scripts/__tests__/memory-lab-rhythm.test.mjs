@@ -9,6 +9,7 @@ import {
   compareRuns,
   judgeProgress,
   noiseBand,
+  provenanceDifferences,
   readRun,
   renderComparison,
   renderJudgement,
@@ -43,44 +44,73 @@ function storeEntry(repetition, precision, recall) {
   };
 }
 
-function probeEntry(repetition, passed) {
+// One probe entry of a repetition; the evidence starts with the probe's kind, as the report writes it.
+function probeEntry(repetition, passed, kind = "answer", id = "related") {
   return {
-    name: `scenario-one:product:r${String(repetition)}:probe:related`,
+    name: `scenario-one:product:r${String(repetition)}:probe:${id}`,
     passed,
-    evidence: "kind=answer termsPresent=true",
+    evidence: `kind=${kind} suppliedCount=1`,
   };
 }
 
-// A run with the given product figures; `jitter` spreads repetitions around the mean.
+const PROVENANCE = {
+  mode: "offline",
+  memoryMode: "autonomous-delivery",
+  ceiling: "autonomous-delivery",
+  arms: ["off", "product", "oracle"],
+  answerModelId: "memory-lab-answerer",
+  learnModelId: "memory-lab-learner",
+};
+
+// A run with the given product figures; `jitter` spreads repetitions around the mean, `repetitions`
+// is how many there are (three by default: a band needs at least two), `abstainPasses` and
+// `unrelatedPasses` are the pass/fail of the abstention and the no-memory probe per repetition.
 function writeRun(
   root,
   name,
-  { precision, recall, answer, jitter = 0, hard = {}, corpus = CORPUS },
+  {
+    precision,
+    recall,
+    answer,
+    jitter = 0,
+    hard = {},
+    corpus = CORPUS,
+    repetitions = 3,
+    abstainPasses = [true, true, true],
+    unrelatedPasses = [true, true, true],
+    failedUnits = 0,
+    sealed = false,
+    ...provenance
+  },
 ) {
   const directory = join(root, name);
   mkdirSync(directory, { recursive: true });
-  const repetitions = [precision - jitter, precision, precision + jitter];
+  const spread = [precision - jitter, precision, precision + jitter].slice(0, repetitions);
   const scorecard = {
     evalSchemaVersion: "1",
     generatedAt: 0,
     totals: { scenarios: 6, passed: 0, failed: 0 },
-    scenarios: repetitions.flatMap((value, index) => [
+    scenarios: spread.flatMap((value, index) => [
       storeEntry(index, clamp(value), clamp(recall + value - precision)),
       probeEntry(index, answer >= 0.5),
+      probeEntry(index, abstainPasses[index] ?? true, "abstain", "unknown"),
+      probeEntry(index, unrelatedPasses[index] ?? true, "no-memory", "unrelated"),
     ]),
   };
+  const share = (passes) => passes.slice(0, repetitions).filter(Boolean).length / repetitions;
   const summary = {
     schemaVersion: 1,
-    runs: 3,
+    runs: repetitions,
+    failedUnits,
     byArm: [
       {
         key: "product",
-        runs: 3,
+        runs: repetitions,
         precision,
         recall,
         answerAccuracy: answer,
-        abstention: 1,
-        noMemoryOnUnrelated: 1,
+        abstention: share(abstainPasses),
+        noMemoryOnUnrelated: share(unrelatedPasses),
         counters: counters(hard),
       },
     ],
@@ -95,9 +125,9 @@ function writeRun(
     setDigest: corpus,
     metadata: {
       productHead: "0123456789abcdef",
-      memoryMode: "autonomous-delivery",
-      ceiling: "autonomous-delivery",
-      mode: "offline",
+      ...PROVENANCE,
+      ...provenance,
+      sealed,
     },
   };
   writeFileSync(join(directory, "scorecard.json"), JSON.stringify(scorecard));
@@ -151,6 +181,94 @@ describe("memory lab comparison", () => {
   });
 });
 
+describe("memory lab comparison of every judged metric", () => {
+  let root;
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = undefined;
+  });
+  const base = { precision: 0.6, recall: 0.8, answer: 0.5, jitter: 0.02 };
+
+  function pair(baseline, candidate) {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-compare-"));
+    return [
+      writeRun(root, "base", { ...base, ...baseline }),
+      writeRun(root, "cand", { ...base, ...candidate }),
+    ];
+  }
+
+  it("takes abstention and no-memory from the probes of each repetition, so they can worsen", () => {
+    // The failure this pins: only store metrics and answer probes had per-repetition values, so the
+    // band of these two stayed unknown and a collapse of either could never be called a worsening.
+    const [baseline, candidate] = pair(
+      {},
+      { abstainPasses: [false, false, false], unrelatedPasses: [false, false, false] },
+    );
+    const comparison = compareRuns(baseline, candidate);
+    const abstention = comparison.deltas.find((row) => row.metric === "abstention");
+    const unrelated = comparison.deltas.find((row) => row.metric === "noMemoryOnUnrelated");
+    expect(abstention).toMatchObject({ before: 1, after: 0, delta: -1, beyondNoise: true });
+    expect(unrelated).toMatchObject({ before: 1, after: 0, delta: -1, beyondNoise: true });
+    expect(comparison.worsened).toEqual(["abstention", "noMemoryOnUnrelated"]);
+  });
+
+  it("calls a small change in abstention noise when the repetitions already spread that far", () => {
+    const [baseline, candidate] = pair(
+      { abstainPasses: [true, false, true] },
+      { abstainPasses: [true, true, false] },
+    );
+    const abstention = compareRuns(baseline, candidate).deltas.find(
+      (row) => row.metric === "abstention",
+    );
+    expect(abstention.delta).toBe(0);
+    expect(abstention.beyondNoise).toBe(false);
+  });
+
+  it("has no band, and says so, when a run has a single repetition", () => {
+    // The failure this pins: pooling one value of each run gives half the difference as "noise", so
+    // any change at all looked beyond it.
+    const [baseline, candidate] = pair({ repetitions: 1 }, { repetitions: 1, precision: 0.9 });
+    const comparison = compareRuns(baseline, candidate);
+    const precision = comparison.deltas.find((row) => row.metric === "precision");
+    expect(precision).toMatchObject({ delta: 0.3, halfRange: null, beyondNoise: null });
+    expect(comparison.improved).toEqual([]);
+    expect(comparison.worsened).toEqual([]);
+    expect(comparison.noiseUnknown).toContain("precision");
+    expect(renderComparison(comparison, "gemma development")).toContain(
+      "precision 0.6->0.9 (noise unknown)",
+    );
+  });
+
+  it("needs two repetitions in each run, not only in both together", () => {
+    const [baseline, candidate] = pair({ repetitions: 3 }, { repetitions: 1, precision: 0.9 });
+    const precision = compareRuns(baseline, candidate).deltas.find(
+      (row) => row.metric === "precision",
+    );
+    expect(precision.beyondNoise).toBeNull();
+    const [twoBase, twoCandidate] = pair({ repetitions: 2 }, { repetitions: 2, precision: 0.9 });
+    const withBand = compareRuns(twoBase, twoCandidate).deltas.find(
+      (row) => row.metric === "precision",
+    );
+    expect(withBand.beyondNoise).toBe(true);
+  });
+
+  it("does not list an unchanged metric as unknown", () => {
+    const [baseline, candidate] = pair({ repetitions: 1 }, { repetitions: 1 });
+    expect(compareRuns(baseline, candidate).noiseUnknown).toEqual([]);
+  });
+
+  it("names the provenance fields in which two runs differ, arms in any order", () => {
+    const [baseline, candidate] = pair(
+      {},
+      { ceiling: "governed-assist", arms: ["oracle", "product", "off"] },
+    );
+    expect(provenanceDifferences(baseline, candidate)).toEqual(["ceiling"]);
+    expect(renderComparison(compareRuns(baseline, candidate), "x")).toContain(
+      "the runs differ in ceiling",
+    );
+  });
+});
+
 describe("memory lab progress judgement", () => {
   let root;
   const before = { precision: 0.6, recall: 0.8, answer: 0.5, jitter: 0.02 };
@@ -159,14 +277,18 @@ describe("memory lab progress judgement", () => {
     root = undefined;
   });
 
+  // The holdout part is made of sealed runs; `baseline` and `candidate` override either run.
   function pairs(spec) {
     root = mkdtempSync(join(tmpdir(), "memory-lab-judge-"));
-    return spec.map(({ model, part, candidate }) => ({
-      model,
-      part,
-      baseline: writeRun(root, `${model}-${part}-base`, before),
-      candidate: writeRun(root, `${model}-${part}-cand`, { ...before, ...candidate }),
-    }));
+    return spec.map(({ model, part, baseline = {}, candidate = {} }) => {
+      const sealed = part === "holdout";
+      return {
+        model,
+        part,
+        baseline: writeRun(root, `${model}-${part}-base`, { ...before, sealed, ...baseline }),
+        candidate: writeRun(root, `${model}-${part}-cand`, { ...before, sealed, ...candidate }),
+      };
+    });
   }
 
   it("accepts a gain on the holdout on two models with hard counters at zero", () => {
@@ -225,6 +347,126 @@ describe("memory lab progress judgement", () => {
     );
     expect(judgement.progress).toBe(false);
     expect(judgement.reasons).toContain("a metric is below its target");
+  });
+});
+
+describe("memory lab judgement refusals", () => {
+  let root;
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true });
+    root = undefined;
+  });
+  const before = { precision: 0.6, recall: 0.8, answer: 0.5, jitter: 0.02 };
+
+  function holdoutPairs(patch, { sealed = true, which = "candidate" } = {}) {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
+    return ["gemma", "qwen"].map((model) => ({
+      model,
+      part: "holdout",
+      baseline: writeRun(root, `${model}-base`, {
+        ...before,
+        sealed: which === "baseline" ? sealed : true,
+      }),
+      candidate: writeRun(root, `${model}-cand`, {
+        ...before,
+        precision: 0.9,
+        sealed: which === "candidate" ? sealed : true,
+        ...patch,
+      }),
+    }));
+  }
+
+  it.each([
+    ["mode", { mode: "live" }],
+    ["memoryMode", { memoryMode: "governed-assist" }],
+    ["ceiling", { ceiling: "governed-assist" }],
+    ["arms", { arms: ["product"] }],
+    ["answerModelId", { answerModelId: "another-answerer" }],
+    ["learnModelId", { learnModelId: "another-learner" }],
+  ])("refuses a pair whose runs differ in %s", (field, patch) => {
+    expect(() => judgeProgress(holdoutPairs(patch))).toThrow(
+      new RegExp(`refusing to judge gemma holdout: the runs differ in ${field}`, "u"),
+    );
+  });
+
+  it("refuses a holdout pair whose candidate was not a sealed run", () => {
+    expect(() => judgeProgress(holdoutPairs({}, { sealed: false }))).toThrow(
+      /refusing to judge gemma holdout: the candidate run is not a sealed holdout run/u,
+    );
+  });
+
+  it("refuses a holdout pair whose baseline was not a sealed run", () => {
+    expect(() => judgeProgress(holdoutPairs({}, { sealed: false, which: "baseline" }))).toThrow(
+      /the baseline run is not a sealed holdout run/u,
+    );
+  });
+
+  it("refuses a holdout pair from runs that do not say whether they were sealed", () => {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
+    const run = (name) => {
+      const written = writeRun(root, name, { ...before, sealed: true });
+      delete written.manifest.metadata.sealed;
+      return written;
+    };
+    expect(() =>
+      judgeProgress([{ model: "gemma", part: "holdout", baseline: run("a"), candidate: run("b") }]),
+    ).toThrow(/not a sealed holdout run/u);
+  });
+
+  it("asks for no seal on the development part", () => {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
+    const judgement = judgeProgress([
+      {
+        model: "gemma",
+        part: "development",
+        baseline: writeRun(root, "base", { ...before }),
+        candidate: writeRun(root, "cand", { ...before, precision: 0.9 }),
+      },
+    ]);
+    expect(judgement.progress).toBe(false);
+    expect(judgement.reasons).toContain("no holdout comparison");
+  });
+
+  it("does not call a change progress while its noise band is unknown", () => {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
+    const single = (name, patch) =>
+      writeRun(root, name, { ...before, repetitions: 1, sealed: true, ...patch });
+    const judgement = judgeProgress(
+      ["gemma", "qwen"].map((model) => ({
+        model,
+        part: "holdout",
+        baseline: single(`${model}-base`, {}),
+        candidate: single(`${model}-cand`, { precision: 0.9 }),
+      })),
+    );
+    expect(judgement.progress).toBe(false);
+    expect(judgement.reasons).toContain("noise band unknown: precision");
+    expect(judgement.reasons).toContain("improvement on the holdout on fewer than two models");
+  });
+
+  it("does not call a change progress when a run has units that could not be measured", () => {
+    const judgement = judgeProgress(holdoutPairs({ failedUnits: 1 }).map((pair) => ({ ...pair })));
+    expect(judgement.progress).toBe(false);
+    expect(judgement.reasons).toContain("a run has failed units");
+  });
+
+  it("rejects a collapse of abstention beyond the noise band on one model", () => {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-refuse-"));
+    const judgement = judgeProgress(
+      ["gemma", "qwen"].map((model) => ({
+        model,
+        part: "holdout",
+        baseline: writeRun(root, `${model}-base`, { ...before, sealed: true }),
+        candidate: writeRun(root, `${model}-cand`, {
+          ...before,
+          precision: 0.9,
+          sealed: true,
+          ...(model === "qwen" ? { abstainPasses: [false, false, false] } : {}),
+        }),
+      })),
+    );
+    expect(judgement.progress).toBe(false);
+    expect(judgement.reasons.join(" ")).toMatch(/worsened beyond the noise band: abstention/u);
   });
 });
 

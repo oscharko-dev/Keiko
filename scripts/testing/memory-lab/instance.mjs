@@ -10,6 +10,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { REPO_ROOT, importBuilt } from "../coding-workbench-lab/lab-common.mjs";
 import { readActivityEvents } from "../coding-workbench-lab/activity-log-events.mjs";
 import { buildDevBffEnv } from "../../lib/dev-bff-env.mjs";
+import { openCallKeys } from "./gateway-calls.mjs";
+import { LabConfigurationError } from "./isolation.mjs";
 import { ANSWERER_MODEL_ID, LEARNER_MODEL_ID } from "./scripted-model.mjs";
 
 export const CEILINGS = Object.freeze([
@@ -136,9 +138,20 @@ async function subjectRuntime(subjectRoot) {
   return import(pathToFileURL(file).href);
 }
 
+// The repository `.env` keys the BFF would fold into the child's environment change the product
+// that is measured (a memory mode, a model, a limit), so they are refused unless the operator says
+// that is wanted; the run's manifest records the decision either way.
+function assertNoFoldedEnvironment(foldedKeys, allowed) {
+  if (foldedKeys.length === 0 || allowed === true) return;
+  throw new LabConfigurationError(
+    `the repository .env would fold ${String(foldedKeys.length)} KEIKO_* key(s) into the measured instance (${foldedKeys.join(", ")}); remove them or pass --allow-folded-env to measure with them`,
+  );
+}
+
 /**
  * Starts an instance. Offline mode needs a scripted model server (`fixture`); live mode needs an
- * existing gateway configuration file whose models the caller names.
+ * existing gateway configuration file whose models the caller names. An instance whose environment
+ * the repository `.env` would change is refused unless `allowFoldedEnv` is true.
  */
 export async function startLabInstance(options) {
   if (!CEILINGS.includes(options.ceiling))
@@ -159,6 +172,7 @@ export async function startLabInstance(options) {
     ceiling: options.ceiling,
     subjectRoot: options.subjectRoot,
   });
+  assertNoFoldedEnvironment(prepared.foldedKeys, options.allowFoldedEnv);
   const runtime = await subjectRuntime(options.subjectRoot);
   const started = await runtime.startObservedBff(
     options.dir,
@@ -189,19 +203,131 @@ function expectOk(result, what) {
   return result.json;
 }
 
-/** The capture ledger of the instance: every capture decision since the start, oldest first. */
-export async function readCaptures(instance) {
-  const json = expectOk(
-    await instance.request("GET", "/api/memory?since=0&order=asc&limit=200"),
-    "capture ledger",
-  );
-  return Array.isArray(json.captures) ? json.captures : [];
+// The largest page either listing route serves (MAX_LIST_LIMIT of memory-handlers.ts).
+const PAGE_SIZE = 200;
+
+// Both listing routes report how many rows exist beyond the page they served. A response without
+// that figure cannot be paged through, and reading it as complete would measure a window.
+function reportedTotal(json, what) {
+  if (!Number.isSafeInteger(json?.total) || json.total < 0)
+    throw new Error(`${what} response carries no usable total`);
+  return json.total;
 }
 
-/** Every stored memory across the instance's scopes, as the list route returns them. */
+/**
+ * Every stored memory across the instance's scopes, as the list route returns them (newest first).
+ * The route serves at most 200 rows per page, so the list is read page by page until the reported
+ * total is reached. It fails when the total changes between pages (the store moved under the
+ * reader) or a page comes back empty before the total is reached (paging is impossible); a partial
+ * list would make a large run look smaller than it is.
+ */
 export async function listMemories(instance) {
-  const json = expectOk(await instance.request("GET", "/api/memory?limit=200"), "memory list");
-  return Array.isArray(json.memories) ? json.memories : [];
+  const memories = [];
+  let total;
+  do {
+    const json = expectOk(
+      await instance.request(
+        "GET",
+        `/api/memory?limit=${String(PAGE_SIZE)}&offset=${String(memories.length)}`,
+      ),
+      "memory list",
+    );
+    const reported = reportedTotal(json, "memory list");
+    if (total !== undefined && reported !== total)
+      throw new Error(
+        `memory list changed while it was read (${String(total)} -> ${String(reported)})`,
+      );
+    total = reported;
+    const page = Array.isArray(json.memories) ? json.memories : [];
+    if (page.length === 0 && memories.length < total)
+      throw new Error(
+        `memory list paging stalled at ${String(memories.length)} of ${String(total)}`,
+      );
+    memories.push(...page);
+  } while (memories.length < total);
+  if (memories.length !== total)
+    throw new Error(
+      `memory list returned ${String(memories.length)} rows for a total of ${String(total)}`,
+    );
+  return memories;
+}
+
+async function readLedgerPage(instance, since) {
+  const json = expectOk(
+    await instance.request(
+      "GET",
+      `/api/memory?since=${String(since)}&order=asc&limit=${String(PAGE_SIZE)}`,
+    ),
+    "capture ledger",
+  );
+  return {
+    captures: Array.isArray(json.captures) ? json.captures : [],
+    total: reportedTotal(json, "capture ledger"),
+  };
+}
+
+/**
+ * The number of capture decisions the instance has recorded since its start. One row is requested:
+ * the quiet detector needs the count, which the ledger reports whatever the page size.
+ */
+export async function captureTotal(instance) {
+  const json = expectOk(
+    await instance.request("GET", "/api/memory?since=0&order=asc&limit=1"),
+    "capture ledger",
+  );
+  return reportedTotal(json, "capture ledger");
+}
+
+// What the pages read so far say about the whole ledger: the decisions older than `since` that were
+// already read plus the route's count from `since` on. It must not move while the ledger is read.
+function ledgerSize(read, since, page) {
+  let older = 0;
+  for (const capture of read.values()) if (capture.occurredAt < since) older += 1;
+  return older + page.total;
+}
+
+// Adds the decisions of a page that were not read before and returns how many were new. A decision
+// is known by its event id, so a row without one cannot be paged through.
+function absorb(read, captures) {
+  let added = 0;
+  for (const capture of captures) {
+    if (typeof capture?.eventId !== "string" || capture.eventId.length === 0)
+      throw new Error("capture ledger row carries no event id");
+    if (read.has(capture.eventId)) continue;
+    read.set(capture.eventId, capture);
+    added += 1;
+  }
+  return added;
+}
+
+/**
+ * The capture ledger of the instance: every capture decision since the start, oldest first. The
+ * ledger route has no offset, so it is read by time: each page starts at the last decision of the
+ * page before (the route's `since` includes it) and decisions already read are dropped by their event
+ * id. It fails when the ledger's size changes between pages or when a whole page repeats decisions
+ * already read (more than a page of them share one millisecond, so paging cannot advance).
+ */
+export async function readCaptures(instance) {
+  const read = new Map();
+  let since = 0;
+  let size;
+  do {
+    const page = await readLedgerPage(instance, since);
+    const current = ledgerSize(read, since, page);
+    if (size !== undefined && current !== size)
+      throw new Error(
+        `capture ledger changed while it was read (${String(size)} -> ${String(current)})`,
+      );
+    size = current;
+    if (absorb(read, page.captures) === 0 && read.size < size)
+      throw new Error(`capture ledger paging stalled at ${String(read.size)} of ${String(size)}`);
+    since = page.captures.at(-1)?.occurredAt ?? since;
+  } while (read.size < size);
+  if (read.size !== size)
+    throw new Error(
+      `capture ledger returned ${String(read.size)} decisions for a size of ${String(size)}`,
+    );
+  return [...read.values()];
 }
 
 // Without a pending-work signal (live mode) the learner's call is invisible until its capture
@@ -217,25 +343,15 @@ async function learnerDone(options, startedAt) {
   return Date.now() - startedAt >= (options.graceMs ?? DEFAULT_GRACE_MS);
 }
 
-const GATEWAY_STARTED = "gateway.chat.started";
-const GATEWAY_COMPLETED = new Set(["gateway.chat.completed", "gateway.stream.completed"]);
-
 /**
- * Model calls the product has started and not completed, read from the instance's own Activity
- * Log. While the lab waits for learning no chat turn is in flight, so every open call is a learning
- * call; this is the live-mode counterpart of the scripted model's queue.
+ * Model calls the product has started and not ended, read from the instance's own Activity Log: a
+ * call ends with a completed, failed or abandoned line, so a learner call that failed (an unreachable
+ * model, a refused request) is finished and must not hold the wait open. While the lab waits for
+ * learning no chat turn is in flight, so every open call is a learning call; this is the live-mode
+ * counterpart of the scripted model's queue.
  */
 export async function pendingGatewayCalls(instance) {
-  const events = await readActivityEvents(instance.logDirectory);
-  const started = new Set();
-  const completed = new Set();
-  for (const event of events) {
-    if (event.op === GATEWAY_STARTED) started.add(event.correlationId);
-    else if (GATEWAY_COMPLETED.has(event.op)) completed.add(event.correlationId);
-  }
-  let open = 0;
-  for (const id of started) if (!completed.has(id)) open += 1;
-  return open;
+  return openCallKeys(await readActivityEvents(instance.logDirectory)).size;
 }
 
 function observeLedger(state, count) {
@@ -256,7 +372,7 @@ export async function awaitLearning(instance, options = {}) {
   const startedAt = Date.now();
   const state = { lastCount: -1, quietSince: Date.now() };
   for (;;) {
-    const count = (await readCaptures(instance)).length;
+    const count = await captureTotal(instance);
     observeLedger(state, count);
     const quiet = Date.now() - state.quietSince >= quietMs;
     if (quiet && (await learnerDone(options, startedAt))) return { captures: count };

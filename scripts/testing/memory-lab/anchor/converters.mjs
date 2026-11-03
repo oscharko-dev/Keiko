@@ -233,9 +233,20 @@ function benchmarkTurns(sessions) {
   return { turns, redactions };
 }
 
+// The oracle arm stores the seed as a memory, and retrieval finds memories by the words they share
+// with the question asked. A bare answer ("7", "$12") shares none, so the oracle would supply
+// nothing for a question it holds the answer to; the seed therefore carries the question as well,
+// while the terms stay the answer alone.
 function benchmarkTruth(instance, abstention, answer) {
   if (abstention) return [];
-  return [{ key: instance.question_id, seed: answer, must: true, terms: [[answer]] }];
+  return [
+    {
+      key: instance.question_id,
+      seed: `${instance.question.trim()} ${answer}`,
+      must: true,
+      terms: [[answer]],
+    },
+  ];
 }
 
 function benchmarkProbe(instance, abstention, answer) {

@@ -118,12 +118,9 @@ function ledgerInstance(counts) {
   let calls = 0;
   return {
     request: async () => {
-      const captures = Array.from(
-        { length: counts[Math.min(calls, counts.length - 1)] },
-        () => ({}),
-      );
+      const total = counts[Math.min(calls, counts.length - 1)];
       calls += 1;
-      return { status: 200, json: { captures } };
+      return { status: 200, json: { captures: [], total } };
     },
   };
 }
@@ -199,7 +196,7 @@ describe("memory lab learning wait", () => {
       request: async () => {
         count += 1;
         await delay(1);
-        return { status: 200, json: { captures: Array.from({ length: count }, () => ({})) } };
+        return { status: 200, json: { captures: [], total: count } };
       },
     };
     await expect(

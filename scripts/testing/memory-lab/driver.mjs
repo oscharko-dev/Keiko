@@ -3,7 +3,8 @@
 // enables memory (the floor), `product` learns from the turns (the measurement), `oracle` receives
 // the truth facts as a curated store and only answers (the ceiling of retrieval and answering).
 import { randomUUID } from "node:crypto";
-import { awaitLearning, listMemories, readCaptures } from "./instance.mjs";
+import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
+import { retainBodiesFor } from "./isolation.mjs";
 import { scoreProbe, scoreStore } from "./score.mjs";
 
 export const ARMS = Object.freeze(["off", "product", "oracle"]);
@@ -122,7 +123,7 @@ async function runTurns(scenario, instance, context) {
       context.fixture.queueLearner(
         context.learnerItems === undefined ? (turn.learner ?? []) : context.learnerItems(turn),
       );
-    const before = (await readCaptures(instance)).length;
+    const before = await captureTotal(instance);
     const sent = await sendTurn(instance, chatId, turn.user, context, enabled);
     const settled = enabled
       ? await awaitLearning(instance, context.learning)
@@ -143,18 +144,47 @@ async function runTurns(scenario, instance, context) {
 }
 
 function sameBody(memory, fact) {
-  return (memory.body ?? "").trim() === fact.seed.trim();
+  return (memory?.body ?? "").trim() === fact.seed.trim();
 }
 
-async function acceptIfProposed(instance, memory) {
-  if (memory.status !== "proposed") return memory;
-  const json = expectOk(
-    await instance.request("POST", `/api/memory/proposals/${memory.id}/accept`, {}),
+// The memory a single-memory route returned; a response without one is a broken contract.
+function memoryOf(json, what) {
+  if (json?.memory === undefined || json.memory === null)
+    throw new Error(`${what} returned no memory`);
+  return json.memory;
+}
+
+async function acceptIfProposed(instance, memoryId, status) {
+  if (status !== "proposed") return;
+  expectOk(
+    await instance.request("POST", `/api/memory/proposals/${memoryId}/accept`, {}),
     "oracle acceptance",
   );
-  return json.memory ?? { ...memory, status: "accepted" };
 }
 
+// The memories a capture response says it stored, by the id the route returns for each. The route
+// persists every candidate and puts the stored memory's id where the proposal's id was; a rejected
+// or unrelated outcome carries none. The newest-first listing is never searched for the seed: it
+// cannot say which of its rows this seeding produced.
+function storedCandidates(captured) {
+  const outcomes = Array.isArray(captured.outcomes) ? captured.outcomes : [];
+  return outcomes
+    .filter(
+      (outcome) =>
+        outcome?.kind === "candidate" && typeof outcome.proposal?.proposalId === "string",
+    )
+    .map((outcome) => ({ id: outcome.proposal.proposalId, status: outcome.status }));
+}
+
+function describeOutcomes(captured) {
+  const outcomes = Array.isArray(captured.outcomes) ? captured.outcomes : [];
+  return outcomes.map((outcome) => `${outcome?.kind ?? "unknown"}:${outcome?.reason ?? "-"}`);
+}
+
+// Stores one truth fact through the explicit route, accepts it when it was parked, makes its body
+// exact, and returns what was stored and in which scope. A seeding the route did not turn into
+// exactly one memory is reported as not seeded and touches nothing: the lab never guesses which
+// stored memory it meant.
 async function seedFact(instance, chatId, fact) {
   const captured = expectOk(
     await instance.request("POST", "/api/memory/capture-from-conversation", {
@@ -163,33 +193,60 @@ async function seedFact(instance, chatId, fact) {
     }),
     "oracle seeding",
   );
-  const outcomes = (Array.isArray(captured.outcomes) ? captured.outcomes : []).map(
-    (outcome) => `${outcome?.kind ?? "unknown"}:${outcome?.reason ?? "-"}`,
+  const outcomes = describeOutcomes(captured);
+  const stored = storedCandidates(captured);
+  if (stored.length !== 1) return { key: fact.key, seeded: false, outcomes };
+  const [{ id, status }] = stored;
+  await acceptIfProposed(instance, id, status);
+  const current = memoryOf(
+    expectOk(await instance.request("GET", `/api/memory/${id}`), "oracle read"),
+    "oracle read",
   );
-  const memories = await listMemories(instance);
-  const candidate = memories.find((memory) => sameBody(memory, fact)) ?? memories.at(-1);
-  if (candidate === undefined) return { key: fact.key, seeded: false, outcomes };
-  const accepted = await acceptIfProposed(instance, candidate);
-  if (!sameBody(accepted, fact))
-    expectOk(
-      await instance.request("PATCH", `/api/memory/${accepted.id}`, { body: fact.seed }),
-      "oracle body edit",
-    );
-  return { key: fact.key, seeded: true, outcomes };
+  const exact = sameBody(current, fact)
+    ? current
+    : memoryOf(
+        expectOk(
+          await instance.request("PATCH", `/api/memory/${id}`, { body: fact.seed }),
+          "oracle body edit",
+        ),
+        "oracle body edit",
+      );
+  return {
+    key: fact.key,
+    seeded: true,
+    outcomes,
+    memoryId: id,
+    scope: exact?.scope?.kind ?? "unknown",
+  };
 }
 
-// The oracle arm asserts its own precondition: every truth fact is stored, accepted and exact.
+function countBy(values) {
+  const counts = {};
+  for (const value of values) counts[value] = (counts[value] ?? 0) + 1;
+  return counts;
+}
+
+// The oracle arm asserts its own precondition: every truth fact was stored by its own seeding and
+// reads back accepted and exact exactly once, and nothing else is accepted. The scope each seed
+// landed in is reported (`scopes`, a count per scope kind): the explicit route stores in project
+// scope today, which the report states instead of leaving to be rediscovered.
 async function seedOracle(scenario, instance) {
   const chatId = await createChat(instance, `oracle ${scenario.id}`);
   const seeded = [];
   for (const fact of scenario.truth) seeded.push(await seedFact(instance, chatId, fact));
-  const memories = await listMemories(instance);
+  const accepted = (await listMemories(instance)).filter((memory) => memory.status === "accepted");
+  const seedIds = new Set(seeded.map((seed) => seed.memoryId).filter((id) => id !== undefined));
   const mismatches = scenario.truth
-    .filter(
-      (fact) => !memories.some((memory) => memory.status === "accepted" && sameBody(memory, fact)),
-    )
+    .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
     .map((fact) => fact.key);
-  return { seeded, mismatches, preconditionMet: mismatches.length === 0 };
+  const extras = accepted.filter((memory) => !seedIds.has(memory.id)).length;
+  return {
+    seeded,
+    mismatches,
+    extras,
+    scopes: countBy(seeded.filter((seed) => seed.seeded).map((seed) => seed.scope)),
+    preconditionMet: mismatches.length === 0 && extras === 0 && seeded.every((seed) => seed.seeded),
+  };
 }
 
 async function runProbes(scenario, instance, context) {
@@ -222,12 +279,28 @@ function storeView(memories, retainBodies) {
   }));
 }
 
+// The scripted model's request journal, without the memory bodies unless bodies may be retained.
+function journalOf(context) {
+  if (context.fixture === undefined) return [];
+  return context.fixture
+    .requests()
+    .map(({ memoryBodies, ...entry }) =>
+      context.retainBodies && memoryBodies !== undefined ? { ...entry, memoryBodies } : entry,
+    );
+}
+
 /**
- * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `context`
+ * Runs one scenario for one arm on a fresh instance and returns the scored evidence. `requested`
  * carries arm, memoryMode, budgetTokens, confirmForget, retainBodies, turnTimeoutMs, learning
- * (quietMs, maxMs, pendingLearner) and, offline, the scripted model fixture.
+ * (quietMs, maxMs, pendingLearner) and, offline, the scripted model fixture. Bodies are retained
+ * only when the scenario is not anchor text, whatever the run asked for (the labelling pass,
+ * `labelPass`, excepted): real conversations leave counts and verdicts, never text.
  */
-export async function runScenario(scenario, instance, context) {
+export async function runScenario(scenario, instance, requested) {
+  const context = {
+    ...requested,
+    retainBodies: retainBodiesFor(scenario, requested.retainBodies, requested.labelPass),
+  };
   if (!ARMS.includes(context.arm)) throw new RangeError(`unknown arm ${context.arm}`);
   await ensureProject(instance);
   context.fixture?.setPhase("run");
@@ -263,6 +336,6 @@ export async function runScenario(scenario, instance, context) {
     probes,
     probeCaptures,
     timing: { learnMs: learnedAt - startedAt, probeMs: Date.now() - learnedAt },
-    requests: context.fixture === undefined ? [] : context.fixture.requests(),
+    requests: journalOf(context),
   };
 }

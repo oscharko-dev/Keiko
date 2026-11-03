@@ -68,10 +68,19 @@ The tools enforce the mechanics, and the rest is procedure:
   the checkout.
 - Error messages never quote conversation text: a parse error names the file kind and the error code
   only, an API error quotes the API's own error message, never a page body.
-- **Anchor runs use `--no-retain-bodies`.** The scorecard, summary and timing of such a run hold counts
-  only and may be quoted. A labelling pass needs the stored memory bodies, so it is the one run that
-  retains them: do it into a private run directory, never attach or quote it, and delete it once the
-  labels are written. The run directory, the sheet and the labels file stay on the machine.
+- **Anchor runs never retain bodies.** The runner decides this per scenario: a scenario of class
+  `anchor-real` or `anchor-benchmark` keeps no stored memory body, no probe answer and no memory body
+  in the scripted model's journal, whatever `--retain-bodies` says, so a forgotten
+  `--no-retain-bodies` cannot leak text. The scorecard, summary and timing of such a run hold counts
+  only and may be quoted. A labelling pass needs the stored memory bodies, so `--label-pass` is the one
+  run that retains them, and it has to be asked for by name: do it into a private run directory, never
+  attach or quote it, and delete it once the labels are written. The run directory, the sheet and the
+  labels file stay on the machine.
+- **`--keep` is refused for real conversations.** A kept instance state holds its chat database, and
+  the real text would stay in it as plain text, so a run over any `anchor-real` scenario cannot keep
+  instance state.
+- **Live runs talk to this machine only.** The gateway configuration of a live run is refused unless
+  every provider in it has the host `127.0.0.1`, `localhost` or `::1`.
 - This tooling does not scan the repository, issues or evidence for real text. That proof is a
   separate acceptance item of #4208.
 
@@ -139,12 +148,12 @@ JSON file that is not a scenario. An existing conversion is never overwritten. E
 validated with the lab's own `validateScenario` before a byte is written, and the manifest digests
 are read back through the lab's own loader, so they equal what a lab run over the directory reports.
 
-| Source                          | Scenario                                                                                                                                                      |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WildChat row                    | `wildchat-<lang>-<hash12>`, class `anchor-real`, no truth, the user turns in order (assistant text is not kept), probe `unrelated` (`no-memory`)              |
-| OASST2 tree                     | `oasst2-<lang>-<hash12>`, the thread from the root following the best-ranked child at every level; prompter texts are the user turns; otherwise as above      |
-| LongMemEval question            | `longmemeval-<id>`, class `anchor-benchmark`, truth `{key: question_id, seed: answer, must, terms: [[answer]]}`, user turns of the haystack, probe `question` |
-| LongMemEval abstention question | no truth, probe `question` of kind `abstain` (`question_id` ending in `_abs`)                                                                                 |
+| Source                          | Scenario                                                                                                                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| WildChat row                    | `wildchat-<lang>-<hash12>`, class `anchor-real`, no truth, the user turns in order (assistant text is not kept), probe `unrelated` (`no-memory`)                             |
+| OASST2 tree                     | `oasst2-<lang>-<hash12>`, the thread from the root following the best-ranked child at every level; prompter texts are the user turns; otherwise as above                     |
+| LongMemEval question            | `longmemeval-<id>`, class `anchor-benchmark`, truth `{key: question_id, seed: "<question> <answer>", must, terms: [[answer]]}`, user turns of the haystack, probe `question` |
+| LongMemEval abstention question | no truth, probe `question` of kind `abstain` (`question_id` ending in `_abs`)                                                                                                |
 
 Skipped, and counted by name in the manifest: fewer than 2 user turns, more than 40 user turns, a user
 turn over 4000 characters, a truncated or malformed row, a duplicate id (real conversations); a
@@ -153,12 +162,23 @@ can never find, a question without answer or evidence session, a malformed insta
 Rows are judged on user turns after blank turns are dropped. For LongMemEval, `--max-turns` keeps the
 evidence sessions whole and admits filler sessions in their original order while they fit.
 
+**The seed of a benchmark question carries the question.** The oracle arm stores a truth seed as a
+memory, and retrieval finds a memory by the words it shares with the question asked. A bare answer
+(`$12`, `2`) shares none, so with the answer alone as the seed the oracle supplied nothing for a
+question it held the answer to (checked offline: 0 of 2 probes answered, nothing supplied); with
+`<question> <answer>` the same two probes are answered from the supplied memory. The `terms` stay the
+answer alone, so a probe passes only when the answer itself is in the reply.
+
 **Redaction** runs over every real user turn and over the filler sessions of the benchmark; the
 synthetic evidence sessions stay verbatim so the answer stays findable. It replaces email addresses,
 IBAN-like patterns, hex runs of 32 or more, `sk-`, `ghp_`, `xox` and other well-known token shapes,
-bearer and basic credentials, JWT-shaped values and phone-number-like runs of 9 or more digits with
-`[redacted]`, and counts each kind. It is shape-based and best effort; it does not remove names or
-other personal information and is no guarantee.
+bearer and basic credentials, JWT-shaped values, phone-number-like runs of 9 or more digits, secrets
+assigned to a name (`password=...`, `api_key: ...`, `"token": "..."`, `Passwort: ...`; the whole
+assignment goes), the user and password of a URL (`https://user:password@host`; scheme and host stay)
+and PEM private key blocks (whole, or the marker and its base64 lines when the block is cut short)
+with `[redacted]`, and counts each kind (assignments and keys count as `token`, URL credentials as
+`bearer`). It is shape-based and best effort; it does not remove names or other personal information
+and is no guarantee.
 
 The manifest holds, per set: dataset, license, citation, language, rows examined, scenarios produced,
 skip counts, redaction counts, style figures (user turns per scenario, characters per turn) and the
@@ -169,7 +189,7 @@ provenance of the fetch; overall: counts per set and language and the digests of
 
 ```bash
 node scripts/testing/memory-lab/run.mjs --mode live --scenarios ~/keiko-anchor/converted/scenarios \
-  --out ~/keiko-anchor/run-1 --no-retain-bodies --arms off,product \
+  --out ~/keiko-anchor/run-1 --arms off,product \
   --config ~/.keiko-lab/gateway.json --answer-model <id> --learn-model <id>
 ```
 
@@ -184,7 +204,7 @@ directory, then exports one sheet entry per stored memory:
 
 ```bash
 node scripts/testing/memory-lab/run.mjs --mode live --scenarios ~/keiko-anchor/converted/scenarios \
-  --out ~/keiko-anchor/run-labelling --retain-bodies --arms product \
+  --out ~/keiko-anchor/run-labelling --label-pass --arms product \
   --config ~/.keiko-lab/gateway.json --answer-model <id> --learn-model <id>
 node scripts/testing/memory-lab/anchor/label.mjs export --run ~/keiko-anchor/run-labelling \
   --scenarios ~/keiko-anchor/converted/scenarios --out ~/keiko-anchor/labels/sheet.json
@@ -234,12 +254,12 @@ to live memories. An unknown label, an unknown memory id or a flat file without 
 - **OASST2 threads** follow the best-ranked branch only, and a limited fetch can cut a tree short.
 - **Benchmark caveats.** Published LongMemEval scores differ in subset, dataset version and judge,
   and use a judge model. Here a probe passes only when the full expected answer appears verbatim
-  (after the lab's normalization), which is stricter, and a short numeric answer can match as a
-  substring. Free-text answers with alternatives rarely match, so pass rates are a lower bound.
+  (after the lab's normalization) as whole words, which is stricter: a short numeric answer
+  matches `7` but not `17`. Free-text answers with alternatives rarely match, so pass rates are a lower bound.
   `single-session-preference` questions are skipped, session dates are dropped (the lab has no clock
-  override), and the oracle arm stores the bare answer as its seed, so its retrieval ceiling is low on
-  this class. The benchmark may also be saturated or contaminated for the models used. Use it as a
-  sanity check, not as a target.
+  override), and the oracle arm stores `<question> <answer>` as its seed (whole-word matching still
+  needs the answer's exact spelling in the reply). The benchmark may also be saturated or
+  contaminated for the models used. Use it as a sanity check, not as a target.
 - **Memory.** Converting LongMemEval parses the 277 MB file in one piece; allow a few gigabytes of RAM.
 
 ## Where the code lives

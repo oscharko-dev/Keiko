@@ -366,7 +366,7 @@ describe("memory lab anchor converters", () => {
         truth: [
           {
             key: "e47becba",
-            seed: "Business Administration",
+            seed: "What degree did I graduate with? Business Administration",
             must: true,
             terms: [["Business Administration"]],
           },
@@ -458,9 +458,25 @@ describe("memory lab anchor converters", () => {
       expect(convertLongMemEval(instance({ answer: null }))).toEqual({ skip: "noAnswer" });
     });
 
+    it("seeds the oracle with the question as well as the answer, so retrieval can find it", () => {
+      // The failure this pins: the seed was the bare answer ("$12", "2"), which shares no word with
+      // the question, so the oracle arm supplied nothing for a question it held the answer to.
+      const { scenario } = convertLongMemEval(
+        instance({ question: "  How much was the ticket?  ", answer: "$12" }),
+      );
+      const [fact] = scenario.truth;
+      expect(fact.seed).toBe("How much was the ticket? $12");
+      expect(fact.terms).toEqual([["$12"]]);
+      expect(scenario.probes[0].expect.terms).toEqual([["$12"]]);
+      expect(validateScenario(scenario)).toBeTruthy();
+    });
+
     it("writes a numeric answer as text", () => {
       const { scenario } = convertLongMemEval(instance({ answer: 7 }));
-      expect(scenario.truth[0]).toMatchObject({ seed: "7", terms: [["7"]] });
+      expect(scenario.truth[0]).toMatchObject({
+        seed: "What degree did I graduate with? 7",
+        terms: [["7"]],
+      });
       expect(scenario.probes[0].expect.terms).toEqual([["7"]]);
     });
 
