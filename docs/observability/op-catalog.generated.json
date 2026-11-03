@@ -110169,7 +110169,7 @@
     {
       "op": "knowledge.requirements-read",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/requirementsTool.ts:548",
+      "site": "packages/keiko-server/src/requirementsTool.ts:551",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
