@@ -221,6 +221,18 @@ describe("filters and views", () => {
     },
   );
 
+  it.each(["cursor", "query", "reportId", "projectKey"])(
+    "reads an empty %s as an omitted one",
+    async (name) => {
+      const f = await fixture([{ capsuleId: "cap-a", text: specification(10).text }]);
+
+      const pages = await readAll(f, { [name]: "" });
+
+      expect(idsOf(pages)).toHaveLength(10);
+      expect(pages[0]?.totals).toMatchObject({ detectedCount: 10, matchedCount: 10 });
+    },
+  );
+
   it("selects by ids, priorities, text and document without paging the rest", async () => {
     const spec = specification(40);
     const f = await fixture([{ capsuleId: "cap-a", text: spec.text }]);

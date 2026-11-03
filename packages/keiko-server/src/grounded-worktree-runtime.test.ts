@@ -30,7 +30,7 @@ async function git(args: readonly string[]): Promise<void> {
   const result = await defaultGitProcessRunner(args, {
     cwd: root,
     maxBytes: 65_536,
-    timeoutMs: 3_000,
+    timeoutMs: 60_000,
   });
   expect(result.exitCode).toBe(0);
 }

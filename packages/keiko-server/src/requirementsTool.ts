@@ -193,7 +193,7 @@ function parseArguments(args: CatalogJsonObject): ParsedArguments {
   return {
     view,
     limit,
-    cursor: typeof args.cursor === "string" ? args.cursor : undefined,
+    cursor: typeof args.cursor === "string" && args.cursor.length > 0 ? args.cursor : undefined,
     reportId: typeof args.reportId === "string" ? args.reportId : undefined,
     projectKey: typeof args.projectKey === "string" ? args.projectKey : undefined,
     filter: {
