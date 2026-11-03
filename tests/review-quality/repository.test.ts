@@ -56,9 +56,9 @@ describe("preparePullRequest", () => {
 
   it("reports a pull request whose commits are unrecorded or unobtainable as unavailable", () => {
     const base = commitFile("a.ts", "x\n", "root");
-    expect(preparePullRequest(repository, { number: 7, baseCommit: null, headCommit: base })).toBe(
-      undefined,
-    );
+    expect(
+      preparePullRequest(repository, { number: 7, baseCommit: null, headCommit: base }),
+    ).toBeUndefined();
     // No `origin` exists, so the missing head cannot be fetched.
     const missing = "f".repeat(40);
     expect(hasCommit(repository, missing)).toBe(false);
