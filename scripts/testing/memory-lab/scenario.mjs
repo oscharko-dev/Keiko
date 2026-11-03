@@ -132,6 +132,8 @@ function validateExpectation(id, where, expect) {
     fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
   if (expect.kind === "answer" && !validTermGroups(expect.terms))
     fail(id, `${where}.expect.terms must be non-empty term groups for an answer probe`);
+  if (expect.forbidden !== undefined && expect.kind !== "answer")
+    fail(id, `${where}.expect.forbidden is only measured on an answer probe`);
   if (expect.forbidden !== undefined && !validTermGroups(expect.forbidden))
     fail(id, `${where}.expect.forbidden must be term groups when present`);
 }
@@ -151,8 +153,8 @@ function validateProbes(id, probes) {
 }
 
 function validateHeader(scenario) {
+  if (!isRecord(scenario)) fail("<unnamed>", "scenario must be an object");
   const id = nonEmptyString(scenario.id) ? scenario.id : "<unnamed>";
-  if (!isRecord(scenario)) fail(id, "scenario must be an object");
   if (scenario.schemaVersion !== SCENARIO_SCHEMA_VERSION)
     fail(id, `schemaVersion must be ${String(SCENARIO_SCHEMA_VERSION)}`);
   if (!nonEmptyString(scenario.id) || !/^[a-z0-9][a-z0-9-]{2,63}$/u.test(scenario.id))
@@ -184,10 +186,22 @@ export function validateScenario(scenario) {
   });
 }
 
-/** Stable content digest of a scenario, independent of key order in the source file. */
+// Sorted keys at every nesting level, arrays in their order: the same content is the same text.
+function canonicalize(value) {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, canonicalize(value[key])]),
+  );
+}
+
+/** Stable content digest of a scenario: every nested field counts, key order does not. */
 export function scenarioDigest(scenario) {
-  const canonical = JSON.stringify(scenario, Object.keys(scenario).toSorted());
-  return createHash("sha256").update(canonical).digest("hex");
+  return createHash("sha256")
+    .update(JSON.stringify(canonicalize(scenario)))
+    .digest("hex");
 }
 
 function parseScenarioFile(path) {

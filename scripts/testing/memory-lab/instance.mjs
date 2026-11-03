@@ -202,10 +202,12 @@ export async function listMemories(instance) {
   return Array.isArray(json.memories) ? json.memories : [];
 }
 
+// Without a pending-work signal (live mode) the learner's call is invisible until its capture
+// lands, so the grace period is always waited through; with the signal, served queues end it early.
 function learnerDone(options, startedAt) {
-  const pending = options.pendingLearner === undefined ? 0 : options.pendingLearner();
   const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
-  return pending === 0 || Date.now() - startedAt >= graceMs;
+  if (Date.now() - startedAt >= graceMs) return true;
+  return options.pendingLearner !== undefined && options.pendingLearner() === 0;
 }
 
 function observeLedger(state, count) {

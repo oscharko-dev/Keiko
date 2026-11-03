@@ -91,8 +91,9 @@ call counts; `manifest.json` names the corpus version, every scenario digest, th
 options. One JSON per run under `runs/` holds the classified store, the probe verdicts, the capture
 ledger outcomes and the scripted model's request journal.
 
-Four hard counters must read zero and are never averaged away: credentials stored, forgotten facts
-returning, third-party facts in private memory, private facts in project memory. The deterministic
+Five hard counters must read zero and are never averaged away: credentials stored, customer or
+personal identifiers stored, forgotten facts returning, third-party facts in private memory, private
+facts in project memory. The deterministic
 last line of a run is the harness result (`PASS memory-lab …`); a product verdict is read from the
 summary, never from the exit code.
 

@@ -73,11 +73,50 @@ describe("memory lab scenario format", () => {
     expect(() => validateScenario({ ...valid(), ...patch })).toThrow(pattern);
   });
 
-  it("digests independently of key order", () => {
+  it("digests independently of key order at every nesting level", () => {
     const base = valid();
     const reordered = Object.fromEntries(Object.entries(base).toReversed());
+    reordered.truth = [Object.fromEntries(Object.entries(base.truth[0]).toReversed())];
+    reordered.probes = [
+      {
+        ...base.probes[0],
+        expect: Object.fromEntries(Object.entries(base.probes[0].expect).toReversed()),
+      },
+    ];
     expect(scenarioDigest(validateScenario(reordered))).toBe(
       scenarioDigest(validateScenario(base)),
+    );
+  });
+
+  it.each([
+    ["a truth seed", (s) => ({ ...s, truth: [{ ...s.truth[0], seed: "Ich mag Listen." }] })],
+    ["a term group", (s) => ({ ...s, truth: [{ ...s.truth[0], terms: [["Listen"]] }] })],
+    ["a turn", (s) => ({ ...s, turns: [{ ...s.turns[0], user: "Ich mag Listen." }] })],
+    [
+      "a probe expectation",
+      (s) => ({
+        ...s,
+        probes: [{ ...s.probes[0], expect: { kind: "answer", terms: [["Listen"]] } }],
+      }),
+    ],
+    ["a learner item", (s) => ({ ...s, turns: [{ ...s.turns[0], learner: [] }] })],
+  ])("changes the digest when %s changes", (_name, mutate) => {
+    const before = scenarioDigest(validateScenario(valid()));
+    const after = scenarioDigest(validateScenario(mutate(valid())));
+    expect(after).not.toBe(before);
+  });
+
+  it("refuses a scenario that is not an object with the scenario error, not a type error", () => {
+    expect(() => validateScenario(null)).toThrow(/scenario must be an object/u);
+    expect(() => validateScenario([])).toThrow(/scenario must be an object/u);
+  });
+
+  it("refuses forbidden terms on a probe that cannot measure them", () => {
+    const probes = [
+      { id: "p", question: "q", expect: { kind: "abstain", forbidden: [["Tabellen"]] } },
+    ];
+    expect(() => validateScenario({ ...valid(), probes })).toThrow(
+      /only measured on an answer probe/u,
     );
   });
 

@@ -93,12 +93,22 @@ function optionalPath(value) {
 }
 
 function assertLiveOptions(mode, values) {
-  if (mode === "live" && (!values.config || !values["answer-model"] || !values["learn-model"]))
+  if (mode !== "live") return;
+  if (!values.config || !values["answer-model"] || !values["learn-model"])
     throw new RangeError("live mode needs --config, --answer-model and --learn-model");
+  if (values["broken-learner"] !== undefined)
+    throw new RangeError("--broken-learner is an offline proof; live mode has no scripted learner");
 }
 
+const DEFAULTS = Object.fromEntries(
+  Object.entries(OPTIONS)
+    .filter(([, option]) => option.default !== undefined)
+    .map(([name, option]) => [name, option.default]),
+);
+
 /** Validated run options from parsed CLI values (also the shape `runLab` accepts). */
-export function normalizeOptions(values) {
+export function normalizeOptions(raw) {
+  const values = { ...DEFAULTS, ...raw };
   if (typeof values.out !== "string" || values.out.length === 0)
     throw new RangeError("--out is required");
   const out = resolve(values.out);
@@ -177,20 +187,44 @@ function runContext(options, arm, fixture) {
   };
 }
 
-async function runUnit(scenario, arm, repetition, options, stateRoot) {
+async function closeFixture(fixture) {
+  if (fixture === undefined) return;
+  await new Promise((resolve) => {
+    fixture.close(() => resolve());
+    fixture.closeAllConnections();
+  });
+}
+
+async function startUnit(scenario, arm, options, stateRoot) {
   const dir = mkdtempSync(join(stateRoot, `${scenario.id}-${arm}-`));
   const fixture = await startFixture(options);
   const startedAt = Date.now();
-  const instance = await startLabInstance({
-    dir,
-    fixture,
-    ceiling: options.ceiling,
-    configPath: options.configPath,
-    answerModelId: options.answerModelId,
-    learnModelId: options.learnModelId,
-    subjectRoot: options.subjectRoot,
-  });
-  const instanceStartMs = Date.now() - startedAt;
+  try {
+    const instance = await startLabInstance({
+      dir,
+      fixture,
+      ceiling: options.ceiling,
+      configPath: options.configPath,
+      answerModelId: options.answerModelId,
+      learnModelId: options.learnModelId,
+      subjectRoot: options.subjectRoot,
+    });
+    return { dir, fixture, instance, instanceStartMs: Date.now() - startedAt };
+  } catch (error) {
+    // The instance's own close would have torn the fixture down; a failed start leaves it to us.
+    await closeFixture(fixture);
+    if (!options.keep) rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function runUnit(scenario, arm, repetition, options, stateRoot) {
+  const { dir, fixture, instance, instanceStartMs } = await startUnit(
+    scenario,
+    arm,
+    options,
+    stateRoot,
+  );
   try {
     const result = await runScenario(scenario, instance, runContext(options, arm, fixture));
     return { ...result, repetition, foldedKeys: instance.foldedKeys, instanceStartMs };
