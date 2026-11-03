@@ -23,6 +23,9 @@ function fixture(files) {
   for (const [path, body] of Object.entries(files)) writeFileSync(join(root, path), body);
   return { root, files: Object.keys(files).map((path) => ({ path })) };
 }
+// Built at runtime so this suite never holds the directive text the runner rejects (REVIEW-3918-041).
+const DISABLE = ["oxlint", "disable"].join("-");
+const APPLY = "Reflect.apply(Math.max, null, [1])";
 const receipt = (filename) => ({
   filename,
   code: "keiko-coverage(program)",
@@ -68,8 +71,7 @@ describe("real pinned native analyzer and visitation contract (#3915)", () => {
     const malformed = fixture({ "bad.ts": "const = ;" });
     expect(() => runNativePolicy(malformed.root, malformed.files)).toThrow();
     const disabled = fixture({
-      "disabled.ts":
-        "// oxlint-disable anti-slop/no-reflect-apply\nReflect.apply(Math.max, null, [1]);",
+      "disabled.ts": `// ${DISABLE} anti-slop/no-reflect-apply\n${APPLY};`,
     });
     expect(() => runNativePolicy(disabled.root, disabled.files)).toThrow(
       "inline-policy-suppression",
@@ -81,6 +83,34 @@ describe("real pinned native analyzer and visitation contract (#3915)", () => {
         stdout: "Failed to load plugin",
       }),
     ).toThrow();
+  });
+
+  // A bare token scanner reads a quote after JSX text, a regular expression or a template tail as
+  // an unterminated string to the end of the line, which hid a directive there (REVIEW-3918-041).
+  it.each([
+    [
+      "JSX text with an apostrophe",
+      "view.tsx",
+      `export const view = (\n  <div>\n    <p>Don't</p> {/* ${DISABLE}-next-line anti-slop/no-reflect-apply */}\n    {${APPLY}}\n  </div>\n);\n`,
+    ],
+    [
+      "a regular expression with a quote",
+      "regex.ts",
+      `export const bad = [/"/u, ${APPLY}]; // ${DISABLE}-line anti-slop/no-reflect-apply\n`,
+    ],
+    [
+      "a block comment after a regular expression with a quote",
+      "block.ts",
+      `export const quote = /'/u; /* ${DISABLE} */\nexport const bad = ${APPLY};\n`,
+    ],
+    [
+      "a template tail with a quote",
+      "template.ts",
+      `export const bad = [\`\${1}'\`, ${APPLY}]; // ${DISABLE}-line anti-slop/no-reflect-apply\n`,
+    ],
+  ])("rejects a directive after %s on the same line", (_shape, path, body) => {
+    const input = fixture({ [path]: body });
+    expect(() => runNativePolicy(input.root, input.files)).toThrow("inline-policy-suppression");
   });
 
   it("does not let an ESLint directive suppress the distinct native policy", () => {

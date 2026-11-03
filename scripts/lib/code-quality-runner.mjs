@@ -123,22 +123,12 @@ function nativeConfig(compiled) {
   };
 }
 
+// Oxlint applies its native directives even with respectEslintDisableDirectives off. A token
+// scanner without parser context misreads a quote after JSX text, a regular expression or a
+// template tail as a string and misses a directive later on that line (REVIEW-3918-041), so the
+// directive text is refused anywhere in the source. A false positive only fails closed.
 function hasDisableDirective(source) {
-  const scanner = ts.createScanner(
-    ts.ScriptTarget.Latest,
-    false,
-    ts.LanguageVariant.Standard,
-    source,
-  );
-  for (let token = scanner.scan(); token !== ts.SyntaxKind.EndOfFileToken; token = scanner.scan()) {
-    if (
-      (token === ts.SyntaxKind.SingleLineCommentTrivia ||
-        token === ts.SyntaxKind.MultiLineCommentTrivia) &&
-      /\boxlint-(?:disable|enable)\b/u.test(scanner.getTokenText())
-    )
-      return true;
-  }
-  return false;
+  return /\boxlint-(?:disable|enable)\b/u.test(source);
 }
 
 function diagnosticPath(root, filename) {
