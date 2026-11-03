@@ -1489,6 +1489,40 @@ it("uses the existing local Data-Pod evidence pack with Jira and keeps its numer
   expect(JSON.stringify(answer.citations)).not.toContain("jira");
 });
 
+// S12 and S17 of epic #4173: a citation repair after the turn ended, or one its grant cannot fund,
+// must not cost the answer. It answered with HTTP 403 after the turn had already done its work.
+it("keeps a Data-Pod turn's transcript answer without another model call after the model failed", async () => {
+  const f = runtime();
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const requests = provider(["tool", "exhausted", "exhausted", "answer"]);
+  const result = await handleGroundedAsk(
+    context({ chatId: f.chatId, content: "List the Jira projects.", modelId: MODEL }),
+    f.deps,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  expect(f.jiraRequests).toEqual(["GET"]);
+  // The tool round, the exhausted round and its one repair; the ended turn adds no further call.
+  expect(requests).toHaveLength(3);
+  expect((result.body as GroundedAnswer).content).toContain("ran out of output budget");
+  expect((result.body as GroundedAnswer).citations).toEqual([]);
+});
+
+it("keeps a complete Data-Pod answer when the input grant cannot fund its citation repair", async () => {
+  const f = runtime();
+  await connectDataPod(f, "Feature returns true. Feature is a function.");
+  const uncited = "Jira tool result: project SYN is visible, and Feature is a plain function.";
+  const requests = provider(["tool", "answer"], uncited, undefined, {
+    usage: { prompt_tokens: 32_000, completion_tokens: 1 },
+  });
+  const result = await handleGroundedAsk(
+    context({ chatId: f.chatId, content: "What is Feature? List Jira too.", modelId: MODEL }),
+    f.deps,
+  );
+  expect(result.status, JSON.stringify(result.body)).toBe(200);
+  expect(requests).toHaveLength(2);
+  expect((result.body as GroundedAnswer).content).toContain("project SYN is visible");
+});
+
 it("preserves Data-only desktop refusal and tool-free grounded synthesis", async () => {
   const f = runtime();
   f.deps.store.updateChat(f.chatId, { jiraPodId: null });

@@ -119,7 +119,6 @@ import {
   releaseObsoleteFailedChatScopeTransitions,
   releaseDetachedFailedChatScopeTransitions,
 } from "./windows/chatWindowActivity";
-import { registerSw } from "./install/registerSw";
 import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
 
@@ -3334,7 +3333,18 @@ export function AppShell(): ReactNode {
   // app shell no longer advertises a browser install manifest, so this is cache/update plumbing,
   // not a browser-managed product installation path.
   useEffect(() => {
-    registerSw();
+    void import("./install/registerSw")
+      .then(({ registerSw }) => {
+        registerSw();
+      })
+      .catch((error: unknown) => {
+        reportClientDiagnostic("Service worker module could not load.", {
+          kind: "other",
+          errorKind: "unavailable",
+          correlationId: newClientCorrelationId(),
+          errorEvidence: clientErrorEvidence(error),
+        });
+      });
   }, []);
   // GEN-STAB-WINDOW-002 — unhandled promise rejections are surfaced once for every route by the
   // root layout's `ClientDiagnosticsRoot` (#3532); a second listener here reported each twice.

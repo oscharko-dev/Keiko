@@ -864,9 +864,10 @@ whose items all exist (or were deselected, at least one existing) writes nothing
 nothing is missing and not to create the issues again with `jira.create` — the lab's S19 rerun showed
 a model reading the bare outcome as a failure and creating duplicates one by one. A single
 `jira.create` checks the same identity (2026-11-02, S19: Gemma read that guidance and still created
-both epics again with `jira.create`). A create that hangs from nothing (no links, and no field whose
-value is an issue key or `{ key }`, so no parent or epic link) on a create screen with labels is
-searched by the identity label a draft item with the same project, issue type and summary carries.
+both epics again with `jira.create`). A create that hangs from nothing (no links, and no non-string
+field whose value is an issue key or `{ key }`, so no parent or epic link; a string field holds text
+even when it reads like a key, such as a requirement id: 2026-11-03, S19, Qwen) on a create screen
+with labels is searched by the identity label a draft item with the same project, issue type and summary carries.
 A match refuses the create as `conflict` before any write, with the existing issue's receipt and
 `JIRA_EXISTING_GUIDANCE`: report that key, do not create it again or change its fields to get
 another. When the search finds nothing, the create carries that same identity label, so a later draft

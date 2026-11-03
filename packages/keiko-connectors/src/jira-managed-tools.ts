@@ -229,7 +229,7 @@ function metadataResult(
 // added by three edits), and a description written as a JSON object loses its sections (S05, Gemma).
 const DRAFT_POINTER = Object.freeze({
   tool: "jira.draft",
-  use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves the draft once, while each jira.create or later jira.edit asks again. Write a description as text with an h2. heading per section, never as JSON.",
+  use: "Put several new issues in one jira.draft, each with every field it needs, labels included: the human approves it once, while each jira.create or jira.edit asks again. Write a description as text, each section starting h2. Title; never JSON or HTML.",
 });
 function withDraftPointer(result: ManagedMcpToolResult): ManagedMcpToolResult {
   return result.data.outcome === "succeeded"

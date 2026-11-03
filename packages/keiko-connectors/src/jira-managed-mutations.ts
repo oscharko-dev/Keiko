@@ -103,18 +103,22 @@ const UNTRACED_REFERENCES: Extract<JiraMutationAttempt, { ok: false }> = {
     ],
   },
 };
+/** The one field name a model reliably puts in the wrong place; it is an argument, not a field. */
+const REFERENCES_PLACE = "requirementIds goes beside fields, not inside them.";
 // eslint-disable-next-line no-control-regex -- HTTP reference values must not contain control characters.
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/u;
 /** Keiko's own pre-dispatch refusal names the field and the closed reason. */
 function validationFailure(
   result: Extract<ReturnType<typeof validateJiraFieldChanges>, { ok: false }>,
 ): Extract<JiraMutationAttempt, { ok: false }> {
+  const message =
+    result.message ?? (result.fieldId === "requirementIds" ? REFERENCES_PLACE : undefined);
   return {
     ...INVALID,
     detail: {
       validation: result.reason,
       ...(result.fieldId === undefined ? {} : { fieldId: result.fieldId }),
-      ...(result.message === undefined ? {} : { messages: [result.message] }),
+      ...(message === undefined ? {} : { messages: [message] }),
     },
   };
 }
@@ -347,8 +351,12 @@ function createdFields(
     : withJiraDraftIdentity(traced, metadata, twin.identity);
 }
 const ISSUE_KEY_VALUE = /^[A-Z][A-Z0-9_]{0,63}-\d{1,12}$/u;
-/** A field value that points at another issue: a bare key, or `{ key }` as `parent` takes it. */
-function pointsAtIssue(value: unknown): boolean {
+/**
+ * A field value that points at another issue: a bare key, or `{ key }` as `parent` takes it. A
+ * string field holds text however much it reads like a key, such as a requirement id.
+ */
+function pointsAtIssue(value: unknown, field: JiraFieldMetadata | undefined): boolean {
+  if (field?.kind === "text" || field?.schemaType === "string") return false;
   if (typeof value === "string") return ISSUE_KEY_VALUE.test(value);
   const key = asRecord(value)?.key;
   return typeof key === "string" && ISSUE_KEY_VALUE.test(key);
@@ -385,7 +393,13 @@ function twinItem(
   create: CreateRequest,
   metadata: readonly JiraFieldMetadata[],
 ): JiraDraftItem | undefined {
-  if (create.links.length > 0 || Object.values(create.fields).some(pointsAtIssue)) return undefined;
+  const hangsFromIssue = Object.entries(create.fields).some(([id, value]) =>
+    pointsAtIssue(
+      value,
+      metadata.find((field) => field.id === id),
+    ),
+  );
+  if (create.links.length > 0 || hangsFromIssue) return undefined;
   if (!metadata.some((field) => field.id === "labels" && field.operations.includes("set")))
     return undefined;
   return parseJiraDraft({

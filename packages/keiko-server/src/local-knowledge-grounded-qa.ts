@@ -13,6 +13,7 @@ import {
   type OpenAIEmbeddingRequest,
   type RerankResult,
 } from "@oscharko-dev/keiko-model-gateway";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { createGroundedSynthesisCallBudget } from "./grounded-answer.js";
 import { callPluralGroundedSynthesis } from "./grounded-plural-synthesis.js";
 import { currentContentRedactor, withChatContentPolicy } from "./content-redactor.js";
@@ -752,6 +753,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   private measuredPromptTokens = 0;
   private readonly synthesis = createGroundedSynthesisCallBudget();
   private lastComplete = true;
+  private lastInput: AnswerGeneratorInput | undefined;
 
   public constructor(
     private readonly model: ModelPort,
@@ -764,6 +766,7 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
+    this.lastInput = input;
     // Re-planned per attempt: when the provider's overflow answer taught Keiko the model's real
     // window, the retry fits the references into it (gateway-context-window.ts).
     const response = await withAdoptedContextWindowRetry(
@@ -802,9 +805,33 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     return this.sentReferences;
   }
 
-  /** An optional citation repair needs a free synthesis attempt slot (#4179). */
+  /**
+   * An optional citation repair needs a free synthesis attempt slot (#4179), a turn that has not
+   * ended, and the grant its prompt costs: refused at admission it would fail the finished turn.
+   */
   public repairAvailable(): boolean {
-    return this.synthesis.remaining() > 0;
+    if (this.synthesis.remaining() <= 0) return false;
+    const toolTurn = this.context.deps.chatToolTurn;
+    if (toolTurn === undefined) return true;
+    return !toolTurn.endedEarly && this.repairFitsGrant();
+  }
+
+  private repairFitsGrant(): boolean {
+    const limits = this.sent?.profile ?? DEFAULT_CONTEXT_PROFILE;
+    const pending = this.synthesis.pendingUsage();
+    if (limits.reservedOutputTokens <= pending.completionTokens) return false;
+    const input = this.lastInput;
+    if (input === undefined) return true;
+    const messages = buildLocalKnowledgeMessages(
+      input.query.answerQuestion ?? input.query.text,
+      { ...input, citationRepair: true, references: this.sentReferences },
+      this.store,
+      this.redactExcerpt,
+      this.limits,
+      this.selectedSkill(),
+    ).messages;
+    const promptTokens = countGatewayPromptTokens({ messages }, limits.tokenAccounting);
+    return promptTokens <= limits.effectiveInputBudget - pending.promptTokens;
   }
 
   /** Whether the last answer ended on its own rather than being interrupted (S12 of #4173). */

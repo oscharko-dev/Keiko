@@ -637,7 +637,7 @@ function resolveItemTraces(
  */
 export const JIRA_DRAFT_UNTRACED_GUIDANCE =
   "Nothing was created. This Chat holds detected requirements, and no item of the draft names the requirements it derives from. " +
-  "If the items derive from them, read knowledge.requirements and put each unit's reference in requirementIds of the items that implement it, then send the draft again. " +
+  "If the items derive from them, read knowledge.requirements and put each unit's reference in requirementIds of the items that implement it, beside fields and not inside them, then send the draft again. " +
   "If they do not, send the same draft again unchanged; it is then created as it is. Do not show this message.";
 
 /** No item that can run names a requirement. */

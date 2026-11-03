@@ -1484,6 +1484,20 @@ it.each([
     expect(f.http).not.toHaveBeenCalled();
   },
 );
+it("says where requirementIds belong when they arrive among the fields", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { requirementIds: ["LH-001"] } }),
+  ).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: {
+      fieldId: "requirementIds",
+      messages: ["requirementIds goes beside fields, not inside them."],
+    },
+  });
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(0);
+});
 it("still writes an ordinary untraced create without requirementIds (review)", async () => {
   const f = fixture();
   expect(
@@ -1536,6 +1550,10 @@ function twinFixture(found: readonly { key: string; id: string }[]): {
     operations: ["set", "add", "remove"],
     schema: { type: "array", items: "string", system: "labels" },
   };
+  const epicLink = {
+    ...field("customfield_10001", "any"),
+    schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+  };
   let posted: Readonly<Record<string, unknown>> = {};
   const http = vi.fn<AtlassianHttpBodyPort>((request) => {
     const url = new URL(request.url);
@@ -1545,7 +1563,13 @@ function twinFixture(found: readonly { key: string; id: string }[]): {
     }
     if (url.pathname.includes("createmeta"))
       return Promise.resolve(
-        response({ values: [...FIELDS, labels], start: 0, size: 100, last: true, total: 5 }),
+        response({
+          values: [...FIELDS, labels, epicLink],
+          start: 0,
+          size: 100,
+          last: true,
+          total: 6,
+        }),
       );
     if (url.pathname.endsWith("/search"))
       return Promise.resolve(
@@ -1656,17 +1680,29 @@ it.each([
 
 it("leaves a create that hangs from an epic link without a draft identity", async () => {
   const f = twinFixture([]);
-  await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, customfield_10000: "SYN-2" } });
+  await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, customfield_10001: "SYN-2" } });
   expect(f.created().labels).toEqual(["anforderung"]);
 });
 
 it.each([
   ["a parent", { parent: { key: "SYN-2" } }],
-  ["an epic link", { customfield_10000: "SYN-2" }],
+  ["an epic link", { customfield_10001: "SYN-2" }],
 ])("never reconciles a create that hangs from %s", async (_name, extra) => {
   const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
   await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, ...extra } });
   expect(f.searches()).toEqual([]);
+});
+
+// S19 of #4173, Qwen: a requirement id in a text field reads like an issue key, and the re-run
+// through jira.create made both epics a second time.
+it("recognises a draft's issue although a text field holds a value shaped like a key", async () => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  const repeat = await f.run({
+    ...TWIN_CREATE,
+    fields: { ...TWIN_CREATE.fields, customfield_10000: "LH-019" },
+  });
+  expect(repeat).toMatchObject({ ok: false, reason: "conflict", receipt: { issueKey: "SYN-4" } });
+  expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
 });
 
 it("never reconciles a create with links", async () => {
