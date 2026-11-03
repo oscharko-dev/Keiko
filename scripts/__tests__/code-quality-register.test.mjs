@@ -525,12 +525,49 @@ describe("code-quality register review CLI base (#4145)", () => {
 
 const RATCHET_COMMAND = "npm run check:code-quality-policy -- --mode ratchet";
 
-const RATCHET_BASE = "${{ github.event.pull_request.base.sha || github.event.before }}";
+// Every event that runs `core-quality` must give the ratchet a full object id (REVIEW-3918-039).
+// A pull_request synchronize payload also carries `before`, so the base must win over it. A
+// manual dispatch has no base; the all-zero id makes the ratchet compare with HEAD's first parent.
+const ZERO_BASE = "0".repeat(40);
+const RATCHET_BASE_EVENTS = [
+  ["pull_request", { pull_request: { base: { sha: "a".repeat(40) } }, before: "d".repeat(40) }],
+  ["merge_group", { merge_group: { base_sha: "b".repeat(40) } }],
+  ["push", { before: "c".repeat(40) }],
+  ["workflow_dispatch", {}],
+];
+const RATCHET_BASE_EXPECTED = {
+  pull_request: "a".repeat(40),
+  merge_group: "b".repeat(40),
+  push: "c".repeat(40),
+  workflow_dispatch: ZERO_BASE,
+};
+
+// Resolves one `github.event.<path>` or quoted literal term; any other term resolves to undefined.
+function evaluateBaseTerm(term, event) {
+  const literal = /^'([^']*)'$/u.exec(term)?.[1];
+  if (literal !== undefined) return literal;
+  const path = /^github\.event\.([a-z_.]+)$/u.exec(term)?.[1];
+  return path?.split(".").reduce((node, key) => node?.[key], event);
+}
+
+// Evaluates the `a || b || 'literal'` expressions this workflow uses, as GitHub's `||` does.
+function evaluateBaseExpression(expression, event) {
+  const body = /^\$\{\{ (.+) \}\}$/u.exec(expression ?? "")?.[1];
+  return body?.split(" || ").reduce((value, term) => value || evaluateBaseTerm(term, event), "");
+}
+
+function ratchetBaseDefects(expression) {
+  return RATCHET_BASE_EVENTS.flatMap(([name, event]) =>
+    evaluateBaseExpression(expression, event) === RATCHET_BASE_EXPECTED[name]
+      ? []
+      : [`unbased:${name}`],
+  );
+}
 
 function ratchetStepDefects(step) {
   const defects = [];
   if (step.run !== RATCHET_COMMAND) defects.push("partial");
-  if (step.env?.KEIKO_CODE_QUALITY_BASE_SHA !== RATCHET_BASE) defects.push("unbased");
+  defects.push(...ratchetBaseDefects(step.env?.KEIKO_CODE_QUALITY_BASE_SHA));
   if (Object.hasOwn(step, "if")) defects.push("conditional");
   if (Object.hasOwn(step, "continue-on-error")) defects.push("continued");
   return defects;
@@ -555,7 +592,7 @@ function ratchetWiringDefects(workflow) {
   ];
 }
 
-// Replaces the epic's qualification-workflow pins on dev (#4145): the required `ci` context must
+// Replaces the epic's qualification-workflow pins (#4145): the required `ci` context must
 // run the full-repository ratchet unconditionally, after the build and lint it depends on.
 describe("code-quality ratchet CI wiring (#4145)", () => {
   const workflow = () => parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -581,10 +618,28 @@ describe("code-quality ratchet CI wiring (#4145)", () => {
     ["conditional", (copy) => (ratchetStep(copy).if = "${{ false }}")],
     ["continued", (copy) => (ratchetStep(copy)["continue-on-error"] = true)],
     ["partial", (copy) => (ratchetStep(copy).run = `${RATCHET_COMMAND} --scope contracts`)],
-    ["unbased", (copy) => delete ratchetStep(copy).env.KEIKO_CODE_QUALITY_BASE_SHA],
+    ["unbased:pull_request", (copy) => delete ratchetStep(copy).env.KEIKO_CODE_QUALITY_BASE_SHA],
     [
-      "unbased",
+      "unbased:pull_request",
       (copy) => (ratchetStep(copy).env.KEIKO_CODE_QUALITY_BASE_SHA = "${{ github.event.before }}"),
+    ],
+    [
+      "unbased:merge_group",
+      (copy) =>
+        (ratchetStep(copy).env.KEIKO_CODE_QUALITY_BASE_SHA =
+          `\${{ github.event.pull_request.base.sha || github.event.before || '${ZERO_BASE}' }}`),
+    ],
+    [
+      "unbased:workflow_dispatch",
+      (copy) =>
+        (ratchetStep(copy).env.KEIKO_CODE_QUALITY_BASE_SHA =
+          "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}"),
+    ],
+    [
+      "unbased:push",
+      (copy) =>
+        (ratchetStep(copy).env.KEIKO_CODE_QUALITY_BASE_SHA =
+          `\${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || '${ZERO_BASE}' }}`),
     ],
     [
       "reordered",

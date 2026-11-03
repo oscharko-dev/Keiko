@@ -330,7 +330,8 @@ export async function collectPolicyInventory(root) {
 }
 
 // The ratchet reviews register raises against the change's base commit (#4145). A push that
-// creates a branch reports an all-zero previous tip; that push compares with HEAD's first parent.
+// creates a branch reports an all-zero previous tip, and a manual dispatch passes the all-zero id
+// because it has no base; both compare with HEAD's first parent.
 const OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u;
 const ZERO_OBJECT_ID = /^0+$/u;
 
