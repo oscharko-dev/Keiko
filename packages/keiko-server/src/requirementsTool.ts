@@ -175,8 +175,11 @@ interface ParsedArguments {
   readonly projectKey: string | undefined;
 }
 
+/** An empty list names nothing to filter by, so it reads like an omitted one, not like "none". */
 function strings(value: unknown): readonly string[] | undefined {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string")
+  return Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((entry) => typeof entry === "string")
     ? value
     : undefined;
 }

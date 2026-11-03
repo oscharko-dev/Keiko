@@ -207,6 +207,17 @@ describe("paging (#4179 review, defect 2)", () => {
 });
 
 describe("filters and views", () => {
+  // S15 of epic #4173: Qwen sent `priorities: []` for "all requirements", read none of the 41 the
+  // same result counted as detected, and answered from nothing.
+  it.each(["priorities", "ids", "documents"])("reads an empty %s list as no filter", async (name) => {
+    const f = await fixture([{ capsuleId: "cap-a", text: specification(10).text }]);
+
+    const [page] = await readAll(f, { [name]: [] });
+
+    expect(idsOf([page!])).toHaveLength(10);
+    expect(page?.totals).toMatchObject({ detectedCount: 10, matchedCount: 10 });
+  });
+
   it("selects by ids, priorities, text and document without paging the rest", async () => {
     const spec = specification(40);
     const f = await fixture([{ capsuleId: "cap-a", text: spec.text }]);
