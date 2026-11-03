@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDeclaredProofFailure } from "./support/code-quality-proof-failure.mjs";
 import { rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
@@ -366,7 +367,9 @@ describe("optional object validator responsibility (#3918)", () => {
       await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
         "semantic-proof-execution-failed",
       );
+      expectDeclaredProofFailure(own);
     },
+    195_000,
   );
 
   it.skipIf(process.platform === "win32")(
@@ -385,6 +388,7 @@ describe("optional object validator responsibility (#3918)", () => {
         adaptResponsibilityDiagnostics({ violations: [finding] }, qualified).violations,
       ).toEqual([]);
     },
+    195_000,
   );
 });
 
@@ -493,10 +497,12 @@ describe("raw metadata source responsibility (#3918)", () => {
         await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
           "semantic-proof-execution-failed",
         );
+        expectDeclaredProofFailure(own);
         return;
       }
       await expectCompletedSemanticProof(subject, own, pending);
     },
+    195_000,
   );
 });
 
@@ -589,6 +595,7 @@ describe("owned structural predicate stage responsibility (#3918)", () => {
         adaptResponsibilityDiagnostics({ violations: [finding] }, qualified).violations,
       ).toEqual([]);
     },
+    195_000,
   );
 
   it.skipIf(process.platform === "win32")(
@@ -601,7 +608,9 @@ describe("owned structural predicate stage responsibility (#3918)", () => {
       await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
         "semantic-proof-execution-failed",
       );
+      expectDeclaredProofFailure(own);
     },
+    195_000,
   );
 });
 
@@ -673,10 +682,12 @@ describe("owned refusal marker pair responsibility (#3918)", () => {
         await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
           "semantic-proof-execution-failed",
         );
+        expectDeclaredProofFailure(own);
         return;
       }
       await expectCompletedSemanticProof(subject, own, pending);
     },
+    195_000,
   );
 });
 
@@ -765,6 +776,7 @@ describe("owned raw-registration transport responsibility (#3918)", () => {
           await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
             "semantic-proof-execution-failed",
           );
+          expectDeclaredProofFailure(own);
           return;
         }
         const qualified = await qualifyPolicyResponsibilities(subject, own.policy);
@@ -774,6 +786,7 @@ describe("owned raw-registration transport responsibility (#3918)", () => {
         own.put(runtime, original);
       }
     },
+    195_000,
   );
 });
 
@@ -810,6 +823,7 @@ describe("physical raw registration contributor proofs (#3918)", () => {
           await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
             "semantic-proof-execution-failed",
           );
+          expectDeclaredProofFailure(own);
           return;
         }
         const report = await qualifyPolicyResponsibilities(subject, own.policy);
@@ -905,6 +919,7 @@ describe("boolean raw object observation responsibility (#3918)", () => {
         await expect(qualifyPolicyResponsibilities(subject, own.policy)).rejects.toThrow(
           "semantic-proof-execution-failed",
         );
+        expectDeclaredProofFailure(own);
         return;
       }
       const report = await qualifyPolicyResponsibilities(subject, own.policy);

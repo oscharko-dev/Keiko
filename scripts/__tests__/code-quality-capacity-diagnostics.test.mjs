@@ -1,12 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDeclaredProofFailure } from "./support/code-quality-proof-failure.mjs";
 import { rmSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { executeCodeQualityPolicy } from "../check-code-quality-policy.mjs";
 import { collectPolicySubject } from "../lib/code-quality-inventory.mjs";
-import {
-  assessPolicyResponsibilities,
-  adaptResponsibilityDiagnostics,
-} from "../lib/code-quality-responsibilities.mjs";
+import { assessPolicyResponsibilities } from "../lib/code-quality-responsibilities.mjs";
 import { createSymbolResolver } from "../lib/code-quality-symbols.mjs";
 import { SYMBOL_LIMITS } from "../lib/code-quality-policy.mjs";
 import {
@@ -162,6 +160,47 @@ describe("collective capacity partial applicability (#3918)", () => {
       await interceptCollectiveAttempt(() => {
         throw error;
       });
+      expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(error);
+    },
+    30_000,
+  );
+
+  // A budget or currentness refusal names its cause, and a defect propagates instead of becoming
+  // a generic unresolved fact (REVIEW-3918-053).
+  it.each([
+    ["symbol-source-budget", "symbol-source-budget"],
+    ["symbol-node-budget", "symbol-node-budget"],
+    ["symbol-subject-changed", "symbol-subject-changed"],
+    ["unresolved-export-entry", "unresolved-responsibility-facts"],
+  ])(
+    "records an assessment refusal %s as %s",
+    async (code, reason) => {
+      const own = createCollectiveParserFixture();
+      roots.push(own.root);
+      const subject = await collectPolicySubject(own.root);
+      await interceptCollectiveAttempt(() => {
+        throw new TypeError(code);
+      }, "resolveProofExport");
+      const report = assessPolicyResponsibilities(subject, own.policy);
+      expect(report.assessments.map((record) => record.reasons)).toEqual(
+        report.assessments.map(() => [reason]),
+      );
+    },
+    30_000,
+  );
+
+  it.each([
+    new TypeError("Cannot read properties of undefined (reading 'kind')"),
+    new RangeError("Maximum call stack size exceeded"),
+  ])(
+    "propagates an assessment defect: %s",
+    async (error) => {
+      const own = createCollectiveParserFixture();
+      roots.push(own.root);
+      const subject = await collectPolicySubject(own.root);
+      await interceptCollectiveAttempt(() => {
+        throw error;
+      }, "resolveProofExport");
       expect(() => assessPolicyResponsibilities(subject, own.policy)).toThrow(error);
     },
     30_000,
@@ -393,6 +432,7 @@ it.skipIf(process.platform === "win32")(
     await expect(executeCodeQualityPolicy(embeddedSemanticOptions(), own.root)).rejects.toThrow(
       "semantic-proof-execution-failed",
     );
+    expectDeclaredProofFailure(own);
   },
   195_000,
 );
@@ -545,17 +585,6 @@ describe("numeric object unsupported form reporting (#3918)", () => {
     expect(report.assessments.map((record) => record.slots)).toEqual(
       before.assessments.map((record) => record.slots),
     );
-    // A constructed object coordinate remains active after the real unsupported assessment.
-    const finding = {
-      path: report.assessments[0].roles.input.identities[0].producer.path,
-      rule: "anti-slop/no-object-parameters",
-      line: 1,
-      column: 1,
-    };
-    expect(adaptResponsibilityDiagnostics({ violations: [finding] }, report)).toMatchObject({
-      adaptations: [],
-      violations: [finding],
-    });
     for (const record of report.assessments) {
       expect(record.objectForms).toEqual([
         {

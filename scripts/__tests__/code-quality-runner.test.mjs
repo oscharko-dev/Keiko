@@ -82,7 +82,7 @@ describe("real pinned native analyzer and visitation contract (#3915)", () => {
         stderr: "",
         stdout: "Failed to load plugin",
       }),
-    ).toThrow();
+    ).toThrow(SyntaxError);
   });
 
   // A bare token scanner reads a quote after JSX text, a regular expression or a template tail as
@@ -125,34 +125,83 @@ describe("real pinned native analyzer and visitation contract (#3915)", () => {
     );
   });
 
-  it("rejects zero, missing, duplicate, extra and unknown parser diagnostics", () => {
+  it("accepts exactly one receipt per file", () => {
     const files = [{ path: "a.ts" }, { path: "b.ts" }];
     expect(
       validateNativeResult("/repo", files, result([receipt("a.ts"), receipt("b.ts")])).visited,
     ).toBe(2);
-    for (const entries of [
-      [],
-      [receipt("a.ts")],
+  });
+
+  // Each case names the guard that must refuse it, so deleting a guard turns its case red
+  // (REVIEW-3918-042).
+  const labelled = (filename, code) => ({
+    filename,
+    code,
+    labels: [{ span: { line: 1, column: 1 } }],
+  });
+  it.each([
+    ["no receipt", [], 0, "incomplete-parser-visitation"],
+    ["a missing receipt", [receipt("a.ts")], 0, "incomplete-parser-visitation"],
+    [
+      "a duplicate receipt",
       [receipt("a.ts"), receipt("a.ts"), receipt("b.ts")],
+      0,
+      "incomplete-parser-visitation",
+    ],
+    [
+      "a receipt for an unscanned file",
       [receipt("a.ts"), receipt("b.ts"), receipt("extra.ts")],
+      0,
+      "unknown-diagnostic",
+    ],
+    [
+      "a diagnostic without a label",
       [receipt("a.ts"), receipt("b.ts"), { filename: "a.ts", code: "unexpected(error)" }],
-    ]) {
-      expect(() => validateNativeResult("/repo", files, result(entries))).toThrow();
-    }
-    expect(() => validateNativeResult("/repo", files, result([], 2))).toThrow();
-    expect(() => validateNativeResult("/repo", [], result([]))).toThrow();
+      1,
+      "unknown-diagnostic",
+    ],
+    [
+      "a labelled diagnostic of a rule outside the policy",
+      [receipt("a.ts"), receipt("b.ts"), labelled("a.ts", "eslint(no-debugger)")],
+      1,
+      "unknown-diagnostic",
+    ],
+    [
+      "a diagnostic code without a plugin",
+      [receipt("a.ts"), receipt("b.ts"), labelled("a.ts", "parser/error")],
+      1,
+      "unknown-diagnostic",
+    ],
+    ["a non-string filename", [{ ...receipt("a.ts"), filename: 12 }], 0, "unknown-diagnostic"],
+    ["an unexpected exit status", [], 2, "runner-execution-failed"],
+    [
+      "a policy finding with exit status 0",
+      [receipt("a.ts"), receipt("b.ts"), labelled("a.ts", "anti-slop(no-reflect-apply)")],
+      0,
+      "runner-exit-mismatch",
+    ],
+    [
+      "exit status 1 without a finding",
+      [receipt("a.ts"), receipt("b.ts")],
+      1,
+      "runner-exit-mismatch",
+    ],
+  ])("rejects %s", (_case, entries, status, reason) => {
+    const files = [{ path: "a.ts" }, { path: "b.ts" }];
+    expect(() => validateNativeResult("/repo", files, result(entries, status))).toThrow(reason);
+  });
+
+  it("rejects an empty scan, standard error output and a report without diagnostics", () => {
+    const files = [{ path: "a.ts" }];
+    expect(() => validateNativeResult("/repo", [], result([]))).toThrow(
+      "incomplete-parser-visitation",
+    );
     expect(() =>
       validateNativeResult("/repo", files, { status: 0, stderr: "warning", stdout: "{}" }),
-    ).toThrow();
+    ).toThrow("runner-execution-failed");
     expect(() =>
       validateNativeResult("/repo", files, { status: 0, stderr: "", stdout: "{}" }),
-    ).toThrow();
-    expect(() =>
-      validateNativeResult("/repo", files, result([{ ...receipt("a.ts"), filename: 12 }])),
-    ).toThrow();
-    expect(() =>
-      validateNativeResult("/repo", files, result([{ filename: "a.ts", code: "parser/error" }])),
-    ).toThrow();
+    ).toThrow("invalid-runner-report");
   });
 
   it("batches Windows command lines without duplicate or missing files", () => {

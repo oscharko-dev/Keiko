@@ -1,9 +1,9 @@
-import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { fixtureGit } from "./support/code-quality-fixture.mjs";
 import {
   compareRegister,
   countRegisterFindings,
@@ -402,22 +402,7 @@ describe("code-quality register review against the base commit (#4145)", () => {
 
 function fixtureRepository() {
   const root = mkdtempSync(join(tmpdir(), "keiko-register-review-"));
-  const git = (args) =>
-    execFileSync(
-      "git",
-      [
-        "-C",
-        root,
-        "-c",
-        "user.name=Fixture",
-        "-c",
-        "user.email=fixture@example.invalid",
-        "-c",
-        "commit.gpgsign=false",
-        ...args,
-      ],
-      { encoding: "utf8" },
-    ).trim();
+  const git = (args) => fixtureGit(root, args, { encoding: "utf8", stdio: "pipe" }).trim();
   git(["init", "--quiet"]);
   mkdirSync(join(root, "scripts"));
   const commit = (files, message) => {

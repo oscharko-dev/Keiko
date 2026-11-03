@@ -1,9 +1,17 @@
 import { Buffer } from "node:buffer";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, symlinkSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  writeFileSync,
+  unlinkSync,
+  symlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   collectPolicyInventory,
   policyDigest,
@@ -16,7 +24,10 @@ import { collectWorkspacePackages } from "../workspace-graph.mjs";
 import { fileURLToPath, URL } from "node:url";
 
 import {
+  buildFixtureRoot,
   createPolicyFixtureRepository,
+  FIXTURE_GIT_CONFIG,
+  fixtureGit,
   fixtureOwnedPolicy,
   copyNativePolicyFixtureSources,
 } from "./support/code-quality-fixture.mjs";
@@ -30,7 +41,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 const { execFileSync: actualExecFileSync } = await vi.importActual("node:child_process");
 
 const roots = [];
+// The inventory's own Git calls inherit the environment; keep the developer's configuration out.
+beforeEach(() => {
+  for (const [name, value] of Object.entries(FIXTURE_GIT_CONFIG)) vi.stubEnv(name, value);
+});
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.mocked(execFileSync).mockReset();
   vi.mocked(execFileSync).mockImplementation(actualExecFileSync);
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
@@ -40,6 +56,35 @@ function trackedRepository() {
   roots.push(root);
   return root;
 }
+
+describe("hermetic fixture repositories (REVIEW-3918-044)", () => {
+  it("ignores a hostile global Git configuration", () => {
+    const hostile = mkdtempSync(join(tmpdir(), "keiko-hostile-git-"));
+    roots.push(hostile);
+    mkdirSync(join(hostile, "hooks"));
+    writeFileSync(join(hostile, "hooks/pre-commit"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    writeFileSync(join(hostile, "excludes"), "*.ts\n");
+    const config = join(hostile, "gitconfig");
+    writeFileSync(
+      config,
+      `[core]\n\thooksPath = ${join(hostile, "hooks")}\n\texcludesFile = ${join(hostile, "excludes")}\n`,
+    );
+    vi.stubEnv("GIT_CONFIG_GLOBAL", config);
+    const root = trackedRepository();
+    expect(policyMembership.collectPolicyPaths(root)).toContain("packages/alpha/src/index.ts");
+  });
+
+  it("removes a fixture root whose construction throws", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-fixture-build-"));
+    roots.push(root);
+    expect(() =>
+      buildFixtureRoot(root, () => {
+        throw new TypeError("fixture-build-failed");
+      }),
+    ).toThrow("fixture-build-failed");
+    expect(existsSync(root)).toBe(false);
+  });
+});
 
 describe("actual tracked/build/workspace inventory (#3915)", () => {
   it("reconciles the actual built workspace public surface with its full source inventory", async () => {
@@ -271,22 +316,8 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     const baseline = fixtureOwnedPolicy([responsibilityRecord()]);
     const commit = (value) => {
       writeFileSync(join(root, "scripts/code-quality-policy.json"), JSON.stringify(value));
-      execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
-      execFileSync(
-        "git",
-        [
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "commit",
-          "-m",
-          "Record responsibility history",
-        ],
-        { cwd: root, stdio: "ignore" },
-      );
+      fixtureGit(root, ["add", "."]);
+      fixtureGit(root, ["commit", "-m", "Record responsibility history"]);
     };
     commit(baseline);
     const removed = fixtureOwnedPolicy();
@@ -321,22 +352,8 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     active.rules.find((rule) => rule.id === id).activeScopes = [scope];
     const commit = (value) => {
       writeFileSync(join(root, "scripts/code-quality-policy.json"), JSON.stringify(value));
-      execFileSync("git", ["add", "."], { cwd: root, stdio: "ignore" });
-      execFileSync(
-        "git",
-        [
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          "commit",
-          "-m",
-          "Record policy fixture",
-        ],
-        { cwd: root, stdio: "ignore" },
-      );
+      fixtureGit(root, ["add", "."]);
+      fixtureGit(root, ["commit", "-m", "Record policy fixture"]);
     };
     commit(active);
     commit(policy);
@@ -350,19 +367,7 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     const policy = fixtureOwnedPolicy();
     mkdirSync(join(root, "scripts"));
     const git = (args) =>
-      execFileSync(
-        "git",
-        [
-          "-c",
-          "user.name=Fixture",
-          "-c",
-          "user.email=fixture@example.invalid",
-          "-c",
-          "commit.gpgsign=false",
-          ...args,
-        ],
-        { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-      ).trim();
+      fixtureGit(root, args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
     const commit = (value) => {
       writeFileSync(join(root, "scripts/code-quality-policy.json"), JSON.stringify(value));
       git(["add", "."]);
@@ -398,9 +403,7 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     expect(readPreviousPolicies(original)).toEqual([]);
     const shallow = mkdtempSync(join(tmpdir(), "keiko-policy-shallow-"));
     roots.push(shallow);
-    execFileSync("git", ["clone", "--no-local", "--depth=1", original, shallow], {
-      stdio: "ignore",
-    });
+    fixtureGit(shallow, ["clone", "--no-local", "--depth=1", original, shallow]);
     expect(() => readPreviousPolicies(shallow)).toThrow("incomplete-policy-history");
   });
 });
@@ -453,7 +456,7 @@ describe("policy digest byte identity (#3918)", () => {
 });
 
 function membershipGit(root, args, input) {
-  return execFileSync("git", args, { cwd: root, encoding: "utf8", input });
+  return fixtureGit(root, args, { encoding: "utf8", input, stdio: "pipe" });
 }
 
 function expectMembershipParity(root) {
@@ -531,6 +534,8 @@ describe("fresh paths-only actual Git membership (#3918)", () => {
     membershipGit(root, ["init", "--initial-branch=fixture"]);
     expect(expectMembershipParity(root).paths).toEqual([]);
     rmSync(join(root, ".git"), { recursive: true });
+    // Without a ceiling, a temporary directory inside a work tree would find that parent repository.
+    vi.stubEnv("GIT_CEILING_DIRECTORIES", dirname(root));
     expect(() => policyMembership.collectPolicyMembership(root)).toThrow();
     expect(() => policyMembership.collectPolicyPaths(root)).toThrow();
   });

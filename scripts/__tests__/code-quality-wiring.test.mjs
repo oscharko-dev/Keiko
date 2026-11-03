@@ -36,6 +36,7 @@ import {
   configureEnforcingPolicyFixture,
   createPolicyFixtureRepository,
   createRuntimePolicyFixture,
+  fixtureGit,
   fixtureOwnedPolicy,
 } from "./support/code-quality-fixture.mjs";
 
@@ -1520,7 +1521,7 @@ function writeReturnedOwner(root, leaf, tracked) {
   const path = `native/opencode-service-host/${leaf}`;
   mkdirSync(join(root, "native/opencode-service-host"), { recursive: true });
   writeFileSync(join(root, path), "export const marker = 1;\n");
-  if (tracked) execFileSync("git", ["add", "--", path], { cwd: root, stdio: "ignore" });
+  if (tracked) fixtureGit(root, ["add", "--", path]);
   return path;
 }
 

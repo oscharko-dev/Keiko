@@ -210,13 +210,23 @@ function compilerHost(state, config) {
   const read = host.readFile;
   host.readFile = (absolute) => {
     assertOpen(state);
-    const text = read(absolute);
-    if (text === undefined) return undefined;
+    if (!host.fileExists(absolute)) return undefined;
     const path = relative(state.subject.root, absolute).replaceAll("\\", "/");
     if (state.inputs.has(path) || state.subject.outputs.has(path)) return readOwned(state, path);
-    return snapshot(state, absolute, text);
+    return snapshotHostText(state, absolute, read);
   };
   return host;
+}
+
+// TypeScript's reader decodes a UTF-8 byte-order mark away, while the currentness check reads the
+// file's own bytes. The snapshot keeps those bytes, and TypeScript receives the same read without
+// the mark (REVIEW-3918-052). A UTF-16 file keeps TypeScript's own decoding.
+function snapshotHostText(state, absolute, read) {
+  const bytes = readFileSync(absolute);
+  const raw = snapshot(state, absolute, bytes.toString("utf8"));
+  if ((bytes[0] === 0xfe && bytes[1] === 0xff) || (bytes[0] === 0xff && bytes[1] === 0xfe))
+    return read(absolute);
+  return raw.startsWith("\uFEFF") ? raw.slice(1) : raw;
 }
 
 function resolveModule(state, source, specifier, config, mode) {

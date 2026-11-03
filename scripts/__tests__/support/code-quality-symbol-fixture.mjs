@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { nativeCompilerExecutable } from "../../lib/code-quality-provenance.mjs";
 import ts from "typescript";
 import {
+  buildFixtureRoot,
   fixtureOwnedPolicy,
   copyNativePolicyFixtureSources,
   createPolicyFixtureRepository,
@@ -15,6 +16,12 @@ export function createSymbolFixture(
   additionalOwners = [],
 ) {
   const root = createPolicyFixtureRepository();
+  return buildFixtureRoot(root, () =>
+    populateSymbolFixture(root, includeNativeHost, prepare, additionalOwners),
+  );
+}
+
+function populateSymbolFixture(root, includeNativeHost, prepare, additionalOwners) {
   if (includeNativeHost) copyNativePolicyFixtureSources(root);
   const put = (path, value) => {
     mkdirSync(join(root, path, ".."), { recursive: true });

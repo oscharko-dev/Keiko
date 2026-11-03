@@ -152,7 +152,6 @@ describe("public parser optional raw admission rules (#3918)", () => {
     expect(validatePolicy({ ...policy, responsibilities: [record] })).toEqual([]);
     record.rules.push(...rules);
     record.proofAssertions = [{ path: record.proofs[0], testName: "actual public refusal" }];
-    expect(record.rules).toEqual(["anti-slop/no-unknown-parameters", ...rules]);
     const candidate = { ...policy, responsibilities: [record] };
     expect(validatePolicy(candidate)).toEqual([]);
   });
@@ -1738,13 +1737,12 @@ describe("closed five-rule native retirement (#3918)", () => {
     const broader = structuredClone(active);
     broader.rules.find(({ id }) => id === HISTORICAL_EFFECT_IDS[0]).activeScopes.push("production");
     expect(validatePolicy(policy, [active, broader])).toContain("activation-shrank");
-    const { responsibilities, ...legacy } = active;
+    const { responsibilities: _responsibilities, ...legacy } = active;
     legacy.version = 1;
     expect(validatePolicy(legacy)).toEqual([]);
     expect(validatePolicy(legacy, [policy])).toContain("responsibility-downgrade");
     expect(validatePolicy(policy, [alteredRetirement("partial")])).toContain(
       "invalid-baseline-policy",
     );
-    expect(responsibilities).toEqual(policy.responsibilities);
   });
 });

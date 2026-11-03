@@ -1,13 +1,57 @@
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import ts from "typescript";
 import { URL } from "node:url";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { NATIVE_EFFECT_RULES } from "../../lib/code-quality-policy.mjs";
+
+// Fixture Git ignores the developer's global and system configuration (hooks, excludes, signing)
+// and never climbs into a repository above the temporary root (REVIEW-3918-044).
+export const FIXTURE_GIT_CONFIG = { GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" };
+
+export function fixtureGit(root, args, options = {}) {
+  return execFileSync(
+    "git",
+    [
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "-c",
+      "commit.gpgsign=false",
+      ...args,
+    ],
+    {
+      cwd: root,
+      stdio: "ignore",
+      ...options,
+      env: { ...process.env, ...FIXTURE_GIT_CONFIG, GIT_CEILING_DIRECTORIES: dirname(root) },
+    },
+  );
+}
+
+// Removes a fixture root whose construction throws; callers register it for cleanup on success.
+export function buildFixtureRoot(root, build) {
+  let built = false;
+  try {
+    const value = build();
+    built = true;
+    return value;
+  } finally {
+    if (!built) rmSync(root, { recursive: true, force: true });
+  }
+}
 
 export function createPolicyFixtureRepository() {
   const root = mkdtempSync(join(tmpdir(), "keiko-policy-inventory-"));
+  return buildFixtureRoot(root, () => {
+    populatePolicyFixtureRepository(root);
+    return root;
+  });
+}
+
+function populatePolicyFixtureRepository(root) {
   mkdirSync(join(root, "packages/alpha/src"), { recursive: true });
   for (const [path, value] of Object.entries({
     "package.json": { name: "fixture", workspaces: ["packages/*"] },
@@ -22,25 +66,20 @@ export function createPolicyFixtureRepository() {
   }))
     writeFileSync(join(root, path), JSON.stringify(value));
   writeFileSync(join(root, "packages/alpha/src/index.ts"), "export const value = 1;");
-  const git = (args) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
-  git(["init", "--initial-branch=fixture"]);
-  git(["add", "."]);
-  git([
-    "-c",
-    "user.name=Fixture",
-    "-c",
-    "user.email=fixture@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-m",
-    "Create hermetic policy inventory",
-  ]);
-  return root;
+  fixtureGit(root, ["init", "--initial-branch=fixture"]);
+  fixtureGit(root, ["add", "."]);
+  fixtureGit(root, ["commit", "-m", "Create hermetic policy inventory"]);
 }
 
 export function createRuntimePolicyFixture(helper, linkage = "runtime") {
   const root = createPolicyFixtureRepository();
+  return buildFixtureRoot(root, () => {
+    populateRuntimePolicyFixture(root, helper, linkage);
+    return root;
+  });
+}
+
+function populateRuntimePolicyFixture(root, helper, linkage) {
   configureRuntimeFixture(root);
   writeFileSync(
     join(root, "packages/alpha/package.json"),
@@ -68,7 +107,6 @@ export function createRuntimePolicyFixture(helper, linkage = "runtime") {
   emitRuntimeFixture(root);
   configureEnforcingPolicyFixture(root);
   writeFileSync(join(root, ".gitignore"), "**/dist/\n");
-  return root;
 }
 
 export function fixtureOwnedPolicy(records = [], owners = ["alpha"]) {

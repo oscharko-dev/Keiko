@@ -392,9 +392,32 @@ function assessRecord(subject, resolver, record, files) {
       proofs,
       slots,
     };
-  } catch {
-    return pendingRecord(record, "incomplete", ["unresolved-responsibility-facts"]);
+  } catch (error) {
+    return unresolvedRecord(record, error);
   }
+}
+
+// A budget or currentness refusal names its own cause. Another closed engine refusal is an
+// unresolved fact. Any other error is a defect and propagates (REVIEW-3918-053).
+const NAMED_REFUSALS = new Set([
+  "symbol-alias-budget",
+  "symbol-context-changed",
+  "symbol-emission-budget",
+  "symbol-membership-changed",
+  "symbol-module-facts-changed",
+  "symbol-node-budget",
+  "symbol-proof-context-changed",
+  "symbol-source-budget",
+  "symbol-subject-changed",
+]);
+const ENGINE_REFUSAL = /^[a-z0-9]+(?:-[a-z0-9]+)+$/u;
+
+function unresolvedRecord(record, error) {
+  if (!(error instanceof TypeError) || !ENGINE_REFUSAL.test(error.message)) throw error;
+  const reason = NAMED_REFUSALS.has(error.message)
+    ? error.message
+    : "unresolved-responsibility-facts";
+  return pendingRecord(record, "incomplete", [reason]);
 }
 
 function qualifiedAdaptationSlot(assessment, slot, assessments) {
