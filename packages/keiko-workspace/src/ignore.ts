@@ -58,16 +58,38 @@ export const isDenied: (relPath: string) => boolean = memoizeByStringKey(
   isDeniedUncached,
 );
 
+// Windows names one entry by spellings that differ from the stored name: an alternate data stream
+// suffix (`.env::$DATA`, `dir::$INDEX_ALLOCATION`) and trailing dots or spaces are removed by the
+// Win32 layer before the lookup, so `.env::$DATA` and `id_rsa.` open the denied file. The deny
+// decision therefore reads the name the filesystem would resolve, in addition to the spelling given.
+// The stripping applies on every host: a colon never occurs in a Windows entry name and stripping
+// only widens the denial, so a path moved between hosts keeps one verdict (W7 of #4068).
+function windowsResolvedName(lowerPart: string): string {
+  const colon = lowerPart.indexOf(":");
+  const withoutStream = colon === -1 ? lowerPart : lowerPart.slice(0, colon);
+  let end = withoutStream.length;
+  while (
+    end > 0 &&
+    (withoutStream.codePointAt(end - 1) === 46 || withoutStream.codePointAt(end - 1) === 32)
+  ) {
+    end -= 1;
+  }
+  return withoutStream.slice(0, end);
+}
+
+function isDeniedName(lower: string): boolean {
+  return PRECOMPILED_DENY_MATCHERS.some((matcher) => matcher.regex.test(lower));
+}
+
 function isDeniedUncached(relPath: string): boolean {
   for (const part of segments(relPath)) {
     const lower = part.toLowerCase();
-    if (lower === EXAMPLE_ENV) {
+    const resolved = windowsResolvedName(lower);
+    if (lower === EXAMPLE_ENV || resolved === EXAMPLE_ENV) {
       continue;
     }
-    for (const matcher of PRECOMPILED_DENY_MATCHERS) {
-      if (matcher.regex.test(lower)) {
-        return true;
-      }
+    if (isDeniedName(lower) || isDeniedName(resolved)) {
+      return true;
     }
   }
   return false;
