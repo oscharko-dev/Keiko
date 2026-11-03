@@ -41,12 +41,33 @@ export function prepareRuntimeGatewayProcessSandbox(
       },
       ...(gitExecutable === undefined ? {} : { gatewayChildExecutable: gitExecutable.path }),
       ...(policy.filesystem === undefined ? {} : { gatewayFilesystem: policy.filesystem }),
+      gatewayProfile: policy.profile,
+      ...(policy.egress === undefined ? {} : { gatewayEgress: policy.egress }),
     },
     input.availability,
     input.platform,
   );
   if (decision.kind !== "wrapped") throw new Error("runtime-gateway-confinement-unavailable");
   return decision;
+}
+
+/**
+ * Only the gateway profile admits Git through its process-exec allowlist, so only it needs an
+ * attested Git (ADR-0043 D16). The native profile has no exec allowlist: its shell runs the host's
+ * toolchains, Git included, from the system PATH. Attesting there only refused a run on a managed
+ * Mac whose Git is Xcode's in the admin-writable /Applications (customer, 1.3.4). Every backend
+ * that launches a confined runtime asks this one rule.
+ */
+export function runtimeProfileAttestsGit(profile: RuntimeGatewayConfinement["profile"]): boolean {
+  return profile !== "keiko-native";
+}
+
+function childExecutablePolicy(
+  profile: RuntimeGatewayConfinement["profile"],
+  git: AttestedDarwinGitExecutable | undefined,
+): "toolchain-inherited" | "namespace-inherited" | "runtime-and-attested-git-only" {
+  if (profile === "keiko-native") return "toolchain-inherited";
+  return git === undefined ? "namespace-inherited" : "runtime-and-attested-git-only";
 }
 
 export function recordRuntimeGatewayConfinementSpawned(
@@ -70,15 +91,23 @@ export function recordRuntimeGatewayConfinementSpawned(
         treeBindingId: policy.treeBindingId,
         profile: policy.profile,
         ...(parentLifetime === undefined ? {} : { parentLifetime }),
-        childExecutablePolicy:
-          git === undefined ? "namespace-inherited" : "runtime-and-attested-git-only",
+        childExecutablePolicy: childExecutablePolicy(policy.profile, git),
+        // Recorded for the native profile only: the kernel-enforced network disposition the run's
+        // mode selected (loopback-only below Full access, inherited at Full access).
+        ...(policy.egress === undefined ? {} : { egressDisposition: policy.egress }),
         ...(git === undefined ? {} : { childExecutableDigest: git.sha256 }),
         ...(git?.source === undefined ? {} : { childExecutableSource: git.source }),
         ...(policy.filesystem === undefined
           ? {}
           : {
-              filesystemPolicy: "native-root-union-v1",
-              workspaceAccess: "read-only-outside-private-state",
+              filesystemPolicy:
+                policy.filesystem.workspaceAccess === "read-write"
+                  ? "native-workspace-rw-v1"
+                  : "native-root-union-v1",
+              workspaceAccess:
+                policy.filesystem.workspaceAccess === "read-write"
+                  ? "read-write"
+                  : "read-only-outside-private-state",
               privateStateAccess: "read-write",
             }),
       },

@@ -1,0 +1,236 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded pending-window creation identity repair; original visible failure retained; not complete multi-browser/model-election, updater, retrieval or skill acceptance",
+  "publishedParent": "8399bd1aef7de7cc17f29cbbe90c3871f8c50e72",
+  "issues": [4040, 4043],
+  "repair": {
+    "owner": "Existing workspace config serializer and AppShell secure creation producer",
+    "behavior": "Retain the canonical secret-checked pending creation reference through serialize/parse; reuse secureRandomId with at most32 draws and existing structured client failure diagnostic; accepted binding clears pending identity",
+    "unchanged": [
+      "Durable UiStore request/project/model/title fingerprint",
+      "Strict parameter-conflict409 and fresh model/authority admission",
+      "Legacy stable window identity",
+      "Secret-shape heuristic, prompts and model budgets"
+    ]
+  },
+  "failureFirst": {
+    "persistenceAndMountedHosts": {
+      "failed": 2,
+      "passed": 197,
+      "logSha256": "55c9a28548140c19b5733d110f6d2ae509ad24b3fe4ce18d408fe26e0772e23f"
+    },
+    "producerDraws": {
+      "failed": 2,
+      "passed": 17,
+      "logSha256": "fd6aa4665690daf092e0f4f0c7772e3bdafbb0624282c572a1d20aa0ce1d92b4"
+    },
+    "retainedIntermediateFailures": [
+      "A new test used the nullable parsed-window result without narrowing; strict UI typecheck failed after transpiled tests passed. The final fixture explicitly narrows the result.",
+      "The first exhaustion fixture also returned the rejected UUID as a separately generated diagnostic correlation. It now supplies32 rejected candidate draws and a distinct valid correlation; the earlier failed assertion remains retained."
+    ]
+  },
+  "verification": {
+    "sourceFreezeSha256": "cb81d6a04c1dbe15c00142a846a6b7b113e5a94b410ba864b8e0d449d43f67d1",
+    "frozenFiles": 7,
+    "targetedUiPassed": 331,
+    "fullUi": {
+      "suites": 562,
+      "passed": 10824,
+      "existingSkipped": 1
+    },
+    "actualStoreAndHandlerPassed": 129,
+    "activityLogChecks": 7,
+    "actualBuiltUiAssets": 301,
+    "buildProvenanceSha256": "35cab3c86c80294a998e88ac3e2ae8d081a88d8e89d03938ec2f0ab8c904e616",
+    "commands": [
+      {
+        "label": "root-typecheck",
+        "exitCode": 0,
+        "receiptSha256": "85c596c7b5daddc01ae809b62b44a94d20853cb7f0d75af6dccb147003b663e3",
+        "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29",
+        "actualArgvSha256": "e7f1a6143601f8eaeebf1837c7854c14f118864f0568ad75956bdba45af9e92a",
+        "commandDisplay": ["npm", "run", "typecheck"]
+      },
+      {
+        "label": "ui-typecheck",
+        "exitCode": 0,
+        "receiptSha256": "4857b1a8804b2c0eff1946926df7724bd7cdf51bbd3801318bf8795fbbfd5871",
+        "logSha256": "bec09a74b9b71b5348d1fe72720400ca5afb55d241d0fcca59f0b7046c31fd4e",
+        "actualArgvSha256": "f79e6d897addfb1c231e4fc2cabc9d85981c589970dc65a1f2df3a4bf09438b9",
+        "commandDisplay": ["npm", "run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"]
+      },
+      {
+        "label": "ui-lint",
+        "exitCode": 0,
+        "receiptSha256": "b989bf20b3f71c834705922a27e1723cfb296e66cd571de0235b3e2d622910c1",
+        "logSha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382",
+        "actualArgvSha256": "7d0f19b49c9c4c138a0dfcd1afa21df0c3abb560791df71388f853fd1c0b0a82",
+        "commandDisplay": ["npm", "run", "lint", "--workspace", "@oscharko-dev/keiko-ui"]
+      },
+      {
+        "label": "ui-coverage",
+        "exitCode": 0,
+        "receiptSha256": "0f8e74ec70a794812157573ed7a525272a7c5458d9c574d5492323663e85b40c",
+        "logSha256": "062d067a729c734fbf3666d3c774b813859d6665224b3beb8eff2487ecb276c1",
+        "actualArgvSha256": "e880f51cb905d574a14f85de5bd6f39409d4684d8d85187d604aa61f1b9c5e89",
+        "commandDisplay": ["npm", "run", "test:coverage:ui"]
+      },
+      {
+        "label": "backend-intents",
+        "exitCode": 0,
+        "receiptSha256": "0fbefa7dfd8ea38fd334ebbe0486f25fed63efff2eadfbfb0d6f42f413d5ce41",
+        "logSha256": "4c29008f00e203bae302c2ed6b8aeeb77edde166fbbe2414be4b4272b5c27fb0",
+        "actualArgvSha256": "ea64b70322a66a1e1a33b0dea097689f42936eecacedc399a8f71ae653b92fcf",
+        "commandDisplay": [
+          "npm",
+          "test",
+          "--workspace",
+          "@oscharko-dev/keiko-server",
+          "--",
+          "src/store/chatCreationIntents.test.ts",
+          "src/desktop-chat-handlers.test.ts"
+        ]
+      },
+      {
+        "label": "ui-build",
+        "exitCode": 0,
+        "receiptSha256": "52eb3bb03cda60c2466c35cfb66d380bd1915c7cebe465fce3a45fe68d30ef18",
+        "logSha256": "97837c5db459d9d0feccfc500dd0631fb0643fdff2d93b6f6fe58e33555c4ec7",
+        "actualArgvSha256": "08565f972b8f4857026583696fd9f40c2a8257a6b3ffb61915398908849e4e41",
+        "commandDisplay": ["npm", "run", "build:ui"]
+      },
+      {
+        "label": "ui-i18n",
+        "exitCode": 0,
+        "receiptSha256": "4b72c24d120829147452c19f59eccc65cdfcab946fd1a6322b1f9bb3954a8d04",
+        "logSha256": "a01aa8beac1449616dd6c4ff209c6a83017fe83d2f6781eec831f6ada19dda8c",
+        "actualArgvSha256": "563531eccc015f72062b7d0312da5510b3b1f8d83a34807ac168ff8daab0fc2f",
+        "commandDisplay": ["npm", "run", "check:ui-i18n"]
+      },
+      {
+        "label": "editor-evidence",
+        "exitCode": 0,
+        "receiptSha256": "6bd3ebbe9bb2357c0c32a4028e609985ce8946d1ff8217f430aad10a6415b6b4",
+        "logSha256": "4fbebddfd6c8f111327a91d30fdbd65299f85a4d5e12d5f4c39c66ca5894097f",
+        "actualArgvSha256": "14c31ce503a46abc7fd13057f835216f5a2567d7917b0b3863a462dee555400c",
+        "commandDisplay": ["npm", "run", "check:editor-release-evidence"]
+      },
+      {
+        "label": "sonar",
+        "exitCode": 0,
+        "receiptSha256": "0f52afbfebbeea5daa6734e9145b6ecbcee1bccc9040f3e07c4a4767008b0401",
+        "logSha256": "7b90173f206349245aacac42da65af61b2a0b15d468fdab4b5eb7e453ab51fd1",
+        "actualArgvSha256": "d598681f5a5b021b5ccaff0e19e2789576751f13730c6e5edfaddfc2da7e3a94",
+        "commandDisplay": ["npm", "run", "gates:sonar"]
+      },
+      {
+        "label": "op-catalog",
+        "exitCode": 0,
+        "receiptSha256": "c60ea44ce669a29fa754402459a411a60fd380ad363674dc8d0aae711dd5fd7f",
+        "logSha256": "98b6a3c3452a5ad75edf44df17c2f64f040eb1e4c9dabde653394ef0f88a8282",
+        "actualArgvSha256": "33a07b64933d019c7d4794a59e8a07ea9d2ff5dcf9745a267a4b1be2e2dd42bd",
+        "commandDisplay": ["npm", "run", "generate:op-catalog"]
+      },
+      {
+        "label": "activity-log",
+        "exitCode": 0,
+        "receiptSha256": "4594cf04bcb7caed441d3138086e772901131690661b8f7f740d420bff5f2a59",
+        "logSha256": "f1ba46c88480ce8c0793ff17324389fb667650144457ac64acb722eb8669fe9a",
+        "actualArgvSha256": "9f4f66231ead682816af5a5fc71b7dfca5a8d7fa6555f426baa9fd78a0251e7f",
+        "commandDisplay": ["npm", "run", "check:activity-log"]
+      },
+      {
+        "label": "shellcheck",
+        "exitCode": 0,
+        "receiptSha256": "9e2c7acdc6b98921e6d50d1c278c9d9f93add4b45e15c4ee2c211777ec7142ce",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "actualArgvSha256": "ec535ad3a2c563e4e4201efd5d785704253934ec22b88abfac6ed6374e74d5bb",
+        "commandDisplay": [
+          "docker",
+          "run",
+          "--rm",
+          "--network",
+          "none",
+          "--read-only",
+          "--mount",
+          "type=bind,src=<owned-worktree>,dst=/repo,readonly",
+          "--workdir",
+          "/repo",
+          "koalaman/shellcheck@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d",
+          "-S",
+          "warning",
+          "scripts/check-linux-native-quality.sh"
+        ]
+      }
+    ],
+    "commandRedaction": "Display argv replaces the local checkout mount and tool executable path only; exact actual argv remains bound by private receipt and actualArgvSha256."
+  },
+  "independent": {
+    "classification": "Independent isolated exact producer, cfg sanitizer, restored-host ID expression and backend identity functions. Actual chat registry/descriptor entries and unchanged shared secret detector used; no app/browser/model/server/DB/shared build execution. Secondary automatic/explicit snapshot gap remains open.",
+    "beforePassed": 13,
+    "beforeTotal": 20,
+    "afterPassed": 20,
+    "afterTotal": 20,
+    "afterReceiptSha256": "6da94bfc44270f739623bfce1daf83db72b1d7aacfdd3b45ab1ae50954058b22",
+    "sourceFiles": [
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/AppShell.tsx",
+        "sha256": "27f924340cf7184475b249f522097e7d82910859ba5f2d69a418810946017f36"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspace-persistence.ts",
+        "sha256": "68ba02f672d7d36635d6f4453e12ba04d97b304396ad268d4e261ac083626fde"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/windows/WindowsRegistry.ts",
+        "sha256": "74bf565699ab127320187f58fa550ccea200ce4aa344c7fd8ff652d6a1f46de5"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/windows/descriptor-meta.ts",
+        "sha256": "0e97b7273244ca675022f63bfafffe5ed623c919d1360d3a326fab4c7f1d1e71"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/hooks/isSecretShapedString.ts",
+        "sha256": "3936123fc3939e9aeb85ce16c820a694900dd040cebab6fe996cb7170b23d46d"
+      },
+      {
+        "path": "packages/keiko-ui/src/lib/secure-random.ts",
+        "sha256": "a4785ff65bfe56098e9f5dac140854e989c9b58eff73b8807830bd2a7f2a91b3"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx",
+        "sha256": "8fd8f0b613f142067caabdd57cf0aa575db29dd3c42669e091b7198bb7c7b199"
+      },
+      {
+        "path": "packages/keiko-contracts/src/bff-wire.ts",
+        "sha256": "1044ec272f8a23da9ad11c1ff4ea40f6c0ad2aa9d14e3f55ed0bf2648862731a"
+      },
+      {
+        "path": "packages/keiko-server/src/store/chatCreationIntents.ts",
+        "sha256": "405257c3d6307d5ce46b80ea2a616d0ffcc6afbede071ccea19e2429c3208e17"
+      }
+    ],
+    "limitation": "Isolated exact-function controls; no browser, model, shared build or installed updater qualification"
+  },
+  "originalVisibleFailure": {
+    "sourceHead": "8399bd1aef7de7cc17f29cbbe90c3871f8c50e72",
+    "uiCreationActions": 1,
+    "acceptedChats": 2,
+    "taskQuestions": 0,
+    "modelTaskDispatches": 0,
+    "automaticReadinessRequests": 6,
+    "displayedOutcome": "Chat not found",
+    "cleanup": {
+      "drain": "fulfilled",
+      "close": "fulfilled"
+    },
+    "terminalManifestSha256": "533e52f08b0081b6b95681272a507b142c5e49bcd1ab7eb4bfd1a2fa2be6f226",
+    "limitation": "Initial request bodies were not captured; observed rows support separately labelled read-only automatic/null versus explicit reconstruction, not new acceptance scoring The two actual create requests are not attributed to distinct browser sessions; original/restored-host identity loss is independently reproduced."
+  },
+  "remaining": [
+    "Snapshot the originating automatic/explicit model choice through the existing coordinator before full independent-browser acceptance; reject incomplete unsafe snapshots before acceptance and keep strict backend409.",
+    "Repeat current built UI creation and grounded response survival across independent browser workspace replays.",
+    "Complete updater/native production ownership, installed versions/recovery/SSD, browser/search/compaction, both skill profiles and untouched tasks.",
+    "Final local and exact-head hosted checks, every review conversation, authorized successful dev merge, then issue closure."
+  ]
+}

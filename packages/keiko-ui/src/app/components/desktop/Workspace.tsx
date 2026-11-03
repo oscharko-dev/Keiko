@@ -25,7 +25,7 @@ import {
   isTextInputTarget,
   workspaceInteractionLocked,
 } from "./interactionGuards";
-import { WindowFrame } from "./windows/WindowFrame";
+import { createWindowChunkFallback } from "./widgets/WindowChunkFallback";
 import { KNOWLEDGE_CONNECTOR_NODE_SIZE, localizedWindowTitle } from "./windows/WindowsRegistry";
 import { canConnect, relLabel } from "./windows/connectionUtils";
 import type { AppWindow, ConnState, ConnectingState, Connection, SnapPrev } from "./windows/types";
@@ -37,38 +37,57 @@ import type {
 } from "./hooks/useWorkspace.types";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
   parseLocalKnowledgeConnectorDrag,
+  isLocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDragPayload,
   type LocalKnowledgeConnectorDropDetail,
 } from "../../local-knowledge/connector-drag";
 import {
   FIGMA_VIEW_DROP_EVENT,
+  FIGMA_VIEW_DRAG_TYPE,
   parseFigmaViewDrag,
   type FigmaViewDragPayload,
   type FigmaViewDropDetail,
 } from "./figma-view-drag";
 import {
   FIGMA_JSON_DROP_EVENT,
+  FIGMA_JSON_DRAG_TYPE,
   parseFigmaJsonDrag,
   type FigmaJsonDragPayload,
   type FigmaJsonDropDetail,
 } from "./figma-json-drag";
 import {
   FIGMA_IMAGE_DROP_EVENT,
+  FIGMA_IMAGE_DRAG_TYPE,
   parseFigmaImageDrag,
   type FigmaImageDragPayload,
   type FigmaImageDropDetail,
 } from "./figma-image-drag";
 import { isWorkspaceWindowSelectable } from "./hooks/workspaceActions";
-import { syncPdfCitationPreviewWindowRegistry } from "./widgets/cards/pdf-citation-preview-session";
+import { syncDeferredPdfPreviewWorkspace } from "./widgets/cards/pdf-citation-preview-workspace";
 import selectionStyles from "./WorkspaceSelection.module.css";
+import controlStyles from "./WorkspaceControls.module.css";
 import clipboardStatusStyles from "./WorkspaceClipboardStatus.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
+const WORKSPACE_DRAG_TYPES: ReadonlySet<string> = new Set([
+  LOCAL_KNOWLEDGE_CONNECTOR_DRAG_TYPE,
+  FIGMA_VIEW_DRAG_TYPE,
+  FIGMA_JSON_DRAG_TYPE,
+  FIGMA_IMAGE_DRAG_TYPE,
+]);
+
 const ZoomOutIcon = Icons.zoomOut;
 const ExpandIcon = Icons.expand;
 const ZoomInIcon = Icons.zoomIn;
 const AddIcon = Icons.add;
+
+// Window chrome is only needed when a window exists; keep the empty canvas interactive first.
+const WindowFrame = dynamic(
+  () => import("./windows/WindowFrame").then((module) => module.WindowFrame),
+  { ssr: false, loading: createWindowChunkFallback("window chunk") },
+);
 
 // Load connection geometry independently of the initial desktop shell.
 const ConnectionsLayer = dynamic(
@@ -123,64 +142,50 @@ export function workspaceDropPointToWindowOrigin({
   };
 }
 
+function workspaceDropPayload(detail: unknown): Record<string, unknown> | undefined {
+  if (typeof detail !== "object" || detail === null) return undefined;
+  const record = detail as Record<string, unknown>;
+  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number")
+    return undefined;
+  const payload = record["payload"];
+  return typeof payload === "object" && payload !== null
+    ? (payload as Record<string, unknown>)
+    : undefined;
+}
+
 function isLocalKnowledgeConnectorDropDetail(
   detail: unknown,
 ): detail is LocalKnowledgeConnectorDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
-  const kind = payloadRecord["kind"];
-  return (kind === "capsule" || kind === "capsule-set") && typeof payloadRecord["id"] === "string";
+  return isLocalKnowledgeConnectorDragPayload(workspaceDropPayload(detail));
+}
+
+function isFigmaViewPayload(payload: Record<string, unknown> | undefined): boolean {
+  return (
+    payload !== undefined &&
+    typeof payload["snapshotRunId"] === "string" &&
+    typeof payload["screenId"] === "string" &&
+    typeof payload["name"] === "string"
+  );
 }
 
 function isFigmaViewDropDetail(detail: unknown): detail is FigmaViewDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
+  return isFigmaViewPayload(workspaceDropPayload(detail));
+}
+
+function isFigmaJsonPayload(payload: Record<string, unknown> | undefined): boolean {
   return (
-    typeof payloadRecord["snapshotRunId"] === "string" &&
-    typeof payloadRecord["screenId"] === "string" &&
-    typeof payloadRecord["name"] === "string"
+    isFigmaViewPayload(payload) &&
+    (payload?.["sourceWindowId"] === undefined || typeof payload["sourceWindowId"] === "string")
   );
 }
 
 function isFigmaJsonDropDetail(detail: unknown): detail is FigmaJsonDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
-  return (
-    typeof payloadRecord["snapshotRunId"] === "string" &&
-    typeof payloadRecord["screenId"] === "string" &&
-    typeof payloadRecord["name"] === "string" &&
-    (payloadRecord["sourceWindowId"] === undefined ||
-      typeof payloadRecord["sourceWindowId"] === "string")
-  );
+  return isFigmaJsonPayload(workspaceDropPayload(detail));
 }
 
 function isFigmaImageDropDetail(detail: unknown): detail is FigmaImageDropDetail {
-  if (typeof detail !== "object" || detail === null) return false;
-  const record = detail as Record<string, unknown>;
-  const payload = record["payload"];
-  if (typeof record["clientX"] !== "number" || typeof record["clientY"] !== "number") return false;
-  if (typeof payload !== "object" || payload === null) return false;
-  const payloadRecord = payload as Record<string, unknown>;
-  return (
-    typeof payloadRecord["snapshotRunId"] === "string" &&
-    typeof payloadRecord["screenId"] === "string" &&
-    typeof payloadRecord["name"] === "string" &&
-    typeof payloadRecord["imageSrc"] === "string" &&
-    (payloadRecord["sourceWindowId"] === undefined ||
-      typeof payloadRecord["sourceWindowId"] === "string")
-  );
+  const payload = workspaceDropPayload(detail);
+  return isFigmaJsonPayload(payload) && typeof payload?.["imageSrc"] === "string";
 }
 
 // Step the view zoom by ±0.2, snapping onto 100% when a step would jump across
@@ -892,18 +897,23 @@ function WorkspaceScene({
       ) : null}
       {wins !== null
         ? wins.map((w) => (
-            <WindowFrame
+            <div
               key={w.id}
-              win={w}
-              top={top !== null && w.id === top.id}
-              connState={connStateById.get(w.id) ?? null}
-              api={api}
-              wsRef={wsRef}
-              linkRevision={linkRevision}
-              layoutLocked={layoutLocked}
-              selected={selectedWindowIds.has(w.id)}
-              selectedWindowCount={selectedWindowIds.size}
-            />
+              hidden={w.minimized === true}
+              style={{ display: w.minimized === true ? "none" : "contents" }}
+            >
+              <WindowFrame
+                win={w}
+                top={top !== null && w.id === top.id}
+                connState={connStateById.get(w.id) ?? null}
+                api={api}
+                wsRef={wsRef}
+                linkRevision={linkRevision}
+                layoutLocked={layoutLocked}
+                selected={selectedWindowIds.has(w.id)}
+                selectedWindowCount={selectedWindowIds.size}
+              />
+            </div>
           ))
         : null}
       {/* Selection rings render as sibling overlays on their own window's z-layer
@@ -1437,19 +1447,14 @@ export function Workspace({
     [wins],
   );
   useEffect(() => {
-    syncPdfCitationPreviewWindowRegistry(wins);
+    return syncDeferredPdfPreviewWorkspace(wins);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- winMembershipSignature is the stable membership key; wins is read fresh
   }, [winMembershipSignature]);
 
   const onDragOver = (event: ReactDragEvent<HTMLDivElement>): void => {
-    if (
-      parseLocalKnowledgeConnectorDrag(event.dataTransfer) === null &&
-      parseFigmaViewDrag(event.dataTransfer) === null &&
-      parseFigmaJsonDrag(event.dataTransfer) === null &&
-      parseFigmaImageDrag(event.dataTransfer) === null
-    ) {
+    // Browsers protect payload data during dragover; only drop can validate its contents.
+    if (!Array.from(event.dataTransfer.types).some((type) => WORKSPACE_DRAG_TYPES.has(type)))
       return;
-    }
     event.preventDefault();
     event.dataTransfer.dropEffect = "copy";
   };
@@ -1498,11 +1503,15 @@ export function Workspace({
     handTool,
     marquee,
   });
+  const openWindowPalette = (): void => {
+    reportClientDiagnostic("Workspace window palette opened.");
+    openPalette();
+  };
 
   /* eslint-disable jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/no-noninteractive-tabindex -- the workspace landmark is also the OS-style drop target for connector payloads (interactions) and requires tabIndex={0} for WCAG 2.1.1 keyboard pan (WC-01). */
   return (
     <main
-      className={`workspace ${selectionStyles.cmpWorkspaceSurface}`}
+      className={`workspace ${selectionStyles.cmpWorkspaceSurface} ${controlStyles.cmpWorkspaceViewport}`}
       data-layout-locked={layoutLocked ? "true" : undefined}
       ref={wsRef}
       aria-label={t("workspace.surface")}
@@ -1539,7 +1548,7 @@ export function Workspace({
       </p>
       <WorkspaceClipboardStatusView status={clipboardStatus} />
       <WorkspaceConnectHint connecting={connecting} t={t} />
-      <WorkspaceEmptyState empty={empty} onNewWindow={openPalette} />
+      <WorkspaceEmptyState empty={empty} onNewWindow={openWindowPalette} />
 
       <WorkspaceScene
         layoutLocked={layoutLocked}
@@ -1557,7 +1566,7 @@ export function Workspace({
         selectedWindowIds={selectedWindowIds}
       />
 
-      <div className="ws-zoom">
+      <div className={`ws-zoom ${controlStyles.cmpWorkspaceControl}`}>
         <button
           type="button"
           className="ws-zoom-btn ui-tip cmp-tip-start"
@@ -1602,9 +1611,9 @@ export function Workspace({
 
       <button
         type="button"
-        className="ws-fab ui-tip cmp-tip-end"
+        className={`ws-fab ui-tip cmp-tip-end ${controlStyles.cmpWorkspaceControl}`}
         onPointerDown={(event) => event.stopPropagation()}
-        onClick={openPalette}
+        onClick={openWindowPalette}
         aria-label={t("workspace.newWindow")}
         data-tip={t("workspace.newWindow")}
       >

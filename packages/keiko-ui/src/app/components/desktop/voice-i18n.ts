@@ -26,9 +26,12 @@ const VOICE_EN_MESSAGES = {
     "The live dictation connection was interrupted. Try again to use standard dictation.",
   "voice.dictation.error.supportId": "Support ID: {correlationId}",
   "voice.dictation.error.failed": "Dictation could not be completed.",
+  "voice.dictation.error.draftTooLong":
+    "Your message is too long. Shorten it, then click the microphone to insert the retained dictation.",
   "voice.dictation.preparingMic": "Preparing mic…",
   "voice.dictation.capturing": "Capturing speech…",
   "voice.dictation.listening": "Listening…",
+  "voice.dictation.empty": "No speech was recognized. Click the microphone to try again.",
   "voice.dictation.preview": "Dictation transcript preview",
   "voice.dictation.ready": "Transcript ready for review.",
   "voice.dictation.review": "Review your dictation",
@@ -101,9 +104,13 @@ const VOICE_DE_MESSAGES: VoiceMessageCatalog = {
     "Die Live-Diktat-Verbindung wurde unterbrochen. Versuche es erneut, um das Standarddiktat zu verwenden.",
   "voice.dictation.error.supportId": "Support-ID: {correlationId}",
   "voice.dictation.error.failed": "Das Diktat konnte nicht abgeschlossen werden.",
+  "voice.dictation.error.draftTooLong":
+    "Deine Nachricht ist zu lang. Kürze sie und klicke dann auf das Mikrofon, um das aufbewahrte Diktat einzufügen.",
   "voice.dictation.preparingMic": "Mikrofon wird vorbereitet…",
   "voice.dictation.capturing": "Sprache wird erfasst…",
   "voice.dictation.listening": "Hört zu…",
+  "voice.dictation.empty":
+    "Keine Sprache erkannt. Klicke auf das Mikrofon, um es erneut zu versuchen.",
   "voice.dictation.preview": "Vorschau des Diktat-Transkripts",
   "voice.dictation.ready": "Transkript ist zur Prüfung bereit.",
   "voice.dictation.review": "Diktat prüfen",

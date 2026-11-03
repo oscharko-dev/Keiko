@@ -37,6 +37,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     "@oscharko-dev/keiko-connectors",
     ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
   ],
+  ["@oscharko-dev/keiko-mcp", ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"]],
   ["@oscharko-dev/keiko-contracts", []],
   [
     "@oscharko-dev/keiko-activity-log",
@@ -161,6 +162,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-contracts",
       "@oscharko-dev/keiko-git",
       "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-mcp",
       "@oscharko-dev/keiko-model-gateway",
       "@oscharko-dev/keiko-workspace",
       "@oscharko-dev/keiko-sandbox",

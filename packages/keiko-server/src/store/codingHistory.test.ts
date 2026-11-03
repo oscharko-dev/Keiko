@@ -279,3 +279,49 @@ describe("Coding History on the existing conversation store", () => {
     expect(history.list("a".repeat(64))).toHaveLength(0);
   });
 });
+
+describe("the skill a coding run's task turn is bound to (#4025)", () => {
+  const task = {
+    projectPath: "",
+    title: "Audit receipt",
+    modelId: "coding",
+    workspaceId: "ws_skill",
+    taskId: "task_skill",
+    branch: "keiko/task/skill",
+    operatorDigest: "a".repeat(64),
+  };
+  const upload = (body: string): { fileName: string; contentBase64: string } => ({
+    fileName: "audit.md",
+    contentBase64: Buffer.from(body).toString("base64"),
+  });
+
+  it("names each run's intent message, bound to the conversation's selection when the run began", () => {
+    const history = codingHistory();
+    const created = history.create({ ...task, projectPath: root });
+    const skill = store.markdownSkills.import(upload("# Method\nBound to the first run.\n"));
+    const selection = store.markdownSkills.select(created.id, skill, 0);
+    history.begin({
+      ...task,
+      projectPath: root,
+      conversationId: created.id,
+      runId: "run-a",
+      intent: "First.",
+    });
+    store.markdownSkills.select(created.id, null, selection.revision);
+    history.begin({
+      ...task,
+      projectPath: root,
+      conversationId: created.id,
+      runId: "run-b",
+      intent: "Second.",
+    });
+
+    const first = history.intentMessageId("run-a");
+    const second = history.intentMessageId("run-b");
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(store.markdownSkills.forTurn(first ?? "")?.digest).toBe(skill.digest);
+    expect(store.markdownSkills.forTurn(second ?? "")).toBeUndefined();
+    expect(history.intentMessageId("run-unknown")).toBeUndefined();
+  });
+});

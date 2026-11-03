@@ -7,10 +7,16 @@ export const OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 =
   "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6";
 export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
   "keiko-opencode-protocol-surface-v2" as const;
+/** The current pin's structural digest; per-version values live in `opencodeRuntimeVersions.ts`. */
 export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
-  "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b";
+  "941a87888e62c1b22bc9b4c6a8b7fbc6baacaa1c52dd47aa384248fc4fe8c857";
 
-const OPENCODE_V2_APPROVED_ENDPOINTS = [
+/**
+ * The admitted operations as `METHOD path`. The complete service inventory
+ * (`opencodeServiceInventory.ts`) derives its `admitted` disposition from this list instead of
+ * restating it.
+ */
+export const OPENCODE_V2_APPROVED_ENDPOINTS = [
   "GET /api/info",
   "GET /api/session",
   "POST /api/session",
@@ -18,12 +24,40 @@ const OPENCODE_V2_APPROVED_ENDPOINTS = [
   "GET /api/session/{sessionID}/message",
   "POST /api/session/{sessionID}/prompt",
   "POST /api/session/{sessionID}/interrupt",
+  "POST /api/session/{sessionID}/agent",
+  "GET /api/session/{sessionID}/diff",
+  "POST /api/session/{sessionID}/revert/stage",
+  "POST /api/session/{sessionID}/revert/commit",
+  "DELETE /api/session/{sessionID}/revert",
   "GET /api/permission/request",
   "POST /api/session/{sessionID}/permission/{requestID}/reply",
+  "GET /api/plugin",
   "GET /api/form",
   "POST /api/session/{sessionID}/form/{formID}/reply",
   "DELETE /api/session/{sessionID}/form/{formID}",
   "GET /api/event",
+  "GET /api/command",
+  "POST /api/session/{sessionID}/command",
+  // The subagents and skills a prompt may mention with `@` and `$` (S15, #3906).
+  "GET /api/agent",
+  "GET /api/skill",
+  "POST /api/session/{sessionID}/fork",
+  // #3903 AC4, #3902 AC3: Keiko moves a task's continued session into its run's new workspace.
+  "POST /api/session/{sessionID}/move",
+  "DELETE /api/session/{sessionID}",
+  "GET /api/session/{sessionID}/inbox",
+  "DELETE /api/session/{sessionID}/inbox/{inboxID}",
+  "PATCH /api/session/{sessionID}/inbox/{inboxID}",
+  // #3901 AC3: the run's background shell jobs keep it alive and are stopped with it.
+  "GET /api/shell",
+  "DELETE /api/shell/{id}",
+  // #3903 AC3: an admitted MCP server's status, the runtime's own OAuth authorization of it, and
+  // the seeding of the credential Keiko keeps between runs. Keiko never lists or reads credentials.
+  "GET /api/mcp",
+  "POST /api/integration/{integrationID}/connect/oauth",
+  "GET /api/integration/{integrationID}/connect/oauth/{attemptID}",
+  "DELETE /api/integration/{integrationID}/connect/oauth/{attemptID}",
+  "POST /api/credential",
 ] as const;
 
 export interface OpenCodeProtocolSurfaceProjection {

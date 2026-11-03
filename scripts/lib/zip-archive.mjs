@@ -18,7 +18,7 @@ import {
   statSync,
 } from "node:fs";
 import { dirname, join, sep } from "node:path";
-import { deflateRawSync, inflateRawSync } from "node:zlib";
+import { crc32, deflateRawSync, inflateRawSync } from "node:zlib";
 
 const LOCAL_FILE_HEADER = 0x04034b50;
 const CENTRAL_DIRECTORY_HEADER = 0x02014b50;
@@ -29,20 +29,6 @@ const ZIP_VERSION = 20;
 const UNIX_VERSION = (3 << 8) | ZIP_VERSION;
 const MAX_ZIP32 = 0xffffffff;
 const DOS_EPOCH_DATE = 0x0021;
-
-const CRC32_TABLE = Uint32Array.from({ length: 256 }, (_, index) => {
-  let value = index;
-  for (let bit = 0; bit < 8; bit += 1) {
-    value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0);
-  }
-  return value >>> 0;
-});
-
-function crc32(bytes) {
-  let value = 0xffffffff;
-  for (const byte of bytes) value = (value >>> 8) ^ CRC32_TABLE[(value ^ byte) & 0xff];
-  return (value ^ 0xffffffff) >>> 0;
-}
 
 function normalizedEntryName(name, allowUnsafeEntryNames) {
   const normalized = name.replaceAll("\\", "/").replace(/^\.\//u, "");
@@ -390,6 +376,68 @@ function assertZip32Directory(count, directoryOffset) {
   if (count === 0xffff || directoryOffset === 0xffffffff) {
     throw new Error("ZIP64 archives are not supported");
   }
+}
+
+/** Measures the finished archive's central directory without inflating its payload. */
+export function readZipArchiveUncompressedSize(archivePath) {
+  const fd = openSync(archivePath, "r");
+  try {
+    return uncompressedDirectorySize(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function expandedZipDirectory(fd) {
+  const size = fstatSync(fd).size;
+  const tailLength = Math.min(size, END_OF_CENTRAL_DIRECTORY_MIN_BYTES + 0xffff);
+  const tail = readAt(fd, size - tailLength, tailLength);
+  const end = endOfCentralDirectoryOffset(tail);
+  const count = tail.readUInt16LE(end + 10);
+  const directoryOffset = tail.readUInt32LE(end + 16);
+  const directorySize = tail.readUInt32LE(end + 12);
+  assertZip32Directory(count, directoryOffset);
+  if (
+    end + END_OF_CENTRAL_DIRECTORY_MIN_BYTES + tail.readUInt16LE(end + 20) !== tail.length ||
+    tail.readUInt16LE(end + 4) !== 0 ||
+    tail.readUInt16LE(end + 6) !== 0 ||
+    tail.readUInt16LE(end + 8) !== count
+  )
+    throw new Error("ZIP end record is incomplete or uses multiple disks");
+  if (
+    count > 60_000 ||
+    directorySize > 32 * 1024 * 1024 ||
+    directoryOffset + directorySize !== size - tailLength + end
+  ) {
+    throw new Error("ZIP central directory is malformed or exceeds the entry ceiling");
+  }
+  const directory = readAt(fd, directoryOffset, directorySize);
+  return { directory, count };
+}
+
+function uncompressedDirectorySize(fd) {
+  const { directory, count } = expandedZipDirectory(fd);
+  const directorySize = directory.length;
+  let offset = 0;
+  let expanded = 0;
+  for (let index = 0; index < count; index += 1) {
+    const entry = readCentralEntry(directory, offset);
+    if (
+      entry.next > directorySize ||
+      entry.size === 0xffffffff ||
+      entry.compressedSize === 0xffffffff ||
+      entry.localOffset === 0xffffffff
+    ) {
+      throw new Error("ZIP central directory entry is malformed or uses ZIP64");
+    }
+    expanded += entry.size;
+    if (expanded > 2 ** 31) throw new Error("ZIP expanded size exceeds the 2 GiB ceiling");
+    offset = entry.next;
+  }
+  if (offset !== directorySize || expanded === 0) {
+    throw new Error("ZIP central directory is incomplete or has no payload bytes");
+  }
+  return expanded;
 }
 
 /**

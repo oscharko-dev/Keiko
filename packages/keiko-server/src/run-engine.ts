@@ -42,12 +42,20 @@ import type { EvidenceReport } from "@oscharko-dev/keiko-evidence";
 import type { MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import type { RunRequest } from "./run-request.js";
+import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
+  agentRunAuthorityCurrent,
   agentRunGovernanceFingerprintProjection,
   createAgentRunBudgetedModelPort,
   createAgentRunBudgetedSpawn,
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
+import {
+  SelectedMarkdownSkillUnavailableError,
+  withSelectedMarkdownSkill,
+} from "./markdown-skill-admission.js";
+import type { MarkdownSkillStore } from "./store/markdownSkills.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { QueueEventSink } from "./sink.js";
 import {
   executeVerificationEnforced,
@@ -88,6 +96,8 @@ interface EngineContext {
   readonly model: ModelPort;
   readonly registry: RunRegistry;
   readonly governance?: AgentRunGovernanceBinding | undefined;
+  // The private skill library a run's selected skill (`request.markdownSkill`) resolves against.
+  readonly markdownSkills?: MarkdownSkillStore | undefined;
   // Where terminated runs persist their redacted evidence manifest (AC5). Optional so the 3-arg
   // engine-context form in older tests still compiles; persistence is simply skipped when absent.
   readonly evidence?: EvidencePersistContext | undefined;
@@ -195,6 +205,12 @@ function unitTestAppliable(
         payload: request.input,
         limits: request.limits,
         governedHandoff: request.governedHandoff,
+        markdownSkill: request.markdownSkill,
+        reviewedPatch: {
+          diff: report.proposedDiff,
+          coveredBehavior: report.coveredBehavior,
+          knownGaps: report.knownGaps,
+        },
       }
     : undefined;
 }
@@ -209,6 +225,8 @@ function bugAppliable(
         payload: request.input,
         limits: request.limits,
         governedHandoff: request.governedHandoff,
+        markdownSkill: request.markdownSkill,
+        reviewedPatch: { diff: report.proposedDiff, hypothesis: report.hypothesis },
       }
     : undefined;
 }
@@ -228,7 +246,10 @@ interface Dispatched {
   readonly cancel: (reason?: string) => void;
 }
 
-function governedWorkflowPorts(ctx: EngineContext): {
+function governedWorkflowPorts(
+  ctx: EngineContext,
+  runId: string,
+): {
   readonly model: ModelPort;
   readonly spawn?: typeof nodeSpawnFn | undefined;
 } {
@@ -238,10 +259,47 @@ function governedWorkflowPorts(ctx: EngineContext): {
     workspaceRoot: workspaceRoot(ctx.request),
     nowIso: (): string => new Date().toISOString(),
   };
+  const budgeted = createAgentRunBudgetedModelPort({ ...budgetInput, model: ctx.model });
   return {
-    model: createAgentRunBudgetedModelPort({ ...budgetInput, model: ctx.model }),
+    model: withRunSkill(budgeted, {
+      reference: ctx.request.markdownSkill,
+      library: ctx.markdownSkills,
+      governance: ctx.governance,
+      workspaceRoot: budgetInput.workspaceRoot,
+      runId,
+      workflow: ctx.request.kind === "unit-tests" ? "unit-tests" : "bug-investigation",
+    }),
     spawn: createAgentRunBudgetedSpawn({ ...budgetInput, spawn: nodeSpawnFn }),
   };
+}
+
+/**
+ * The run's selected skill around its budgeted model port (#4025 AC1): outside the budget, so the
+ * instructions are counted with the prompt, and asking the run's own authority for every attempt.
+ * A run bound to a skill without the library to resolve it fails closed.
+ */
+function withRunSkill(
+  model: ModelPort,
+  input: {
+    readonly reference: MarkdownSkillReference | undefined;
+    readonly library: MarkdownSkillStore | undefined;
+    readonly governance: AgentRunGovernanceBinding;
+    readonly workspaceRoot: string;
+    readonly runId: string;
+    readonly workflow: "unit-tests" | "bug-investigation";
+  },
+): ModelPort {
+  const { reference, library, governance } = input;
+  if (reference === undefined) return model;
+  if (library === undefined) throw new SelectedMarkdownSkillUnavailableError();
+  return withSelectedMarkdownSkill(model, {
+    library,
+    reference,
+    authorityCurrent: () =>
+      agentRunAuthorityCurrent(governance, input.workspaceRoot, new Date().toISOString()),
+    runId: input.runId,
+    workflow: input.workflow,
+  });
 }
 
 function cancelWorkflow(controller: AbortController): (reason?: string) => void {
@@ -301,7 +359,7 @@ function dispatchWorkflowMemoryDeps(
 
 function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
   const controller = new AbortController();
-  const ports = governedWorkflowPorts(ctx);
+  const ports = governedWorkflowPorts(ctx, runId);
   // Probe THIS host for an enforcing egress backend and hand the answer to the verify stage, the
   // same probe-then-enforce composition the editor verification path uses (ADR-0043 D8). Threads
   // this dispatch's own runId (ADR-0173 D5 / g12) into a probe-failure diagnostic.
@@ -665,10 +723,46 @@ function attachEvidenceReport(
   };
 }
 
+// The apply's model: budgeted by the run's authority and carrying the dry run's skill, the same
+// revision, so the re-invoked generation is instructed as the reviewed one was. A snapshot bound to
+// a skill without the run's authority fails closed instead of applying without it.
+function applyExecutionModel(
+  snapshot: AppliableSnapshot,
+  model: ModelPort,
+  input: {
+    readonly governance: AgentRunGovernanceBinding | undefined;
+    readonly workspaceRoot: string;
+    readonly runId: string;
+    readonly markdownSkills: MarkdownSkillStore | undefined;
+  },
+): ModelPort {
+  const { governance } = input;
+  if (governance === undefined) {
+    if (snapshot.markdownSkill !== undefined) throw new SelectedMarkdownSkillUnavailableError();
+    return model;
+  }
+  const budgeted = createAgentRunBudgetedModelPort({
+    binding: governance,
+    workspaceRoot: input.workspaceRoot,
+    nowIso: (): string => new Date().toISOString(),
+    model,
+  });
+  return withRunSkill(budgeted, {
+    reference: snapshot.markdownSkill,
+    library: input.markdownSkills,
+    governance,
+    workspaceRoot: input.workspaceRoot,
+    runId: input.runId,
+    workflow: snapshot.kind,
+  });
+}
+
 // Re-invokes a workflow with apply:true through the SAME gated entry point (D8). This is the only
 // place the engine sets apply:true; it does not construct a patch or write a file — the workflow's
-// own guards (isSensitivePath, patch limits, #6 applyEnabled) fire at its boundary. Awaits the
-// apply+verify result and returns the redacted report. The model is resolved by the caller.
+// own guards (isSensitivePath, patch limits, #6 applyEnabled) fire at its boundary. The workflow
+// writes the snapshot's reviewed patch and asks the model nothing (#4025 AC4): the snapshot's value
+// replaces anything the original input carried under that name. Awaits the apply+verify result and
+// returns the redacted report. The model is resolved by the caller.
 export async function applyRun(
   snapshot: AppliableSnapshot,
   model: ModelPort,
@@ -679,6 +773,8 @@ export async function applyRun(
   // network-isolation probe so a probe failure joins the SAME run's other diagnostics rather than
   // a disconnected mint.
   runId?: string,
+  // The library the dry run's selected skill resolves against (#4025 AC1).
+  markdownSkills?: MarkdownSkillStore,
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
   const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
@@ -688,10 +784,12 @@ export async function applyRun(
     workspaceRoot: root,
     nowIso: (): string => new Date().toISOString(),
   };
-  const executionModel =
-    governance === undefined
-      ? model
-      : createAgentRunBudgetedModelPort({ ...budgetInput, binding: governance, model });
+  const executionModel = applyExecutionModel(snapshot, model, {
+    governance,
+    workspaceRoot: root,
+    runId: runId ?? UNKNOWN_CORRELATION_ID,
+    markdownSkills,
+  });
   const spawn =
     governance === undefined
       ? undefined
@@ -707,17 +805,18 @@ export async function applyRun(
       ? {}
       : { workflowHandoff: snapshot.governedHandoff }),
   };
+  const applyInput = {
+    ...input,
+    modelId,
+    apply: true,
+    ...limitsOverride,
+    reviewedPatch: snapshot.reviewedPatch,
+  };
   if (snapshot.kind === "unit-tests") {
-    const report = await generateUnitTests(
-      { ...input, modelId, apply: true, ...limitsOverride } as unknown as UnitTestWorkflowInput,
-      deps,
-    );
+    const report = await generateUnitTests(applyInput as unknown as UnitTestWorkflowInput, deps);
     return redactReport(report);
   }
-  const report = await investigateBug(
-    { ...input, modelId, apply: true, ...limitsOverride } as unknown as BugInvestigationInput,
-    deps,
-  );
+  const report = await investigateBug(applyInput as unknown as BugInvestigationInput, deps);
   return redactReport(report);
 }
 

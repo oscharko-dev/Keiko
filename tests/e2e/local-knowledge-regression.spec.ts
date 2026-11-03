@@ -15,6 +15,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { basename, join } from "node:path";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -27,6 +28,8 @@ const RUN_LEDGER = join(CORPUS_ROOT, "runs", "local-knowledge-regression.jsonl")
 const PASS_COUNT = Number(process.env.KEIKO_LK_REGRESSION_PASSES ?? "5");
 const INCLUDE_LARGE_PDF = process.env.KEIKO_LK_INCLUDE_LARGE_PDF !== "0";
 const MAX_FILE_BYTES = 1024 * 1024 * 1024;
+// The ceiling the start route's request timeout used to carry while it awaited the whole job.
+const INDEXING_JOB_TIMEOUT_MS = 30 * 60_000;
 const GROUNDING_EVIDENCE_ROOT = "docs/design-system/evidence/3184";
 
 const GROUNDING_EVIDENCE_MODES = [
@@ -99,6 +102,7 @@ interface CapsuleDetail {
     readonly unsupportedDocuments: number;
   };
   readonly indexingJobs: readonly {
+    readonly id: string;
     readonly status: string;
     readonly totalDocuments: number;
     readonly processedDocuments: number;
@@ -539,18 +543,47 @@ async function detail(request: APIRequestContext, capsuleId: string): Promise<Ca
   );
 }
 
+type TerminalIndexingStatus = "succeeded" | "failed" | "cancelled";
+
+const TERMINAL_INDEXING_STATUS_PATTERN = /^(succeeded|failed|cancelled)$/u;
+
+// Since #3221 the start route is detached: it answers 202 as soon as the job is admitted and the
+// persisted job row is the source of truth (the UI polls the same row). Starting is therefore
+// asserted as 202, and the outcome is awaited through the capsule detail's job history — never a
+// sleep. The repository pod path mints its job id inside its own refresh flow, so the 202 body
+// carries no `jobId` there; the job is then the one row that did not exist before the request.
 async function indexCapsule(
   request: APIRequestContext,
   capsuleId: string,
-  expectedStatus = 200,
+  expectedOutcome: TerminalIndexingStatus = "succeeded",
 ): Promise<void> {
-  await apiJson(
+  const knownJobIds = new Set((await detail(request, capsuleId)).indexingJobs.map((job) => job.id));
+  const accepted = await apiJson<{ ok: boolean; capsuleId: string; jobId?: string }>(
     request,
     "post",
     `/api/local-knowledge/capsules/${encodeURIComponent(capsuleId)}/index`,
     { confirm: true },
-    expectedStatus,
+    202,
   );
+  expect(accepted).toMatchObject({ ok: true, capsuleId });
+  const findJob = async (): Promise<CapsuleDetail["indexingJobs"][number] | undefined> =>
+    (await detail(request, capsuleId)).indexingJobs.find((job) =>
+      accepted.jobId === undefined ? !knownJobIds.has(job.id) : job.id === accepted.jobId,
+    );
+  // Admission is bounded by the default expectation timeout; the run itself by the ceiling above.
+  await expect
+    .poll(async () => (await findJob()) !== undefined, {
+      message: "the accepted indexing job never appeared in the capsule job history",
+    })
+    .toBe(true);
+  await expect
+    .poll(async () => (await findJob())?.status ?? "missing", {
+      message: "the accepted indexing job never reached a terminal status",
+      timeout: INDEXING_JOB_TIMEOUT_MS,
+      intervals: [250, 500, 1_000, 2_000],
+    })
+    .toMatch(TERMINAL_INDEXING_STATUS_PATTERN);
+  expect((await findJob())?.status).toBe(expectedOutcome);
 }
 
 async function reindexCapsule(
@@ -679,7 +712,11 @@ async function openLocalKnowledge(page: Page): Promise<void> {
 }
 
 async function resetWorkspaceState(page: Page): Promise<void> {
-  await page.goto("/");
+  // Pair the browser through the real launcher-fragment handshake first: the shell's active chat
+  // reads its private draft and skill selection on every load, and an unpaired browser answers
+  // those 404 (ADR-0114 D1), a console error this pass must not produce. The session cookie then
+  // carries every later navigation and reload of the pass.
+  await page.goto(`/${editorM11PairingFragment("local-knowledge-regression")}`);
   await page.evaluate(() => {
     window.localStorage.removeItem("keiko.workspace.v4");
     window.localStorage.removeItem("keiko.conns.v1");
@@ -825,10 +862,11 @@ async function stubNativeFileDialog(page: Page, smallFilesRoot: string): Promise
 async function uiExercisePicker(page: Page, capsuleName: string): Promise<void> {
   const smallFilesRoot = join(CORPUS_DATA_ROOT, "small-files");
   await page.getByRole("button", { name: `Open details for Knowledge Pod ${capsuleName}` }).click();
-  // #2485: ca64b217 (#2155) reformatted the limit copy from "1.0 GB" to "1 GB"; the summary sits
-  // in the maintenance disclosure.
+  // The limit summary sits in the maintenance disclosure. #3687 (501e8d199) pinned the shared byte
+  // presenter to exactly one fraction digit ("1.0 GB"; capsule-actions.test.tsx and format.test.ts
+  // hold the same pin), superseding the "1 GB" spelling #2155 had produced.
   await openMaintenanceSection(page);
-  await expect(page.getByText(/Maximum single file size: 1 GB/u)).toBeVisible();
+  await expect(page.getByText(/Maximum single file size: 1\.0 GB/u)).toBeVisible();
   // #2485: Epic #1941/#2097 replaced the source combobox + Browse flow with the native-dialog
   // picker buttons ("Select folder" / "Select documents") feeding the shared "Source path" +
   // specific-documents scope. The stubbed endpoints above still prove the same UI contract.
@@ -1033,7 +1071,7 @@ async function runRegressionPass(
 
   const failureId = await createCapsule(request, `E2E Pass ${passLabel} Repair`);
   await connectFolder(request, failureId, corpus.failureCycle);
-  await indexCapsule(request, failureId, 409);
+  await indexCapsule(request, failureId, "failed");
   expect(countRows("indexing_jobs", failureId)).toBeGreaterThan(0);
   copyFileSync(
     join(corpus.pdfSmall, "small-text-layer.pdf"),

@@ -67,6 +67,13 @@ typedef struct {
   char *field[KEIKO_KHP_MAX_FIELD_COUNT];
 } keiko_handoff_plan;
 
+static inline uint64_t keiko_khp_phase_tail(unsigned int field) {
+  if (field == KEIKO_KHP_START_AT) return UINT64_C(60000);
+  if (field == KEIKO_KHP_VERIFY_AT) return UINT64_C(300000);
+  if (field == KEIKO_KHP_CLEANUP_AT) return UINT64_C(600000);
+  return 0;
+}
+
 static uint16_t keiko_khp_read_u16(const unsigned char *value) {
   return (uint16_t)((uint16_t)value[0] | (uint16_t)((uint16_t)value[1] << 8));
 }

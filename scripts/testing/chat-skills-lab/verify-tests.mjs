@@ -4,9 +4,11 @@ import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync, realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { URL } from "node:url";
 import { APP } from "./cases.mjs";
+import { qualifiedBaseline, qualifiedPair, resultCounts } from "./verification-result.mjs";
 
-const IMAGE = "node:24.18.0-bookworm";
+const IMAGE = "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
 const COMMAND = `set -eu
 mkdir /tmp/qualified
 cp /input/* /tmp/qualified/
@@ -14,7 +16,7 @@ ln -s /opt/qualification/node_modules /tmp/qualified/node_modules
 cd /tmp/qualified
 node node_modules/typescript/bin/tsc --noEmit > typecheck.log 2>&1 || { cat typecheck.log; exit 20; }
 set +e
-node node_modules/vitest/vitest.mjs run --config vitest.config.mjs --configLoader native --reporter=json --outputFile=result.json > test.log 2>&1
+node node_modules/vitest/vitest.mjs run --config vitest.config.mjs --configLoader native --reporter=./qualification-reporter.mjs > test.log 2>&1
 result=$?
 set -e
 if [ -f result.json ]; then cat result.json; else cat test.log; fi
@@ -33,6 +35,10 @@ function prepareInput(directory, code, mutant) {
     "SensorBadge.tsx": mutant ? APP.replace("value < 20", "value <= 20") : APP,
     "SensorBadge.test.tsx": code,
     "setup.ts": 'import "@testing-library/jest-dom/vitest";\n',
+    "qualification-reporter.mjs": readFileSync(
+      new URL("./qualification-reporter.mjs", import.meta.url),
+      "utf8",
+    ),
     "package.json": JSON.stringify({ private: true, type: "module" }),
     "tsconfig.json": JSON.stringify({
       compilerOptions: {
@@ -49,7 +55,7 @@ function prepareInput(directory, code, mutant) {
       include: ["*.ts", "*.tsx"],
     }),
     "vitest.config.mjs":
-      'export default {esbuild:{jsx:"automatic"},test:{environment:"jsdom",setupFiles:["./setup.ts"],maxWorkers:1,fileParallelism:false}};\n',
+      'export default {esbuild:{jsx:"automatic"},test:{environment:"jsdom",setupFiles:["./setup.ts"],maxWorkers:1,fileParallelism:false,allowOnly:false,retry:0}};\n',
   };
   for (const [name, contents] of Object.entries(files))
     writeFileSync(join(directory, name), contents, { mode: 0o600 });
@@ -127,15 +133,6 @@ function runContainer(directory, dependencies) {
   };
 }
 
-function resultCounts(result) {
-  return {
-    tests: result?.numTotalTests ?? 0,
-    passed: result?.numPassedTests ?? 0,
-    failed: result?.numFailedTests ?? 0,
-    runtimeErrors: result?.numRuntimeErrorTestSuites ?? 0,
-  };
-}
-
 export function verifyGeneratedTests(text, directory, dependencyDirectory) {
   const dependencies = realpathSync(resolve(dependencyDirectory));
   const code = extractGeneratedTest(text);
@@ -145,20 +142,13 @@ export function verifyGeneratedTests(text, directory, dependencyDirectory) {
   prepareInput(correct, code, false);
   prepareInput(mutant, code, true);
   const baseline = runContainer(correct, dependencies);
-  const mutation = baseline.status === 0 ? runContainer(mutant, dependencies) : undefined;
+  const mutation = qualifiedBaseline(baseline) ? runContainer(mutant, dependencies) : undefined;
   return {
     image: IMAGE,
     network: "none",
     baseline,
     mutation,
-    passed:
-      baseline.typechecks &&
-      baseline.status === 0 &&
-      baseline.tests > 0 &&
-      mutation?.status === 1 &&
-      mutation.typechecks &&
-      mutation.failed > 0 &&
-      mutation.runtimeErrors === 0,
+    passed: qualifiedPair(baseline, mutation),
   };
 }
 

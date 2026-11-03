@@ -103,10 +103,29 @@ function deferred(): Deferred {
 // that the EventSource handler consumed them — the POST could still resolve first, clear
 // `pendingRequestIdRef`, and have the frame rejected as belonging to no active run. The signal is
 // therefore taken from the log the assertion itself reads. No sleeps, no assumed ordering.
+//
+// The widget no longer posts a run until the shared event stream has completed its open handshake
+// (`withSharedEventSourceOpen`, fd6d3b6f3 / #3685: the execution callback stays subscribed before
+// its POST and throughout its completion, and an unopened stream is refused after 15 s). A stream
+// held back until the POST publishes its requestId would therefore deadlock the run, so the first
+// connection answers at once with `ready`. A fulfilled route response cannot stay open, so that
+// connection ends and the widget reconnects through its own backoff; the reconnection is the one
+// that waits for the run's requestId and delivers the completion frame.
 async function routeCommandBff(page: Page, runs: string[]): Promise<void> {
   const requestIdKnown = deferred();
+  let streamConnections = 0;
 
   await page.route("**/api/commands/events**", async (route) => {
+    streamConnections += 1;
+    const opened = "event: ready\ndata: {}\n\n";
+    if (streamConnections !== 2) {
+      await route.fulfill({
+        status: 200,
+        contentType: "text/event-stream; charset=utf-8",
+        body: opened,
+      });
+      return;
+    }
     const requestId = await requestIdKnown.promise;
     const completed = JSON.stringify({
       kind: "run-completed",
@@ -117,7 +136,7 @@ async function routeCommandBff(page: Page, runs: string[]): Promise<void> {
     await route.fulfill({
       status: 200,
       contentType: "text/event-stream; charset=utf-8",
-      body: `event: ready\ndata: {}\n\nid: 1\nevent: command:run-completed\ndata: ${completed}\n\n`,
+      body: `${opened}id: 1\nevent: command:run-completed\ndata: ${completed}\n\n`,
     });
   });
 

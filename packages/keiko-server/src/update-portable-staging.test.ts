@@ -1,3 +1,4 @@
+import { managedRootFromPackageRoot } from "./update-portable-staging-archive.js";
 import { createHash } from "node:crypto";
 import {
   existsSync,
@@ -29,6 +30,7 @@ import {
   MAX_INFLATE_RATIO,
   MAX_UNCOMPRESSED_BYTES,
   PortableUpdateStagingError,
+  type PortableUpdateStageInput,
 } from "./update-portable-staging-shared.js";
 
 const ENC = new TextEncoder();
@@ -930,6 +932,45 @@ describe("portable update staging", () => {
     expect(persisted).not.toContain("https://github.com");
   });
 
+  it("coalesces small-entry extraction progress and publishes the final byte count", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
+    try {
+      const archive = await portableArchive(
+        Array.from({ length: 64 }, (_, index) => ({
+          name: `Keiko/app/small-${String(index)}.txt`,
+          bytes: ENC.encode("small fixture file"),
+        })),
+      );
+      const install = makeManagedInstall();
+      const selected = candidate(archive);
+      const onProgress = vi.fn<NonNullable<PortableUpdateStageInput["onProgress"]>>();
+      const stager = createPortableUpdateStager({
+        env: {},
+        fetchImpl: responseFor(archive),
+        platformVerifier: verifyPlatform,
+      });
+      await stager.stage({
+        candidate: selected,
+        sessionId: "small-entry-progress",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: install.packageRoot },
+        onProgress,
+      });
+      const updates = onProgress.mock.calls.filter(([value]) => value.phase === "staging");
+      expect(updates).toHaveLength(1);
+      expect(updates[0]?.[0]).toMatchObject({
+        totalBytes: selected.portable?.uncompressedSizeBytes,
+      });
+      expect(updates[0]?.[0].completedBytes).toBeGreaterThan(64 * 18);
+      expect(updates[0]?.[0].completedBytes).toBeLessThanOrEqual(
+        selected.portable?.uncompressedSizeBytes ?? 0,
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it.each([
     ["generation-mutation", "staged Windows generation digest mismatch"],
     ["launcher-replacement", "staged Windows root launcher digest mismatch"],
@@ -1147,4 +1188,10 @@ describe("portable update staging", () => {
     expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
     expect(localState.readRuntimeState().portableStage).toBeUndefined();
   });
+});
+
+it("Linux staging resolves the actual flat managed root", () => {
+  expect(managedRootFromPackageRoot("linux-x64", "/home/alice/.local/opt/Keiko/app")).toBe(
+    "/home/alice/.local/opt/Keiko",
+  );
 });

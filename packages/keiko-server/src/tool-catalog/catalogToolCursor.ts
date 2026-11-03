@@ -15,8 +15,7 @@ import { CatalogDispatchFault, requireDispatch } from "./catalogToolRuntimeAutho
 export interface CursorBinding {
   readonly toolRef: ToolRef;
   readonly requestDigest: CatalogDigest;
-  readonly workspaceIdentity: string;
-  readonly workspaceRevision: string;
+  readonly scopeDigest: CatalogDigest;
   readonly profile: CatalogVersionRef;
   readonly projectionDigest: CatalogDigest;
   readonly expiresAt: string;
@@ -28,8 +27,7 @@ export const CATALOG_CURSOR_ID_PREFIX = "catalog-cursor-";
 const KEYS = [
   "toolRef",
   "requestDigest",
-  "workspaceIdentity",
-  "workspaceRevision",
+  "scopeDigest",
   "profile",
   "projectionDigest",
   "expiresAt",
@@ -51,19 +49,16 @@ function object(value: unknown): CatalogJsonObject {
 }
 function scalarFields(value: CatalogJsonObject): void {
   requireDispatch(
-    [value.requestDigest, value.projectionDigest].every(
+    [value.requestDigest, value.projectionDigest, value.scopeDigest].every(
       (digest) => typeof digest === "string" && DIGEST.test(digest),
     ),
     "invalid",
     "cursor-invalid",
   );
   requireDispatch(
-    [
-      value.workspaceIdentity,
-      value.workspaceRevision,
-      value.budgetReservationId,
-      value.nonce,
-    ].every((id) => typeof id === "string" && /^[A-Za-z0-9_.-]{1,128}$/u.test(id)),
+    [value.budgetReservationId, value.nonce].every(
+      (id) => typeof id === "string" && /^[A-Za-z0-9_.-]{1,128}$/u.test(id),
+    ),
     "invalid",
     "cursor-invalid",
   );
@@ -134,7 +129,7 @@ function identity(
   return { runId, actionId: id, idempotencyKey: id };
 }
 function bindingDigest(binding: CursorBinding): string {
-  return sha256Hex(canonicalise({ domain: "keiko.tool-cursor.v1", ...binding }));
+  return sha256Hex(canonicalise({ domain: "keiko.tool-cursor.v2", ...binding }));
 }
 function assertUnexpired(binding: CursorBinding, now: number): void {
   requireDispatch(

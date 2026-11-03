@@ -1,4 +1,4 @@
-# Public API surface — 1.2.2
+# Public API surface — 1.3.5
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -39,6 +39,7 @@ details of the shipped artifact:
 @oscharko-dev/keiko-memory-governance
 @oscharko-dev/keiko-memory-retrieval
 @oscharko-dev/keiko-memory-vault
+@oscharko-dev/keiko-mcp
 @oscharko-dev/keiko-model-gateway
 @oscharko-dev/keiko-quality-intelligence
 @oscharko-dev/keiko-sandbox
@@ -109,7 +110,60 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 
 ## Stability notes
 
+- 1.3.5: root exports and CLI entrypoints remain stable. The Coding Workbench sidecar profile
+  judges the selected model's own readiness and accepts `check=1` to check it; an unanswered
+  tool-calling check reports `tool-calling-unverified`. No schema migration.
+
+- 1.3.4: root exports and CLI entrypoints remain stable. Chat adds revision-bound private
+  continuity checkpoints and bounded archive discovery; original messages remain canonical,
+  and token-estimate provenance does not imply a model-independent memory-quality guarantee.
+  Local SQLite schema migrations 55/56 are automatic. Coding Workbench adds governed task
+  branch creation and issue-free draft PR delivery while preserving protected integration.
+
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.3.3: root exports and CLI entrypoints remain stable. Authenticated MCP Settings routes add
+  shared OAuth start, status, cancellation and revocation for Chat and Coding Workbench. Existing
+  server definitions remain readable; unbound legacy OAuth records require central sign-in again.
+  Provider ownership and credential-generation checks remain internal execution boundaries.
+- 1.3.2: root exports, CLI entrypoints and local server routes remain unchanged. The release fixes
+  server-sent event flow control (a large frame is queued until the reader drains instead of ending
+  the stream), raises the Coding changeset limits to 8 MiB per changeset and 64 MiB per run, returns
+  a byte-capped Git diff as a bounded truncated view, and keeps a proven chat model selectable while
+  its provider is busy. The model gateway package adds the `ProviderResponseInvalidError` export.
+  No customer database schema migration is introduced.
+- 1.3.1: root exports, CLI entrypoints and local server routes remain unchanged. The release fixes
+  Coding Workbench, editor, Git-change Chat and Linux sandbox behaviour. The server reads the new
+  deployment environment variable `KEIKO_CONTENT_REDACTION` once at startup: only the exact value
+  `off` lets Chat preserve authorized document content. Coding Workbench model answers are
+  preserved in every installation, with the same credential floor. The workspace packages add the matching
+  content-policy contract and security exports. No customer database schema migration is introduced.
+- 1.3.0: root exports and CLI entrypoints remain unchanged. The macOS optional coding-runtime
+  dependencies move to 1.1.4 (OpenCode 2.1.4). The local server adds authenticated Coding History
+  import and export routes for the Workbench UI. No customer database schema migration is introduced.
+- 1.2.7: root exports and CLI entrypoints remain unchanged. Portable update coordination, locking
+  and recovery share the canonical runtime-state directory independently of UI database storage.
+  No customer database schema migration is introduced. Published source updaters require the
+  documented one-time bootstrap before using the corrected handoff.
+- 1.2.6: root exports and CLI entrypoints remain unchanged. Portable updater admission consumes
+  authenticated future release-impact entries and measured archive expansion metadata. Native
+  macOS application ownership is independent of the optional Endpoint Security Coding backend.
+  Existing workspace state and database schemas are retained.
+- 1.2.5: the root exports and CLI entrypoints remain unchanged. Existing authenticated local
+  session routes add bounded browser approval, expiration and revocation. Forward-only SQLite
+  migrations V45 and V46 persist browser approvals and shared Chat creation intents. Source
+  ownership, updater recovery and syntax-preserving privacy are hardened through existing
+  contracts. Compact test-generation skills add instructions without execution authority or
+  a demonstrated universal model-quality guarantee; unfulfilled acceptance remains in #4051.
+- 1.2.4: the root exports and CLI entrypoints remain unchanged. Chat gateway waiting,
+  connected-source selection, restored source presentation and repository retrieval are hardened
+  through existing contracts. Java/Spring Boot and React/MUI/Vitest Markdown skill candidates
+  remain reviewable instructions, with qualification limits tracked in #4040. Windows OpenCode
+  metadata and home resolution remain confined to private host state.
+- 1.2.3: the root exports and CLI entrypoints are unchanged from v1.2.2. Authenticated
+  local Chat routes add private draft revision handling, backed by forward-only SQLite migration
+  V44. Speech transcription retains its route contract while browser clips are normalized before
+  upload. Skill recovery and source-reference validation extend existing application contracts;
+  no public package entrypoint or execution authority is added.
 - 1.2.2: the root runtime/declaration export contract and CLI entrypoints are unchanged from
   v1.2.1. Private Markdown skills extend authenticated local Chat routes and the existing UI
   store, including explicit per-chat selection and protected context accounting. Document-to-skill

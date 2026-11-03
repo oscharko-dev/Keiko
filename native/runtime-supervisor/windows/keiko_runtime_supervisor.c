@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <io.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
@@ -216,6 +217,7 @@ static wchar_t *append_quoted(wchar_t *output, const wchar_t *value) {
     if (*value == L'\\') {
       ++backslashes;
     } else {
+      if (*value == L'"') backslashes *= 2;
       while (backslashes-- != 0) *output++ = L'\\';
       backslashes = 0;
       if (*value == L'"') *output++ = L'\\';
@@ -475,6 +477,65 @@ static int reconcile_job(const wchar_t *wide_handle) {
   return 1;
 }
 
+/* MCP providers are operator-configured host programs, not Coding sandbox actions. */
+static int mcp_stdio_owner(int argc, wchar_t **argv) {
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+  STARTUPINFOW startup;
+  PROCESS_INFORMATION child;
+  HANDLE job = NULL;
+  wchar_t *line = NULL, *cursor;
+  size_t length = 1;
+  DWORD exit_code = 127;
+  int index, result = 1;
+  if (argc < 3) return 1;
+  for (index = 2; index < argc; ++index) {
+    size_t added = quoted_length(argv[index]) + 1;
+    if (added > 32767 - length) return 1;
+    length += added;
+  }
+  line = calloc(length, sizeof(wchar_t));
+  if (line == NULL) return 1;
+  cursor = line;
+  for (index = 2; index < argc; ++index) {
+    if (index != 2) *cursor++ = L' ';
+    cursor = append_quoted(cursor, argv[index]);
+  }
+  *cursor = L'\0';
+  memset(&limits, 0, sizeof(limits));
+  memset(&startup, 0, sizeof(startup));
+  memset(&child, 0, sizeof(child));
+  /* No breakaway flags: grandchildren remain in this lifetime scope as well. */
+  limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+  job = CreateJobObjectW(NULL, NULL);
+  if (job == NULL || !SetInformationJobObject(job, JobObjectExtendedLimitInformation,
+                                             &limits, sizeof(limits))) goto cleanup;
+  startup.cb = sizeof(startup);
+  startup.dwFlags = STARTF_USESTDHANDLES;
+  startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+  startup.hStdOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+  startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  if (!CreateProcessW(argv[2], line, NULL, NULL, TRUE,
+                      CREATE_SUSPENDED | CREATE_NO_WINDOW, NULL, NULL, &startup, &child)) goto cleanup;
+  /* Admission happens before the provider or its Node lifetime owner can execute. */
+  if (!AssignProcessToJobObject(job, child.hProcess) || ResumeThread(child.hThread) == (DWORD)-1) {
+    (void)TerminateProcess(child.hProcess, 127);
+    (void)WaitForSingleObject(child.hProcess, INFINITE);
+    goto cleanup;
+  }
+  if (WaitForSingleObject(child.hProcess, INFINITE) != WAIT_OBJECT_0 ||
+      !GetExitCodeProcess(child.hProcess, &exit_code)) goto cleanup;
+  result = (int)exit_code;
+cleanup:
+  if (job != NULL) {
+    (void)TerminateJobObject(job, 127);
+    CloseHandle(job);
+  }
+  if (child.hThread != NULL) CloseHandle(child.hThread);
+  if (child.hProcess != NULL) CloseHandle(child.hProcess);
+  free(line);
+  return result;
+}
+
 int wmain(int argc, wchar_t **argv) {
   struct launch_request request;
   PROCESS_INFORMATION process;
@@ -489,6 +550,11 @@ int wmain(int argc, wchar_t **argv) {
    * close the remaining search-path surface for any later LoadLibrary-style dependency.
    */
   if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32) || !SetDllDirectoryW(L"")) return 1;
+  if (argc == 2 && wcscmp(argv[1], L"--probe-stdio-owner") == 0) {
+    puts("{\"schemaVersion\":1,\"ownedStdio\":\"windows-job\"}");
+    return 0;
+  }
+  if (argc >= 2 && wcscmp(argv[1], L"--stdio-owner") == 0) return mcp_stdio_owner(argc, argv);
   memset(&process, 0, sizeof(process));
   if (argc == 3 && wcscmp(argv[1], L"--reconcile") == 0) return reconcile_job(argv[2]);
   if (argc != 1) {

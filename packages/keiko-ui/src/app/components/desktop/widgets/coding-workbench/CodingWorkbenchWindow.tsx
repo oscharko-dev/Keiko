@@ -1,5 +1,6 @@
 "use client";
 
+import { isCodingWorkbenchBuiltInAgent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { ClientModelCatalogEvidence } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
@@ -14,7 +15,9 @@ import {
   type WorkbenchExecutionLocationState,
 } from "./useWorkbenchExecutionLocation";
 import { useCodingTaskSession, type CodingTaskSession } from "./useCodingTaskSession";
+import { usePromptDeliveryNotice } from "./usePromptDeliveryNotice";
 import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
+import { CodingTaskForkNotice } from "./CodingTaskForkNotice";
 import {
   CodingWorkbenchDeliveryReview,
   approvalHelpKey,
@@ -46,7 +49,6 @@ import type {
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
-  CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
@@ -55,7 +57,11 @@ import {
   isCodingWorkbenchMode,
   isCodingWorkbenchModeWidening,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { isCodingWorkbenchModel } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  electConversationDefault,
+  isCodingWorkbenchModel,
+  isCodingWorkbenchProofRenewing,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { useTranslate } from "@/lib/i18n";
 import { CodingWorkbenchCiReadiness } from "./CodingWorkbenchCiReadiness";
 import {
@@ -72,8 +78,15 @@ import {
   CodingWorkbenchCommitReview,
   reviewForPermission,
   approvalReviewRequestId,
+  isNativeActionPermission,
   StageReviewDiagnostic,
 } from "./CodingWorkbenchCommitReview";
+import {
+  CodingWorkbenchNativeActionReview,
+  nativeActionLabel,
+  nativeActionNamesResource,
+  nativePermissionLabel,
+} from "./CodingWorkbenchNativeActionReview";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -85,12 +98,14 @@ import {
   type UseCodingWorkbenchRuntimeInput,
 } from "@/lib/useCodingWorkbenchRuntime";
 import { useAutonomyModePolicy } from "../../hooks/useAutonomyModePolicy";
-import type {
-  CodingWorkbenchClientError,
-  CodingWorkbenchMutationKind,
-  CodingWorkbenchMutationState,
-  CodingWorkbenchRuntimeState,
-  CodingWorkbenchWorkspaceProjection,
+import {
+  offeredCodingWorkbenchAgents,
+  offeredCodingWorkbenchPromptInputs,
+  type CodingWorkbenchClientError,
+  type CodingWorkbenchMutationKind,
+  type CodingWorkbenchMutationState,
+  type CodingWorkbenchRuntimeState,
+  type CodingWorkbenchWorkspaceProjection,
 } from "@/lib/coding-workbench-live-state";
 import { useCodingWorkbenchQuestions } from "@/lib/useCodingWorkbenchQuestions";
 import { useCodingWorkbenchSafeActivity } from "@/lib/useCodingWorkbenchSafeActivity";
@@ -126,7 +141,7 @@ import {
   useRepositoryBranchState,
   type RepositoryBranchState,
 } from "../../hooks/useRepositoryBranchState";
-import { DiffFileSection } from "../cards/shared/diffView";
+import { CodingWorkbenchDiffFiles } from "./CodingWorkbenchWindowedDiff";
 import {
   PanelTitle,
   TaskStartSection,
@@ -138,12 +153,17 @@ import {
   type CodingWorkbenchSetupRuntimePosture,
 } from "./CodingWorkbenchSetup";
 import {
-  CodingWorkbenchChanges,
+  CodingWorkbenchChangesView,
   diffLabels,
   RetryMessage,
   type RetryMessageProps,
 } from "./CodingWorkbenchChanges";
 import { useCodingWorkbenchChanges } from "@/lib/useCodingWorkbenchChanges";
+import { useCodingWorkbenchRevert } from "@/lib/useCodingWorkbenchRevert";
+import { CodingWorkbenchInboxPanel } from "./CodingWorkbenchInboxPanel";
+import { CodingWorkbenchRevertBar } from "./CodingWorkbenchRevert";
+import { changesRefreshSignal } from "./codingWorkbenchChangesSignal";
+import { deliveredMessageSignal } from "./codingWorkbenchInboxSignal";
 import { CodexSubscriptionAuthCard } from "./CodingWorkbenchModelCards";
 import {
   useCodingWorkbenchRunWorkspace,
@@ -152,6 +172,8 @@ import {
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
 import { ApprovedSkillsDisclosure } from "./CodingWorkbenchApprovedSkills";
+import { CodingWorkbenchPairingHold, useHeldNotice } from "./codingWorkbenchPairingHold";
+import { CodingWorkbenchMcpServers } from "./CodingWorkbenchMcpServers";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
@@ -165,6 +187,7 @@ import {
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
+  visibleStatusNotice,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
 import {
@@ -174,7 +197,10 @@ import {
 import { runPhase } from "./codingWorkbenchRunFacts";
 import { useRestoredRunTimeline } from "./codingWorkbenchRestoredRun";
 import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPreference";
+import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
+import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
+import { useCodingWorkbenchJiraPod } from "./useCodingWorkbenchJiraPod";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
@@ -243,15 +269,7 @@ const NEUTRAL_RUNTIME_ASSURANCE_POSTURES: ReadonlySet<CodingWorkbenchSetupRuntim
   ["pending", "verified"],
 );
 
-function latestChangesSignal(events: readonly CodingWorkbenchRuntimeSseEvent[]): string | null {
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.kind === "status" || event?.eventKind === "diff-summarized") return event.cursor;
-  }
-  return null;
-}
-
-/** Joins `CodingWorkbenchChanges`' own live file list to a bounded count + truncation flag (AC2) —
+/** Joins the run's live changed-file list to a bounded count + truncation flag (AC2) —
  * never a path, a diff or the underlying provider error detail. */
 function changedFilesSummary(
   changes: ReturnType<typeof useCodingWorkbenchChanges>,
@@ -448,6 +466,15 @@ function selectedResumeMode(
  * when the run is waiting for the very action the trust notice is offering. A reasonless pause is
  * the operator's own, and keeps resuming exactly as it always has.
  */
+
+/** Run states whose undo counts the Workbench reads (B3, #3904 AC3). */
+const REVERT_READ_STATES: ReadonlySet<string> = new Set([
+  "running",
+  "paused",
+  "succeeded",
+  "failed",
+]);
+
 export function operatorResumeAvailable(
   resumeMode: CodingWorkbenchMode | null,
   pauseReason: CodingWorkbenchOperatorDecision | undefined,
@@ -542,6 +569,37 @@ function runPendingPermission(
  * — this wraps the optional-chain form so callers do not spend a branching point on it. */
 function runIsActiveFrom(state: CodingWorkbenchRuntimeState): boolean {
   return activeRunState(state.run.value?.state);
+}
+
+// The root is an ordinary folder when its branch read says so, and stays one while that read is
+// not being made (during a run) or has not resolved yet, as long as the bound workspace for this
+// root is a folder workspace: a run must not lose its binding because the branch read paused. A
+// read that resolved as a repository always wins (the folder became one).
+function workbenchFolderMode(
+  branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): boolean {
+  if (branchInventory.ordinaryFolder) return true;
+  if (branchInventory.response?.available === true) return false;
+  const instance = activeWorkspace.activeInstance;
+  return (
+    repositoryRoot !== null &&
+    instance?.workspaceKind === "folder" &&
+    instance.repositoryRoot === repositoryRoot
+  );
+}
+
+// A folder is always Local: there is no repository to put a worktree in.
+function workbenchExecutionLocation(
+  branchInventory: Pick<RepositoryBranchState, "ordinaryFolder" | "response">,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+  selected: WorkbenchExecutionLocation | undefined,
+): WorkbenchExecutionLocation {
+  return workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot)
+    ? "local"
+    : activeExecutionLocation(activeWorkspace.activeInstance, repositoryRoot, selected);
 }
 
 function repositoryBranchReadRoot(
@@ -644,6 +702,34 @@ function liveWorkspaceRootOf(workspace: WorkbenchWorkspaceApi): string | null {
 /** True while the live binding is unsettled and therefore proves nothing about where it points. */
 function workspaceBindingPendingOf(workspace: WorkbenchWorkspaceApi): boolean {
   return workspace.loading || workspace.switching;
+}
+
+/**
+ * The root a task with no run yet starts in, which its first prompt's `@` picker searches: the live
+ * task workspace when it belongs to the selected repository and its binding has settled, else the
+ * selected repository itself. A root that is not the selected repository's is never offered.
+ */
+export function newTaskReferenceRoot(
+  workspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): string | null {
+  if (repositoryRoot === null) return null;
+  const belongs =
+    workspace.activeInstance?.repositoryRoot === repositoryRoot &&
+    !workspaceBindingPendingOf(workspace);
+  return (belongs ? liveWorkspaceRootOf(workspace) : null) ?? repositoryRoot;
+}
+
+/** The workspace root the composer's `@` picker searches: the live run's own, else the next run's. */
+function composerReferenceRoot(
+  state: CodingWorkbenchRuntimeState,
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  workspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): string | null {
+  return runIsActiveFrom(state)
+    ? (runWorkspace.bound?.root ?? null)
+    : newTaskReferenceRoot(workspace, repositoryRoot);
 }
 
 // Verification in a managed worktree uses its repository's package-script trust, and independently
@@ -783,7 +869,7 @@ function historyRuntimeState(
 function welcomeEligible(
   history: CodingTaskSession,
   state: CodingWorkbenchRuntimeState,
-  content: Readonly<Record<"activity" | "questions" | "review" | "research", boolean>>,
+  content: Readonly<Record<"activity" | "questions" | "review" | "research" | "revert", boolean>>,
 ): boolean {
   return (
     history.detail === null &&
@@ -833,6 +919,7 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
+  onOpenMcpSettings,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
@@ -840,6 +927,7 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -874,7 +962,7 @@ export function CodingWorkbenchWindow({
   );
   // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
   const catalogSettled = useGatewayModelCatalogSettled();
-  useEffect(() => requestGatewayModelCatalogRefresh(), []);
+  useEffect(() => requestGatewayModelCatalogRefresh({ check: true }), []);
   const modelSelection = useCodingModelSelection(
     state,
     actions,
@@ -901,19 +989,23 @@ export function CodingWorkbenchWindow({
     activeWorkspace,
     selectedRoot,
   );
-  const location = activeExecutionLocation(
-    activeWorkspace.activeInstance,
-    repositoryRoot,
-    selectedLocation,
-  );
   const branchInventory = useRepositoryBranchState(
     repositoryBranchReadRoot(runIsActive, repositoryRoot),
+  );
+  // An ordinary folder (not a Git repository) is bound in place, always Local, without a branch.
+  const folderMode = workbenchFolderMode(branchInventory, activeWorkspace, repositoryRoot);
+  const location = workbenchExecutionLocation(
+    branchInventory,
+    activeWorkspace,
+    repositoryRoot,
+    selectedLocation,
   );
   const refreshCheckout = useCheckoutRefresh(branchInventory.refresh, activeWorkspace.refresh);
   const locationState = useWorkbenchExecutionLocation({
     root: repositoryRoot,
     branch: selectedBranch,
     location,
+    folderMode,
     activeInstance: activeWorkspace.activeInstance,
     branchLoading: branchInventory.loading,
     branchError: branchInventory.error !== null,
@@ -943,6 +1035,7 @@ export function CodingWorkbenchWindow({
     <WorkbenchContent
       history={history}
       onOpenHistory={onOpenHistory}
+      onOpenMcpSettings={onOpenMcpSettings}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -992,7 +1085,7 @@ function selectedConversationReadiness(
 ): CodingWorkbenchRuntimeState {
   if (state.runtimePreference !== "managed-gateway" || state.selectedModelId === null) return state;
   const selected = catalog?.models.find((model) => model.id === state.selectedModelId);
-  if (isFreshSelectedCodingModel(selected)) return state;
+  if (isUsableSelectedCodingModel(selected)) return state;
   return {
     ...state,
     canStart: false,
@@ -1000,8 +1093,10 @@ function selectedConversationReadiness(
   };
 }
 
-function isFreshSelectedCodingModel(selected: ModelCapability | undefined): boolean {
-  return selected?.conversationReady === true && isCodingWorkbenchModel(selected);
+// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model whose
+// answer expired or that nobody checked yet is usable, because its run's start checks it first.
+function isUsableSelectedCodingModel(selected: ModelCapability | undefined): boolean {
+  return selected !== undefined && isCodingWorkbenchModel(selected);
 }
 
 function pendingSelectedSource(
@@ -1020,13 +1115,26 @@ function pendingSelectedSource(
   };
 }
 
+// A model the Workbench would offer, or that it does not offer only while the server renews its
+// tool-call proof (#3905): a human choice of either stays pending instead of being replaced.
+function isOfferedOrRenewing(model: ModelCapability): boolean {
+  return isCodingWorkbenchModel(model) || isCodingWorkbenchProofRenewing(model);
+}
+
 function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly string[] | undefined {
   const actual = catalog?.modelCatalogRead?.capabilities;
-  if (actual !== undefined) return actual.filter(isCodingWorkbenchModel).map((model) => model.id);
+  if (actual !== undefined) return actual.filter(isOfferedOrRenewing).map((model) => model.id);
   const excluded = new Set(
-    catalog?.models.filter((model) => !isCodingWorkbenchModel(model)).map((model) => model.id),
+    catalog?.models.filter((model) => !isOfferedOrRenewing(model)).map((model) => model.id),
   );
   return catalog?.configuredModelIds?.filter((id) => !excluded.has(id));
+}
+
+// The default a Workbench elects when no human choice remains is the one Chat elects: a gateway-
+// declared chat model first, a special-purpose engine only when nothing else is ready, and within a
+// tier a ready model before one whose answer is unknown, so wire order never decides it (#3905).
+function electedCodingDefault(models: readonly ModelCapability[]): ModelCapability | undefined {
+  return electConversationDefault(models, (model) => model.conversationReady);
 }
 
 function useCodingModelSelection(
@@ -1049,7 +1157,7 @@ function useCodingModelSelection(
     const next =
       selected?.id ??
       offeredSavedCodingModel(models)?.id ??
-      models.find((model) => model.conversationReady === true)?.id ??
+      electedCodingDefault(models)?.id ??
       null;
     if (next !== state.selectedModelId) {
       setHumanSelectedId(null);
@@ -1130,9 +1238,9 @@ function workbenchCatalogEvidenceSnapshot(
   human: boolean,
 ): WorkbenchCatalogEvidenceSnapshot {
   const selected = read.capabilities.find((model) => model.id === selectedId);
-  const fresh = isFreshSelectedCodingModel(selected);
+  const fresh = isUsableSelectedCodingModel(selected);
   const selectionDigest = selectedId === null ? undefined : sha256Hex(selectedId);
-  const held = selected !== undefined && isCodingWorkbenchModel(selected) && !fresh;
+  const held = selected !== undefined && isOfferedOrRenewing(selected) && !fresh;
   const catalogDigest = sha256Hex(JSON.stringify(read.capabilities));
   return {
     next: {
@@ -1147,7 +1255,7 @@ function workbenchCatalogEvidenceSnapshot(
       surface: "coding-workbench",
       source: read.source,
       configuredModelCount: read.capabilities.length,
-      usableModelCount: read.capabilities.filter(isFreshSelectedCodingModel).length,
+      usableModelCount: read.capabilities.filter(isUsableSelectedCodingModel).length,
     },
   };
 }
@@ -1197,6 +1305,7 @@ function useWorkbenchCatalogEvidence(
 }
 
 interface WorkbenchContentProps {
+  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly history: CodingTaskSession;
   readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
@@ -1242,6 +1351,18 @@ function WorkbenchAlert({
       {workbenchFailureReport(failure)}
     </p>
   );
+}
+
+/** A polite status (never an alert) for a live stream the browser is reconnecting by itself. */
+function WorkbenchStatusNotice({
+  state,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const message = visibleStatusNotice(state, t);
+  if (message === null) return null;
+  return <output className={styles.cmpStreamNotice}>{message}</output>;
 }
 
 function workbenchFailureReport(failure: CodingWorkbenchClientError | null): ReactNode {
@@ -1310,7 +1431,9 @@ function DeploymentCeilingNotice({
  */
 function EditorBridgeUnavailableNotice({ visible }: { readonly visible: boolean }): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  if (!visible) return null;
+  // #3880: an unpaired window cannot register its bridge; the run status sentence says why.
+  const held = useHeldNotice("editor-bridge", visible);
+  if (!visible || held) return null;
   return (
     <output className={styles.alert}>
       <span aria-hidden="true">!</span> {t("codingWorkbench.editorBridge.reconnecting")}
@@ -1326,15 +1449,17 @@ function WorkbenchContent({ alert, workbenchLabel, ...columns }: WorkbenchConten
     <section
       className={styles.shell}
       aria-label={workbenchLabel}
-      aria-busy={state.mutation.status === "pending"}
       data-state={state.run.value?.state ?? "idle"}
     >
       <h2 className="sr-only">{workbenchLabel}</h2>
-      <WorkbenchHeader columns={columns} />
-      <div className={styles.body}>
-        <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
-        <WorkbenchColumns {...columns} />
-      </div>
+      <CodingWorkbenchPairingHold unpaired={state.pairing === "unpaired"}>
+        <WorkbenchHeader columns={columns} />
+        <div className={styles.body}>
+          <WorkbenchAlert message={alert} failure={visibleAlertFailure(state)} />
+          <WorkbenchStatusNotice state={state} />
+          <WorkbenchColumns {...columns} />
+        </div>
+      </CodingWorkbenchPairingHold>
     </section>
   );
 }
@@ -1345,6 +1470,7 @@ function WorkbenchHeader({
   readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
+  const t = useCodingWorkbenchTranslate();
   return (
     <header className={styles["cmp-workbench-header"]}>
       <div className={styles.cmpHeaderRow}>
@@ -1359,6 +1485,11 @@ function WorkbenchHeader({
           active={runIsActive}
           onHistory={columns.onOpenHistory}
         />
+        {columns.onOpenMcpSettings !== undefined && (
+          <button type="button" onClick={columns.onOpenMcpSettings}>
+            {t("codingWorkbench.mcp.manage")}
+          </button>
+        )}
       </div>
       <CodingWorkbenchTrustAffordance
         binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -1367,20 +1498,6 @@ function WorkbenchHeader({
       />
     </header>
   );
-}
-
-// Epic #3384 cascade, end-to-end run 2026-09-05: after a stop, this window's activity feed showed
-// "Reconnect activity" and stayed disconnected even once a different run started — the operator
-// had to click Reconnect (or reload the page) before seeing anything for it. `retry` is a stable,
-// pure epoch-bump (`useCodingWorkbenchSafeActivity`); calling it once per newly observed run id is
-// therefore always safe, whatever the feed's current status happens to be.
-function useReconnectActivityOnNewRun(runId: string | undefined, retry: () => void): void {
-  const seenRunIdRef = useRef<string | undefined>(runId);
-  useEffect(() => {
-    if (runId === undefined || runId === seenRunIdRef.current) return;
-    seenRunIdRef.current = runId;
-    retry();
-  }, [runId, retry]);
 }
 
 // Lab ledger F2 (#3873): a streamed answer grows inside one message, whose activity timestamp stays
@@ -1482,9 +1599,10 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
+  const jiraPod = useCodingWorkbenchJiraPod();
   const issueIntake = useCodingWorkbenchIssueIntake(
     repositoryRoot ?? "",
     `${activeWorkspace.activeBinding?.workspaceId ?? ""}:${history.conversationId ?? ""}`,
@@ -1522,7 +1640,7 @@ function WorkbenchColumns({
     runtimeEventSignal,
   });
   // The active workspace's live root, and whether that binding is still resolving — shared by the
-  // headless editor bridge and `CodingWorkbenchChanges` below so a workspace switch mid-run is
+  // headless editor bridge and the Changes hook below so a workspace switch mid-run is
   // handled identically by both (workbench audit, 2026-09-03). Each also receives the run's
   // SUBMISSION-time root: the server bound the run to the pointer it read when Start arrived, so a
   // Start whose response lands after a switch must still bind this run to the workspace it was
@@ -1537,19 +1655,15 @@ function WorkbenchColumns({
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
   });
-  // Epic #3384 cascade: a run this window observes as a NEW run id — a status poll or stream
-  // catching up after a stop, or a run started from another paired client — must not leave the
-  // activity feed sitting on "Reconnect activity" until the operator clicks it (or reloads the
-  // page). `activity`'s own connection effect already reacts to a `runId` change; this reconnects
-  // it EVEN WHEN the feed's projected status is currently a failure/terminal one that would
-  // otherwise wait for a manual retry (`useCodingWorkbenchSafeActivity`'s own resync only fires
-  // for an ALREADY-known run's runtime events, never for the transition onto a brand new one).
-  useReconnectActivityOnNewRun(state.run.value?.runId, activity.retry);
   // The session stream is a bounded scroll region below the header; a run's newest activity lands
   // at its end. Follow that growth while the operator is at the bottom, never yank a reader who
   // scrolled up into the history, and start following again for every new run (#3257 Wave 0).
   const sessionStreamRef = useRef<HTMLDivElement>(null);
-  const { onScroll: onStreamScroll, resume: followNewest } = useFollowNewest(
+  const {
+    onScroll: onStreamScroll,
+    regionRef: streamRegionRef,
+    resume: followNewest,
+  } = useFollowNewest(
     sessionStreamRef,
     sessionGrowthKey(runtimeEventSignal, activity.feed, questions.questions.length),
   );
@@ -1560,12 +1674,24 @@ function WorkbenchColumns({
   const journey = useCodingWorkbenchJourney(
     state.run.value?.draftDelivery?.pullRequest !== undefined ? runId : undefined,
   );
+  // ONE read of the run's changes serves the journey summary and the Changes list below, and it
+  // refreshes when a status event, a diff summary or a settled workspace-changing tool says the
+  // worktree may have moved (native edits emit no runtime event of their own, #3897).
   const journeyChanges = useCodingWorkbenchChanges({
     root: liveWorkspaceRoot,
     runId: state.run.value?.runId,
-    changeSignal: latestChangesSignal(state.events),
+    changeSignal: changesRefreshSignal(state.events, activity.feed),
     bindingPending: workspaceBindingPending,
     submittedRoot: runBoundRoot,
+  });
+  // Undo / Restore of the newest turn (B3): counts only, for a run that is still open or that
+  // settled and whose healthy runtime the server still holds for undo (#3904 AC3); the server answers
+  // no counts once that window has closed.
+  const revert = useCodingWorkbenchRevert({
+    runId: state.run.value?.runId,
+    live: REVERT_READ_STATES.has(state.run.value?.state ?? ""),
+    revision: state.run.value?.revision,
+    changeSignal: changesRefreshSignal(state.events, activity.feed),
   });
   const pausedRun = state.run.value?.state === "paused" ? state.run.value : undefined;
   const resumeMode = selectedResumeMode(
@@ -1579,42 +1705,43 @@ function WorkbenchColumns({
     setProjectMemoryEnabled(true);
   }, [repositoryRoot]);
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
-  const startTask = (draft = taskIntent): void => {
-    const submittedDraft = draft.trim();
-    void issueIntake.submit(submittedDraft, async (issue): Promise<void> => {
-      runWorkspace.captureSubmission();
-      await actions.start(submittedDraft, {
-        projectMemoryEnabled,
-        conversationId: history.conversationId,
-        issue,
-      });
-    });
-  };
+  const promptDelivery = usePromptDeliveryNotice(state.mutation, runId);
+  const taskActions = useTaskComposerActions({
+    actions,
+    issueIntake,
+    runWorkspace,
+    promptDelivery,
+    taskIntent,
+    projectMemoryEnabled,
+    jiraPodId: jiraPod.podId,
+    conversationId: history.conversationId,
+    fork: history.fork,
+    resumeMode,
+  });
   const taskComposer = (
     <TaskStartSection
       taskIntent={taskIntent}
       onTaskIntentChange={onTaskIntentChange}
-      actions={{
-        onStart: startTask,
-        onPause: () => void actions.pause(),
-        onStop: () => void actions.stop(),
-        onResume: () => {
-          if (resumeMode !== null) void actions.resume(resumeMode);
-        },
-        onSend: (draft): void => void actions.submitFollowUp(draft.trim()),
-      }}
+      actions={taskActions.composer}
+      promptInputs={offeredCodingWorkbenchPromptInputs(state)}
+      referenceRoot={composerReferenceRoot(state, runWorkspace, activeWorkspace, repositoryRoot)}
+      runId={runId}
+      deliveryNotice={promptDelivery.notice}
       canStart={canStartAtLocation(state, locationState)}
       runState={state.run.value?.state}
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={issuePending || state.mutation.status === "pending"}
+      stopPending={state.mutation.kind === "stop" && state.mutation.status === "pending"}
       startBusy={
         issuePending || (state.mutation.kind === "start" && state.mutation.status === "pending")
       }
       startBlockedReason={startBlocker}
       projectMemoryEnabled={projectMemoryEnabled}
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}
+      jiraPod={jiraPod.selection}
       autonomyMode={confirmedMode(state)}
       autonomyLabel={confirmedModeLabel(state, t)}
+      activeRunMode={activeRunMode(state)}
       requestedMode={state.requestedMode}
       runtimePreference={state.runtimePreference}
       configurationLocked={
@@ -1630,6 +1757,13 @@ function WorkbenchColumns({
       reasoningEffort={state.reasoningEffort}
       onSelectedModelChange={onSelectedModelChange}
       onReasoningEffortChange={actions.setReasoningEffort}
+      offeredAgents={offeredCodingWorkbenchAgents(state)}
+      agent={state.agent}
+      agentLocked={agentSelectionLocked(state, issuePending)}
+      onAgentChange={(agent): void => {
+        actions.setAgent(agent);
+        reportAgentSelection(agent);
+      }}
     />
   );
   const repositorySelector = (
@@ -1701,97 +1835,115 @@ function WorkbenchColumns({
     questions: questions.questions.length > 0,
     review: editorBridge.pendingReview !== null,
     research: research.grant !== null,
+    // An undo the server still offers for a settled run is never hidden behind the welcome.
+    revert: revert.revert !== null,
   });
   return (
     <div className={styles.session}>
-      {showWelcome ? (
-        <WorkbenchWelcome />
-      ) : (
-        <div
-          ref={sessionStreamRef}
-          className={styles.sessionStream}
-          role="log"
-          aria-label={t("codingWorkbench.readiness.eventStream.label")}
-          onScroll={onStreamScroll}
-          // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
-          tabIndex={0}
-        >
-          <CodingTaskTranscript session={history} shownRun={timeline.shownRun} />
-          <PermissionPrompt state={state} research={research} onDecision={onDecision} />
-          <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
-          <CodingWorkbenchDraftDelivery
-            snapshot={state.run.value ?? undefined}
-            onReviewDescription={(descriptionReview): void => {
-              // The server retains the reviewable proposal under the run's task workspace root
-              // (`descriptionApplicationTarget`: `workspace.binding.activeRoot`), never under the
-              // repository root this settled Workbench labels; the governed pull request card must
-              // open on that exact root or its retained review resolves an empty proposal holder.
-              const root = liveWorkspaceRootOf(activeWorkspace) ?? repositoryRoot;
-              if (root === null) return;
-              onOpenGit({
-                root,
-                binding: "task-workspace",
-                descriptionReview,
-              });
-            }}
-          />
-          <CodingWorkbenchJourneyOutcome
-            snapshot={state.run.value ?? undefined}
-            outcome={journey.outcome}
-            onRefresh={journey.onRefresh}
-            changedFiles={changedFilesSummary(journeyChanges)}
-            markReadyAvailable={onProposeReady !== undefined}
-            {...optionalMarkReadyHandler(onProposeReady)}
-          />
-          <CodingWorkbenchCommitResult
-            result={state.run.value?.verifiedCommitResult}
-            runId={runId}
-          />
-          <ChangesetReviewPanel
-            review={editorBridge.pendingReview}
-            onApprove={editorBridge.approve}
-            onDeny={editorBridge.deny}
-            onRetry={editorBridge.retry}
-          />
-          <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
-          <ResearchGrantChip
-            grant={research.grant ?? undefined}
-            busy={state.mutation.status === "pending"}
-            onRevoke={() => {
-              if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
-            }}
-          />
-          <ApprovedSkillsDisclosure
-            status={skills.status}
-            skills={skills.skills ?? undefined}
-            retry={skills.retry}
-          />
-          <Timeline
-            active={runIsActive}
-            generating={generatingRunState(state.run.value?.state)}
-            events={timeline.events}
-            activity={timeline.activity}
-            questions={questions}
-            focusRef={focusRef}
-          />
-          <CodingWorkbenchChanges
-            root={liveWorkspaceRoot}
-            runId={state.run.value?.runId}
-            changeSignal={latestChangesSignal(state.events)}
-            bindingPending={workspaceBindingPending}
-            submittedRoot={runBoundRoot}
-            pairing={state.pairing}
-          />
-        </div>
-      )}
-      <div className={styles.composerDock}>
+      <div className={styles.cmpSessionContent}>
         {runStatus}
+        {showWelcome ? (
+          <WorkbenchWelcome />
+        ) : (
+          <div
+            ref={streamRegionRef}
+            className={styles.sessionStream}
+            role="log"
+            aria-label={t("codingWorkbench.readiness.eventStream.label")}
+            onScroll={onStreamScroll}
+            // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
+            tabIndex={0}
+          >
+            <CodingTaskTranscript
+              session={history}
+              shownRun={timeline.shownRun}
+              onFork={runIsActive ? undefined : history.beginFork}
+            />
+            <PermissionPrompt
+              // A new request is a new decision: remount so the previous request's focused Approve
+              // (and its review state) can never be reused to decide it.
+              key={pendingPermissionKey(state)}
+              state={state}
+              research={research}
+              onDecision={onDecision}
+            />
+            <CodingWorkbenchCiReadiness snapshot={state.run.value ?? undefined} />
+            <CodingWorkbenchDraftDelivery
+              snapshot={state.run.value ?? undefined}
+              onReviewDescription={(descriptionReview): void => {
+                // The server retains the reviewable proposal under the run's task workspace root
+                // (`descriptionApplicationTarget`: `workspace.binding.activeRoot`), never under the
+                // repository root this settled Workbench labels; the governed pull request card must
+                // open on that exact root or its retained review resolves an empty proposal holder.
+                const root = liveWorkspaceRootOf(activeWorkspace) ?? repositoryRoot;
+                if (root === null) return;
+                onOpenGit({
+                  root,
+                  binding: "task-workspace",
+                  descriptionReview,
+                });
+              }}
+            />
+            <CodingWorkbenchJourneyOutcome
+              snapshot={state.run.value ?? undefined}
+              outcome={journey.outcome}
+              onRefresh={journey.onRefresh}
+              changedFiles={changedFilesSummary(journeyChanges)}
+              markReadyAvailable={onProposeReady !== undefined}
+              {...optionalMarkReadyHandler(onProposeReady)}
+            />
+            <CodingWorkbenchCommitResult
+              result={state.run.value?.verifiedCommitResult}
+              runId={runId}
+            />
+            <ChangesetReviewPanel
+              review={editorBridge.pendingReview}
+              onApprove={editorBridge.approve}
+              onDeny={editorBridge.deny}
+              onRetry={editorBridge.retry}
+            />
+            <RecoveryPanel state={state} taskIntent={taskIntent} actions={actions} />
+            <ResearchGrantChip
+              grant={research.grant ?? undefined}
+              busy={state.mutation.status === "pending"}
+              onRevoke={() => {
+                if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
+              }}
+            />
+            <ApprovedSkillsDisclosure
+              status={skills.status}
+              skills={skills.skills ?? undefined}
+              retry={skills.retry}
+            />
+            <CodingWorkbenchMcpServers
+              runId={state.run.value?.runId}
+              revision={state.run.value?.revision}
+            />
+            <Timeline
+              active={runIsActive}
+              generating={generatingRunState(state.run.value?.state)}
+              events={timeline.events}
+              activity={timeline.activity}
+              questions={questions}
+              focusRef={focusRef}
+            />
+            <CodingWorkbenchRevertBar
+              revert={revert.revert}
+              busy={state.mutation.status === "pending"}
+              onRevert={(action): void => void actions.revert(action)}
+            />
+            <CodingWorkbenchChangesView changes={journeyChanges} pairing={state.pairing} />
+          </div>
+        )}
+      </div>
+      <div className={styles.composerDock}>
         {repositorySelector}
         <LocationBindingNotices locationState={locationState} />
+        <CodingTaskForkNotice fork={history.fork} onCancel={history.cancelFork} />
         <CodingWorkbenchIssueIntake
           state={issueIntake.state}
           onCancel={issueIntake.cancel}
-          onRetry={(): void => startTask()}
+          onRetry={taskActions.retryStart}
           repositoryPath={repositoryRoot ?? ""}
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
@@ -1819,6 +1971,14 @@ function WorkbenchColumns({
             }}
           />
         </div>
+        <CodingWorkbenchInboxPanel
+          runId={runId}
+          running={state.run.value?.state === "running"}
+          revision={state.run.value?.revision}
+          deliveredSignal={deliveredMessageSignal(activity.feed)}
+          busy={state.mutation.status === "pending"}
+          onAction={(action, itemId): void => void actions.inboxAction(action, itemId)}
+        />
         {taskComposer}
       </div>
     </div>
@@ -1852,6 +2012,12 @@ function confirmedModeLabel(
 ): string {
   const mode = confirmedMode(state);
   return mode === null ? t("codingWorkbench.mode.unconfirmed") : modeLabel(mode, t);
+}
+
+/** The confirmed mode of the run that is active; null when no run is. */
+function activeRunMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {
+  const snapshot = state.run.value;
+  return activeRunState(snapshot?.state) ? (snapshot?.effectiveMode ?? null) : null;
 }
 
 function confirmedMode(state: CodingWorkbenchRuntimeState): CodingWorkbenchMode | null {
@@ -1994,6 +2160,16 @@ function sessionRunFacts(
       value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
     },
   ];
+  // The primary agent is stated only where the server offers a choice (#3897).
+  if (offeredCodingWorkbenchAgents(state).length > 1) {
+    facts.push({
+      label: t("codingWorkbench.info.agent"),
+      // A custom primary agent (#3903 AC1) is shown by its own name.
+      value: isCodingWorkbenchBuiltInAgent(state.agent)
+        ? t(`codingWorkbench.composer.agent.${state.agent}`)
+        : state.agent,
+    });
+  }
   if (issue !== undefined) {
     facts.push({
       primary: true,
@@ -2058,7 +2234,13 @@ function SessionContextBar({
     posture,
     t,
   });
-  return <CodingWorkbenchInfoPanel facts={facts} contextUsage={state.run.value?.contextUsage} />;
+  return (
+    <CodingWorkbenchInfoPanel
+      facts={facts}
+      contextUsage={state.run.value?.contextUsage}
+      runtimeVersion={state.runtime.value?.runtimeVersion}
+    />
+  );
 }
 
 interface LiveSectionProps {
@@ -2119,6 +2301,18 @@ function RuntimeControls({
   );
 }
 
+/** The authenticated review channel's half of {@link approvalEvidenceBound}. */
+function approvalReviewBound(
+  request: CodingWorkbenchRuntimePendingPermission,
+  approvalReview: UseCodingWorkbenchApprovalReviewResult,
+): boolean {
+  if (approvalReviewRequestId(request) === undefined) return true;
+  const review = approvalReview.status === "ready" ? approvalReview.review : null;
+  if (review?.requestId !== request.requestId) return false;
+  // A native ask that names no command, path or address gives the human nothing to decide on.
+  return !isNativeActionPermission(request) || nativeActionNamesResource(review.nativeAction);
+}
+
 /**
  * Whether the evidence THIS request is decided on is loaded and belongs to it (#3381 review).
  *
@@ -2129,21 +2323,34 @@ function RuntimeControls({
  * channel and the human-control invariant (ADR-0129 D1), so Approve fails closed until the evidence
  * is READY and its `requestId` binds it to the request on screen. Deny and the channel's own retry
  * stay available — the recovery path is to see the evidence or refuse, never to wave it through.
+ * A native OpenCode ask whose review names no command, path or address stays unapprovable too:
+ * there is nothing to decide about.
  */
 function approvalEvidenceBound(
   request: CodingWorkbenchRuntimePendingPermission,
   approvalReview: UseCodingWorkbenchApprovalReviewResult,
   research: UseCodingWorkbenchResearchResult,
 ): boolean {
-  if (approvalReviewRequestId(request) !== undefined) {
-    const review = approvalReview.status === "ready" ? approvalReview.review : null;
-    if (review?.requestId !== request.requestId) return false;
-  }
-  if (request.kind === "network-egress") {
+  if (!approvalReviewBound(request, approvalReview)) return false;
+  if (request.kind === "network-egress" && !isNativeActionPermission(request)) {
     const ask = research.status === "ready" ? research.ask : null;
     if (ask?.requestId !== request.requestId) return false;
   }
   return true;
+}
+
+/** A loaded native review that names nothing says so; any other unbound ask is still loading. */
+function unboundNoteKey(
+  native: boolean,
+  approvalReview: UseCodingWorkbenchApprovalReviewResult,
+): CodingWorkbenchMessageKey {
+  return native && approvalReview.review?.nativeAction !== undefined
+    ? "codingWorkbench.approval.native.nothingNamed"
+    : "codingWorkbench.approval.evidenceRequired";
+}
+
+function pendingPermissionKey(state: CodingWorkbenchRuntimeState): string {
+  return state.run.value?.pendingPermission?.requestId ?? "no-permission";
 }
 
 function PermissionPrompt({
@@ -2169,34 +2376,106 @@ function PermissionPrompt({
     state.run.value ?? undefined,
   );
   const evidenceBound = approvalEvidenceBound(request, approvalReview, research);
+  const native = isNativeActionPermission(request);
+  // Less is more (#3907, owner): the card leads with what the agent wants to do and the decision.
+  // Every bounded policy fact stays one click away in the collapsed details, never off the card.
   return (
     <section className={cx(styles.card, styles.permission)} aria-labelledby="permission-title">
-      <PanelTitle eyebrow={t("codingWorkbench.approval.eyebrow")} id="permission-title" focusable>
-        {t("codingWorkbench.approval.title")}
+      <PanelTitle eyebrow={approvalEyebrow(request, t)} id="permission-title" focusable>
+        {approvalTitle(request, native ? approvalReview.review?.nativeAction : undefined, t)}
       </PanelTitle>
-      <ApprovalFacts request={request} t={t} />
-      <ApprovalReviewContent kind={request.actionKind} review={approvalReview} t={t} />
-      {request.kind === "network-egress" ? <ResearchDestination state={research} t={t} /> : null}
-      <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>
+      <ApprovalReviewContent
+        kind={request.actionKind}
+        native={native}
+        review={approvalReview}
+        t={t}
+      />
+      {request.kind === "network-egress" && !native ? (
+        <ResearchDestination state={research} t={t} />
+      ) : null}
       <ApprovalDecisionControls
         busy={state.mutation.status === "pending"}
         evidenceBound={evidenceBound}
+        unboundNoteKey={unboundNoteKey(native, approvalReview)}
         onDecision={onDecision}
         t={t}
       />
+      <ApprovalDetails request={request} native={native} t={t} />
     </section>
   );
 }
 
+/** The bounded policy facts and, for a governed action, its help: collapsed below the decision. */
+function ApprovalDetails({
+  request,
+  native,
+  t,
+}: {
+  readonly request: CodingWorkbenchRuntimePendingPermission;
+  readonly native: boolean;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <details className={styles.cmpApprovalDetails}>
+      <summary>{t("codingWorkbench.approval.details")}</summary>
+      {native ? null : <p className={styles.helpText}>{t(approvalHelpKey(request.actionKind))}</p>}
+      <ApprovalFacts request={request} t={t} />
+    </details>
+  );
+}
+
+/** A high or critical risk is named beside the eyebrow, so it is read before the decision. */
+function approvalEyebrow(
+  request: CodingWorkbenchRuntimePendingPermission,
+  t: CodingWorkbenchTranslate,
+): string {
+  const eyebrow = t("codingWorkbench.approval.eyebrow");
+  if (request.risk !== "high" && request.risk !== "critical") return eyebrow;
+  return `${eyebrow} · ${t("codingWorkbench.approval.risk")}: ${t(APPROVAL_RISK_MESSAGE_KEYS[request.risk])}`;
+}
+
+/** The card names the action itself: the native permission, else the supervised action kind. */
+function approvalTitle(
+  request: CodingWorkbenchRuntimePendingPermission,
+  nativeAction: Parameters<typeof CodingWorkbenchNativeActionReview>[0]["action"] | undefined,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (nativeAction !== undefined) return nativePermissionLabel(nativeAction.permission, t);
+  if (request.actionKind !== undefined) return t(ACTION_KIND_MESSAGE_KEYS[request.actionKind]);
+  return t(PERMISSION_KIND_MESSAGE_KEYS[request.kind]);
+}
+
+const APPROVAL_NATIVE_MESSAGE_KEYS = {
+  loading: "codingWorkbench.approval.native.loading",
+  unavailable: "codingWorkbench.approval.native.unavailable",
+  retry: "codingWorkbench.approval.native.retry",
+} as const;
+
 function ApprovalReviewContent({
   kind,
+  native,
   review,
   t,
 }: {
   readonly kind: CodingWorkbenchRuntimePendingPermission["actionKind"];
+  readonly native: boolean;
   readonly review: UseCodingWorkbenchApprovalReviewResult;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  // A native OpenCode action (#3897): the human sees the agent's own command, paths or address.
+  if (native) {
+    const action = review.review?.nativeAction;
+    return action === undefined ? (
+      <fieldset
+        className={styles.approvalResearch}
+        aria-label={t("codingWorkbench.approval.native.title")}
+      >
+        <RetryMessage {...detailMessageProps(review, t, APPROVAL_NATIVE_MESSAGE_KEYS)} />
+      </fieldset>
+    ) : (
+      <CodingWorkbenchNativeActionReview action={action} t={t} />
+    );
+  }
   return (
     <>
       <StageReviewDiagnostic
@@ -2220,11 +2499,14 @@ const APPROVAL_EVIDENCE_NOTE_ID = "coding-workbench-approval-evidence-note";
 function ApprovalDecisionControls({
   busy,
   evidenceBound,
+  unboundNoteKey,
   onDecision,
   t,
 }: {
   readonly busy: boolean;
   readonly evidenceBound: boolean;
+  /** Why Approve is unavailable: the evidence has not loaded, or it names nothing to approve. */
+  readonly unboundNoteKey: CodingWorkbenchMessageKey;
   readonly onDecision: (decision: CodingWorkbenchRuntimeApprovalDecision) => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
@@ -2232,7 +2514,7 @@ function ApprovalDecisionControls({
     <>
       {evidenceBound ? null : (
         <output className={styles.helpText} id={APPROVAL_EVIDENCE_NOTE_ID}>
-          {t("codingWorkbench.approval.evidenceRequired")}
+          {t(unboundNoteKey)}
         </output>
       )}
       <div className={styles.controls}>
@@ -2240,6 +2522,7 @@ function ApprovalDecisionControls({
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
           disabled={busy || !evidenceBound}
+          aria-busy={busy}
           {...(evidenceBound ? {} : { "aria-describedby": APPROVAL_EVIDENCE_NOTE_ID })}
           onClick={() => onDecision("approved")}
         >
@@ -2249,6 +2532,7 @@ function ApprovalDecisionControls({
           className={styles.button}
           type="button"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => onDecision("denied")}
         >
           {t("codingWorkbench.approval.deny")}
@@ -2264,7 +2548,7 @@ function ApprovalDecisionControls({
  * high risk): the headless bridge (`useCodingWorkbenchEditorBridge`) only reaches this state when
  * the run's mode requires review, so it must never auto-resolve on its own.
  */
-function ChangesetReviewPanel({
+export function ChangesetReviewPanel({
   review,
   onApprove,
   onDeny,
@@ -2301,16 +2585,12 @@ function ChangesetReviewPanel({
         {review.diff.files.length === 0 ? (
           <p className={styles.helpText}>{t("codingWorkbench.changesetReview.empty")}</p>
         ) : (
-          review.diff.files.map((file, index) => (
-            <DiffFileSection
-              key={`${file.path}:${String(index)}`}
-              file={file}
-              index={index}
-              idPrefix="coding-workbench-changeset-review-file"
-              sectionRef={() => undefined}
-              labels={labels}
-            />
-          ))
+          <CodingWorkbenchDiffFiles
+            surface="changeset-review"
+            files={review.diff.files}
+            idPrefix="coding-workbench-changeset-review-file"
+            labels={labels}
+          />
         )}
       </div>
       <div className={styles.controls}>
@@ -2551,6 +2831,10 @@ const ACTION_KIND_MESSAGE_KEYS: Record<
 > = {
   "file-edit": "codingWorkbench.approval.actionKind.file-edit",
   "git-stage": "codingWorkbench.approval.actionKind.git-stage",
+  "git-unstage": "codingWorkbench.approval.actionKind.git-unstage",
+  "git-fetch": "codingWorkbench.approval.actionKind.git-fetch",
+  "git-pull": "codingWorkbench.approval.actionKind.git-pull",
+  "git-branch": "codingWorkbench.approval.actionKind.git-branch",
   "verification-command": "codingWorkbench.approval.actionKind.verification-command",
   "ci-observe": "codingWorkbench.approval.actionKind.ci-observe",
   "connector-read": "codingWorkbench.approval.actionKind.connector-read",
@@ -2626,7 +2910,10 @@ function approvalFacts(
     { label: t("codingWorkbench.approval.scope"), value: request.scopeLabel ?? notSpecified },
     {
       label: t("codingWorkbench.approval.commandClass"),
-      value: request.commandLabel ?? t("codingWorkbench.approval.notApplicable"),
+      value:
+        request.commandLabel === undefined
+          ? t("codingWorkbench.approval.notApplicable")
+          : nativeActionLabel(request.commandLabel, t),
     },
     {
       label: t("codingWorkbench.approval.connectorScopes"),
@@ -2688,6 +2975,7 @@ function RecoveryPanel({
           className={cx(styles.button, styles.buttonPrimary)}
           type="button"
           disabled={busy || !state.canRetry || taskIntent.trim().length === 0}
+          aria-busy={busy}
           onClick={() => void actions.retry(taskIntent)}
         >
           {t("codingWorkbench.recovery.retry")}
@@ -2697,6 +2985,7 @@ function RecoveryPanel({
           className={styles.button}
           type="button"
           disabled={busy}
+          aria-busy={busy}
           onClick={() => void actions.acknowledgeRecovery()}
         >
           {t("codingWorkbench.recovery.acknowledge")}

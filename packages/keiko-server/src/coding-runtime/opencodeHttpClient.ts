@@ -41,6 +41,8 @@ const FIXED_SESSION_TITLE = "Keiko governed runtime";
 const SESSION_ID = /^ses_[A-Za-z0-9_-]{1,251}$/u;
 const QUESTION_ID = /^que_[A-Za-z0-9_-]{1,251}$/u;
 const PERMISSION_ID = /^per[A-Za-z0-9_-]{1,253}$/u;
+// The only answers Keiko gives a permission request; `always` is never one of them.
+const PERMISSION_REPLIES: ReadonlySet<string> = new Set(["once", "reject"]);
 const MESSAGE_ID = /^msg_[A-Za-z0-9_-]{1,251}$/u;
 
 export interface OpenCodeQuestionRequest {
@@ -273,6 +275,9 @@ async function replyPermission(
   requestOptions: OpenCodeHttpRequestOptions,
 ): Promise<boolean> {
   if (!PERMISSION_ID.test(requestId)) throw new Error("opencode-permission-invalid");
+  // The runtime remembers an `always` for the rest of its session, which a retained and resumed
+  // session would carry across runs (S02): Keiko answers one request at a time, whatever the type says.
+  if (!PERMISSION_REPLIES.has(reply)) throw new Error("opencode-permission-reply-invalid");
   return booleanResponse(
     options,
     endpoint,
@@ -884,6 +889,8 @@ function readEventChunk(
     typeof idleTimeoutMs === "number" && Number.isSafeInteger(idleTimeoutMs) && idleTimeoutMs > 0
       ? idleTimeoutMs
       : DEFAULT_EVENT_IDLE_TIMEOUT_MS;
+  // An abort that fired between two pulls has no listener to hear it: wait for nothing more.
+  if (signal?.aborted === true) return Promise.reject(new Error("opencode-event-aborted"));
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       reject(new Error("opencode-event-idle"));

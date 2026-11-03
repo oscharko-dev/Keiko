@@ -48,7 +48,14 @@ const SESSION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["grounded-chat", "desktop-chat", "streaming-chat", "git-description", "unspecified"],
+      values: [
+        "grounded-chat",
+        "desktop-chat",
+        "streaming-chat",
+        "git-description",
+        "coding-run",
+        "unspecified",
+      ],
     },
     releaseReason: {
       type: "string",
@@ -76,7 +83,8 @@ const SESSION_OPERATION = defineActivityLogOperation({
 });
 interface OperationContext {
   readonly correlationId?: string | undefined;
-  readonly surface?: "grounded-chat" | "desktop-chat" | "streaming-chat" | "git-description";
+  readonly surface?:
+    "grounded-chat" | "desktop-chat" | "streaming-chat" | "git-description" | "coding-run";
 }
 type OperationDeps = Pick<UiHandlerDeps, "codingAppSessionChannel" | "activityLog">;
 function operationAuthorityState(

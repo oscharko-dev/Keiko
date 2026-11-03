@@ -9,7 +9,7 @@ import type {
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
-import { catalogArray, catalogObject, copyCatalogJson, exactCatalogKeys } from "./json.js";
+import { catalogArray, catalogObject, copyCatalogEnvelope, exactCatalogKeys } from "./json.js";
 import { catalogDigest, semanticDigest, toolRefKey } from "./identity.js";
 import { createToolDescriptor, verifyToolDescriptor } from "./descriptor.js";
 import { createCatalogProfileDeclaration, stampCatalogProfile } from "./profile.js";
@@ -35,7 +35,7 @@ function descriptorsFrom(
   value: unknown,
   previous: readonly ToolDescriptor[],
 ): readonly ToolDescriptor[] {
-  const descriptors = catalogArray(copyCatalogJson(value)).map((entry): ToolDescriptor => {
+  const descriptors = catalogArray(copyCatalogEnvelope(value)).map((entry): ToolDescriptor => {
     const object = catalogObject(entry);
     const descriptor = Object.hasOwn(object, "descriptorDigest")
       ? verifyToolDescriptor(object)
@@ -192,7 +192,7 @@ export function verifyToolCatalogSnapshot(value: unknown): ToolCatalog {
   if (typeof value === "object" && value !== null && VALIDATED_CATALOGS.has(value)) {
     return value as ToolCatalog;
   }
-  const object = catalogObject(copyCatalogJson(value));
+  const object = catalogObject(copyCatalogEnvelope(value));
   exactCatalogKeys(object, ["catalogRevision", "descriptors", "profiles", "compatibility"]);
   const revision = catalogDigest(object.catalogRevision);
   const descriptors = descriptorsFrom(object.descriptors, []);
@@ -213,7 +213,7 @@ export function verifyToolCatalogSnapshot(value: unknown): ToolCatalog {
 
 /** Pure snapshot construction: callers supply the comparison snapshot and compatibility clock. */
 export function createToolCatalog(value: unknown, context: CatalogCompilationContext): ToolCatalog {
-  const object = catalogObject(copyCatalogJson(value));
+  const object = catalogObject(copyCatalogEnvelope(value));
   exactCatalogKeys(object, ["descriptors", "profiles", "compatibility"]);
   const previous =
     context.previous === undefined ? undefined : verifyToolCatalogSnapshot(context.previous);

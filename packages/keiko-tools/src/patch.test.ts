@@ -10,6 +10,7 @@ import {
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   applyPatch,
   inspectPatch,
@@ -26,7 +27,7 @@ import {
   PatchApplyError,
   PatchValidationError,
 } from "./errors.js";
-import { makeWorkspace, recordingWriter } from "./_support.js";
+import { createDiffOfBytes, makeWorkspace, recordingWriter } from "./_support.js";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
@@ -224,6 +225,33 @@ describe("validatePatch — rejections", () => {
     });
     expect(v.ok).toBe(false);
     expect(v.reasons.map((r) => r.code)).toContain("size-limit");
+  });
+
+  // #4110: the tool host default is the one shared governed patch cap, and the boundary is exact.
+  it("accepts a patch of exactly the governed cap under the default limits (#4110)", () => {
+    const validation = validatePatch(
+      info,
+      createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES),
+    );
+    expect(validation.reasons).toEqual([]);
+    expect(validation.ok).toBe(true);
+    expect(validation.totalBytes).toBe(GOVERNED_PATCH_MAX_BYTES);
+  });
+
+  it("refuses a patch one byte over the governed cap with a size-limit reason (#4110)", () => {
+    const validation = validatePatch(
+      info,
+      createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES + 1),
+    );
+    expect(validation.ok).toBe(false);
+    expect(validation.reasons.map((reason) => reason.code)).toEqual(["size-limit"]);
+  });
+
+  it("applies a patch of exactly the governed cap under the default limits (#4110)", () => {
+    const diff = createDiffOfBytes("src/big.txt", GOVERNED_PATCH_MAX_BYTES);
+    const result = applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() });
+    expect(result.created).toEqual(["src/big.txt"]);
+    expect(existsSync(join(root, "src/big.txt"))).toBe(true);
   });
 
   it("rejects too many changed lines", () => {

@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "26649fe7bc1bcf06e87b099e01c526012203f031",
+  "classification": "Correct a test-only unsupported React Testing Library option; no product runtime or model input change",
+  "failure": {
+    "code": "TS2769",
+    "scope": "Workspace.test.tsx getByRole options",
+    "productionBuildFailed": true,
+    "uiWorkspaceTypecheckFailed": true,
+    "missingPreviousCheck": "Explicit UI workspace typecheck was omitted from checkpoint73; package/root typing did not cover this test",
+    "redArtifact": "checkpoint74-ui-typecheck-red-v1.json",
+    "redSha256": "b8abf331b99e552b766d0fdabf124b01eea1438fb4c0af85f0d8c32d1c893e3a"
+  },
+  "repair": "Remove the unsupported Playwright exact option from the React Testing Library query. The same string name, clicks, once-per-entry callback assertions and diagnostic assertions remain.",
+  "source": {
+    "path": "packages/keiko-ui/src/app/components/desktop/Workspace.test.tsx",
+    "sha256": "1953178a5632edff4f087dd63ae14ff7451b4f0ed4ef421d4acfeea6aac12877"
+  },
+  "sourceFreezeSha256": "d8df2bbbe36196102363aba7d519fd7f66656fca6811ba7aaf5063e62f9650dd",
+  "compiledFreezeSha256": "5fe77b4149002857dbd4e3380c52ef4a42b5011f9a2d8541af29728244d9ed3f",
+  "checks": [
+    {
+      "artifact": "checkpoint74-ui-typecheck-green-v1.json",
+      "sha256": "3f4a4a83bd06669b89dcb14cd6f27313e245f90258c4aaf1018e61d3aa5314ef",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint74-ui-production-build-v1.json",
+      "sha256": "2ea18f2b9cc2843803979b0df014104b7ce17dce4797a1f74a652bd0730ccff6",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint74-ui-coverage-v1.json",
+      "sha256": "b143bf233a52e3be91e096f88643dad3c0840c9a263161bcaec62ec4f69d6ee0",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint74-ui-lint-v1.json",
+      "sha256": "ab8edb9e87ae2e0b6e6291f7d044262c5322d90dfd637361c3b29ad6ffe19605",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint74-sonar-v1.json",
+      "sha256": "fb6961eb9ca320255f9d2116d85b209340a5afc180a32d629da34fef10229f71",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint74-editor-evidence-v1.json",
+      "sha256": "a0135d69553683a4f9d3177ea671df21bb476cc393ecc1ed39dfc58319050c53",
+      "exitCode": 0
+    }
+  ],
+  "uiCoverage": {
+    "passed": 10857,
+    "failed": 0,
+    "existingSkipped": 1,
+    "files": 563
+  },
+  "obsoleteNativeQualification": {
+    "runId": 39367947894,
+    "sourceHead": "26649fe7bc1bcf06e87b099e01c526012203f031",
+    "actualFinalConclusion": "cancelled",
+    "cancelledDuring": "Prepare the locked assembled product",
+    "acceptanceCredit": false
+  },
+  "productRuntimeSourcesChanged": false,
+  "skillsChanged": false,
+  "promptsChanged": false,
+  "modelOutputsRegraded": false,
+  "overallAcceptance": false,
+  "mergeAcceptance": false
+}

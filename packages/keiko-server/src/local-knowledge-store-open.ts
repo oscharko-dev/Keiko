@@ -245,6 +245,7 @@ export function localKnowledgeVectorIndexOptions(
 ): VectorIndexOptions {
   return {
     ...resolveVectorIndexOptions(undefined, deps.env),
+    logSink: processServerLogSink(),
     onUnexpectedFailure: (failure): void => {
       reportUnexpectedVectorIndexFailure(deps.diagnostics, failure);
     },

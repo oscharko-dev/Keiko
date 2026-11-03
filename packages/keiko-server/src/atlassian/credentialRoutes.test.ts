@@ -1,3 +1,20 @@
+import type {
+  JiraChatToolAuthoritySubject,
+  ChatToolReadGrant,
+  KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { createCapsule, listCapsules } from "@oscharko-dev/keiko-local-knowledge";
+import { openKnowledgeStoreForDeps } from "../local-knowledge-store-open.js";
+import {
+  AtlassianActionApprovalRegistry,
+  ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+} from "./actionApprovals.js";
+import {
+  EditorAgentAuthorityRegistry,
+  type ChatToolAuthorityResolution,
+} from "../editor/agentAuthorityRegistry.js";
+import { chatAuthorityFixture } from "../editor/chatAuthority.test-support.js";
 // Issue #2241 — /api/atlassian-connectors/credentials/* route integration tests. The createUiServer
 // fixture mirrors command-runner-routes.test.ts so the CSRF guard, JSON content-type gate,
 // host-check, correlation-id plumbing, and top-level catch all run live. Custody is REAL (the
@@ -7,12 +24,22 @@
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import type { Chat } from "../store/index.js";
+import { jiraChatActorDigest } from "./jiraPodAccess.js";
+import { invalidateJiraPodChats } from "./jiraPodLifecycle.js";
+import { runSerializedChatTurn } from "../chat-turn-serializer.js";
+import {
+  createFileServerLogSink,
+  createServerLogger,
+  setServerLogger,
+} from "../observability/index.js";
+import { resetServerLogger } from "../../../../tests/support/activity-log-test-support.js";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AtlassianCredentialCustodyError,
   createAtlassianCredentialCustody,
@@ -22,11 +49,14 @@ import {
   type AtlassianHttpBodyResult,
   type AtlassianHttpPort,
   type AtlassianHttpRequest,
+  type AtlassianHttpBodyRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
 } from "../../../../tests/support/activity-log-proof.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
@@ -36,7 +66,10 @@ import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { mockRequest, mockResponse } from "../_support.js";
 import type { RouteContext } from "../routes.js";
-import { atlassianCredentialMetadataPath } from "./credentialMetadataStore.js";
+import {
+  atlassianCredentialMetadataPath,
+  createAtlassianCredentialMetadataStore,
+} from "./credentialMetadataStore.js";
 import { buildAtlassianConnectorCredentialDeps } from "./wiring.js";
 import {
   handleCreateAtlassianConnectorCredential,
@@ -55,8 +88,9 @@ let configPath: string;
 let port: number;
 let diagnostics: ServerDiagnosticRecord[];
 let wiring: AtlassianConnectorCredentialDeps;
+let fixtureStore: ReturnType<typeof createInMemoryUiStore>;
 let fakePortResult: AtlassianHttpResult;
-let fakePortRequests: AtlassianHttpRequest[];
+let fakePortRequests: (AtlassianHttpRequest | AtlassianHttpBodyRequest)[];
 
 function vaultEnv(): Record<string, string> {
   return { KEIKO_ATLASSIAN_CONNECTOR_CREDENTIALS_KEY: randomBytes(32).toString("base64") };
@@ -70,8 +104,27 @@ function fakeHttpPortFactory(): (metadata: AtlassianCredentialMetadata) => Atlas
     };
 }
 
+function fakeHttpBodyPortFactory(): (
+  metadata: AtlassianCredentialMetadata,
+) => AtlassianHttpBodyPort {
+  return () => (request) => {
+    fakePortRequests.push(request);
+    if (fakePortResult.kind !== "response") return Promise.resolve(fakePortResult);
+    const bodyText = JSON.stringify({ accountId: "synthetic-id", active: true });
+    return Promise.resolve({
+      ...fakePortResult,
+      bodyText,
+      bodyBytes: Buffer.byteLength(bodyText),
+      truncated: false,
+    });
+  };
+}
+
 function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHandlerDeps {
   return {
+    serverPrincipal: () => activePrincipal,
+    agentAuthorityRegistry: fixtureAuthorityRegistry,
+    atlassianActionApprovalRegistry: fixtureApprovalRegistry,
     config: undefined,
     configPresent: false,
     evidenceStore: {
@@ -89,9 +142,68 @@ function baseDeps(atlassian: AtlassianConnectorCredentialDeps | undefined): UiHa
     },
     registry: createRunRegistry(),
     modelPortFactory: (): undefined => undefined,
-    store: createInMemoryUiStore(),
+    store: fixtureStore,
     ...(atlassian === undefined ? {} : { atlassianConnectorCredentials: atlassian }),
   };
+}
+
+let activePrincipal = "synthetic-operator";
+let fixtureAuthorityRegistry: EditorAgentAuthorityRegistry;
+let fixtureApprovalRegistry: AtlassianActionApprovalRegistry;
+
+function livePodCreateInput(): Record<string, unknown> {
+  return {
+    provider: "jira",
+    displayName: "Live Jira",
+    baseUrl: "https://jira.example.invalid/context",
+    authScheme: "bearer-pat",
+    deployment: "data-center",
+    apiToken: SYNTHETIC_TOKEN,
+    livePodCreationRequestId: "6d3eb557-e77f-4215-a806-af1826230b18",
+  };
+}
+
+function jiraProbeResponse(
+  request: AtlassianHttpBodyRequest,
+  status = 200,
+): AtlassianHttpBodyResult {
+  const bodyText = JSON.stringify(
+    request.url.endsWith("/serverInfo")
+      ? { version: "10.3.26", versionNumbers: [10, 3, 26], deploymentType: "Server" }
+      : { name: "synthetic-user", key: "synthetic-key", active: true },
+  );
+  return {
+    kind: "response",
+    status,
+    bodyText,
+    bodyBytes: Buffer.byteLength(bodyText),
+    truncated: false,
+  };
+}
+
+function verifyCredentialRequest(authRef: string): Promise<Response> {
+  return fetch(
+    `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(authRef)}/verify`,
+    { method: "POST", headers: csrfHeaders(), body: "{}" },
+  );
+}
+
+function probeSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve = (): void => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+function readVerificationEvidence(
+  sink: ReturnType<typeof createFileServerLogSink>,
+): readonly Record<string, unknown>[] {
+  sink.close?.();
+  return persistedActivityLogLines(
+    readPersistedActivityLog(configDir),
+    "atlassian.connection.checked",
+  ).map((line) => expectActivityLogProof("atlassian.connection.checked.line", line));
 }
 
 async function listen(srv: Server): Promise<number> {
@@ -175,6 +287,10 @@ function expectNoSecretBytes(text: string): void {
 }
 
 beforeEach(async () => {
+  fixtureStore = createInMemoryUiStore();
+  fixtureAuthorityRegistry = new EditorAgentAuthorityRegistry();
+  fixtureApprovalRegistry = new AtlassianActionApprovalRegistry();
+  activePrincipal = "synthetic-operator";
   // realpath: on macOS tmpdir() lives under the /var -> /private/var symlink, which the vault and
   // private-JSON writers' symlink-refusing path checks correctly reject.
   const realTmp = realpathSync(tmpdir());
@@ -185,6 +301,12 @@ beforeEach(async () => {
   fakePortRequests = [];
   fakePortResult = { kind: "response", status: 200 };
   const built = buildAtlassianConnectorCredentialDeps({
+    onLivePodInvalidated: (podId, generation, correlationId) => {
+      invalidateJiraPodChats(fixtureStore, podId, generation, correlationId, {
+        agentAuthorityRegistry: fixtureAuthorityRegistry,
+        atlassianActionApprovalRegistry: fixtureApprovalRegistry,
+      });
+    },
     configPath,
     env: vaultEnv(),
     egress: () => undefined,
@@ -192,7 +314,7 @@ beforeEach(async () => {
   wiring = {
     custody: built.custody,
     httpPortFactory: fakeHttpPortFactory(),
-    httpBodyPortFactory: built.httpBodyPortFactory,
+    httpBodyPortFactory: fakeHttpBodyPortFactory(),
   };
   const listening = await buildServer(baseDeps(wiring));
   server = listening.server;
@@ -201,6 +323,8 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await closeServer();
+  resetServerLogger();
+  fixtureStore.close();
   await rm(staticRoot, { recursive: true, force: true });
   await rm(configDir, { recursive: true, force: true });
 });
@@ -307,6 +431,12 @@ describe("POST /api/atlassian-connectors/credentials", () => {
   // ceiling as a server fault. Uses a stub custody instead of filling 64 real vault entries.
   it("answers 429 CREDENTIAL_LIMIT_EXCEEDED when custody has hit the storage cap", async () => {
     const stubCustody: AtlassianCredentialCustody = {
+      updateLivePod: (): never => {
+        throw new Error("Unexpected Live Pod update");
+      },
+      beginVerification: (): undefined => undefined,
+      finishVerification: (): boolean => false,
+      observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
       },
@@ -370,10 +500,20 @@ describe("POST /api/atlassian-connectors/credentials", () => {
   // through the real formatter/registry path rather than only asserted field-by-field, so the
   // `atlassian.credential.rejected.reason` proof id resolves against a production-computed event —
   // never a hand-built one (this task's rule 1).
-  it("persists atlassian.credential.rejected as a registered Activity Log proof line", async () => {
+  it.each([
+    { code: "credential-limit-exceeded", status: 429, errorKind: "rate-limited" },
+    { code: "creation-conflict", status: 409, errorKind: "validation-failed" },
+    { code: "credential-changed", status: 409, errorKind: "validation-failed" },
+  ] as const)("persists the registered credential rejection: $code", async (failure) => {
     const stubCustody: AtlassianCredentialCustody = {
+      updateLivePod: (): never => {
+        throw new Error("Unexpected Live Pod update");
+      },
+      beginVerification: (): undefined => undefined,
+      finishVerification: (): boolean => false,
+      observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
-        throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
+        throw new AtlassianCredentialCustodyError(failure.code);
       },
       getMetadata: (): undefined => undefined,
       list: (): readonly AtlassianCredentialMetadata[] => [],
@@ -405,7 +545,7 @@ describe("POST /api/atlassian-connectors/credentials", () => {
       headers: csrfHeaders(),
       body: createBody(),
     });
-    expect(res.status).toBe(429);
+    expect(res.status).toBe(failure.status);
 
     const rejection = activityEvents.find((e) => e.op === "atlassian.credential.rejected");
     if (rejection === undefined) throw new Error("expected a rejection event");
@@ -413,9 +553,9 @@ describe("POST /api/atlassian-connectors/credentials", () => {
     const persisted = expectActivityLogProof("atlassian.credential.rejected.reason", line);
     expect(persisted).toMatchObject({
       category: "security",
-      errorKind: "rate-limited",
-      status: 429,
-      reason: "credential-limit-exceeded",
+      errorKind: failure.errorKind,
+      status: failure.status,
+      reason: failure.code,
     });
   });
 
@@ -435,6 +575,12 @@ describe("POST /api/atlassian-connectors/credentials", () => {
 describe("Atlassian credential route in-memory failure handling", () => {
   it("preserves the typed 429 when activity logging fails", async (): Promise<void> => {
     const custody: AtlassianCredentialCustody = {
+      updateLivePod: (): never => {
+        throw new Error("Unexpected Live Pod update");
+      },
+      beginVerification: (): undefined => undefined,
+      finishVerification: (): boolean => false,
+      observeAuthenticationFailure: (): boolean => false,
       create: (): never => {
         throw new AtlassianCredentialCustodyError("credential-limit-exceeded");
       },
@@ -545,7 +691,7 @@ describe("POST /api/atlassian-connectors/credentials/:authRef/verify", () => {
     [{ kind: "response", status: 200 } satisfies AtlassianHttpResult, "ok"],
     [{ kind: "response", status: 401 } satisfies AtlassianHttpResult, "auth-failed"],
     [{ kind: "response", status: 403 } satisfies AtlassianHttpResult, "forbidden"],
-    [{ kind: "response", status: 302 } satisfies AtlassianHttpResult, "unreachable"],
+    [{ kind: "response", status: 302 } satisfies AtlassianHttpResult, "redirect-refused"],
     [{ kind: "timeout" } satisfies AtlassianHttpResult, "timeout"],
     [{ kind: "network-error" } satisfies AtlassianHttpResult, "unreachable"],
   ])("maps the transport outcome %o to %s", async (portResult, expected) => {
@@ -639,6 +785,445 @@ describe("redaction under failure", () => {
 });
 
 describe("end-to-end verify through the gateway transport adapter", () => {
+  it("records a failed verification only as a probe through the real credential transport", async () => {
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    try {
+      const real = buildAtlassianConnectorCredentialDeps({
+        configPath,
+        env: vaultEnv(),
+        egress: () => undefined,
+        activityLog: sink,
+        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status: 401 })),
+      });
+      await rebuild(real);
+      const created = real.custody.create(
+        livePodCreateInput(),
+        jiraChatActorDigest(baseDeps(real)),
+      );
+      expect(await (await verifyCredentialRequest(created.authRef)).json()).toMatchObject({
+        status: "auth-failed",
+      });
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.connection.checked",
+      );
+      expect(lines).toHaveLength(1);
+      expect(
+        expectActivityLogProof("atlassian.connection.checked.line", lines[0] ?? ""),
+      ).toMatchObject({
+        action: "verify",
+        outcome: "auth-failed",
+        verificationState: "applied",
+      });
+      expect(real.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: 2,
+        livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+      });
+      expectNoSecretBytes(lines.join("\n"));
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it("retains successful verification and revokes the generation after a failed recheck", async () => {
+    const created = wiring.custody.create(
+      livePodCreateInput(),
+      jiraChatActorDigest(baseDeps(wiring)),
+    );
+    let status = 200;
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory:
+        () =>
+        (request): Promise<AtlassianHttpBodyResult> =>
+          Promise.resolve(jiraProbeResponse(request, status)),
+    });
+    expect((await verifyCredentialRequest(created.authRef)).status).toBe(200);
+    expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 1,
+      livePod: { verificationStatus: "ok", verificationInProgress: false },
+    });
+    status = 401;
+    expect(await (await verifyCredentialRequest(created.authRef)).json()).toMatchObject({
+      status: "auth-failed",
+    });
+    expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "auth-failed", verificationInProgress: false },
+    });
+  });
+
+  it.each([200, 401])(
+    "rejects a late probe after the newer verification returned %s",
+    async (newerStatus) => {
+      const created = wiring.custody.create(
+        livePodCreateInput(),
+        jiraChatActorDigest(baseDeps(wiring)),
+      );
+      const entered = probeSignal();
+      const release = probeSignal();
+      let attempt = 0;
+      const sink = createFileServerLogSink(configDir, { level: "debug" });
+      await rebuild({
+        ...wiring,
+        activityLog: sink,
+        httpBodyPortFactory: () => {
+          const currentAttempt = ++attempt;
+          return async (request): Promise<AtlassianHttpBodyResult> => {
+            if (currentAttempt === 1 && request.url.endsWith("/serverInfo")) {
+              entered.resolve();
+              await release.promise;
+            }
+            return jiraProbeResponse(
+              request,
+              currentAttempt === 1 ? (newerStatus === 200 ? 401 : 200) : newerStatus,
+            );
+          };
+        },
+      });
+      const earlier = verifyCredentialRequest(created.authRef);
+      await entered.promise;
+      expect((await verifyCredentialRequest(created.authRef)).status).toBe(200);
+      release.resolve();
+      expect((await earlier).status).toBe(409);
+      expect(readVerificationEvidence(sink).map((entry) => entry.verificationState)).toEqual([
+        "applied",
+        "stale",
+      ]);
+      expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: newerStatus === 200 ? 1 : 2,
+        livePod: {
+          verificationStatus: newerStatus === 200 ? "ok" : "auth-failed",
+          verificationRevision: 2,
+          verificationInProgress: false,
+        },
+      });
+    },
+  );
+
+  it("cannot complete a verification after the credential deletion route removed its Pod", async () => {
+    const created = wiring.custody.create(
+      livePodCreateInput(),
+      jiraChatActorDigest(baseDeps(wiring)),
+    );
+    const entered = probeSignal();
+    const release = probeSignal();
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory:
+        () =>
+        async (request): Promise<AtlassianHttpBodyResult> => {
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        },
+    });
+    const pending = verifyCredentialRequest(created.authRef);
+    await entered.promise;
+    const deleted = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(created.authRef)}`,
+      { method: "DELETE", headers: csrfHeaders() },
+    );
+    expect(deleted.status).toBe(200);
+    release.resolve();
+    expect((await pending).status).toBe(409);
+    expect(wiring.custody.getMetadata(created.authRef)).toBeUndefined();
+  });
+
+  it("retires an interrupted probe without falsely retaining readiness", async () => {
+    const created = wiring.custody.create(
+      livePodCreateInput(),
+      jiraChatActorDigest(baseDeps(wiring)),
+    );
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({
+      ...wiring,
+      activityLog: sink,
+      httpBodyPortFactory: () => (): Promise<AtlassianHttpBodyResult> =>
+        Promise.reject(new TypeError("Synthetic probe failure")),
+    });
+    expect((await verifyCredentialRequest(created.authRef)).status).toBe(500);
+    expect(readVerificationEvidence(sink)).toMatchObject([
+      { verificationState: "applied", outcome: "verification-aborted" },
+    ]);
+    expect(wiring.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+    });
+  });
+  it("projects existing credential GET without private Pod ownership or creation facts", async () => {
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({ ...wiring, activityLog: sink });
+    const owner = jiraChatActorDigest(baseDeps(wiring));
+    const created = wiring.custody.create(livePodCreateInput(), owner);
+    expect(created).toHaveProperty("livePod");
+    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`);
+    const body = (await response.json()) as { credentials: readonly Record<string, unknown>[] };
+    expect(response.status).toBe(200);
+    expect(body.credentials).toHaveLength(1);
+    expect(body.credentials[0]).toHaveProperty("livePod.kind", "jira-live");
+    expect(JSON.stringify(body)).not.toMatch(/ownerDigest|creationRequestId|credentialOperation/);
+    sink.close?.();
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "atlassian.credential.listed",
+    );
+    expect(lines).toHaveLength(1);
+    for (const line of lines)
+      expect(expectActivityLogProof("atlassian.credential.listed.line", line)).toMatchObject({
+        visibleCount: 1,
+      });
+  });
+
+  it("creates through the authenticated route with a server owner and public response only", async () => {
+    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify(livePodCreateInput()),
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authRef: string };
+    expect(body).toHaveProperty("livePod.kind", "jira-live");
+    expect(JSON.stringify(body)).not.toMatch(/ownerDigest|creationRequestId|credentialOperation/);
+    expect(wiring.custody.getMetadata(body.authRef)).toMatchObject({
+      livePod: {
+        ownerDigest: jiraChatActorDigest(baseDeps(wiring)),
+        verificationStatus: "unverified",
+      },
+    });
+  });
+
+  it("hides another operator's Pod from list, verify and delete without HTTP dispatch", async () => {
+    const owner = jiraChatActorDigest(baseDeps(wiring));
+    const created = wiring.custody.create(livePodCreateInput(), owner);
+    activePrincipal = "another-operator";
+    const list = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`);
+    expect(await list.json()).toEqual({ credentials: [] });
+    for (const [method, suffix] of [
+      ["POST", "/verify"],
+      ["DELETE", ""],
+    ] as const) {
+      const result = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(created.authRef)}${suffix}`,
+        { method, headers: csrfHeaders(), body: "{}" },
+      );
+      expect(result.status).toBe(404);
+    }
+    expect(fakePortRequests).toHaveLength(0);
+    expect(wiring.custody.getMetadata(created.authRef)).toBeDefined();
+  });
+  it("forwards final transport lifecycle guards before materializing credentials", async () => {
+    let calls = 0;
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      fetchImpl: (): Promise<Response> => {
+        calls++;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+    const metadata = real.custody.create({
+      provider: "jira",
+      displayName: "Synthetic",
+      baseUrl: "https://acme.example",
+      authScheme: "basic-api-token",
+      accountEmail: SYNTHETIC_EMAIL,
+      apiToken: SYNTHETIC_TOKEN,
+    });
+    const request = {
+      method: "GET",
+      url: "https://acme.example/rest/api/3/myself",
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    } as const;
+    const hooks = { beforeDispatch: (): boolean => false };
+    await expect(
+      real.httpPortFactory(metadata, "factory-guard", hooks)(request),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    await expect(
+      real.httpBodyPortFactory(metadata, "factory-guard", hooks)(request),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    expect(calls).toBe(0);
+  });
+
+  it.each([401, 403])(
+    "handles observed HTTP %s without confusing permission denial with invalid credentials",
+    async (status) => {
+      const invalidated: number[] = [];
+      const real = buildAtlassianConnectorCredentialDeps({
+        configPath,
+        env: vaultEnv(),
+        egress: () => undefined,
+        onLivePodInvalidated: (_podId, generation): void => {
+          if (generation !== null) invalidated.push(generation);
+        },
+        fetchImpl: (): Promise<Response> => Promise.resolve(new Response("{}", { status })),
+      });
+      const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      const probe = real.custody.beginVerification(created.authRef);
+      if (probe === undefined) throw new Error("Expected verification ticket");
+      real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+      const metadata = real.custody.getMetadata(created.authRef);
+      if (metadata === undefined) throw new Error("Expected metadata");
+      const port = real.httpBodyPortFactory(metadata, "observed-authentication");
+      expect(
+        await port({
+          method: "GET",
+          url: `${metadata.baseUrl}/rest/api/2/project`,
+          timeoutMs: 1000,
+          maxBodyBytes: 4096,
+        }),
+      ).toMatchObject({ kind: "response", status });
+      expect(real.custody.getMetadata(created.authRef)).toMatchObject({
+        generation: status === 401 ? 2 : 1,
+        livePod: { verificationStatus: status === 401 ? "auth-failed" : "ok" },
+      });
+      expect(invalidated).toEqual(status === 401 ? [2] : []);
+    },
+  );
+
+  it("records observed authentication invalidation after acknowledgement and before body consumption", async () => {
+    const events: string[] = [];
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    try {
+      const real = buildAtlassianConnectorCredentialDeps({
+        configPath,
+        env: vaultEnv(),
+        egress: () => undefined,
+        activityLog: sink,
+        onLivePodInvalidated: (): void => {
+          events.push("invalidated");
+        },
+        fetchImpl: (): Promise<Response> =>
+          Promise.resolve(
+            new Response(
+              new ReadableStream<Uint8Array>(
+                {
+                  pull: (controller): void => {
+                    events.push("body");
+                    controller.enqueue(new TextEncoder().encode("{}"));
+                    controller.close();
+                  },
+                },
+                { highWaterMark: 0 },
+              ),
+              { status: 401 },
+            ),
+          ),
+      });
+      const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+      const probe = real.custody.beginVerification(created.authRef);
+      if (probe === undefined) throw new Error("Expected verification ticket");
+      real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+      const metadata = real.custody.getMetadata(created.authRef);
+      if (metadata === undefined) throw new Error("Expected metadata");
+      const http = real.httpBodyPortFactory(metadata, "observed-authentication-proof", {
+        onResponse: (): boolean => {
+          events.push("acknowledged");
+          return true;
+        },
+      });
+      await http({
+        method: "GET",
+        url: `${metadata.baseUrl}/rest/api/2/project`,
+        timeoutMs: 1000,
+        maxBodyBytes: 4096,
+      });
+      expect(events).toEqual(["acknowledged", "invalidated", "body"]);
+      const lines = persistedActivityLogLines(
+        readPersistedActivityLog(configDir),
+        "atlassian.connection.checked",
+      );
+      const records = lines.map((line) =>
+        expectActivityLogProof("atlassian.connection.checked.observed-authentication", line),
+      );
+      expect(records).toMatchObject([
+        {
+          action: "request",
+          outcome: "auth-failed",
+          verificationState: "applied",
+          correlationId: "observed-authentication-proof",
+        },
+      ]);
+      expectNoSecretBytes(lines.join("\n"));
+      expect(lines.join("\n")).not.toContain(metadata.authRef);
+      expect(lines.join("\n")).not.toContain(metadata.baseUrl);
+    } finally {
+      sink.close?.();
+    }
+  });
+
+  it("pins response observation before caller metadata or verification can change", async () => {
+    const invalidated: number[] = [];
+    const real = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      onLivePodInvalidated: (_pod, generation): void => {
+        if (generation !== null) invalidated.push(generation);
+      },
+      fetchImpl: (): Promise<Response> => {
+        if (selected === undefined) throw new Error("Expected selected credential");
+        const newer = real.custody.beginVerification(selected.authRef);
+        if (newer === undefined) throw new Error("Expected newer verification");
+        real.custody.finishVerification(selected.authRef, 1, newer.revision, "ok");
+        Object.assign(selected, real.custody.getMetadata(selected.authRef));
+        return Promise.resolve(new Response("{}", { status: 401 }));
+      },
+    });
+    const created = real.custody.create(livePodCreateInput(), "a".repeat(64));
+    const probe = real.custody.beginVerification(created.authRef);
+    if (probe === undefined) throw new Error("Expected verification ticket");
+    real.custody.finishVerification(created.authRef, 1, probe.revision, "ok");
+    const selected = real.custody.getMetadata(created.authRef);
+    if (selected === undefined) throw new Error("Expected metadata");
+    await real.httpBodyPortFactory(selected)({
+      method: "GET",
+      url: `${selected.baseUrl}/rest/api/2/project`,
+      timeoutMs: 1000,
+      maxBodyBytes: 4096,
+    });
+    expect(real.custody.getMetadata(created.authRef)).toMatchObject({
+      generation: 1,
+      livePod: { verificationStatus: "ok", verificationRevision: 2 },
+    });
+    expect(invalidated).toEqual([]);
+  });
+
+  it("pins the selected generation in both HTTP factories before credential materialization", async () => {
+    let calls = 0;
+    const realWiring = buildAtlassianConnectorCredentialDeps({
+      configPath,
+      env: vaultEnv(),
+      egress: () => undefined,
+      fetchImpl: (): Promise<Response> => {
+        calls++;
+        return Promise.resolve(new Response("{}"));
+      },
+    });
+    const metadata = realWiring.custody.create({
+      provider: "jira",
+      displayName: "Synthetic Jira",
+      baseUrl: "https://acme.example",
+      authScheme: "basic-api-token",
+      accountEmail: SYNTHETIC_EMAIL,
+      apiToken: SYNTHETIC_TOKEN,
+    });
+    const port = realWiring.httpPortFactory(metadata);
+    const bodyPort = realWiring.httpBodyPortFactory(metadata);
+    createAtlassianCredentialMetadataStore({ configPath }).insert({ ...metadata, generation: 2 });
+    Object.assign(metadata, { generation: 2 });
+    const request = {
+      method: "GET",
+      url: "https://acme.example/rest/api/3/myself",
+      timeoutMs: 1_000,
+      maxBodyBytes: 4096,
+    } as const;
+    await expect(port(request)).rejects.toMatchObject({ code: "credential-changed" });
+    await expect(bodyPort(request)).rejects.toMatchObject({ code: "credential-changed" });
+    expect(calls).toBe(0);
+  });
   it("resolves the stored credential into Basic auth and contacts the configured host only", async () => {
     const seen: { url: string; authorization: string | null }[] = [];
     const fetchImpl = ((input: string | URL | Request, init?: RequestInit): Promise<Response> => {
@@ -647,7 +1232,7 @@ describe("end-to-end verify through the gateway transport adapter", () => {
           typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url,
         authorization: new Headers(init?.headers).get("authorization"),
       });
-      return Promise.resolve(new Response(null, { status: 200 }));
+      return Promise.resolve(Response.json({ accountId: "synthetic-id", active: true }));
     }) as typeof fetch;
     const realWiring = buildAtlassianConnectorCredentialDeps({
       configPath,
@@ -667,5 +1252,1118 @@ describe("end-to-end verify through the gateway transport adapter", () => {
     expect(seen[0]?.url).toBe("https://acme.example/rest/api/3/myself");
     const expectedBasic = `Basic ${Buffer.from(`${SYNTHETIC_EMAIL}:${SYNTHETIC_TOKEN}`, "utf8").toString("base64")}`;
     expect(seen[0]?.authorization).toBe(expectedBasic);
+  });
+});
+
+async function readyJiraPod(): Promise<string> {
+  await rebuild({
+    ...wiring,
+    httpBodyPortFactory:
+      () =>
+      (request): Promise<AtlassianHttpBodyResult> => {
+        fakePortRequests.push(request);
+        return Promise.resolve(jiraProbeResponse(request));
+      },
+  });
+  const created = wiring.custody.create(
+    { ...livePodCreateInput(), livePodCreationRequestId: randomUUID() },
+    jiraChatActorDigest(baseDeps(wiring)),
+  );
+  expect((await verifyCredentialRequest(created.authRef)).status).toBe(200);
+  if (created.deployment !== "data-center" || created.livePod === undefined)
+    throw new Error("Expected synthetic Live Pod");
+  return created.livePod.podId;
+}
+
+function patchJiraChat(
+  chat: Chat,
+  patch: Record<string, unknown>,
+  includePrecondition = true,
+): Promise<Response> {
+  return fetch(`${baseUrl()}/api/chats?id=${encodeURIComponent(chat.id)}`, {
+    method: "PATCH",
+    headers: csrfHeaders(),
+    body: JSON.stringify({
+      ...patch,
+      ...(includePrecondition
+        ? { expectedGroundingScopeIdentity: chat.groundingScopeIdentity }
+        : {}),
+    }),
+  });
+}
+
+function jiraChat(): Chat {
+  fixtureStore.createProject(configDir);
+  return fixtureStore.createChat(configDir, "Jira Chat", "model");
+}
+
+async function updatedJiraChat(chat: Chat, patch: Record<string, unknown>): Promise<Chat> {
+  const response = await patchJiraChat(chat, patch);
+  expect(response.status).toBe(200);
+  return ((await response.json()) as { chat: Chat }).chat;
+}
+
+function jiraChatSubject(chat: Chat): JiraChatToolAuthoritySubject {
+  const binding = chat.jiraPodBinding;
+  const actorDigest = jiraChatActorDigest(baseDeps(wiring));
+  if (binding === undefined || actorDigest === undefined)
+    throw new Error("Expected an owned Chat binding");
+  return {
+    actorDigest,
+    chatId: chat.id,
+    podId: binding.podId,
+    bindingGeneration: binding.bindingGeneration,
+    authenticationGeneration: binding.authenticationGeneration,
+  };
+}
+
+function retainedChatAuthority(chat: Chat): () => ChatToolAuthorityResolution {
+  const ceiling = baseDeps(wiring).autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+  const value = chatAuthorityFixture({
+    deploymentCeiling: ceiling,
+    expiresAt: new Date(Date.now() + ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
+    runId: `authority-${chat.id}-${randomUUID()}`,
+    requestedMode: chat.toolMode ?? "governed-assist",
+    subject: jiraChatSubject(chat),
+  });
+  const registered = fixtureAuthorityRegistry.registerChat(
+    value,
+    ceiling,
+    new Date().toISOString(),
+  );
+  if (!registered.ok) throw new Error("Expected retained Chat authority");
+  return () =>
+    fixtureAuthorityRegistry.resolveChat(
+      registered.authorityRef,
+      value.subject,
+      ceiling,
+      new Date().toISOString(),
+    );
+}
+
+function retainedChatReadGrant(
+  chat: Chat,
+  granted = true,
+  grantId = randomUUID(),
+): () => ChatToolReadGrant["state"] | undefined {
+  const now = Date.now();
+  const ceiling = baseDeps(wiring).autonomousDeliveryDeploymentCeiling ?? "governed-assist";
+  const subject = jiraChatSubject(chat);
+  const value = chatAuthorityFixture({
+    runId: `read-${grantId}`,
+    subject,
+    requestedMode: chat.toolMode ?? "governed-assist",
+    deploymentCeiling: ceiling,
+    expiresAt: new Date(now + ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
+  });
+  const authority = fixtureAuthorityRegistry.registerChat(
+    value,
+    ceiling,
+    new Date(now).toISOString(),
+  );
+  if (!authority.ok) throw new Error("Expected current read authority");
+  expect(
+    fixtureApprovalRegistry.createChatReadGrant({
+      grant: {
+        schemaVersion: "1",
+        kind: "jira-chat-read-grant",
+        grantId,
+        subject,
+        disclosureVersion: "jira-chat-read-v1",
+        requestedAt: now,
+        expiresAt: now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        state: "pending",
+        consentProofDigest: null,
+      },
+      authority: authority.authorityRef,
+    }).ok,
+  ).toBe(true);
+  if (granted)
+    expect(
+      fixtureApprovalRegistry.acceptChatReadGrant(
+        grantId,
+        subject,
+        authority.authorityRef,
+        "b".repeat(64),
+      ).ok,
+    ).toBe(true);
+  return () => fixtureApprovalRegistry.getChatReadGrant(grantId)?.grant.state;
+}
+
+describe("normal Chat Jira binding through authenticated PATCH", () => {
+  it("does not attach a previously verified Pod while a fresh verification is pending", async () => {
+    const podId = await readyJiraPod();
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential?.deployment !== "data-center") throw new Error("Expected credential");
+    const ticket = wiring.custody.beginVerification(credential.authRef, credential.generation);
+    if (ticket === undefined) throw new Error("Expected verification ticket");
+    const unbound = jiraChat();
+    expect((await patchJiraChat(unbound, { jiraPodId: podId })).status).toBe(400);
+    expect(
+      wiring.custody.finishVerification(
+        credential.authRef,
+        credential.generation,
+        ticket.revision,
+        "ok",
+      ),
+    ).toBe(true);
+    expect((await updatedJiraChat(unbound, { jiraPodId: podId })).jiraPodBinding?.podId).toBe(
+      podId,
+    );
+  });
+
+  it("revokes authority only after committed mode, binding or closed-state changes", async () => {
+    const podId = await readyJiraPod();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const firstAuthority = retainedChatAuthority(bound);
+    const firstGrant = retainedChatReadGrant(bound);
+    const noOp = await updatedJiraChat(bound, { toolMode: "governed-assist" });
+    expect(firstAuthority().ok).toBe(true);
+    expect(firstGrant()).toBe("granted");
+    const changed = await updatedJiraChat(noOp, { toolMode: "autonomous-delivery" });
+    expect(firstAuthority()).toEqual({ ok: false, reason: "revoked" });
+    expect(firstGrant()).toBe("revoked");
+    const changedAuthority = retainedChatAuthority(changed);
+    const pendingGrant = retainedChatReadGrant(changed, false);
+    expect((await patchJiraChat(bound, { jiraPodId: null })).status).toBe(409);
+    expect(changedAuthority().ok).toBe(true);
+    expect(pendingGrant()).toBe("pending");
+    const disconnected = await updatedJiraChat(changed, { jiraPodId: null });
+    expect(changedAuthority()).toEqual({ ok: false, reason: "revoked" });
+    expect(pendingGrant()).toBe("revoked");
+    const reconnected = await updatedJiraChat(disconnected, { jiraPodId: podId });
+    const reconnectedAuthority = retainedChatAuthority(reconnected);
+    const reconnectedGrant = retainedChatReadGrant(reconnected);
+    await updatedJiraChat(reconnected, { status: "closed" });
+    expect(reconnectedAuthority()).toEqual({ ok: false, reason: "revoked" });
+    expect(reconnectedGrant()).toBe("revoked");
+  });
+
+  it("direct credential deletion revokes both shared-Pod Chats but leaves another Pod authority live", async () => {
+    const podId = await readyJiraPod();
+    const otherPodId = await readyJiraPod();
+    const chats = await Promise.all(
+      [podId, podId, otherPodId].map(async (jiraPodId) =>
+        updatedJiraChat(jiraChat(), { jiraPodId }),
+      ),
+    );
+    const authorities = chats.map(retainedChatAuthority);
+    const grants = chats.map((chat) => retainedChatReadGrant(chat));
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential === undefined) throw new Error("Expected credential");
+    const response = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}`,
+      { method: "DELETE", headers: csrfHeaders() },
+    );
+    expect(response.status).toBe(200);
+    expect(authorities.map((resolve) => resolve().ok)).toEqual([false, false, true]);
+    expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
+  });
+
+  it("direct credential deletion disconnects matching Chats and cancels only their active turns", async () => {
+    const podId = await readyJiraPod();
+    const otherPodId = await readyJiraPod();
+    const first = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherPodId });
+    const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential === undefined) throw new Error("Expected synthetic credential");
+    const controllers = [
+      new AbortController(),
+      new AbortController(),
+      new AbortController(),
+      new AbortController(),
+    ];
+    const started: number[] = [];
+    let release!: () => void;
+    const work = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const turns = [first, second, other, first].map((chat, index) => {
+      const controller = controllers[index];
+      if (controller === undefined) throw new Error("Expected turn controller");
+      return runSerializedChatTurn(
+        { store: fixtureStore },
+        chat.id,
+        controller.signal,
+        () => {
+          started.push(index);
+          return work;
+        },
+        controller,
+      );
+    });
+    let requestCorrelation: string | null = null;
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const response = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${credential.authRef}`,
+        {
+          method: "DELETE",
+          headers: csrfHeaders(),
+        },
+      );
+      requestCorrelation = response.headers.get("x-keiko-correlation-id");
+      expect(response.status).toBe(200);
+      expect(controllers.map((controller) => controller.signal.aborted)).toEqual([
+        true,
+        true,
+        false,
+        true,
+      ]);
+      for (const chat of [first, second]) {
+        expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding).toBeUndefined();
+        expect(fixtureStore.findChatById(chat.id)?.jiraBindingGeneration).toBe(2);
+      }
+      expect(fixtureStore.findChatById(other.id)).toEqual(otherStoredBefore);
+    } finally {
+      release();
+      await Promise.all(turns);
+      sink.close?.();
+      resetServerLogger();
+    }
+    expect(started).toEqual([0, 1, 2]);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.scope.update",
+    );
+    const events = lines.map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(requestCorrelation).not.toBeNull();
+    expect(events.every((event) => event.correlationId === requestCorrelation)).toBe(true);
+    expect(events.map((event) => event.outcome)).toEqual([
+      "applied",
+      "applied",
+      "cancellation-requested",
+      "cancellation-requested",
+    ]);
+    expect(lines.join("\n")).not.toContain(podId);
+    expect(lines.join("\n")).not.toContain(credential.authRef);
+  });
+
+  it("a failed direct reverify revokes the old binding generation while retaining the Pod", async () => {
+    const podId = await readyJiraPod();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const credential = wiring.custody
+      .list()
+      .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+    if (credential === undefined) throw new Error("Expected synthetic credential");
+    fakePortResult = { kind: "response", status: 401 };
+    await rebuild({ ...wiring, httpBodyPortFactory: fakeHttpBodyPortFactory() });
+    const grant = retainedChatReadGrant(bound);
+    const failed = await verifyCredentialRequest(credential.authRef);
+    expect(failed.status).toBe(200);
+    expect(grant()).toBe("revoked");
+    expect(await failed.json()).toMatchObject({ status: "auth-failed" });
+    expect(fixtureStore.findChatById(bound.id)?.jiraPodBinding).toEqual({
+      ...bound.jiraPodBinding,
+      authenticationGeneration: 2,
+      bindingGeneration: 2,
+    });
+    expect((await patchJiraChat(bound, { toolMode: "autonomous-delivery" })).status).toBe(409);
+  });
+
+  it("records each binding effect once and reconstructs denials and conflicts without private facts", async () => {
+    const podId = await readyJiraPod();
+    const initial = jiraChat();
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    try {
+      const connected = await updatedJiraChat(initial, { jiraPodId: podId });
+      expect((await patchJiraChat(connected, { toolMode: "invalid" })).status).toBe(400);
+      activePrincipal = "another-operator";
+      expect((await patchJiraChat(connected, { jiraPodId: podId })).status).toBe(400);
+      expect((await patchJiraChat(initial, { toolMode: "supervised-coding" })).status).toBe(409);
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.scope.update",
+    );
+    const events = lines.map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(events.map((entry) => entry.outcome)).toEqual([
+      "applied",
+      "denied",
+      "denied",
+      "conflict",
+    ]);
+    expect(events.map((entry) => entry.status)).toEqual([200, 400, 400, 409]);
+    expect(lines.join("\n")).not.toContain(podId);
+    expectNoSecretBytes(lines.join("\n"));
+  });
+  it("persists one verified owned Pod, replacement, disconnection and the chosen mode", async () => {
+    const first = await readyJiraPod();
+    const second = await readyJiraPod();
+    const initial = jiraChat();
+    expect(initial.toolMode).toBe("governed-assist");
+    const connected = await updatedJiraChat(initial, { jiraPodId: first });
+    expect(connected.jiraPodBinding).toMatchObject({
+      podId: first,
+      authenticationGeneration: 1,
+      bindingGeneration: 1,
+    });
+    expect(connected.groundingScopeIdentity).not.toBe(initial.groundingScopeIdentity);
+    const replaced = await updatedJiraChat(connected, {
+      jiraPodId: second,
+      toolMode: "supervised-coding",
+    });
+    expect(replaced.jiraPodBinding).toMatchObject({ podId: second, bindingGeneration: 2 });
+    expect(replaced.toolMode).toBe("supervised-coding");
+    const disconnected = await updatedJiraChat(replaced, { jiraPodId: null });
+    expect(disconnected.jiraPodBinding).toBeUndefined();
+    expect(disconnected.jiraBindingGeneration).toBe(3);
+    const full = await updatedJiraChat(disconnected, { toolMode: "autonomous-delivery" });
+    expect(full.toolMode).toBe("autonomous-delivery");
+    const list = await fetch(`${baseUrl()}/api/chats?projectPath=${encodeURIComponent(configDir)}`);
+    expect(await list.json()).toMatchObject({
+      chats: [{ id: initial.id, toolMode: "autonomous-delivery", jiraBindingGeneration: 4 }],
+    });
+  });
+
+  it.each(["unverified", "foreign", "unknown"])(
+    "rejects %s Pods without changing the Chat",
+    async (state) => {
+      const podId = state === "unknown" ? randomUUID() : await readyJiraPod();
+      if (state === "foreign") activePrincipal = "another-operator";
+      if (state === "unverified") {
+        const current = wiring.custody
+          .list()
+          .find((item) => item.deployment === "data-center" && item.livePod?.podId === podId);
+        if (current === undefined) throw new Error("Expected owned Pod");
+        const ticket = wiring.custody.beginVerification(current.authRef);
+        if (ticket === undefined) throw new Error("Expected verification ticket");
+        wiring.custody.finishVerification(
+          current.authRef,
+          current.generation ?? 1,
+          ticket.revision,
+          "auth-failed",
+        );
+      }
+      const chat = jiraChat();
+      expect(
+        (await patchJiraChat(chat, { jiraPodId: podId, title: "Must not apply" })).status,
+      ).toBe(400);
+      expect(fixtureStore.findChatById(chat.id)).toEqual(chat);
+    },
+  );
+
+  it.each([
+    { toolMode: "root" },
+    { jiraPodId: "invalid" },
+    { jiraPodBinding: {} },
+    { jiraBindingGeneration: 99 },
+  ])("rejects malformed or server-owned binding fields %j", async (patch) => {
+    const chat = jiraChat();
+    expect((await patchJiraChat(chat, patch)).status).toBe(400);
+    expect(fixtureStore.findChatById(chat.id)).toEqual(chat);
+  });
+
+  it("requires a scope precondition for Jira or mode changes", async () => {
+    const chat = jiraChat();
+    expect((await patchJiraChat(chat, { toolMode: "autonomous-delivery" }, false)).status).toBe(
+      400,
+    );
+    expect(fixtureStore.findChatById(chat.id)).toEqual(chat);
+  });
+
+  it("accepts only one competing binding update and leaves another Chat untouched", async () => {
+    const first = await readyJiraPod();
+    const second = await readyJiraPod();
+    const chat = jiraChat();
+    const other = fixtureStore.createChat(configDir, "Other Chat", "model");
+    const responses = await Promise.all([
+      patchJiraChat(chat, { jiraPodId: first, title: "First" }),
+      patchJiraChat(chat, { jiraPodId: second, title: "Second" }),
+    ]);
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 409]);
+    const winner = responses[0].status === 200 ? first : second;
+    expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding?.podId).toBe(winner);
+    expect(fixtureStore.findChatById(other.id)).toEqual(other);
+  });
+});
+
+function updateJiraCredential(authRef: string, patch: Record<string, unknown>): Promise<Response> {
+  return fetch(`${baseUrl()}/api/atlassian-connectors/credentials/${authRef}`, {
+    method: "PATCH",
+    headers: csrfHeaders(),
+    body: JSON.stringify(patch),
+  });
+}
+
+function credentialForPod(podId: string): AtlassianCredentialMetadata {
+  const metadata = wiring.custody
+    .list()
+    .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+  if (metadata === undefined) throw new Error("Expected synthetic credential");
+  return metadata;
+}
+
+describe("authenticated Live Pod credential updates", () => {
+  it("a delayed verification cannot restore readiness after the token replacement route", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const entered = probeSignal();
+    const release = probeSignal();
+    await rebuild({
+      ...wiring,
+      httpBodyPortFactory:
+        () =>
+        async (request): Promise<AtlassianHttpBodyResult> => {
+          entered.resolve();
+          await release.promise;
+          return jiraProbeResponse(request);
+        },
+    });
+    const pending = verifyCredentialRequest(credential.authRef);
+    await entered.promise;
+    const changed = await updateJiraCredential(credential.authRef, {
+      expectedGeneration: 1,
+      apiToken: SYNTHETIC_TOKEN + "rotated",
+    }).finally(release.resolve);
+    const stale = await pending;
+    expect(changed.status).toBe(200);
+    expect(stale.status).toBe(409);
+    expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+      generation: 2,
+      livePod: { verificationStatus: "unverified", verificationInProgress: false },
+    });
+  });
+
+  it("applies the existing CSRF guard before token replacement", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    const response = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${credential.authRef}`,
+      {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ expectedGeneration: 1, apiToken: SYNTHETIC_TOKEN }),
+      },
+    );
+    expect(response.status).toBe(403);
+    expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
+  });
+
+  it("renames and replaces tokens without losing the Pod association or exposing private state", async () => {
+    const podId = await readyJiraPod();
+    const credential = credentialForPod(podId);
+    const first = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const second = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const otherId = await readyJiraPod();
+    const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherId });
+    const otherStoredBefore = structuredClone(fixtureStore.findChatById(other.id));
+    const grants = [first, second, other].map((chat) => retainedChatReadGrant(chat));
+    const sink = createFileServerLogSink(configDir, { level: "debug" });
+    await rebuild({ ...wiring, activityLog: sink });
+    setServerLogger(createServerLogger({ sink, level: "debug" }));
+    const correlations: (string | null)[] = [];
+    try {
+      const renamed = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        displayName: "Renamed Jira",
+      });
+      expect(renamed.status).toBe(200);
+      correlations.push(renamed.headers.get("x-keiko-correlation-id"));
+      expect(await renamed.json()).toMatchObject({ generation: 1, displayName: "Renamed Jira" });
+      const replaced = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 1,
+        apiToken: SYNTHETIC_TOKEN + "new",
+      });
+      expect(replaced.status).toBe(200);
+      correlations.push(replaced.headers.get("x-keiko-correlation-id"));
+      const response = await replaced.text();
+      expect(JSON.parse(response)).toMatchObject({ authRef: credential.authRef, generation: 2 });
+      expect(response).not.toMatch(/ownerDigest|creationRequestId|credentialOperation/);
+      expect(response).not.toContain(SYNTHETIC_TOKEN);
+      const both = await updateJiraCredential(credential.authRef, {
+        expectedGeneration: 2,
+        displayName: "Renamed Again",
+        apiToken: SYNTHETIC_TOKEN + "newer",
+      });
+      expect(both.status).toBe(200);
+      correlations.push(both.headers.get("x-keiko-correlation-id"));
+      expect(
+        (
+          await updateJiraCredential(credential.authRef, {
+            expectedGeneration: 1,
+            apiToken: SYNTHETIC_TOKEN,
+          })
+        ).status,
+      ).toBe(409);
+      for (const chat of [first, second])
+        expect(fixtureStore.findChatById(chat.id)?.jiraPodBinding).toMatchObject({
+          podId,
+          authenticationGeneration: 3,
+          bindingGeneration: 3,
+        });
+      expect(fixtureStore.findChatById(other.id)).toEqual(otherStoredBefore);
+      expect(grants.map((state) => state())).toEqual(["revoked", "revoked", "granted"]);
+      expect(wiring.custody.getMetadata(credential.authRef)).toMatchObject({
+        generation: 3,
+        livePod: { verificationStatus: "unverified" },
+      });
+    } finally {
+      sink.close?.();
+      resetServerLogger();
+    }
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "atlassian.credential.updated",
+    );
+    const events = lines.map((line) =>
+      expectActivityLogProof("atlassian.credential.updated.line", line),
+    );
+    expect(events.map((event) => event.action)).toEqual([
+      "rename",
+      "replace-token",
+      "rename-and-replace-token",
+    ]);
+    expect(events.map((event) => event.authenticationGeneration)).toEqual([1, 2, 3]);
+    expect(correlations.every((id) => id !== null)).toBe(true);
+    expect(events.map((event) => event.correlationId)).toEqual(correlations);
+    const scopes = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.scope.update",
+    ).map((line) => expectActivityLogProof("chat.scope.update.outcome", line));
+    expect(scopes.map((event) => event.correlationId)).toEqual([
+      correlations[1],
+      correlations[1],
+      correlations[2],
+      correlations[2],
+    ]);
+    expect(lines.join("\n")).not.toContain(credential.authRef);
+    expect(lines.join("\n")).not.toContain(SYNTHETIC_TOKEN);
+  });
+
+  it("refuses foreign Pod updates and malformed bodies without changing custody", async () => {
+    const credential = credentialForPod(await readyJiraPod());
+    activePrincipal = "another-operator";
+    expect(
+      (
+        await updateJiraCredential(credential.authRef, {
+          expectedGeneration: 1,
+          apiToken: SYNTHETIC_TOKEN,
+        })
+      ).status,
+    ).toBe(404);
+    activePrincipal = "synthetic-operator";
+    for (const patch of [
+      {},
+      { expectedGeneration: 1, apiToken: "short" },
+      { expectedGeneration: 1, baseUrl: "https://other.invalid" },
+    ])
+      expect((await updateJiraCredential(credential.authRef, patch)).status).toBe(400);
+    expect(wiring.custody.getMetadata(credential.authRef)).toEqual(credential);
+  });
+});
+
+it("deleting a Chat through the real route revokes its retained read grant", async () => {
+  const podId = await readyJiraPod();
+  const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grant = retainedChatReadGrant(bound);
+  const response = await fetch(`${baseUrl()}/api/chats?id=${encodeURIComponent(bound.id)}`, {
+    method: "DELETE",
+    headers: csrfHeaders(),
+    body: JSON.stringify({
+      projectPath: configDir,
+      confirmation: { chatId: bound.id, irreversible: true },
+    }),
+  });
+  expect(response.status).toBe(204);
+  expect(fixtureStore.findChatById(bound.id)).toBeUndefined();
+  expect(grant()).toBe("revoked");
+});
+
+it("deleting a project revokes grants of its removed Chats", async () => {
+  const podId = await readyJiraPod();
+  const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grant = retainedChatReadGrant(bound);
+  const response = await fetch(`${baseUrl()}/api/projects?path=${encodeURIComponent(configDir)}`, {
+    method: "DELETE",
+    headers: csrfHeaders(),
+  });
+  expect(response.status).toBe(204);
+  expect(fixtureStore.findChatById(bound.id)).toBeUndefined();
+  expect(grant()).toBe("revoked");
+});
+
+it("correlates real credential deletion with read-grant revocation evidence", async () => {
+  const podId = await readyJiraPod();
+  const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grant = retainedChatReadGrant(bound);
+  const credential = wiring.custody
+    .list()
+    .find((row) => row.deployment === "data-center" && row.livePod?.podId === podId);
+  if (credential === undefined) throw new Error("Expected credential");
+  const sink = createFileServerLogSink(configDir, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    const response = await fetch(
+      `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}`,
+      { method: "DELETE", headers: csrfHeaders() },
+    );
+    expect(response.status).toBe(200);
+    expect(grant()).toBe("revoked");
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.read-grant-lifecycle", line),
+    );
+    const revoked = records.filter((line) => line.grantState === "revoked");
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]).toMatchObject({
+      correlationId: response.headers.get("x-keiko-correlation-id"),
+      affectedCount: 1,
+    });
+    for (const value of [bound.id, podId, credential.authRef, SYNTHETIC_TOKEN])
+      expect(lines.join("\n")).not.toContain(value);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+  }
+});
+
+function chatReadConsentUrl(grantId: string): string {
+  return `${baseUrl()}/api/atlassian-connectors/action-approvals/${grantId}/chat-read-consent`;
+}
+
+function decideChatReadConsent(
+  grantId: string,
+  body: Record<string, unknown> = { decision: "approve", disclosureVersion: "jira-chat-read-v1" },
+): Promise<Response> {
+  return fetch(chatReadConsentUrl(grantId), {
+    method: "POST",
+    headers: csrfHeaders(),
+    body: JSON.stringify(body),
+  });
+}
+
+async function pendingChatReadConsent(): Promise<{
+  chat: Chat;
+  grantId: string;
+  state: () => ChatToolReadGrant["state"] | undefined;
+}> {
+  const podId = await readyJiraPod();
+  const chat = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+  const grantId = randomUUID();
+  return { chat, grantId, state: retainedChatReadGrant(chat, false, grantId) };
+}
+
+it("projects a Chat read consent without private authority or evidence", async () => {
+  const pending = await pendingChatReadConsent();
+  const response = await fetch(chatReadConsentUrl(pending.grantId));
+  expect(response.status).toBe(200);
+  const body: unknown = await response.json();
+  expect(body).toMatchObject({
+    approval: {
+      kind: "jira-chat-read",
+      grantId: pending.grantId,
+      chatId: pending.chat.id,
+      state: "pending",
+      disclosureVersion: "jira-chat-read-v1",
+    },
+  });
+  expect(JSON.stringify(body)).not.toMatch(
+    /actorDigest|consentProofDigest|authority|authRef|baseUrl/,
+  );
+  expect(pending.state()).toBe("pending");
+});
+
+it("accepts explicit Chat read consent once without extending its proof or expiry", async () => {
+  const pending = await pendingChatReadConsent();
+  expect((await decideChatReadConsent(pending.grantId)).status).toBe(200);
+  expect(pending.state()).toBe("granted");
+  const first = fixtureApprovalRegistry.getChatReadGrant(pending.grantId)?.grant;
+  expect(first?.consentProofDigest).toMatch(/^[a-f0-9]{64}$/);
+  expect((await decideChatReadConsent(pending.grantId)).status).toBe(200);
+  expect(fixtureApprovalRegistry.getChatReadGrant(pending.grantId)?.grant).toEqual(first);
+});
+
+it("rejects Chat read consent without granting access", async () => {
+  const pending = await pendingChatReadConsent();
+  const rejected = await decideChatReadConsent(pending.grantId, {
+    decision: "reject",
+    disclosureVersion: "jira-chat-read-v1",
+  });
+  expect(rejected.status).toBe(200);
+  expect(pending.state()).toBe("rejected");
+  expect((await decideChatReadConsent(pending.grantId)).status).toBe(409);
+  expect(pending.state()).toBe("rejected");
+});
+
+it.each([
+  { authority: { runId: "injected" } },
+  { consentProofDigest: "a".repeat(64) },
+  { chatId: "another-chat" },
+  { disclosureVersion: "old-disclosure" },
+  { decision: "allow-all" },
+])("rejects a changed or widened Chat consent request %j", async (patch) => {
+  const pending = await pendingChatReadConsent();
+  const response = await decideChatReadConsent(pending.grantId, {
+    decision: "approve",
+    disclosureVersion: "jira-chat-read-v1",
+    ...patch,
+  });
+  expect(response.status).toBe(400);
+  expect(pending.state()).toBe("pending");
+});
+
+it.each(["actor", "mode", "disconnect", "authority", "verification"] as const)(
+  "revalidates Chat consent after %s changes",
+  async (change) => {
+    const pending = await pendingChatReadConsent();
+    expect((await fetch(chatReadConsentUrl(pending.grantId))).status).toBe(200);
+    if (change === "actor") activePrincipal = "another-operator";
+    if (change === "mode")
+      fixtureStore.updateChat(pending.chat.id, { toolMode: "autonomous-delivery" });
+    if (change === "disconnect") fixtureStore.updateChat(pending.chat.id, { jiraPodId: null });
+    if (change === "authority") fixtureAuthorityRegistry.revokeChatAuthorities(pending.chat.id);
+    if (change === "verification") {
+      const credential = wiring.custody.list()[0];
+      if (credential === undefined) throw new Error("Expected credential");
+      wiring.custody.beginVerification(credential.authRef);
+    }
+    expect((await decideChatReadConsent(pending.grantId)).status).toBe(404);
+    expect(pending.state()).toBe("pending");
+  },
+);
+
+it("keeps Chat consent isolated from legacy approval routes and requires CSRF", async () => {
+  const pending = await pendingChatReadConsent();
+  const legacy = `${baseUrl()}/api/atlassian-connectors/action-approvals/${pending.grantId}`;
+  expect((await fetch(legacy)).status).toBe(404);
+  expect(
+    (
+      await fetch(`${legacy}/approve`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: "{}",
+      })
+    ).status,
+  ).toBe(404);
+  expect(
+    (
+      await fetch(chatReadConsentUrl(pending.grantId), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision: "approve", disclosureVersion: "jira-chat-read-v1" }),
+      })
+    ).status,
+  ).toBe(403);
+  expect(pending.state()).toBe("pending");
+});
+
+it("logs the actual HTTP consent and response correlation without private payloads", async () => {
+  const pending = await pendingChatReadConsent();
+  const requests = fakePortRequests.length;
+  expect(requests).toBeGreaterThan(0);
+  const sink = createFileServerLogSink(configDir, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    const response = await decideChatReadConsent(pending.grantId);
+    expect(response.status).toBe(200);
+    const lines = persistedActivityLogLines(
+      readPersistedActivityLog(configDir),
+      "chat.tool-authority.operation",
+    );
+    const records = lines.map((line) =>
+      expectActivityLogProof("chat.tool-authority.operation.read-consent-route", line),
+    );
+    const grants = records.filter((line) => line.grantState === "granted");
+    expect(grants).toHaveLength(1);
+    expect(grants[0]).toMatchObject({
+      correlationId: response.headers.get("x-keiko-correlation-id"),
+      affectedCount: 1,
+      consentProofDigest: fixtureApprovalRegistry.getChatReadGrant(pending.grantId)?.grant
+        .consentProofDigest,
+    });
+    for (const value of [
+      pending.grantId,
+      pending.chat.id,
+      pending.chat.jiraPodBinding?.podId,
+      SYNTHETIC_TOKEN,
+    ])
+      if (value !== undefined) expect(lines.join("\n")).not.toContain(value);
+    expect(fakePortRequests).toHaveLength(requests);
+  } finally {
+    sink.close?.();
+    resetServerLogger();
+  }
+});
+
+it.each(["scope", "lifetime", "subject"] as const)(
+  "refuses a retained grant exceeding its current %s",
+  async (mismatch) => {
+    const pending = await pendingChatReadConsent();
+    const entry = fixtureApprovalRegistry.getChatReadGrant(pending.grantId);
+    if (entry === undefined || entry.grant.subject.kind === "configured-mcp")
+      throw new Error("Expected pending Jira grant");
+    const grantId = randomUUID();
+    const envelope = chatAuthorityFixture({
+      runId: `limited-${grantId}`,
+      subject: entry.grant.subject,
+      requestedMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      connectorScopes: mismatch === "scope" ? ["issue-tracker.write"] : ["issue-tracker.read"],
+      expiresAt: new Date(
+        mismatch === "lifetime" ? Date.now() + 30_000 : entry.grant.expiresAt,
+      ).toISOString(),
+    });
+    const registered = fixtureAuthorityRegistry.registerChat(
+      envelope,
+      "governed-assist",
+      new Date().toISOString(),
+    );
+    if (!registered.ok) throw new Error("Expected limited authority");
+    const grant = {
+      ...entry.grant,
+      grantId,
+      subject: {
+        ...entry.grant.subject,
+        bindingGeneration: entry.grant.subject.bindingGeneration + (mismatch === "subject" ? 1 : 0),
+      },
+    };
+    expect(
+      fixtureApprovalRegistry.createChatReadGrant({ grant, authority: registered.authorityRef }).ok,
+    ).toBe(true);
+    expect((await decideChatReadConsent(grantId)).status).toBe(404);
+    expect(fixtureApprovalRegistry.getChatReadGrant(grantId)?.grant.state).toBe("pending");
+  },
+);
+
+it("does not restore an expired read grant through the consent endpoint", async () => {
+  const pending = await pendingChatReadConsent();
+  const entry = fixtureApprovalRegistry.getChatReadGrant(pending.grantId);
+  if (entry === undefined || entry.grant.subject.kind === "configured-mcp")
+    throw new Error("Expected pending Jira grant");
+  let now = Date.now();
+  fixtureApprovalRegistry = new AtlassianActionApprovalRegistry(() => now);
+  expect(
+    fixtureApprovalRegistry.createChatReadGrant({
+      ...entry,
+      grant: { ...entry.grant, requestedAt: now, expiresAt: now + 1 },
+    }).ok,
+  ).toBe(true);
+  await rebuild(wiring);
+  now += 2;
+  expect((await decideChatReadConsent(pending.grantId)).status).toBe(404);
+  expect(fixtureApprovalRegistry.getChatReadGrant(pending.grantId)).toBeUndefined();
+});
+
+it.each(["{", "null", "[]", "{}"])(
+  "rejects malformed or incomplete consent JSON %s",
+  async (body) => {
+    const pending = await pendingChatReadConsent();
+    const response = await fetch(chatReadConsentUrl(pending.grantId), {
+      method: "POST",
+      headers: csrfHeaders(),
+      body,
+    });
+    expect(response.status).toBe(400);
+    expect(pending.state()).toBe("pending");
+  },
+);
+
+it("bounds the Chat consent request body before accepting anything", async () => {
+  const pending = await pendingChatReadConsent();
+  const response = await decideChatReadConsent(pending.grantId, {
+    decision: "approve",
+    disclosureVersion: "jira-chat-read-v1",
+    extra: "ü".repeat(4096),
+  });
+  expect(response.status).toBe(413);
+  expect(pending.state()).toBe("pending");
+});
+
+describe("public Live Pod projection", () => {
+  it("exposes the connectable identity without private custody or authorization facts", async () => {
+    const response = await fetch(`${baseUrl()}/api/atlassian-connectors/credentials`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify(livePodCreateInput()),
+    });
+    expect(response.status).toBe(200);
+    const created = (await response.json()) as Record<string, unknown>;
+    expect(created.livePod).toEqual({
+      kind: "jira-live",
+      podId: expect.any(String) as unknown,
+      authenticationGeneration: 1,
+      verificationRevision: 0,
+      verificationInProgress: false,
+      verificationStatus: "unverified",
+      capabilities: ["live-read", "live-write"],
+    });
+    expect(JSON.stringify(created)).not.toMatch(
+      /ownerDigest|creationRequestId|credentialOperation/,
+    );
+    expectNoSecretBytes(JSON.stringify(created));
+  });
+});
+
+async function livePodDataBoundaryFixture(): Promise<{
+  readonly podId: string;
+  readonly dataId: KnowledgeCapsuleId;
+  readonly deps: UiHandlerDeps;
+}> {
+  const podId = await readyJiraPod();
+  const deps: UiHandlerDeps = {
+    ...baseDeps(wiring),
+    uiDbPath: join(configDir, "ui.db"),
+    localKnowledgeEmbeddingRequest: vi.fn(() =>
+      Promise.reject(new Error("Unexpected embedding request")),
+    ),
+  };
+  const dataId = "cap-data-control" as KnowledgeCapsuleId;
+  const knowledge = openKnowledgeStoreForDeps(deps);
+  try {
+    createCapsule(knowledge.store, {
+      id: dataId,
+      displayName: "Data control",
+      tags: [],
+      retrievalEffort: "default",
+      outputMode: "snippets",
+      answerGroundingPolicy: "require-citations",
+      modelUsePolicy: standardPodModelUsePolicy(),
+      embeddingModelIdentity: {
+        provider: "openai",
+        modelId: "text-embedding-3-small",
+        vectorDimensions: 1536,
+        vectorMetric: "cosine",
+      },
+      lifecycleState: "ready",
+      storageReference: "capsules/cap-data-control",
+    });
+  } finally {
+    knowledge.close();
+  }
+  await closeServer();
+  ({ server, port } = await buildServer(deps));
+  return { podId, dataId, deps };
+}
+
+describe("Jira Live Pod direct Data-surface isolation", () => {
+  it.each([
+    { method: "GET", suffix: "" },
+    { method: "POST", suffix: "/index" },
+    { method: "POST", suffix: "/reindex" },
+    { method: "POST", suffix: "/connection" },
+    { method: "POST", suffix: "/export" },
+  ])(
+    "rejects $method capsule$suffix for an actual verified Live Pod",
+    async ({ method, suffix }) => {
+      const { podId, dataId, deps } = await livePodDataBoundaryFixture();
+      const probeCount = fakePortRequests.length;
+      const response = await fetch(
+        `${baseUrl()}/api/local-knowledge/capsules/${encodeURIComponent(podId)}${suffix}`,
+        {
+          method,
+          headers: csrfHeaders(),
+          ...(method === "GET"
+            ? {}
+            : {
+                body: JSON.stringify(
+                  suffix === "/connection"
+                    ? { scope: { kind: "folder", rootPath: configDir, recursive: true } }
+                    : {},
+                ),
+              }),
+        },
+      );
+      expect(response.status).toBe(404);
+      expect((await response.json()) as unknown).toMatchObject({ error: { code: "NOT_FOUND" } });
+      expect(fakePortRequests).toHaveLength(probeCount);
+      expect(deps.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
+      const knowledge = openKnowledgeStoreForDeps(deps);
+      try {
+        expect(listCapsules(knowledge.store).map((capsule) => capsule.id)).toEqual([dataId]);
+        expect(
+          knowledge.store._internal.db.prepare("SELECT COUNT(*) AS count FROM indexing_jobs").get(),
+        ).toMatchObject({ count: 0 });
+      } finally {
+        knowledge.close();
+      }
+    },
+  );
+
+  it("refuses mixed Live/Data membership and preserves Data after direct Live credential deletion", async () => {
+    const otherPodId = await readyJiraPod();
+    const { podId, dataId, deps } = await livePodDataBoundaryFixture();
+    const bound = await updatedJiraChat(jiraChat(), { jiraPodId: podId });
+    const other = await updatedJiraChat(jiraChat(), { jiraPodId: otherPodId });
+    const otherBefore = structuredClone(fixtureStore.findChatById(other.id));
+    const otherCredential = credentialForPod(otherPodId);
+    const credential = credentialForPod(podId);
+    const grants = [bound, other].map((chat) => retainedChatReadGrant(chat));
+    const probeCount = fakePortRequests.length;
+    const createSet = (capsuleIds: readonly string[]): Promise<Response> =>
+      fetch(`${baseUrl()}/api/local-knowledge/capsule-sets`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({ displayName: "Boundary control", capsuleIds }),
+      });
+    expect((await createSet([dataId, podId])).status).toBe(404);
+    const afterDenied = await fetch(`${baseUrl()}/api/local-knowledge/capsule-sets`);
+    expect((await afterDenied.json()) as unknown).toMatchObject({ capsuleSets: [] });
+    const dataSet = await createSet([dataId]);
+    expect(dataSet.status).toBe(201);
+    expect((await dataSet.json()) as unknown).toMatchObject({
+      capsuleSet: { capsuleIds: [dataId], capsuleCount: 1 },
+    });
+    const dataRead = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}`);
+    expect(dataRead.status).toBe(200);
+    const dataBefore: unknown = await dataRead.json();
+    expect(dataBefore).toMatchObject({ capsule: { id: dataId } });
+    const dataIndex = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}/index`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: "{}",
+    });
+    // The Data route admits this identity, then correctly rejects its empty source set.
+    expect(dataIndex.status).toBe(409);
+    const readDataCollections = (): Promise<readonly unknown[]> =>
+      Promise.all(
+        ["capsules", "capsule-sets"].map(async (collection): Promise<unknown> => {
+          const response = await fetch(`${baseUrl()}/api/local-knowledge/${collection}`);
+          expect(response.status).toBe(200);
+          return response.json() as Promise<unknown>;
+        }),
+      );
+    const collectionsBefore = await readDataCollections();
+    const knowledge = openKnowledgeStoreForDeps(deps);
+    try {
+      const storedBefore = structuredClone(listCapsules(knowledge.store));
+      expect(storedBefore.map((capsule) => capsule.id)).toEqual([dataId]);
+      const deleted = await fetch(
+        `${baseUrl()}/api/atlassian-connectors/credentials/${encodeURIComponent(credential.authRef)}`,
+        { method: "DELETE", headers: csrfHeaders() },
+      );
+      expect(deleted.status).toBe(200);
+      expect(wiring.custody.getMetadata(credential.authRef)).toBeUndefined();
+      expect(fixtureStore.findChatById(bound.id)?.jiraPodBinding).toBeUndefined();
+      expect(wiring.custody.getMetadata(otherCredential.authRef)).toEqual(otherCredential);
+      expect(fixtureStore.findChatById(other.id)).toEqual(otherBefore);
+      expect(grants.map((state) => state())).toEqual(["revoked", "granted"]);
+      const afterDelete = await fetch(`${baseUrl()}/api/local-knowledge/capsules/${dataId}`);
+      expect(afterDelete.status).toBe(200);
+      expect((await afterDelete.json()) as unknown).toEqual(dataBefore);
+      expect(await readDataCollections()).toEqual(collectionsBefore);
+      expect(listCapsules(knowledge.store)).toEqual(storedBefore);
+      expect(
+        knowledge.store._internal.db.prepare("SELECT COUNT(*) AS count FROM indexing_jobs").get(),
+      ).toMatchObject({ count: 0 });
+    } finally {
+      knowledge.close();
+    }
+    expect(fakePortRequests).toHaveLength(probeCount);
+    expect(deps.localKnowledgeEmbeddingRequest).not.toHaveBeenCalled();
   });
 });

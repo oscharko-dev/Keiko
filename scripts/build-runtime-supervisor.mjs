@@ -7,6 +7,7 @@ import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "./lib/windows-msvc.mjs";
 
 const WINDOWS_SOURCE = resolve("native/runtime-supervisor/windows/keiko_runtime_supervisor.c");
+const LINUX_SOURCE = resolve("native/runtime-supervisor/linux/keiko_runtime_supervisor.c");
 const MACOS_SOURCE = resolve("native/runtime-supervisor/macos/keiko_runtime_supervisor.c");
 const MACOS_EXTENSION_ROOT = resolve("native/runtime-supervisor/macos/system-extension");
 const ROOT_PACKAGE = JSON.parse(await readFile(resolve("package.json"), "utf8"));
@@ -41,6 +42,7 @@ function compilerInvocation(argv) {
       target,
     };
   }
+  if (target === "linux-x64") return linuxCompilerInvocation(target, output);
   if (target === "macos-arm64" || target === "macos-x64") {
     return {
       args: [
@@ -63,6 +65,30 @@ function compilerInvocation(argv) {
     };
   }
   return undefined;
+}
+
+function linuxCompilerInvocation(target, output) {
+  return {
+    args: [
+      "-std=c11",
+      "-m64",
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      "-O2",
+      "-fPIE",
+      "-pie",
+      "-fstack-protector-strong",
+      "-D_FORTIFY_SOURCE=3",
+      "-Wl,-z,relro,-z,now,-z,noexecstack",
+      "-o",
+      output,
+      LINUX_SOURCE,
+    ],
+    compiler: "cc",
+    output,
+    target,
+  };
 }
 
 function macosComponentInvocations(target, supervisorOutput) {
@@ -182,9 +208,9 @@ export async function runRuntimeSupervisorBuild({
   await mkdir(dirname(output), { recursive: true });
   const status = compileSupervisorBinary(compilerPath, args, compilerEnvironment, spawnSyncImpl);
   if (status !== 0) return status;
-  return target === "windows-x64"
-    ? 0
-    : buildMacosComponents(invocation, environment, spawnSyncImpl);
+  return target.startsWith("macos-")
+    ? buildMacosComponents(invocation, environment, spawnSyncImpl)
+    : 0;
 }
 
 function compileSupervisorBinary(compilerPath, args, compilerEnvironment, spawnSyncImpl) {

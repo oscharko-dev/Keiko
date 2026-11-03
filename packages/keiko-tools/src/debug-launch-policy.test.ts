@@ -30,8 +30,64 @@ const runtimeToolchainCheck = fileURLToPath(
   new URL("../../../scripts/check-runtime-toolchain.mjs", import.meta.url),
 );
 
+type ExactToolchainGate =
+  { readonly kind: "run" } | { readonly kind: "skip"; readonly reason: string };
+
+// #4111: the npm-policy proof below is only meaningful on a governed Node/npm pair, because it
+// asserts `check-runtime-toolchain.mjs --exact`, which accepts the approved pairs alone. A developer
+// host inside the supported engine range but on another patch (for example Node 24.22.0 with
+// npm 11.19.1) is a supported host, not a broken one, so there the proof skips with its reason.
+// Required CI (`CI=true`) always runs it: it provisions the pinned toolchain, so a pair mismatch
+// there is real drift and must fail the test, never skip it.
+function exactToolchainGate(
+  env: NodeJS.ProcessEnv,
+  exactCheckStatus: number | null,
+): ExactToolchainGate {
+  if (env.CI === "true" || exactCheckStatus === 0) return { kind: "run" };
+  return {
+    kind: "skip",
+    reason:
+      `Node ${process.version} with this npm is not an approved exact toolchain pair ` +
+      "(scripts/check-runtime-toolchain.mjs --exact); run npm test under the pinned toolchain " +
+      "from docs/qa/local-gates.md to execute it. Required CI (CI=true) never skips.",
+  };
+}
+
+function exactToolchainCheckStatus(): number | null {
+  return spawnSync(process.execPath, [runtimeToolchainCheck, "--exact"], {
+    encoding: "utf8",
+    timeout: 10_000,
+  }).status;
+}
+
+describe("debug launch toolchain gate", () => {
+  it("skips a supported but unapproved host outside CI with the reason", () => {
+    const gate = exactToolchainGate({}, 1);
+    expect(gate.kind).toBe("skip");
+    expect(gate.kind === "skip" ? gate.reason : "").toContain("not an approved exact toolchain");
+  });
+
+  it("stays a hard failure in CI with the pinned toolchain", () => {
+    expect(exactToolchainGate({ CI: "true" }, 1)).toEqual({ kind: "run" });
+    expect(exactToolchainGate({ CI: "true" }, 0)).toEqual({ kind: "run" });
+  });
+
+  it("runs on an approved host whether or not CI is set", () => {
+    expect(exactToolchainGate({}, 0)).toEqual({ kind: "run" });
+  });
+
+  it("does not treat a falsy or non-true CI value as CI", () => {
+    expect(exactToolchainGate({ CI: "false" }, 1).kind).toBe("skip");
+    expect(exactToolchainGate({ CI: "" }, 1).kind).toBe("skip");
+  });
+});
+
 describe("debug launch Layer-2 policy", () => {
-  it("executes the selected script with distinct empty configs and the approved shell", () => {
+  it("executes the selected script with distinct empty configs and the approved shell", ({
+    skip,
+  }) => {
+    const gate = exactToolchainGate(process.env, exactToolchainCheckStatus());
+    if (gate.kind === "skip") skip(gate.reason);
     const root = mkdtempSync(join(tmpdir(), "keiko-debug-npm-policy-"));
     try {
       const home = join(root, "home");

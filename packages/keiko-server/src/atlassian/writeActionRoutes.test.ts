@@ -1,3 +1,10 @@
+import { activityLogLossCounters } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 // Issue #2244 — route-level governance tests for the Confluence/Jira write actions. Hermetic: no
 // network (the transport port is a counting fixture), no wall-clock races (envelopes register
 // far-future or with pinned past instants), singleton registries reset around every test.
@@ -116,6 +123,12 @@ function guardWith(
   override?: (request: AtlassianHttpBodyRequest) => AtlassianHttpBodyResult | undefined,
 ): AtlassianConnectorCredentialDeps {
   const custody = {
+    updateLivePod: (): never => {
+      throw new Error("Unexpected Live Pod update");
+    },
+    beginVerification: (): undefined => undefined,
+    finishVerification: (): boolean => false,
+    observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create not exercised");
     },
@@ -1285,3 +1298,76 @@ describe("write-action route — governed action correlation", () => {
     });
   });
 });
+
+it("records one failed write attempt without resending a possibly committed PUT (#4083)", async () => {
+  const counter: FetchCounter = { count: 0, requests: [] };
+  const logs = createBufferedServerLogSink();
+  const guard = { ...guardWith(counter, () => response(503)), activityLog: logs };
+  const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+  const result = await postAction("update-issue-fields", authority, "autonomous-delivery", guard);
+  expect(counter.count).toBe(1);
+  expect(result.body.result).toMatchObject({ status: "failed", reason: "unavailable" });
+  const records = atlassianSyncJobRegistry.listActivity(connectorIdForAuthRef(JIRA_AUTH_REF));
+  expect(records).toHaveLength(1);
+  expect(records[0]).toMatchObject({ outcome: "failed", reasonCode: "unavailable" });
+  const event = logs.events.find((item) => item.op === "atlassian.action.outcome");
+  if (event === undefined) throw new Error("Missing action outcome event");
+  const line = formatActivityLogProofLine(event);
+  expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+    outcome: "failed",
+    failureReason: "unavailable",
+    deploymentCeiling: "autonomous-delivery",
+    actionType: "update-issue-fields",
+    provider: "jira",
+  });
+  const timeline = analyzeLogText(line).timelines.find(
+    (item) => item.correlationId === records[0]?.correlationId,
+  );
+  expect(timeline?.lines.some((item) => item.op === "atlassian.action.outcome")).toBe(true);
+  expect(line).not.toContain(JIRA_AUTH_REF);
+  expect(line).not.toContain("Sharper");
+  expect(line).not.toContain("example.atlassian.net");
+});
+
+it("preserves the observed write result and records loss if the terminal log sink fails", async () => {
+  const counter: FetchCounter = { count: 0, requests: [] };
+  const before = activityLogLossCounters()["port-sink-failed"];
+  const guard = {
+    ...guardWith(counter),
+    activityLog: {
+      write(): void {
+        throw new Error("private sink failure");
+      },
+    },
+  };
+  const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+  const result = await postAction("update-issue-fields", authority, "autonomous-delivery", guard);
+  expect(counter.count).toBe(1);
+  expect(result.body.result).toMatchObject({ status: "succeeded" });
+  expect(activityLogLossCounters()["port-sink-failed"]).toBe(before + 1);
+});
+
+it.each(["{", "[]"])(
+  "records malformed provider metadata before any transition mutation",
+  async (bodyText) => {
+    const counter: FetchCounter = { count: 0, requests: [] };
+    const logs = createBufferedServerLogSink();
+    const guard = { ...guardWith(counter, () => response(200, bodyText)), activityLog: logs };
+    const authority = registerEnvelope("autonomous-delivery", BOTH_WRITE_SCOPES);
+    const result = await postAction("transition-issue", authority, "autonomous-delivery", guard);
+    expect(result.body.result).toMatchObject({ status: "failed", reason: "malformed-payload" });
+    expect(counter.requests.map((request) => request.method)).toEqual(["GET"]);
+    const events = logs.events.filter((event) => event.op === "atlassian.action.outcome");
+    expect(events).toHaveLength(1);
+    const event = events[0];
+    if (event === undefined) throw new Error("Missing metadata failure event");
+    const line = formatActivityLogProofLine(event);
+    expect(expectActivityLogProof("atlassian.action.outcome.line", line)).toMatchObject({
+      outcome: "failed",
+      failureReason: "malformed-payload",
+      actionType: "transition-issue",
+    });
+    expect(analyzeLogText(line).timelines).toHaveLength(1);
+    expect(line).not.toContain(JIRA_AUTH_REF);
+  },
+);

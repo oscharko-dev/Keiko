@@ -13,6 +13,8 @@ import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.j
 import { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { GitDeliveryDescriptionAuthorityScope } from "../gitDelivery/runBoundAuthority.js";
 import type { CodingToolEditOutcome } from "./codingToolFacadePorts.js";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 
 describe("coding runtime control plane", () => {
   it("constructs one fail-closed aggregate when no runtime host is qualified", async () => {
@@ -150,6 +152,102 @@ describe("coding runtime control plane", () => {
     });
 
     expect(control.runtimeHostQualified).toBe(true);
+  });
+
+  // Audit finding 8: the per-run runtime state of a crashed run was never removed. The control plane
+  // answers which runs still own theirs: an unsettled snapshot does, a settled or unknown one does not.
+  // #4105: the manager's event callback has no caller to receive a rejected ingest, which used to
+  // leave no Activity Log line at all.
+  it("logs a runtime event the orchestrator rejected on the run's own line", async () => {
+    const { snapshots, evidence } = minimalControlPlaneSnapshots();
+    vi.mocked(snapshots.get).mockImplementation(() => {
+      throw new RangeError("snapshot store unavailable");
+    });
+    const records: ServerLogEvent[] = [];
+    let deliver: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
+    const base = minimalRuntimeHost();
+    const runtimeHost: CodingRuntimeHost = {
+      ...base,
+      createManager: (onEvent) => {
+        deliver = onEvent;
+        return base.createManager(onEvent);
+      },
+    };
+    createCodingRuntimeControlPlane({
+      snapshots,
+      evidence,
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+      activityLog: { write: (event) => void records.push(event) },
+    });
+
+    deliver?.({
+      schemaVersion: "1",
+      eventId: "event-1",
+      runId: "run-ghost-0001",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "runtime-stopped",
+    });
+
+    await vi.waitFor(() => {
+      expect(records.some((record) => record.op === "coding-runtime.event.dropped")).toBe(true);
+    });
+    const line = records.find((record) => record.op === "coding-runtime.event.dropped");
+    expect(line).toMatchObject({
+      level: "warn",
+      correlationId: "run-ghost-0001",
+      errorKind: "internal",
+      extra: { eventKind: "runtime-stopped", reason: "ingest-rejected" },
+    });
+    expect(JSON.stringify(line)).not.toContain("snapshot store unavailable");
+  });
+
+  it("asks the runtime host to sweep orphaned run state, keeping only unsettled runs", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const snapshots = createCodingRuntimeSnapshotStore(db);
+    const digest = "a".repeat(64);
+    const row = (runId: string, state: "running" | "succeeded") => ({
+      schemaVersion: "1" as const,
+      runId,
+      state,
+      revision: 1,
+      requestedMode: "supervised-coding" as const,
+      runtimeSource: "keiko-sidecar" as const,
+      modelSource: "keiko-model-gateway" as const,
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:01:00.000Z",
+      ...(state === "succeeded" ? { terminalAt: "2026-07-13T00:01:00.000Z" } : {}),
+      taskDigest: digest,
+      workspaceDigest: digest,
+      operatorDigest: digest,
+      authorityDigest: digest,
+      bindingDigest: digest,
+      provenanceDigest: digest,
+      toolCallCount: 0,
+      patchByteCount: 0,
+      modelRequestCount: 0,
+    });
+    snapshots.create(row("run-settled", "succeeded"));
+    snapshots.create(row("run-recoverable", "running"));
+    const sweep = vi.fn<(isRetained: (runId: string) => boolean) => void>();
+    const runtimeHost = { ...minimalRuntimeHost(), sweepOrphanedRunState: sweep };
+
+    createCodingRuntimeControlPlane({
+      snapshots,
+      evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+      workspaceLifecycle: { getActive: () => undefined } as never,
+      serverPrincipal: () => "local-operator",
+      runtimeHost,
+    });
+
+    expect(sweep).toHaveBeenCalledOnce();
+    const isRetained = sweep.mock.calls[0]?.[0];
+    expect(isRetained?.("run-recoverable")).toBe(true);
+    expect(isRetained?.("run-settled")).toBe(false);
+    expect(isRetained?.("run-unknown")).toBe(false);
+    db.close();
   });
 
   it("reconciles a durable active row to one content-free recovery manifest at bootstrap", () => {
@@ -400,6 +498,17 @@ function minimalControlPlaneSnapshots(): {
       deletePruned: vi.fn(),
     },
     evidence: { observe: vi.fn(), settle: vi.fn(), deletePruned: vi.fn() },
+  };
+}
+
+function minimalRuntimeHost(): CodingRuntimeHost {
+  return {
+    createManager: unqualifiedManager,
+    launchResolver: { resolve: qualifiedLaunch },
+    approvalAuthority: {
+      issue: () => ({ ok: false, failureCode: "runtime-stopped", retryable: false }),
+    },
+    cancellationRegistry: { signalFor: () => undefined },
   };
 }
 

@@ -46,9 +46,12 @@ export const ACTIVITY_LOG_FAILURE_MODES = ["rejection", "dependency-failure", "c
 // keiko-server and keiko-cli have no owner-wide rule on purpose: a new BFF or CLI emitter module
 // must be mapped deliberately, and until it is, generation fails with `surface-unmapped`.
 export const ACTIVITY_LOG_SURFACE_RULES = [
+  { owner: "keiko-mcp", emitterPrefix: "", surface: "tools-workflows" },
   { owner: "keiko-cli", emitterPrefix: "audit", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "install-layout", surface: "runtime-packages" },
   { owner: "keiko-cli", emitterPrefix: "lifecycle-browser-activity", surface: "ui" },
+  { owner: "keiko-cli", emitterPrefix: "lifecycle-health-activity", surface: "ui" },
+  { owner: "keiko-cli", emitterPrefix: "lifecycle-native-activity", surface: "ui" },
   { owner: "keiko-cli", emitterPrefix: "portable-launch-notifier", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "process-activity-log", surface: "lifecycle-crash" },
   { owner: "keiko-cli", emitterPrefix: "security-log", surface: "runtime-packages" },
@@ -81,6 +84,8 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "coding-app-session", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-context", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "coding-runtime", surface: "tools-workflows" },
+  // The operator's MCP server registry (#3903): admitted MCP tools are governed tool surfaces.
+  { owner: "keiko-server", emitterPrefix: "mcp", surface: "tools-workflows" },
   {
     owner: "keiko-server",
     emitterPrefix: "coding-runtime.productionDraftDeliveryDependencies",
@@ -120,6 +125,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gateway-readiness", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "conversation-readiness-log", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "chat-context-log", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "chat-draft-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "markdown-skill-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "chat-continuity-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "gateway-setup", surface: "model-gateway" },
@@ -132,6 +138,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "gitChangeSnapshotRegistry", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitChangeSnapshotService", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitDelivery", surface: "editor-delivery" },
+  { owner: "keiko-server", emitterPrefix: "gitDiffView", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "gitProcessActivity", surface: "editor-delivery" },
   { owner: "keiko-server", emitterPrefix: "grounded-citation-log", surface: "memory-knowledge" },
   { owner: "keiko-server", emitterPrefix: "knowledge-prompt-window", surface: "memory-knowledge" },
@@ -155,6 +162,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
   { owner: "keiko-server", emitterPrefix: "process-log-sink", surface: "tools-workflows" },
   { owner: "keiko-server", emitterPrefix: "reference-id", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "run-handlers", surface: "bff" },
+  { owner: "keiko-server", emitterPrefix: "run-patch-refusal-log", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "server", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "sse-write", surface: "bff" },
   { owner: "keiko-server", emitterPrefix: "store", surface: "bff" },
@@ -177,6 +185,11 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
     surface: "runtime-packages",
   },
   { owner: "keiko-server", emitterPrefix: "update-runtime-activity", surface: "runtime-packages" },
+  {
+    owner: "keiko-server",
+    emitterPrefix: "update-native-handoff-activity",
+    surface: "runtime-packages",
+  },
   { owner: "keiko-server", emitterPrefix: "update-session", surface: "runtime-packages" },
   { owner: "keiko-server", emitterPrefix: "voice-live-dictation", surface: "model-gateway" },
   { owner: "keiko-server", emitterPrefix: "voice-realtime", surface: "model-gateway" },
@@ -188,6 +201,7 @@ export const ACTIVITY_LOG_SURFACE_RULES = [
 // the CLI write through the process-wide server logger; every domain package receives its own
 // port from the server (AGENTS.md §8).
 export const ACTIVITY_LOG_OWNER_PORTS = {
+  "keiko-mcp": { port: "ManagedMcpLogPort", declaredIn: "keiko-contracts" },
   "keiko-activity-log": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-cli": { port: "ServerLogSink", declaredIn: "keiko-activity-log" },
   "keiko-local-knowledge": { port: "KnowledgeLogSink", declaredIn: "keiko-local-knowledge" },

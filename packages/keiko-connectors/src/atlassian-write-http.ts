@@ -7,17 +7,10 @@
 //   - Bounded backoff reusing the sync lane's D3 constants: 500 ms base, factor 2, 8 000 ms
 //     per-attempt cap, at most 5 attempts total, `Retry-After` honored and capped at the same
 //     ceiling.
-//   - Retry eligibility is METHOD-AWARE. D3 fixes the backoff envelope for 429/5xx but is silent
-//     on request idempotency, so this helper implements the fail-safe reading:
-//       · GET and PUT are idempotent (Jira field updates replay identically; Confluence page
-//         updates carry an explicit version, so a replay lands as a typed `conflict`, never a
-//         double-apply) → retried on 429 and 5xx per D3.
-//       · POST is NOT idempotent (create-issue, transition-issue, comments, create-page — a 5xx
-//         may arrive AFTER the mutation committed upstream) → retried ONLY on 429 AND only when
-//         the response carries `Retry-After` (a 429 is rejected before processing, and the
-//         explicit header keeps the pacing server-directed). Every other POST failure returns
-//         immediately as a typed result; there is no speculative replay of a non-idempotent
-//         write.
+//   - Only GET may retry 429/5xx. POST and PUT are dispatched at most once, even
+//     with Retry-After: a response can be lost or replaced after the mutation committed.
+//     Replaying PUT can also overwrite a concurrent actor's intervening change.
+//     Mutation outcome reconciliation and any explicit new intent belong to the caller.
 //   - 4xx other than 429 never retries (D3), mapping to closed content-free reasons.
 //
 // Byte bounds: the serialized JSON request body is checked against
@@ -33,7 +26,7 @@ import {
   type AtlassianHttpBodyResult,
 } from "./atlassian-http-port.js";
 import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
-import { parseJsonRecord } from "./atlassian-sync-classify.js";
+import { parseJsonArray, parseJsonRecord } from "./atlassian-sync-classify.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
@@ -55,8 +48,8 @@ export interface AtlassianWriteHttpRequest {
   readonly url: string;
   // Serialized JSON request body (POST/PUT only).
   readonly bodyJson?: string | undefined;
-  // Whether the caller consumes a JSON response body ("json") or only the status ("none").
-  readonly expect: "json" | "none";
+  // Object/collection response shape, or status only. Both JSON shapes share the same byte cap.
+  readonly expect: "json" | "json-array" | "none";
 }
 
 export interface AtlassianWriteHttpDeps {
@@ -75,6 +68,7 @@ export type AtlassianWriteHttpOutcome =
       readonly ok: true;
       readonly status: number;
       readonly body: Record<string, unknown> | undefined;
+      readonly items?: readonly unknown[];
     }
   | {
       readonly ok: false;
@@ -99,14 +93,13 @@ function failureReasonForWriteStatus(status: number): AtlassianConnectorWriteFai
   return "unavailable";
 }
 
-// Method-aware retry eligibility (see the header): idempotent methods follow D3's 429/5xx rule;
-// POST retries only a Retry-After-bearing 429.
+// Read retries retain D3's bounded pacing; a mutation never enters the retry loop.
 function isRetryable(method: AtlassianWriteHttpMethod, result: AtlassianHttpBodyResult): boolean {
-  if (result.kind !== "response") return false;
-  if (method === "POST") {
-    return result.status === 429 && result.retryAfterMs !== undefined;
-  }
-  return result.status === 429 || (result.status >= 500 && result.status < 600);
+  return (
+    method === "GET" &&
+    result.kind === "response" &&
+    (result.status === 429 || (result.status >= 500 && result.status < 600))
+  );
 }
 
 function classifyTransport(
@@ -119,7 +112,7 @@ function classifyTransport(
 
 function classifyResponse(
   result: Extract<AtlassianHttpBodyResult, { kind: "response" }>,
-  expect: "json" | "none",
+  expect: AtlassianWriteHttpRequest["expect"],
 ): AtlassianWriteHttpOutcome {
   if (result.status < 200 || result.status >= 300) {
     return {
@@ -131,6 +124,12 @@ function classifyResponse(
   if (expect === "none") return { ok: true, status: result.status, body: undefined };
   if (result.truncated) {
     return { ok: false, reason: "malformed-payload", httpStatus: result.status };
+  }
+  if (expect === "json-array") {
+    const items = parseJsonArray(result.bodyText);
+    return items === undefined
+      ? { ok: false, reason: "malformed-payload", httpStatus: result.status }
+      : { ok: true, status: result.status, body: undefined, items };
   }
   const body = parseJsonRecord(result.bodyText);
   if (body === undefined) {

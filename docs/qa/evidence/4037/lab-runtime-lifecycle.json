@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 1,
+  "classification": "Lab process/error ownership repair only; no skill benefit, full updater or epic acceptance",
+  "sourceParent": "e05d0c661ce8ab74e5a9b2015ac565a6d3273770",
+  "sourceFreeze": {
+    "artifact": "checkpoint48-source-freeze-v3.json",
+    "sha256": "bddf8c1acbbda99b30379d78357cc8dcda15aebbc12c99a9b730283e9dfe0c4b"
+  },
+  "implementation": {
+    "owner": "Existing scripts/testing/chat-skills-lab/runtime.mjs",
+    "startup": "Original 45000ms readiness deadline, exit and error listeners settle together and are released. A lifetime owner retains process errors through session creation.",
+    "stop": "A real-shaped successfully spawned child is signalled only while neither exitCode nor signalCode proves termination. Stop errors reject without claiming termination. Unreported lifetime errors survive successful stop; distinct stop failures are retained together, while an already delivered or identical error is not double-counted.",
+    "resources": "Proxy close and connection cleanup are attempted after child stop refuses. Independent cleanup errors and the original startup error remain available through AggregateError.",
+    "reuse": "The shared composite accepts the existing environment producer as its default. A future observer may supply its unchanged configuration producer and import this owner from its actual frozen measurement checkout. No second lifecycle implementation or runtime-root override is added."
+  },
+  "verification": {
+    "identicalCoreControls": {
+      "beforeFailed": 11,
+      "beforeHealthy": 4,
+      "afterPassed": 15,
+      "beforeLog": {
+        "artifact": "checkpoint48-final-controls-before.log",
+        "sha256": "310210286a38dbafc6be0271ac6f7f057e1c192e52b3ab099b36c7286d64138b"
+      },
+      "finalAffectedSuites": 4,
+      "finalAffectedTests": 68,
+      "finalLifecycleControls": 20,
+      "afterLog": {
+        "artifact": "checkpoint48-lifecycle-and-lab-v5.log",
+        "sha256": "0ee88bbe910e69e221605840b7aaff1f020c7336e416098161bcb6b8be571dec"
+      }
+    },
+    "actualPrivateChildren": {
+      "receipt": {
+        "artifact": "checkpoint48-real-child-final-receipt.json",
+        "sha256": "c1861577ce2c1b01a77921c53c50038cd4f5547e635b708af59564344c9ec9aa"
+      },
+      "passed": 2,
+      "scope": "Exact final code hashes verified before and after actual isolated BFF normal-stop and already-signalled child controls. Rejecting close deadline; child terminal and proxy closure asserted before emergency finally cleanup. One contained synthetic startup probe per case; zero forwarded provider dispatches."
+    },
+    "retainedCommissioningFailures": {
+      "initialTestClock": {
+        "artifact": "checkpoint48-lifecycle-and-lab-v2.log",
+        "sha256": "1723caec16d3440e9543f98074105a8d75f4c588ac89a3d4bc3de811e053970c"
+      },
+      "clockCorrection": "The node:timers test port now follows the fake clock, with an actual one-timer precondition; the product deadline is unchanged.",
+      "initialActualChildFixture": {
+        "artifact": "checkpoint48-real-child.log",
+        "sha256": "a334312db7e44d3add5f78223f3b235f3c7734810a1c6ea6e538938c4003809b"
+      },
+      "fixtureCorrection": "The initial fixture incorrectly expected no startup probe. A separate corrected driver retains actual contained request counts and never forwards; the original failed artifact remains."
+    },
+    "futureObserverReuse": {
+      "artifact": "checkpoint48-future-observer-reuse-candidate.json",
+      "sha256": "fa7948ce7012ac0f1d228275e015b26d7039672bcc9baf97e11edafdd9de03f7"
+    },
+    "priorIndependentSameSeven": {
+      "before": {
+        "artifact": "lab-runtime-lifecycle-shared-seven-before-independent.json",
+        "sha256": "42734f212f09460818356cce38eb32d78789ce55b68a3e122d962faf620df1ae"
+      },
+      "after": {
+        "artifact": "lab-runtime-lifecycle-shared-seven-after-v1-independent.json",
+        "sha256": "5d11be2da5f70f8e109fbacab615ef3ec3f91c936a9059583b3969879c7788ad"
+      },
+      "scope": "Actual five owner bodies, nonexecuting fork/FS/session/proxy adapters; same expected outcomes and real-shaped PID adapter on both sources. Not an OS process proof."
+    },
+    "independentFinalOwners": {
+      "nineErrorControls": {
+        "artifact": "lab-runtime-lifecycle-shared-nine-after-v3-independent.json",
+        "sha256": "fce4757e76885a633eea519c92a864747562144dac25f21674d2e9f3d6b8c9d7"
+      },
+      "fourSignaledControls": {
+        "artifact": "lab-runtime-shared-signaled-after-v3-independent.json",
+        "sha256": "2967a5fe2c5cff4fe4aeefb39eec3084542a5a79721856a1f469f0f1ab155ce7"
+      },
+      "scope": "Actual six owner bodies on final a026a53e source; nonexecuting adapters. Thirteen controls pass, separate from actual-child tests."
+    },
+    "lateErrorCausality": {
+      "before": {
+        "artifact": "lab-runtime-lifecycle-shared-nine-before-late-v1-independent.json",
+        "sha256": "dabc11e62cbeb1a3fe555d5c71885aeab55ccdf6cde71f9bf2eefdfd0cc820fe"
+      },
+      "directBeforeLog": {
+        "artifact": "checkpoint48-late-errors-before.log",
+        "sha256": "63872877171691ce246b425909c48f8512eab27bb7d4da5d10392fc0c8565872"
+      },
+      "beforeNewCasesFailed": 2,
+      "beforeHealthyControls": 18,
+      "afterPassed": 20
+    },
+    "priorActualPrivateChildren": {
+      "result": {
+        "artifact": "checkpoint48-real-child-v2-result.json",
+        "sha256": "3cab705bc8f810868a921813e8b526dbafafb4a3a3ff69b54cd41f2dd37d3eb5"
+      },
+      "driver": {
+        "artifact": "checkpoint48-real-child-controls-v2.mjs",
+        "sha256": "b0b62232c9c74ae5a601cc2c36153c2469075738912e229b827d2b1afcc7bc15"
+      },
+      "log": {
+        "artifact": "checkpoint48-real-child-v2.log",
+        "sha256": "09553295e2ea75c4e9f022eae89173f1cd29bfb5bd9e8fdb56125655b3b7bfa8"
+      },
+      "passed": 2,
+      "scope": "Actual BFF normal stop and already SIGKILL-terminal child; actual loopback proxy closed. Each retained one contained synthetic upstream startup probe. The proxy never forwards to a real provider."
+    },
+    "priorActualPrivateChildrenV3": {
+      "result": {
+        "artifact": "checkpoint48-real-child-v3-result.json",
+        "sha256": "3cab705bc8f810868a921813e8b526dbafafb4a3a3ff69b54cd41f2dd37d3eb5"
+      },
+      "driver": {
+        "artifact": "checkpoint48-real-child-controls-v3.mjs",
+        "sha256": "a4129bb93ceb550f4969c7132fe719100c3491647a20fd6f7223a5b2827591ab"
+      },
+      "log": {
+        "artifact": "checkpoint48-real-child-v3.log",
+        "sha256": "09553295e2ea75c4e9f022eae89173f1cd29bfb5bd9e8fdb56125655b3b7bfa8"
+      },
+      "passed": 2,
+      "scope": "Actual BFF normal stop and already SIGKILL-terminal child; actual loopback proxy closed. Each retained one contained synthetic upstream startup probe. The proxy never forwards to a real provider."
+    }
+  },
+  "limits": [
+    "Prepared future observer remains unexecuted until its shared owner and BFF are assembled and frozen at the same published head.",
+    "Original v4 model observations remain immutable; no skill receives additional credit or changed grading.",
+    "Original provider, transport, input/output grants and every customer skill remain unchanged.",
+    "No complete acceptance disposition or issue checkbox changes; shipping native integration, skill benefit, held-outs and final integration remain open."
+  ],
+  "priorSourceFreeze": {
+    "artifact": "checkpoint48-source-freeze-v2.json",
+    "sha256": "e740760582304af8a9c553befc6e50c20031acb3290a6b35f63f7f71e6705013"
+  }
+}

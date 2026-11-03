@@ -44,6 +44,50 @@ function annotated(
 }
 
 describe("filterCandidates", () => {
+  it("retains a bounded peer matching the same query groups without admitting unrelated groups", () => {
+    const result = filterCandidates(
+      [
+        annotated("backend/current.java", 0.02),
+        annotated("frontend/current.tsx", 0.019),
+        annotated("generic.md", 0.08),
+        annotated("other-query.md", 0.1),
+      ],
+      options({
+        fallbackOrder: ["backend/current.java", "frontend/current.tsx", "generic.md"],
+        fallbackPeerGroups: new Map([
+          ["backend/current.java", "3"],
+          ["frontend/current.tsx", "3"],
+          ["generic.md", "c"],
+        ]),
+      }),
+    );
+    expect(result.kept.map((entry) => entry.scopePath)).toEqual([
+      "backend/current.java",
+      "frontend/current.tsx",
+    ]);
+    expect(result.omitted.map((entry) => entry.scopePath)).toEqual([
+      "generic.md",
+      "other-query.md",
+    ]);
+  });
+
+  it.each([0, 1, 2, 3, 8])("bounds low-confidence peers under a %s-file grant", (maxKept) => {
+    const entries = Array.from({ length: 8 }, (_, index) => annotated(`${String(index)}.md`, 0.02));
+    const paths = entries.map((entry) => entry.candidate.scopePath);
+    const result = filterCandidates(
+      entries,
+      options({
+        maxKept,
+        fallbackOrder: paths,
+        fallbackPeerGroups: new Map(paths.map((path) => [path, "3"])),
+      }),
+    );
+    expect(result.kept.map((entry) => entry.scopePath)).toEqual(
+      paths.slice(0, Math.min(3, maxKept)),
+    );
+    expect(result.omitted).toHaveLength(8 - Math.min(3, maxKept));
+  });
+
   it("uses producer ordering only to choose one eligible low-confidence fallback", () => {
     const result = filterCandidates(
       [annotated("adjacent/note.md", 0.12), annotated("src/transform.ts", 0.08)],
@@ -67,13 +111,33 @@ describe("filterCandidates", () => {
       annotated("strong.md", 0.7),
     ];
     const fallbackOrder = entries.map((entry) => entry.candidate.scopePath);
-    expect(filterCandidates(entries, options({ fallbackOrder })).kept).toEqual([
+    const fallbackPeerGroups = new Map(fallbackOrder.map((path) => [path, "3"]));
+    expect(filterCandidates(entries, options({ fallbackOrder, fallbackPeerGroups })).kept).toEqual([
       candidate("strong.md", 0.7),
     ]);
-    expect(filterCandidates(entries, options({ fallbackOrder, maxKept: 0 })).kept).toEqual([]);
-    expect(filterCandidates(entries.slice(0, -1), options({ fallbackOrder })).kept).toEqual([
-      candidate("weak.md", 0.05),
-    ]);
+    expect(
+      filterCandidates(entries, options({ fallbackOrder, fallbackPeerGroups, maxKept: 0 })).kept,
+    ).toEqual([]);
+    expect(
+      filterCandidates(entries.slice(0, -1), options({ fallbackOrder, fallbackPeerGroups })).kept,
+    ).toEqual([candidate("weak.md", 0.05)]);
+  });
+
+  it.each([undefined, "", "invalid", "C"])("rejects missing or malformed peer keys: %s", (key) => {
+    const result = filterCandidates(
+      [annotated("first.md", 0.02), annotated("second.md", 0.01)],
+      options({
+        fallbackOrder: ["first.md", "second.md"],
+        fallbackPeerGroups:
+          key === undefined
+            ? undefined
+            : new Map([
+                ["first.md", key],
+                ["second.md", key],
+              ]),
+      }),
+    );
+    expect(result.kept.map((entry) => entry.scopePath)).toEqual(["first.md"]);
   });
 
   it("retains certified generated content without overriding eligibility denials", () => {

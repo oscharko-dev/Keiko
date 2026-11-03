@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CommandDeniedError, DEFAULT_SANDBOX_POLICY, runCommand } from "@oscharko-dev/keiko-tools";
+import { portablePackageLayout } from "./update-portable-windows-generation.js";
 import {
   UPDATE_COMMAND_RULES,
   buildUpdateCommand,
@@ -149,7 +150,14 @@ function portableManifest(
   });
 }
 
-function managedRegistration(overrides: Record<string, unknown> = {}): string {
+const MAC_LAUNCHER = "synthetic macOS managed launcher";
+
+function managedRegistration(
+  overrides: Record<string, unknown> = {},
+  packageRoot = PORTABLE_ROOT,
+): string {
+  const layout = portablePackageLayout("macos-arm64", packageRoot);
+  if (layout === undefined) throw new TypeError("Expected macOS fixture layout");
   return JSON.stringify({
     schemaVersion: 1,
     status: "managed",
@@ -158,9 +166,9 @@ function managedRegistration(overrides: Record<string, unknown> = {}): string {
     packageVersion: "0.2.14",
     stable: true,
     managedRootLocator: { kind: "default" },
-    setupManifestSha256: "a".repeat(64),
-    installRootIdentitySha256: "b".repeat(64),
-    launcherIdentitySha256: "c".repeat(64),
+    setupManifestSha256: sha256(portableManifest()),
+    installRootIdentitySha256: sha256(layout.installRoot),
+    launcherIdentitySha256: sha256(MAC_LAUNCHER),
     updatedAt: "2026-07-06T00:00:00.000Z",
     ...overrides,
   });
@@ -168,10 +176,16 @@ function managedRegistration(overrides: Record<string, unknown> = {}): string {
 
 function portableFiles(
   packageRoot: string = PORTABLE_ROOT,
-  registration: string | false = managedRegistration(),
+  registration: string | false = managedRegistration({}, packageRoot),
 ): ReturnType<typeof fakeFiles> {
+  const layout = portablePackageLayout("macos-arm64", packageRoot);
+  if (layout === undefined) throw new TypeError("Expected macOS fixture layout");
   const files: Record<string, string> = {
-    [join(packageRoot, "package.json")]: JSON.stringify({ name: "@oscharko-dev/keiko" }),
+    [join(packageRoot, "package.json")]: JSON.stringify({
+      name: "@oscharko-dev/keiko",
+      version: "0.2.14",
+    }),
+    [layout.rootLauncherPath]: MAC_LAUNCHER,
     [join(dirname(packageRoot), ".portable", "setup-manifest.json")]: portableManifest(),
   };
   if (registration !== false) {
@@ -473,7 +487,7 @@ describe("detectUpdateInstallMode", () => {
   });
 
   it("does not mark system-managed portable installs as self-update eligible", () => {
-    const packageRoot = "/Applications/Keiko.app/Contents/Resources/app";
+    const packageRoot = "/Applications/Other.app/Contents/Resources/app";
     const mode = detectUpdateInstallMode(
       facts({
         packageRoot,
@@ -571,4 +585,223 @@ describe("update command policy", () => {
       ),
     ).rejects.toBeInstanceOf(CommandDeniedError);
   });
+});
+
+const LINUX_PORTABLE_ROOT = "/home/alice/.local/opt/Keiko";
+const LINUX_PORTABLE_STATE = "/home/alice/.keiko";
+function fixtureIdentity(variant: string, kind: string, value: string): string {
+  return variant === `foreign-${kind}` ? "a".repeat(64) : sha256(value);
+}
+function linuxPortableFiles(
+  variant = "valid",
+  installRoot = LINUX_PORTABLE_ROOT,
+  resolvedRoot = installRoot,
+): ReturnType<typeof fakeFiles> {
+  const launcher = "synthetic Linux launcher identity";
+  const setup = {
+    schemaVersion: 1,
+    platformTarget: "linux-x64",
+    packageName: "@oscharko-dev/keiko",
+    packageVersion: "1.2.3",
+    stable: true,
+    primaryLauncher: "Keiko",
+    bootstrapUpdateEligible: false,
+    runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
+  };
+  const setupBytes = `${JSON.stringify(setup, null, 2)}\n`;
+  const registration = {
+    schemaVersion: 1,
+    status: "managed",
+    updateEligible: true,
+    platformTarget: "linux-x64",
+    packageVersion: variant === "foreign-version" ? "1.2.2" : "1.2.3",
+    stable: true,
+    managedRootLocator: { kind: "default" },
+    setupManifestSha256: fixtureIdentity(variant, "setup", setupBytes),
+    installRootIdentitySha256: fixtureIdentity(variant, "root", resolvedRoot),
+    launcherIdentitySha256: fixtureIdentity(variant, "launcher", launcher),
+    updatedAt: "2026-10-18T00:00:00.000Z",
+    ...(variant === "foreign-generation" ? { windowsGeneration: { schemaVersion: 1 } } : {}),
+  };
+  const files: Record<string, string> = {
+    [`${installRoot}/app/package.json`]: JSON.stringify({
+      name: "@oscharko-dev/keiko",
+      version: variant === "foreign-package" ? "1.2.2" : "1.2.3",
+    }),
+    [`${installRoot}/.portable/setup-manifest.json`]: setupBytes,
+    [`${installRoot}/Keiko`]: launcher,
+  };
+  if (variant !== "bootstrap")
+    files[`${LINUX_PORTABLE_STATE}/portable-install-state.json`] = JSON.stringify(registration);
+  return fakeFiles(
+    files,
+    variant === "linked-registration"
+      ? [`${LINUX_PORTABLE_STATE}/portable-install-state.json`]
+      : [],
+  );
+}
+function linuxPortableMode(
+  variant = "valid",
+  installRoot = LINUX_PORTABLE_ROOT,
+  resolvedRoot = installRoot,
+): ReturnType<typeof detectUpdateInstallMode> {
+  return detectUpdateInstallMode(
+    facts({
+      packageRoot: `${installRoot}/app`,
+      packageManagerHint: undefined,
+      installScope: "local",
+      portableStateDir: LINUX_PORTABLE_STATE,
+      ...(variant === "organization"
+        ? { portableManagement: "organization-managed" as const }
+        : {}),
+    }),
+    {},
+    {
+      ...linuxPortableFiles(variant, installRoot, resolvedRoot),
+      realpathSync: (path: string): string => (path === installRoot ? resolvedRoot : path),
+    },
+  );
+}
+
+it("recognizes a registered Linux install through the existing portable detector", () => {
+  expect(linuxPortableMode()).toMatchObject({
+    status: "supported",
+    installKind: "portable-managed",
+    recommendedAction: "portable-managed-update",
+    portable: {
+      target: "linux-x64",
+      status: "managed",
+      updateEligible: true,
+      packageVersion: "1.2.3",
+    },
+  });
+  expect(linuxPortableMode().packageManager).toBeUndefined();
+});
+it("recognizes a Linux bootstrap without offering package-manager installation", () => {
+  expect(linuxPortableMode("bootstrap")).toMatchObject({
+    status: "unsupported",
+    installKind: "portable-bootstrap",
+    reason: "portable-bootstrap",
+    portable: { target: "linux-x64", updateEligible: false },
+  });
+  expect(linuxPortableMode("bootstrap").packageManager).toBeUndefined();
+});
+it.each(["foreign-version", "foreign-generation", "linked-registration", "organization"] as const)(
+  "Linux eligibility remains denied for %s",
+  (variant) => {
+    const mode = linuxPortableMode(variant);
+    expect(mode.status).toBe("unsupported");
+    expect(mode.portable?.updateEligible).not.toBe(true);
+  },
+);
+
+it.each(["/usr/local/Keiko", "/etc/Keiko"] as const)(
+  "Linux detection does not promote protected system root %s",
+  (root) => {
+    const mode = linuxPortableMode("valid", root);
+    expect(mode.status).toBe("unsupported");
+    expect(mode.portable?.updateEligible).not.toBe(true);
+  },
+);
+
+function registeredMacMode(
+  installRoot: string,
+  variant = "valid",
+  resolvedRoot = installRoot,
+): ReturnType<typeof detectUpdateInstallMode> {
+  const packageRoot = `${installRoot}/Contents/Resources/app`;
+  const launcher = "synthetic macOS launcher identity";
+  const setup = {
+    schemaVersion: 1,
+    platformTarget: "macos-arm64",
+    packageName: "@oscharko-dev/keiko",
+    packageVersion: "1.2.4",
+    stable: true,
+    primaryLauncher: "Keiko.app",
+    bootstrapUpdateEligible: false,
+    runtime: { nodePlatform: "darwin", nodeArchitecture: "arm64" },
+  };
+  const bytes = JSON.stringify(setup);
+  const registration = {
+    schemaVersion: 1,
+    status: "managed",
+    updateEligible: true,
+    platformTarget: "macos-arm64",
+    packageVersion: variant === "foreign-version" ? "1.2.3" : "1.2.4",
+    stable: true,
+    managedRootLocator: { kind: "default" },
+    setupManifestSha256: sha256(bytes),
+    installRootIdentitySha256: sha256(resolvedRoot),
+    launcherIdentitySha256: sha256(launcher),
+    updatedAt: "2026-10-18T00:00:00.000Z",
+  };
+  const files = fakeFiles({
+    [`${packageRoot}/package.json`]: JSON.stringify({
+      name: "@oscharko-dev/keiko",
+      version: "1.2.4",
+    }),
+    [`${installRoot}/Contents/Resources/.portable/setup-manifest.json`]: bytes,
+    [`${installRoot}/Contents/MacOS/Keiko`]: launcher,
+    [`${PORTABLE_STATE_DIR}/portable-install-state.json`]: JSON.stringify(registration),
+  });
+  return detectUpdateInstallMode(
+    facts({
+      packageRoot,
+      packageManagerHint: undefined,
+      installScope: "local",
+      portableStateDir: PORTABLE_STATE_DIR,
+      ...(variant === "organization"
+        ? { portableManagement: "organization-managed" as const }
+        : {}),
+    }),
+    {},
+    {
+      ...files,
+      realpathSync: (path: string): string => (path === installRoot ? resolvedRoot : path),
+    },
+  );
+}
+it("honors the canonical macOS managed-root exception in ADR0121", () => {
+  expect(registeredMacMode("/Applications/Keiko.app")).toMatchObject({
+    status: "supported",
+    installKind: "portable-managed",
+    portable: { target: "macos-arm64", status: "managed", updateEligible: true },
+  });
+});
+it("refuses other applications in the protected system Applications directory", () => {
+  expect(registeredMacMode("/Applications/Other.app").status).toBe("unsupported");
+});
+it.each(["foreign-version", "organization"] as const)(
+  "canonical macOS keeps %s registration ineligible",
+  (variant) => {
+    const mode = registeredMacMode("/Applications/Keiko.app", variant);
+    expect(mode.status).toBe("unsupported");
+    expect(mode.portable?.updateEligible).not.toBe(true);
+  },
+);
+
+it.each(["foreign-setup", "foreign-root", "foreign-launcher", "foreign-package"] as const)(
+  "Linux registration does not attest %s identity",
+  (variant) => {
+    const mode = linuxPortableMode(variant);
+    expect(mode.status).toBe("unsupported");
+    expect(mode.portable?.updateEligible).not.toBe(true);
+  },
+);
+
+it("macOS classification checks a forbidden resolved target behind a user-local root", () => {
+  expect(
+    registeredMacMode("/Users/alice/Applications/Keiko.app", "valid", "/Applications/Other.app")
+      .status,
+  ).toBe("unsupported");
+});
+it("Linux classification checks a forbidden resolved target behind a user-local root", () => {
+  expect(linuxPortableMode("valid", LINUX_PORTABLE_ROOT, "/usr/local/Keiko").status).toBe(
+    "unsupported",
+  );
+});
+it("a resolved canonical macOS target never erases a forbidden original alias", () => {
+  expect(
+    registeredMacMode("/Applications/Other.app", "valid", "/Applications/Keiko.app").status,
+  ).toBe("unsupported");
 });

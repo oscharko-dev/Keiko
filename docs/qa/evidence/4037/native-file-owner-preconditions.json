@@ -1,0 +1,190 @@
+{
+  "schemaVersion": 1,
+  "classification": "Linux app-root decoder ownership and held-file identity preconditions; no installed updater or supported-Worker metadata adaptation acceptance",
+  "sourceParent": "1ff21b257ffc578c8d80d2c52c86d0e61433aea4",
+  "sourceFreeze": {
+    "artifact": "checkpoint59-source-freeze-v1.json",
+    "sha256": "8028b27f7a8f1d953f3aeb8da2ff9466a9e87e67aafe9c238525bbafb319fde9"
+  },
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "fff92be06b2de96d73810c26ff55f4485fcee97c12bbf07fddc77dc21c0bcf7a"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-process-scope-linux.h",
+      "sha256": "ad2405016b8ac6e71f427974d7e30d2a004cb39471e4a0af098fb0812c0129d9"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process-scope.test.mjs",
+      "sha256": "76537ef0bbe0255d5a1a667730735a1b857a1fa678c6827599898b971f6793bf"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_decoder_worker_fixture.mjs",
+      "sha256": "2796bb998593fbc53901a2c26488d80051c4b8e1427f797b2f7d9d094fa2adac"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_node_fixture.mjs",
+      "sha256": "57c07a958caa5b8b4b0a03d5b220f399e278dccc4c86ba3ed042994773336658"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_receiver_fixture.c",
+      "sha256": "a58dcdf675e168fb9c367d87e232caed6e4a5590d1ea16aa0727e57ec30435f0"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_root_fixture.c",
+      "sha256": "dcfe49ea83fc9b1a84e5978e1d85ad8d2eb9e937372621ff5767cef4c370dd58"
+    },
+    {
+      "path": "packages/keiko-security/src/native-process-scope.test.ts",
+      "sha256": "d66eee1366ecdfa01c5d43634a0a40d94d0d3d008c2aa65e3e33aae63ac963d1"
+    },
+    {
+      "path": "packages/keiko-security/src/native-process-scope.ts",
+      "sha256": "15bb2e5ca45a1326d26b079594b54014dff8ee17d67e03ff2e19b24c9b2b8763"
+    }
+  ],
+  "pdca": {
+    "plan": {
+      "decoderLifetimeBefore": {
+        "failed": 3,
+        "healthy": 26,
+        "log": {
+          "artifact": "checkpoint59-native-decoder-red-v1.log",
+          "sha256": "fc85e1c24bca3cab6c95e6faebd77ad6c874de02dc84e11c64aeb97a6c4b6f96"
+        }
+      },
+      "conditionalClientBefore": {
+        "failed": 10,
+        "healthy": 40,
+        "receipt": {
+          "artifact": "checkpoint59-native-metadata-client-red-v1.json",
+          "sha256": "44d64f9d44662fe778aedb2b41968ad5743581697fa3e8c2ce44dbe2ca3517a3"
+        }
+      },
+      "actualKernelBefore": {
+        "failed": 1,
+        "healthy": 25,
+        "receipt": {
+          "artifact": "checkpoint59-native-stale-kernel-red-v1.json",
+          "sha256": "53d49e3fa68ed3ab6990c0f45a8d43d034e4d6600f061f551fbf10e3af06fd22"
+        }
+      },
+      "acceptance": "Workers and repeated initializers never read or close the shared root decoder; stale descriptor-slot reuse returns no UID and leaves subsequent correct metadata and liveness usable. Invalid native messages still retire the port."
+    },
+    "do": [
+      "Main-thread, one-attempt initialization is claimed before namespace lookup, descriptor observation, read or close; malformed first identity cannot be retried.",
+      "Conditional request kind6 carries exact u64 device/inode and u32 mode; distinct reply kind7 retains the existing bounded protocol. The client never retries the older unconditional request.",
+      "The owner duplicates the target through the held root pidfd, stats that held object once, and compares the expected tuple before publishing its UID. This is a held-object precondition, not an atomic caller-slot comparison.",
+      "Closed unavailable/stale statuses have zero metadata and preserve the healthy port. Wrong successful tuples, invalid/reserved fields, mismatched targets/kinds and delayed replies retain permanent retirement. Out-of-range local tuples perform no I/O."
+    ],
+    "check": {
+      "client": {
+        "passed": 50,
+        "log": {
+          "artifact": "checkpoint59-security-tests-v1.log",
+          "sha256": "b2209e42288a1e73ea477ea7278ab7a21c042923ef67520510c538f69067696d"
+        },
+        "scope": "Full security suite includes these50 decoder controls; retained failure-first client log has10fail/40healthy before conditional protocol implementation."
+      },
+      "actualKernel": {
+        "architecture": "linux/arm64",
+        "metadataScopeControlsPerUid": 33,
+        "uids": [1000, 65534],
+        "compilerAndAnalyzerObjectsPerUid": 10,
+        "receipts": [
+          {
+            "artifact": "checkpoint59-native-full-kernel-uid1000-v1.json",
+            "sha256": "864258570bf60a4a210d0a1ca2b1294e4c228eac6b868a6356407d1826543fc0"
+          },
+          {
+            "artifact": "checkpoint59-native-full-kernel-uid65534-v1.json",
+            "sha256": "b17cf744bf267d98b261488ea04e28cfc48a6ab23bb87b89f54e9380a2087790"
+          }
+        ],
+        "unchangedForcedReuseFixtureSha256": "dcfe49ea83fc9b1a84e5978e1d85ad8d2eb9e937372621ff5767cef4c370dd58",
+        "cases": "Actual close/dup2 forced same-slot reuse, stale then matching owner query and same-channel liveness; real BFF repeated-main/Worker initializer refusal followed by live root channel; seven malformed conditional-frame controls plus retained native generation tests.",
+        "qualificationPolicy": "Digest-pinned existing image; all capabilities dropped, no new privileges, no network, read-only repository/root. seccomp unconfined only in the declared isolated kernel fixture, never product policy."
+      },
+      "independent": {
+        "client": {
+          "passed": 86,
+          "baselinePassed": 71,
+          "baselineFailed": 15,
+          "receipt": {
+            "artifact": "native59-client-candidate59-independent.json",
+            "sha256": "3f6ba8468e7a91b1b61200c60b3c4871149a3efb712e4e46ec773b8008bb7f05"
+          },
+          "scope": "Actual decoder source in independent CPU ports, including every reserved refusal byte, u64 goldens and lifetime guards; not native execution."
+        },
+        "heldKernel": {
+          "metadataRequestsPerUid": 207,
+          "uids": [1000, 65534],
+          "receipt": {
+            "artifact": "native59-held-kernel-independent.json",
+            "sha256": "7162db4a01374fd21fd445bac8bb4a6e6730f6891cdaa24d50d17a4d6bafd2ef"
+          },
+          "scope": "Independent identical C fixture fails source58 and passes candidate59 using actual full launcher/header, real self pidfd_getfd, socket credentials, mode/dev/ino changes, closed slots and no descriptor leak. Separate from the namespaced real BFF lane."
+        }
+      },
+      "localGates": [
+        {
+          "artifact": "checkpoint59-v1-typecheck.json",
+          "sha256": "686d07d180d00f92487b1c44d2a9bf6112b793f3dd7a4952af6a43dbc68fe9f9"
+        },
+        {
+          "artifact": "checkpoint59-lint-execution-v1.json",
+          "sha256": "3a690965dc396cecdc7cf5c34aefd84cc42ab379ab4c5a824a471e5a86f07c7d"
+        },
+        {
+          "artifact": "checkpoint59-security-tests-execution-v1.json",
+          "sha256": "1f2e1df5de854599da7830797a9b6d686d281356f3a669e47a37d538c1cc2dbc"
+        },
+        {
+          "artifact": "checkpoint59-cli-tests-execution-v1.json",
+          "sha256": "5479c8502f50c4b86f389f883e92be02a96ee2435532b6895feccc65acd57383"
+        },
+        {
+          "artifact": "checkpoint59-v1-sonar.json",
+          "sha256": "abb2b117d6457517876b9becb37303d5a6174ace4e9890b71fc428e2fae76abb"
+        },
+        {
+          "artifact": "checkpoint59-v1-op-catalog.json",
+          "sha256": "b12089a900a2aea385b4b84180ec9d589031d15242bfab788947702dda9a68d5"
+        },
+        {
+          "artifact": "checkpoint59-v1-activity-log.json",
+          "sha256": "b1e4d4b332898be94bde78e7435272acad120a37f20a13adf07e73d58ef754b5"
+        }
+      ],
+      "securitySuite": {
+        "passed": 923,
+        "existingSkips": 3,
+        "suites": 37
+      },
+      "cliSuite": {
+        "passed": 1421,
+        "existingSkips": 1,
+        "suites": 71
+      },
+      "completeActivityLogChecks": 7
+    },
+    "act": {
+      "next": "Adapt supported report/ANN Workers through a private bounded metadata/probe port backed by the already selected main scope; retain main-thread-only writer and caller-owned failure evidence.",
+      "prospectiveWorkerFailure": {
+        "receipt": {
+          "artifact": "checkpoint60-native-support-worker-red-v2.json",
+          "sha256": "bf951e0885ac8cba418d99bf13af7647a485f2467df188ba07fafc050bec0729"
+        },
+        "scope": "Separate read-only prospective fixture overlays: main direct-report positive control passes; subsequent actual report Worker positive-record assertion fails, while33 retained native controls pass. The redacted harness retains the failing frame, not its exact diagnostic summary. Not part of this implementation or a completed acceptance criterion."
+      }
+    }
+  },
+  "limits": [
+    "Initial detached app lifetime, authenticated coordinator placement outside the old namespace, distinct installed/running/successor ownership and process/signal consumers remain open.",
+    "Actual installed cross-version and two successive updates, graceful drain/restart, cancellation, recovery/rollback and SSD/state continuity are not qualified by these controls.",
+    "Linux x64 native ownership and installed entitled macOS Endpoint Security remain unqualified. Existing native P1 review conversations remain open.",
+    "No new browser/search/compaction/skill efficacy, original96-criterion, final-head CI or merge acceptance. Frozen quality tasks/candidates/budgets and prior failures are unchanged.",
+    "No per-FD logging or parallel writer is added. Existing root start/heartbeat reports channel availability and existing caller-owned body-free failures remain authoritative."
+  ]
+}

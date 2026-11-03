@@ -86,7 +86,12 @@ never reports a result before `EDITOR_AGENT_ACTION_TIMEOUT_MS`, the action is fa
 structured lifecycle code `TIMED_OUT`, a result event is fanned out, and the queue slot is reclaimed —
 so a silent or disconnected bridge cannot strand the queue. When the bounded depth
 (`EDITOR_AGENT_MAX_QUEUED_PER_SESSION`) is already saturated, a further action is rejected with
-`QUEUE_FULL` (HTTP 429) backpressure rather than growing the queue without limit. A browser result
+`QUEUE_FULL` (HTTP 429) backpressure rather than growing the queue without limit. The queue is also
+bounded by the serialized bytes it retains, per session (`EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION`,
+64 MiB) and across the process (`EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL`, 256 MiB), because one action may
+carry about 25 MiB (#4107); a refusal is the same `QUEUE_FULL`, and the Activity Log operation
+`editor.agent.action-queue` names the closed reason (`queue-count`, `session-bytes`,
+`process-bytes`) with counts and bytes only. A browser result
 correlated to a queued action clears its timeout and frees the slot. `TIMED_OUT` and `QUEUE_FULL` are
 _lifecycle failures_ (status `failed`), kept disjoint from the preflight _conflict_ taxonomy; both are
 added additively to the contract (`EDITOR_AGENT_FAILURE_CODES`, `EditorAgentActionFailure`,

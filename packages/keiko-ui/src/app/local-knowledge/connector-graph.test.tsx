@@ -1299,8 +1299,8 @@ describe("ConnectorGraph — error states", () => {
     render(<ConnectorGraph fetchCapsulesImpl={fetchCapsulesImpl} />);
 
     await waitFor(() => {
-      const alert = screen.getByRole("alert");
-      expect(alert.textContent).toContain("network error");
+      const alert = screen.getByText("network error").closest('[role="alert"]');
+      expect(alert).not.toBeNull();
     });
 
     // Retry button is reachable

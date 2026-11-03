@@ -155,6 +155,8 @@ describe("candidateProvedEveryReusedJob", () => {
     "Portable secure-read smoke (windows-x64)",
     "Portable secure-read smoke (macos-arm64)",
     "Portable secure-read smoke (macos-x64)",
+    "Firefox smoke (shard 1/2)",
+    "Firefox smoke (shard 2/2)",
     "ui",
     "Cross-platform smoke (ubuntu-latest)",
     "Coverage shard (packages 1/3)",
@@ -194,6 +196,16 @@ describe("candidateProvedEveryReusedJob", () => {
     jobs.push({ name: "Node 26 compatibility", conclusion: "success" });
     stubFetch({ "/jobs": { body: { jobs } } });
     await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+  });
+
+  it.each([1, 2])("requires successful exact evidence for Firefox shard %s", async (shard) => {
+    const name = `Firefox smoke (shard ${shard}/2)`;
+    const missing = everyJob.filter((job) => job.name !== name);
+    for (const conclusion of [undefined, "failure", "cancelled", "skipped"]) {
+      const jobs = conclusion === undefined ? missing : [...missing, { name, conclusion }];
+      stubFetch({ "/jobs": { body: { jobs } } });
+      await expect(candidateProvedEveryReusedJob(REPO, 1, TOKEN)).resolves.toBe(false);
+    }
   });
 
   it("refuses a malformed payload", async () => {

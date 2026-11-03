@@ -1,6 +1,9 @@
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
-import { isDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isDraftDeliveryRecord,
+  isIssueBoundDraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
@@ -198,7 +201,7 @@ export function logJourneyObservationActivity(
 
 /** Read authority from the selected workspace/connection; not a resumed coding-runtime mutation lease. */
 export interface JourneyObservationContext {
-  readonly draft: DraftDeliveryRecord;
+  readonly draft: IssueBoundDraftDeliveryRecord;
   readonly accessScope: object;
   readonly correlationId: string;
   readonly signal?: AbortSignal;
@@ -263,7 +266,11 @@ export class JourneyObservationController {
     try {
       context = this.options.context();
       if (!live(context)) return this.record(context, unavailable("authority-denied"));
-      if (!isDraftDeliveryRecord(context.draft) || context.draft.pullRequest === undefined)
+      if (
+        !isDraftDeliveryRecord(context.draft) ||
+        !isIssueBoundDraftDeliveryRecord(context.draft) ||
+        context.draft.pullRequest === undefined
+      )
         return this.record(context, unavailable("draft-unavailable"));
       context = { ...context, draft: structuredClone(context.draft) };
       return await this.observeCurrent(context);

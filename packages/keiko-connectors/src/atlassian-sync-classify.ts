@@ -24,12 +24,20 @@ export function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-export function parseJsonRecord(bodyText: string): Record<string, unknown> | undefined {
+function parseAtlassianJsonValue(bodyText: string): unknown {
   try {
-    return asRecord(JSON.parse(bodyText));
+    return JSON.parse(bodyText) as unknown;
   } catch {
     return undefined;
   }
+}
+
+export function parseJsonRecord(bodyText: string): Record<string, unknown> | undefined {
+  return asRecord(parseAtlassianJsonValue(bodyText));
+}
+
+export function parseJsonArray(bodyText: string): readonly unknown[] | undefined {
+  return asArray(parseAtlassianJsonValue(bodyText));
 }
 
 // ─── Single-host, API-root-scoped URL construction (ADR-0128 D3) ──────────────

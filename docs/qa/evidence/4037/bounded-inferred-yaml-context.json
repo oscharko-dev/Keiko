@@ -1,0 +1,322 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "333a112561e8749c874e52c16a787ac4c2e8f147",
+  "classification": "Complete inferred YAML privacy context and bounded mapping/blank-prefix scanner repair; scoped evidence, not whole-closure or issue acceptance",
+  "repair": [
+    "Parse each complete inferred mapping once, retain duplicate entries for privacy, and reuse the parsed context through projection.",
+    "Keep strict explicit-YAML duplicate rejection with linear scalar-value/node-identity equivalence to the pinned parser.",
+    "Retain mapping-shaped streaming context until successful completion so later private bindings protect earlier decoded copies.",
+    "Consume blank prefixes once; preserve existing strict plain-field redaction, public prose, later code parsing and canonical placeholders.",
+    "Invalidate old projected index records with snapshot version 11; record revision 3 on existing body-free Activity Log fields."
+  ],
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "92cbafd0f89b7d8d783a814e5d5231f227adf1375d0d2ec9cb2f475fdb644524"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-code.ts",
+      "sha256": "c3496412b58d80ebcef9f114fb365dd1e9ae169c6d06cc6addf838cfcc588a1d"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-formats.test.ts",
+      "sha256": "753657c1b7a5c8de789a4d15d559ff2c7a35be5df4b2f7cdaea52d2922bc214e"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-stream.ts",
+      "sha256": "48309ddd585ba65bf1ff05c8dc900b71d2fde8adf0146594c041c1b48ce6be9e"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.inference-work.test.ts",
+      "sha256": "0933e887f7efc7a7acae9baf9ae7c8d414f9ca06b45db718b36f52539191c4f4"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.ts",
+      "sha256": "c2eac70b583e06788318d4469d3866511a05d20e709a0ec00ebcd47dbb91858f"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction.ts",
+      "sha256": "3a6131788bc2b1d8b26c0ea9bdd486d993d284c03a708ba620e7c78d51139fc2"
+    },
+    {
+      "path": "packages/keiko-workspace/src/discovery.code-redaction.test.ts",
+      "sha256": "b550f5b0fad724442d1ad0675fb6b6f260972a6715c46a75c92e3e6b6689b751"
+    },
+    {
+      "path": "packages/keiko-workspace/src/workspaceIndex.security.test.ts",
+      "sha256": "11dfb016013cf10d503f42af16ddc53ef4c13a4986197dd9b5063aff70ab3ef2"
+    },
+    {
+      "path": "packages/keiko-workspace/src/workspaceIndex.ts",
+      "sha256": "d4d025532f874d7d48c215121745e63f11f505d83300ad20a32d69ba2ca0b380"
+    }
+  ],
+  "freeze": {
+    "sourceSha256": "9f3a7cb6b016b9a5de6b3c27093969951e890192b243b9a57a30a3ecd300fb74",
+    "compiledSha256": "0d2b21781f32eba21bc2404f0625c7ca411e2c9c447aea686bf8fd9798e49be4"
+  },
+  "focusedTestsPassed": 290,
+  "broad": {
+    "passed": 9006,
+    "failed": 0,
+    "existingSkipped": 4,
+    "reportSha256": "d9dec3dc7f7f85bbd39854df0adc819ac4ea8bc87b8dad3592133f1479c76e75"
+  },
+  "independent": {
+    "privateStreamPartitions": 848,
+    "strictKeyEquivalenceCases": 584,
+    "plainPrefixFenceCases": 48,
+    "ownScopedTests": 321,
+    "oldIndexSchemaTests": 2,
+    "receipts": [
+      {
+        "label": "redaction-candidate-80c-independent/capture.json",
+        "receiptSha256": "b0bb7100a181293dbfcf7e2e5006ff34e90e60c4a920a172b6005f67b6726a29"
+      },
+      {
+        "label": "yaml-stream-binding-candidate80c.json",
+        "receiptSha256": "ce754cfa4c327de1b867b900832679e03f575be0ce2243511a29a68f317d36cf"
+      },
+      {
+        "label": "yaml-crossline-binding-candidate80c.json",
+        "receiptSha256": "21e5d1ee501980cea3481fbcd17f18d4e871cfc5e630d5e87f7696acc87cdcc6"
+      },
+      {
+        "label": "yaml-inference-boundaries-candidate80c.json",
+        "receiptSha256": "f7d34a92f0af31c49a3b56ad1822447f1871ecaae58bb026df8161ee95dfaf65"
+      },
+      {
+        "label": "yaml-strict-duplicate-equivalence-candidate80c.json",
+        "receiptSha256": "0eb7bb1ae0f2f260ccfbad8300147380f7dfc85c8f385fa75949d4bb0b730d5e"
+      },
+      {
+        "label": "plain-prefix-fences-candidate80c.json",
+        "receiptSha256": "465f0119c13b6e5b6999a1d856bd16d083b932393e7f2cd18586790c4287aae3"
+      },
+      {
+        "label": "candidate80c-own-scoped-tests.json",
+        "receiptSha256": "4819fc939c6fc072934084fc9e4c625c16fbf2e2b18fb0aafcb2fcc7df3137d8"
+      },
+      {
+        "label": "candidate80c-own-index-version-tests.json",
+        "receiptSha256": "e4ee63e0d94ae13a5028c65e161d2d7081cbe442768ac31eeea235dd053785e9"
+      },
+      {
+        "label": "yaml-suffix-scaling-candidate80c-v2.json",
+        "receiptSha256": "dafb6f0482de75fd1424ee273b7a84513acf34014466d14cfe18529aafa0740f"
+      },
+      {
+        "label": "blank-prefix-scaling-candidate80c.json",
+        "receiptSha256": "bd1dc0b1eaa3614d200c35ec612cfdec933d91e0616a8fcf0b05097643a4fc4b"
+      }
+    ],
+    "finalScopedJoinReceiptSha256": "601756a27f14bd24e9fa1303923530f83cef9dc23e7b086d619dbb28508215cd"
+  },
+  "ciphertextFixture": {
+    "classification": "A prior test changed unused Base64url pad bits rather than ciphertext. Only the test now flips an actual decoded byte, preserves wire size and checks rejection through the existing crypto owner. No crypto/cache runtime change.",
+    "causeReceiptSha256": "cfe8a0c63f8c5e65cf1f18715844b05aef446407b4dc677fb4d1eada60961505",
+    "targetedTestsPassed": 34
+  },
+  "checks": [
+    {
+      "label": "checkpoint80d-typecheck-v1",
+      "receiptSha256": "daa6165d87bb308f0332247dc30079bb0f7eee260ab2502b1bc7c3ef41665502",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "label": "checkpoint80-yaml-scoped-lint-v7",
+      "receiptSha256": "13cf47698a0d03b2ac094c99047f8a16324184bd643c80b44ac5877e2e823366",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "checkpoint80d-fixture-lint-v1",
+      "receiptSha256": "3507f879eef4a6132f903ddff27680c463409dfccecd9a9991cd9ec72ada9b08",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "checkpoint80d-fixture-test-v1",
+      "receiptSha256": "42bea997e9a2da9778cecb578ff80321a3bfb2f17940c02bd946d62e99c35d17",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "1e5440ce54ca49145c443e73299e1142781ae78252eee91ac2b99a3952374840"
+    },
+    {
+      "label": "checkpoint80-yaml-regressions-green-v4",
+      "receiptSha256": "bf3862caec45d2c074731c61d8da8be3481b99e4366ae42dc9786234532c0a7a",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "861b93cb9e23646b7dea03c2fab76c9989f93abeaa04711598cec6c4aff4c67c"
+    },
+    {
+      "label": "checkpoint80d-yaml-broad-coverage-v1",
+      "receiptSha256": "f254b4f8bae08f4b14ad188d8bb44ead9c27cfe7252184d104455c37c37aabb9",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "10b7e74d3b5ca198f04140c90fec612d63ab6500c1f1d7ebba30f1b95ab2cf07"
+    },
+    {
+      "label": "checkpoint80d-yaml-sonar-v1",
+      "receiptSha256": "dc12f9673a071e8eb6bf814e84cd8ee1c7af19534388ebced6044738cb118972",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "0c22bc84d713aa530b73fba946597f2dc07095ce8595763ad383a658b70daccb"
+    },
+    {
+      "label": "checkpoint80d-arch-v1",
+      "receiptSha256": "454f87b2aba49e843b6a3c3b0a63584adf8ab1e087f6eaaba5d80c7975665e3b",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "19b37493d2fb27d0893aa449af9b7269dc217ec86c9c619070e6562821d5704a"
+    },
+    {
+      "label": "checkpoint80c-arch-negative-v1",
+      "receiptSha256": "2028805a25053cd4610523f1150888e254e35b38dc462687a2e22610acc57a9b",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "3e024386847be2d39bc4cdb0b5829c7b2243a9bfc5887d6ec1f86e72abcff6df"
+    },
+    {
+      "label": "checkpoint80c-activity-v1",
+      "receiptSha256": "6703bb6a0340509a711c21c64948ba82b0f012248fa08de443a772e2144086f0",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "306ef94e855e9754c2fa071e91190e492e060b7b85088a573ef06a8af4a62b46"
+    },
+    {
+      "label": "checkpoint80c-retrieval-quality-v1",
+      "receiptSha256": "338eb37983ae661c438d5b0bad760e44ac7f9767b47a8d2c396c2f8c3caf56bf",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "445e6b8f0bbe8000a835aeb9638b2e825cefa7fa72f2e299d50a63e77d457540"
+    },
+    {
+      "label": "checkpoint80c-grounded-retrieval-v1",
+      "receiptSha256": "dbea6dcfc5ea371af9fc1a5855231f3fa6a1cc6768ee531ceb19258cafdd280c",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "e67d8c1c0dd1eb7195e6135d7e761636176e7b6f8cdaeda7b24b75670f26db8f"
+    },
+    {
+      "label": "checkpoint80c-faithfulness-v1",
+      "receiptSha256": "35b8d8b756e9775da0063a9b1918f9def0555eb2013161b38c472f75dc7dbfb7",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "fdd38052b4664f551a607833d9165fcf7aeb9f337195541781bf2d7f2c63c5e2"
+    },
+    {
+      "label": "checkpoint80c-context-v1",
+      "receiptSha256": "f1286f77981e6b1b90350ebab4e8e7413129aea45de93b9b2df7e7ecfa87b587",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "d8a6eb7c74eb1dcf6175bad4efd6fb1934fe17dd31de2886db64acb99172fa8c"
+    },
+    {
+      "label": "checkpoint80c-adr-v1",
+      "receiptSha256": "9f6e6399ebebc04d7b20b9ddb8711b387215616c600d1af2f48e2c5dc78957f9",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "label": "checkpoint80c-observability-v2",
+      "receiptSha256": "d5477a85e7441eb5eb40af37d2961b46888802d84bd6ae2c4af0f61a05b1c066",
+      "exitCode": 0,
+      "frozenSourceUnchanged": true,
+      "logSha256": "098043d3017c53b1af2ac6327a2eb03c183fbb2b28acadc08885acd9befd0c9d"
+    }
+  ],
+  "retainedFailures": [
+    {
+      "label": "checkpoint80-yaml-inference-red-v2",
+      "receiptSha256": "93558d7fb5374556b6aac2bee1547ac655c8a6064553e31432d146ee234d9855",
+      "exitCode": 1,
+      "passed": 2,
+      "failed": 6,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint80-blank-prefix-red-v1",
+      "receiptSha256": "9af633c82d29edf474ad5595dfe50f63f9f0ae9f61430be08e4f42132bad5374",
+      "exitCode": 1,
+      "passed": 0,
+      "failed": 1,
+      "skipped": 8
+    },
+    {
+      "label": "checkpoint80-yaml-inference-green-v1",
+      "receiptSha256": "37bd6b2ce7109bf9f4b8218a485653dd7c3089562e0f502832ed3e4fda0ec1bb",
+      "exitCode": 1,
+      "passed": 72,
+      "failed": 3,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint80-yaml-broad-coverage-v1",
+      "receiptSha256": "8594527bd05b813ce44662d37e10e6339df7b4c5ff93dd9a79815c19dcf47168",
+      "exitCode": 1,
+      "passed": 8971,
+      "failed": 31,
+      "skipped": 4
+    },
+    {
+      "label": "checkpoint80-yaml-sonar-v1",
+      "receiptSha256": "ae3b8afef6e089f8924981e34146fd110dd201a44c5508f1dc014379586f0b5d",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint80-yaml-regressions-green-v1",
+      "receiptSha256": "c6478e62fbb6f21690a5f329ceaee8eef3ff0bf0cf3e98be9c82657652c78f9c",
+      "exitCode": 1,
+      "passed": 260,
+      "failed": 29,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint80-yaml-regressions-green-v2",
+      "receiptSha256": "5b67a241a41db24550506e76e16d3d21dcb040dd5d85a739de85e02552285e27",
+      "exitCode": 1,
+      "passed": 288,
+      "failed": 1,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint80-yaml-regressions-green-v3",
+      "receiptSha256": "9c7501c5f12e0a1564c92db80ccfbc4c16b1d1bb68fb19538bfbf4de7b05ad4f",
+      "exitCode": 1,
+      "passed": 288,
+      "failed": 1,
+      "skipped": 0
+    },
+    {
+      "label": "checkpoint80c-yaml-broad-coverage-v1",
+      "receiptSha256": "78884f97113df8cd13d8e9a0af6ecbf3f42bf16e98ef4788a5451f6ac6d9e8c7",
+      "exitCode": 1,
+      "passed": 9005,
+      "failed": 1,
+      "skipped": 4
+    }
+  ],
+  "reconciledLegacyAssertion": "The old immediate PUBLIC mapping assertion contradicts future private-binding confidentiality; actual prose progress and deferred mapping/cancellation controls are retained separately.",
+  "knownOpen": [
+    "Inherited alias-key privacy defect: aliases resolving to sensitive scalar field names can leave values unmasked. Separate next repair with the per-document target index; no complete YAML privacy acceptance.",
+    "Repeated alias resolution remains quadratic:16,384 aliases exceed the unchanged 2,000 ms child guard, while the scalar control completes. Separate next repair; no claim that all YAML processing is linear.",
+    "Vendor runtime overrides and real consumer resolution remain unqualified.",
+    "Java comparison is incomplete; React correct-subject failures, bounded repair, unused-task skill benefit and conventions remain unaccepted.",
+    "Installed updates, broader browser/search/context/history acceptance, final exact-head CI/review settlement and owner-authorized merge remain open."
+  ],
+  "aliasFailureReceiptSha256": "61e85a0a3a56c2842f6a15afab22e3342fe65614d5cbba5b95170e6c1f477afc",
+  "promptsSkillsAndGrantsChanged": false,
+  "overallAcceptance": false,
+  "measuredAffectedCoverage": {
+    "classification": "Affected owners only, not full-repository coverage",
+    "linesPct": 94.45,
+    "branchesPct": 86.89,
+    "receiptSha256": "59ee5d591e9454f6fe24e2e43d2cb32dfe2b7803e7848d70efaf9ee457060dda"
+  }
+}

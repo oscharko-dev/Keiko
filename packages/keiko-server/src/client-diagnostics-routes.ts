@@ -71,10 +71,24 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   CLIENT_BINDING_FAILURE_OUTCOMES,
+  CLIENT_CODING_RUNTIME_CALLS,
+  CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+  CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
+  CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+  CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+  CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+  CLIENT_CODING_WORKBENCH_INTERACTIONS,
+  CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+  CLIENT_BROWSER_APPROVAL_OPERATIONS,
+  CLIENT_BROWSER_APPROVAL_OUTCOMES,
   CLIENT_MODULE_LOAD_FAILURES,
   CLIENT_COMPOSER_ACTIVITIES,
   CLIENT_COMPOSER_CODE_STAGES,
   CLIENT_FILES_SCOPE_DECISIONS,
+  CLIENT_UPDATE_NOTICE_KINDS,
+  CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+  CLIENT_EDITOR_LINE_ENDINGS,
+  CLIENT_EDITOR_LINE_ENDING_SOURCES,
   CLIENT_GROUNDING_MUTATION_SURFACES,
   CLIENT_VOICE_DIALOGUE_FAILURE_STAGES,
   CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
@@ -593,6 +607,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_IDS = [
   "gateway-profile-refresh",
   "model-selection-availability",
   "markdown-copy-feedback",
+  "transcript-navigation",
+  "browser-approval",
 ] as const;
 
 const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
@@ -613,6 +629,8 @@ const CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID = {
   "gateway profile refresh": "gateway-profile-refresh",
   "model selection availability": "model-selection-availability",
   "markdown copy feedback": "markdown-copy-feedback",
+  "transcript navigation": "transcript-navigation",
+  "browser approval": "browser-approval",
 } as const satisfies Record<ClientStageId, (typeof CLIENT_STAGE_ACTIVITY_LOG_IDS)[number]>;
 
 // KEIKO-3557: routine desktop-window stage evidence (`useWindowStageEvidence`, keiko-ui) rides its
@@ -631,6 +649,12 @@ const CLIENT_STAGE_FIELDS = {
   requestedCount: { type: "integer", dataClass: "count", required: false },
   deletedCount: { type: "integer", dataClass: "count", required: false },
   failedCount: { type: "integer", dataClass: "count", required: false },
+  browserOperation: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: CLIENT_BROWSER_APPROVAL_OPERATIONS,
+  },
 } as const;
 
 const CLIENT_STAGE_STARTED_OPERATION = defineActivityLogOperation({
@@ -658,6 +682,12 @@ const CLIENT_STAGE_SETTLED_OPERATION = defineActivityLogOperation({
   emitter: "client-diagnostics-routes.logClientStageSettled",
   fields: {
     ...CLIENT_STAGE_FIELDS,
+    browserOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_BROWSER_APPROVAL_OUTCOMES,
+    },
     profileOutcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -764,6 +794,8 @@ const CLIENT_BINDING_FIELDS = {
   // How many list loads decided the outcome, when more than the line names; the line is then
   // `partial` with `loss: event-location-unknown`, never silently complete.
   decidingLoadCount: { type: "integer", dataClass: "count", required: false },
+  // How many times the window opened the chat's project before it held, when more than once (#4123).
+  projectOpenAttemptCount: { type: "integer", dataClass: "count", required: false },
   // The other list loads a legacy binding's verdict depended on, beyond the line's correlation id.
   relatedCorrelationIds: {
     type: "string-array",
@@ -818,6 +850,27 @@ const CLIENT_BINDING_TARGET_MISSING_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["client-binding"],
   proofIds: ["client.binding.target-missing.line"],
+  releaseImpact: "patch",
+});
+
+// #4126 review: every bounded attempt to open the chat's project was overtaken by another update, so
+// the window stopped waiting and shows that the chat could not be opened. The line names the attempts.
+const CLIENT_BINDING_PROJECT_OPEN_EXHAUSTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.binding.project-open-exhausted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientBindingProjectOpenExhausted",
+  fields: {
+    ...CLIENT_BINDING_FIELDS,
+    projectOpenAttemptCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-binding"],
+  proofIds: ["client.binding.project-open-exhausted.line"],
   releaseImpact: "patch",
 });
 
@@ -1312,7 +1365,7 @@ const CLIENT_CODING_RUN_RESTORED_OPERATION = defineActivityLogOperation({
   op: "client.coding-run.restored",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "client-diagnostics-routes.logClientCodingRunRestore",
+  emitter: "client-diagnostics-routes.logCodingClientReport",
   fields: {
     timelineCount: { type: "integer", dataClass: "count", required: true },
     transcriptCount: { type: "integer", dataClass: "count", required: true },
@@ -1329,6 +1382,106 @@ const CLIENT_CODING_RUN_RESTORED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["client-coding-run-restore"],
   proofIds: ["client.coding-run.restored.line"],
+  releaseImpact: "patch",
+});
+
+// #3897: what the human did on the Coding Workbench page — ordinary evidence, so it never spends the
+// failure budget or reads as a warn/unknown `client.diagnostic`. Closed values, the two body-free
+// ids of a trust binding and one count only.
+const CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.coding-workbench.interaction",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logCodingClientReport",
+  fields: {
+    interaction: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_CODING_WORKBENCH_INTERACTIONS,
+    },
+    section: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_DETAIL_SECTIONS,
+    },
+    expanded: { type: "boolean", dataClass: "closed-enum", required: false },
+    progressState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_PROGRESS_STATES,
+    },
+    agent: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_AGENT_KINDS,
+    },
+    refusal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_BRIDGE_REFUSALS,
+    },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    fileCount: { type: "integer", dataClass: "count", required: false },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_DIFF_SURFACES,
+    },
+    totalLineCount: { type: "integer", dataClass: "count", required: false },
+    totalByteCount: { type: "integer", dataClass: "count", required: false },
+    notice: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: CLIENT_CODING_WORKBENCH_HELD_NOTICES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-coding-workbench-interaction"],
+  proofIds: ["client.coding-workbench.interaction.line"],
+  releaseImpact: "patch",
+});
+
+// #4109: a runtime request the Workbench gave up on at its own client-side deadline. The BFF accepted
+// it and never answered in time, so no server line can describe it; this one names the call kind and
+// the deadline it ran out of, under the failed request's correlation id. A request that Stop took the
+// place of is not a timeout and is never reported here. Closed values and one duration only.
+const CLIENT_CODING_WORKBENCH_REQUEST_TIMED_OUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.coding-workbench.request-timed-out",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logCodingRequestTimeout",
+  fields: {
+    call: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_CODING_RUNTIME_CALLS,
+    },
+    deadlineMs: { type: "integer", dataClass: "duration", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-coding-workbench-request-timeout"],
+  proofIds: ["client.coding-workbench.request-timed-out.line"],
   releaseImpact: "patch",
 });
 
@@ -1367,6 +1520,72 @@ const CLIENT_SUPPORT_REPORT_DOWNLOAD_STARTED_OPERATION = defineActivityLogOperat
   analyzerProjection: "timeline",
   failureClasses: ["support-report"],
   proofIds: ["client.support-report.download-started.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_UPDATE_NOTICE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.update-notice.presented",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientUpdateNotice",
+  fields: {
+    noticeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_UPDATE_NOTICE_KINDS,
+    },
+    presentation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_UPDATE_NOTICE_PRESENTATIONS,
+    },
+    blockerCount: { type: "integer", dataClass: "count", required: true },
+    updateAvailable: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-update-notice"],
+  proofIds: ["client.update-notice.presented.line"],
+  releaseImpact: "patch",
+});
+
+// #4123: the Editor's model adopted the line ending of text the host wrote into it, so a reloaded
+// or host-edited buffer keeps the exact text instead of a normalized copy that reads as dirty.
+const CLIENT_EDITOR_LINE_ENDING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.editor.line-ending.adopted",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientEditorLineEnding",
+  fields: {
+    lineEnding: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_EDITOR_LINE_ENDINGS,
+    },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: CLIENT_EDITOR_LINE_ENDING_SOURCES,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-editor-line-ending"],
+  proofIds: ["client.editor.line-ending.adopted.line"],
   releaseImpact: "patch",
 });
 
@@ -2126,6 +2345,61 @@ function logClientSupportReportPrepared(
   return true;
 }
 
+function logClientEditorLineEnding(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const report = request.editorLineEnding;
+  if (report === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_EDITOR_LINE_ENDING_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        lineEnding: report.lineEnding,
+        source: report.source,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
+// The closed presentation reports: an update notice, or an Editor line-ending adoption.
+function logPresentationClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  return (
+    logClientUpdateNotice(request, correlationId) ||
+    logClientEditorLineEnding(request, correlationId)
+  );
+}
+
+function logClientUpdateNotice(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const notice = request.updateNotice;
+  if (notice === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_UPDATE_NOTICE_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        blockerCount: notice.blockerCount,
+        noticeKind: notice.noticeKind,
+        presentation: notice.presentation,
+        updateAvailable: notice.updateAvailable,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 function logClientFilesScopeDecision(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
@@ -2220,20 +2494,50 @@ function logClientEvidenceInspection(
   return true;
 }
 
-function logClientCodingRunRestore(
+function logCodingRequestTimeout(
   request: ClientDiagnosticIngestRequest,
   correlationId: string,
 ): boolean {
-  const restore = request.codingRunRestore;
-  if (restore === undefined) return false;
-  getServerLogger().info(
+  const timeout = request.codingRequestTimeout;
+  if (timeout === undefined) return false;
+  getServerLogger().warn(
     activityLogEvent(
-      CLIENT_CODING_RUN_RESTORED_OPERATION,
-      clientDiagnosticCorrelation(request, correlationId),
-      { ...restore, completeness: "complete", loss: "none" },
+      CLIENT_CODING_WORKBENCH_REQUEST_TIMED_OUT_OPERATION,
+      { ...clientDiagnosticCorrelation(request, correlationId), errorKind: "timeout" },
+      {
+        call: timeout.call,
+        deadlineMs: timeout.deadlineMs,
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
   return true;
+}
+
+// The closed Coding Workbench reports: a request that hit its deadline, else a restored run, else a
+// routine page interaction.
+function logCodingClientReport(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  if (logCodingRequestTimeout(request, correlationId)) return true;
+  const { codingRunRestore: restore, codingWorkbenchInteraction: interaction } = request;
+  const envelope = clientDiagnosticCorrelation(request, correlationId);
+  const closed = { completeness: "complete", loss: "none" } as const;
+  if (restore !== undefined) {
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CODING_RUN_RESTORED_OPERATION, envelope, { ...restore, ...closed }),
+    );
+  } else if (interaction !== undefined) {
+    getServerLogger().info(
+      activityLogEvent(CLIENT_CODING_WORKBENCH_INTERACTION_OPERATION, envelope, {
+        ...interaction,
+        ...closed,
+      }),
+    );
+  }
+  return restore !== undefined || interaction !== undefined;
 }
 
 // The closed report shapes, each of which owns its own registered line.
@@ -2260,8 +2564,9 @@ function logClosedClientReport(
     logClientSupportReportDownload(request, correlationId) ||
     logClientSupportReportPrepared(request, correlationId) ||
     logClientFilesScopeDecision(request, correlationId) ||
+    logPresentationClientReport(request, correlationId) ||
     logRetrievalClientReport(request, correlationId) ||
-    logClientCodingRunRestore(request, correlationId)
+    logCodingClientReport(request, correlationId)
   );
 }
 
@@ -2370,6 +2675,9 @@ function logClientStageStarted(
         stage: CLIENT_STAGE_ACTIVITY_LOG_ID_BY_WIRE_ID[request.stage],
         ordinal: request.ordinal,
         ...request.deletion,
+        ...(request.browserApproval === undefined
+          ? {}
+          : { browserOperation: request.browserApproval.operation }),
         completeness: "complete",
         loss: "none",
       },
@@ -2432,6 +2740,14 @@ function logClientStageSettled(
         ...request.deletion,
         ...sourcePreviewActivityFields(request.preview),
         ...modelCatalogActivityFields(request.modelCatalog),
+        ...(request.browserApproval === undefined
+          ? {}
+          : {
+              browserOperation: request.browserApproval.operation,
+              ...(request.browserApproval.outcome === undefined
+                ? {}
+                : { browserOutcome: request.browserApproval.outcome }),
+            }),
         ...(request.gatewayProfile === undefined
           ? {}
           : {
@@ -2526,6 +2842,9 @@ function clientBindingFields(request: ClientBindingIngestRequest): ClientBinding
     bindingDigest: clientBindingDigest(request.windowRef),
     ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
     ...(unnamed ? { decidingLoadCount: deciding } : {}),
+    ...(request.projectOpenAttemptCount === undefined
+      ? {}
+      : { projectOpenAttemptCount: request.projectOpenAttemptCount }),
     completeness: unnamed ? "partial" : "complete",
     loss: unnamed ? "event-location-unknown" : "none",
   };
@@ -2636,6 +2955,32 @@ function logClientBindingChoiceDecision(
   logClientBindingChoiceWithdrawn(request, correlationId);
 }
 
+type ClientBindingProjectOpenExhausted = ClientBindingIngestRequest & {
+  readonly outcome: "project-open-exhausted";
+  readonly projectOpenAttemptCount: number;
+};
+
+function isClientBindingProjectOpenExhausted(
+  request: ClientBindingIngestRequest,
+): request is ClientBindingProjectOpenExhausted {
+  return (
+    request.outcome === "project-open-exhausted" && request.projectOpenAttemptCount !== undefined
+  );
+}
+
+function logClientBindingProjectOpenExhausted(
+  request: ClientBindingProjectOpenExhausted,
+  correlationId: string,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_BINDING_PROJECT_OPEN_EXHAUSTED_OPERATION,
+      { correlationId, errorKind: "conflict" },
+      { ...clientBindingFields(request), projectOpenAttemptCount: request.projectOpenAttemptCount },
+    ),
+  );
+}
+
 function logClientBindingTargetMissing(
   request: ClientBindingIngestRequest,
   correlationId: string,
@@ -2667,6 +3012,10 @@ function logClientBinding(
   }
   if (isClientBindingChoiceDecision(request)) {
     logClientBindingChoiceDecision(request, correlationId);
+    return;
+  }
+  if (isClientBindingProjectOpenExhausted(request)) {
+    logClientBindingProjectOpenExhausted(request, correlationId);
     return;
   }
   logClientBindingTargetMissing(request, correlationId);
@@ -2837,12 +3186,16 @@ function isRoutineVoiceReport(report: ClientDiagnosticIngestRequest): boolean {
   );
 }
 
-// The closed support, scope, citation and restored-run reports: routine evidence, never a failure.
+// The closed support, scope, citation, restored-run and Coding Workbench interaction reports:
+// routine evidence, never a failure.
 function isRoutineScopedReport(report: ClientDiagnosticIngestRequest): boolean {
   return (
+    report.codingWorkbenchInteraction !== undefined ||
     report.supportReportDelivery !== undefined ||
     report.supportReportPreparation !== undefined ||
     report.filesScopeDecision !== undefined ||
+    report.updateNotice !== undefined ||
+    report.editorLineEnding !== undefined ||
     report.codingRunRestore !== undefined ||
     report.scopeNotice !== undefined ||
     report.citationActivation !== undefined

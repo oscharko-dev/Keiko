@@ -16,8 +16,92 @@ import {
 } from "./catalogToolBinder.js";
 import { catalogToolFixture } from "./__fixtures__/catalogToolFixture.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { createGatewayToolCatalogBridge } from "@oscharko-dev/keiko-model-gateway";
+import { createCatalogToolBinder } from "./catalogToolDispatch.js";
 
 describe("catalog handler binding and offered projection", () => {
+  it.each([
+    { deadline: 91_000, authority: 121_000, arrival: 50_000, accepted: true },
+    { deadline: 91_000, authority: 121_000, arrival: 91_000, accepted: false },
+    { deadline: 121_000, authority: 61_000, arrival: 60_000, accepted: true },
+    { deadline: 121_000, authority: 61_000, arrival: 61_000, accepted: false },
+  ])(
+    "bounds model response lifetime by consumer deadline and authority: %j",
+    async ({ deadline, authority, arrival, accepted }) => {
+      const fixture = catalogToolFixture();
+      const execute = vi.fn(fixture.handler.execute);
+      const binder = createCatalogToolBinder(
+        { ...fixture.input, handlerBindings: [{ ...fixture.handler, execute }] },
+        {
+          ...fixture.options,
+          context: () => ({
+            ...fixture.context,
+            deadlineAt: new Date(deadline).toISOString(),
+            authorityExpiresAt: new Date(authority).toISOString(),
+          }),
+        },
+      );
+      const offered = binder.offer();
+      const gateway = createGatewayToolCatalogBridge(
+        {
+          modelId: "fixture-model",
+          messages: [],
+          toolCatalog: {
+            kind: "bound",
+            catalog: fixture.pure.catalog,
+            projection: fixture.pure.projection,
+            offered,
+          },
+        },
+        fixture.now,
+      );
+      fixture.now.mockReturnValue(arrival);
+      const bind = (): ReturnType<typeof gateway.bind> =>
+        gateway.bind({
+          id: "delayed-model-call",
+          name: "fixture_read",
+          arguments: { path: "fixture.ts" },
+        });
+      if (accepted) {
+        const call = bind();
+        expect(
+          await binder.dispatch(call.invocation, {
+            actionId: "delayed-action",
+            idempotencyKey: "delayed-key",
+          }),
+        ).toMatchObject({
+          kind: "settled",
+          result: { status: "completed", effectStarted: true },
+        });
+        expect(execute).toHaveBeenCalledOnce();
+      } else {
+        const expiredCause: unknown = expect.objectContaining({ reason: "expired-compatibility" });
+        expect(bind).toThrow(
+          expect.objectContaining({
+            reason: "invalid-arguments",
+            cause: expiredCause,
+          }),
+        );
+        expect(
+          await binder.dispatch(
+            {
+              kind: "bound",
+              toolRef: fixture.handler.toolRef,
+              projectionDigest: offered.binding.projectionDigest,
+              offerId: offered.offerId,
+              arguments: { path: "fixture.ts" },
+            },
+            { actionId: "expired-action", idempotencyKey: "expired-key" },
+          ),
+        ).toMatchObject({
+          kind: "settled",
+          result: { effectStarted: false },
+        });
+        expect(execute).not.toHaveBeenCalled();
+      }
+      expect(Date.parse(offered.expiresAt)).toBe(Math.min(deadline, authority));
+    },
+  );
   it("offers only the bound ready handler and keeps all server material out of the wire shape", () => {
     const fixture = catalogToolFixture();
     const state = createCatalogBinding(fixture.input, fixture.options);

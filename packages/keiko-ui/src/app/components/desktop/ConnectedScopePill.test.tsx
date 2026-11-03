@@ -121,9 +121,7 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByTitle("/repo/src/feature/validation.ts")).toHaveTextContent(
       "File: validation.ts",
     );
-    expect(
-      screen.getByText(/Keiko may inspect only the connected file scope/i),
-    ).toBeInTheDocument();
+    expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
   });
 
   it("shows the selected directory under its root instead of claiming the entire folder", () => {
@@ -187,15 +185,13 @@ describe("ConnectedScopePill", () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders repository scope and trust/budget disclosure", () => {
+  it("renders a compact connected root label", () => {
     const chat = makeChat({
       connectedScope: { kind: "workspace-root", relativePaths: [], connectedAtMs: 1 },
     });
     render(<ConnectedScopePill chat={chat} updateScopes={vi.fn()} />);
     expect(screen.getByText("Connected root folder")).toBeInTheDocument();
-    expect(screen.getByText(/Keiko may inspect only the connected root folder/i)).toHaveTextContent(
-      /safe-read exclusions and context budget limits apply/i,
-    );
+    expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
   });
 
   it("renders the single-file basename when the scope has one file path", () => {
@@ -214,7 +210,7 @@ describe("ConnectedScopePill", () => {
     expect(screen.getByText("Folder: lib")).toBeInTheDocument();
   });
 
-  it("renders canonical list-only folder and file boundary copy", () => {
+  it("renders each canonical folder and file with compact labels", () => {
     const chat = makeChat({
       connectedScopes: [
         { kind: "directory", relativePaths: ["src/lib"], connectedAtMs: 1 },
@@ -225,12 +221,8 @@ describe("ConnectedScopePill", () => {
     // GEN-UI-STATE-001: labels are plain spans now — assert by visible text.
     expect(screen.getByText("Folder: lib")).toBeInTheDocument();
     expect(screen.getByText("File: README.md")).toBeInTheDocument();
-    expect(screen.getByText(/Keiko may inspect only the connected folder/i)).toHaveTextContent(
-      /safe-read exclusions and context budget limits apply/i,
-    );
-    expect(screen.getByText(/Keiko may inspect only the connected file scope/i)).toHaveTextContent(
-      /safe-read exclusions and context budget limits apply/i,
-    );
+    expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
+    expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
   });
 
   it("labels an external connected folder by its root basename (#532)", () => {

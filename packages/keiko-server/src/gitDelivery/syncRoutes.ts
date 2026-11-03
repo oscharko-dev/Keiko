@@ -71,12 +71,7 @@ import {
   type GitDeliverySyncSeams,
   type SyncExecuteResult,
 } from "./syncExecution.js";
-import {
-  gitSyncRepoIdHash,
-  recordGitSyncEvidence,
-  GIT_SYNC_EVIDENCE_SCHEMA_VERSION,
-  type GitSyncEvidenceRecord,
-} from "./syncEvidence.js";
+import { persistGitSyncResult } from "./syncEvidence.js";
 
 // ─── Error envelope ───────────────────────────────────────────────────────────────────────────
 
@@ -198,10 +193,6 @@ export const createHandleSyncPreview = (
 
 // ─── Execute handler (bounded fetch/pull) ───────────────────────────────────────────────────────
 
-function redactStringFor(deps: Pick<UiHandlerDeps, "redactor">): (input: string) => string {
-  return (input: string): string => deps.redactor(input) as string;
-}
-
 function executeResponse(
   operation: GitSyncOperation,
   remote: string | undefined,
@@ -219,56 +210,6 @@ function executeResponse(
     behind: result.behind,
     truncated: result.truncated,
   };
-}
-
-function evidenceRecord(
-  operation: GitSyncOperation,
-  remote: string | undefined,
-  repoIdHash: string,
-  before: GitSyncPreview | undefined,
-  result: SyncExecuteResult,
-  recordedAtMs: number,
-): GitSyncEvidenceRecord {
-  return {
-    schemaVersion: GIT_SYNC_EVIDENCE_SCHEMA_VERSION,
-    operation,
-    outcome: result.outcome,
-    repoIdHash,
-    branch: result.branch ?? before?.branch,
-    remote,
-    aheadBefore: before?.ahead,
-    behindBefore: before?.behind,
-    aheadAfter: result.ahead,
-    behindAfter: result.behind,
-    recordedAtMs,
-  };
-}
-
-function persistSyncResult(
-  deps: UiHandlerDeps,
-  operation: GitSyncOperation,
-  remote: string | undefined,
-  workspaceRoot: string,
-  before: GitSyncPreview,
-  result: SyncExecuteResult,
-  recordedAtMs: number,
-): void {
-  const record = evidenceRecord(
-    operation,
-    remote,
-    gitSyncRepoIdHash(workspaceRoot),
-    before,
-    result,
-    recordedAtMs,
-  );
-  recordGitSyncEvidence(
-    {
-      evidenceStore: deps.evidenceStore,
-      redactString: redactStringFor(deps),
-      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
-    },
-    record,
-  );
 }
 
 interface SyncDispatchInput {
@@ -347,7 +288,14 @@ function syncResponse(
   dispatched: SyncDispatchResult,
   now: () => number,
 ): RouteResult {
-  persistSyncResult(deps, operation, remote, workspaceRoot, before, dispatched.result, now());
+  persistGitSyncResult(deps, {
+    operation,
+    remote,
+    workspaceRoot,
+    before,
+    result: dispatched.result,
+    recordedAtMs: now(),
+  });
   if (dispatched.denial !== undefined) return dispatched.denial;
   return {
     status: 200,

@@ -31,6 +31,29 @@ describe("checkArchitectureImportPolicy", () => {
     }
   });
 
+  it("isolates all official MCP SDK imports to the managed host", async () => {
+    root = makeRoot("mcp-import-policy-");
+    writeText(
+      root,
+      "packages/keiko-server/src/leak.ts",
+      'import { Client } from "@modelcontextprotocol/client";\nexport const leaked = Client;',
+    );
+    writeText(
+      root,
+      "packages/keiko-connectors/src/leak.ts",
+      'export const leaked = import("@modelcontextprotocol/server");',
+    );
+    writeText(
+      root,
+      "packages/keiko-mcp/src/allowed.ts",
+      'import { Client } from "@modelcontextprotocol/client";\nexport const allowed = Client;',
+    );
+    const violations = await checkArchitectureImportPolicy(root);
+    expect(violations.filter((entry) => entry.rule === "adr-0181-mcp-sdk-isolation")).toHaveLength(
+      2,
+    );
+  });
+
   it("passes on the live production source tree", async () => {
     await expect(checkArchitectureImportPolicy(REPO_ROOT)).resolves.toEqual([]);
   }, 60_000);
@@ -65,6 +88,21 @@ describe("checkArchitectureImportPolicy", () => {
     expect(violations.every((entry) => entry.rule === "adr-0175-tool-catalog-pure-imports")).toBe(
       true,
     );
+  });
+
+  it("admits only exact standard validator imports in the external schema owner", async () => {
+    root = makeRoot("catalog-import-policy-");
+    writeText(
+      root,
+      "packages/keiko-tool-catalog/src/external-schema.ts",
+      [
+        'import { Ajv } from "ajv";',
+        'import { Ajv2019 } from "ajv/dist/2019.js";',
+        'import { Ajv2020 } from "ajv/dist/2020.js";',
+        'import formats from "ajv-formats";',
+      ].join("\n"),
+    );
+    await expect(checkArchitectureImportPolicy(root)).resolves.toEqual([]);
   });
 
   it("allows the catalog's own modules and existing pure contract/security owners", async () => {
@@ -167,7 +205,7 @@ describe("checkArchitectureImportPolicy", () => {
 
     expect(Object.fromEntries([...counts.entries()].sort())).toEqual({
       // Both core filesystem access and third-party SDK access are independently forbidden.
-      "adr-0175-tool-catalog-pure-imports": 2,
+      "adr-0175-tool-catalog-pure-imports": 4,
       "adr-0165-raw-coordinate-owner": 1,
       "adr-0005-owned-root-authority-implementation-private": 1,
       "adr-0005-owned-root-containment-allowed-callers": 1,
@@ -175,6 +213,7 @@ describe("checkArchitectureImportPolicy", () => {
       "adr-0005-owned-root-mint-allowed-callers": 1,
       "adr-0005-owned-root-preserve-allowed-callers": 1,
       "adr-0019-trust-1-provider-sdk-isolation": 1,
+      "adr-0181-mcp-sdk-isolation": 1,
       "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
       "adr-0019-trust-5-patch-routes-through-tools": 1,
       "adr-0019-trust-9-local-knowledge-no-egress": 1,

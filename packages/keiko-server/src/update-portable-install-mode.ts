@@ -16,8 +16,12 @@ import type {
   UpdatePortableManagedRootKind,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
-import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import {
+  UPDATE_PORTABLE_TARGETS,
+  UPDATE_SESSION_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { isSystemManagedPortableRoot } from "@oscharko-dev/keiko-security/portable-root-policy";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   generationBindingMatchesPackageLayout,
@@ -100,11 +104,6 @@ const WINDOWS_REGISTRATION_V2_KEYS = [
   "windowsGeneration",
   "updatedAt",
 ] as const;
-const PORTABLE_TARGETS: readonly UpdatePortableTarget[] = [
-  "windows-x64",
-  "macos-arm64",
-  "macos-x64",
-] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -120,7 +119,9 @@ function parseJsonObject(text: string): Record<string, unknown> | undefined {
 }
 
 function isPortableTarget(value: unknown): value is UpdatePortableTarget {
-  return typeof value === "string" && (PORTABLE_TARGETS as readonly string[]).includes(value);
+  return (
+    typeof value === "string" && (UPDATE_PORTABLE_TARGETS as readonly string[]).includes(value)
+  );
 }
 
 function safeToken(value: unknown): string | undefined {
@@ -480,7 +481,14 @@ function bootstrapSummaryFromManifest(
     stable: raw.stable,
   };
   if (target !== "windows-x64") {
-    return raw.schemaVersion === 1 && raw.windowsGeneration === undefined
+    return raw.schemaVersion === 1 &&
+      raw.windowsGeneration === undefined &&
+      fs.existsSync(layout.packageJsonPath) &&
+      packageIdentityMatches(
+        parseJsonObject(readBoundedText(layout.packageJsonPath, fs)),
+        packageName,
+        packageVersion,
+      )
       ? { bytes, layout, summary }
       : undefined;
   }
@@ -491,7 +499,7 @@ function selectPortableManifest(
   packageRoot: string | undefined,
   fs: PortableDetectorFs,
 ): SelectedPortableManifest | undefined {
-  const targetLayouts = PORTABLE_TARGETS.map((target) =>
+  const targetLayouts = UPDATE_PORTABLE_TARGETS.map((target) =>
     portablePackageLayout(target, packageRoot),
   );
   for (const candidate of targetLayouts) {
@@ -564,7 +572,13 @@ function registrationMatchesManifest(
     registration.summary.stable === manifest.summary.stable,
   ].every(Boolean);
   if (!summaryMatches) return false;
-  if (manifest.binding === undefined) return registration.raw.windowsGeneration === undefined;
+  if (manifest.binding === undefined) {
+    return (
+      registration.raw.windowsGeneration === undefined &&
+      (manifest.summary.target === "windows-x64" ||
+        registrationDiskMatches(registration.raw, manifest, fs))
+    );
+  }
 
   const registrationBinding = parseWindowsGenerationBinding(registration.raw.windowsGeneration);
   if (
@@ -584,23 +598,40 @@ function windowsRegistrationDiskMatches(
   fs: PortableDetectorFs,
 ): boolean {
   return [
-    registration.setupManifestSha256 === sha256(manifest.bytes),
-    registration.installRootIdentitySha256 === sha256(fs.realpathSync(manifest.layout.installRoot)),
-    registration.launcherIdentitySha256 === fileSha256(manifest.layout.rootLauncherPath, fs),
+    registrationDiskMatches(registration, manifest, fs),
     registration.launcherIdentitySha256 === binding.launcherSha256,
   ].every(Boolean);
 }
 
-function normalizedPath(value: string | undefined): string {
-  return (value ?? "").replaceAll("\\", "/").toLowerCase();
+function registrationDiskMatches(
+  registration: Record<string, unknown>,
+  manifest: PortableManifestSummary,
+  fs: PortableDetectorFs,
+): boolean {
+  if (manifest.summary.target !== "windows-x64") {
+    if (
+      hasSymlinkAncestor(manifest.layout.appRoot, fs) ||
+      !fs.existsSync(manifest.layout.rootLauncherPath)
+    )
+      return false;
+  }
+  return [
+    registration.setupManifestSha256 === sha256(manifest.bytes),
+    registration.installRootIdentitySha256 === sha256(fs.realpathSync(manifest.layout.installRoot)),
+    registration.launcherIdentitySha256 === fileSha256(manifest.layout.rootLauncherPath, fs),
+  ].every(Boolean);
 }
 
-function hasMachineManagedRoot(packageRoot: string | undefined): boolean {
-  const normalized = normalizedPath(packageRoot);
+function hasMachineManagedRoot(
+  facts: PortableUpdateRuntimeFacts,
+  target: UpdatePortableTarget,
+  fs: PortableDetectorFs,
+): boolean {
+  const layout = portablePackageLayout(target, facts.packageRoot);
+  if (layout === undefined) return true;
   return (
-    normalized.startsWith("/applications/keiko.app/") ||
-    /^[a-z]:\/program files( \(x86\))?\/keiko\//u.test(normalized) ||
-    /^[a-z]:\/programdata\/keiko\//u.test(normalized)
+    isSystemManagedPortableRoot(layout.installRoot, target) ||
+    isSystemManagedPortableRoot(fs.realpathSync(layout.installRoot), target)
   );
 }
 
@@ -677,6 +708,7 @@ function modeForPortableSummary(
   summary: UpdatePortableInstallSummary,
   facts: PortableUpdateRuntimeFacts,
   packageName: string,
+  fs: PortableDetectorFs,
 ): UpdateInstallMode {
   if (summary.status === "setup-failed") {
     return portableUnsupportedMode(packageName, "portable-setup-failed", summary);
@@ -685,7 +717,7 @@ function modeForPortableSummary(
     return portableUnsupportedMode(packageName, "portable-bootstrap", summary);
   }
   if (!summary.stable) return portableUnsupportedMode(packageName, "portable-non-stable", summary);
-  if (isOrganizationManaged(facts) || hasMachineManagedRoot(facts.packageRoot)) {
+  if (isOrganizationManaged(facts) || hasMachineManagedRoot(facts, summary.target, fs)) {
     return portableUnsupportedMode(packageName, "portable-it-managed", {
       ...summary,
       status: "it-managed",
@@ -730,7 +762,7 @@ export function detectPortableUpdateInstallMode(
     );
   }
   if (registration.status === "absent") {
-    return modeForPortableSummary(manifestSummary.summary, facts, packageName);
+    return modeForPortableSummary(manifestSummary.summary, facts, packageName, fs);
   }
   if (!registrationMatchesManifest(registration, manifestSummary, fs)) {
     return portableUnsupportedMode(
@@ -739,5 +771,5 @@ export function detectPortableUpdateInstallMode(
       manifestSummary.summary,
     );
   }
-  return modeForPortableSummary(registration.summary, facts, packageName);
+  return modeForPortableSummary(registration.summary, facts, packageName, fs);
 }

@@ -330,6 +330,23 @@ describe("parseUnifiedDiff", () => {
     expect(result.files.length).toBeGreaterThan(0);
   });
 
+  it("parses a larger diff in full when the caller states its own byte bound", () => {
+    const header = ["--- /dev/null", "+++ b/big.ts", "@@ -0,0 +1,30000 @@", ""].join("\n");
+    const raw = header + "+added line of a generated file\n".repeat(30_000);
+    expect(raw.length).toBeGreaterThan(MAX_DIFF_BYTES);
+
+    const bounded = parseUnifiedDiff(raw, { maxBytes: 8 * 1024 * 1024 });
+    expect(bounded.truncated).toBe(false);
+    expect(bounded.files[0]?.addedLines).toBe(30_000);
+
+    // The default display bound is unchanged for every other surface.
+    expect(parseUnifiedDiff(raw).truncated).toBe(true);
+    // A caller's bound still truncates what goes past it.
+    const cut = parseUnifiedDiff(raw, { maxBytes: 700_000 });
+    expect(cut.truncated).toBe(true);
+    expect(cut.files[0]?.addedLines).toBeLessThan(30_000);
+  });
+
   // Issue #645 — large diffs must cap the rendered file list and flag truncation so the Review
   // widget never iterates an unbounded files array for generated patches / large repository diffs.
   describe("file-count cap (issue #645)", () => {

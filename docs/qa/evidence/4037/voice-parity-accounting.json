@@ -1,0 +1,213 @@
+{
+  "schemaVersion": 1,
+  "classification": "Test-only actual provider-wire/persisted accounting joins and canonical macOS fixture-root repair; no product accounting or authority change and no whole-campaign acceptance",
+  "parentHead": "6c217e9e4019a8cd64e15d40ca225b9718c4fca5",
+  "sourceFiles": [
+    {
+      "path": "tests/e2e/support/grounding-accounting-witness.mjs",
+      "sha256": "c9e00c8a5d815914046e9c2e7ec2babce7547dbb9fc541f73c6ffeca3dd4b803"
+    },
+    {
+      "path": "tests/e2e/support/model-mock-server.mjs",
+      "sha256": "bdf576a1ba2c65a00c9a6dc0fe86abd980a31150251c7acf7b124ffaa6542055"
+    },
+    {
+      "path": "tests/e2e/voice-dialogue.smoke.spec.ts",
+      "sha256": "ffbbe93cba592746e0e08d94945e29d44adfb90fe5cc2b990bd5d452829d727d"
+    },
+    {
+      "path": "tests/e2e/release-smoke.spec.ts",
+      "sha256": "6cdc5d06c89c880f76492c89926819924d315862c612e87484d3224fb247e149"
+    },
+    {
+      "path": "scripts/__tests__/grounding-accounting-witness.test.mjs",
+      "sha256": "f6e4becc6ecfd04ceb599f2942cc2c554f5f40af2ed05a508c681f1acfb701f3"
+    }
+  ],
+  "unchangedProductionOwnersAndFixture": [
+    {
+      "path": "packages/keiko-server/src/grounded-answer.ts",
+      "sha256": "4ce6bde8e17ef945c8d8824bcbefc6c03487d570d24e434d23ea432824cc25ad"
+    },
+    {
+      "path": "packages/keiko-model-gateway/src/prompt-token-accounting.ts",
+      "sha256": "0be857673fff68e256cca69f107f0e8f5d4672cf5b9d5daf9ef5715b10d5fa4d"
+    },
+    {
+      "path": "tests/e2e/fixtures/keiko.e2e.config.json",
+      "sha256": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6"
+    }
+  ],
+  "nativeCiFailureBefore": {
+    "head": "a25b1e1a8563c5028d6c1f91562fcaa179485566",
+    "job": "https://github.com/oscharko-dev/Keiko/actions/runs/39166523374/job/117790904047",
+    "assertion": "Cross-turn equality of modelInputTokens in otherwise equal typed/voice retrieval identities",
+    "typedModelInputTokens": 1203,
+    "voiceModelInputTokens": 1202,
+    "causeBoundary": "The actual production serializer includes elapsed retrieval time; canonical prompt charges may differ for separate requests. No product undercharge or authority widening is inferred."
+  },
+  "repairedContract": {
+    "unchangedSemanticSourceRangeAndGrantParity": true,
+    "ownPersistedInputEstimateAndOutputJoinActualWire": true,
+    "ownProviderMeasurementSeparateFromCanonicalFloor": true,
+    "canonicalCounterAndAttemptUsageProducersReused": true,
+    "oneGroundedModelCallPerTurn": true,
+    "actualWireModelHashAndSingleOutputCapBound": true,
+    "supportedWire": "Exactly system/user string messages with no extra message fields, tools or response format; fixed uncalibrated synthetic profile only",
+    "witnessRetentionLimit": 16,
+    "evidence": "Counts, hashes and bounded grants only; no prompt, source body, endpoint, cookie or credential retained in witness"
+  },
+  "actualFinalBrowserObservations": [
+    {
+      "snapshot": {
+        "totalCalls": 1,
+        "witnesses": [
+          {
+            "requestSha256": "6fb91a9561055ea4c48309dc77ee3324c8a860f573ab66a1a603afe3ca04546f",
+            "requestModelSha256": "4c59cce70f35cb5bf2d1e7f2649e5254148739008851f65433e286cdd8753a4a",
+            "outputTokensMax": 1024,
+            "outputCapFields": 1,
+            "supportedTextOnly": true,
+            "canonicalPromptTokens": 1202,
+            "promptTokens": 8,
+            "completionTokens": 6,
+            "accountedPromptTokens": 1202
+          }
+        ]
+      },
+      "identity": {
+        "promptContext": {
+          "promptTokens": 8,
+          "promptTokensMeasured": true,
+          "estimatedPromptTokens": 1202,
+          "instructionTokens": 910,
+          "sourceTokens": 79,
+          "sentReferenceCount": 1,
+          "availableReferenceCount": 1,
+          "contextWindowTokens": 8192,
+          "inputBudgetTokens": 6912,
+          "reservedOutputTokens": 1024,
+          "modelId": "e2e-chat-model"
+        },
+        "contextPack": {
+          "usage": {
+            "searchCalls": 2,
+            "filesRead": 1,
+            "excerptBytes": 126,
+            "modelInputTokens": 1202,
+            "modelOutputTokens": 6,
+            "rerankCalls": 0
+          },
+          "budget": {
+            "searchCallsMax": 16,
+            "filesReadMax": null,
+            "excerptBytesMax": 131072,
+            "modelInputTokensMax": 6912,
+            "modelOutputTokensMax": 1024,
+            "elapsedMsMax": null,
+            "rerankCallsMax": 1
+          }
+        }
+      },
+      "previousCalls": 0
+    },
+    {
+      "snapshot": {
+        "totalCalls": 2,
+        "witnesses": [
+          {
+            "requestSha256": "a4bee38f1a0a2491a8974a0e899301abee889eb12041f8b17252b23a0dd165f1",
+            "requestModelSha256": "4c59cce70f35cb5bf2d1e7f2649e5254148739008851f65433e286cdd8753a4a",
+            "outputTokensMax": 1024,
+            "outputCapFields": 1,
+            "supportedTextOnly": true,
+            "canonicalPromptTokens": 1202,
+            "promptTokens": 8,
+            "completionTokens": 6,
+            "accountedPromptTokens": 1202
+          }
+        ]
+      },
+      "identity": {
+        "promptContext": {
+          "promptTokens": 8,
+          "promptTokensMeasured": true,
+          "estimatedPromptTokens": 1202,
+          "instructionTokens": 910,
+          "sourceTokens": 80,
+          "sentReferenceCount": 1,
+          "availableReferenceCount": 1,
+          "contextWindowTokens": 8192,
+          "inputBudgetTokens": 6912,
+          "reservedOutputTokens": 1024,
+          "modelId": "e2e-chat-model"
+        },
+        "contextPack": {
+          "usage": {
+            "searchCalls": 2,
+            "filesRead": 1,
+            "excerptBytes": 126,
+            "modelInputTokens": 1202,
+            "modelOutputTokens": 6,
+            "rerankCalls": 0
+          },
+          "budget": {
+            "searchCallsMax": 16,
+            "filesReadMax": null,
+            "excerptBytesMax": 131072,
+            "modelInputTokensMax": 6912,
+            "modelOutputTokensMax": 1024,
+            "elapsedMsMax": null,
+            "rerankCallsMax": 1
+          }
+        }
+      },
+      "previousCalls": 1
+    }
+  ],
+  "actualFinalBrowserReport": {
+    "sha256": "294d8f640d0d7358b59c75fe01d1bb116c4263dcca75fc3b5dbc7da1453aea4b",
+    "passed": 110,
+    "failed": 0,
+    "skipped": 0,
+    "retries": 0,
+    "flaky": 0,
+    "durationMs": 351420.171
+  },
+  "owningHelperControls": {
+    "passed": 8,
+    "failed": 0
+  },
+  "actualOwningSpecGuardControls": {
+    "passed": 26,
+    "healthy": 2,
+    "refusedCorruptions": 24,
+    "sourceSha256": "ffbbe93cba592746e0e08d94945e29d44adfb90fe5cc2b990bd5d452829d727d",
+    "helperSha256": "cbd3985b9ff6f1fcb8c3b149cc2fa3fc7ef3bd54dda9059966cae79987f325ca",
+    "receiptSha256": "7dcc59cc9c6037d7dd2b6b3eba667c186bcf1773c545a72d340944784c7f12f3",
+    "ports": "Actual unchanged Playwright helpers/expect against the two final successful browser count observations; only HTTP and test-attachment ports inert"
+  },
+  "canonicalFixtureFailureBefore": {
+    "passed": 104,
+    "failed": 6,
+    "firstFinalCandidateFullSmokeRetained": true,
+    "cause": "Fixture retained the macOS temporary-directory alias; product responses and actual hot-exit writes use the canonical root. Five exact hot-exit observers and one exact navigation assertion rejected that mismatched expected root.",
+    "repair": "Canonicalize the newly created fixture root once with realpathSync; exact content/path/window/pane assertions remain unchanged.",
+    "targetedAfter": {
+      "passed": 7,
+      "failed": 0,
+      "durationSeconds": 45.7
+    }
+  },
+  "withdrawnAdditionalAssertion": {
+    "retained": true,
+    "reason": "An extra cross-request promptContext equality introduced during implementation wrongly equated independently rounded source-token shares. It failed 79 versus 80, was removed before publication and never changed production accounting."
+  },
+  "remainingHolds": [
+    "Native updater generation transfer and durable recovery",
+    "Both customer skills and actual native model acceptance",
+    "Trusted browser and restart/SSD qualification",
+    "Native N+1/compaction and remaining scale/history acceptance",
+    "Final exact-head required CI/reviews and owner-authorized integration"
+  ]
+}

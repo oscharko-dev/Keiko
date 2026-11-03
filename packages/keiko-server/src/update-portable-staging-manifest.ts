@@ -684,7 +684,10 @@ function verifiedCandidateSidecars(
       "portable manifest is not verified",
     );
   }
-  const sidecars = verifyPortableManifestSidecars(manifestRecord, target).sidecars;
+  const sidecars = verifyPortableManifestSidecars(manifestRecord, target, {
+    now: new Date(options.now?.() ?? Date.now()),
+    trustedKeys: options.releaseTrustedKeys ?? KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  }).sidecars;
   const actualSidecars = sidecars.map(({ summary }) => summary);
   if (JSON.stringify(actualSidecars) !== JSON.stringify(portable.sidecarRuntimes ?? [])) {
     throw new PortableUpdateStagingError(

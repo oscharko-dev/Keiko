@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   parseExpectedSkillSelectionRevision,
   markdownSkillSelectionRefusal,
@@ -79,3 +79,39 @@ describe("Composer skill selection preconditions", () => {
     }
   });
 });
+
+it.each([undefined, 1, null])(
+  "refuses a deleted selected revision before admission: %j",
+  (revision) => {
+    const store = createInMemoryUiStore();
+    try {
+      const project = store.createProject(process.cwd());
+      const chat = store.createChat(project.path, "Synthetic", "fixture");
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chat.id, skill, 0);
+      store.markdownSkills.delete(skill.id, skill.revision);
+      expect(
+        markdownSkillSelectionRefusal(
+          { store, markdownSkillAuthority: () => true },
+          chat.id,
+          revision,
+        ),
+      ).toMatchObject({ status: 409, body: { error: { code: "SKILL_SELECTION_CHANGED" } } });
+      const read = vi.spyOn(store.markdownSkills, "get");
+      expect(
+        markdownSkillSelectionRefusal(
+          { store, markdownSkillAuthority: () => false },
+          chat.id,
+          revision,
+        ),
+      ).toMatchObject({ status: 404 });
+      expect(read).not.toHaveBeenCalled();
+      expect(store.countMessages(chat.id)).toBe(0);
+    } finally {
+      store.close();
+    }
+  },
+);

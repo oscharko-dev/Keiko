@@ -244,14 +244,9 @@ export async function buildRepoEvidenceItem(spec, scope, fs, search = searchText
 async function buildRepoEvidenceLane(specs = REPO_QUERIES) {
   const fs = buildFixtureFs(REPO_FILES);
   const scope = buildScope();
-  const items = [];
-  const metas = [];
-  for (const spec of specs) {
-    const built = await buildRepoEvidenceItem(spec, scope, fs);
-    items.push(built.item);
-    metas.push(built.meta);
-  }
-  return { items, metas };
+  // The fixed queries read one immutable fixture; each search owns its budget and fixed clock.
+  const built = await Promise.all(specs.map((spec) => buildRepoEvidenceItem(spec, scope, fs)));
+  return { items: built.map((result) => result.item), metas: built.map((result) => result.meta) };
 }
 
 // The evicting repo-evidence items (real searchText/readExcerpt-backed, low-scored). Marked

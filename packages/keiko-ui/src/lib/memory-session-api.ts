@@ -76,7 +76,7 @@ export async function acceptMemoryProposal(
 ): Promise<MemoryActionResponse> {
   const options = typeof optionsOrFetch === "function" ? {} : optionsOrFetch;
   const fetchImpl = typeof optionsOrFetch === "function" ? optionsOrFetch : fetchOverride;
-  return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
+  return await fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
     method: "POST",
     body: JSON.stringify(options),
   });

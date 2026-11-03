@@ -360,6 +360,7 @@ Primary docs:
 
 - [coding-runtime/dev-lane.md](coding-runtime/dev-lane.md)
 - [coding-runtime/milestone-1-real-binary-validation.md](coding-runtime/milestone-1-real-binary-validation.md)
+- [coding-runtime/opencode-upgrade.md](coding-runtime/opencode-upgrade.md)
 - [coding-runtime/research-content-threat-model.md](coding-runtime/research-content-threat-model.md)
 - [coding-workbench-codex-subscription-profiles.md](coding-workbench-codex-subscription-profiles.md)
 - [qa/coding-workbench-operator-runbook.md](qa/coding-workbench-operator-runbook.md)

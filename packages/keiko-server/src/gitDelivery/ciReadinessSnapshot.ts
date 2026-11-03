@@ -6,7 +6,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import {
   isDraftDeliveryRecord,
-  type DraftDeliveryRecord,
+  isIssueBoundDraftDeliveryRecord,
+  type IssueBoundDraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
@@ -23,7 +24,7 @@ export interface CiSnapshotResult {
   readonly assessment?: GitCiAssessment;
 }
 function fallback(
-  draft: DraftDeliveryRecord,
+  draft: IssueBoundDraftDeliveryRecord,
   failure: GitDeliveryObservationFailure,
 ): Omit<GitCiAssessment, "checks"> {
   return {
@@ -47,7 +48,7 @@ function fallback(
     },
   };
 }
-function boundFacts(draft: DraftDeliveryRecord, result: GitCiFactsResult): boolean {
+function boundFacts(draft: IssueBoundDraftDeliveryRecord, result: GitCiFactsResult): boolean {
   if (result.status === "unavailable") return true;
   const identity = result.identity;
   return (
@@ -64,7 +65,7 @@ function boundFacts(draft: DraftDeliveryRecord, result: GitCiFactsResult): boole
   );
 }
 function snapshotFields(
-  draft: DraftDeliveryRecord,
+  draft: IssueBoundDraftDeliveryRecord,
   result: GitCiFactsResult,
   observedAtMs: number,
   summary: Omit<GitCiAssessment, "checks">,
@@ -109,7 +110,7 @@ function withRepairBudgetExhaustion(
     : summary;
 }
 function assessedSummary(
-  draft: DraftDeliveryRecord,
+  draft: IssueBoundDraftDeliveryRecord,
   result: GitCiFactsResult,
 ): {
   readonly assessment: GitCiAssessment | undefined;
@@ -125,12 +126,17 @@ function assessedSummary(
 }
 /** Only body-free counts and exact identity enter durable runtime evidence; transient source IDs remain outside. */
 export function produceCiReadinessSnapshot(
-  draft: DraftDeliveryRecord,
+  draft: IssueBoundDraftDeliveryRecord,
   result: GitCiFactsResult,
   observedAtMs: number,
   repairBudgetExhausted = false,
 ): CiSnapshotResult {
-  if (!isDraftDeliveryRecord(draft) || !Number.isSafeInteger(observedAtMs) || observedAtMs < 0)
+  if (
+    !isDraftDeliveryRecord(draft) ||
+    !isIssueBoundDraftDeliveryRecord(draft) ||
+    !Number.isSafeInteger(observedAtMs) ||
+    observedAtMs < 0
+  )
     throw new TypeError("Invalid CI observation binding or time");
   if (!boundFacts(draft, result))
     throw new TypeError("CI observation does not match accepted draft");

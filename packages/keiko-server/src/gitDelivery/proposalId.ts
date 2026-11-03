@@ -1,9 +1,10 @@
 import { randomBytes } from "node:crypto";
 
 /**
- * The exact three prefixes the server's git-delivery pipeline mints for proposals that a model
+ * The exact prefixes the server's git-delivery pipeline mints for proposals that a model
  * redeems through keiko_git_execute (packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts):
  * - "stage": RuntimeGitService.buildStageProposal (runtimeGitService.ts)
+ * - "unstage": RuntimeGitService.buildUnstageProposal (runtimeGitService.ts, #3902 AC2)
  * - "commit": VerifiedCommitService's binding (verifiedCommitService.ts)
  * - "delivery": DraftDeliveryService's push/pull-request proposals, minted via
  *   draftDeliveryId("delivery") (draftDeliveryFacts.ts)
@@ -11,7 +12,7 @@ import { randomBytes } from "node:crypto";
  * This list is the single source of truth: keiko_git_execute's proposalId pattern is derived
  * from it (see proposalIdPattern below) instead of being hand-typed a second time.
  */
-export const PROPOSAL_ID_PREFIXES = ["stage", "delivery", "commit"] as const;
+export const PROPOSAL_ID_PREFIXES = ["stage", "unstage", "delivery", "commit"] as const;
 export type ProposalIdPrefix = (typeof PROPOSAL_ID_PREFIXES)[number];
 
 /**
@@ -24,7 +25,7 @@ export function proposalIdPattern(): string {
 }
 
 /**
- * Mints a proposal-shaped id: `<prefix>-<128-bit random value as decimal>`. Shared by the three
+ * Mints a proposal-shaped id: `<prefix>-<128-bit random value as decimal>`. Shared by the
  * model-visible minters above and by draftDeliveryFacts.ts's "recovery" id, which reuses the same
  * shape but is never redeemed through keiko_git_execute.
  */

@@ -21,7 +21,7 @@ export type {
   RetrievalIntentClassification,
   RetrievalIntentContext,
 } from "./intent.js";
-export { classifyRetrievalIntent } from "./intent.js";
+export { classifyRetrievalIntent, requestsDependencyMetadata } from "./intent.js";
 
 export type {
   ClarificationPrompt,

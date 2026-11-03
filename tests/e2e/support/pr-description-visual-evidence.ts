@@ -30,11 +30,23 @@ function sourceHashes(paths: readonly string[]): Readonly<Record<string, string>
   return Object.fromEntries(paths.map((path) => [path, artifactDigest(path)]));
 }
 
+// Waits for every finite animation under the frame. An animation with no end can never finish, so it
+// is held at its first frame instead: the connected-source label of a Chat grounded on a Git change
+// pulses forever (globals.css `grounding-label-pulse`, since #3506 counts a Git change as a
+// grounding source), and waiting for it hung the capture until the test timeout. Holding it also
+// gives the accessibility measurement one deterministic frame rather than a phase of the pulse.
 async function settleAnimations(page: Page, selector: string): Promise<void> {
   await page.locator(selector).evaluate(async (element) => {
-    await Promise.allSettled(
-      element.getAnimations({ subtree: true }).map((animation) => animation.finished),
-    );
+    const finite: Animation[] = [];
+    for (const animation of element.getAnimations({ subtree: true })) {
+      if (animation.effect?.getComputedTiming().endTime === Infinity) {
+        animation.pause();
+        animation.currentTime = 0;
+      } else {
+        finite.push(animation);
+      }
+    }
+    await Promise.allSettled(finite.map((animation) => animation.finished));
   });
 }
 

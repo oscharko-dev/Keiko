@@ -8,7 +8,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 
-import { writeOrDestroy } from "../../sse-write.js";
+import { writeSseFrame } from "../../sse-write.js";
 import { editorSettingsWorkspaceFingerprint } from "./editorSettingsStore.js";
 
 interface EditorSettingsSubscriber {
@@ -88,7 +88,7 @@ export function createEditorSettingsEventBus(): EditorSettingsEventBus {
       const encoded = frame(payload);
       for (const subscriber of subscribers) {
         if (eventMatches(subscriber, args)) {
-          writeOrDestroy(subscriber.res, encoded, subscriber.controller);
+          writeSseFrame(subscriber.res, encoded, subscriber.controller);
         }
       }
     },

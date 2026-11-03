@@ -1,0 +1,355 @@
+.cmpPanel {
+  display: grid;
+  align-content: start;
+  gap: 20px;
+  min-width: 0;
+  max-width: 960px;
+  padding: 20px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  container-type: inline-size;
+}
+.cmpPanel :is(h2, h3, p) {
+  margin: 0;
+}
+.cmpHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.cmpHeader h2 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+}
+.cmpHeader p {
+  color: var(--text-secondary);
+  margin-top: 6px;
+  max-width: 480px;
+}
+.cmpHeader > button {
+  flex: 0 0 auto;
+}
+.cmpAvailability {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.cmpAvailability svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+.cmpOverview {
+  display: grid;
+  gap: 12px;
+}
+.cmpListHeading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.cmpListHeading h3 {
+  font-size: 13px;
+  font-weight: 600;
+}
+.cmpListHeading > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.cmpServers {
+  display: grid;
+  gap: 12px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.cmpCard {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  min-width: 0;
+}
+.cmpCardHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  flex-wrap: wrap;
+}
+.cmpServerIcon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  background: var(--surface-inset);
+  color: var(--accent);
+}
+.cmpServerIcon svg {
+  width: 20px;
+  height: 20px;
+}
+.cmpServerIdentity {
+  flex: 1;
+  min-width: 100px;
+}
+.cmpServerIdentity h3 {
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.cmpTarget {
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.cmpBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border-subtle);
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+.cmpStatusDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: 0 0 auto;
+}
+.cmpBadge[data-state="connected"] {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 8%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 25%, transparent);
+}
+.cmpBadge[data-state="failed"] {
+  color: var(--danger);
+}
+.cmpCardFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+.cmpTransport {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+.cmpActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.cmpPanel button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 7px 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+}
+.cmpPanel button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+.cmpPanel button:hover:not(:disabled) {
+  background: var(--surface-inset);
+  border-color: var(--border-strong);
+}
+.cmpPanel button.cmpPrimary {
+  background: color-mix(in srgb, var(--accent) 15%, var(--surface-elevated));
+  color: var(--text-primary);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border-default));
+}
+.cmpPanel button.cmpPrimary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 24%, var(--surface-elevated));
+}
+.cmpPanel button.cmpDanger {
+  color: var(--danger);
+}
+.cmpPanel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.cmpFormCard {
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 20px;
+  background: var(--surface-elevated);
+}
+.cmpForm {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+}
+.cmpForm legend {
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+  padding: 0 0 18px;
+}
+.cmpForm label {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.cmpForm :is(input:not([type="checkbox"]), textarea, select) {
+  width: 100%;
+  min-width: 0;
+  min-height: 38px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-inset);
+  color: var(--text-primary);
+  padding: 9px 11px;
+  font: inherit;
+  font-size: 13px;
+}
+.cmpForm textarea {
+  resize: vertical;
+}
+.cmpForm input[readonly] {
+  color: var(--text-secondary);
+}
+.cmpForm input[type="file"] {
+  font-size: 12px;
+}
+.cmpForm input::file-selector-button {
+  border: 0;
+  border-radius: 5px;
+  padding: 4px 7px;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-right: 8px;
+}
+.cmpForm .cmpCheck {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cmpCheck input {
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+.cmpForm p,
+.cmpHelp {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.cmpPanel :is(input, select, textarea, button):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.cmpAlert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border-default));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--warn) 6%, var(--surface-elevated));
+}
+.cmpAlert strong {
+  display: block;
+  color: var(--text-primary);
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.cmpAlert p {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.cmpAlert > button {
+  flex: 0 0 auto;
+}
+.cmpEmpty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border-default);
+  border-radius: 12px;
+}
+.cmpEmpty svg {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+}
+.cmpEmpty h3 {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+.cmpRemoveConfirm {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+}
+.cmpRemoveConfirm p {
+  width: 100%;
+  font-size: 12px;
+}
+@container (max-width: 520px) {
+  .cmpHeader {
+    flex-direction: column;
+    gap: 12px;
+  }
+  .cmpHeader > button {
+    align-self: flex-start;
+  }
+  .cmpCardHeader {
+    gap: 10px;
+  }
+  .cmpBadge {
+    margin-left: 50px;
+  }
+  .cmpCardFooter {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .cmpAlert {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

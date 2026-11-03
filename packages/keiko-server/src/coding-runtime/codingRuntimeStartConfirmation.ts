@@ -1,4 +1,5 @@
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
+import type { CodingJiraPodBinding } from "./codingJiraPodBinding.js";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
@@ -30,6 +31,8 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly modelSource: CodingWorkbenchModelSource;
   readonly modelProfileId: string;
   readonly issueBindingDigest?: string | undefined;
+  /** The Jira Pod identity the run was bound to; a different Pod or credential is another claim. */
+  readonly jiraPod?: CodingJiraPodBinding | undefined;
   readonly repositoryIdentity?: {
     readonly kind: "github-origin" | "foreign-origin" | "local";
     readonly digest: string;
@@ -79,6 +82,7 @@ export function codingRuntimeStartConfirmationClaim(
         ...(facts.issueBindingDigest === undefined
           ? {}
           : { issueBindingDigest: facts.issueBindingDigest }),
+        ...(facts.jiraPod === undefined ? {} : { jiraPod: facts.jiraPod }),
         project: { id: facts.projectId, digest: facts.projectDigest },
         ...(facts.repositoryIdentity === undefined
           ? {}

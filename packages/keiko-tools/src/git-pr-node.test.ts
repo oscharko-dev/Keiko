@@ -7,6 +7,7 @@
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { makeFakeChild, makeWorkspace, recordingSpawn } from "./_support.js";
+import { PR_DESCRIPTION_ATTRIBUTION } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 import { createNodeGitPullRequestAdapter } from "./git-pr-node.js";
 import type { HomeProvider, SpawnFn } from "./exec.js";
 import type { GitPrCreateExecRequest, GitPrUpdateExecRequest } from "./git-pr-gateway.js";
@@ -928,6 +929,59 @@ describe("node PR adapter — exact body-only reads and writes", () => {
       PATH: "/usr/bin",
       BUILD_ROOT: "/srv/build-agent-42/checkout",
     });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toEqual({ ok: false, reason: "invalid-response" });
+  });
+  it("returns a body Keiko attributed when the runner's repository metadata lies inside the attribution", async () => {
+    // PR #4095: a GitHub-hosted runner exports its repository slug and server URL, both inside
+    // Keiko's own public attribution, so the read after every description apply came back altered
+    // and the applied description was reported as provider-failed.
+    const body = `Closes #42\n\n${PR_DESCRIPTION_ATTRIBUTION}\n`;
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+    ]);
+    const adapter = makeAdapter(spawn, {
+      PATH: "/usr/bin",
+      GITHUB_REPOSITORY: "oscharko-dev/Keiko",
+      GITHUB_REPOSITORY_OWNER: "oscharko-dev",
+      GITHUB_SERVER_URL: "https://github.com",
+    });
+    expect(
+      await adapter.readPullRequestBody({
+        ownerAndRepo: CREATE.ownerAndRepo,
+        prExternalId: "1499",
+      }),
+    ).toMatchObject({ ok: true, value: { body } });
+  });
+  it.each([
+    [
+      "outside the attribution",
+      `See https://github.com/oscharko-dev/Keiko/issues/1\n\n${PR_DESCRIPTION_ATTRIBUTION}`,
+      "oscharko-dev/Keiko",
+    ],
+    [
+      "across the attribution's end",
+      `${PR_DESCRIPTION_ATTRIBUTION} build-agent-42`,
+      "Keiko) build-agent-42",
+    ],
+    [
+      "across the attribution's start",
+      `ref-agent Generated with [Keiko](https://github.com/oscharko-dev/Keiko)`,
+      "ref-agent Generated",
+    ],
+  ])("still treats an env value %s as an altered read", async (_case, body, value) => {
+    const spawn = scriptedSpawn([
+      {
+        stdout: JSON.stringify({ identity: PR_IDENTITY, body, updatedAt: "2026-09-05T00:00:00Z" }),
+      },
+    ]);
+    const adapter = makeAdapter(spawn, { PATH: "/usr/bin", BUILD_CONTEXT: value });
     expect(
       await adapter.readPullRequestBody({
         ownerAndRepo: CREATE.ownerAndRepo,

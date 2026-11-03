@@ -675,6 +675,13 @@ function isChatGitChangeScope(value: unknown): value is ChatGitChangeScope {
   return hasChatGitChangeScopeTextFields(value) && hasChatGitChangeScopeCountFields(value);
 }
 
+// The server omits `status` for an open chat and serialises it only when a chat is closed, so an
+// absent value is the open case (`ownsOpenGitChat` in chat-grounding-mutation.ts applies the same
+// rule). Requiring a literal "open" refused every real connect/refresh response.
+function isOpenChatStatus(status: unknown): boolean {
+  return status === undefined || status === "open";
+}
+
 function hasCanonicalGitChatFields(value: Record<string, unknown>, chatId: string): boolean {
   return (
     value.id === chatId &&
@@ -683,7 +690,7 @@ function hasCanonicalGitChatFields(value: Record<string, unknown>, chatId: strin
     typeof value.selectedModel === "string" &&
     Number.isSafeInteger(value.createdAt) &&
     Number.isSafeInteger(value.updatedAt) &&
-    value.status === "open" &&
+    isOpenChatStatus(value.status) &&
     isGroundingScopeIdentity(value.groundingScopeIdentity)
   );
 }

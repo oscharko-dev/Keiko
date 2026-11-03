@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded explicit stored-alias reconnect repair; no full search, skill, browser, updater or epic acceptance",
+  "sourceParent": "2d30626ba65a3181407e8554644950ec08dbcfeb",
+  "sourceFreeze": {
+    "artifact": "checkpoint44-source-freeze-v1.json",
+    "sha256": "4d70ccd44aaede6d65b193c5dd72fd1773ce68c4e36ce8fe804028e761278996"
+  },
+  "repair": {
+    "owner": "Existing UiStore reconnect transaction and workspace-manifest identity owner",
+    "anchor": "Resolve the explicit single-root reconnect once to the canonical path used by both identity inspection and descriptor refresh; retain lexical project identity and history.",
+    "healthyIdentity": "Manifest revision and trust remain unchanged.",
+    "availableReplacement": "Refresh the existing manifest, revoke former-root trust only and retain a restricted new root.",
+    "registeredCollision": "PROJECT_EXISTS before identity writes; the existing enclosing transaction rolls back project metadata and timestamps.",
+    "unchanged": [
+      "global strict identity-inspector alias refusal",
+      "multi-root reconnect",
+      "legacy explicit registration/backfill",
+      "other workspace trust",
+      "existing request authority"
+    ],
+    "logging": "Existing registered project.workspace.reconnect.outcome producer records the actual availability outcome with complete lifecycle and no paths, project names or source bodies."
+  },
+  "controls": {
+    "identicalFinalCausal": {
+      "receipt": {
+        "artifact": "checkpoint44-causal.json",
+        "sha256": "25e199705c3c87df3ffafd141f4896de645ddccf786aa6a7ff318e4ba9672846"
+      },
+      "parentFailed": 5,
+      "candidatePassed": 5,
+      "filteredUnchangedTests": 192,
+      "tests": {
+        "packages/keiko-server/src/workspace-manifests.test.ts": "f380470ae0c903f160095b3460ff64c58df213642c851463d777b0a4f53ffd9b",
+        "packages/keiko-server/src/store-handlers.test.ts": "899b1bed29be79ccc8f1383791a7b6e2661a440ca10edfa2511e6021c42cd0e4"
+      },
+      "before": {
+        "exitCode": 1,
+        "artifact": "checkpoint44-causal-before.log",
+        "sha256": "d368e3854e4f949b411c6baf1ab4cc8ce36dbc797a541440034231c92bda3a4d",
+        "summary": ["Test Files  2 failed (2)", "Tests  5 failed | 192 skipped (197)"]
+      },
+      "after": {
+        "exitCode": 0,
+        "artifact": "checkpoint44-causal-after.log",
+        "sha256": "518b6ffdc0414a1a1da95b5be77469d8fbed060983c9b57c753c218edff73f72",
+        "summary": ["Test Files  2 passed (2)", "Tests  5 passed | 192 skipped (197)"]
+      }
+    },
+    "fullAffected": {
+      "suitesPassed": 8,
+      "testsPassed": 387,
+      "log": {
+        "artifact": "checkpoint44-full-affected.log",
+        "sha256": "22ae28575ce022530443d1d0e673d1e07edb17f05788219a24dbc7dc08602b51"
+      }
+    },
+    "independentActualStoreAndTrust": {
+      "before": {
+        "artifact": "reconnect44-state-boundaries-before-independent.json",
+        "sha256": "02fe696b9325df95a3d91543ec87dcc839b799cd238a4837b0fa876b9327e5b8"
+      },
+      "after": {
+        "artifact": "reconnect44-state-boundaries-after-v1-independent.json",
+        "sha256": "cf537588b507ea9f710f98fbf0bee06e271cf505016170633efffc2e0feb9885"
+      },
+      "parentFailed": 2,
+      "parentHealthy": 7,
+      "candidatePassed": 9,
+      "coverage": [
+        "healthy canonical and aliased roots",
+        "available retarget adoption",
+        "already registered target refusal",
+        "broken and regular-file target rollback",
+        "same-path filesystem object replacement",
+        "legacy explicit backfill",
+        "multi-root preservation",
+        "unrelated and other-root trust preservation",
+        "global strict alias denial"
+      ]
+    },
+    "sourceAndBuiltOwnerJoin": {
+      "artifact": "reconnect44-critical-emission-independent.json",
+      "sha256": "abcb876c5cd0c17e32a8dce7f255b44043662868422b7767d8ea5f94408eb4c1"
+    }
+  },
+  "localChecks": {
+    "strictTypecheck": {
+      "artifact": "checkpoint44-typecheck.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    "scopedZeroWarningLint": {
+      "artifact": "checkpoint44-reconnect-lint-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "canonicalCatalog": {
+      "artifact": "checkpoint44-catalog.log",
+      "sha256": "4b9dad0a7d497683ea9c3bc0a1e20e9f0faedb0b87e9c1b867f202ab485d4b36"
+    },
+    "completeActivityLog": {
+      "checksPassed": 7,
+      "log": {
+        "artifact": "checkpoint44-activity.log",
+        "sha256": "1275334484f2a0c3ab5632ef6f0cde82c939c576c8172bf419116272844faad7"
+      }
+    }
+  },
+  "editorialReview": {
+    "reviewComment": 4311771582,
+    "receipt": {
+      "artifact": "checkpoint44-review4311771582-editorial.json",
+      "sha256": "4ae70ade58be34a825a9e893897aff8470d7c29739cad4bf786df99eb3aede24"
+    },
+    "scope": "Spacing in exactly two existing classification strings; artifact names, hashes, counts, scores and dispositions unchanged."
+  },
+  "limits": [
+    "No full acceptance disposition or issue checkbox changed.",
+    "Native skill matrix remains separate and frozen; this reconnect repair changes none of its measured inputs.",
+    "Linux/macOS installed update ownership and two-update qualification remain open.",
+    "Final release-affecting local gates, required exact-head hosted checks, review settlement and authorized dev integration remain open."
+  ]
+}

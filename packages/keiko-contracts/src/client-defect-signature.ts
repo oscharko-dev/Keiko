@@ -1,4 +1,8 @@
-import { isClientDiagnosticKind, isPersistedClientDiagnosticFrame } from "./diagnostics.js";
+import {
+  CLIENT_MODULE_LOAD_FAILURES,
+  isClientDiagnosticKind,
+  isPersistedClientDiagnosticFrame,
+} from "./diagnostics.js";
 
 const CLIENT_CONTEXT_VALUES: ReadonlySet<string> = new Set([
   "kind:boundary",
@@ -12,10 +16,6 @@ const CLIENT_CONTEXT_VALUES: ReadonlySet<string> = new Set([
   "kind:other",
   "render:shell",
   "render:window-body",
-  "module:git-sync",
-  "module:git-history",
-  "module:git-read",
-  "module:widget-locale",
   "stage:files-directory-load",
   "stage:files-source-preview",
   "stage:files-directory-navigation",
@@ -29,6 +29,13 @@ const CLIENT_CONTEXT_VALUES: ReadonlySet<string> = new Set([
   "stage:command-palette",
   "stage:chat-history-deletion",
 ]);
+
+function isClientContextValue(token: string): boolean {
+  return (
+    CLIENT_CONTEXT_VALUES.has(token) ||
+    CLIENT_MODULE_LOAD_FAILURES.some((name) => token === `module:${name}`)
+  );
+}
 
 export interface ClientDefectContextFacts {
   readonly clientKind?: unknown;
@@ -47,13 +54,13 @@ export function clientDefectContext(facts: ClientDefectContextFacts): readonly s
     ["stage", facts.stage],
   ] as const) {
     const token = typeof value === "string" ? `${prefix}:${value}` : "";
-    if (CLIENT_CONTEXT_VALUES.has(token)) context.push(token);
+    if (isClientContextValue(token)) context.push(token);
   }
-  return context.filter((token) => CLIENT_CONTEXT_VALUES.has(token));
+  return context.filter(isClientContextValue);
 }
 
 export function isClientDefectContext(value: readonly string[]): boolean {
-  return value.length <= 4 && value.every((token) => CLIENT_CONTEXT_VALUES.has(token));
+  return value.length <= 4 && value.every(isClientContextValue);
 }
 
 /** Browser frames are already reduced to shipped chunk digests before they reach this layer. */

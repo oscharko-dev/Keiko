@@ -21,6 +21,7 @@ import {
   codingWorkbenchModelEligibility,
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  isCodingWorkbenchProofRenewing,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
@@ -687,6 +688,67 @@ describe("isLikelyRerankModelId", () => {
     ]) {
       expect(isLikelyRerankModelId(id)).toBe(false);
     }
+  });
+});
+
+// #3905: the server renews a lapsed or withdrawn forced tool-call proof by itself and says so on the
+// models wire. A human choice of such a model is kept pending; every other model the Workbench does
+// not offer is not "being renewed", whatever the flag says.
+describe("isCodingWorkbenchProofRenewing", () => {
+  const proof = (
+    status: "verified" | "unsupported" | "unverified",
+  ): ModelCapability["toolCallingVerification"] => ({
+    status,
+    checkedAt: "2026-09-24T08:00:00.000Z",
+    probe: "gateway-tool-calling-v1",
+    configurationFingerprint: "test-fingerprint",
+  });
+  const renewing = (overrides: Partial<ModelCapability> = {}): ModelCapability =>
+    cap({
+      toolCalling: false,
+      toolCallingVerification: proof("verified"),
+      toolCallingRenewalPending: true,
+      ...overrides,
+    });
+
+  it("holds for a claimed proof the server flagged as being renewed", () => {
+    expect(isCodingWorkbenchProofRenewing(renewing())).toBe(true);
+    expect(isCodingWorkbenchProofRenewing(renewing({ conversationReady: true }))).toBe(true);
+    expect(isCodingWorkbenchProofRenewing(renewing({ conversationReady: undefined }))).toBe(true);
+    // A model the loader kept at toolCalling:true whose proof merely aged is renewable too.
+    expect(isCodingWorkbenchProofRenewing(renewing({ toolCalling: true }))).toBe(true);
+  });
+
+  it.each([
+    ["unflagged", { toolCallingRenewalPending: undefined }],
+    ["an embedding model", { kind: "embedding" as const }],
+    ["a refuted proof", { toolCallingVerification: proof("unsupported") }],
+    [
+      "a refuted proof on a model still marked as calling tools",
+      {
+        toolCalling: true,
+        toolCallingVerification: proof("unsupported"),
+      },
+    ],
+    ["a never concluded proof", { toolCallingVerification: proof("unverified") }],
+    ["a model that never claimed tool calling", { toolCallingVerification: undefined }],
+    ["a model observed unready", { conversationReady: false }],
+  ] as const)("does not hold for %s", (_title, overrides) => {
+    expect(isCodingWorkbenchProofRenewing(renewing(overrides))).toBe(false);
+  });
+
+  it("does not hold for a model that is already eligible", () => {
+    const fresh = cap({
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date().toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+      toolCallingRenewalPending: true,
+    });
+    expect(codingWorkbenchModelEligibility(fresh)).toBe("eligible");
+    expect(isCodingWorkbenchProofRenewing(fresh)).toBe(false);
   });
 });
 

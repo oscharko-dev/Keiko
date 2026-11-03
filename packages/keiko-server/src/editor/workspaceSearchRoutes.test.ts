@@ -1004,7 +1004,7 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
   it("applies a single-word replacement in a real-world-sized file without a spurious patch-limit conflict", async () => {
     // A file this size produces a full-file preflight diff (renderFullFileModifyDiff renders
     // every original line as `-` and every new line as `+`) with well over 2,000 changed lines —
-    // keiko-tools' DEFAULT_PATCH_LIMITS (sized for small assistant-generated patches) would reject
+    // keiko-tools' DEFAULT_PATCH_LIMITS (2,000 changed lines) would reject
     // this even for a one-word replacement. REPLACE_APPLY_PREFLIGHT_LIMITS must be sized to the
     // search/replace engine's own file-size bound instead.
     const lines: string[] = [];

@@ -3,6 +3,7 @@
 // project registry reference and make membership/ordering constraints transactional.
 
 import type { DatabaseSync } from "node:sqlite";
+import { realpathSync } from "node:fs";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { workspaceTrustRootBindingsMatch } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
@@ -362,6 +363,15 @@ function storedManifest(record: WorkspaceManifestRecordRow): WorkspaceManifest {
   return manifest;
 }
 
+function assertReconnectRootAvailable(
+  db: DatabaseSync,
+  rootRef: string,
+  workspaceId: string,
+): void {
+  const owner = findWorkspaceManifestRecordByRoot(db, rootRef);
+  if (owner !== undefined && owner.workspaceId !== workspaceId) throw projectExists();
+}
+
 /**
  * An explicit reconnect accepts the filesystem object currently occupying a registered
  * single-root project's path. It never rewrites a multi-root workspace, and replacement always
@@ -385,7 +395,8 @@ export function reconnectProjectWorkspaceManifest(
   if (previousRoot === undefined || projectRoot?.projectPath !== projectPath) {
     throw new Error("WORKSPACE_MANIFEST_INVALID");
   }
-  const inspected = inspectWorkspaceRootIdentity(projectPath);
+  const canonicalPath = realpathSync.native(projectPath);
+  const inspected = inspectWorkspaceRootIdentity(canonicalPath);
   if (
     inspected.rootRef === previousRoot.rootRef &&
     inspected.identityDigest === previousRoot.identityDigest &&
@@ -393,7 +404,8 @@ export function reconnectProjectWorkspaceManifest(
   ) {
     return;
   }
-  const refreshedRoot = inspectWorkspaceRootDescriptor(projectPath, projectName);
+  assertReconnectRootAvailable(db, inspected.rootRef, record.workspaceId);
+  const refreshedRoot = inspectWorkspaceRootDescriptor(canonicalPath, projectName);
   const refreshed = reviseWorkspaceManifest(manifest, [refreshedRoot], refreshedRoot.rootRef);
   updateTargetManifest(
     db,

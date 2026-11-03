@@ -144,8 +144,55 @@ export function deliveryDescriptionGatewayConfig(port: number): GatewayConfig {
         ...createDefaultChatCapability(DELIVERY_DESCRIPTION_MODEL_ID),
         contextWindow: 32_768,
         maxOutputTokens: 2_048,
+        // Priced like the scripted coding model, so a tie in model selection is broken by
+        // configuration order, which places this model first (`deliveryJourneyGatewayConfig`).
+        costClass: "low",
       },
     ],
+  };
+}
+
+/**
+ * The delivery journey's one gateway configuration. The composed server loads a single
+ * configuration, and its runtime holder carries the readiness evidence that admits a coding run
+ * (ADR-0171) while the same holder's gateway generates the automatic PR description. The scripted
+ * coding model the runtime resolver names therefore sits beside the loopback description model: the
+ * runtime codes on the first, and model selection for the description, a tie on rank and cost,
+ * keeps the first configured model, which is the loopback one.
+ */
+export function deliveryJourneyGatewayConfig(port: number, scripted: GatewayConfig): GatewayConfig {
+  const description = deliveryDescriptionGatewayConfig(port);
+  return {
+    ...scripted,
+    providers: [...description.providers, ...scripted.providers],
+    capabilities: [...(description.capabilities ?? []), ...(scripted.capabilities ?? [])],
+  };
+}
+
+/**
+ * The provider transport of the gateway's readiness probes: the loopback description model answers
+ * them the way a working endpoint would, so no probe ever reaches its listener, which accepts only
+ * the description requests it derives citations for and counts every other request as a rejection.
+ * Every other destination is the scripted coding model's, answered by its own transport.
+ */
+export function deliveryJourneyReadinessFetch(
+  port: number,
+  scripted: (input: string | URL | Request) => Promise<Response>,
+): (input: string | URL | Request) => Promise<Response> {
+  const origin = `http://127.0.0.1:${String(port)}`;
+  return (input) => {
+    const url = new URL(input instanceof Request ? input.url : input);
+    if (url.origin !== origin) return scripted(input);
+    return Promise.resolve(
+      Response.json({
+        id: "chatcmpl-delivery-readiness",
+        object: "chat.completion",
+        choices: [
+          { index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } },
+        ],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+    );
   };
 }
 

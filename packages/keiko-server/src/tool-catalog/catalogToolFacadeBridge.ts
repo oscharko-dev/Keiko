@@ -1,9 +1,18 @@
+import {
+  type CatalogBindingPreparation,
+  catalogHandlerReadiness,
+  computeHandlerSetDigest,
+  type CatalogBoundHandler,
+} from "./catalogToolBinder.js";
+import { codingCatalogConsumer } from "./catalogCodingConsumer.js";
 import { randomUUID } from "node:crypto";
-import type {
-  CatalogJsonValue,
-  ToolDescriptor,
-  ToolResultReason,
-  ToolResultStatus,
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GOVERNED_CHANGESET_EDIT_TOOL_ID,
+  type CatalogJsonValue,
+  type ToolDescriptor,
+  type ToolResultReason,
+  type ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   EditorAgentConflictCode,
@@ -39,11 +48,6 @@ import {
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitToolLifecycleEvent, type CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
-import {
-  catalogHandlerReadiness,
-  computeHandlerSetDigest,
-  type CatalogBoundHandler,
-} from "./catalogToolBinder.js";
 import {
   createCatalogToolBinderFromPreparation,
   deriveCatalogBindingPreparation,
@@ -215,14 +219,18 @@ function editCatalogAction(
   request: Extract<CodingToolActionRequest, { readonly action: "edit" }>,
 ): CatalogAction {
   return {
-    toolId: "keiko.changeset.edit",
-    arguments: captureCatalogJson({
-      changeset: {
-        ...request.changeset,
-        selectedFiles:
-          request.changeset.selectedFiles ?? request.changeset.files.map((file) => file.file),
+    toolId: GOVERNED_CHANGESET_EDIT_TOOL_ID,
+    arguments: captureCatalogJson(
+      {
+        changeset: {
+          ...request.changeset,
+          selectedFiles:
+            request.changeset.selectedFiles ?? request.changeset.files.map((file) => file.file),
+        },
       },
-    }),
+      undefined,
+      CHANGESET_EDIT_ARGUMENT_LIMITS,
+    ),
   };
 }
 
@@ -291,12 +299,28 @@ function gitCatalogAction(
       toolId: "keiko.ci.status",
       arguments: { forceFresh: request.forceFresh ?? false },
     };
-  if (request.operation !== "stage") return undefined;
+  // #3902 AC2: one governed fetch or fast-forward pull.
+  if (request.operation === "fetch" || request.operation === "pull")
+    return { toolId: "keiko.git.sync", arguments: { pull: request.operation === "pull" } };
+  return gitIndexOrBranchCatalogAction(request);
+}
+
+// Staging and its inverse, their shared redemption (#3902 AC2) and the governed task branch (#3907).
+function gitIndexOrBranchCatalogAction(
+  request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
+): CatalogAction | undefined {
+  if (request.operation === "branch")
+    return { toolId: "keiko.git.branch", arguments: { name: request.branchName } };
+  if (request.operation !== "stage" && request.operation !== "unstage") return undefined;
+  // Unstaging is staging's inverse under the same proposal and redemption (#3902 AC2).
   return request.phase === "propose"
-    ? { toolId: "keiko.git.stage", arguments: { paths: [...request.paths] } }
+    ? {
+        toolId: "keiko.git.stage",
+        arguments: { paths: [...request.paths], unstage: request.operation === "unstage" },
+      }
     : {
         toolId: "keiko.git.execute",
-        arguments: { kind: "stage", proposalId: request.proposalId },
+        arguments: { kind: request.operation, proposalId: request.proposalId },
       };
 }
 
@@ -389,6 +413,9 @@ function deliveryRepresentative(
     };
   if (canonicalId === "keiko.git.execute")
     return { ...base, action: "git", operation: "stage", phase: "execute", proposalId: "stage-1" };
+  if (canonicalId === "keiko.git.sync") return { ...base, action: "git", operation: "pull" };
+  if (canonicalId === "keiko.git.branch")
+    return { ...base, action: "git", operation: "branch", branchName: "feature/x" };
   return { ...base, action: "git", operation: "ci", forceFresh: false };
 }
 
@@ -399,7 +426,7 @@ function representative(
   const base = { actionId: identity.actionId, idempotencyKey: identity.idempotencyKey };
   const workspace = workspaceRepresentative(canonicalId, base);
   if (workspace !== undefined) return workspace;
-  if (canonicalId === "keiko.changeset.edit")
+  if (canonicalId === GOVERNED_CHANGESET_EDIT_TOOL_ID)
     return {
       ...base,
       action: "edit",
@@ -745,10 +772,10 @@ export function createCanonicalOpenCodeHandlerCoverage(
 
 interface PreparedDispatchBinder {
   readonly advertisement: ReturnType<typeof openCodeGatewayCatalogProjection>;
-  readonly preparation: ReturnType<typeof prepareCatalogToolBinder>;
+  readonly preparation: CatalogBindingPreparation;
   readonly preparationFor: (
     unavailable: ReadonlySet<OpenCodeOptionalToolName>,
-  ) => ReturnType<typeof prepareCatalogToolBinder>;
+  ) => CatalogBindingPreparation;
 }
 
 function unavailableKey(unavailable: ReadonlySet<OpenCodeOptionalToolName>): string {
@@ -759,19 +786,19 @@ function prepareDispatchBinder(
   bridgeInput: CanonicalCatalogFacadeBridgeInput,
   advertisement = catalogAdvertisementForProfile(bridgeInput.toolProfile ?? "direct"),
 ): PreparedDispatchBinder {
-  const descriptors = projectedDescriptors(advertisement);
   const fallback = representative("keiko.workspace.discover", {
     actionId: "catalog-composition",
     idempotencyKey: "catalog-composition",
   });
   const preparation = prepareCatalogToolBinder(
     {
+      consumerPort: codingCatalogConsumer,
       projection: advertisement.projection,
       handlerBindings: preparedBindings(
         fallback,
         bridgeInput.unavailableOptionalTools ??
           ((): ReadonlySet<OpenCodeOptionalToolName> => new Set()),
-        descriptors,
+        projectedDescriptors(advertisement),
       ),
       authorityPort: {
         preview: bridgeInput.previewAuthority,

@@ -1,15 +1,24 @@
 import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  GENERIC_TOOL_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
+  type ToolArgumentLimits,
   type CatalogJsonObject,
   type CatalogJsonValue,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { requireCatalog, ToolCatalogError } from "./errors.js";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+
+/** A whole native tool advertisement is captured with its own budget, never a call's (#3897). */
+const MAX_ADVERTISEMENT_COPY_BYTES = GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES;
 
 const ENCODER = new TextEncoder();
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 interface CopyBudget {
   readonly maxBytes: number;
+  readonly maxDepth: number;
+  readonly maxStringBytes: number;
   readonly ancestors: Set<object>;
   bytes: number;
 }
@@ -33,10 +42,7 @@ function scalar(value: unknown, budget: CopyBudget): CatalogJsonValue {
   );
   if (typeof value === "number") requireCatalog(Number.isFinite(value), "invalid-shape");
   if (typeof value === "string")
-    requireCatalog(
-      ENCODER.encode(value).length <= TOOL_CATALOG_LIMITS.maxStringBytes,
-      "input-bound",
-    );
+    requireCatalog(ENCODER.encode(value).length <= budget.maxStringBytes, "input-bound");
   const result = value;
   charge(budget, JSON.stringify(result));
   return result;
@@ -98,7 +104,7 @@ function copyObject(value: object, budget: CopyBudget, depth: number): CatalogJs
 // array/object arms both assign the same declared `CatalogJsonValue` union before one trailing
 // return, rather than returning from inside each branch.
 function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJsonValue {
-  requireCatalog(depth <= TOOL_CATALOG_LIMITS.maxSchemaDepth, "input-bound");
+  requireCatalog(depth <= budget.maxDepth, "input-bound");
   let result: CatalogJsonValue;
   if (typeof value !== "object" || value === null) {
     result = scalar(value, budget);
@@ -113,19 +119,55 @@ function copyValue(value: unknown, budget: CopyBudget, depth: number): CatalogJs
   return result;
 }
 
-/** Validate and detach before canonicalization, freezing, hashing, or schema interpretation. */
+/**
+ * Validate and detach before canonicalization, freezing, hashing, or schema interpretation.
+ * The contract's per-tool limits bound both the whole copy and each string; arbitrary caller
+ * limits are refused. Ordinary values retain the schema depth, while envelopes alone add levels.
+ */
 export function copyCatalogJson(
   value: unknown,
-  maxBytes: number = TOOL_CATALOG_LIMITS.maxArgumentBytes,
+  requestedBytes?: number,
+  limits: ToolArgumentLimits = GENERIC_TOOL_ARGUMENT_LIMITS,
+): CatalogJsonValue {
+  return copyWithinBounds(value, requestedBytes, TOOL_CATALOG_LIMITS.maxSchemaDepth, limits);
+}
+
+/** Catalog/projection/binding wrappers add levels; descriptors are still independently qualified. */
+export function copyCatalogEnvelope(value: unknown): CatalogJsonValue {
+  return copyWithinBounds(
+    value,
+    TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    TOOL_CATALOG_LIMITS.maxSchemaDepth + 6,
+    GENERIC_TOOL_ARGUMENT_LIMITS,
+  );
+}
+
+function copyWithinBounds(
+  value: unknown,
+  requestedBytes: number | undefined,
+  maxDepth: number,
+  limits: ToolArgumentLimits,
 ): CatalogJsonValue {
   requireCatalog(
-    Number.isSafeInteger(maxBytes) &&
-      maxBytes > 0 &&
-      maxBytes <= TOOL_CATALOG_LIMITS.maxResultBytes,
+    limits === GENERIC_TOOL_ARGUMENT_LIMITS || limits === CHANGESET_EDIT_ARGUMENT_LIMITS,
     "input-bound",
   );
+  const maxBytes = requestedBytes ?? limits.maxArgumentBytes;
+  const ceiling =
+    limits === GENERIC_TOOL_ARGUMENT_LIMITS
+      ? Math.max(TOOL_CATALOG_LIMITS.maxResultBytes, MAX_ADVERTISEMENT_COPY_BYTES)
+      : limits.maxArgumentBytes;
+  requireCatalog(
+    Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= ceiling,
+    "input-bound",
+  );
+  const { maxStringBytes } = limits;
   try {
-    return copyValue(value, { maxBytes, ancestors: new Set(), bytes: 0 }, 1);
+    return copyValue(
+      value,
+      { maxBytes, maxDepth, maxStringBytes, ancestors: new Set(), bytes: 0 },
+      1,
+    );
   } catch (error) {
     if (error instanceof ToolCatalogError) throw error;
     throw new ToolCatalogError("invalid-shape");

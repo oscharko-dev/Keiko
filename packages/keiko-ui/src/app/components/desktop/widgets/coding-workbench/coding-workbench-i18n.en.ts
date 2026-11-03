@@ -1,4 +1,6 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const EN_CODING_WORKBENCH_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
   "codingWorkbench.progress.working": "Working",
   "codingWorkbench.progress.approval": "Waiting for your approval",
   "codingWorkbench.progress.question": "Your answer is needed",
@@ -7,6 +9,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.progress.answer": "Answer question",
   "codingWorkbench.history.title": "Coding History",
   "codingWorkbench.history.new": "New task",
+  "codingWorkbench.history.noBranch": "Folder",
   "codingWorkbench.history.search": "Search coding tasks",
   "codingWorkbench.history.filter": "Task status",
   "codingWorkbench.history.active": "Active",
@@ -20,7 +23,41 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.history.save": "Save",
   "codingWorkbench.history.cancel": "Cancel",
   "codingWorkbench.history.rename": "Rename",
+  "codingWorkbench.history.exportJson": "Export JSON",
+  "codingWorkbench.history.exportMarkdown": "Export Markdown",
+  "codingWorkbench.history.exportHint":
+    "Saves a redacted copy of this task to your device. Nothing is uploaded.",
+  "codingWorkbench.history.exporting": "Preparing export…",
+  "codingWorkbench.history.exportError": "The task could not be exported. Try again.",
+  "codingWorkbench.history.import": "Import task",
+  "codingWorkbench.history.importFile": "Coding task file",
+  "codingWorkbench.history.importHint":
+    "Imports a task saved with Export JSON, or an OpenCode session transcript, from your device into this workspace. The file stays on this computer.",
+  "codingWorkbench.history.importing": "Importing task…",
+  "codingWorkbench.history.importPartial":
+    "Older messages were left out. The {count} most recent messages were imported.",
+  "codingWorkbench.history.importInvalid":
+    "This file is not a coding task export or an OpenCode session transcript.",
+  "codingWorkbench.history.importUnsupported": "This file was exported by a newer Keiko version.",
+  "codingWorkbench.history.importTooLarge": "This file is too large to import.",
+  "codingWorkbench.history.importEmpty": "This file holds no conversation to import.",
+  "codingWorkbench.history.importNoWorkspace":
+    "Open a workspace first. The task is imported into the active workspace.",
+  "codingWorkbench.history.importError": "The task could not be imported. Try again.",
+  "codingWorkbench.history.importedNotice":
+    "“{title}” was imported from a file. Your next message continues it as a new task that keeps this conversation and does not change “{title}”.",
   "codingWorkbench.history.finish": "Complete task",
+  "codingWorkbench.history.fork": "Fork task",
+  "codingWorkbench.history.showEarlier": "Show earlier messages ({count} hidden)",
+  "codingWorkbench.history.forkFrom": "Fork from here",
+  "codingWorkbench.history.forkNotice":
+    "Your next message starts a new task forked from “{title}”. The new task keeps this conversation up to the fork point and does not change “{title}”.",
+  "codingWorkbench.history.forkNoticeBefore":
+    "Your next message starts a new task forked from “{title}”, just before the message you picked. The new task keeps the conversation up to that point and does not change “{title}”.",
+  "codingWorkbench.history.forkNoticeWorkspace":
+    "Your next message starts a new task in the workspace “{workspace}”, continued from “{title}”. The new task keeps this conversation and does not change “{title}”.",
+  "codingWorkbench.history.continueIn": "Continue in “{workspace}”",
+  "codingWorkbench.history.forkCancel": "Cancel fork",
   "codingWorkbench.history.location": "Task workspace location",
   "codingWorkbench.history.transcript": "Previous conversation",
   "codingWorkbench.history.truncated": "Only the most recent saved messages are shown.",
@@ -231,8 +268,23 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.taskBranch": "Task branch",
   "codingWorkbench.info.runState": "Run state",
   "codingWorkbench.info.model": "Model",
+  "codingWorkbench.info.agent": "Agent",
   "codingWorkbench.info.modelReadiness": "Model readiness",
   "codingWorkbench.info.runtime": "Runtime verification",
+  "codingWorkbench.info.runtimeVersion": "OpenCode runtime",
+  "codingWorkbench.info.runtimeVersion.value": "{version} · {origin}",
+  "codingWorkbench.info.runtimeVersion.pinned":
+    "{version} · {origin} · this Keiko version expects {pinned}",
+  "codingWorkbench.info.runtimeOrigin.portable-release": "Keiko release",
+  "codingWorkbench.info.runtimeOrigin.npm-runtime-package": "npm runtime package",
+  "codingWorkbench.info.runtimeOrigin.dev-checkout": "development checkout",
+  "codingWorkbench.info.latestRelease": "Latest Keiko release",
+  "codingWorkbench.info.latestRelease.checking": "Checking…",
+  "codingWorkbench.info.latestRelease.current": "{version} is installed and current",
+  "codingWorkbench.info.latestRelease.available":
+    "{version} is available. Install it from Updates; it brings its own OpenCode runtime.",
+  "codingWorkbench.info.latestRelease.unknown":
+    "Unknown: the update check could not reach the release source",
   "codingWorkbench.info.contextWindow": "Context window",
   "codingWorkbench.info.context.meter": "Context window {percent}% used",
   "codingWorkbench.info.context.used": "Used input",
@@ -250,23 +302,24 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.info.none": "None",
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
-  "codingWorkbench.mode.governed-assist.label": "Ask for approval",
-  "codingWorkbench.mode.governed-assist.short": "Approve every workspace change",
+  "codingWorkbench.mode.governed-assist.short":
+    "Reads freely; asks before every file change and command",
   "codingWorkbench.mode.governed-assist.description":
-    "Reads and planning proceed; workspace edits, commands, external-file access, and internet use require approval. Delivery remains separately human-approved.",
-  "codingWorkbench.mode.supervised-coding.label": "Supervised workspace",
-  "codingWorkbench.mode.supervised-coding.short": "Routine edits proceed; risky asks",
+    "Reads and searches run freely; every file change and every command asks for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
+  "codingWorkbench.mode.supervised-coding.short":
+    "Routine edits and vetted project commands run; other commands ask",
   "codingWorkbench.mode.supervised-coding.description":
-    "Routine low- and medium-risk workspace edits, vetted commands, and verification proceed; external-file access and internet use require approval. Delivery remains separately human-approved.",
-  "codingWorkbench.mode.autonomous-delivery.label": "Full access",
-  "codingWorkbench.mode.autonomous-delivery.short": "Runs without per-action approval",
+    "Routine workspace edits and vetted project commands run; other commands ask for approval, and there is no internet access. Git commit, push, and pull request are done by Keiko after separate approval, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible.",
+  "codingWorkbench.mode.autonomous-delivery.short":
+    "Works without asking within the task's authority; internet only here",
   "codingWorkbench.mode.autonomous-delivery.description":
-    "File, internet, and accepted Code-task commit, push, and draft pull request operations within the validated Authority Envelope proceed without per-action approval. Merge remains separately approval-gated.",
+    "Files, commands, and the internet work without asking within the task's authority. Accepted Code-task commit, push, and draft pull request operations are done by Keiko within the validated Authority Envelope, never by the agent's shell. Files outside the workspace and secret files such as .env and keys are never accessible. Merge remains separately approval-gated.",
   "codingWorkbench.task.eyebrow": "Task",
   "codingWorkbench.task.title": "Describe the bounded coding task",
   "codingWorkbench.task.instructions": "Task instructions",
   "codingWorkbench.task.placeholder":
-    "Ask Keiko to inspect, explain, implement, test, or repair something in this repository…",
+    "Ask Keiko to inspect, explain, implement, test, or repair something in this project…",
+  "codingWorkbench.task.placeholder.followUp": "Reply to Keiko, or ask for the next change…",
   "codingWorkbench.task.help":
     "Task text is transient intent. Start unlocks only after every readiness check is confirmed.",
   "codingWorkbench.task.starting": "Starting…",
@@ -274,10 +327,69 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.pause": "Pause run",
   "codingWorkbench.composer.resume": "Resume run",
   "codingWorkbench.composer.send": "Send follow-up",
+  "codingWorkbench.composer.sendNow": "Send now",
+  "codingWorkbench.composer.sendNow.help":
+    "Send now: the message joins the running task at its next step (Enter)",
+  "codingWorkbench.composer.queue": "Queue message",
+  "codingWorkbench.composer.queue.help":
+    "Queue: the message is delivered after the running task's current work (Ctrl or Cmd+Enter)",
+  "codingWorkbench.composer.blocked.emptyMessage": "Write a message first.",
+  "codingWorkbench.composer.delivery.steer":
+    "Message sent. It joins the running task at its next step.",
+  "codingWorkbench.composer.delivery.queue":
+    "Message queued. It is delivered after the running task's current work.",
+  "codingWorkbench.composer.delivery.failed":
+    "The message was not sent and your text is kept. The task may have just finished, a referenced file may no longer be available, or this runtime cannot take messages while it works.",
+  "codingWorkbench.composer.references.label": "Referenced files",
+  "codingWorkbench.composer.references.remove": "Remove reference to {path}",
+  "codingWorkbench.composer.references.picker.title": "Reference a task file",
+  "codingWorkbench.composer.references.picker.results": "Matching task files",
+  "codingWorkbench.composer.references.picker.option": "Reference {path}",
+  "codingWorkbench.composer.references.picker.agent": "Mention agent {name}",
+  "codingWorkbench.composer.references.picker.agentKind": "Agent",
+  "codingWorkbench.composer.skills.title": "Use a skill",
+  "codingWorkbench.composer.skills.results": "Skills of this task",
+  "codingWorkbench.composer.skills.option": "Use skill {name}",
+  "codingWorkbench.composer.skills.found":
+    "Skills available: {count}. Use the arrow keys to choose and Enter to select one.",
+  "codingWorkbench.composer.skills.loading": "Loading skills...",
+  "codingWorkbench.composer.skills.empty": "No matching skills.",
+  "codingWorkbench.composer.skills.none": "This task offers no skills.",
+  "codingWorkbench.composer.skills.error": "Skills could not be loaded.",
+  "codingWorkbench.composer.skills.retry": "Try again",
+  "codingWorkbench.composer.references.picker.active": "{name}, {position} of {total}",
+  "codingWorkbench.composer.references.picker.hint": "Type to search the task's files.",
+  "codingWorkbench.composer.references.picker.searching": "Searching files...",
+  "codingWorkbench.composer.references.picker.found":
+    "{count} files found. Use the arrow keys to choose and Enter to reference one.",
+  "codingWorkbench.composer.references.picker.empty": "No matching files.",
+  "codingWorkbench.composer.references.picker.error":
+    "The file search failed. Type again to retry.",
+  "codingWorkbench.composer.references.picker.limit":
+    "At most {count} files can be referenced in one message.",
+  "codingWorkbench.composer.commands.title": "Run a slash command",
+  "codingWorkbench.composer.commands.results": "Matching commands",
+  "codingWorkbench.composer.commands.option": "Run command /{name}",
+  "codingWorkbench.composer.commands.active": "/{name}, {position} of {total}",
+  "codingWorkbench.composer.commands.loading": "Loading commands...",
+  "codingWorkbench.composer.commands.found":
+    "Commands available: {count}. Use the arrow keys to choose and Enter to select one.",
+  "codingWorkbench.composer.commands.empty": "No matching commands.",
+  "codingWorkbench.composer.commands.none": "This task offers no slash commands.",
+  "codingWorkbench.composer.commands.error": "The commands could not be loaded.",
+  "codingWorkbench.composer.commands.retry": "Try again",
+  "codingWorkbench.composer.commands.init.description":
+    "Guided AGENTS.md setup for this repository",
+  "codingWorkbench.composer.commands.review.description":
+    "Review changes [commit|branch|pr]; reviews the uncommitted changes by default",
   "codingWorkbench.composer.model.label": "Coding model",
   "codingWorkbench.composer.model.selected": "Coding model: {model}",
   "codingWorkbench.composer.model.menu": "Choose coding model",
   "codingWorkbench.composer.model.none": "No coding model available",
+  "codingWorkbench.composer.jira.label": "Jira Pod for this run",
+  "codingWorkbench.composer.jira.menu": "Choose Jira Pod",
+  "codingWorkbench.composer.jira.none": "Jira: none",
+  "codingWorkbench.composer.jira.pod": "Jira: {name}",
   "codingWorkbench.composer.source.label": "Model source",
   "codingWorkbench.composer.source.menu": "Choose model source",
   "codingWorkbench.composer.effort.label": "Reasoning effort",
@@ -295,6 +407,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Run authority could not be loaded. Ask for approval remains selected.",
   "codingWorkbench.composer.authority.error.persist":
     "Run authority could not be saved. The previous authority remains active.",
+  "codingWorkbench.composer.agent.label": "Agent",
+  "codingWorkbench.composer.agent.build": "Build",
+  "codingWorkbench.composer.agent.plan": "Plan",
+  "codingWorkbench.composer.agent.build.description":
+    "The agent changes files and runs commands within the selected mode.",
+  "codingWorkbench.composer.agent.plan.description":
+    "The agent analyzes and writes a plan without changing workspace files.",
+  "codingWorkbench.composer.agent.custom.description":
+    "A primary agent this repository defines; it works within the selected mode.",
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",
@@ -311,6 +432,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
   "codingWorkbench.composer.blocked.emptyStart": "Describe what Keiko should do first.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Write a follow-up first.",
+  "codingWorkbench.composer.blocked.commandsLoading":
+    "Keiko is still loading this task's commands. Send again in a moment.",
   "codingWorkbench.composer.blocked.pauseDecision":
     "This paused run is waiting for a required decision. Use the decision action shown above.",
   "codingWorkbench.composer.blocked.notReady":
@@ -376,6 +499,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This repository is no longer available in Git. Choose another repository or reconnect it in Git.",
   "codingWorkbench.repository.gitUnavailableHelp":
     "This folder's Git status could not be read, so it may not be a Git repository. Open Git to check it.",
+  "codingWorkbench.repository.folderModeHint":
+    "Not a Git repository: the agent edits, runs and verifies here, without commits or pushes.",
   "codingWorkbench.repository.deniedHelp":
     "Keiko may not read this folder: its location is excluded from the read surface for safety, for example because it lies inside a tool's own state directory, or access to it was denied. This is a policy decision, not a missing Git repository. Choose a repository outside that location, or open Git to see the refusal.",
   "codingWorkbench.repository.loadError":
@@ -384,6 +509,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.repository.manage": "Open Git",
   "codingWorkbench.setup.title": "Code setup",
   "codingWorkbench.setup.help": "Prepare a governed task workspace for the selected repository.",
+  "codingWorkbench.setup.folderHelp":
+    "Open the selected folder for the agent. No branch is needed: it works directly in this folder.",
+  "codingWorkbench.setup.folderBindFailed":
+    "The folder could not be opened for the Workbench. Check that it is still available, then try again.",
   "codingWorkbench.setup.repositoryNotConnected":
     "This repository is not available in Git. Reconnect it there, then choose it again.",
   "codingWorkbench.setup.repositoryCatalogUnavailable":
@@ -455,6 +584,35 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.tool.repository_search": "Repository search",
   "codingWorkbench.timeline.tool.workspace_discover": "Workspace discovery",
   "codingWorkbench.timeline.tool.workspace_read": "Workspace read",
+  "codingWorkbench.timeline.tool.read": "Read file",
+  "codingWorkbench.timeline.tool.glob": "Find files",
+  "codingWorkbench.timeline.tool.grep": "Search in files",
+  "codingWorkbench.timeline.tool.list": "List folder",
+  "codingWorkbench.timeline.tool.edit": "Edit file",
+  "codingWorkbench.timeline.tool.write": "Write file",
+  "codingWorkbench.timeline.tool.patch": "Apply patch",
+  "codingWorkbench.timeline.tool.shell": "Shell command",
+  "codingWorkbench.timeline.tool.webfetch": "Web fetch",
+  "codingWorkbench.timeline.tool.websearch": "Web search",
+  "codingWorkbench.timeline.tool.skill": "Skill",
+  "codingWorkbench.timeline.tool.subagent": "Subagent",
+  "codingWorkbench.timeline.tool.todo": "Task list",
+  "codingWorkbench.timeline.tool.question": "Question",
+  "codingWorkbench.timeline.tool.changeset_edit": "Change files",
+  "codingWorkbench.timeline.tool.verification": "Verification",
+  "codingWorkbench.timeline.tool.research_fetch": "Research fetch",
+  "codingWorkbench.timeline.tool.skill_discover": "Skill discovery",
+  "codingWorkbench.timeline.tool.keiko_skill": "Skill",
+  "codingWorkbench.timeline.tool.child_agent": "Child agent",
+  "codingWorkbench.timeline.tool.git_diff": "Git diff",
+  "codingWorkbench.timeline.tool.git_stage": "Git stage",
+  "codingWorkbench.timeline.tool.git_commit": "Git commit",
+  "codingWorkbench.timeline.tool.git_push": "Git push",
+  "codingWorkbench.timeline.tool.pull_request": "Pull request",
+  "codingWorkbench.timeline.tool.git_execute": "Git operation",
+  "codingWorkbench.timeline.tool.git_sync": "Git sync",
+  "codingWorkbench.timeline.tool.git_branch": "Create task branch",
+  "codingWorkbench.timeline.tool.ci_status": "CI status",
   "codingWorkbench.changes.title": "Changes",
   "codingWorkbench.changes.idle": "Start a run to inspect its workspace changes.",
   "codingWorkbench.changes.loading": "Loading the latest bounded changes…",
@@ -488,6 +646,17 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.retry": "Retry diff",
   "codingWorkbench.changes.diff.truncated":
     "This bounded file diff is incomplete because it reached the server limit.",
+  "codingWorkbench.diffWindow.notice":
+    "This diff is large: {rows} lines in {files} files, {size} in total. Only one file and up to {page} of its lines are shown at a time, and nothing is left out. Choose a file or a page to read the rest.",
+  "codingWorkbench.diffWindow.files": "Files in this diff",
+  "codingWorkbench.diffWindow.fileMeta": "+{added} −{removed} · {size} · {rows} lines",
+  "codingWorkbench.diffWindow.fileMetaBinary": "Binary file",
+  "codingWorkbench.diffWindow.position": "File {file} of {files}, lines {from} to {to} of {rows}",
+  "codingWorkbench.diffWindow.positionEmpty": "File {file} of {files}, no text lines",
+  "codingWorkbench.diffWindow.pages": "Pages of this file",
+  "codingWorkbench.diffWindow.previous": "Previous lines",
+  "codingWorkbench.diffWindow.next": "Next lines",
+  "codingWorkbench.diffWindow.pageOf": "Page {page} of {pages}",
   "codingWorkbench.changes.diff.addedLine": "Added line",
   "codingWorkbench.changes.diff.deletedLine": "Deleted line",
   "codingWorkbench.changes.diff.contextLine": "Context line",
@@ -500,12 +669,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.binaryFile": "Binary file — no text diff to display.",
   "codingWorkbench.changes.diff.previousPath": " (previously {path})",
   "codingWorkbench.changes.diff.elevatedReview": "Elevated review",
+  "codingWorkbench.richContent.math.region": "Formula",
+  "codingWorkbench.richContent.diff.region": "Diff shown in the model answer",
+  "codingWorkbench.richContent.diff.unnamedFile": "Diff",
+  "codingWorkbench.richContent.diagram.title": "Diagram source",
+  "codingWorkbench.richContent.diagram.region": "Diagram",
+  "codingWorkbench.richContent.diagram.note":
+    "The diagram could not be drawn, so its source is shown as written.",
   "codingWorkbench.activity.reasoningBoundary":
-    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning. Model reasoning is unverified and is never kept in history or evidence.",
-  "codingWorkbench.activity.reasoning.title": "Model reasoning",
-  "codingWorkbench.activity.reasoning.badge": "Unverified",
-  "codingWorkbench.activity.reasoning.note":
-    "Unverified model reasoning: how the model approached this step. It can be wrong; the answer and the changes are what count.",
+    "This timeline shows the conversation, the work activity and, when the model provides it, the model's own reasoning, which is unverified and never kept in history or evidence.",
+  "codingWorkbench.activity.reasoning.title": "Thinking",
   "codingWorkbench.activity.status.idle": "No run yet.",
   "codingWorkbench.activity.status.loading": "Connecting activity…",
   "codingWorkbench.activity.status.live": "Live.",
@@ -528,10 +701,15 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.toolState.running": "Running",
   "codingWorkbench.activity.toolState.succeeded": "Succeeded",
   "codingWorkbench.activity.toolState.failed": "Failed",
+  "codingWorkbench.activity.toolState.exited": "Exit code {code}",
+  "codingWorkbench.activity.toolState.waiting-for-trust": "Waiting for approval",
+  "codingWorkbench.activity.toolState.no-runnable-steps": "Nothing to run",
+  "codingWorkbench.activity.toolState.not-run": "Not run",
   "codingWorkbench.activity.toolState.denied": "Denied",
   "codingWorkbench.activity.toolState.cancelled": "Cancelled",
   "codingWorkbench.activity.plan.title": "Current plan",
   "codingWorkbench.activity.plan.truncated": "Part of this plan was omitted.",
+  "codingWorkbench.activity.plan.progress": "{completed}/{total} completed",
   "codingWorkbench.activity.planState.pending": "Pending",
   "codingWorkbench.activity.planState.active": "In progress",
   "codingWorkbench.activity.planState.completed": "Completed",
@@ -559,11 +737,11 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Keiko checked it automatically and could not confirm 32,000 tokens. Choose a larger model, or have the gateway declare this model's max_input_tokens.",
   "codingWorkbench.source.unavailableReason.model-verification-pending":
-    "Keiko is still verifying this model with the gateway (basic chat, a context window of at least 32,000 tokens, and tool calling). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
+    "Keiko is still checking this model with the gateway. The Workbench updates by itself when the check is done.",
   "codingWorkbench.source.unavailableReason.conversation-not-ready":
-    "The latest automatic chat check could not use this model. Keiko continues checking in the background; choose another ready model or wait for recovery.",
+    "The latest chat check could not use this model. Open the Workbench or the model list again to check it once more, or choose another ready model.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
+    "The gateway has not confirmed yet that this model can call tools. Open the Workbench or the model list again in a minute to check it once more, or choose another ready model.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
@@ -605,7 +783,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.controls.resumeMode.help":
     "Resume with the server-confirmed current mode or a stricter mode. Widening is unavailable.",
   "codingWorkbench.approval.eyebrow": "Approval required",
-  "codingWorkbench.approval.title": "Review the bounded action",
+  "codingWorkbench.approval.details": "Details",
   "codingWorkbench.approval.facts": "Approval facts",
   "codingWorkbench.approval.permissionKind": "Permission kind",
   "codingWorkbench.approval.actionClass": "Action class",
@@ -639,6 +817,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.approval.risk.critical": "Critical",
   "codingWorkbench.approval.actionKind.file-edit": "File edit",
   "codingWorkbench.approval.actionKind.git-stage": "Stage changes",
+  "codingWorkbench.approval.actionKind.git-unstage": "Unstage changes",
+  "codingWorkbench.approval.actionKind.git-fetch": "Fetch from the remote",
+  "codingWorkbench.approval.actionKind.git-pull": "Fast-forward from the remote",
+  "codingWorkbench.approval.actionKind.git-branch": "Create a task branch and switch to it",
   "codingWorkbench.approval.actionKind.verification-command": "Verification command",
   "codingWorkbench.approval.actionKind.ci-observe": "CI status check",
   "codingWorkbench.approval.actionKind.connector-read": "Connector read",
@@ -721,6 +903,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.draftDelivery.remote.notDraft": "Not a draft",
   "codingWorkbench.draftDelivery.details": "Saved delivery target",
   "codingWorkbench.draftDelivery.repository": "Repository",
+  "codingWorkbench.draftDelivery.remoteName": "Remote",
   "codingWorkbench.draftDelivery.issue": "Accepted issue",
   "codingWorkbench.draftDelivery.headRef": "Feature branch",
   "codingWorkbench.draftDelivery.headSha": "Approved commit",
@@ -885,6 +1068,38 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Changed files unavailable. Re-pair this window to see them before deciding.",
   "codingWorkbench.approval.changes.retry": "Retry loading the changed files",
   "codingWorkbench.approval.help": "Raw commands, prompts, diffs, and file contents remain hidden.",
+  "codingWorkbench.approval.native.title": "What the agent wants to do",
+  "codingWorkbench.approval.native.help": "Allows exactly this action once.",
+  "codingWorkbench.approval.native.help.shell": "Runs this command once in the task workspace.",
+  "codingWorkbench.approval.native.help.edit": "Applies this change to the listed files once.",
+  "codingWorkbench.approval.native.help.internet":
+    "Allows this one internet request. Internet access exists only in Full access.",
+  "codingWorkbench.approval.native.help.execute":
+    "Runs this Code Mode program once in OpenCode's script sandbox.",
+  "codingWorkbench.approval.native.help.worktree":
+    "Creates a new task workspace on its own branch; this run keeps working here.",
+  "codingWorkbench.approval.native.resources": "Requested command, paths, or addresses",
+  "codingWorkbench.approval.native.noResources": "No command, path, or address was named.",
+  "codingWorkbench.approval.native.nothingNamed":
+    "Approval is unavailable because this request names no command, path, or address. Deny it so the agent can continue.",
+  "codingWorkbench.approval.native.loading": "Loading the requested action…",
+  "codingWorkbench.approval.native.unavailable":
+    "The requested action is unavailable. Re-pair this window to see it before deciding.",
+  "codingWorkbench.approval.native.retry": "Retry loading the requested action",
+  "codingWorkbench.approval.native.permission.shell": "Shell command",
+  "codingWorkbench.approval.native.permission.edit": "File change",
+  "codingWorkbench.approval.native.permission.write": "File change",
+  "codingWorkbench.approval.native.permission.patch": "File change",
+  "codingWorkbench.approval.native.permission.webfetch": "Web fetch",
+  "codingWorkbench.approval.native.permission.websearch": "Web search",
+  "codingWorkbench.approval.native.permission.execute": "Code Mode script",
+  "codingWorkbench.approval.native.permission.worktree": "New task workspace",
+  "codingWorkbench.approval.native.permission.other": "Native action",
+  "codingWorkbench.approval.native.label.native-shell": "Native shell command",
+  "codingWorkbench.approval.native.label.native-edit": "Native file change",
+  "codingWorkbench.approval.native.label.native-egress": "Native internet access",
+  "codingWorkbench.approval.native.label.native-execute": "Native Code Mode script",
+  "codingWorkbench.approval.native.label.native-read": "Native read",
   "codingWorkbench.approval.evidenceRequired":
     "Approval stays unavailable until what this request would touch has loaded. Retry that read, or deny the request.",
   "codingWorkbench.approval.approve": "Approve once",
@@ -904,7 +1119,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.recovery.eyebrow": "Recovery required",
   "codingWorkbench.recovery.title": "Reconcile before retrying",
   "codingWorkbench.recovery.summary":
-    "Keiko will start a fresh run. It will not replay prior mutations.",
+    "A previous action may already have changed files. Check its result before retrying; Keiko will not repeat it.",
   "codingWorkbench.recovery.retry": "Retry as a fresh run",
   "codingWorkbench.recovery.acknowledge": "Acknowledge recovery",
   "codingWorkbench.header.notReady": "Not ready to start",
@@ -934,10 +1149,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.runStatus.phase.tool": "Running a tool",
   "codingWorkbench.runStatus.phase.decision": "Waiting for your decision",
   "codingWorkbench.runStatus.readiness": "Readiness details",
+  "codingWorkbench.runStatus.agent.plan": "Plan agent",
   "codingWorkbench.resourceStatus.unavailable": "Unavailable",
   "codingWorkbench.announcement.runChecking": "Run status checking.",
   "codingWorkbench.announcement.noActiveRun": "No active coding run.",
-  "codingWorkbench.announcement.runRevision": "{state}. Revision {revision}.",
   "codingWorkbench.announcement.recoveryComplete": "Recovery acknowledgement complete.",
   "codingWorkbench.announcement.setupReady": "Authentication setup plan ready.",
   "codingWorkbench.announcement.setupChecking": "Authentication setup plan checking.",
@@ -996,6 +1211,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Keiko stopped the run because the model's edits were refused several times in a row, for example because they no longer matched the file. Start the task again, rephrase or split it, or choose another model; your changes so far stay in the task workspace.",
   "codingWorkbench.event.failure.runtime":
     "The coding run ended with an internal error after the actions shown above. Start the task again; if it recurs, check the Activity Log.",
+  "codingWorkbench.event.failure.invalid-intent":
+    "Keiko refused the task before it ran, for example because a file you referenced with @ is missing, outside the workspace or protected, or because the slash command is not available. Check the referenced files and the command, then start the task again.",
   "codingWorkbench.event.failure.generic":
     "This step could not be completed. Check the Activity Log and try again.",
   "codingWorkbench.event.failure.prompt-allowance-exhausted":
@@ -1049,15 +1266,27 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.verification.status.passed": "Passed",
   "codingWorkbench.verification.status.failed": "Failed",
   "codingWorkbench.verification.status.partial": "Partial",
+  "codingWorkbench.verification.status.notRun": "Not run",
   "codingWorkbench.verification.checks":
     "Checks: {passed} passed, {failed} unsuccessful, {skipped} skipped",
-  "codingWorkbench.verification.duration": "Duration: {duration} ms",
+  "codingWorkbench.verification.duration": "Duration: {duration}",
   "codingWorkbench.activity.readBytes": "Read: {bytes} bytes",
   "codingWorkbench.activity.readFacts": "Read: {bytes} bytes · Whole file: {lines} lines",
   "codingWorkbench.activity.returnedPaths": "Returned paths: {count}",
   "codingWorkbench.activity.editRefusal": "Edit refusal: {reason}",
   "codingWorkbench.activity.affectedFile": "Affected file: {path}",
-  "codingWorkbench.activity.serviceDuration": "Tool service: {duration} ms",
+  "codingWorkbench.activity.serviceDuration": "Duration: {duration}",
+  "codingWorkbench.activity.exitCode": "The command exited with code {code}.",
+  "codingWorkbench.activity.toolError": "The tool reported an error to the model.",
+  "codingWorkbench.activity.verification.passed": "Every requested verification check passed.",
+  "codingWorkbench.activity.verification.failed-check":
+    "A verification check ran and failed. The model received the failing locations.",
+  "codingWorkbench.activity.verification.waiting-for-trust":
+    "Verification has not run: this workspace's package scripts are not allowed yet. Allow package scripts for verification in the Coding Workbench header, then verify again.",
+  "codingWorkbench.activity.verification.no-runnable-steps":
+    "Verification has not run: this repository defines no script the verifier can run, such as test, lint or build. That is not a failing check.",
+  "codingWorkbench.activity.verification.not-run":
+    "Verification did not run to completion: a step was skipped, denied or cancelled. That is not a failing check.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
@@ -1088,6 +1317,30 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.unavailable": "The approved skills could not be read.",
   "codingWorkbench.skills.retry": "Try again",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget exhausted",
+  "codingWorkbench.mcp.summary": "MCP servers ({count})",
+  "codingWorkbench.mcp.manage": "Manage MCP servers",
+  "codingWorkbench.mcp.status.connected": "Connected",
+  "codingWorkbench.mcp.status.needsAuthorization": "Needs authorization",
+  "codingWorkbench.mcp.status.failed": "Not connected",
+  "codingWorkbench.mcp.status.disabled": "Disabled",
+  "codingWorkbench.mcp.status.pending": "Connecting",
+  "codingWorkbench.mcp.authorize": "Authorize",
+  "codingWorkbench.mcp.authorizeLabel": "Authorize the MCP server {server}",
+  "codingWorkbench.mcp.openAuthorization": "Open the authorization page",
+  "codingWorkbench.mcp.authorizing": "Waiting for the authorization in your browser…",
+  "codingWorkbench.mcp.cancel": "Cancel",
+  "codingWorkbench.mcp.authorized": "Authorized. The server connects now.",
+  "codingWorkbench.mcp.authorizationFailed": "The authorization did not complete. Try again.",
+  "codingWorkbench.mcp.authorizationExpired": "The authorization expired. Try again.",
+  "codingWorkbench.mcp.refused.urlRefused":
+    "Keiko withheld an authorization page that does not belong to the expected issuer.",
+  "codingWorkbench.mcp.refused.unavailable":
+    "The server cannot be authorized right now. Try again in a moment.",
+  "codingWorkbench.mcp.refused.connected": "The server is already connected.",
+  "codingWorkbench.mcp.refused.notOauth": "This server does not authorize through OAuth.",
+  "codingWorkbench.mcp.refused.failed": "The authorization could not be started.",
+  "codingWorkbench.mcp.unavailable": "The MCP servers could not be read.",
+  "codingWorkbench.mcp.retry": "Try again",
   "codingWorkbench.announcement.researchActive": "Internet research grant active.",
   "codingWorkbench.alert.actionFailedCode":
     "The requested runtime action failed ({code}). Review the live state and retry.",
@@ -1112,6 +1365,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The workspace could not be bound. Review the repository path and target branch.",
   "codingWorkbench.alert.runRefreshFailed": "Run could not be refreshed.",
   "codingWorkbench.alert.eventStreamRefreshFailed": "Event stream could not be refreshed.",
+  "codingWorkbench.status.eventStreamReconnecting":
+    "Live updates were interrupted. Reconnecting to the event stream…",
   "codingWorkbench.issue.resolving": "Reading linked issue…",
   "codingWorkbench.issue.error.multiple-issues":
     "This prompt names several issues. Choose one primary issue for this task and send it again.",
@@ -1165,6 +1420,44 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The repository's approval does not cover this task workspace's package scripts, usually because this run changed package.json. Allowing them is your decision for exactly this manifest.",
   "codingWorkbench.trust.allow": "Allow package scripts for verification",
   "codingWorkbench.trust.allowing": "Allowing…",
+  "codingWorkbench.revert.region": "Last turn",
+  "codingWorkbench.revert.summary":
+    "The last turn changed {count} files (+{additions} / -{deletions}).",
+  "codingWorkbench.revert.summary.one":
+    "The last turn changed 1 file (+{additions} / -{deletions}).",
+  "codingWorkbench.revert.none":
+    "The last turn has not changed any file, so there is nothing to undo.",
+  "codingWorkbench.revert.undo": "Undo last turn",
+  "codingWorkbench.revert.undo.confirm":
+    "Undo the last turn? This stops the turn if it is still running and puts the files it changed back to their earlier content. While the run stays open you can restore the changes.",
+  "codingWorkbench.revert.undo.confirmAction": "Confirm undo",
+  "codingWorkbench.revert.staged":
+    "The last turn is undone: {count} files are back to their earlier content. Restore the changes, or stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.staged.one":
+    "The last turn is undone: 1 file is back to its earlier content. Restore the changes, or stop the run to keep the undo. No new task starts in this run while the undo is in place.",
+  "codingWorkbench.revert.restore": "Restore changes",
+  "codingWorkbench.revert.restore.confirm":
+    "Restore the undone changes? The files go back to the content the turn left. If you edited one of these files since the undo, nothing is overwritten and the restore is refused.",
+  "codingWorkbench.revert.restore.confirmAction": "Confirm restore",
+  "codingWorkbench.revert.cancel": "Cancel",
+  "codingWorkbench.revert.busy": "Applying…",
+  "codingWorkbench.inbox.region": "Messages waiting for this task",
+  "codingWorkbench.inbox.summary": "{count} messages are waiting for the running task.",
+  "codingWorkbench.inbox.summary.one": "1 message is waiting for the running task.",
+  "codingWorkbench.inbox.delivery.steer": "Send now",
+  "codingWorkbench.inbox.delivery.steer.help": "It joins the running task at its next step.",
+  "codingWorkbench.inbox.delivery.queue": "Queued",
+  "codingWorkbench.inbox.delivery.queue.help":
+    "It is delivered after the running task's current work.",
+  "codingWorkbench.inbox.emptyPreview": "Message without text",
+  "codingWorkbench.inbox.sendNow": "Send now",
+  "codingWorkbench.inbox.sendNow.item": "Send now: {text}",
+  "codingWorkbench.inbox.cancel": "Cancel",
+  "codingWorkbench.inbox.cancel.item": "Cancel message: {text}",
+  "codingWorkbench.inbox.busy": "Applying…",
+  "codingWorkbench.inbox.error":
+    "The waiting messages could not be read. They may still reach the running task.",
+  "codingWorkbench.inbox.retry": "Retry",
 } as const;
 
 export type CodingWorkbenchMessageKey = keyof typeof EN_CODING_WORKBENCH_MESSAGES;

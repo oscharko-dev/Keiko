@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from "vitest";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
+import {
+  DEFAULT_EXPLORATION_BUDGET,
+  validateConnectedContextPack,
+} from "@oscharko-dev/keiko-contracts/connected-context";
 import { WorkspaceReadError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
@@ -479,4 +482,143 @@ it("does not recover descendant availability when current root access is lost", 
   expect(activityLog.events.some((event) => event.op === "search.connected-context.failed")).toBe(
     true,
   );
+});
+
+function diagnosticMetadataFixture(): string {
+  const root = workspaceManifestFixture();
+  writeFileSync(
+    join(root, "package.json"),
+    '{"name":"diagnostic-fixture","devDependencies":{"test-library":"2.3.4"}}\n',
+  );
+  writeFileSync(join(root, "tsconfig.json"), '{"compilerOptions":{"strict":true}}\n');
+  writeFileSync(
+    join(root, "worker.ts"),
+    'export function renderItem() { throw new TypeError("unsupported function"); }\n',
+  );
+  return root;
+}
+
+function nestedMetadataFixture(directory: string, canonical = true): string {
+  const root = rootFixture();
+  mkdirSync(join(root, directory, "src"), { recursive: true });
+  writeFileSync(
+    join(root, directory, canonical ? "package.json" : "profile.json"),
+    '{"name":"nested-module","devDependencies":{"test-library":"2.3.4"}}\n',
+  );
+  writeFileSync(
+    join(root, directory, "src", "worker.ts"),
+    'export function renderItem() { throw new TypeError("unsupported function"); }\n',
+  );
+  return root;
+}
+
+describe("dependency evidence alongside diagnostic routing", () => {
+  it.each(["departments/client-app", "a/b/c/server-module"])(
+    "retains observed metadata beside relevant code in arbitrary nested roots: %s",
+    async (directory) => {
+      const root = nestedMetadataFixture(directory);
+      const request = input(root, 20);
+      const result = await retrieveConnectedContextPack(
+        {
+          ...request,
+          query: {
+            ...request.query,
+            text:
+              "Error: unsupported function. Generate renderItem tests using installed dependency versions. " +
+              `Write the new test to ${directory}/src/renderItem.test.ts.`,
+          },
+        },
+        deps(root),
+      );
+      expect(result.pack.files.map((file) => file.scopePath)).toContain(
+        `${directory}/package.json`,
+      );
+      expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+    },
+  );
+
+  it("does not infer a metadata root from an arbitrary JSON content match", async () => {
+    const directory = "departments/client-app";
+    const root = nestedMetadataFixture(directory, false);
+    writeFileSync(join(root, directory, "package.json"), '{"name":"quiet-module"}\n');
+    const request = input(root, 20);
+    const result = await retrieveConnectedContextPack(
+      {
+        ...request,
+        query: {
+          ...request.query,
+          text: "Error: unsupported function. Generate renderItem tests using installed dependency versions.",
+        },
+      },
+      deps(root),
+    );
+    expect(result.pack.files.map((file) => file.scopePath)).not.toContain(
+      `${directory}/package.json`,
+    );
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
+
+  it.each([
+    "Error: unsupported function. Which package manager configuration and dependency versions are used?",
+    "Fix the assertion failure and use the dependencies declared in the build configuration.",
+  ])("retains independently requested metadata in %s", async (text) => {
+    const root = diagnosticMetadataFixture();
+    const request = input(root, 20);
+    const activityLog = createBufferedServerLogSink();
+    const result = await retrieveConnectedContextPack(
+      { ...request, query: { ...request.query, text } },
+      productionDeps(activityLog),
+    );
+    const manifest = result.pack.files.find((file) => file.scopePath === "package.json");
+    expect(manifest).toBeDefined();
+    expect(manifest?.excerpts.map((excerpt) => excerpt.content).join("\n")).toContain(
+      '"test-library":"2.3.4"',
+    );
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+    expect(
+      activityLog.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra?.metadataInjectionReason,
+    ).toBe("pattern");
+    expect(activityLog.lines().join("\n")).not.toContain(root);
+    expect(activityLog.lines().join("\n")).not.toContain(text);
+  });
+
+  it.each([
+    "Fix the failing test without changing production code, dependencies, or accepted requirements.",
+    "The test failed with TypeError. Keep dependencies and their versions unchanged.",
+    'The failure text is "expected version 2 but received 1". Explain the failing test.',
+    'Explain the failing test:\n```ts\nconst dependencies = "version 2";\n```',
+  ])("does not infer metadata demand from preservation or source data: %s", async (text) => {
+    const root = diagnosticMetadataFixture();
+    const request = input(root, 20);
+    const activityLog = createBufferedServerLogSink();
+    await retrieveConnectedContextPack(
+      { ...request, query: { ...request.query, text } },
+      productionDeps(activityLog),
+    );
+    expect(
+      activityLog.events.find((event) => event.op === "search.connected-context.source-details")
+        ?.extra?.metadataInjectionReason,
+    ).toBe("none");
+    expect(activityLog.lines().join("\n")).not.toContain(root);
+  });
+
+  it("retains the original file grant when diagnostic metadata is requested", async () => {
+    const root = diagnosticMetadataFixture();
+    const request = input(root, 20);
+    const result = await retrieveConnectedContextPack(
+      {
+        ...request,
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 1 },
+        query: {
+          ...request.query,
+          text: "Error: unsupported function. Which dependency versions are installed?",
+        },
+      },
+      deps(root),
+    );
+    expect(result.pack.usage.filesRead).toBeLessThanOrEqual(1);
+    expect(result.pack.files.length).toBeLessThanOrEqual(1);
+    expect(validateConnectedContextPack(result.pack).ok).toBe(true);
+  });
 });

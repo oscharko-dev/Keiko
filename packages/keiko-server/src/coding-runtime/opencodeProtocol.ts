@@ -4,7 +4,12 @@ import {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { toolArgumentLimitsByToolName } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+  type ToolArgumentLimits,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { ToolCatalogError, captureCatalogJson } from "@oscharko-dev/keiko-tool-catalog";
 
 import {
@@ -16,6 +21,7 @@ import type {
   OpenCodeProviderTokenUsage,
   OpenCodeReconciliationEvent,
 } from "./opencodeReconciler.js";
+import { isAdmissibleOpenCodeToolName, openCodeToolLogLabel } from "./opencodeNativeTools.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
@@ -59,7 +65,11 @@ export interface OpenCodeSseDecoder {
 
 export interface OpenCodeLiveControl {
   readonly sessionId: string;
-  readonly state: "activity" | "terminal";
+  /**
+   * `interrupted` is the V2 runtime ending an execution at a human's refusal (a dismissed question):
+   * it is not a verdict, and no idle message follows it.
+   */
+  readonly state: "activity" | "interrupted" | "terminal";
 }
 
 interface NormalizedSseData extends Record<string, unknown> {
@@ -74,31 +84,48 @@ const MAX_HISTORY_INFO_DEPTH = 8;
 /**
  * A durable tool part records the governed call's arguments twice: parsed as `state.input` (every
  * status) and as the provider's raw text `state.raw` (pending). Both were admitted upstream under
- * the catalog ceilings (ADR-0175 D4, `TOOL_CATALOG_LIMITS`), so the same ceilings -- not the
- * 4096-character metadata bound -- re-bound them here, and this is the largest part one call can
- * therefore leave: the metadata budget plus two argument bodies. Run 2026-09-10: a 19 KiB
- * `keiko_changeset_edit` patch, inside the 64 KiB patch contract, failed the metadata bound, the
- * whole `POST /sync/history` pull threw, and the run ended `runtime-failed` on its first edit.
+ * the catalog ceilings (ADR-0175 D4, `TOOL_CATALOG_LIMITS`; the governed changeset edit and the
+ * native file-content tools carry their own, `CHANGESET_EDIT_ARGUMENT_LIMITS`), so the same
+ * ceilings -- not the 4096-character metadata bound -- re-bound them here, and this is the largest
+ * part one call can therefore leave: the metadata budget plus two argument bodies of the largest
+ * ceiling. Run 2026-09-10: a 19 KiB `keiko_changeset_edit` patch, inside the patch contract of the
+ * time, failed the metadata bound, the whole `POST /sync/history` pull threw, and the run ended
+ * `runtime-failed` on its first edit.
  */
 export const OPENCODE_HISTORY_TOOL_PART_MAX_BYTES =
-  MAX_HISTORY_INFO_BYTES + 2 * TOOL_CATALOG_LIMITS.maxArgumentBytes;
+  MAX_HISTORY_INFO_BYTES + 2 * CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes;
 // One governed call leaves at most three argument-bearing rows (pending, running, settled): the
 // pending row carries both bodies, the other two carry `state.input` once each.
-const HISTORY_TOOL_CALL_ROWS_MAX_BYTES =
-  3 * MAX_HISTORY_INFO_BYTES + 4 * TOOL_CATALOG_LIMITS.maxArgumentBytes;
+function historyToolCallRowsMaxBytes(argumentLimits: ToolArgumentLimits): number {
+  return 3 * MAX_HISTORY_INFO_BYTES + 4 * argumentLimits.maxArgumentBytes;
+}
 /** Argument-bearing calls one catch-up pull is budgeted for after a stream reconnect. */
 export const OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS = 8;
+/**
+ * Of those calls, how many may be changeset-edit calls (or native file-content calls) at their own,
+ * far larger argument ceiling (owner decision 2026-10-28: an edit of up to 8 MiB is never
+ * refused). One whole such call fits a pull; the rest of the budget is ordinary calls, so the
+ * response bound grows by one call's rows, not by a multiple of the whole catch-up allowance.
+ */
+export const OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS = 1;
 // The per-pull budget every non-argument row shared before tool bodies were admitted at all.
 const HISTORY_METADATA_ROWS_MAX_BYTES = 1024 * 1024;
 /**
  * `POST /sync/history` returns every durable row after the checkpoints, so one pull after a stream
  * reconnect can carry a whole turn. The response budget therefore covers the ordinary metadata rows
- * plus the argument-bearing rows of OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS calls; a pull above it
- * still fails closed (`opencode-history-oversized`) and is recorded by its closed reason.
+ * plus the argument-bearing rows of OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS calls, of which
+ * OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS may be at the changeset-edit ceiling; a pull above
+ * it still fails closed (`opencode-history-oversized`) and is recorded by its closed reason.
  */
 export const OPENCODE_HISTORY_RESPONSE_MAX_BYTES =
   HISTORY_METADATA_ROWS_MAX_BYTES +
-  OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS * HISTORY_TOOL_CALL_ROWS_MAX_BYTES;
+  (OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS - OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS) *
+    historyToolCallRowsMaxBytes({
+      maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+      maxStringBytes: TOOL_CATALOG_LIMITS.maxStringBytes,
+    }) +
+  OPENCODE_HISTORY_CATCH_UP_CHANGESET_EDIT_CALLS *
+    historyToolCallRowsMaxBytes(CHANGESET_EDIT_ARGUMENT_LIMITS);
 const MAX_JSON_DEPTH = 64;
 const ID = /^(?:evt_|ses_|per|que)[A-Za-z0-9_-]+$/u;
 const PERMISSION_ID = /^per_[A-Za-z0-9_-]+$/u;
@@ -150,13 +177,36 @@ export function isOpenCodeFacadeDispatchedTool(tool: string): boolean {
   return APPROVED_PRODUCTIVE_TOOLS.has(tool);
 }
 
-const APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS = new Set<string>([
+/**
+ * The plan surfaces (#2480): a completed carrier part projects as a governed plan snapshot and
+ * none of them ever surfaces as productive tool activity, in any tool profile. OpenCode 2.1.4
+ * registers a single plan tool whose id and permission action are `todowrite`, only under its
+ * opt-in experimental switch (`opencodeNativeQualification.real.test.ts`); the shorter name an
+ * earlier capture recorded stays admitted (#3897).
+ */
+export const OPENCODE_PLAN_CARRIER_TOOLS: ReadonlySet<string> = new Set(["todowrite", "todo"]);
+export const OPENCODE_PLAN_SURFACE_TOOLS: ReadonlySet<string> = new Set([
+  ...OPENCODE_PLAN_CARRIER_TOOLS,
+  "todoread",
+]);
+
+const APPROVED_MAPPED_RUNTIME_TOOLS = new Set<string>([
   "question",
   // #2480: plan carrier only — its admitted parts feed the governed plan projection and it
   // never reaches the productive tool facade.
   "todowrite",
   ...APPROVED_PRODUCTIVE_TOOLS,
 ]);
+
+/**
+ * A tool name the runtime may report in an event or history part: one of the mapped `keiko_*`
+ * tools, or, in the native profile (#3897), any admissible OpenCode tool id (native, MCP or
+ * plugin). The shape bound keeps the vocabulary closed enough for body-free evidence; the
+ * body-free label of an extension tool is `extension` (`openCodeToolLogLabel`).
+ */
+function isApprovedRuntimeTool(value: unknown): value is string {
+  return APPROVED_MAPPED_RUNTIME_TOOLS.has(value as string) || isAdmissibleOpenCodeToolName(value);
+}
 
 export function validateOpenCodeHealth(value: unknown): OpenCodeProtocolResult<OpenCodeHealth> {
   return exactRecord(value, ["healthy", "version"]) &&
@@ -239,8 +289,7 @@ function frameDataFailure(data: NormalizedSseData): OpenCodeProtocolFailure | un
     return "frame-invalid";
   if (
     data.type === "session.next.tool.called" &&
-    (!nonEmpty(data.properties.tool) ||
-      !APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.properties.tool))
+    (!nonEmpty(data.properties.tool) || !isApprovedRuntimeTool(data.properties.tool))
   )
     return "event-unknown";
   return undefined;
@@ -375,11 +424,22 @@ function projectGovernedPermissionByKind(
   if (
     metadata.actionKind === "verification-command" ||
     metadata.actionKind === "ci-observe" ||
-    metadata.actionKind === "connector-read"
+    metadata.actionKind === "connector-read" ||
+    metadata.actionKind === "git-fetch" ||
+    metadata.actionKind === "git-pull" ||
+    metadata.actionKind === "git-branch"
   ) {
     return projectGovernedCommandPermission(properties, metadata);
   }
   return undefined;
+}
+
+// The risk a governed command ask states (supervisedCodingPolicy.ts states the same): a fetch moves
+// only remote-tracking refs, a pull the worktree (#3902 AC2); the bounded commands are low.
+function governedCommandRisk(actionKind: string): string {
+  // A task branch is one local ref write and a switch of the run's own branch (#3907).
+  if (actionKind === "git-fetch" || actionKind === "git-branch") return "medium";
+  return actionKind === "git-pull" ? "high" : "low";
 }
 
 function projectGovernedEditPermission(
@@ -419,7 +479,8 @@ function projectGovernedCommandPermission(
 ): Record<string, unknown> | undefined {
   const actionKind = metadata.actionKind;
   const metadataKeys =
-    actionKind === "verification-command" && metadata.commandLabel === "targeted-test"
+    (actionKind === "verification-command" && metadata.commandLabel === "targeted-test") ||
+    actionKind === "git-branch"
       ? GOVERNED_TARGETED_VERIFICATION_METADATA_KEYS
       : GOVERNED_VERIFICATION_METADATA_KEYS;
   if (
@@ -430,7 +491,7 @@ function projectGovernedCommandPermission(
       "command-execution",
       "command-execution",
       actionKind,
-      "low",
+      governedCommandRisk(actionKind),
     ) ||
     !validCommandApproval(properties, metadata)
   ) {
@@ -455,7 +516,9 @@ function validCommandApproval(
     validApprovalIdentities(metadata) &&
     typeof approvalDigest === "string" &&
     /^[0-9a-f]{64}$/u.test(approvalDigest) &&
-    (commandLabel === "targeted-test"
+    // The asks whose approval is bound to the digest of their target: a targeted verification's
+    // path and a governed task branch's name (#3907).
+    (commandLabel === "targeted-test" || metadata.actionKind === "git-branch"
       ? typeof targetPathHash === "string" && /^[0-9a-f]{64}$/u.test(targetPathHash)
       : targetPathHash === undefined) &&
     sameStrings(properties.patterns, [commandLabel])
@@ -465,6 +528,11 @@ function validCommandApproval(
 function validGovernedCommandTarget(actionKind: unknown, commandLabel: string): boolean {
   if (actionKind === "verification-command") return GOVERNED_VERIFIERS.has(commandLabel);
   if (actionKind === "ci-observe") return commandLabel === "ci";
+  // #3902 AC2: a governed fetch or pull is approved as its own operation.
+  if (actionKind === "git-fetch") return commandLabel === "fetch";
+  if (actionKind === "git-pull") return commandLabel === "pull";
+  // #3907: a governed task branch is approved as itself; the branch name travels as its digest.
+  if (actionKind === "git-branch") return commandLabel === "branch";
   return actionKind === "connector-read" && boundedApprovalIdentity(commandLabel);
 }
 
@@ -1165,9 +1233,8 @@ function closedLabel(value: unknown, labels: ReadonlySet<string>): string {
 
 function approvedToolLabel(value: unknown): string {
   if (value === undefined) return "none";
-  return typeof value === "string" && APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(value)
-    ? value
-    : "unapproved";
+  if (typeof value === "string" && APPROVED_MAPPED_RUNTIME_TOOLS.has(value)) return value;
+  return isAdmissibleOpenCodeToolName(value) ? openCodeToolLogLabel(value) : "unapproved";
 }
 
 function messagePartUpdated(data: Record<string, unknown>, aggregateId: string): boolean {
@@ -1282,7 +1349,7 @@ function toolPartGate(part: Record<string, unknown>): OpenCodeHistoryPartGate | 
     !nonEmpty(part.tool)
   )
     return "shape";
-  if (!APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(part.tool)) return "tool-unapproved";
+  if (!isApprovedRuntimeTool(part.tool)) return "tool-unapproved";
   if ((part.metadata !== undefined && !isRecord(part.metadata)) || !isRecord(part.state)) {
     return "shape";
   }
@@ -1378,7 +1445,8 @@ function toolPartBodyGate(
   part: Record<string, unknown>,
   state: Record<string, unknown>,
 ): OpenCodeHistoryPartGate | undefined {
-  if (!boundedToolArguments(state.input) || !boundedRawToolArguments(state.raw)) {
+  const limits = toolArgumentLimitsByToolName(typeof part.tool === "string" ? part.tool : "");
+  if (!boundedToolArguments(state.input, limits) || !boundedRawToolArguments(state.raw, limits)) {
     return "argument-bound";
   }
   const bodiless = { ...part, state: { ...state, ...blankedToolArguments(state) } };
@@ -1396,10 +1464,10 @@ function toolPartBodyGate(
 
 // A non-record is left to the tool-state gate, which refuses it under its own name; a record is
 // validated exactly as the gateway validated it (byte, string-byte, depth, key and item ceilings).
-function boundedToolArguments(input: unknown): boolean {
+function boundedToolArguments(input: unknown, limits: ToolArgumentLimits): boolean {
   if (!isRecord(input)) return true;
   try {
-    captureCatalogJson(input);
+    captureCatalogJson(input, undefined, limits);
     return true;
   } catch (error) {
     if (error instanceof ToolCatalogError) return false;
@@ -1409,8 +1477,8 @@ function boundedToolArguments(input: unknown): boolean {
 
 // The raw text is the canonical argument JSON the gateway handed the runtime, so it can never
 // legitimately exceed the argument ceiling; a non-string is again the tool-state gate's refusal.
-function boundedRawToolArguments(raw: unknown): boolean {
-  return typeof raw !== "string" || bytes(raw) <= TOOL_CATALOG_LIMITS.maxArgumentBytes;
+function boundedRawToolArguments(raw: unknown, limits: ToolArgumentLimits): boolean {
+  return typeof raw !== "string" || bytes(raw) <= limits.maxArgumentBytes;
 }
 
 function blankedToolArguments(state: Record<string, unknown>): Record<string, unknown> {
@@ -1630,7 +1698,7 @@ function toolEvent(type: string, data: Record<string, unknown>): boolean {
     nonEmpty(data.callID) &&
     nonEmpty(data.provider) &&
     (type !== "session.next.tool.called" ||
-      (nonEmpty(data.tool) && APPROVED_MODEL_VISIBLE_RUNTIME_TOOLS.has(data.tool)))
+      (nonEmpty(data.tool) && isApprovedRuntimeTool(data.tool)))
   );
 }
 
@@ -1671,13 +1739,18 @@ function classifiedToolEvent(
 ): "question" | "tool" | undefined {
   if (!toolEvent(type, data)) return undefined;
   if (type === "session.next.tool.called" && data.tool === "question") return "question";
-  if (
-    type === "session.next.tool.called" &&
-    (!nonEmpty(data.tool) || !APPROVED_PRODUCTIVE_TOOLS.has(data.tool))
-  )
-    return undefined;
+  if (type === "session.next.tool.called" && !productiveToolCall(data.tool)) return undefined;
   return "tool";
 }
+/** A plan surface is never a productive tool call, whatever profile admitted its name (#2480). */
+function productiveToolCall(tool: unknown): boolean {
+  return (
+    nonEmpty(tool) &&
+    !OPENCODE_PLAN_SURFACE_TOOLS.has(tool) &&
+    (APPROVED_PRODUCTIVE_TOOLS.has(tool) || isAdmissibleOpenCodeToolName(tool))
+  );
+}
+
 function digest(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value), "utf8").digest("hex");
 }

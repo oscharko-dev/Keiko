@@ -1,4 +1,7 @@
-import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import {
+  CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS,
+  isCodingRuntimeDeliveryResult,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import {
   VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
   type VerifiedCommitBlockingPaths,
@@ -9,7 +12,10 @@ import {
   isCodingRuntimeGitResult,
   type CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
-import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import {
@@ -32,6 +38,7 @@ import {
   CODING_SAFE_ACTIVITY_EDIT_REFUSAL_REASON_CODES,
   isCodingSafeActivityPresentationPath,
   type CodingSafeActivityToolPresentation,
+  type CodingSafeActivityVerificationOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
@@ -44,8 +51,8 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import {
-  CODING_TOOL_MAX_BODY_BYTES,
   CODING_TOOL_MAX_IN_FLIGHT,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
   CODING_TOOL_MAX_READ_BYTES,
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
@@ -123,6 +130,13 @@ const HTTP_ONLY_VERIFICATION_RUNNER_CODES: ReadonlySet<VerificationRunnerErrorCo
   VERIFICATION_RUNNER_ERROR_CODES.PAYLOAD_TOO_LARGE,
   VERIFICATION_RUNNER_ERROR_CODES.RUN_NOT_FOUND,
 ]);
+// Why a push or pull request proposal could not be recorded: the contract's own closed vocabulary,
+// sourced rather than restated. A delivery refusal used to reach the model as a bare "failed", so it
+// invented a cause (a "remote that is not accessible") for a run that simply had no issue
+// (Coding Workbench live lab, 2026-10-30). Forwarded for the delivery action only.
+const DELIVERY_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>(
+  CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS,
+);
 const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "ci-repair-budget-blocked",
   "ci-observation-required",
@@ -134,6 +148,9 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "git-proposal-unknown",
   "git-execution-failed",
   "delivery-authority-revoked",
+  // The workspace is an ordinary folder, not a Git repository (owner decision 2026-10-30): every
+  // repository tool refuses with this one closed reason while edits, commands and verification work.
+  "repository-required",
   "connector-authority-revoked",
   "search-authority-revoked",
   // A read the port refused for the model's own request (#3615): named, so the model can act on it
@@ -172,7 +189,7 @@ export function createCodingToolFacade(
 ): CodingToolFacade {
   const context: ExecutionContext = {
     ports,
-    maxBodyBytes: boundedOption(options.maxBodyBytes, CODING_TOOL_MAX_BODY_BYTES),
+    maxBodyBytes: boundedOption(options.maxBodyBytes, CODING_TOOL_MAX_REQUEST_BODY_BYTES),
     maxInFlight: boundedOption(options.maxInFlight, CODING_TOOL_MAX_IN_FLIGHT),
     invocationRegistry: options.invocationRegistry,
     requireInvocationRegistryForEdits: options.requireInvocationRegistryForEdits === true,
@@ -345,6 +362,38 @@ export function codingToolEditPresentation(
     refusalReason,
     ...(affectedRelativePath === undefined ? {} : { affectedRelativePath }),
   });
+}
+
+// The closed refusal codes of a governed verification that were never a check failing (#3579): the
+// operator's package-script decision, a repository without a runnable step, and a run whose steps
+// were skipped, denied or cancelled. `VERIFICATION_FAILED` alone is a check that ran and went red.
+// A timeout, a resource ceiling or a refusal before the runner stay out: they claim no more than
+// the card's generic failure.
+const VERIFICATION_OUTCOME_BY_REASON: ReadonlyMap<string, CodingSafeActivityVerificationOutcome> =
+  new Map([
+    ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+    ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ["VERIFICATION_NOT_RUN", "not-run"],
+    ["VERIFICATION_FAILED", "failed-check"],
+  ]);
+
+/**
+ * Server-private live presentation of one answered `keiko_verification` call: why it ended as it
+ * did, in the contract's closed words, from the result the model received. The same closed code the
+ * model reads, never its prose, so the card cannot say a trust wait or an empty repository "failed".
+ */
+export function codingToolVerificationPresentation(
+  result: CodingToolResult,
+): CodingSafeActivityToolPresentation {
+  if (result.status === "completed") {
+    return "verification" in result ? Object.freeze({ verificationOutcome: "passed" }) : {};
+  }
+  if (result.status !== "failed") return {};
+  const verificationOutcome =
+    result.reasonCode === undefined
+      ? undefined
+      : VERIFICATION_OUTCOME_BY_REASON.get(result.reasonCode);
+  return verificationOutcome === undefined ? {} : Object.freeze({ verificationOutcome });
 }
 
 async function executeAdmitted(
@@ -520,7 +569,12 @@ const COMMIT_PROOF_NEXT_ACTIONS: ReadonlyMap<unknown, string> = new Map([
 function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommitProofResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
-  if (value.commitProof !== "unavailable") return false;
+  if (value.commitProof === "admitted")
+    return Object.keys(value).length === 2 && isVerifiedCommitBlockingPaths(value.blocking);
+  return value.commitProof === "unavailable" && isUnavailableCommitProof(value);
+}
+
+function isUnavailableCommitProof(value: Record<string, unknown>): boolean {
   const nextAction = COMMIT_PROOF_NEXT_ACTIONS.get(value.reasonCode);
   if (nextAction === undefined || value.nextAction !== nextAction) return false;
   if (value.reasonCode !== "candidate-not-staged" || value.blocking === undefined) {
@@ -622,6 +676,7 @@ function projectRuntimeGit(
           evidence: [{ kind: "governed-delegate", code: "completed" }],
           git: value.git,
           ...stageGuidance(value.git),
+          ...branchGuidance(value.git),
         }
       : projected("failed");
   return undefined;
@@ -633,10 +688,15 @@ function projectRuntimeGit(
 // succeeded when it did not. Only `status: "recorded"` rides out as completed; `"unavailable"`
 // collapses to the facade's own closed "failed" reasonCode vocabulary, the same shape
 // `projectGovernedFailure` already uses for a governed refusal.
-function projectDraftDelivery(value: Record<string, unknown>): CodingToolResult {
+function projectDraftDelivery(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult {
   if (!isCodingRuntimeDeliveryResult(value.draftDelivery)) return projected("failed");
-  if (value.draftDelivery.status === "unavailable")
-    return projected("failed", value.draftDelivery.reason, true);
+  if (value.draftDelivery.status === "unavailable") {
+    const reason = value.draftDelivery.reason;
+    return { ...projected("failed", reason, true), ...governedFailureCoaching(request, reason) };
+  }
   const disposition = approvalDisposition(value);
   if (disposition === false) return projected("failed");
   return {
@@ -656,7 +716,7 @@ function projectVerifiedCommit(
   request: CodingToolActionRequest,
   value: Record<string, unknown>,
 ): CodingToolResult | undefined {
-  if (isDraftToolRequest(request)) return projectDraftDelivery(value);
+  if (isDraftToolRequest(request)) return projectDraftDelivery(request, value);
   if (request.action === "delivery" && request.intent === "commit") {
     const disposition = approvalDisposition(value);
     return isVerifiedCommitResult(value.verifiedCommit) && disposition !== false
@@ -665,10 +725,35 @@ function projectVerifiedCommit(
           evidence: [{ kind: "governed-delegate", code: value.verifiedCommit.status }],
           verifiedCommit: value.verifiedCommit,
           ...(disposition === undefined ? {} : { approvalDisposition: disposition }),
+          ...commitBlockGuidance(value.verifiedCommit),
         }
       : projected("failed");
   }
   return undefined;
+}
+
+// Coding Workbench Jira lab, 2026-10-30: a Local checkout on `main` had its commit blocked as
+// `protected-branch` and the model, seeing only the code, looped on the pull request until the run
+// timed out. Keiko never commits to a protected branch, but since the owner decision of 2026-10-31
+// (#3907) the model can give the run a task branch itself: `keiko_git_branch` creates one at the
+// current commit and switches the run to it, through Keiko's Git kernel. When that tool refuses
+// too (a managed worktree, an existing name, ...), the operator report stays the fallback; the
+// other policy blocks keep their bare codes.
+const PROTECTED_BRANCH_COMMIT_GUIDANCE =
+  "This run works directly on a protected branch (such as main or dev), and Keiko never commits there. Create a task branch with keiko_git_branch (a new name such as feature/short-description; your uncommitted changes carry over), then stage, verify and commit again on it. Do not retry this commit unchanged and do not propose a push or pull request yet. If keiko_git_branch refuses, report to the operator that the change is ready and that committing it needs a task branch, either a new worktree or a Local checkout of a feature branch.";
+
+// AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier could
+// not run on the host and named the shell instead, and the model, seeing only `verification-missing`
+// on every commit, restaged and re-proposed until the deadline. The refusal names the model's step.
+const UNVERIFIED_COMMIT_GUIDANCE =
+  "The staged change has no verification yet; it is already staged. Do not stage again and do not retry this commit unchanged. Verify the staged change first: run keiko_verification, or, when it says to run the check in your shell, run the repository's own test command in your shell, where it counts for the staged change. Then propose the commit again.";
+
+function commitBlockGuidance(result: VerifiedCommitResult): { readonly guidance?: string } {
+  if (result.status === "blocked" && result.blockReason === "protected-branch")
+    return { guidance: PROTECTED_BRANCH_COMMIT_GUIDANCE };
+  return result.status === "verification-failed" && result.reason === "verification-missing"
+    ? { guidance: UNVERIFIED_COMMIT_GUIDANCE }
+    : {};
 }
 
 // A search's OWN outcome (`ok: false`, e.g. scope-denied/file-too-large/cancelled/timeout) is
@@ -699,7 +784,7 @@ function projectGovernedFailure(
   // The operator declined a server-raised ask (a Git stage, commit, push or pull-request proposal):
   // the same decision as a declined step, so the model reads why and goes on (ADR-0124 D6).
   if (reasonCode === GOVERNED_ASK_DECLINED_REASON_CODE) return humanDecisionToolResult("denied");
-  if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
+  if (typeof reasonCode !== "string" || !forwardsReasonCode(request, reasonCode)) {
     return projected("failed");
   }
   const result = {
@@ -721,12 +806,22 @@ function projectGovernedFailure(
       };
 }
 
+function forwardsReasonCode(request: CodingToolActionRequest, reasonCode: string): boolean {
+  return (
+    GOVERNED_FAILURE_REASON_CODES.has(reasonCode) ||
+    (isDraftToolRequest(request) && DELIVERY_FAILURE_REASON_CODES.has(reasonCode))
+  );
+}
+
 // What the model is told about a governed refusal it can act on, by action and closed reasonCode.
 // Verification: the runner refused for want of package-script trust (ADR-0147 D3) — only the
 // operator can change that state, in the Coding Workbench header; the bare code left the model to
 // retry the verifier or route around it (Coding Workbench run 8, 2026-09-10). Git: the two runtime
 // Git service refusals that are the model's to repair (runtimeGitService.ts) — a stale proposal id
 // and a thrown Git failure — which used to reach it as a revoked authority (run 13, 2026-09-10).
+const REPOSITORY_REQUIRED_GUIDANCE =
+  "This workspace is a plain folder, not a Git repository, so Git tools (status, diff, stage, commit, sync, push, pull request) are unavailable here. Keep working with file edits, commands and verification, and report the result; do not try to initialize a repository or run Git another way.";
+
 const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   verification: {
     WORKSPACE_TRUST_REQUIRED:
@@ -734,10 +829,38 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the
     // model picked another verifier at once without knowing why. A run cancelled after a passing
     // step still checked something, so the guidance claims no more than the named steps (PR #3452).
+    // A Python repository read "add the script" as an order and gained a package.json the task
+    // forbade (AC3 lab T19, #3907); the shell command is the verification that already counts.
     VERIFICATION_NOT_RUN:
-      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier, or the repository has no package.json at all: choose a verifier the repository defines, or run the repository's own command for that check in your shell (for example python3 -m unittest or pytest), where its result counts as that verification. Never add a package.json or a script only to satisfy this verifier. A step to run in your own shell cannot run in the isolated verifier on this host: run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+  },
+  // Push and pull request proposals (CodingRuntimeDeliveryResult, contracts). Each names the true
+  // cause and the one next step that is the model's to take; none suggests another remote or URL.
+  delivery: {
+    "authority-denied":
+      "The run's authority no longer covers this delivery step, or the approval it needed is gone. Report this blocker; do not retry or route around it.",
+    "issue-unavailable":
+      "The issue this run is bound to could not be read, so the delivery cannot be checked against it. Report this blocker.",
+    "verified-commit-required":
+      "There is no verified commit of this run to deliver yet. Commit the verified change with the commit tool first, then propose the push again.",
+    "proposal-unavailable":
+      "This delivery proposal is no longer valid: it expired, was replaced, or was already redeemed. Propose it again and redeem the new id promptly.",
+    "operation-in-flight":
+      "Another delivery step of this run is still running. Wait for it to settle, then retry once.",
+    "payload-invalid": "The delivery request was malformed. Correct the request and send it again.",
+    "provider-unavailable":
+      "The remote could not be reached or refused the request. Retry once; if it fails again, report the blocker instead of working around it.",
+    "repository-required":
+      "This run has no verified Git repository context to deliver from; a plain folder that is not a Git repository has none. This is not a remote or network problem: keep editing and verifying, report the result, and do not initialize a repository or run Git another way.",
+    "remote-required":
+      "This repository has no 'origin' remote, so there is nowhere to push. Report this blocker to the operator; do not add a remote or push to any other URL.",
+    "github-origin-required":
+      "A draft pull request can only be opened where this repository's 'origin' is a github.com repository, and it is not. The branch push is the complete delivery here: report the pushed branch name and do not retry the pull request. This is not about an issue: no issue is needed for a pull request.",
+    "issue-binding-required":
+      "Observing a delivered pull request's CI needs a run that is bound to an issue, and this run has none. The pull request itself is delivered: report it and do not retry the observation.",
   },
   git: {
+    "repository-required": REPOSITORY_REQUIRED_GUIDANCE,
     "git-proposal-unknown":
       "This proposal id cannot be redeemed: it was never proposed in this run, was already redeemed, or has expired. Propose the change again with the proposing tool and redeem the new id promptly.",
     "git-execution-failed":
@@ -758,6 +881,8 @@ function governedFailureCoaching(
 const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
   "script-missing": "no such script in package.json",
   "dependencies-unavailable": "dependencies did not install",
+  "native-shell-required":
+    "the isolated verifier cannot install dependencies for this host; run this check in your own shell",
   denied: "denied by policy",
   cancelled: "cancelled",
   skipped: "skipped",
@@ -800,10 +925,47 @@ const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
     "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
 };
 
+// An unstage proposal is refused for its own reasons (#3902 AC2).
+const UNSTAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
+  "selection-unreviewed":
+    "At least one requested path has no staged change Git lists for this worktree: it is unstaged only, unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as staged and not conflicted.",
+  "proposal-limit":
+    "Too many stage and unstage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+};
+
+// A task branch Keiko refused, with the one step that is the model's to take (#3907).
+const BRANCH_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
+  "invalid-name":
+    "That is not a branch name Keiko will create. Use a short name of letters, digits, '-', '_', '.' and '/', such as feature/short-description, without spaces or '..', and not starting with '-'.",
+  "protected-name":
+    "Keiko never creates or commits on a protected branch such as main or dev. Choose a new task branch name such as feature/short-description.",
+  "branch-exists":
+    "A branch with that name already exists at a different commit (or is the current branch). Choose a new name; Keiko never moves, resets or deletes an existing branch.",
+  "not-on-base":
+    "This run already works on its own task branch, so no further branch is created. Continue on it: stage, verify and commit there.",
+  "not-local-checkout":
+    "Keiko creates a task branch only in a Local checkout that stands on its base branch. This run's workspace is not one, so keep working here and report the result to the operator.",
+  "executable-filters":
+    "This checkout has executable Git filters, so Keiko will not switch its branch. Report to the operator that a task branch must be created outside Keiko.",
+  "authority-denied":
+    "The run's authority no longer covers this step. Report this blocker; do not retry or route around it.",
+  "policy-block":
+    "The repository's Git policy does not allow this branch to be created. Report this blocker to the operator.",
+  "preflight-block":
+    "Git reports a repository condition that blocks the branch (for example a merge in progress). Read keiko_git_status, resolve nothing yourself, and report the blocker.",
+};
+
+function branchGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
+  if (result.kind !== "branch") return {};
+  const guidance = result.status === "blocked" ? BRANCH_BLOCKED_GUIDANCE[result.reason] : undefined;
+  return guidance === undefined ? {} : { guidance };
+}
+
 function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
+  const table = result.kind === "unstage" ? UNSTAGE_BLOCKED_GUIDANCE : STAGE_BLOCKED_GUIDANCE;
   const guidance =
-    result.kind === "stage" && result.status === "blocked"
-      ? STAGE_BLOCKED_GUIDANCE[result.reason]
+    (result.kind === "stage" || result.kind === "unstage") && result.status === "blocked"
+      ? table[result.reason]
       : undefined;
   return guidance === undefined ? {} : { guidance };
 }

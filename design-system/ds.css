@@ -354,9 +354,13 @@ a {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  transition:
-    border-color 0.14s,
-    transform 0.14s;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .hub-card {
+    transition:
+      border-color 0.14s,
+      transform 0.14s;
+  }
 }
 .hub-card:hover {
   border-color: var(--accent-line);
@@ -736,11 +740,11 @@ a {
     padding-left: 0;
     background: #fff;
   }
-  .nav,
-  .skip-link,
-  .theme-toggle,
-  .theme-control {
-    display: none !important;
+  .ds .nav,
+  .ds .skip-link,
+  .ds .theme-toggle,
+  .ds .theme-control {
+    display: none;
   }
   .main {
     max-width: none;

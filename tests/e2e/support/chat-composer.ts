@@ -15,11 +15,11 @@ export async function openChatComposer(page: Page): Promise<void> {
   const reload = page.getByRole("button", { name: "Reload Keiko", exact: true });
   await expect(newChat.or(reload)).toBeVisible({ timeout: 30_000 });
   if (await reload.isVisible()) {
-    const reloaded = page.waitForEvent("load");
     await reload.click();
-    await reloaded;
     // The reload restores the Chat History window the workspace persisted; that restore is part
     // of the recovery, so the helper never reopens (and thereby toggles) the window itself.
+    // The actionable New button and composer below prove recovery. A document load event can
+    // remain pending on unrelated resources even after those controls are ready.
   }
   await newChat.click();
   await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();

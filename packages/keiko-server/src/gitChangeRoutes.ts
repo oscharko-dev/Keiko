@@ -1,3 +1,4 @@
+import { interruptChangedChatGenerations } from "./chat-turn-serializer.js";
 // Issue #3400 (epic #3384): connect a Git change to Chat for iterative pull-request description
 // refinement. Two mutating routes:
 //
@@ -678,6 +679,7 @@ function persistConnectedScope(
     captured.prNumber,
     now,
   );
+  const previous = deps.store.findChatById(chatId);
   let chat: Chat;
   try {
     // Appends against the list as it is at write time, not against the array captured before
@@ -697,6 +699,7 @@ function persistConnectedScope(
     }
     throw error;
   }
+  interruptChangedChatGenerations(deps, previous, chat, correlationId);
   logGitChangeConnected(deps, correlationId, scope);
   const result: GitChangeConnectResponse = { status: "connected", scope, chat };
   return { status: 200, body: result };
@@ -890,11 +893,13 @@ function persistStaleScope(
     ),
     descriptionStatus: "stale",
   };
+  const previous = deps.store.findChatById(chatId);
   const committed = replaceStaleScope(deps, workspaceId, chatId, found, staleScope);
   if (!("chat" in committed)) {
     logGitChangeBlocked(deps, correlationId, "relationship-conflict");
     return committed;
   }
+  interruptChangedChatGenerations(deps, previous, committed.chat, correlationId);
   logGitChangeStale(deps, correlationId, staleScope);
   const result: GitChangeRefreshResponse = {
     status: "stale",

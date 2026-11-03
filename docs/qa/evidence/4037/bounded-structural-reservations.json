@@ -1,0 +1,291 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "ae7b49dc07cfa83874141236f287707128fbe539",
+  "classification": "Scoped failure-first structural search reservation repair; no full skill, native/UI, epic or release acceptance.",
+  "repair": [
+    "Reserve at most the remaining existing search-call grant rather than charging an oversized optional structural batch that never executes.",
+    "Initial anchor queries then bounded follow-up queries share that exact admitted batch prefix; clipped work retains budget uncertainty.",
+    "Retain conservative search-reservation accounting and separate observed index/structural work counters. No prompt, model, skill, scoring floor, scope or grant change."
+  ],
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "6e281ea1b31b30036d5c65dc6b32286280db5ceb442c543f52b543b81dd07bdc"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "abb471204842620dd11b7ac39485708151a995b94769ee14b3766380b1859050"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "5945f78954cc1eb0e6b236019d58c0b7bbc76a9c9795782513681916b7048276"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "7ff6e5f4412a088d732b7b2efbdf95a708e97c96454708252d4306fc9e281a02"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-completion-cap.activity-log.test.ts",
+      "sha256": "a11842171d7e7ed5087906ded9977de47382b46ed58e808d0c29690076195889"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-orchestrator.ts",
+      "sha256": "6b171282506ec2db6f8130bb71409c15d7564103e3a476e4f8711c5ee6bd2509"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-structural-reservation.test.ts",
+      "sha256": "907557070732b7abd5d47e49fa14c9680c09017a7e8c0def080eda27a3d6b1b3"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-structured-folder-referents.native-http.test.ts",
+      "sha256": "3dad81f109ead11c3afba66b466d7aee664f07ef703fcd6512ec46fa8d44888e"
+    }
+  ],
+  "freeze": {
+    "sourceSha256": "4631f7b0551d29eb75860add2f3e0867cd2421196c25cf237b56934916ab4535",
+    "compiledSha256": "2fb78221bfb8c03ad07000f48e7f96e0fce39f386e820fe0c062634782bc793e"
+  },
+  "causalRegression": {
+    "before": {
+      "passedHealthyZeroGrant": 1,
+      "failedCurrentSourceCases": 2,
+      "reportSha256": "75d01a2a565b8e9ae30327940d0ea9613eea8707413e74d57f93d6b83e057fe8"
+    },
+    "focusedAfter": {
+      "passed": 11,
+      "notExecutedUnderNameFilter": 186,
+      "unchangedExistingBoundaryPins": true
+    }
+  },
+  "affectedGroundedTests": {
+    "passed": 2797,
+    "failed": 0,
+    "skipped": 1,
+    "reportSha256": "f29ffe2f35c759d91aae7cc4c90e750f1fdc1266dc477185c9a76b0055736171"
+  },
+  "affectedCoverage": {
+    "classification": "Grounded orchestrator only; not repository-wide coverage.",
+    "linesPercent": 96.92,
+    "branchesPercent": 88.53,
+    "reportSha256": "bf990dde8905bb487c1284705f16bff2855ada6cca65089329d8603f89836f24"
+  },
+  "localChecks": [
+    {
+      "label": "checkpoint83b-activity-v1",
+      "sha256": "ed745e4d401f66ef8200f539f97f9bb5bf0d41bec5c00a45104592629933866d",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-typecheck-final-v1",
+      "sha256": "c3743229017f74c3747590bd75ab08e7506a0a6229e8b4abf36e6f5a4a70e22b",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83-reservation-green-v3",
+      "sha256": "dca693f11f47461f52cc808b05fd03940919cbcf1be4c29c05acbe0b07fee8ff",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-lint-v1",
+      "sha256": "058da4d8dcf07d6582271d84dcf85b29587139dd3a75a25db8b99a8b88a533d7",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-format-v1",
+      "sha256": "60d6a502a4ac6f232032def495528ebaf348a88fc6f7655a158831973ad58109",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-retrieval-v1",
+      "sha256": "bebb13245d10b47ae86f2a786008ab91e1043f548be3c10b2915c3577973607e",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-grounded-v1",
+      "sha256": "f567fb8b4e4260bdde7d0462ce98a2c6a413e64e5f421c48691da10ed2bb46aa",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-faithfulness-v1",
+      "sha256": "d05f08a283082766bfbd05dd7dea55c0eb82c6a9811bd77e4b7a7cc390a278c4",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-context-v1",
+      "sha256": "1708fa0e59d82bda3b3acba29c614861bc80ca0f5eecbdcc232b7ca58f41e42c",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-observability-v1",
+      "sha256": "ace7db7babc520ff735d0604c1a3b6257c1e8c627b5f9971428a04ecaabd4387",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-adr-v1",
+      "sha256": "8c4c32f4840a635ac50050b142a28e141f41be07ea1e1f649ed86f73b9b6f04d",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-sonar-v1",
+      "sha256": "7e4baef550544054bd3aeaff10ebc11f30e779a9d4c8eacee0ee2e05f72c7b77",
+      "exitCode": 0
+    },
+    {
+      "label": "checkpoint83b-final-affected-coverage-v1",
+      "sha256": "429217ea7be117c17fb20f9acec244a059b5b1abdd9e4b641aae327288c5858d",
+      "exitCode": 0
+    }
+  ],
+  "independent": {
+    "classification": "Same original and renamed feedback, source files and16-call grant; no model call or changed prompt.",
+    "published82FileCount": 3,
+    "candidate83FileCount": 7,
+    "completeImplementationAndSupportFilesVerified": true,
+    "sourceRows": 7578,
+    "compiledRows": 6645,
+    "grantCases": [0, 1, 2, 3, 8, 16],
+    "scopeAndCancellationControls": true,
+    "actualContentPortAndLogCountsAgree": true,
+    "evidence": [
+      {
+        "label": "context-candidate-83b-independent/capture.json",
+        "sha256": "5d85f0ea0bc51f449be8d1ee37306fdbee00e8e24a50b816b0a5f14c0db114a5"
+      },
+      {
+        "label": "followup-context-v2-published82.json",
+        "sha256": "7259dc7a812dd1445e6b6b0f6da8a447f71fc87bd53f5a4618c94040a565bf48"
+      },
+      {
+        "label": "followup-context-v2-candidate83b.json",
+        "sha256": "c085717fbe7707954aabacd6f4cf654aa0ce7837ee2292af6d477b7623987c18"
+      },
+      {
+        "label": "followup-admission-v2-published82.json",
+        "sha256": "6681aef2d418991f940faf405817365b6e26906a2717f0c2c7a2e53836c23165"
+      },
+      {
+        "label": "followup-admission-v2-candidate83b.json",
+        "sha256": "714a70d661d717f4a0efe357cc4ff5575951ce6021a264585ccd2876465b7ae6"
+      },
+      {
+        "label": "followup-actual-admission-candidate83b.json",
+        "sha256": "83d145b15127953e46c93ec8c7c26cac93625b6ed0af74585f354f263a21c1cf"
+      },
+      {
+        "label": "context-candidate-83b-independent/finite-causal-final.json",
+        "sha256": "3b20cc80d860745567714ec4d287deeb4dc9557838b7aad8de329278b9c5c50b"
+      }
+    ]
+  },
+  "retainedIntermediateFailures": [
+    {
+      "label": "checkpoint83-activity-v1",
+      "exitCode": 1,
+      "reason": "Generated emitter source-line inventory drift:95registry tests passed,2failed. Canonical generator then full aggregate pass; no changed registration schema.",
+      "receiptSha256": "7dcf42cb15c5c1bb50883635ce31405f465766e08c2a686c25700582ab77ff73"
+    },
+    {
+      "label": "checkpoint83-reservation-green-v1",
+      "shellExitCode": 127,
+      "reason": "Unquoted shell alternation prevented the intended boundary selection; not accepted as verification. Correct structured argument is retained in green-v2/v3."
+    },
+    {
+      "label": "checkpoint83-final-affected-coverage-v1",
+      "passed": 2793,
+      "failed": 2,
+      "existingSkipped": 1,
+      "receiptSha256": "c7825399f8e526d29d852a2687adc979ba07be80f3c0b1e1dfe14471a5e9c1b9",
+      "disposition": "Old facade scheduling and phantom-exhaustion fixture assumptions; both strict pins relocated and causally challenged without discarding freshness or log integrity."
+    },
+    {
+      "label": "checkpoint83b-typecheck-v1",
+      "exitCode": 1,
+      "reason": "New test-helper framework metadata was undefined; corrected to the existing unknown enum member.",
+      "receiptSha256": "9e981e64f31f277fe826f91b8830e10360558a155c4df0ac5966d8721f52fff0"
+    },
+    {
+      "label": "checkpoint83b-regressions-v1",
+      "receiptSha256": "6de9cbe8872ae64226b59d52db9db14a8aadee02b7ade140b7845c0ac4d6680f",
+      "acceptanceCredit": false
+    },
+    {
+      "label": "checkpoint83b-regressions-v2",
+      "receiptSha256": "e1f03e208de7f36ad71a5131f8a530eec20dbed2aa6ab749d1c4c3fb79105c2d",
+      "acceptanceCredit": false
+    },
+    {
+      "label": "checkpoint83b-regressions-v3",
+      "receiptSha256": "5dcf6efcf55289e6b017d4049576963525f1c8481fbb94852904386e19d673ef",
+      "acceptanceCredit": false
+    },
+    {
+      "label": "checkpoint83b-regressions-v4",
+      "receiptSha256": "ddd4bb678d8557885649cf417eb0d38a39708570e6768b960a19a420d466db21",
+      "acceptanceCredit": false
+    },
+    {
+      "label": "checkpoint83b-stale-precondition-v1",
+      "receiptSha256": "ea36196f444a4b4a67d77a870a999f84f1651e12d58083590e81fec16ff3b4d4",
+      "acceptanceCredit": false
+    },
+    {
+      "label": "checkpoint83b-native-queue-precondition-v1",
+      "receiptSha256": "caae357e6ba5a5ec79116756dc71f451405b86b30ee3d33619177063d50e236d",
+      "acceptanceCredit": false
+    }
+  ],
+  "remainingHolds": [
+    "Inferred malformed plain-text JSON and unified-diff privacy/preservation.",
+    "Vendor dependency closure and remaining browser/native updater/source/history acceptance.",
+    "React and untouched-task skill qualification; original failures are retained.",
+    "Final exact-head local and required CI checks, evidenced review settlement and verified authorized integration."
+  ],
+  "pinRelocation": {
+    "classification": "Original strict assertions retained at the owners that exercise them; native stale-history/current-source checks strengthened.",
+    "runtimeByteIdenticalTo83a": true,
+    "compiledRowsByteIdenticalTo83a": true,
+    "nativeQueuedCurrentRead": {
+      "priorHintRemainsStale": true,
+      "staleQueuePriorityPreserved": true,
+      "currentReturnedLines": [1, 2],
+      "physicalFacadeReads": 1,
+      "freshContentCitationAndContinuityAsserted": true
+    },
+    "isolatedFallback": {
+      "originalExactOutsideRangeThenDefaultAssertionRetained": true,
+      "usesActualPersistedHintAndShortenedFile": true,
+      "fallbackDisabledControlFails": true
+    },
+    "logEvidence": {
+      "originalTwoPersistedCompletionsIntegrityAndNoTruncationRetained": true,
+      "originalBudgetSkipAssertionRetainedUnderActualOneSearchExhaustion": true,
+      "observationDisabledControlFails": true
+    },
+    "independentCausalControlSha256": "3b20cc80d860745567714ec4d287deeb4dc9557838b7aad8de329278b9c5c50b"
+  },
+  "reactFirstFeedbackRound": {
+    "classification": "Completed first feedback round on frozen77; not exhaustion of the maximum-two-feedback-turn cap, not plateau or untouched-task acceptance.",
+    "completedCases": 12,
+    "perGroup": 6,
+    "correctSubject": {
+      "skillPassed": 3,
+      "controlPassed": 4
+    },
+    "correctSubjectAndConventions": {
+      "skillPassed": 3,
+      "controlPassed": 1
+    },
+    "eligibleUnspentSecondFeedbackTurns": 8,
+    "originalFirstDraftsPassedPerGroup": 0,
+    "pairedReportSha256": "7d9be0dc50a90398e7fa6df173c217326ec8a2494bd5cf4b9d36c361c976438f",
+    "conventionsReportSha256": "1a6693d279ff529d6ae2d916444964b12c39ed84cc2be9c711bb0522bf4c2a82",
+    "finalization": {
+      "status": "completed",
+      "drain": "fulfilled",
+      "close": "fulfilled"
+    },
+    "generatedFilesModified": false,
+    "mutationFeedback": false,
+    "budgetChanges": false
+  }
+}

@@ -195,6 +195,19 @@ system message as an attributed continuity block; it is not a fabricated user in
 Summary fitting counts the complete serialized system message, including its wrapper. The latest
 request stays unchanged. If mandatory context cannot fit, the call fails closed before generation.
 
+Explicit **Compact context now** maintenance summarizes the entire eligible stored conversation
+in one pass, using the same structured summary and protected context rules. Its target is bounded
+by the model's conversation capacity, not a repeatedly shrinking fraction of the remaining history.
+The action is unavailable until new eligible messages exist and at least 50% of the conversation
+capacity is occupied. A completed checkpoint leaves no eligible tail, so repeated requests and
+reopening the control cannot shrink it again. Connected sources and protected Skills remain
+unchanged. Automatic maintenance still starts at 90% before request dispatch and targets 70%; a
+grounded chat applies these thresholds to its dedicated conversation lane. Existing body-free
+`chat.context.management` events report the saved tokens or an unchanged result.
+The context meter keeps metrics, savings and the action visible, with concise explanations in a
+collapsed disclosure. Expanding or collapsing it emits the corresponding closed activity on the
+existing body-free `client.composer.activity` operation.
+
 The validated `ContextCompactionRecord` contains structured continuity fields and source spans.
 `tokensBefore` counts the removed provider messages; `tokensAfter` counts the incremental cost of
 the embedded summary over the original system message. Their difference equals the complete
@@ -655,3 +668,21 @@ caller to opt in by threading a profile.
 ## Date
 
 2026-06-23
+
+### Jira tool pairs in ordinary Chat context (#4091 / #4081)
+
+The persisted human turn is the atomic history-selection unit for its tool exchanges. Verbatim
+context expands it into the original user message and matching assistant/tool pairs; token accounting
+includes those exchanges. Existing compaction summarizes an entire older unit or retains its complete
+pairs. Interrupted observations receive a closed unavailable/unknown result in context, never an
+invented success or a request to repeat the action. The existing history allocator and continuity
+checkpoint owner remain authoritative; transcript changes invalidate the same history revision.
+
+
+Ordinary Jira Chat uses one invocation loop for buffered and SSE delivery. SSE tool
+rounds are retained until the completed gateway response identifies a tool invocation
+or final answer; final text still traverses the existing streaming redaction and
+backpressure owner. A bounded `tool-read-consent` event exposes only the public read
+grant. Buffered clients observe the exact scoped canonical turn through the existing
+message GET and cannot resume execution or grant consent through polling. Both
+transports use the authenticated consent decision route and cumulative turn budgets.

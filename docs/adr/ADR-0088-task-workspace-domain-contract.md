@@ -102,6 +102,20 @@ actual selected local branch. This discriminator excludes the row from managed w
 health, reconciliation, repair, and cleanup. Local selection and activation use the shared stores
 and content-free evidence adapter; they do not create or maintain a managed worktree.
 
+**Folder workspace (owner decision, 2026-10-30).** The Coding Workbench works in any folder, as
+standalone OpenCode does. An ordinary registered folder that is not a Git repository is bound in
+place as `workspaceKind: "folder"` with `executionLocation: "local"`, so every Local-aware consumer
+(inventory filters, reconciliation, health, cleanup, root access) treats it like a Local checkout. It
+carries no branch and no HEAD: `baseBranch` and `taskBranch` hold the reserved spelling
+`FOLDER_WORKSPACE_BRANCH` (it contains a space, so it is never a valid ref name and no repository
+workspace may use it), `gitdirIdentity` is the folder's filesystem identity and `lastVerifiedHead` is
+`folderWorkspaceHead(gitdirIdentity)`. `validateWorkspaceInstance` enforces that shape and rejects the
+reserved spelling on a repository workspace; the store derives the kind from it, so no column is added.
+The identity is the directory's device and inode, so a folder replaced under the same path is a
+different workspace and the bound pointer fails closed. `POST /api/task-workspaces/folder` selects
+it; the server refuses a folder that is a Git repository (a `.git` entry or a readable HEAD) and
+logs the selection on `task-workspace.lifecycle` with `workspaceKind: "folder"`.
+
 The module defines eight entities. All schema-versioned objects carry `schemaVersion:
 TASK_WORKSPACE_SCHEMA_VERSION = "1"`.
 

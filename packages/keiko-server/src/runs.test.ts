@@ -7,6 +7,8 @@ import {
 } from "./runs.js";
 import { QueueEventSink } from "./sink.js";
 
+const REVIEWED_DIFF = "--- /dev/null\n+++ b/tests/a.test.ts\n@@ -0,0 +1 @@\n+export {};\n";
+
 function reg(now: () => number, maxActiveRuns = 2, terminatedTtlMs = 1000): RunRegistry {
   return createRunRegistry({ now, maxActiveRuns, terminatedTtlMs });
 }
@@ -87,6 +89,7 @@ describe("run registry completion capture", () => {
         kind: "unit-tests",
         payload: { workspaceRoot: "." },
         limits: undefined,
+        reviewedPatch: { diff: REVIEWED_DIFF },
       },
     );
     const record = registry.get("a");

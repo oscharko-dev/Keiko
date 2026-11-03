@@ -90,6 +90,42 @@ describe("portable release-trust workflow", () => {
     );
   });
 
+  // OpenCode's glob/grep tools run ripgrep (#3897). The stager refuses to build a payload without
+  // the digest-verified binary, so every stage job must provision it first and prove the staged
+  // copy runs before anything downstream trusts the artifact.
+  it.each([
+    ["stage", "${{ matrix.platform_target }}"],
+    ["stage-linux-manual", "linux-x64"],
+    ["stage-linux-production", "linux-x64"],
+  ])("provisions and functionally smokes the pinned ripgrep in %s", (jobName, target) => {
+    const steps = workflowJob(jobName).steps;
+    const indexOf = (name) => steps.findIndex((step) => step.name === name);
+    const provision = indexOf("Provision the pinned ripgrep runtime");
+    const prepare = indexOf("Prepare approved sidecar payloads");
+    const smoke = indexOf("Functionally smoke the staged ripgrep executable");
+    const usearchSmoke = indexOf("Functionally smoke the staged USearch addon");
+    const launchSmoke = indexOf("Smoke test the staged artifact");
+    expect(steps[provision].run).toBe("npm run provision:ripgrep");
+    expect(steps[provision].if).toBeUndefined();
+    expect(provision).toBeGreaterThan(-1);
+    expect(provision).toBeLessThan(prepare);
+    expect(steps[smoke].run).toBe(
+      `node scripts/smoke-portable-ripgrep.mjs .portable-runtime/staging/${target} ${target}`,
+    );
+    expect(steps[smoke].if).toBeUndefined();
+    expect(smoke).toBeGreaterThan(usearchSmoke);
+    expect(smoke).toBeLessThan(launchSmoke);
+    // The staging commands, whichever variant a trigger selects, all sit between the two.
+    const stages = steps
+      .map((step, index) => ({ step, index }))
+      .filter(({ step }) => step.run?.startsWith("node scripts/run-portable-assets-stage.mjs"));
+    expect(stages.length).toBeGreaterThan(0);
+    for (const { index } of stages) {
+      expect(index).toBeGreaterThan(provision);
+      expect(index).toBeLessThan(smoke);
+    }
+  });
+
   it("keeps native signing optional and out of the release authority path", () => {
     expect(Object.keys(portableWorkflowDocument.jobs)).toEqual([
       "rehearsal-readiness",

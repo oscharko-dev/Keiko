@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -259,7 +259,13 @@
         <div class="card" style="padding: 24px">
           <div class="canvas-demo">
             <div class="gd"></div>
-            <svg class="conn" viewBox="0 0 600 280" preserveAspectRatio="none">
+            <svg
+              role="img"
+              aria-label="Active connection between Chat and Files"
+              class="conn"
+              viewBox="0 0 600 280"
+              preserveAspectRatio="none"
+            >
               <path class="flow" d="M210 90 C 300 90, 300 175, 390 175" />
               <circle class="port" cx="210" cy="90" r="6" />
               <circle class="port" cx="390" cy="175" r="6" />

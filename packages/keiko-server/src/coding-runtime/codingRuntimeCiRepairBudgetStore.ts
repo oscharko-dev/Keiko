@@ -1,6 +1,9 @@
 import { ciRepairBudgetErrorKind } from "./codingRuntimeCiRepairBudgetTypes.js";
 import type { DatabaseSync } from "node:sqlite";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -157,7 +160,7 @@ function liveDraft(
   read: (runId: string) => CodingRuntimeSnapshot | undefined,
 ): DraftDeliveryRecord | undefined {
   const draft = draftDeliveryLineageRecord(snapshot, read)?.record;
-  if (draft === undefined) return undefined;
+  if (draft === undefined || !isIssueBoundDraftDeliveryRecord(draft)) return undefined;
   return [
     snapshot.terminalAt === undefined,
     new Set(["starting", "ready", "running", "awaiting-approval"]).has(snapshot.state),

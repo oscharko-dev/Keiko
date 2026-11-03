@@ -1,0 +1,175 @@
+{
+  "schemaVersion": 1,
+  "classification": "Implemented browser-approval SERVER CORE with owning controls. Not complete browser-independent UI, real browser, OS restart, SSD, full issue acceptance or merge qualification.",
+  "parentHead": "14946692661e27f55863e18c0e0d0a7e64c19fb5",
+  "issue": 4043,
+  "sources": [
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "bdfe0ee8f1b7ee53baaeda940aab4657244e0982bb2104035d11dd4e952353ef"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "5fd23cd1902c4d9bfde8bbff53b790db253a68f5ceaa4ac9e4dcd2e574bfc8b3"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "0b428cd4bf884bd11e4206673a76c67ea08da24cd1f28e19dec7202ffa909b80"
+    },
+    {
+      "path": "packages/keiko-contracts/src/browser-approval.test.ts",
+      "sha256": "9ae0a831a000f2a72f957a2ece5f7f1736699ecbfaa950d1e9703ba13c425010"
+    },
+    {
+      "path": "packages/keiko-contracts/src/browser-approval.ts",
+      "sha256": "628e20f3e198077b9f32c449ee424480cf6c3d68a2a3ec3f2cd0ef396de896c8"
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-app-session.ts",
+      "sha256": "43acdf547be242c6a4d2761e7260a8ed32191ddf4d8c2bb84fdbd5a3920cdbff"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApproval.test.ts",
+      "sha256": "26f70335fa1bf3b13280c314f463f56506c6c9f6785ecad7c26fc5528b702541"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApproval.ts",
+      "sha256": "cfabd9775c8483b6ab9f4dc4816be6cc1e725334b3ab9b51d6969054812ccaaa"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts",
+      "sha256": "fc72e40e2ae26951b3d2b870dddd6a819ee49e8184c6b8826e2232a9a15529f8"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts",
+      "sha256": "19eadf286b0f62f0b39edbdf5588a6a8448b443ce038b9e5d67db208a95d4cf8"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts",
+      "sha256": "716d858f66441f8694d2d766ac627bff321ff2f962de519dfc4d0fb5fda747ac"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/sessionChannel.ts",
+      "sha256": "263eddfd03afb50a1cbf06ef3b7c4eabab5e097c1ddfbcb66eff595d672407fa"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.browser-approval.test.ts",
+      "sha256": "3127cc3b110c35c8abf0fc7fee10136a90bdc3049de631b1dbd9f22d0ffecb5e"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/sessionRegistry.ts",
+      "sha256": "72ebe0942394f1b140f39a3ccce3ca6527f67fbcb05a8e818df184f6f104082e"
+    },
+    {
+      "path": "packages/keiko-server/src/deps.ts",
+      "sha256": "4c526cfc38af075c74434fec485234ae70f03c4143559e3194c5f827e4c3415b"
+    },
+    {
+      "path": "packages/keiko-server/src/routes.ts",
+      "sha256": "0832ee30f745b5a66658d96251ccc90bd030abc4a2ccc13c30e04515aa93f2c8"
+    },
+    {
+      "path": "packages/keiko-server/src/store/browserApprovals.test.ts",
+      "sha256": "3052b2bdff21e1535f3b4e55501cd5bfeabe5c72ea975d121cd7a05465468e37"
+    },
+    {
+      "path": "packages/keiko-server/src/store/browserApprovals.ts",
+      "sha256": "c5ac531894c5381f0f6dbb782fc2568911b7f91439fc0d49ff220fa4bd87850a"
+    },
+    {
+      "path": "packages/keiko-server/src/store/db.ts",
+      "sha256": "287ef62fba1df78ab1c50d38902a36e17e4d2a4bb0b216c11dbc8178fb4caeb3"
+    },
+    {
+      "path": "packages/keiko-server/src/store/forbidden-fields.test.ts",
+      "sha256": "e6ebc29eb3b39f6073873a5d333affd5a139f9a0d02ecabcbd9d4508f79b5f50"
+    },
+    {
+      "path": "packages/keiko-server/src/store/legacySchemaTestFixture.ts",
+      "sha256": "57a79332134d2a1d1d4a3badbed86419ba82878319b4e6f388371a642312e806"
+    },
+    {
+      "path": "packages/keiko-server/src/store/schema.ts",
+      "sha256": "a320493809caaab45a433c2f05120d1d0c6701d84818e0fc1c450d26001f90ef"
+    },
+    {
+      "path": "packages/keiko-server/src/store/types.ts",
+      "sha256": "4cc524f771c15cc37b83184ad5e7a7d82af488550752a85fb7a01a60544d975a"
+    }
+  ],
+  "sourceManifestSha256": "1258041590f6ef21a2f407f0723660de3d76e7be4f403205b8397933186faa5b",
+  "runtimeOwnership": {
+    "sessionRegistry": "Existing per-BFF registry; approval-bound mint, original absolute expiry, rotation, cookie repair, active-operation release and approval revocation.",
+    "privateStore": "Existing protected UiStore; additive schema45 public identity/approval tables and persisted observation floor. No private key, cookie, proof or bearer persisted.",
+    "routes": "Six bounded routes under the existing app-session cookie family. Existing Host/Origin/CSRF guards plus exact transport Origin on new POSTs. Only an already approved session can approve or revoke.",
+    "logging": "Registered coding-app-session.browser-approval.state on the existing Activity Log, with action, outcome and actual session count only.",
+    "limits": {
+      "pendingRequests": 32,
+      "challenges": 64,
+      "pendingMs": 300000,
+      "challengeMs": 60000,
+      "rememberedMs": 2592000000
+    }
+  },
+  "controls": {
+    "owningSuites": 43,
+    "owningTestsPassed": 858,
+    "httpTestsPassed": 9,
+    "crypto": "Actual Node WebCrypto P256 signatures verified by Node crypto using the shared domain-separated bytes. Not native browser proof.",
+    "http": "Actual mounted BFF, real ephemeral loopback HTTP; test-only injected launcher pairing seam. Protected chat draft save/read succeeds after approval and is refused after revocation.",
+    "restart": "Recomposed production service/registry over the actual SQLite owner; not a real process/browser restart.",
+    "relocation": "Closed and reopened the actual private SQLite store after moving its temporary directory; not SSD qualification.",
+    "causalFindings": [
+      {
+        "case": "known-expiry",
+        "testFile": "packages/keiko-server/src/coding-app-session/browserApproval.test.ts",
+        "testSha256": "26f70335fa1bf3b13280c314f463f56506c6c9f6785ecad7c26fc5528b702541",
+        "beforeSourceSha256": "706b962a8f4e023f984b2237791934aa4466d5fc3d246d77e9de0f83eef7519f",
+        "afterSourceSha256": "cfabd9775c8483b6ab9f4dc4816be6cc1e725334b3ab9b51d6969054812ccaaa",
+        "beforeExitCode": 1,
+        "afterExitCode": 0,
+        "restored": true,
+        "beforeLogSha256": "d621778e8c587fdf14485a58f0f47a736fa7aa59171b6f7eb7b07cf4bb4ff091",
+        "afterLogSha256": "7cef4aecbf12636ebe75bb47eace4f192459a28283073abdadf5fb8a9917eddb"
+      },
+      {
+        "case": "release-observer",
+        "testFile": "packages/keiko-server/src/coding-app-session/sessionRegistry.browser-approval.test.ts",
+        "testSha256": "3127cc3b110c35c8abf0fc7fee10136a90bdc3049de631b1dbd9f22d0ffecb5e",
+        "beforeSourceSha256": "43f52ac6dd5625305ac3e7f942f2ffb30dd5f5726cd5b8db533b93aab6603fcb",
+        "afterSourceSha256": "72ebe0942394f1b140f39a3ccce3ca6527f67fbcb05a8e818df184f6f104082e",
+        "beforeExitCode": 1,
+        "afterExitCode": 0,
+        "restored": true,
+        "beforeLogSha256": "582560ce56ecb1fc18f2df4807ea6fc6f891380aa2382472308e656d6bab7dfc",
+        "afterLogSha256": "a0385bb612ed5a3f124ea9ad4aa3c71a8b065f0864244fc07fb16a55740b7ec8"
+      }
+    ],
+    "finalKnownExpiryCounts": {
+      "beforeFailed": 1,
+      "beforeHealthy": 14,
+      "afterPassed": 15
+    },
+    "finalReleaseObserverCounts": {
+      "beforeFailed": 1,
+      "beforeHealthy": 10,
+      "afterPassed": 11
+    },
+    "independentReview": "Auditor actual-owner checks: persisted-known-expiry7/7; release-first-observer4/4. Scope is those repairs only."
+  },
+  "limitations": [
+    "Requester and approval UI, IndexedDB persistence, and boot/recovery integration remain to implement and qualify.",
+    "Real Chrome/Safari/Firefox, profile, restart and SSD flows remain open.",
+    "Cookies are not isolated by TCP port. Nonextractability and origin-scoped storage do not protect against hostile same-origin script or local origin takeover.",
+    "No protection claimed against privileged OS clock/state tampering or restoration of revoked state from an old database backup.",
+    "Schema45 is forward-only. Packaged updater rollback/state compatibility remains unqualified; no release version or installed-state change is claimed.",
+    "The broader updater, skill benefit, Chat/search, original96, CI/review and merge criteria remain open."
+  ],
+  "retainedFailures": [
+    "Initial test KeyObject return annotation failed strict typecheck and was corrected.",
+    "A direct route import exposed a runtime module cycle. The existing STREAMING sentinel now comes directly from its owning route-outcome module; the bounded reader stays in its original owner.",
+    "The first Activity Log check rejected new bare catches and the temporary reader relocation. The original reader owner was retained; pure URL validation uses URL.canParse, malformed-point handling catches only ERR_CRYPTO_INVALID_JWK, and unexpected cryptographic failures propagate to existing diagnostics.",
+    "Initial generator output used stale compiled failure-class contracts; contracts were rebuilt, the existing failure-class obligations were strengthened and the catalog regenerated with zero violations.",
+    "Both independent expiry findings and all prior failed logs remain retained."
+  ]
+}

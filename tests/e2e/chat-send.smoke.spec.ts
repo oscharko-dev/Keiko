@@ -351,14 +351,7 @@ test("keeps a long private skill preview keyboard-scrollable and accessible @smo
   await expect(preview).toHaveCount(0);
 });
 
-test("applies a selected private skill once across compaction and reload, then removes it @smoke", async ({
-  page,
-  request,
-}) => {
-  const fixture = await openFixtureComposer(page, request);
-  await page.goto(`/${editorM11PairingFragment("chat-skills")}`);
-  const composer = page.getByRole("textbox", { name: "Chat message" });
-  await page.getByRole("button", { name: "Skills", exact: true }).click();
+async function uploadAndSelectBoundarySkill(page: Page): Promise<void> {
   const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
   const body = readFileSync(new URL("./fixtures/private-markdown-skill.md", import.meta.url));
   await expect(dialog.getByLabel(/Upload Markdown/)).toBeEnabled();
@@ -376,21 +369,68 @@ test("applies a selected private skill once across compaction and reload, then r
   await selection.click();
   await expect(dialog.getByRole("button", { name: "Active in this chat" })).toBeVisible();
   await dialog.getByRole("button", { name: "Close skills" }).click();
+}
+
+test("restores an open private skill dialog after same-document launcher pairing @smoke", async ({
+  page,
+  request,
+}) => {
+  await openFixtureComposer(page, request);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  const draft = "Review this synthetic reading after restoring the session.";
+  await composer.fill(draft);
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "Skills", exact: true });
+  const unpaired = dialog.getByText(/Open Keiko from its launcher/u);
+  await expect(unpaired).toBeVisible();
+  // Real pairing against the fixture BFF; the existing dialog must recover without navigation,
+  // focus changes, a reload or a second mount. A content-free acknowledgement alone is no proof.
+  await dialog.evaluate((element) => {
+    element.setAttribute("data-pairing-witness", "same-dialog");
+  });
+  await page.evaluate((fragment) => {
+    window.location.hash = fragment;
+  }, editorM11PairingFragment("chat-skills-recovery"));
+  await expect(unpaired).toBeHidden();
+  await expect(dialog).toHaveAttribute("data-pairing-witness", "same-dialog");
+  await expect(page).toHaveURL(/\/$/u);
+  await uploadAndSelectBoundarySkill(page);
+  await expect(composer).toHaveText(draft);
+  await page.getByRole("button", { name: "Send message" }).click();
+  await expect(page.locator('article[data-role="assistant"]').last()).toContainText(
+    "KEIKO_SKILL_ONCE_OK",
+  );
+});
+
+test("applies a selected private skill once across compaction and reload, then removes it @smoke", async ({
+  page,
+  request,
+}) => {
+  const fixture = await openFixtureComposer(page, request);
+  await page.goto(`/${editorM11PairingFragment("chat-skills")}`);
+  const composer = page.getByRole("textbox", { name: "Chat message" });
+  await page.getByRole("button", { name: "Skills", exact: true }).click();
+  await uploadAndSelectBoundarySkill(page);
   const chip = page.getByRole("button", { name: /Synthetic boundary method.*v1/ });
   await expect(chip).toBeVisible();
   await composer.fill(
-    "Review this synthetic reading. " + "The sensor has a missing value. ".repeat(100),
+    "Review this synthetic reading. " + "The sensor has a missing value. ".repeat(400),
   );
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(
     page.locator('article[data-role="assistant"]').filter({ hasText: "KEIKO_SKILL_ONCE_OK" }),
   ).toHaveCount(1);
   await page.getByRole("button", { name: /Conversation context:/ }).click();
-  await expect(page.getByText("Skill instructions (protected)", { exact: true })).toBeVisible();
+  await expect(page.getByText("Skill instructions", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compact context now" })).toBeEnabled();
   await page.getByRole("button", { name: "Compact context now" }).click();
-  await expect(page.getByText(/tokens saved across/)).toBeVisible();
+  await expect(page.getByText(/tokens saved/)).toBeVisible();
+  await expect(page.getByRole("button", { name: "Compact context now" })).toBeDisabled();
   await page.reload();
   await expect(chip).toBeVisible();
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
+  await expect(page.getByRole("button", { name: "Compact context now" })).toBeDisabled();
+  await page.getByRole("button", { name: /Conversation context:/ }).click();
   await composer.fill("Review another synthetic reading.");
   await page.getByRole("button", { name: "Send message" }).click();
   await expect(
@@ -664,7 +704,7 @@ test.describe("native Composer clipboard", () => {
     const source = [
       "export interface Probe { readonly count: number; }",
       ...Array.from(
-        { length: 60 },
+        { length: 300 },
         (_, index) => `export const count${String(index)}: number = ${String(index)};`,
       ),
     ].join("\n");
@@ -702,8 +742,10 @@ test.describe("native Composer clipboard", () => {
     await expect(prompt.getByRole("button", { name: "Apply in editor" })).toHaveCount(0);
     await expect(page.getByText(new RegExp(REPLY_MARKER))).toBeVisible({ timeout: 30000 });
     await page.getByRole("button", { name: /Conversation context:/ }).click();
+    await expect(page.getByRole("button", { name: "Compact context now" })).toBeEnabled();
     await page.getByRole("button", { name: "Compact context now" }).click();
-    await expect(page.getByText(/tokens saved across/)).toBeVisible();
+    await expect(page.getByText(/tokens saved/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "Compact context now" })).toBeDisabled();
     await expect(page.getByText("The context could not be refreshed.")).toHaveCount(0);
     await expectStoredPrompt(
       request,

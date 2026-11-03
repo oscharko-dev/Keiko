@@ -1,3 +1,7 @@
+import {
+  LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
 import { isValidCodingRepositoryGlob } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -204,18 +208,54 @@ async function streamDiscovery(
   }
 }
 
+const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
+  ...LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,
+  ...LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
+]);
+
+const DOCUMENT_SHORTHAND_STEMS: ReadonlySet<string> = new Set(["readme", "contributing"]);
+
+/** Bare document references are distinct from ordinary prose and overview ranking. */
+export function isDocumentBasenameShorthand(stem: string): boolean {
+  return DOCUMENT_SHORTHAND_STEMS.has(stem.toLowerCase());
+}
+
+/** Exact document-name shorthand; paths and extra basename suffixes never match. */
+export function matchesDocumentBasenameStem(path: string, stem: string): boolean {
+  const basename = path.split("/").at(-1)?.toLowerCase() ?? "";
+  const dot = basename.lastIndexOf(".");
+  if (dot < 0) return basename === stem.toLowerCase();
+  return (
+    basename.slice(0, dot) === stem.toLowerCase() &&
+    DOCUMENT_EXTENSIONS.has(basename.slice(dot + 1))
+  );
+}
+
+interface BasenameDiscoveryControl extends StructuralExecutionControl {
+  readonly exactBasename?: string | undefined;
+  readonly documentStem?: string | undefined;
+}
+
+function discoveryPathMatcher(
+  request: WorkspacePathDiscoveryRequest,
+  control: BasenameDiscoveryControl,
+): (path: string) => boolean {
+  const stem = control.documentStem;
+  if (stem !== undefined) return (path) => matchesDocumentBasenameStem(path, stem);
+  const basename = control.exactBasename;
+  if (basename !== undefined) return (path) => path.split("/").at(-1) === basename;
+  return pathMatcher(request);
+}
+
 /** Path-only streaming discovery with bounded results and caller-owned execution control. */
 export async function discoverWorkspacePaths(
   workspace: WorkspaceInfo,
   request: unknown,
-  control: StructuralExecutionControl & { readonly exactBasename?: string | undefined },
+  control: BasenameDiscoveryControl,
   fs: WorkspaceFs = nodeWorkspaceFs,
 ): Promise<WorkspacePathDiscoveryResult> {
   const selected = validateRequest(request);
-  const matches =
-    control.exactBasename === undefined
-      ? pathMatcher(selected)
-      : (path: string): boolean => path.split("/").at(-1) === control.exactBasename;
+  const matches = discoveryPathMatcher(selected, control);
   const retained = new RetainedAtomHeap<WorkspacePathDiscoveryEntry>(
     selected.maxResults,
     (left, right) => compareStrings(left.relativePath, right.relativePath),

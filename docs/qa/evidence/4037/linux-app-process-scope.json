@@ -1,0 +1,287 @@
+{
+  "schemaVersion": 1,
+  "classification": "Linux app-root coordinate and owner-metadata mechanisms only; installed update and final UI acceptance remain open",
+  "sourceParent": "831e18f17269e5e84f1b7a416a280a69fae877fe",
+  "sourceFreeze": {
+    "artifact": "checkpoint53-source-freeze-v4.json",
+    "sha256": "c0bf6cd951d54e7db80c273b2b7f65d75083fee3f9a59cfc58988154960888bf"
+  },
+  "sourceObjects": 45,
+  "sourceLineage": {
+    "v1": {
+      "artifact": "checkpoint53-source-freeze-v1.json",
+      "sha256": "b3b4401c6096d43f1a03dbc7b99dfc2adf18fad0ea7897a67f8d338335db7897"
+    },
+    "v2Delta": "Explicit JSON.parse callback in the Node fixture",
+    "v3Delta": "Seven exact reviewed failure boundaries and seven removed legacy owners",
+    "v4Delta": "Actual persisted heartbeat proof and precise cleanup/observation rationale; all product bytes unchanged from v3"
+  },
+  "implementation": [
+    "An explicit role of the existing Linux launcher supplies a root-only bounded read-only process/metadata channel; no third native artifact is added.",
+    "The BFF selects one immutable outer coordinate before durable writers and locks. Persistent owner/self joins and shared probes use that coordinate. Unknown liveness retains ownership; elapsed age alone never proves a foreign owner dead.",
+    "The already-held root reference, actual sender credentials and closed frames bind requests. Metadata duplicates an already-open root descriptor without reopening a path or reading content, and joins device/inode/mode before existing ownership policy. Every nonlocal UID requires observation, including overflow collisions.",
+    "Failed or delayed lookups permanently retire that port without terminating the healthy app. Existing held-generation containment, STOP deadlines and zero-live proofs remain independent.",
+    "Native SQLite unavailability refuses before durable state instead of replacing the root and losing the selected channel.",
+    "Existing process start/heartbeat evidence exposes closed observation state. The actual native BFF timeout case reads its unavailable heartbeat back from the same active writer using the existing interval test seam; production cadence is unchanged."
+  ],
+  "failureFirst": {
+    "roleBefore": {
+      "failed": 2,
+      "passed": 0,
+      "log": {
+        "artifact": "checkpoint53-process-scope-before.log",
+        "sha256": "212a8a0bfb37510e6cfeab89108bfc67ae891ff82be5efcb056e2f59b02076cb"
+      }
+    },
+    "ownerLockBefore": {
+      "failed": 2,
+      "passed": 50,
+      "log": {
+        "artifact": "checkpoint53-owner-lock-before.log",
+        "sha256": "98e0ad7004e31bb82aecc9fea37c9e190b4dc9ed201eb5b902f08634ee026bb5"
+      }
+    },
+    "filesystemBeforePublished52": {
+      "failed": 4,
+      "passed": 1,
+      "receipt": {
+        "artifact": "checkpoint53-fs-policy-before52.json",
+        "sha256": "6800c995e4df0ad19e10b77a2bfa9958d3463ebbee480ff2e19e83483c172bbb"
+      }
+    },
+    "highBitDecoderBefore": {
+      "failed": 4,
+      "passed": 12,
+      "receipt": {
+        "artifact": "checkpoint53-native-scope-high-bit-before.json",
+        "sha256": "deff1db4aea8f9655e3e5648a6c2467481f8f78d3fd7faaa228e4107e2db952d"
+      }
+    },
+    "healthyAppLookupBefore": {
+      "failed": 1,
+      "passed": 22,
+      "log": {
+        "artifact": "checkpoint53-read-port-isolation-before.log",
+        "sha256": "211a51f654897ed22c3d0bde52d471bbea6f9a16f2b274c134efb671195ed4c6"
+      }
+    }
+  },
+  "verification": {
+    "runs": [
+      {
+        "scope": "Strict whole package graph and root TypeScript",
+        "receipt": {
+          "artifact": "checkpoint53-final-typecheck.json",
+          "sha256": "b74f9d73d54874517b33e29051f18224afe9bdf931317afd29b76d58a6e960b0"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v1.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "All28 changed nongenerated TypeScript/JavaScript source/test files at v1",
+        "receipt": {
+          "artifact": "checkpoint53-final-lint.json",
+          "sha256": "1a199878a21041ef42d1e9fbd6c9030e179535c1a336be4c01d60a58f902989a"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v1.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Full repository formatting at v1",
+        "receipt": {
+          "artifact": "checkpoint53-final-format.json",
+          "sha256": "35296fc6cd884f4717780eb19c82dd4c7223ce70cc9ec89ee4310de58e3e47d8"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v1.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Full pinned Linux ARM compiler/analyzer/kernel gate; all compiler inputs remain byte-identical in v4",
+        "receipt": {
+          "artifact": "checkpoint53-final-native-arm-v2.json",
+          "sha256": "a5bcbe05dd78843f71aaad48c5f485d9289ae6b6d9277815720ec488998a8861"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v1.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Existing macOS compiler/analyzer/boundary checks; no installed Endpoint Security qualification",
+        "receipt": {
+          "artifact": "checkpoint53-final-native-macos.json",
+          "sha256": "998171c7b1fa239b0a384e155c5d04723174dc05428515ad93239efb526a245c"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v1.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Actual built and assembled package/public-export surface;6375 files",
+        "receipt": {
+          "artifact": "checkpoint53-final-package-surface.json",
+          "sha256": "9bf32f1cb31668ec197e5b275a501c4caae0a31d97e69bbc7a0ee98178cedba8"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v1.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "191 affected suites:4429 pass,6 existing skips,0 fail; all product bytes unchanged in v4",
+        "receipt": {
+          "artifact": "checkpoint53-final-units-v3.json",
+          "sha256": "4d247858d73b136fd4bacb3af9f2f37a09c243030f3a193246cf5d5777b49459"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v3.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "All7 complete registered-inventory checks; only explanatory gate strings and Node fixture differ in v4",
+        "receipt": {
+          "artifact": "checkpoint53-final-activity-log-v3.json",
+          "sha256": "2c27682bb77567c60c7f07aa57bc0bbaa01326cbd0ea583342f9072703cfa0fe"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v3.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "22 gate/inventory tests; exemption keys and logic unchanged in v4",
+        "receipt": {
+          "artifact": "checkpoint53-final-gate-tests-v3.json",
+          "sha256": "6b812bc74f9fdd073f1ccacc005514b3542f21e5ae94763b4963cd88051e18b1"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v3.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "25 actual scope controls under UID1000 including real BFF and persisted unavailable heartbeat",
+        "receipt": {
+          "artifact": "checkpoint53-final-scope-arm-v4.json",
+          "sha256": "4d31b80641f927161d04e80471639954198045703f162a1749eaa747f54cc8b6"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Same25 actual controls under UID65534",
+        "receipt": {
+          "artifact": "checkpoint53-final-scope-overflow-v4.json",
+          "sha256": "065106381b58d097e414a426015a46f8c1967496efc03bfb7a04d94b4289b759"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Full failure inventory and12 actual diagnostic sites",
+        "receipt": {
+          "artifact": "checkpoint53-final-failure-paths-v4.json",
+          "sha256": "64020003383558c5b738da0b384d52ddf2a39abad991b0c9ae1e819ba59d6c57"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Final changed Node fixture and exact reviewed-boundary script",
+        "receipt": {
+          "artifact": "checkpoint53-final-lint-v4.json",
+          "sha256": "f567787613803079d9e95278f1506bbd562e0ad71696ab2a12df64aef0b6d086"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Final changed Node fixture and reviewed-boundary script",
+        "receipt": {
+          "artifact": "checkpoint53-final-formatting-v4.json",
+          "sha256": "d4dc74bf41a6ca341ca6a9b8e0e23f2ac41531ed69196e308945ca2c8cc56e1c"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Actual final local analyzer; pinned ShellCheck independently passed",
+        "receipt": {
+          "artifact": "checkpoint53-final-sonar-v4.json",
+          "sha256": "1cd4a335d33c8124eb3ab325404f9ae8efbb4909762a2e5a569c9d516096c462"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      },
+      {
+        "scope": "Pinned ShellCheck v0.11.0 on final changed Linux shell gate",
+        "receipt": {
+          "artifact": "checkpoint53-final-shellcheck-v4.json",
+          "sha256": "6b71ac514d21a186fd3f024d0643fa67a15f3aafb2e73b665bd6b7774cbd2f50"
+        },
+        "sourceFreeze": "checkpoint53-source-freeze-v4.json",
+        "exitCode": 0,
+        "sourceStable": true
+      }
+    ],
+    "kernelFixture": {
+      "image": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+      "architecture": "linux/arm64",
+      "users": ["1000:1000", "65534:65534"],
+      "capabilities": "all dropped",
+      "noNewPrivileges": true,
+      "network": "none",
+      "rootAndRepository": "read-only",
+      "seccomp": "Unconfined only in this declared private kernel fixture; no production fallback or policy widening"
+    },
+    "nativeCompilerObjects": 10,
+    "scopeCasesPerUid": 25,
+    "forcedStopBoundary": "Raw KRC STOP proves containment with root exit137; this is not graceful BFF/UI drain evidence.",
+    "independentCpuControls": {
+      "client": 33,
+      "filesystemPolicy": 25,
+      "metadataProducer": 18,
+      "ownerWait": 15,
+      "scope": "Read-only independent copied-function controls; exact product bodies match final source; no kernel or installed acceptance substitution"
+    },
+    "initialEnvironmentFailure": {
+      "failed": 12,
+      "cause": "Private harness PATH omitted the actual enforcing Docker backend",
+      "correction": {
+        "artifact": "checkpoint53-cli-admission-environment-correction.json",
+        "sha256": "0b7fe761c55c3bb7a596d670549cd187763a5dbe14860a2d3985faca49e8c249"
+      },
+      "result": "All45 targeted CLI tests and all191 broad suites pass with the corrected environment; no planner, fixture or authority change"
+    },
+    "legacyFailureInventory": {
+      "before": 1464,
+      "after": 1457,
+      "addedLegacyEntries": 0,
+      "exactReviewedBoundaries": 7
+    },
+    "retainedFailures": "All initial fixture commissioning, failed analyzer and inventory runs remain retained without pass credit."
+  },
+  "finalVisibleUi": {
+    "status": "required-not-yet-executed",
+    "plan": {
+      "artifact": "final-visible-ui-plan-v1.json",
+      "sha256": "70086a4dc91a09855c578452476c7a7c814acf2f53eda822705c92223f2bb7d8"
+    },
+    "journeys": 6,
+    "boundary": "Real built UI/local model and generated-code execution supplement automated proofs; frozen failed calibration and held-out protection remain intact."
+  },
+  "remaining": [
+    "Initial detached CLI/outer-owner lifetime and complete production admission",
+    "Direct BFF-created coordinator authentication, separate installed-current/running-owner bindings and successor ownership",
+    "Worker/signal and remaining process-coordinate consumers before installed integration",
+    "Real distinct-version updates, graceful drain/restart/abort/recovery/SSD and consecutive updates",
+    "Entitled installed macOS native qualification and authoritative Linux x64 kernel evidence",
+    "Full skill/profile/held-out, browser/search/source, exact-head CI/review and authorized merge acceptance"
+  ],
+  "acceptanceDisposition": "Unchanged; no issue checkbox or original native P1 is closed by these mechanisms."
+}

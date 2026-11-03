@@ -15,6 +15,11 @@ import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagn
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
 export const CODING_WORKBENCH_OBSERVATION_BATCH_MS = 100;
 export const CODING_WORKBENCH_EVENT_STREAM_STALE_MS = 35_000;
+/** Consecutive silent watchdog reconnects after which the stream is reported as failed. */
+export const CODING_WORKBENCH_STREAM_SILENT_RECONNECTS_MAX = 3;
+
+// EventSource.CLOSED: the browser will not reconnect this source by itself.
+const EVENT_SOURCE_CLOSED = 2;
 
 const TERMINAL_STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "succeeded",
@@ -66,6 +71,12 @@ export interface CodingWorkbenchRuntimeStreamHandlers {
     resnapshot: boolean,
   ) => void;
   readonly onError: (error: unknown) => void;
+  /**
+   * The browser is reconnecting an interrupted source by itself. This is a status, not a failure:
+   * `onError` is reserved for a source the browser closed for good, a watchdog that keeps finding
+   * the stream silent, and an unreadable frame.
+   */
+  readonly onReconnecting?: () => void;
   readonly onReset: () => Promise<void>;
 }
 
@@ -94,6 +105,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   private batchTimer: ReturnType<typeof setTimeout> | undefined;
   private watchdogTimer: ReturnType<typeof setTimeout> | undefined;
   private closed = false;
+  private silentReconnects = 0;
 
   public constructor(
     private readonly runId: string,
@@ -123,6 +135,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     this.source = source;
     source.onopen = (): void => {
       if (this.source !== source) return;
+      this.silentReconnects = 0;
       this.armWatchdog();
       this.handlers.onOpen();
     };
@@ -131,7 +144,11 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
       reportClientDiagnostic(
         sseStreamErrorDiagnostic("coding-workbench-runtime", source.readyState),
       );
-      this.handlers.onError(new Error("The runtime event stream is reconnecting."));
+      if (source.readyState === EVENT_SOURCE_CLOSED) {
+        this.handlers.onError(new Error("The runtime event stream was closed."));
+      } else {
+        this.handlers.onReconnecting?.();
+      }
     };
     const receive: EventListener = (event) => {
       if (this.source === source) this.receive(event as MessageEvent<string>);
@@ -165,6 +182,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   }
 
   private readonly receive = (message: MessageEvent<string>): void => {
+    this.silentReconnects = 0;
     this.armWatchdog();
     try {
       const event = parseCodingWorkbenchRuntimeEvent(message.data);
@@ -207,6 +225,7 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
   };
 
   private readonly handleHeartbeat = (): void => {
+    this.silentReconnects = 0;
     this.armWatchdog();
   };
 
@@ -232,6 +251,15 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
 
   private reconnectStaleStream(): void {
     if (this.closed) return;
+    this.silentReconnects += 1;
+    // Once per silent streak: a stream that stays down is reported once, not on every reconnect.
+    if (this.silentReconnects === CODING_WORKBENCH_STREAM_SILENT_RECONNECTS_MAX) {
+      // The same body-free line a failed source reports, so the escalation is on the Activity Log.
+      reportClientDiagnostic(
+        sseStreamErrorDiagnostic("coding-workbench-runtime", this.source?.readyState),
+      );
+      this.handlers.onError(new Error("The runtime event stream stayed silent."));
+    }
     try {
       this.flush();
       this.connect();
@@ -279,6 +307,7 @@ export function useCodingWorkbenchRuntimeEventStream(
           onEvents: (events, cursor, resnapshot) =>
             handlersRef.current.onEvents(events, cursor, resnapshot),
           onError: (error) => handlersRef.current.onError(error),
+          onReconnecting: () => handlersRef.current.onReconnecting?.(),
           onReset: () => handlersRef.current.onReset(),
         },
         { staleAfterMs },

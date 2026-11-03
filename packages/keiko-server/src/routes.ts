@@ -18,6 +18,10 @@ import {
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  KEIKO_UI_LAUNCH_ID_ENV,
+  isKeikoUiLaunchId,
+} from "@oscharko-dev/keiko-contracts/runtime/ui-launch";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentActivityLogReadiness } from "@oscharko-dev/keiko-activity-log";
@@ -74,6 +78,18 @@ import {
   handleSendDesktopChat,
 } from "./chat-handlers.js";
 import { handleSendDesktopChatStream } from "./chat-stream-handlers.js";
+import { handleReadChatDraft, handleSaveChatDraft } from "./chat-draft-routes.js";
+import {
+  handleGetMcpSettings,
+  handlePutMcpSettings,
+  handleConnectMcpServer,
+} from "./mcp/mcpSettingsRoutes.js";
+import {
+  handleStartMcpAuthorization,
+  handleMcpAuthorizationStatus,
+  handleCancelMcpAuthorization,
+  handleRevokeMcpAuthorization,
+} from "./mcp/mcpAuthorizationRoutes.js";
 import {
   handleDeleteConversationAttachment,
   handleUploadConversationAttachment,
@@ -126,6 +142,7 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
+import { handleCodingSidecarMcpRelay } from "./coding-sidecar-mcp-relay.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
   handleCodingCodexSubscriptionProfile,
@@ -134,6 +151,7 @@ import {
 import { CODING_CONTEXT_ROUTE_GROUP } from "./coding-context/codingContextRoutes.js";
 import { CODING_RUNTIME_ROUTE_GROUP } from "./coding-runtime/codingRuntimeRoutes.js";
 import { CODING_APP_SESSION_ROUTE_GROUP } from "./coding-app-session/codingAppSessionRoutes.js";
+import { BROWSER_APPROVAL_ROUTES } from "./coding-app-session/browserApprovalRoutes.js";
 import { handleGetUpdatePreflight, handlePostUpdatePreflightCheck } from "./update-preflight.js";
 import {
   handleCancelUpdateSession,
@@ -188,6 +206,7 @@ import {
   handleResumeTaskWorkspace,
   handleSetActiveTaskWorkspace,
   handleSelectLocalCheckout,
+  handleSelectFolderWorkspace,
 } from "./task-workspace/routes.js";
 import {
   handleContainerCapability,
@@ -377,6 +396,7 @@ import {
 import {
   handleCreateAtlassianConnectorCredential,
   handleDeleteAtlassianConnectorCredential,
+  handleUpdateAtlassianConnectorCredential,
   handleListAtlassianConnectorCredentials,
   handleVerifyAtlassianConnectorCredential,
 } from "./atlassian/credentialRoutes.js";
@@ -393,6 +413,8 @@ import {
   handleListAtlassianConnectorActionApprovals,
   handleRejectAtlassianConnectorActionApproval,
 } from "./atlassian/writeActionRoutes.js";
+import { CHAT_READ_CONSENT_ROUTE_GROUP } from "./atlassian/chatReadConsentRoutes.js";
+import { CHAT_WRITE_APPROVAL_ROUTE_GROUP } from "./atlassian/chatWriteApprovalRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
@@ -456,11 +478,13 @@ export interface RouteDefinition {
 // `diagnostics` is additive (#3532): the Activity Log readiness evaluated before this server
 // accepted work, with a live lost-event count. It is a closed, body-free projection — states,
 // reason codes and a count — so a health probe never discloses a path or an error message.
-function health(): RouteResult {
+function health(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  const launchId = deps.env[KEIKO_UI_LAUNCH_ID_ENV];
   const body: HealthResponse = {
     status: "ok",
     version: SDK_VERSION,
     diagnostics: currentActivityLogReadiness(),
+    ...(isKeikoUiLaunchId(launchId) ? { launchId } : {}),
   };
   return { status: 200, body };
 }
@@ -509,6 +533,33 @@ function dispatchGitChangeApplyDescription(
 // two desktop chat routes, desktop terminal JSON routes, and read-only Files widget routes.
 // Terminal byte I/O uses a token-scoped WebSocket upgrade path.
 export const API_ROUTES: readonly RouteDefinition[] = [
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization",
+    handler: handleStartMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/status",
+    handler: handleMcpAuthorizationStatus,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/cancel",
+    handler: handleCancelMcpAuthorization,
+  },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/authorization/revoke",
+    handler: handleRevokeMcpAuthorization,
+  },
+  { method: "GET", pattern: "/api/mcp/servers", handler: handleGetMcpSettings },
+  { method: "PUT", pattern: "/api/mcp/servers", handler: handlePutMcpSettings },
+  {
+    method: "POST",
+    pattern: "/api/mcp/servers/:serverName/connect",
+    handler: handleConnectMcpServer,
+  },
   { method: "GET", pattern: "/api/health", handler: health },
   ...WORKSPACE_MANIFEST_ROUTE_GROUP,
   ...EDITOR_LOCAL_HISTORY_ROUTE_GROUP,
@@ -568,6 +619,22 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/coding-sidecar/tool",
     handler: handleCodingSidecarToolFacade,
   },
+  // #3903 AC3: the MCP Streamable HTTP transport of a relayed remote server, per method.
+  {
+    method: "GET",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
+  {
+    method: "DELETE",
+    pattern: "/api/coding-sidecar/mcp/:relayId",
+    handler: handleCodingSidecarMcpRelay,
+  },
   {
     method: "GET",
     pattern: "/api/coding-workbench/codex-subscription/profile",
@@ -623,6 +690,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/projects", handler: handleDeleteProject },
   { method: "POST", pattern: "/api/repositories/clone", handler: handleCloneRepository },
   { method: "GET", pattern: "/api/chats", handler: handleListChats },
+  { method: "GET", pattern: "/api/chats/:id/draft", handler: handleReadChatDraft },
+  { method: "PUT", pattern: "/api/chats/:id/draft", handler: handleSaveChatDraft },
   { method: "POST", pattern: "/api/chats", handler: handleCreateChat },
   { method: "PATCH", pattern: "/api/chats", handler: handleUpdateChat },
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
@@ -762,6 +831,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/task-workspaces/active", handler: handleGetActiveTaskWorkspace },
   { method: "POST", pattern: "/api/task-workspaces/active", handler: handleSetActiveTaskWorkspace },
   { method: "POST", pattern: "/api/task-workspaces/local", handler: handleSelectLocalCheckout },
+  { method: "POST", pattern: "/api/task-workspaces/folder", handler: handleSelectFolderWorkspace },
   {
     method: "DELETE",
     pattern: "/api/task-workspaces/active",
@@ -1389,7 +1459,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // Issue #2241 (Epic #2238, ADR-0128) — Atlassian connector credential custody. Write-only
   // after creation: create answers authRef + metadata (never the secret), list is metadata-only,
   // delete removes ciphertext + metadata and invalidates the authRef, and verify runs one bounded
-  // probe against the configured base URL returning the closed status union. POST/DELETE inherit
+  // probe against the configured base URL returning the closed status union. POST/PATCH/DELETE inherit
   // the server CSRF + JSON content-type gate.
   {
     method: "GET",
@@ -1400,6 +1470,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/atlassian-connectors/credentials",
     handler: handleCreateAtlassianConnectorCredential,
+  },
+  {
+    method: "PATCH",
+    pattern: "/api/atlassian-connectors/credentials/:authRef",
+    handler: handleUpdateAtlassianConnectorCredential,
   },
   {
     method: "DELETE",
@@ -1639,6 +1714,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.
   ...CODING_APP_SESSION_ROUTE_GROUP,
+  ...BROWSER_APPROVAL_ROUTES,
   // #1989 coding-context intake: governed GitHub/Jira reads behind default-false connector
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
   // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.
@@ -1653,6 +1729,8 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/diagnostics/report/download/:downloadId",
     handler: handleDownloadSupportReport,
   },
+  ...CHAT_READ_CONSENT_ROUTE_GROUP,
+  ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
 ];
 
 interface PreparedRoute {

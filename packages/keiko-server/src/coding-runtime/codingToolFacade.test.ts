@@ -4,6 +4,7 @@ import {
   EDITOR_AGENT_CONFLICT_CODES,
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
@@ -16,6 +17,7 @@ import {
 import {
   createCodingToolFacade,
   codingToolEditPresentation,
+  codingToolVerificationPresentation,
   humanDecisionFeedback,
   humanDecisionToolResult,
 } from "./codingToolFacade.js";
@@ -754,6 +756,179 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "provider-unavailable" }],
       reasonCode: "provider-unavailable",
+      guidance: expect.stringContaining("Retry once") as string,
+    });
+  });
+
+  // Coding Workbench live lab, 2026-10-30: an issue-free run pushed six times and each refusal reached
+  // the model as a bare "failed", so it invented a "remote that is not accessible". Every reason in the
+  // contract's closed vocabulary is forwarded for the delivery action, with the true cause as guidance.
+  it.each(CODING_RUNTIME_DELIVERY_UNAVAILABLE_REASONS)(
+    "forwards the delivery refusal %s to the model with its cause",
+    async (reasonCode) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+      const subject = createCodingToolFacade(ports);
+
+      const result = await subject.execute({
+        body: requestBody({ action: "delivery", intent: "push", phase: "propose" }),
+        capability,
+      });
+
+      expect(result).toMatchObject({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: reasonCode }],
+        reasonCode,
+        guidance: expect.stringMatching(/^.{41,}$/su) as string,
+      });
+    },
+  );
+
+  it.each([
+    ["repository-required", "not a remote or network problem"],
+    ["remote-required", "no 'origin' remote"],
+    ["github-origin-required", "github.com repository"],
+    ["issue-binding-required", "bound to an issue"],
+  ])("tells the model why a delivery is refused: %s", async (reasonCode, cause) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({
+        action: "delivery",
+        intent: "pull-request",
+        phase: "propose",
+        title: "t",
+      }),
+      capability,
+    });
+
+    expect(result).toMatchObject({ guidance: expect.stringContaining(cause) as string });
+    expect(JSON.stringify(result)).not.toMatch(/inaccessible|not accessible/iu);
+  });
+
+  // Coding Workbench Jira lab, 2026-10-30: a Local checkout on `main` had its verified commit blocked
+  // as `protected-branch`, the model saw only the code, tried the pull request and looped until the
+  // run timed out. The blocked commit names the cause and the one step that is the model's: since
+  // the owner decision of 2026-10-31 that is a task branch of its own through keiko_git_branch, and
+  // the operator report stays only as the fallback when that tool refuses too.
+  it("tells the model to create a task branch when a commit is blocked on a protected branch (#3907)", async () => {
+    const digest = "a".repeat(64);
+    const verifiedCommit = {
+      schemaVersion: "1",
+      proposalId: "commit-protected",
+      runId: "run-1",
+      envelopeDigest: digest,
+      runtimeAuthorityDigest: digest,
+      workspaceDigest: digest,
+      repositoryDigest: digest,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: digest,
+      verificationEvidenceId: "verification-1",
+      messageDigest: digest,
+      status: "blocked",
+      reason: "policy-block",
+      blockReason: "protected-branch",
+      recordedAt: "2026-10-30T23:20:00.000Z",
+    };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], verifiedCommit }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+      capability,
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "blocked", blockReason: "protected-branch" },
+      guidance: expect.stringContaining("protected branch") as string,
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+    // It points at the governed tool, keeps the operator report as the fallback, and never hands
+    // the model a raw shell command: the shell keeps refusing `git checkout -b`.
+    expect(guidance).toContain("Create a task branch with keiko_git_branch");
+    expect(guidance).toContain("commit again");
+    expect(guidance).toContain("report to the operator");
+    expect(guidance).not.toMatch(/git (checkout|switch|branch)/u);
+    expect(guidance).not.toContain("does not create or switch branches");
+
+    verifiedCommit.blockReason = "risk-class-ceiling";
+    const other = await subject.execute({
+      body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+      capability,
+    });
+    expect(other).not.toHaveProperty("guidance");
+  });
+
+  // AC3 lab T17 (round I, #3907): the staged candidate had no verification, the governed verifier
+  // could not run on this host and named the shell instead, and the model, reading only
+  // `verification-missing` on each commit, restaged and re-proposed until the deadline. The refusal
+  // now names the one step that is the model's: verify the staged change, then commit again.
+  it("tells the model to verify the staged change when a commit has no verification (#3907)", async () => {
+    const digest = "a".repeat(64);
+    const verifiedCommit = {
+      schemaVersion: "1",
+      proposalId: "commit-unverified",
+      runId: "run-1",
+      envelopeDigest: digest,
+      runtimeAuthorityDigest: digest,
+      workspaceDigest: digest,
+      repositoryDigest: digest,
+      baseSha: "1".repeat(40),
+      parentSha: "2".repeat(40),
+      stagedTreeDigest: digest,
+      verificationEvidenceId: "verification-1",
+      messageDigest: digest,
+      status: "verification-failed",
+      reason: "verification-missing",
+      recordedAt: "2026-10-31T08:30:56.000Z",
+    };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], verifiedCommit }),
+    );
+    const subject = createCodingToolFacade(ports);
+    const propose = (): Promise<unknown> =>
+      subject.execute({
+        body: requestBody({ action: "delivery", intent: "commit", phase: "propose", message: "m" }),
+        capability,
+      });
+
+    const result = await propose();
+    expect(result).toMatchObject({
+      status: "completed",
+      verifiedCommit: { status: "verification-failed", reason: "verification-missing" },
+    });
+    const guidance = (result as { readonly guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("keiko_verification");
+    expect(guidance).toContain("in your shell");
+    expect(guidance).toContain("Do not stage again");
+
+    verifiedCommit.reason = "verification-failed";
+    expect(await propose()).not.toHaveProperty("guidance");
+  });
+
+  it("keeps the delivery vocabulary out of every other action", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "remote-required" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "command", commandId: "test" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "failed" }],
     });
   });
 
@@ -1026,6 +1201,65 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // AC3 lab T19 (#3907): in a repository without package.json the guidance read "add the script"
+  // as an order, and the model added an npm project the task forbade. It now points to the
+  // repository's own command in the shell, which already counts, and rules the manifest out.
+  it("sends a repository without a verifier script to its own command, never to a new package.json", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [{ kind: "test", reason: "script-missing" }],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    const result = await subject.execute({
+      body: requestBody({ action: "verification", verifierId: "unit" }),
+      capability,
+    });
+
+    expect(result).toMatchObject({ reasonCode: "VERIFICATION_NOT_RUN" });
+    const guidance = (result as { guidance?: string }).guidance ?? "";
+    expect(guidance).toContain("or the repository has no package.json at all");
+    expect(guidance).toContain("python3 -m unittest");
+    expect(guidance).toContain(
+      "Never add a package.json or a script only to satisfy this verifier",
+    );
+    expect(guidance).not.toContain("add the script as part of your change");
+  });
+
+  // Keiko 1.3.0 test on macOS (#3897): a check the isolated verifier cannot install for is named
+  // as one to run in the runtime's own shell, and the guidance says that result counts.
+  it("tells the model to run a check its isolated verifier cannot install for in its own shell", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [{ kind: "typecheck", reason: "native-shell-required" }],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: typecheck (the isolated verifier cannot install dependencies for this host; run this check in your own shell).",
+      guidance: expect.stringContaining(
+        "run the repository's own command for that check (its package script, or the tool itself) in your shell, where its result counts as that verification",
+      ) as string,
+    });
+  });
+
   // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
   // (PR #3452 review).
   it("forwards no detail for an empty not-run list", async () => {
@@ -1085,6 +1319,65 @@ describe("CodingToolFacade", () => {
       },
       guidance: expect.stringContaining("keiko_git_status") as string,
     });
+  });
+
+  // #3907: a task branch Keiko refused is a completed Git result with a closed reason, and each
+  // refusal the model can act on carries the one step that is its own.
+  it.each([
+    ["invalid-name", "not starting with '-'"],
+    ["protected-name", "Choose a new task branch name"],
+    ["branch-exists", "never moves, resets or deletes"],
+    ["not-on-base", "Continue on it"],
+    ["not-local-checkout", "Local checkout"],
+    ["executable-filters", "executable Git filters"],
+    ["authority-denied", "Report this blocker"],
+    ["policy-block", "Git policy"],
+    ["preflight-block", "keiko_git_status"],
+  ] as const)(
+    "tells the model what to do about a task branch refused as %s",
+    async (reason, coaching) => {
+      const ports = facade();
+      const git = { kind: "branch", status: "blocked", reason };
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      await expect(
+        subject.execute({
+          body: requestBody({ action: "git", operation: "branch", branchName: "main" }),
+          capability,
+        }),
+      ).resolves.toEqual({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        git,
+        guidance: expect.stringContaining(coaching) as string,
+      });
+    },
+  );
+
+  it("keeps a created task branch, and a failed one, free of guidance", async () => {
+    for (const git of [
+      { kind: "branch", status: "succeeded", reason: "none", branch: "feature/x" },
+      { kind: "branch", status: "failed", reason: "rebind-failed", branch: "feature/x" },
+    ]) {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({ outcome: "completed", evidence: [], git }),
+      );
+      const subject = createCodingToolFacade(ports);
+      await expect(
+        subject.execute({
+          body: requestBody({ action: "git", operation: "branch", branchName: "feature/x" }),
+          capability,
+        }),
+      ).resolves.toEqual({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        git,
+      });
+    }
   });
 
   it("keeps a ready stage proposal free of guidance", async () => {
@@ -1540,6 +1833,8 @@ describe("CodingToolFacade", () => {
     },
     { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "save-then-verify" },
     { commitProof: "unavailable", reasonCode: "unknown-reason", nextAction: "verify-again" },
+    { commitProof: "admitted" },
+    { commitProof: "admitted", blocking: { unstagedCount: 0, untrackedCount: 1 } },
   ])("strips a malformed verification proof payload", async (commit) => {
     const verification = { status: "passed", completed: ["test"], commit };
     const ports = facade();
@@ -1594,6 +1889,14 @@ describe("CodingToolFacade", () => {
       },
     },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "admitted",
+        blocking: { unstagedCount: 0, untrackedCount: 1, unstaged: [], untracked: ["a.json"] },
+      },
+    },
     {
       status: "passed",
       completed: ["test"],
@@ -1939,6 +2242,78 @@ describe("CodingToolFacade", () => {
         extra: { status: "failed", reason: "handler-failed" },
       });
     });
+  });
+});
+
+// #3579: a refused or skipped verification used to read as a failed one in the Workbench timeline,
+// because the card knew only that the tool reported an error. The presentation names, in the
+// contract's closed words, why the call the model received ended as it did.
+describe("CodingToolFacade verification presentation (#3579)", () => {
+  async function presented(delegateOutcome: unknown): Promise<unknown> {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve(delegateOutcome));
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "verification", verifierId: "test" }),
+      capability,
+    });
+    return codingToolVerificationPresentation(result);
+  }
+
+  it.each([
+    ["WORKSPACE_TRUST_REQUIRED", "waiting-for-trust"],
+    ["NO_RUNNABLE_STEPS", "no-runnable-steps"],
+    ["VERIFICATION_NOT_RUN", "not-run"],
+    ["VERIFICATION_FAILED", "failed-check"],
+  ] as const)("presents the refusal %s as %s", async (reasonCode, verificationOutcome) => {
+    await expect(presented({ outcome: "failed", reasonCode })).resolves.toEqual({
+      verificationOutcome,
+    });
+  });
+
+  it("presents a completed verification as passed, with or without commit proof", async () => {
+    const passed = { status: "passed", completed: ["test", "lint"] };
+    await expect(presented({ outcome: "completed", verification: passed })).resolves.toEqual({
+      verificationOutcome: "passed",
+    });
+    await expect(
+      presented({
+        outcome: "completed",
+        verification: {
+          ...passed,
+          commit: {
+            commitProof: "unavailable",
+            reasonCode: "candidate-drift",
+            nextAction: "verify-again",
+          },
+        },
+      }),
+    ).resolves.toEqual({ verificationOutcome: "passed" });
+  });
+
+  // A timeout, a resource ceiling, a refusal before the runner and a bare failure claim no more
+  // than the card's generic failure; an unknown code and every non-failed status present nothing.
+  it.each([
+    { outcome: "failed", reasonCode: "VERIFICATION_TIMED_OUT" },
+    { outcome: "failed", reasonCode: "VERIFICATION_RESOURCE_EXCEEDED" },
+    { outcome: "failed", reasonCode: "VERIFICATION_RUNNER_UNAVAILABLE" },
+    { outcome: "failed", reasonCode: "PROJECT_NOT_FOUND" },
+    { outcome: "failed", reasonCode: "verification-authority-revoked" },
+    { outcome: "failed", reasonCode: "RAW_PROVIDER_SENTINEL" },
+    { outcome: "failed" },
+  ])("presents no outcome for %j", async (delegateOutcome) => {
+    await expect(presented(delegateOutcome)).resolves.toEqual({});
+  });
+
+  it("presents no outcome for a completed result that carries no verification", () => {
+    expect(
+      codingToolVerificationPresentation({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      }),
+    ).toEqual({});
+    for (const status of ["denied", "cancelled", "timeout", "busy"] as const) {
+      expect(codingToolVerificationPresentation({ status, evidence: [] })).toEqual({});
+    }
   });
 });
 

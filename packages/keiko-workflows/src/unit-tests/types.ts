@@ -77,6 +77,16 @@ export interface UnitTestWorkflowInput {
   readonly modelId: string;
   // Per-workflow resource limits. Defaults to DEFAULT_WORKFLOW_LIMITS.
   readonly limits?: Partial<WorkflowLimits> | undefined;
+  // The patch a human reviewed in the dry run, exactly as its report showed it (#4025 AC4). With
+  // `apply`, the workflow validates and writes this diff through the same guards and never calls
+  // the model; without `apply` it is ignored. Only the server's gated apply route sets it.
+  readonly reviewedPatch?: ReviewedTestPatch | undefined;
+}
+
+export interface ReviewedTestPatch {
+  readonly diff: string;
+  readonly coveredBehavior?: string | undefined;
+  readonly knownGaps?: string | undefined;
 }
 
 export interface UnitTestWorkflowDeps {

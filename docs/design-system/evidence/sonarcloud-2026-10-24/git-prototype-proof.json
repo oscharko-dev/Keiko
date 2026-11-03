@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 1,
+  "baselineRevision": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "file": "design-system/git-window.html",
+  "sourceSha256": "fff5aab41a75c63136523f28e746df647456ee78c5660941bd58ebbc52cc34c3",
+  "harnessSha256": "32cc6055305b35f1a5894f6e11692eebfa32c33ae61305448334fdc6538d529f",
+  "fixtureHtmlHelperSha256": "da60782f0e78a0ea12d04a77c3722dee22a2e3947f99c7d1a8a472b13ab276fd",
+  "stylesheetSources": [
+    {
+      "file": "design-system/keiko-fonts.css",
+      "revision": 0,
+      "sha256": "6c487e130c799b7141882c158cf9ec587ce6b86074aa27b9bd68836702816aaf"
+    },
+    {
+      "file": "design-system/keiko-tokens.css",
+      "revision": 0,
+      "sha256": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d"
+    },
+    {
+      "file": "design-system/keiko-semantic-tokens.css",
+      "revision": 0,
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
+    },
+    {
+      "file": "design-system/keiko-editor-tokens.css",
+      "revision": 0,
+      "sha256": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
+    },
+    {
+      "file": "design-system/ds.css",
+      "revision": 0,
+      "sha256": "535b8a4b6c3fe1a573fb84835be1dc7a3c5db77905a0ea24be92f4909560dfca"
+    },
+    {
+      "file": "design-system/keiko-fonts.css",
+      "revision": 1,
+      "sha256": "6c487e130c799b7141882c158cf9ec587ce6b86074aa27b9bd68836702816aaf"
+    },
+    {
+      "file": "design-system/keiko-tokens.css",
+      "revision": 1,
+      "sha256": "ebb2520ea5c85953b5dca237026e917330884b0e4639f68e93f8d82608a1681d"
+    },
+    {
+      "file": "design-system/keiko-semantic-tokens.css",
+      "revision": 1,
+      "sha256": "aaa597a1d3d28309de222ead883f6a83f05d4ae66747e2d474663c718e3fd845"
+    },
+    {
+      "file": "design-system/keiko-editor-tokens.css",
+      "revision": 1,
+      "sha256": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
+    },
+    {
+      "file": "design-system/ds.css",
+      "revision": 1,
+      "sha256": "6c76abd249c8b668ea8a408ba5d3162519f4f0b40f88c46d5b584d68e9be1a76"
+    }
+  ],
+  "nodeVersion": "v24.18.0",
+  "chromiumVersion": "156.0.8078.4",
+  "states": [
+    "changes",
+    "history",
+    "empty"
+  ],
+  "stateNodeCount": 9,
+  "switcherNodeCount": 1,
+  "accessibleSwitcherGroup": true,
+  "computedValueComparisons": 360,
+  "differences": []
+}

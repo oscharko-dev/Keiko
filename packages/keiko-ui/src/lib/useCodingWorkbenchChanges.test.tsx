@@ -282,6 +282,35 @@ describe("useCodingWorkbenchChanges", () => {
     });
   });
 
+  // PR #4095: after a sign-out the status read is refused, and every later re-read of the same run
+  // (a binding re-check, a re-pair inspection, Retry) reset the explanation to loading. The panel
+  // renders nothing while loading, so the Changes disclosure unmounted and came back collapsed.
+  it("keeps an unavailable explanation while the same run reads its changes again", async () => {
+    const statusGate = deferred<GitRepositoryStatusResponse>();
+    const stub = client({ getStatus: vi.fn(async () => statusFixture([], false)) });
+    const view = renderHook(
+      (input: UseCodingWorkbenchChangesInput) => useCodingWorkbenchChanges(input),
+      { initialProps: { ...baseInput(), client: stub } },
+    );
+    await flush();
+    expect(view.result.current.status).toBe("unavailable");
+
+    view.rerender({ ...baseInput({ bindingPending: true }), client: stub });
+    expect(view.result.current.status).toBe("unavailable");
+
+    stub.getStatus.mockImplementation(() => statusGate.promise);
+    view.rerender({ ...baseInput(), client: stub });
+    await flush();
+    expect(stub.getStatus).toHaveBeenCalledTimes(2);
+    expect(view.result.current.status).toBe("unavailable");
+
+    await act(async () => {
+      statusGate.resolve(statusFixture());
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.result.current.status).toBe("ready"));
+  });
+
   it("selects the fallback file and clears the diff when the previously selected file is removed", async () => {
     vi.useFakeTimers();
     const stub = client();

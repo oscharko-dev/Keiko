@@ -139,6 +139,17 @@ draft always produces the same enhanced prompt and the same scores.
 
 ## Private Markdown skills in Chat
 
+Start Keiko with its desktop launcher or `keiko start`; use `keiko restart` to restart the server.
+These commands open an authenticated browser session by default. Open the browser URL handed off
+by the launcher. A manually opened address, `--no-open`, or a direct `keiko ui` process does not
+establish a new session. Direct `keiko ui` receives authenticated launch authority only when invoked
+through the lifecycle launcher. Ordinary Chat remains available without a private skill.
+
+If Skills asks you to open Keiko from its launcher, reopen through that launcher or run
+`keiko start` for the same running instance. A fresh launcher link arriving in the existing tab
+refreshes the open skill library and selection without losing the message draft. A browser reload
+alone cannot restore a missing or expired session.
+
 Open **Skills** below the Chat composer to upload a UTF-8 `.md` file. Review its contents, then
 select it for that chat. Uploading a file does not activate it. The composer displays the selected
 name and revision; remove that selection to return to ordinary Chat behavior.

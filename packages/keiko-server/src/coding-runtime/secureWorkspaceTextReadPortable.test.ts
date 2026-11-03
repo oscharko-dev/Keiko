@@ -378,6 +378,25 @@ describe("portable secure workspace-read binding", () => {
     ).toBe(platform.os === "darwin" ? `darwin-${platform.arch}` : `${platform.os}-x64`);
   });
 
+  it("accepts the exact native Linux identity while preserving the legacy tuple", () => {
+    const value = linuxManifestWithSupervisor();
+    const supervisor = value.nativeHelpers[1]!;
+    supervisor.executablePath = "runtime/native/keiko-runtime-supervisor";
+    supervisor.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+    supervisor.source.path = "native/runtime-supervisor";
+    value.releaseImpact.reviewedBinding.nativeHelpers[1] = structuredClone(supervisor);
+    const input = {
+      manifest: value,
+      lane: "release-qualified" as const,
+      platform: { os: "linux", arch: "x64" },
+      resourceRoot: "/managed/Keiko",
+    };
+    expect(resolvePortableSecureWorkspaceReadBinding(input)).toBeDefined();
+    supervisor.source.path = "native/runtime-supervisor/linux";
+    value.releaseImpact.reviewedBinding.nativeHelpers[1] = structuredClone(supervisor);
+    expect(resolvePortableSecureWorkspaceReadBinding(input)).toBeUndefined();
+  });
+
   it("selects the secure-read helper from the exact release helper set", () => {
     const value = manifest();
     const supervisor = {

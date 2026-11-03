@@ -181,14 +181,14 @@ function classifiedTriggerSet(values) {
   );
 }
 
-function conditionAllowsEvent(condition, event) {
+export function conditionAllowsEvent(condition, event, pullRequestState = "open") {
   if (condition === undefined) return true;
-  const expression = conditionExpression(condition, event);
+  const expression = conditionExpression(condition, event, pullRequestState);
   if (expression === undefined) return false;
   return evaluateBooleanExpression(expression);
 }
 
-function conditionExpression(condition, event) {
+function conditionExpression(condition, event, pullRequestState) {
   const trimmed = condition.trim();
   const unwrapped =
     trimmed.startsWith("${{") && trimmed.endsWith("}}") ? trimmed.slice(3, -2).trim() : condition;
@@ -198,6 +198,11 @@ function conditionExpression(condition, event) {
     })
     .replace(BASE_REF_COMPARISON, (_match, operator, _quote, value) => {
       return String(event === "pull_request" && compareKnownValue("dev", operator, value));
+    })
+    .replace(PULL_REQUEST_STATE_COMPARISON, (_match, operator, _quote, value) => {
+      return String(
+        compareKnownValue(event === "pull_request" ? pullRequestState : "", operator, value),
+      );
     })
     .replace(/\balways\(\)|\bsuccess\(\)|!cancelled\(\)/gu, "true")
     .replace(TREE_REUSE_GUARD, (_match, operator) => String(operator === "!="))
@@ -225,6 +230,9 @@ const TREE_REUSE_GUARD = /needs\.verified-tree\.outputs\.tree-verified\s*(==|!=)
 
 const EVENT_COMPARISON = /github\.event_name\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
 const BASE_REF_COMPARISON = /github\.base_ref\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
+// PR protection inventories describe live pull requests; a closed metadata event is not that lane.
+const PULL_REQUEST_STATE_COMPARISON =
+  /github\.event\.pull_request\.state\s*(==|!=)\s*(['"])([^'"]+)\2/gu;
 const UNKNOWN_REFERENCE = /\b[A-Za-z_][A-Za-z0-9_.]*\b/gu;
 const BOOLEAN_EXPRESSION = /^(?:\s|true|false|unknown|&&|\|\||!|\(|\))+$/u;
 

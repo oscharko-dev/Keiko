@@ -1,3 +1,9 @@
+import {
+  memoryInputEmbeddingIdentity as inputIdentity,
+  memoryStoredEmbeddingIdentity as rowIdentity,
+} from "./memory-embedding-identity.js";
+import { cosineSimilarity } from "@oscharko-dev/keiko-memory-retrieval";
+import { normalizedEndpointFingerprint } from "./embedding-provider-identity.js";
 // Memory embeddings — the model/IO boundary for semantic memory (#204).
 //
 // Mirrors the proven Local Knowledge embedding pipeline (selectEmbeddingModelId +
@@ -24,7 +30,6 @@ import {
   type OpenAIEmbeddingRequest,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createHash, randomUUID } from "node:crypto";
-import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogErrorKindOr,
   activityLogEvent,
@@ -53,16 +58,23 @@ import {
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
 import { errorKindOf, getServerLogger, startLogTimer } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
 export type MemoryEmbeddingKind = "query" | "document";
 
-const EMBEDDING_MEMORY_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+const MEMORY_EMBEDDING_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
+  owner: "keiko-server",
+  causal: "none",
+  releaseImpact: "patch",
+} as const;
+
+const EMBEDDING_MEMORY_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "embedding.memory.unavailable",
   category: "embedding",
-  owner: "keiko-server",
   emitter: "memory-embedding.logEmbeddingUnavailable",
   fields: {
     reason: {
@@ -73,76 +85,60 @@ const EMBEDDING_MEMORY_UNAVAILABLE_OPERATION = defineActivityLogOperation({
     },
     providerCount: { type: "integer", dataClass: "count", required: true },
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["memory-embedding-unavailable"],
   proofIds: ["embedding.memory.unavailable.line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_MEMORY_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "embedding.memory.failed",
   category: "embedding",
-  owner: "keiko-server",
   emitter: "memory-embedding.logEmbeddingFailed",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
     providerIdentity: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["memory-embedding-request"],
   proofIds: ["embedding.memory.failed.line"],
-  releaseImpact: "patch",
 });
 
 const MEMORY_EMBEDDING_STORE_REJECTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "memory.embedding.store-rejected",
   category: "memory",
-  owner: "keiko-server",
   emitter: "memory-embedding.logEmbeddingStoreRejected.store",
   fields: {
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["memory-embedding-storage"],
   proofIds: ["memory.embedding.store-rejected.line"],
-  releaseImpact: "patch",
 });
 
 const MEMORY_EMBEDDING_INVALIDATION_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "memory.embedding.invalidation-failed",
   category: "memory",
-  owner: "keiko-server",
   emitter: "memory-embedding.logEmbeddingStoreRejected.invalidation",
   fields: {
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
-  causal: "none",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["memory-embedding-invalidation"],
   proofIds: ["memory.embedding.invalidation-failed.line"],
-  releaseImpact: "patch",
 });
 
 const EMBEDDING_MEMORY_SUCCEEDED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "embedding.memory.succeeded",
   category: "embedding",
-  owner: "keiko-server",
   emitter: "memory-embedding.logEmbeddingSucceeded",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
@@ -155,20 +151,16 @@ const EMBEDDING_MEMORY_SUCCEEDED_OPERATION = defineActivityLogOperation({
     },
     dimensions: { type: "integer", dataClass: "count", required: true },
   },
-  causal: "none",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["memory-embedding-request"],
   proofIds: ["embedding.memory.succeeded.line"],
-  releaseImpact: "patch",
 });
 
 const MEMORY_EMBEDDING_INVALIDATED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "memory.embedding.invalidated",
   category: "memory",
-  owner: "keiko-server",
   emitter: "memory-embedding.logEmbeddingInvalidated",
   fields: {
     reason: {
@@ -178,20 +170,16 @@ const MEMORY_EMBEDDING_INVALIDATED_OPERATION = defineActivityLogOperation({
       values: ["no-embedding", "store-rejected"],
     },
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["memory-embedding-invalidation"],
   proofIds: ["memory.embedding.invalidated.line"],
-  releaseImpact: "patch",
 });
 
 const MEMORY_CAPTURE_NOVELTY_GATE_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...MEMORY_EMBEDDING_OPERATION_BASE,
   op: "memory.capture.novelty-gate",
   category: "memory",
-  owner: "keiko-server",
   emitter: "memory-embedding.logNoveltyDecision",
   fields: {
     outcome: {
@@ -216,12 +204,10 @@ const MEMORY_CAPTURE_NOVELTY_GATE_OPERATION = defineActivityLogOperation({
       values: ["suppressed-by-forget", "suppressed-by-rejection"],
     },
   },
-  causal: "none",
   lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["memory-capture-novelty"],
   proofIds: ["memory.capture.novelty-gate.line"],
-  releaseImpact: "patch",
 });
 
 const QWEN3_MEMORY_QUERY_INSTRUCTION =
@@ -233,6 +219,10 @@ export function selectMemoryEmbeddingModelId(
   return selectEmbeddingModelId(config);
 }
 
+// The model-gateway log port, named through the request that carries it (the package does not
+// export the interface itself).
+type EmbeddingLogSink = NonNullable<OpenAIEmbeddingRequest["log"]>;
+
 function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
@@ -243,6 +233,7 @@ function requestEmbeddingImpl(
 function buildAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  log: EmbeddingLogSink,
 ): OpenAIEmbeddingAdapter {
   return {
     endpoint: provider.baseUrl,
@@ -252,7 +243,10 @@ function buildAdapter(
       : {}),
     ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
     request: (request) =>
+      // `log` is spread first so a caller-supplied sink wins. Without one the gateway transport
+      // resolves the frozen no-op sink and its failure / TLS-trust lines count as `port-unwired`.
       requestImpl({
+        log,
         ...request,
         endpoint: provider.baseUrl,
         apiKey: provider.apiKey,
@@ -267,18 +261,6 @@ function buildAdapter(
 // Strip trailing "/" characters with a single linear scan. The equivalent regex `/\/+$/` is retried
 // at every index by `String.replace`, which is O(n^2) on adversarial input such as `"/".repeat(n)+"x"`
 // (CodeQL js/polynomial-redos). A codePoint loop is O(n) and behaviourally identical for URL trimming.
-function stripTrailingSlashes(value: string): string {
-  let end = value.length;
-  while (end > 0 && value.codePointAt(end - 1) === 47 /* "/" */) {
-    end -= 1;
-  }
-  return value.slice(0, end);
-}
-
-function normalizedEndpointFingerprint(baseUrl: string): string {
-  const normalized = stripTrailingSlashes(baseUrl.trim());
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
-}
 
 export function memoryEmbeddingProviderIdentity(provider: ModelProviderConfig): string {
   return `openai-compatible:${normalizedEndpointFingerprint(provider.baseUrl)}`;
@@ -421,6 +403,7 @@ function logEmbeddingSucceeded(
 export function createMemoryEmbedder(
   config: GatewayConfig | undefined,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  log: EmbeddingLogSink = processServerLogSink(),
 ): MemoryEmbedder | null {
   const providers = configuredEmbeddingProviders(config);
   if (providers.length === 0) {
@@ -432,7 +415,7 @@ export function createMemoryEmbedder(
     logEmbeddingUnavailable("provider-absent", providers.length, true);
     return null;
   }
-  const adapter = buildAdapter(provider, requestImpl);
+  const adapter = buildAdapter(provider, requestImpl, log);
   // NOT `async`: an async arrow that merely returns an inner promise adopts it, adding two
   // microtask ticks before the caller observes the result. Chat streaming interleaves cancellation
   // with this exact resolution, and those two ticks moved a cancelled turn from "retryable" to
@@ -482,7 +465,11 @@ export async function embedMemoryText(
   text: string,
   kind: MemoryEmbeddingKind = "document",
 ): Promise<MemoryEmbeddingInput | null> {
-  const embedder = createMemoryEmbedder(currentGatewayConfig(deps), requestEmbeddingImpl(deps));
+  const embedder = createMemoryEmbedder(
+    currentGatewayConfig(deps),
+    requestEmbeddingImpl(deps),
+    deps.activityLog ?? processServerLogSink(),
+  );
   if (embedder === null) return null;
   return embedder(text, kind);
 }
@@ -548,23 +535,7 @@ function deleteEmbeddingBestEffort(vault: MemoryVaultStore, memoryId: MemoryId):
 // Pure cosine similarity in [0,1]. Returns 0 when the vectors differ in length or either has zero
 // magnitude, and clamps a negative cosine to 0 so the ranker only ever sees a non-negative signal
 // (mirrors Local Knowledge's cosine metric semantics).
-export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-  if (a.length === 0 || a.length !== b.length) return 0;
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
-    dot += x * y;
-    normA += x * x;
-    normB += y * y;
-  }
-  if (normA === 0 || normB === 0) return 0;
-  const cosine = dot / (Math.sqrt(normA) * Math.sqrt(normB));
-  if (cosine <= 0) return 0;
-  return Math.min(cosine, 1);
-}
+export { cosineSimilarity } from "@oscharko-dev/keiko-memory-retrieval";
 
 // ─── Semantic novelty gate at capture (#204, O-F1) ──────────────────────────────
 // Lexical Jaccard dedup at capture misses semantic restatements ("I use Postgres" vs "my database is
@@ -706,26 +677,6 @@ export function findRelatedNeighbors(
     a.similarity !== b.similarity ? b.similarity - a.similarity : a.id.localeCompare(b.id),
   );
   return scored.slice(0, maxLinks).map((n) => n.id);
-}
-
-function inputIdentity(input: MemoryEmbeddingInput): EmbeddingModelIdentity {
-  return {
-    provider: input.provider,
-    modelId: input.modelId,
-    ...(input.modelRevision !== undefined ? { modelRevision: input.modelRevision } : {}),
-    vectorDimensions: input.vector.length,
-    vectorMetric: input.metric,
-  };
-}
-
-function rowIdentity(row: MemoryEmbeddingRow): EmbeddingModelIdentity {
-  return {
-    provider: row.provider,
-    modelId: row.modelId,
-    ...(row.modelRevision !== undefined ? { modelRevision: row.modelRevision } : {}),
-    vectorDimensions: row.dimensions,
-    vectorMetric: row.metric,
-  };
 }
 
 function embeddingIdentitiesCompatible(

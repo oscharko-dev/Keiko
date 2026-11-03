@@ -97,11 +97,34 @@ async function listen(server) {
   return address.port;
 }
 
+// The fixture provider (`provider.invalid`) cannot be probed; since #3895 a Code run is admitted
+// only against a conversation the automatic readiness probe has verified, so the fixture answers
+// that one probe itself through the readiness egress seam, handed to the builder because that
+// probe starts during construction. Every productive turn still flows through the streaming seam
+// below; nothing reaches a network.
+function readinessProbeFetch() {
+  return () =>
+    Promise.resolve(
+      new globalThis.Response(
+        JSON.stringify({
+          id: "chatcmpl-performance-readiness",
+          object: "chat.completion",
+          choices: [
+            { index: 0, finish_reason: "stop", message: { role: "assistant", content: "OK" } },
+          ],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+}
+
 function runtimeDependencies(root, modules, port) {
   return modules.buildUiHandlerDeps({
     configPath: undefined,
     evidenceDir: join(root, "evidence"),
     uiDbPath: join(root, "ui-db", "keiko-ui.db"),
+    gatewayReadinessFetch: readinessProbeFetch(),
     env: {
       PATH: process.env.PATH,
       KEIKO_STATE_DIR: join(root, "state"),

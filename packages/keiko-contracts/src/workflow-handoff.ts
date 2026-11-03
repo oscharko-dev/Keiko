@@ -7,6 +7,7 @@
 // module — including this package's own siblings; intra-package imports use relative paths.
 
 import { isValidScopePath } from "./connected-context.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
 
 // ─── Schema version ───────────────────────────────────────────────────────────
 export const WORKFLOW_HANDOFF_SCHEMA_VERSION = "1" as const;
@@ -28,7 +29,7 @@ export interface PatchScopeLimits {
 
 export const DEFAULT_PATCH_SCOPE_LIMITS: PatchScopeLimits = {
   maxFileCount: 16,
-  maxPatchBytes: 65_536,
+  maxPatchBytes: GOVERNED_PATCH_MAX_BYTES,
   maxNewFiles: 4,
   elapsedMsMax: 60_000,
 } as const;

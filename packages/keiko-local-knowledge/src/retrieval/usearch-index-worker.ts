@@ -7,11 +7,14 @@ import {
   openSync,
   readFileSync,
   readSync,
-  type Stats,
+  type BigIntStats,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
+
+import { fileDescriptorOwnerUid } from "@oscharko-dev/keiko-security/process-scope";
+import { bindWorkerProcessScope } from "@oscharko-dev/keiko-security/process-scope-worker";
 
 import {
   USEARCH_COMMAND,
@@ -60,7 +63,9 @@ function sha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function sha256Descriptor(descriptor: number, size: number): string {
+function sha256Descriptor(descriptor: number, length: bigint): string {
+  if (length < 0n || length > BigInt(Number.MAX_SAFE_INTEGER)) return "";
+  const size = Number(length);
   const hash = createHash("sha256");
   const buffer = Buffer.allocUnsafe(Math.min(Math.max(size, 1), 64 * 1_024));
   let offset = 0;
@@ -79,86 +84,122 @@ function sha256Descriptor(descriptor: number, size: number): string {
   return hash.digest("hex");
 }
 
-function sameRuntimeFile(left: Stats, right: Stats): boolean {
+interface RuntimeEntry {
+  readonly descriptor: number;
+  readonly identity: BigIntStats;
+}
+
+interface VerifiedRuntime extends RuntimeEntry {
+  readonly parent: RuntimeEntry;
+}
+
+function sameRuntimeObject(left: BigIntStats, right: BigIntStats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function sameRuntimeFile(left: BigIntStats, right: BigIntStats): boolean {
   return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.size === right.size &&
-    left.mtimeMs === right.mtimeMs
+    sameRuntimeObject(left, right) && left.size === right.size && left.mtimeNs === right.mtimeNs
   );
 }
 
-function trustedPosixOwnerAndMode(entry: Stats): boolean {
+function trustedPosixOwnerAndMode(descriptor: number, entry: BigIntStats): boolean {
   if (process.platform === "win32" || process.getuid === undefined) return true;
-  const currentUid = process.getuid();
-  const trustedOwner = entry.uid === currentUid || entry.uid === 0;
-  return trustedOwner && (entry.mode & 0o022) === 0;
-}
-
-// This boundary excludes path substitution by other POSIX users: the file and its immediate parent
-// must be owned by this uid/root and not group/world writable, and the opened descriptor stays live
-// across require. It does not claim protection from a hostile same-uid process, which can chmod or
-// rename owner-controlled paths. Windows ACL semantics are not represented by Node's POSIX mode
-// bits; Windows retains the symlink, regular-file, descriptor-identity and digest checks here, plus
-// the portable signing and isolated-smoke gates at artifact qualification.
-function trustedRuntimePath(path: string): boolean {
-  const binary = lstatSync(path);
-  const parent = lstatSync(dirname(path));
+  const uid = fileDescriptorOwnerUid(descriptor, entry);
   return (
-    binary.isFile() &&
-    !binary.isSymbolicLink() &&
-    parent.isDirectory() &&
-    !parent.isSymbolicLink() &&
-    trustedPosixOwnerAndMode(binary) &&
-    trustedPosixOwnerAndMode(parent)
+    uid !== undefined &&
+    (uid === BigInt(process.getuid()) || uid === 0n) &&
+    (entry.mode & 0o022n) === 0n
   );
 }
 
-function openVerifiedRuntime(
-  data: UsearchWorkerData,
-): { readonly descriptor: number; readonly identity: Stats } | undefined {
+// Hold both objects across require. Owner observations use their exact descriptor metadata in the
+// selected process coordinate; projected stat UIDs never stand in for unavailable native proof.
+// Same-uid hostile replacement and Windows ACL semantics remain outside this POSIX boundary.
+function runtimeOpenFlags(directory: boolean): number {
+  if (process.platform === "win32") return constants.O_RDONLY;
+  return constants.O_RDONLY | constants.O_NOFOLLOW | (directory ? constants.O_DIRECTORY : 0);
+}
+
+function openRuntimeEntry(path: string, directory: boolean): RuntimeEntry | undefined {
   let descriptor: number | undefined;
+  let admitted = false;
   try {
-    if (!trustedRuntimePath(data.binaryPath)) return undefined;
-    const pathIdentity = lstatSync(data.binaryPath);
-    const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
-    descriptor = openSync(data.binaryPath, constants.O_RDONLY | noFollow);
-    const identity = fstatSync(descriptor);
+    const pathIdentity = lstatSync(path, { bigint: true });
+    const expectedPathType = directory ? pathIdentity.isDirectory() : pathIdentity.isFile();
+    if (pathIdentity.isSymbolicLink() || !expectedPathType) return undefined;
+    descriptor = openSync(path, runtimeOpenFlags(directory));
+    const identity = fstatSync(descriptor, { bigint: true });
+    const expectedType = directory ? identity.isDirectory() : identity.isFile();
     if (
-      !identity.isFile() ||
-      !sameRuntimeFile(pathIdentity, identity) ||
-      !trustedPosixOwnerAndMode(identity) ||
-      sha256Descriptor(descriptor, identity.size) !== data.binarySha256
+      expectedType &&
+      sameRuntimeObject(pathIdentity, identity) &&
+      trustedPosixOwnerAndMode(descriptor, identity)
     ) {
-      closeSync(descriptor);
-      return undefined;
+      admitted = true;
+      return { descriptor, identity };
     }
-    return { descriptor, identity };
-  } catch {
-    if (descriptor !== undefined) closeSync(descriptor);
     return undefined;
+  } finally {
+    if (!admitted && descriptor !== undefined) closeSync(descriptor);
   }
 }
 
-function runtimeUnchanged(data: UsearchWorkerData, identity: Stats, descriptor: number): boolean {
-  const pathIdentity = lstatSync(data.binaryPath);
-  const descriptorIdentity = fstatSync(descriptor);
+function openVerifiedRuntime(data: UsearchWorkerData): VerifiedRuntime | undefined {
+  const parent = openRuntimeEntry(dirname(data.binaryPath), true);
+  if (parent === undefined) return undefined;
+  let binary: RuntimeEntry | undefined;
+  let admitted = false;
+  try {
+    binary = openRuntimeEntry(data.binaryPath, false);
+    if (
+      binary === undefined ||
+      sha256Descriptor(binary.descriptor, binary.identity.size) !== data.binarySha256
+    ) {
+      return undefined;
+    }
+    admitted = true;
+    return { ...binary, parent };
+  } finally {
+    if (!admitted) {
+      if (binary !== undefined) closeSync(binary.descriptor);
+      closeSync(parent.descriptor);
+    }
+  }
+}
+
+function runtimeEntryUnchanged(path: string, entry: RuntimeEntry): boolean {
+  const pathIdentity = lstatSync(path, { bigint: true });
+  const identity = fstatSync(entry.descriptor, { bigint: true });
   return (
-    sha256Descriptor(descriptor, descriptorIdentity.size) === data.binarySha256 &&
-    trustedRuntimePath(data.binaryPath) &&
-    sameRuntimeFile(identity, pathIdentity) &&
-    sameRuntimeFile(identity, descriptorIdentity) &&
+    !pathIdentity.isSymbolicLink() &&
+    sameRuntimeObject(entry.identity, pathIdentity) &&
+    sameRuntimeObject(entry.identity, identity) &&
+    trustedPosixOwnerAndMode(entry.descriptor, identity)
+  );
+}
+
+function runtimeUnchanged(data: UsearchWorkerData, opened: VerifiedRuntime): boolean {
+  const pathIdentity = lstatSync(data.binaryPath, { bigint: true });
+  const descriptorIdentity = fstatSync(opened.descriptor, { bigint: true });
+  return (
+    sha256Descriptor(opened.descriptor, descriptorIdentity.size) === data.binarySha256 &&
+    runtimeEntryUnchanged(data.binaryPath, opened) &&
+    runtimeEntryUnchanged(dirname(data.binaryPath), opened.parent) &&
+    sameRuntimeFile(opened.identity, pathIdentity) &&
+    sameRuntimeFile(opened.identity, descriptorIdentity) &&
     sha256(data.binaryPath) === data.binarySha256
   );
 }
 
 function loadRuntime(data: UsearchWorkerData): NativeUsearchModule | undefined {
-  const opened = openVerifiedRuntime(data);
-  if (opened === undefined) return undefined;
+  let opened: VerifiedRuntime | undefined;
   try {
+    opened = openVerifiedRuntime(data);
+    if (opened === undefined) return undefined;
     const loaded: unknown = createRequire(import.meta.url)(data.binaryPath);
     if (
-      !runtimeUnchanged(data, opened.identity, opened.descriptor) ||
+      !runtimeUnchanged(data, opened) ||
       !isNativeUsearchModule(loaded) ||
       (loaded.version !== undefined && loaded.version() !== data.expectedVersion)
     ) {
@@ -168,7 +209,10 @@ function loadRuntime(data: UsearchWorkerData): NativeUsearchModule | undefined {
   } catch {
     return undefined;
   } finally {
-    closeSync(opened.descriptor);
+    if (opened !== undefined) {
+      closeSync(opened.descriptor);
+      closeSync(opened.parent.descriptor);
+    }
   }
 }
 
@@ -186,6 +230,7 @@ function postMessage(message: UsearchWorkerMessage): void {
 function buildIndex(data: UsearchWorkerData): NativeCompiledIndex | undefined {
   const control = new Int32Array(data.controlBuffer);
   try {
+    bindWorkerProcessScope(data.processScope);
     const runtime = loadRuntime(data);
     if (runtime === undefined) {
       publishFailure(control, USEARCH_ERROR.runtimeInvalid);

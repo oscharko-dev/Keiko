@@ -1,0 +1,317 @@
+{
+  "schemaVersion": 1,
+  "classification": "Lossless held ANN runtime ownership, private Worker lifetime, default native ANN strategy and registered build-result formatting; not installed updater or full UI/skill acceptance",
+  "sourceParent": "396c387d1f7fe531a075294795f68b21bbf53967",
+  "sourceFreeze": {
+    "artifact": "checkpoint61-source-freeze-v4.json",
+    "sha256": "37976828c99229b9f85c93dfe446d969d6387f90bfec70e1a32af1338910e47a"
+  },
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "dd8f0076a242ccb5d2732783906ea8c6f73a95d02a612ea428a4325118f8d365"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "941879de046a2d140c23e778970a0e5c612cd2883cc4adba32ed941a2ba23430"
+    },
+    {
+      "path": "docs/observability/legacy-failure-path-register.json",
+      "sha256": "ab5d00e457abb3edec6dd5b4a4b16d341ac16aa861e061957cadc987f926cd1a"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "dea3afa9b53c8fd931a0492824c2db33cc3043dcb49aae48da7ebe67ce6f2bb1"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "2e78615a3b7365544683036b86e717f22161d6e47b1869a3e0c3d014a26a3a79"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "d04fec4cbdfbf512b388a8ac4ef3c1716aaea44a91a99726ff2e9c1aa475ae39"
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts",
+      "sha256": "03d5ebd919bcd86edc1fce9c0ce2a0f5c4cd4b61b127e93fae6f7607997a19ad"
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.test.ts",
+      "sha256": "4194e5bad44f9b1b3d2e48b501447e584ce4d7566ed13c0eb54958fcaca42982"
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts",
+      "sha256": "39b50493c1a6c254139dcfefff785eddba2595f242f42540cc744dc5daffdff3"
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-runtime-resolved-logging.test.ts",
+      "sha256": "0119ef1a8ccbe132fdb9241d05487478c0f19ae67b256f734e5980c9a208fd7c"
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-worker-lifetime.test.ts",
+      "sha256": "66cba8357db15b9be4fe54428aa8d97ca8ff758e06d821246544c191df1c5d15"
+    },
+    {
+      "path": "packages/keiko-local-knowledge/src/retrieval/usearch-worker-protocol.ts",
+      "sha256": "bcdc1b4fd2566d628e21398bf9b96425d275fee07d9f2f3cd233ea72044a4a2f"
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-store-open.ts",
+      "sha256": "d24371a6185bd89db23fcac0d4d2fa93f25a9f134bdcbcc8c93b99fa5d20cad4"
+    },
+    {
+      "path": "packages/keiko-server/src/local-knowledge-store-open.vector-index.test.ts",
+      "sha256": "7333d60ac0def45e4a6bd602eed5ee8404ef7cd50b151a4784178ceb51c01bf2"
+    }
+  ],
+  "pdca": {
+    "plan": {
+      "nativeBefore": {
+        "passed": 6,
+        "failed": 4,
+        "falseRefusals": 1,
+        "falseGrants": 3,
+        "receipt": {
+          "artifact": "checkpoint61-ann-owner-red-summary-v1.json",
+          "sha256": "93178aa863b6fd1bf672d6bbc56566d28a54f731113b9ee55553ee90cc775693"
+        },
+        "scope": "Actual approved Linux ARM USearch ELF in the real native process scope. Five immutable file/parent owner fixtures per UID, original per-case five-second deadline."
+      },
+      "cpuBefore": {
+        "failed": 6,
+        "healthy": 11,
+        "log": {
+          "artifact": "checkpoint61-worker-owner-cpu-red-v1.log",
+          "sha256": "21887abcae07ae6da8d30e38c74376e94fed6b1a72e4d9826fb09dff33b5664c"
+        }
+      },
+      "loggingBefore": {
+        "failed": 5,
+        "healthy": 16,
+        "log": {
+          "artifact": "checkpoint61-worker-log-red-v1.log",
+          "sha256": "7502871384dd66b816739a256053b63beab9bf552986299070317b74d6d277ed"
+        }
+      },
+      "mixedReadyBefore": {
+        "failed": 1,
+        "unselected": 16,
+        "log": {
+          "artifact": "checkpoint61-mixed-ready-red-v1.log",
+          "sha256": "cb2e18dfe16083117bb385bdcf085ec33a5f3a3a07bf52f605dae1b7744b4553"
+        }
+      }
+    },
+    "do": [
+      "The existing ANN Worker binds the existing private main-scope observation bridge before loading its runtime. It never initializes or consumes the native decoder.",
+      "Held binary and immediate-parent descriptors use exact BigInt device/inode/mode metadata. Unknown and foreign ownership refuse before module execution; root/caller grants preserve type, symlink, POSIX mode, digest, version and pre/post-load identity checks.",
+      "The existing index owner disposes the private observation authority on constructor/build/deadline/error/exit/eviction/reset/query-discard paths before termination. Existing cache, queue, protocol, thresholds and budgets remain. Ready plus a nonzero error refuses.",
+      "The existing native-runtime Activity Log operation gains one optional closed Worker result, independently of cold digest resolution. The BFF supplies its existing process sink. No per-file/query event, path, descriptor, inode, UID, content, parallel writer or prompt is added.",
+      "Cleanup propagates to the existing loader failure boundary; the canonical legacy-register prune removes one retired catch and adds no suppression. Generated operation contracts and inventories use the canonical producer."
+    ],
+    "check": {
+      "native": [
+        {
+          "lane": "owner",
+          "receipts": [
+            {
+              "artifact": "checkpoint61-ann-owner-green-uid1000-v3.json",
+              "sha256": "d9a0c7b4d6b6c9ca6bd09c0b9cf829a0fa0d69b01436b468f6a0a4a43ed4a291"
+            },
+            {
+              "artifact": "checkpoint61-ann-owner-green-uid65534-v3.json",
+              "sha256": "9b622467eba0c729cf79962edf26903a25045a96d6b108e358457de0e350ddca"
+            }
+          ]
+        },
+        {
+          "lane": "default",
+          "receipts": [
+            {
+              "artifact": "checkpoint61-ann-default-green-uid1000-v4.json",
+              "sha256": "824e1d8197633ed4bf7c352e8b3ef7f2a67aa64f5aad855370258530e5a11c2b"
+            },
+            {
+              "artifact": "checkpoint61-ann-default-green-uid65534-v4.json",
+              "sha256": "ccf9847adf2061c2edcac66b5a720f75ede57115acaa9860fc9309cbcc7e3548"
+            }
+          ]
+        },
+        {
+          "lane": "temporal",
+          "receipts": [
+            {
+              "artifact": "checkpoint61-ann-temporal-green-uid1000-v2.json",
+              "sha256": "f50a5b6628d15cc2c567cfe120a485ef9e3213e788ea0203c8bb53645a0ab8dc"
+            },
+            {
+              "artifact": "checkpoint61-ann-temporal-green-uid65534-v2.json",
+              "sha256": "dd1d8f3a0f501a3bd4e3cf53977194a8e62ec3b55613bb52caf5eac3a880c6c1"
+            }
+          ]
+        }
+      ],
+      "retention": {
+        "artifact": "checkpoint61-final-native-retention-v2.json",
+        "sha256": "739318ff726cf50c4c037d76c63b577981599aba5550ee51ac696d9acce15ce0"
+      },
+      "default": {
+        "rows": 20001,
+        "strategy": "ann",
+        "defaultExactThreshold": 20000,
+        "requestsPerUid": 18,
+        "identicalConcurrentWarmRequests": 16,
+        "examinedCandidates": 129,
+        "groupRebuildsPerUid": 1,
+        "registeredReadyEventsPerUid": 2,
+        "registeredColdEventsPerUid": 1,
+        "warmSettlementEvents": 0,
+        "scope": "Exact approved ELF, public product search owner, correct unique self-neighbor, unchanged default threshold and group rebuild; real registered formatter with collector sink. No per-query isolation or BFF log transport claim."
+      },
+      "temporalLimit": "Approved positive addons are cached; rejected owner cases remain absent. Cache absence alone cannot rule out arbitrary failed addon execution; source ordering and CPU denial controls remain necessary. Successful outer logs retain aggregate pass, not individual inner rows.",
+      "independent": [
+        {
+          "artifact": "independent-checkpoint61/checkpoint61-ann-owner-red-independent-join.json",
+          "sha256": "7215f6adc3348fa3948b2cfc6bad980947bdb6c462a0dff4edcccb2599345081"
+        },
+        {
+          "artifact": "independent-checkpoint61/ann61-loader-log-fix-v3-independent.json",
+          "sha256": "76f96880c638f029b5b9813743c927db4a039ece168245142ca47bc348737a5e"
+        },
+        {
+          "artifact": "independent-checkpoint61/ann61-owner-log-final3-hardened-independent.json",
+          "sha256": "70568c5b0499f5586b397ba4e294c4aef3da3d9ea136186e9445219b2e04d225"
+        },
+        {
+          "artifact": "independent-checkpoint61/checkpoint61-native-final3-independent-join.json",
+          "sha256": "a9a808b51a7eb3dd250a9cebcdc7e5c4005f5a3f7ffad50ab7cfa586120d99f6"
+        }
+      ],
+      "independentScope": "33 controlled loader/order/cleanup cases and15 controlled public-owner settlement cases supplement actual native executions; they are not kernel, formatter or UI evidence.",
+      "localChecks": [
+        {
+          "artifact": "checkpoint61-v4-typecheck.json",
+          "sha256": "20b4a3d2788ee5d1909175b4fa7d771520523fd7bfdb193fc8459c6467769f41"
+        },
+        {
+          "artifact": "checkpoint61-v4-test-file-lint.json",
+          "sha256": "98db126a8ca2edfddeea6c0836e05c59e52f96e87bbd5fd8475a1dc47d685363"
+        },
+        {
+          "artifact": "checkpoint61-v4-target-tests.json",
+          "sha256": "7b6f330fc5c6c4668f21f9c4e149c4e6d88229f4d3717a97f3ac6a7eab73a864"
+        },
+        {
+          "artifact": "checkpoint61-v4-sonar.json",
+          "sha256": "6321e96f9ea8a3c156437225cdb151a3354325d3d7d79fea45ee5559a4963247"
+        },
+        {
+          "artifact": "checkpoint61-v4-package-surface.json",
+          "sha256": "3cb4ecaabf025ec5f2e357b020a21bdc9a3c8628cf2b3348cd4dd43129c63ba3"
+        },
+        {
+          "artifact": "checkpoint61-v4-build-after-assembly.json",
+          "sha256": "5d6f5093cf2fd9b71dceb9a3580791b342f09f38150f1fee673a8fa59872997c"
+        },
+        {
+          "artifact": "checkpoint61-v4-op-catalog.json",
+          "sha256": "ed205e4c07a7693e10eb9fc9a1d705583b2a4cb62034a333ae6b564f714191b6"
+        },
+        {
+          "artifact": "checkpoint61-v4-activity-log.json",
+          "sha256": "8609c00f75ef6c19f20759c7f93b49778dfc5abe1b564f948d8e722bae64ec67"
+        },
+        {
+          "artifact": "checkpoint61-v4-adr-index.json",
+          "sha256": "b6884bfb9c958704ee313bdcaeb4621f65e97c6a386a676b4bb65471fd709d34"
+        },
+        {
+          "artifact": "checkpoint61-v3-lint.json",
+          "sha256": "367d1a08bbf9db44b34de6f67cabaa661ceff432e7b0baf42d590afb7a4e7717"
+        },
+        {
+          "artifact": "checkpoint61-v3-knowledge-server-tests.json",
+          "sha256": "c458d9560b33eb590e891f1ebec0b35f5c9969ce5feec5c04c2a3e4702f77b25"
+        },
+        {
+          "artifact": "checkpoint61-v3-ui-typecheck.json",
+          "sha256": "9ceaa3ca3a80d61551c69b8a56dfc57d00226e497a8c47679011d79d917f8c06"
+        },
+        {
+          "artifact": "checkpoint61-v3-ui-build.json",
+          "sha256": "d887489c041178600411de87e67dd2b3152f42e022760337a1bea32376cd7172"
+        },
+        {
+          "artifact": "checkpoint61-v3-error-observability.json",
+          "sha256": "076cf9abf66c63ee12b4643ec8c47635d70c97b026fca664f9e3e2e2167486a8"
+        },
+        {
+          "artifact": "checkpoint61-v3-retrieval-quality.json",
+          "sha256": "222ae55bd9d40c2910851fc81d21812ff8e3a4964ffa0d4cdd0966a80bedd31b"
+        },
+        {
+          "artifact": "checkpoint61-v3-grounded-retrieval.json",
+          "sha256": "3f4f9598d2ffb97b7035aa93a080ebcd6ed7927b61a2f44d0566c9bc4f43dbbd"
+        },
+        {
+          "artifact": "checkpoint61-v3-faithfulness.json",
+          "sha256": "ecd40f2d4198a4bbca5fc4fd99eb161f9f286492ca9597527fb15d77a98ab81b"
+        }
+      ],
+      "localReuse": "Freeze4 changes only the test table required by Sonar S5976. Whole root/UI lint,1680 affected tests across114 suites, UI type/build and three retrieval gates bind the identical final runtime at freeze3; final full typecheck, changed-test lint,42 targeted controls and real Sonar bind freeze4. Native bytes are unchanged and retained. No unnecessary native rerun is credited."
+    },
+    "act": {
+      "remaining": [
+        "Production initial/detached owner transfer and outside-generation authenticated coordinator placement.",
+        "Canonical PID-record compatibility, Linux probe/recovery contract and remediation lease ownership/reclaim races.",
+        "Actual distinct and two consecutive installed updates, cancellation/drain/recovery, state and SSD continuity; Linux x64 and installed entitled macOS.",
+        "Broader visible Chat/search/context/compaction/browser journeys, untouched skill tasks, original96 reconciliation and exact-head delivery checks/reviews."
+      ],
+      "acceptanceLedgersChanged": false,
+      "allAcceptanceComplete": false
+    }
+  },
+  "intermediateFailures": [
+    {
+      "artifact": {
+        "artifact": "checkpoint61-lint-preflight-v1.log",
+        "sha256": "a7e852c34d683069761f52089be32f2c0c3e150ce754479108ddbc65688f7fc4"
+      },
+      "scope": "Initial changed-file complexity/test typing rules corrected before freeze3."
+    },
+    {
+      "artifact": {
+        "artifact": "checkpoint61-v1-typecheck.json",
+        "sha256": "a7486d00d417cccc6fa44805115ed4ce1c7ee62b1b6ade0ce9a3a1747659c499"
+      },
+      "scope": "Two new test-harness typing errors; final typecheck passes."
+    },
+    {
+      "artifact": {
+        "artifact": "checkpoint61-v2-error-observability.json",
+        "sha256": "84c216df641cecb642e6ccb06bca1cf5029a2674e4e5747a1131c3d530454180"
+      },
+      "scope": "Moved unregistered catch and obsolete register entry; finally cleanup and canonical prune repair the owner boundary."
+    },
+    {
+      "artifact": {
+        "artifact": "checkpoint61-worker-log-green-v1.log",
+        "sha256": "ff38ee9a8ff8f57eee8d66d19ea7f96dcfd7bade9450303f24311a0535b08264"
+      },
+      "scope": "Historical name notwithstanding,7 failed formatter registrations/34 healthy controls before rebuilding generated contracts; retained as failed."
+    },
+    {
+      "artifact": {
+        "artifact": "checkpoint61-v3-sonar.json",
+        "sha256": "1667eea6fae46f3a878c078d3d8a5bfb9c666c00bf72440a1615f14958c872d3"
+      },
+      "scope": "One S5976 test parameterization finding; runtime unchanged, final freeze4 analyzer passes."
+    }
+  ],
+  "limits": [
+    "No original private history is represented as recovered; owner-authorized new fixtures remain independently identified.",
+    "No frozen Gemma task, candidate, oracle, budget, outcome or acceptance checkbox changes.",
+    "Local timings are diagnostics, not a portable latency guarantee. No installed updater, wider UI, complete skill efficacy or global CI clearance follows.",
+    "C implementation is unchanged; strict isolated fixture compilation is distinct from the earlier full C analyzer lanes. Windows POSIX policy source/controlled checks are not native Windows runtime proof."
+  ]
+}

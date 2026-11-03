@@ -21,7 +21,6 @@ import type { Chat, ChatConnectedScope, GroundedAnswerContextPackSummary } from 
 import { useScopePillError, ScopePillError, emptyScopePill } from "./hooks/useScopePillError";
 import { effectiveScopes } from "./hooks/workspaceActions";
 import {
-  connectedScopeBoundary,
   connectedScopeFullPath,
   connectedScopeLabel,
   connectedScopeSignature,
@@ -211,7 +210,6 @@ function ScopePillItem({
           <span aria-hidden="true">×</span>
         </button>
       </span>
-      <span className="scope-pill-detail">{connectedScopeBoundary(scope, t)}</span>
     </span>
   );
 }

@@ -4,9 +4,10 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 // Priority is fixed (pre-set reason > generated > low-relevance > duplicate); a hard maxKept
 // cap demotes the overflow to "budget-exhausted". Determinism: ties break on scopePath asc.
 
-import type {
-  CandidateFile,
-  OmittedContextEntry,
+import {
+  isLexicalQueryGroupKey,
+  type CandidateFile,
+  type OmittedContextEntry,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 
 // AnnotatedCandidate carries only annotation flags; the score is read from candidate.score
@@ -20,8 +21,10 @@ export interface AnnotatedCandidate {
 
 export interface FilterOptions {
   readonly minScore: number;
-  // Optional producer ordering applies only to the existing single below-floor fallback.
+  // Optional producer ordering applies only when no ordinary candidate clears the floor.
   readonly fallbackOrder?: readonly string[] | undefined;
+  // Same-query, current content evidence only. Identical matched-group keys can retain two peers.
+  readonly fallbackPeerGroups?: ReadonlyMap<string, string> | undefined;
   readonly minScoreExemptPaths?: ReadonlySet<string>;
   readonly generatedExemptPaths?: ReadonlySet<string>;
   readonly maxKept: number;
@@ -149,6 +152,43 @@ function appendLowRelevanceOmissions(
   }
 }
 
+function isFallbackPeer(
+  candidate: CandidateFile | undefined,
+  groups: FilterOptions["fallbackPeerGroups"],
+  orderedPaths: ReadonlySet<string>,
+  group: string,
+): candidate is CandidateFile {
+  return (
+    candidate !== undefined &&
+    orderedPaths.has(candidate.scopePath) &&
+    groups?.get(candidate.scopePath) === group
+  );
+}
+
+function takeFallbackPeers(
+  fallback: CandidateFile,
+  lowRelevance: CandidateFile[],
+  options: FilterOptions,
+  maxKept: number,
+): readonly CandidateFile[] {
+  const group = options.fallbackPeerGroups?.get(fallback.scopePath);
+  if (!isLexicalQueryGroupKey(group)) return [];
+  const orderedPaths = new Set(options.fallbackOrder ?? []);
+  if (!orderedPaths.has(fallback.scopePath)) return [];
+  const peers: CandidateFile[] = [];
+  const limit = Math.min(2, maxKept - 1);
+  for (let index = 0; index < lowRelevance.length && peers.length < limit;) {
+    const candidate = lowRelevance[index];
+    if (isFallbackPeer(candidate, options.fallbackPeerGroups, orderedPaths, group)) {
+      peers.push(candidate);
+      lowRelevance.splice(index, 1);
+    } else {
+      index += 1;
+    }
+  }
+  return peers;
+}
+
 export function filterCandidates(
   entries: readonly AnnotatedCandidate[],
   options: FilterOptions,
@@ -165,7 +205,7 @@ export function filterCandidates(
   if (kept.length === 0 && maxKept > 0) {
     const fallback = lowRelevance.shift();
     if (fallback !== undefined) {
-      kept.push(fallback);
+      kept.push(fallback, ...takeFallbackPeers(fallback, lowRelevance, options, maxKept));
     }
   }
   appendLowRelevanceOmissions(omittedEntries, lowRelevance, nowMs);

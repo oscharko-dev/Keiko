@@ -35,6 +35,7 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { recordConnectionCheck } from "./credentialActivity.js";
 import type {
   AtlassianConnectorActionType,
   AtlassianConnectorActivityReasonCode,
@@ -444,6 +445,17 @@ export function handleStartAtlassianConnectorSync(
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const credential = requireAtlassianCredential(ctx, guard);
+    if (credential.deployment === "data-center") {
+      recordConnectionCheck(guard, ctx.correlationId ?? UNKNOWN_CORRELATION_ID, "sync-unsupported");
+      return {
+        status: 400,
+        body: errorBody(
+          "SYNC_UNSUPPORTED_DEPLOYMENT",
+          "Data Center connectors do not support sync.",
+          ctx.correlationId,
+        ),
+      };
+    }
     const body = validateStartSyncBody(await readJsonObject(ctx.req), credential.provider);
     if (body.authority !== undefined) {
       // Threads the request's own correlation id (ADR-0173 D5 / g12) into the governed-start

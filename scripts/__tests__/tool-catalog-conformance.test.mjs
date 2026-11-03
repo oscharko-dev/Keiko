@@ -276,13 +276,13 @@ describe("compiler measurements reuse the existing sample and percentile convent
 
     expect(calls[0]).toEqual([
       "git",
-      ["clone", "--no-local", "--quiet", ROOT, "/work/repo.noindex"],
+      ["clone", "--no-local", "--quiet", ROOT, join("/work", "repo.noindex")],
     ]);
     expect(calls[1][0]).toBe("docker");
     expect(calls[1][1].at(-1)).toContain("--write-measurement");
     expect(copies).toEqual([
       [
-        "/work/repo.noindex/docs/release/3415-tool-catalog-perf-evidence.json",
+        join("/work", "repo.noindex", "docs/release/3415-tool-catalog-perf-evidence.json"),
         join(ROOT, "docs/release/3415-tool-catalog-perf-evidence.json"),
       ],
     ]);

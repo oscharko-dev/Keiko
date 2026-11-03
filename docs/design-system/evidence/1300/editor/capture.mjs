@@ -1,3 +1,10 @@
+import { designEvidenceSourceHashes } from "../../../../../scripts/lib/design-evidence-sources.mjs";
+import {
+  loadHtmlFixture,
+  renderedFixtureColours,
+  rgbaClose,
+} from "../../../../../scripts/lib/css-rendered-evidence.mjs";
+import { readStylesheet } from "../../../../../packages/keiko-ui/read-stylesheet.mjs";
 // Issue #1300 — dedicated EDITOR matrix (Design System 0.4.0 editor tier).
 //
 // The epic gate cannot close on component evidence alone: the issue requires a dedicated editor
@@ -37,7 +44,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "../../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
-const POST = readFileSync(resolve(REPO, CSS_PATH), "utf8").replace(/\r\n?/g, "\n");
+const POST = readStylesheet(resolve(REPO, CSS_PATH)).replace(/\r\n?/g, "\n");
 const POST_CSS_SHA256 = createHash("sha256").update(POST).digest("hex");
 const DS_DIR = resolve(REPO, "design-system");
 const REFERENCE_FILES = [
@@ -132,54 +139,12 @@ function tokenPageHtml(cssText) {
 }
 
 async function applyMode(page, cssText, mode) {
-  await page.emulateMedia({ colorScheme: "dark" });
-  await page.setContent(tokenPageHtml(cssText), { waitUntil: "load" });
-  await page.evaluate(
-    ({ theme, hc }) => {
-      const r = document.documentElement;
-      delete r.dataset.theme;
-      delete r.dataset.hc;
-      if (theme) r.dataset.theme = theme;
-      if (hc) r.dataset.hc = hc;
-    },
-    { theme: mode.theme, hc: mode.hc },
-  );
+  return loadHtmlFixture(page, tokenPageHtml(cssText), mode, { colorScheme: "dark" });
 }
 
 async function collectTokens(page, cssText, mode) {
   await applyMode(page, cssText, mode);
-  return page.evaluate((tokens) => {
-    const cv = document.createElement("canvas");
-    cv.width = cv.height = 1;
-    const cx = cv.getContext("2d", { willReadFrequently: true });
-    const toRGBA = (color) => {
-      cx.clearRect(0, 0, 1, 1);
-      cx.fillStyle = "#000";
-      cx.fillStyle = color;
-      cx.fillRect(0, 0, 1, 1);
-      const d = cx.getImageData(0, 0, 1, 1).data;
-      return `${d[0]},${d[1]},${d[2]},${d[3]}`;
-    };
-    const rootStyle = getComputedStyle(document.documentElement);
-    const out = {};
-    for (const t of tokens) {
-      const el = document.querySelector(`[data-tok="${t}"]`);
-      // `defined` reads the raw custom-property value off :root: an empty string means the token is
-      // not declared in this stylesheet (so `color: var(--t)` would fall back to the inherited --ed-fg).
-      out[t] = {
-        rgba: el ? toRGBA(getComputedStyle(el).color) : "__MISSING__",
-        defined: rootStyle.getPropertyValue(t).trim() !== "",
-      };
-    }
-    return out;
-  }, EDITOR_TOKENS);
-}
-
-function rgbaClose(x, y, tol = 1) {
-  if (x === "__MISSING__" || y === "__MISSING__") return x === y;
-  const a = x.split(",").map(Number);
-  const b = y.split(",").map(Number);
-  return a.length === 4 && b.length === 4 && a.every((v, i) => Math.abs(v - b[i]) <= tol);
+  return page.evaluate(renderedFixtureColours, { kind: "tokens", tokens: EDITOR_TOKENS });
 }
 
 const REF_PAGES = [
@@ -319,6 +284,7 @@ writeFileSync(
       issue: 1300,
       epic: 1290,
       surface: "editor",
+      sourceFiles: designEvidenceSourceHashes(REPO),
       postCssSha256: POST_CSS_SHA256,
       referenceFiles: REFERENCE_FILES,
       referenceFileSha256: Object.fromEntries(

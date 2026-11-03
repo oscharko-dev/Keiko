@@ -32,6 +32,7 @@ function clientListing(connector: AtlassianConnectorMetadata): AtlassianConnecto
   return {
     listConnectors: vi.fn(async () => [connector]),
     createConnector: vi.fn(async () => connector),
+    updateConnector: vi.fn(async () => connector),
     deleteConnector: vi.fn(async () => ({ ok: true as const })),
     verifyConnector: vi.fn(async () => ({ authRef: connector.authRef, status: "ok" as const })),
     startSync: vi.fn(async () => ({ job: { jobId: "j", status: "pending" } as never })),

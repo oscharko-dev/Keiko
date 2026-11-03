@@ -79,8 +79,12 @@ armed with a deadline (`EDITOR_AGENT_ACTION_TIMEOUT_MS`):
 - **Timed out** — if no result arrives before the deadline, the action is failed with the structured
   lifecycle code `TIMED_OUT`, a `result` event is fanned out, and the slot is reclaimed (the queue
   self-heals; a silent or disconnected bridge cannot strand it).
-- **Rejected** — when the bounded depth is already saturated, a further action is rejected with
-  `QUEUE_FULL` (HTTP 429) backpressure.
+- **Rejected** — when the bounded depth is already saturated, or the queued serialized bytes would
+  exceed the per-session (`EDITOR_AGENT_MAX_QUEUED_BYTES_PER_SESSION`, 64 MiB) or process-wide
+  (`EDITOR_AGENT_MAX_QUEUED_BYTES_TOTAL`, 256 MiB) bound, a further action is rejected with
+  `QUEUE_FULL` (HTTP 429) backpressure. Bytes are released with the slot (result, timeout, runtime
+  cancellation, reset). The refusal is logged on `editor.agent.action-queue` with the closed reason
+  `queue-count`, `session-bytes` or `process-bytes` and counts and bytes only (#4107).
 
 `TIMED_OUT` and `QUEUE_FULL` are **lifecycle failures** (status `failed`), kept disjoint from the
 preflight **conflict** taxonomy (`DIRTY`, `VERSION_MISMATCH`, `CONTENT_HASH_MISMATCH`,

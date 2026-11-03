@@ -1,3 +1,14 @@
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -11,6 +22,7 @@ import {
   createCodingRuntimeRepositoryInstructionsPort,
   KEIKO_CODING_REPOSITORY_INSTRUCTIONS_ENABLED_ENV,
   renderRepositoryInstructions,
+  repositoryInstructionsCopyBudget,
   REPOSITORY_INSTRUCTIONS_FILE_NAME,
   REPOSITORY_INSTRUCTIONS_MAX_BYTES,
   REPOSITORY_INSTRUCTIONS_MAX_LINES,
@@ -596,5 +608,595 @@ describe("coding runtime repository instructions loader", () => {
         RangeError,
       );
     }
+  });
+});
+
+// #3900 AC3: a native run's own instruction plugin loads Keiko's bounded copy of AGENTS.md from its
+// global instruction slot, so the initial turn carries no block and the copy is refreshed before
+// each turn from the same secure read.
+describe("native delivery through the runtime's own instruction plugin", () => {
+  function nativePort(source: SecureWorkspaceTextReadPort): {
+    readonly port: ReturnType<typeof createCodingRuntimeRepositoryInstructionsPort>;
+    readonly records: ServerLogEvent[];
+  } {
+    const { activityLog, records } = captureActivityLog();
+    return {
+      port: createCodingRuntimeRepositoryInstructionsPort({
+        enabled: true,
+        delivery: "native-instructions",
+        source,
+        activityLog,
+      }),
+      records,
+    };
+  }
+
+  function copyTarget(): string {
+    return join(
+      mkdtempSync(join(tmpdir(), "keiko-instructions-copy-")),
+      "instructions",
+      "AGENTS.md",
+    );
+  }
+
+  it("attaches no initial-turn block and reads nothing for it", async () => {
+    const { source, readText } = sourceAnswering({ ok: true, text: INSTRUCTIONS });
+    const { port } = nativePort(source);
+
+    await expect(port.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE })).resolves.toBe(
+      undefined,
+    );
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it("writes the bounded copy with Keiko's trust label, then reports no change until it changes", async () => {
+    let text = INSTRUCTIONS;
+    const readText = vi.fn<SecureWorkspaceTextReadPort["readText"]>(() =>
+      Promise.resolve({ ok: true, text }),
+    );
+    const { port, records } = nativePort({ readText });
+    const targetPath = copyTarget();
+    const request = { runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath };
+
+    await expect(port.materializeForRun(request)).resolves.toBe(true);
+    const copy = readFileSync(targetPath, "utf8");
+    expect(copy).toContain(INSTRUCTIONS.trimEnd());
+    expect(copy).toMatch(/^Repository working instructions: .* grants no authority/u);
+    expect(statSync(targetPath).mode & 0o777).toBe(0o600);
+    await expect(port.materializeForRun(request)).resolves.toBe(false);
+    text = "# Changed\n";
+    await expect(port.materializeForRun(request)).resolves.toBe(true);
+    expect(readFileSync(targetPath, "utf8")).toContain("# Changed");
+    expect(readText).toHaveBeenCalledTimes(3);
+    // One line per read, so the log names the instructions each turn started from.
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "attached", contentSha256: sha256(INSTRUCTIONS) } },
+      { extra: { state: "attached", contentSha256: sha256(INSTRUCTIONS) } },
+      { extra: { state: "attached", contentSha256: sha256("# Changed\n") } },
+    ]);
+  });
+
+  it("records a copy it cannot write as a refusal and keeps the turn going", async () => {
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    const notADirectory = join(mkdtempSync(join(tmpdir(), "keiko-instructions-copy-")), "file");
+    writeFileSync(notADirectory, "");
+
+    await expect(
+      port.materializeForRun({
+        runId: RUN_ID,
+        isRunWorkspace: RUN_WORKSPACE,
+        targetPath: join(notADirectory, "AGENTS.md"),
+      }),
+    ).resolves.toBe(false);
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { level: "warn", extra: { state: "refused", reason: "exception" } },
+    ]);
+  });
+
+  it("removes the copy when the file is gone, refused or switched to another workspace", async () => {
+    for (const answer of [
+      { ok: false, reason: "not-found" },
+      { ok: false, reason: "too-large" },
+    ] as const) {
+      const targetPath = copyTarget();
+      const { port: writer } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+      await writer.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+      const { port } = nativePort(sourceAnswering(answer).source);
+
+      await expect(
+        port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath }),
+      ).resolves.toBe(true);
+      expect(existsSync(targetPath)).toBe(false);
+    }
+    const targetPath = copyTarget();
+    const { port } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    await expect(
+      port.materializeForRun({ runId: RUN_ID, isRunWorkspace: () => false, targetPath }),
+    ).resolves.toBe(false);
+    expect(existsSync(targetPath)).toBe(false);
+  });
+
+  // The copy's bound used to be the initial-turn block's 16 KiB and 800 lines, so a standalone run
+  // saw an AGENTS.md that a Keiko run did not (#3900 parity). The invariant that remains is that the
+  // copy is bounded and says so: by the helper's ceiling, and by the run's prompt budget below.
+  it("copies the whole file a standalone run loads, past the block's 16 KiB and 800 lines", async () => {
+    const long = `${lines(2_000, "A line of the repository's working instructions,")}\n`;
+    expect(Buffer.byteLength(long, "utf8")).toBeGreaterThan(REPOSITORY_INSTRUCTIONS_MAX_BYTES * 4);
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: long }).source);
+    const targetPath = copyTarget();
+
+    await port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+
+    const copy = readFileSync(targetPath, "utf8");
+    expect(copy).toContain("working instructions, 2000\n");
+    expect(copy).not.toContain("truncated");
+    const { persisted } = expectInstructionsLine(records);
+    expect(persisted).toMatchObject({
+      state: "attached",
+      byteCount: Buffer.byteLength(long, "utf8"),
+      lineCount: 2_000,
+      limitByteCount: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+      estimatedTokens: estimateTokens(copy),
+    });
+    expect(persisted).not.toHaveProperty("omittedByteCount");
+    expect(persisted).not.toHaveProperty("totalByteCount");
+  });
+
+  it("cuts the copy to the run's prompt budget at a line boundary, with the marker and the counts", async () => {
+    const long = lines(2_000);
+    const budget = 4_096;
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: long }).source);
+    const targetPath = copyTarget();
+
+    await port.materializeForRun({
+      runId: RUN_ID,
+      isRunWorkspace: RUN_WORKSPACE,
+      targetPath,
+      contentByteBudget: budget,
+    });
+
+    const copy = readFileSync(targetPath, "utf8");
+    const shown = /the first (\d+) of 2000 lines are shown/u.exec(copy)?.[1];
+    expect(Number(shown)).toBeGreaterThan(0);
+    expect(Number(shown)).toBeLessThan(2_000);
+    expect(copy).toContain(`line ${String(shown)}\n[AGENTS.md truncated:`);
+    expect(copy).not.toContain(`line ${String(Number(shown) + 1)}\n`);
+    const { persisted } = expectInstructionsLine(records);
+    const total = Buffer.byteLength(long, "utf8");
+    expect(persisted).toMatchObject({
+      state: "truncated",
+      lineCount: Number(shown),
+      totalLineCount: 2_000,
+      totalByteCount: total,
+      limitByteCount: budget,
+    });
+    expect(persisted.byteCount).toBeLessThanOrEqual(budget);
+    expect(persisted.omittedByteCount).toBe(total - Number(persisted.byteCount));
+  });
+
+  it("never grants a budget above the helper's ceiling, and refuses one that is negative", async () => {
+    const { port, records } = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    const targetPath = copyTarget();
+    await port.materializeForRun({
+      runId: RUN_ID,
+      isRunWorkspace: RUN_WORKSPACE,
+      targetPath,
+      contentByteBudget: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES * 4,
+    });
+    expect(expectInstructionsLine(records).persisted).toMatchObject({
+      limitByteCount: SECURE_WORKSPACE_TEXT_READ_MAX_BYTES,
+    });
+
+    const refusing = nativePort(sourceAnswering({ ok: true, text: INSTRUCTIONS }).source);
+    await refusing.port.materializeForRun({
+      runId: RUN_ID,
+      isRunWorkspace: RUN_WORKSPACE,
+      targetPath,
+      contentByteBudget: -1,
+    });
+    expect(existsSync(targetPath)).toBe(false);
+    expect(refusing.records.filter((record) => record.op === OP)).toMatchObject([
+      { level: "warn", extra: { state: "refused", reason: "prompt-budget-exhausted" } },
+    ]);
+  });
+
+  it("derives the run's budget from half the model's input window at three bytes per token", () => {
+    expect(repositoryInstructionsCopyBudget(0)).toBe(0);
+    expect(repositoryInstructionsCopyBudget(32_768)).toBe(49_152);
+    // A 131,072-token window less its 16,384 output reserve holds about 168 KiB, so this
+    // repository's own 120 KiB AGENTS.md travels whole on the lab model.
+    expect(repositoryInstructionsCopyBudget(131_072 - 16_384)).toBe(172_032);
+    expect(repositoryInstructionsCopyBudget(131_072 - 16_384)).toBeGreaterThan(125_313);
+  });
+});
+
+// #3900: every Coding Workbench run on this repository logged `redaction-unavailable` and the model
+// got no repository instructions at all, because the canonical projection read plain English prose
+// in AGENTS.md as source code and then refused the whole file. This window of CONTRIBUTING.md (lines
+// 638-641) failed the same way; it is copied here so the proof does not depend on the live file.
+describe("instruction files whose prose once failed the code projection", () => {
+  const CONTRIBUTING_PROSE_WINDOW =
+    [
+      "healthy controls; ordinary file eligibility exclusions and budget limits are not failures.",
+      "",
+      "All repository-add lifecycle join ids, including discarded settlements, must pass the canonical Activity Log correlation guard. Browser delivery-loss counts enter the shared ledger once after rate admission and before routine diversion. Rate-limited reports carrying loss return 429 so the browser restores their counters for later admission; their server-owned drop must not be counted again as a failed POST. Final pagehide loss reports have their own bounded server budget, independent of routine/failure traffic. Gateway streams settle circuit/spend state, close provider iterators and emit completion before yielding done, since production consumers need not advance again. Commit-draft refusals retain measured prompt bounds and generated/reused outcomes share a body-free key digest.",
+      "Repository-add dialogs report the attempt and its live or discarded settlement using the request's",
+    ].join("\n") + "\n";
+
+  async function deliveries(text: string): Promise<{
+    readonly copy: string | undefined;
+    readonly block: string | undefined;
+    readonly lines: readonly Record<string, unknown>[];
+  }> {
+    const captured = captureActivityLog();
+    const source = sourceAnswering({ ok: true, text }).source;
+    const native = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source,
+      activityLog: captured.activityLog,
+    });
+    const mapped = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      source,
+      activityLog: captured.activityLog,
+    });
+    const targetPath = join(mkdtempSync(join(tmpdir(), "keiko-instructions-prose-")), "AGENTS.md");
+    await native.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+    const block = await mapped.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE });
+    return {
+      copy: existsSync(targetPath) ? readFileSync(targetPath, "utf8") : undefined,
+      block,
+      lines: captured.records
+        .filter((record) => record.op === OP)
+        .map((record) => ({ ...record.extra })),
+    };
+  }
+
+  it("delivers the prose to a native run and to the mapped initial turn, unrefused", async () => {
+    const text = `# Rules\n\n${CONTRIBUTING_PROSE_WINDOW}`;
+
+    const { copy, block, lines: recorded } = await deliveries(text);
+
+    expect(copy).toContain(CONTRIBUTING_PROSE_WINDOW.trimEnd());
+    expect(block).toContain(CONTRIBUTING_PROSE_WINDOW.trimEnd());
+    expect(recorded).toHaveLength(2);
+    for (const line of recorded) {
+      expect(line).toMatchObject({ state: "attached", contentSha256: sha256(text) });
+      expect(line).not.toHaveProperty("reason");
+    }
+  });
+
+  it("still refuses an instruction file that holds source which does not parse", async () => {
+    const text = `# Rules\n\nconst password = foo(bar baz, "synthetic-unparsable-value");\n`;
+
+    const { copy, block, lines: recorded } = await deliveries(text);
+
+    expect(copy).toBeUndefined();
+    expect(block).toBeUndefined();
+    expect(recorded).toMatchObject([
+      { state: "refused", reason: "redaction-unavailable" },
+      { state: "refused", reason: "redaction-unavailable" },
+    ]);
+  });
+});
+
+// PR #4064 review r4369385467: the secure read proves the file, not its text. A credential in
+// AGENTS.md reaches neither the native copy nor the initial-turn block; the rest of the file does.
+describe("credential-safe projection of the instructions (r4369385467)", () => {
+  // Split so no contiguous credential literal sits in the source.
+  const TOKEN = "ghp_" + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  const KEY = "AKIA" + "IOSFODNN7EXAMPLE";
+  const WITH_CREDENTIALS = `# Rules\n\nKeep CANARY-RULE.\nGITHUB_TOKEN=${TOKEN}\naws_access_key_id = ${KEY}\n`;
+
+  async function copied(text: string): Promise<{
+    readonly copy: string;
+    readonly records: ServerLogEvent[];
+  }> {
+    const { activityLog, records } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: sourceAnswering({ ok: true, text }).source,
+      activityLog,
+    });
+    const targetPath = join(mkdtempSync(join(tmpdir(), "keiko-instructions-safe-")), "AGENTS.md");
+    await port.materializeForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE, targetPath });
+    return { copy: readFileSync(targetPath, "utf8"), records };
+  }
+
+  it("masks credentials in the native copy, keeps the rest and names the file's own digest", async () => {
+    const { copy, records } = await copied(WITH_CREDENTIALS);
+    expect(copy).toContain("Keep CANARY-RULE.");
+    expect(copy).not.toContain(TOKEN);
+    expect(copy).not.toContain(KEY);
+    expect(copy).toContain("[REDACTED]");
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "attached", contentSha256: sha256(WITH_CREDENTIALS) } },
+    ]);
+  });
+
+  it("masks credentials in the initial-turn block of the mapped profiles", async () => {
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      source: sourceAnswering({ ok: true, text: WITH_CREDENTIALS }).source,
+      activityLog: undefined,
+    });
+    const block = await port.loadForRun({ runId: RUN_ID, isRunWorkspace: RUN_WORKSPACE });
+    expect(block).toContain("Keep CANARY-RULE.");
+    expect(block).not.toContain(TOKEN);
+    expect(block).not.toContain(KEY);
+  });
+
+  it("leaves harmless instructions exactly as written", async () => {
+    const { copy } = await copied(INSTRUCTIONS);
+    expect(copy).toContain(INSTRUCTIONS.trimEnd());
+    expect(copy).not.toContain("[REDACTED]");
+  });
+});
+
+// #3900 AC3: the further sources a standalone run loads ride in the same copy, named, in the
+// producer's order, masked like the root file; every failure leaves the root file's copy intact.
+describe("additional instruction sources in the native copy", () => {
+  const GITHUB_TOKEN = "ghp_" + "ADDITIONALSOURCECANARY0123456789ABCD";
+
+  function homeTree(): {
+    readonly home: string;
+    readonly workspace: string;
+    readonly config: string;
+  } {
+    const home = realpathSync(mkdtempSync(join(tmpdir(), "keiko-instruction-home-")));
+    const config = join(home, ".config", "opencode");
+    const workspace = join(home, "work", "repo");
+    mkdirSync(config, { recursive: true });
+    mkdirSync(join(workspace, "docs"), { recursive: true });
+    return { home, workspace, config };
+  }
+
+  /** The workspace answered from disk: text reads only (no native listing, so no patterns). */
+  function diskSource(workspace: string): SecureWorkspaceTextReadPort {
+    return {
+      readText: ({ relativePath }): Promise<SecureWorkspaceTextReadResult> => {
+        const path = join(workspace, relativePath);
+        return Promise.resolve(
+          existsSync(path)
+            ? { ok: true, text: readFileSync(path, "utf8") }
+            : { ok: false, reason: "not-found" },
+        );
+      },
+    };
+  }
+
+  function discoveringPort(
+    tree: ReturnType<typeof homeTree>,
+    remote?: { readonly fetchImpl: typeof fetch },
+  ): {
+    readonly port: ReturnType<typeof createCodingRuntimeRepositoryInstructionsPort>;
+    readonly records: ServerLogEvent[];
+  } {
+    const { activityLog, records } = captureActivityLog();
+    return {
+      port: createCodingRuntimeRepositoryInstructionsPort({
+        enabled: true,
+        delivery: "native-instructions",
+        source: diskSource(tree.workspace),
+        activityLog,
+        discovery: {
+          workspaceRoot: tree.workspace,
+          home: tree.home,
+          globalConfigDirectory: tree.config,
+          ...(remote === undefined
+            ? {}
+            : { remote: { egress: () => undefined, fetchImpl: remote.fetchImpl } }),
+        },
+      }),
+      records,
+    };
+  }
+
+  const request = (
+    targetPath: string,
+  ): {
+    readonly runId: string;
+    readonly isRunWorkspace: () => boolean;
+    readonly targetPath: string;
+  } => ({
+    runId: RUN_ID,
+    isRunWorkspace: RUN_WORKSPACE,
+    targetPath,
+  });
+
+  function copyAt(): string {
+    return join(mkdtempSync(join(tmpdir(), "keiko-instructions-copy-")), "AGENTS.md");
+  }
+
+  it("copies global, root, ancestor and configured sources in order, masked and counted", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-RULE\n");
+    writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");
+    writeFileSync(join(tree.home, "AGENTS.md"), "ANCESTOR-RULE\n");
+    writeFileSync(
+      join(tree.workspace, "docs", "style.md"),
+      `STYLE-RULE\nGITHUB_TOKEN=${GITHUB_TOKEN}\n`,
+    );
+    writeFileSync(
+      join(tree.workspace, "opencode.json"),
+      JSON.stringify({ instructions: ["docs/style.md", "../../outside.md"] }),
+    );
+    const { port, records } = discoveringPort(tree);
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    const copy = readFileSync(targetPath, "utf8");
+    const order = ["GLOBAL-RULE", "ROOT-RULE", "ANCESTOR-RULE", "STYLE-RULE"].map((rule) =>
+      copy.indexOf(rule),
+    );
+    expect(order.every((position) => position >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(copy).toMatch(/^Working instructions copied by Keiko: /u);
+    expect(copy).toContain("Instructions from ~/AGENTS.md, above the task workspace:");
+    expect(copy).toContain("Instructions from docs/style.md, named by an instructions setting:");
+    expect(copy).not.toContain(GITHUB_TOKEN);
+    const { persisted } = expectInstructionsLine(records);
+    expect(persisted).toMatchObject({
+      state: "attached",
+      globalSourceCount: 1,
+      ancestorSourceCount: 1,
+      configuredSourceCount: 1,
+      remoteSourceCount: 0,
+      refusedSourceCount: 1,
+      omittedSourceCount: 0,
+    });
+    expect(JSON.stringify(persisted)).not.toContain("STYLE-RULE");
+  });
+
+  it("copies the additional sources even when the workspace has no AGENTS.md", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-ONLY\n");
+    const { port, records } = discoveringPort(tree);
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    expect(readFileSync(targetPath, "utf8")).toContain("GLOBAL-ONLY");
+    expect(readFileSync(targetPath, "utf8")).not.toContain("task workspace root (AGENTS.md)");
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "absent", reason: "not-found", globalSourceCount: 1 } },
+    ]);
+  });
+
+  it("refuses a remote source below Full access and pulls it once in Full access", async () => {
+    const tree = homeTree();
+    writeFileSync(
+      join(tree.config, "opencode.json"),
+      JSON.stringify({ instructions: ["https://rules.example.test/team.md"] }),
+    );
+    const below = discoveringPort(tree);
+    const belowCopy = copyAt();
+    await below.port.materializeForRun(request(belowCopy));
+    expect(existsSync(belowCopy)).toBe(false);
+    expect(below.records.filter((record) => record.op === OP)).toMatchObject([
+      { extra: { state: "absent", refusedSourceCount: 1, remoteSourceCount: 0 } },
+    ]);
+
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response("REMOTE-RULE\n", { status: 200 })),
+    );
+    const full = discoveringPort(tree, { fetchImpl });
+    const fullCopy = copyAt();
+    await full.port.materializeForRun(request(fullCopy));
+    await full.port.materializeForRun(request(fullCopy));
+    expect(readFileSync(fullCopy, "utf8")).toContain(
+      "Instructions from https://rules.example.test/team.md, named by an instructions setting and pulled by Keiko:\nREMOTE-RULE",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(full.records.filter((record) => record.op === OP).at(-1)).toMatchObject({
+      extra: { remoteSourceCount: 1, refusedSourceCount: 0 },
+    });
+  });
+
+  it("records a failed remote pull with its frames and keeps every other source", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");
+    writeFileSync(
+      join(tree.config, "opencode.json"),
+      JSON.stringify({ instructions: ["https://rules.example.test/down.md"] }),
+    );
+    const { port, records } = discoveringPort(tree, {
+      fetchImpl: () => Promise.reject(new Error("connect refused")),
+    });
+    const targetPath = copyAt();
+
+    await port.materializeForRun(request(targetPath));
+    expect(readFileSync(targetPath, "utf8")).toContain("ROOT-RULE");
+    const lines = records.filter((record) => record.op === OP);
+    expect(lines).toMatchObject([
+      {
+        level: "warn",
+        extra: { state: "refused", reason: "source-unavailable", sourceKind: "remote" },
+      },
+      { extra: { state: "attached", refusedSourceCount: 1 } },
+    ]);
+    expect(lines[0]?.extra?.frames).toEqual(expect.any(Array));
+  });
+
+  it("pulls the remote sources together, so an unreachable network costs one wait, not one each", async () => {
+    const tree = homeTree();
+    const urls = ["one", "two", "three"].map((name) => `https://rules.example.test/${name}.md`);
+    writeFileSync(join(tree.config, "opencode.json"), JSON.stringify({ instructions: urls }));
+    // Every pull is held until all of them are in flight: pulls made one after another never are.
+    let inFlight = 0;
+    let release = (): void => undefined;
+    const allInFlight = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+      const url = input instanceof Request ? input.url : String(input);
+      inFlight += 1;
+      if (inFlight === urls.length) release();
+      await allInFlight;
+      return new Response(`RULE ${new URL(url).pathname}\n`, { status: 200 });
+    });
+    const { port, records } = discoveringPort(tree, { fetchImpl });
+    const targetPath = copyAt();
+
+    await expect(port.materializeForRun(request(targetPath))).resolves.toBe(true);
+    expect(fetchImpl).toHaveBeenCalledTimes(urls.length);
+    const copy = readFileSync(targetPath, "utf8");
+    const order = urls.map((url) => copy.indexOf(`RULE ${new URL(url).pathname}`));
+    expect(order.every((position) => position >= 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(records.filter((record) => record.op === OP).at(-1)).toMatchObject({
+      extra: { remoteSourceCount: urls.length, refusedSourceCount: 0 },
+    });
+  });
+
+  it("records a discovery failure with its frames and still copies the root file", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.workspace, "AGENTS.md"), "ROOT-RULE\n");
+    const { activityLog, records } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: true,
+      delivery: "native-instructions",
+      source: {
+        readText: ({ relativePath }) =>
+          relativePath === "AGENTS.md"
+            ? Promise.resolve({ ok: true, text: "ROOT-RULE\n" })
+            : Promise.reject(new Error("helper crashed")),
+      },
+      activityLog,
+      discovery: {
+        workspaceRoot: tree.workspace,
+        home: tree.home,
+        globalConfigDirectory: tree.config,
+      },
+    });
+    const targetPath = copyAt();
+
+    await port.materializeForRun(request(targetPath));
+    expect(readFileSync(targetPath, "utf8")).toMatch(/^Repository working instructions: /u);
+    expect(records.filter((record) => record.op === OP)).toMatchObject([
+      { level: "warn", extra: { state: "refused", reason: "exception", sourceKind: "discovery" } },
+      { extra: { state: "attached" } },
+    ]);
+  });
+
+  it("discovers nothing while the operator disabled the loader", async () => {
+    const tree = homeTree();
+    writeFileSync(join(tree.config, "AGENTS.md"), "GLOBAL-RULE\n");
+    const { activityLog } = captureActivityLog();
+    const port = createCodingRuntimeRepositoryInstructionsPort({
+      enabled: false,
+      delivery: "native-instructions",
+      source: diskSource(tree.workspace),
+      activityLog,
+      discovery: {
+        workspaceRoot: tree.workspace,
+        home: tree.home,
+        globalConfigDirectory: tree.config,
+      },
+    });
+    const targetPath = copyAt();
+    await port.materializeForRun(request(targetPath));
+    expect(existsSync(targetPath)).toBe(false);
   });
 });

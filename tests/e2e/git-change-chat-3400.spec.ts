@@ -63,6 +63,16 @@ async function activateWithKeyboard(control: Locator): Promise<void> {
   await control.press("Enter");
 }
 
+// Since #3676 the composer reads its live editor text and hands it to the session after the input
+// event, so Send is an aria-disabled `type="button"` for a moment after `fill`; Enter on it is a
+// no-op and nothing retries it. A person cannot press inside that window, so the journey waits for
+// the control to be enabled, exactly as chat-send.smoke.spec.ts does before it sends.
+async function sendWithKeyboard(chatWindow: Locator): Promise<void> {
+  const send = chatWindow.getByRole("button", { name: "Send message" });
+  await expect(send).toBeEnabled();
+  await activateWithKeyboard(send);
+}
+
 async function sendConnectedRefinement(
   chatWindow: Locator,
   request: string,
@@ -70,7 +80,7 @@ async function sendConnectedRefinement(
 ): Promise<void> {
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await composer.fill(request);
-  await activateWithKeyboard(chatWindow.getByRole("button", { name: "Send message" }));
+  await sendWithKeyboard(chatWindow);
   await expect(chatWindow.getByText(expected, { exact: false }).first()).toBeVisible({
     timeout: 30_000,
   });
@@ -153,7 +163,7 @@ test("connects the Git window's current branch to a Chat and shows the scope pil
   const composer = chatWindow.getByRole("textbox", { name: "Chat message" });
   await composer.click();
   await composer.fill("First connected refinement");
-  await activateWithKeyboard(chatWindow.getByRole("button", { name: "Send message" }));
+  await sendWithKeyboard(chatWindow);
   await expect(
     chatWindow.getByText("First connected refinement is retained", { exact: false }).first(),
   ).toBeVisible({

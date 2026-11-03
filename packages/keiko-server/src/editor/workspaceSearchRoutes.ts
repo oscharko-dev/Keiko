@@ -73,8 +73,8 @@ const WORKSPACE_SEARCH_SCOPE_ID = "editor-workspace-search";
 const WORKSPACE_SEARCH_SNIPPET_BYTES = 8 * 1024;
 // `renderFullFileModifyDiff` renders the entire file as one modify hunk (every original line as
 // `-`, every new line as `+`), so the preflight diff is roughly 2x the size of a file up to
-// `DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned`. `keiko-tools`' DEFAULT_PATCH_LIMITS is sized for
-// small assistant-generated patches (64KB / 2,000 changed lines) and would reject a real,
+// `DEFAULT_SEARCH_LIMITS.maxBytesPerFileScanned`. `keiko-tools`' DEFAULT_PATCH_LIMITS bounds a patch
+// to 2,000 changed lines (its byte bound is the shared governed patch cap) and would reject a real,
 // moderately-sized source file even for a single-word replacement. This override keeps the same
 // governed, bounded preflight (still fails closed, still routes through validatePatch/applyPatch)
 // but sizes the bound to the feature this route actually serves: replacing text in any file the

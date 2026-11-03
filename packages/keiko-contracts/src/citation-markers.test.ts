@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { citationMarkerIndices, findCitationMarkerGroups } from "./citation-markers.js";
+import {
+  citationMarkerIndices,
+  findCitationMarkerGroups,
+  markdownCodeRanges,
+} from "./citation-markers.js";
 
 describe("findCitationMarkerGroups", () => {
   it("reads a single ASCII marker with its offsets", () => {
@@ -200,6 +204,28 @@ describe("findCitationMarkerGroups", () => {
   it("treats an unmatched backtick or a short tilde run as literal text", () => {
     expect(citationMarkerIndices("A lone ` backtick [1] and ~~strike~~ [2]")).toEqual([1, 2]);
     expect(citationMarkerIndices("Mid-line ``` is inline code `[1]` [2]")).toEqual([2]);
+  });
+
+  it("reports unresolved inline hints without granting them code or citation authority", () => {
+    const hints: string[] = [];
+    const text = "See `unfinished [1]\n\nNext [2].";
+    expect(
+      markdownCodeRanges(text, (range, delimiterLength) => {
+        hints.push(text.slice(range.start + delimiterLength, range.end));
+      }),
+    ).toEqual([]);
+    expect(hints).toEqual(["unfinished [1]"]);
+    expect(citationMarkerIndices(text)).toEqual([1, 2]);
+  });
+
+  it("does not report completed inline spans or fenced contents as unresolved hints", () => {
+    const hints: string[] = [];
+    const text = "Inline `closed` then ``unfinished\n\n```ts\nconst value = `text`;\n```";
+    const observed = markdownCodeRanges(text, (range, delimiterLength) => {
+      hints.push(text.slice(range.start + delimiterLength, range.end));
+    });
+    expect(observed).toEqual(markdownCodeRanges(text));
+    expect(hints).toEqual(["unfinished"]);
   });
 
   it("stays linear on hostile runs of unmatched backticks of distinct lengths", () => {

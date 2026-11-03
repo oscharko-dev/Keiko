@@ -6,6 +6,8 @@ export type UiStoreErrorCode =
   | "PATH_NOT_DIRECTORY"
   | "PATH_NOT_FOUND"
   | "PROJECT_EXISTS"
+  | "PROJECT_IDENTITY_CHANGED"
+  | "GROUNDING_SCOPE_CHANGED"
   | "NOT_FOUND"
   | "INVALID_REQUEST"
   | "INTERNAL";
@@ -44,4 +46,12 @@ export function invalidRequest(message: string): UiStoreError {
 
 export function projectExists(): UiStoreError {
   return new UiStoreError("PROJECT_EXISTS", "Project already registered.", 409);
+}
+
+export function projectIdentityChanged(): UiStoreError {
+  return new UiStoreError(
+    "PROJECT_IDENTITY_CHANGED",
+    "The registered project identity changed. Reconnect the project before continuing.",
+    409,
+  );
 }

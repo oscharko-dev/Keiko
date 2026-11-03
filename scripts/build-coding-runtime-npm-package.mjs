@@ -11,12 +11,18 @@
 // the desktop packages use, and the helper is compiled by the same build script. The server
 // re-verifies both against digests pinned in its own source at every start (npm lane,
 // devLanePortableCodingRuntime.ts), so this package never vouches for itself.
+//
+// OpenCode's glob and grep tools run ripgrep and would otherwise download it on first use, which a
+// firewalled customer cannot do (#3897, #4064). The package therefore also carries the pinned,
+// digest-verified upstream `rg` and its MIT text at the portable payload's own paths, staged by the
+// same function the desktop packages use. The server verifies `runtime/native/rg` against the
+// digest pinned in ripgrepRuntime.ts at every run launch, so this package vouches for nothing there
+// either; a package that lacks it only degrades search.
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -37,16 +43,21 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { prepareApprovedSidecarPayloads } from "./prepare-approved-sidecar-payloads.mjs";
 import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
-import { extractPackedRuntimePackage, stageNodeRuntime } from "./stage-portable-runtime.mjs";
+import {
+  extractPackedRuntimePackage,
+  ripgrepToolManifestEntry,
+  sbomForManifest,
+  stageRipgrepTool,
+} from "./stage-portable-runtime.mjs";
+import { provisionRipgrep } from "./provision-ripgrep.mjs";
 import { portableTargetByName } from "./portable-runtime.mjs";
 import {
-  NPM_PACK_STDIO_MAX_BUFFER,
-  packFiles,
-  npmCommand,
-  shouldShellNpmCommand,
-} from "./package-surface-pack.mjs";
-import { offendersForComponent } from "./check-workspace-supply-chain.mjs";
-import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
+  RIPGREP_PORTABLE_LICENSE_PATH,
+  ripgrepPortableExecutablePath,
+  ripgrepRuntimeApproval,
+  ripgrepRuntimeTargetKey,
+} from "../packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts";
+import { NPM_PACK_STDIO_MAX_BUFFER } from "./package-surface-pack.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import {
   platformRuntimePackageName,
@@ -59,14 +70,22 @@ const HELPER_RELATIVE_PATH = "native/keiko-secure-workspace-read";
 const EXECUTABLE_PATH = "runtime/opencode-compatible/payload/bin/opencode";
 const LICENSE_PATH = "runtime/opencode-compatible/payload/evidence/LICENSE";
 const SBOM_PATH = "runtime/opencode-compatible/payload/evidence/sbom.cdx.json";
-const CANDIDATE_FILES = [
-  "LICENSE.md",
-  "package.json",
-  `runtime/${HELPER_RELATIVE_PATH}`,
-  EXECUTABLE_PATH,
-  LICENSE_PATH,
-  SBOM_PATH,
-].sort(compareStrings);
+const RIPGREP_SBOM_PATH = "runtime/licenses/ripgrep/sbom.cdx.json";
+
+/** Every file a candidate carries; the ripgrep executable name is the target release's own. */
+function candidateFiles(ripgrep) {
+  return [
+    "LICENSE.md",
+    "package.json",
+    `runtime/${HELPER_RELATIVE_PATH}`,
+    EXECUTABLE_PATH,
+    LICENSE_PATH,
+    SBOM_PATH,
+    ripgrepPortableExecutablePath(ripgrep.targetKey),
+    RIPGREP_PORTABLE_LICENSE_PATH,
+    RIPGREP_SBOM_PATH,
+  ].sort(compareStrings);
+}
 
 /** The platform list and its naming are owned by the release workspace policy. */
 export const NPM_RUNTIME_PACKAGE_TARGETS = platformRuntimePackages;
@@ -79,7 +98,8 @@ export function codingRuntimePackageManifest(target, version) {
     version,
     description:
       "Keiko Coding Workbench runtime for npm installations: the review-approved OpenCode " +
-      "executable and Keiko's native secure workspace read helper. Verified by Keiko at every start.",
+      "executable, Keiko's native secure workspace read helper and the pinned ripgrep search " +
+      "executable. Verified by Keiko at every start.",
     // A valid SPDX expression, never "SEE LICENSE IN …": the supply-chain gates evaluate the
     // license of everything the main package can install and refuse what they cannot parse.
     // OpenCode is MIT, the helper is Keiko's own Apache-2.0 code.
@@ -96,19 +116,77 @@ function sha256File(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function licenseNotice(target) {
+function licenseNotice(target, ripgrep) {
   return [
     `# ${codingRuntimePackageName(target)}`,
     "",
-    "This package redistributes two components:",
+    "This package redistributes three components:",
     "",
     "- `runtime/opencode-compatible/payload/bin/opencode`: OpenCode, MIT License. The upstream",
     "  license text is `runtime/opencode-compatible/payload/evidence/LICENSE`, and its software",
     "  bill of materials is `runtime/opencode-compatible/payload/evidence/sbom.cdx.json`.",
     "- `runtime/native/keiko-secure-workspace-read`: part of Keiko, under Keiko's license",
     "  (https://github.com/oscharko-dev/Keiko/blob/dev/LICENSE).",
+    `- \`${ripgrepPortableExecutablePath(ripgrep.targetKey)}\`: ripgrep ${ripgrep.version}, the unmodified upstream`,
+    `  release executable, licensed under ${ripgrep.licenseExpression}, at the recipient's option.`,
+    `  Keiko ships the MIT text at \`${RIPGREP_PORTABLE_LICENSE_PATH}\` and`,
+    `  records the component in \`${RIPGREP_SBOM_PATH}\`.`,
+    `  Source: ${ripgrep.archiveUrl}`,
     "",
   ].join("\n");
+}
+
+/**
+ * The CycloneDX record of the ripgrep component, derived from the pinned approval and the bytes
+ * actually staged in `packageDir`, so the build and the candidate inspection cannot disagree.
+ */
+function ripgrepSbomText(target, ripgrep, packageDir) {
+  const executablePath = ripgrepPortableExecutablePath(ripgrep.targetKey);
+  const entry = ripgrepToolManifestEntry(
+    portableTargetByName(target),
+    ripgrep,
+    {
+      destination: join(packageDir, ...executablePath.split("/")),
+      executablePath,
+      licensePath: RIPGREP_PORTABLE_LICENSE_PATH,
+    },
+    false,
+  );
+  const sbom = sbomForManifest({ nativeHelpers: [], nativeAddons: [], nativeTools: [entry] });
+  return `${JSON.stringify(sbom, null, 2)}\n`;
+}
+
+/**
+ * Provisions (once, verified) and stages the pinned ripgrep of the TARGET release at the portable
+ * payload's own paths, and returns its approval. Reuses `provision-ripgrep` and the portable
+ * `stageRipgrepTool` rather than a second fetch or verify path; one Mac builds both architectures,
+ * so the target's release is provisioned, never the build host's. Both stages throw instead of
+ * exiting the process.
+ */
+export function stagePinnedNpmRipgrep(
+  target,
+  packageRoot,
+  { provision = provisionRipgrep, stage = stageRipgrepTool } = {},
+) {
+  const portableTarget = portableTargetByName(target);
+  if (portableTarget === undefined || NPM_RUNTIME_PACKAGE_TARGETS[target] === undefined) {
+    throw new TypeError(`unsupported npm runtime package target: ${target}`);
+  }
+  const approval = ripgrepRuntimeApproval(
+    ripgrepRuntimeTargetKey(portableTarget.nodePlatform, portableTarget.nodeArchitecture),
+  );
+  if (approval === undefined) throw new Error(`no pinned ripgrep for ${target}`);
+  const refuse = (message) => {
+    throw new Error(`ripgrep staging refused: ${message}`);
+  };
+  provision({
+    hostPlatform: portableTarget.nodePlatform,
+    hostArchitecture: portableTarget.nodeArchitecture,
+    failWith: refuse,
+    log: (message) => console.error(message),
+  });
+  stage(portableTarget, packageRoot, { onFailure: refuse });
+  return approval;
 }
 
 /**
@@ -122,6 +200,7 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
   }
   const prepare = deps.prepareSidecars ?? prepareApprovedSidecarPayloads;
   const runBuild = deps.runBuild ?? runSecureWorkspaceReadBuild;
+  const stageRipgrep = deps.stageRipgrep ?? stagePinnedNpmRipgrep;
   const manifest = codingRuntimePackageManifest(target, version);
   const staging = mkdtempSync(join(tmpdir(), "keiko-coding-runtime-npm-"));
   try {
@@ -139,8 +218,11 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
     const buildScript = join(repoRoot, "scripts", "build-secure-workspace-read.mjs");
     const status = await runBuild({ argv: [process.execPath, buildScript, target, helperPath] });
     if (status !== 0) throw new Error(`secure-workspace-read build failed with status ${status}`);
+    const ripgrep = await stageRipgrep(target, outDir);
+    mkdirSync(dirname(join(outDir, RIPGREP_SBOM_PATH)), { recursive: true });
+    writeFileSync(join(outDir, RIPGREP_SBOM_PATH), ripgrepSbomText(target, ripgrep, outDir));
     writeFileSync(join(outDir, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
-    writeFileSync(join(outDir, "LICENSE.md"), licenseNotice(target));
+    writeFileSync(join(outDir, "LICENSE.md"), licenseNotice(target, ripgrep));
     return {
       helperSha256: sha256File(helperPath),
       helperSizeBytes: statSync(helperPath).size,
@@ -153,407 +235,20 @@ export async function buildCodingRuntimeNpmPackage({ target, version, outDir, de
   }
 }
 
-const SERVICE_HOST_PATH = "runtime/opencode-compatible/service-host/payload";
-const HOST_SOURCE_MEMBERS = [
-  "host.mjs",
-  "entry.mjs",
-  "guard-seams.mjs",
-  "package.json",
-  "package-lock.json",
-];
-
-async function serviceHostOwners() {
-  const [adapter, artifact, security, handoff, contract] = await Promise.all([
-    import("../packages/keiko-server/dist/coding-runtime/opencodeRuntimeAdapter.js"),
-    import("../packages/keiko-server/dist/coding-runtime/opencodeServiceHostArtifact.js"),
-    import("../packages/keiko-security/dist/portable-tree-attestation.js"),
-    import("../packages/keiko-server/dist/update-portable-handoff-tree.js"),
-    import("../packages/keiko-contracts/dist/opencode-service-host.js"),
-  ]);
-  return { adapter, artifact, security, handoff, contract };
-}
-
-function fixedHostAssets({ adapter, artifact }) {
-  return {
-    "keiko-governed-tools.mjs": adapter.createGeneratedOpenCodeV2HostFactory("direct"),
-    "keiko-governed-tools-code-mode.mjs": adapter.createGeneratedOpenCodeV2HostFactory("code-mode"),
-    "keiko-native-context.mjs": adapter.createGeneratedOpenCodeV2Plugins().keiko_native_context,
-    "keiko-host-packet-data.mjs": artifact.createOpenCodeServiceHostPacketDataAsset(),
-  };
-}
-
-function runHostNpm(root, args) {
-  return execFileSync(npmCommand(), args, {
-    cwd: root,
-    encoding: "utf8",
-    timeout: 300_000,
-    maxBuffer: NPM_PACK_STDIO_MAX_BUFFER,
-    // SECURITY-SHELL-OK: trusted npm.cmd needs a shell on Windows; both callers use fixed ci/sbom
-    // argv. npmCommand resolves and quotes the host executable; root is cwd, not a shell argument.
-    shell: shouldShellNpmCommand(),
-  });
-}
-
-function installFixedHost(root) {
-  runHostNpm(root, [
-    "ci",
-    "--ignore-scripts",
-    "--omit=dev",
-    "--workspaces=false",
-    "--bin-links=false",
-    "--offline",
-    "--no-audit",
-    "--no-fund",
-  ]);
-}
-
-function originalHostSbom(root) {
-  const sbom = JSON.parse(
-    runHostNpm(root, ["sbom", "--sbom-format", "cyclonedx", "--omit=dev", "--workspaces=false"]),
-  );
-  // npm includes wall-clock build time; serial identity is derived after deterministic facts.
-  if (sbom.metadata !== undefined) delete sbom.metadata.timestamp;
-  return sbom;
-}
-
-function writeEvidence(root, path, value) {
-  mkdirSync(dirname(join(root, path)), { recursive: true });
-  writeFileSync(join(root, path), `${JSON.stringify(value, null, 2)}\n`);
-}
-
-function hostLicenseInventory(root, sbom) {
-  const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
-  const paths = candidateFilePaths(root).sort();
-  const packages = paths
-    .filter((path) => path.startsWith("node_modules/") && path.endsWith("/package.json"))
-    .map((path) => {
-      const manifest = JSON.parse(readFileSync(join(root, path), "utf8"));
-      return {
-        path,
-        name: manifest.name ?? null,
-        version: manifest.version ?? null,
-        license: manifest.license ?? null,
-        manifestSha256: sha256File(join(root, path)),
-        role:
-          lock.packages[path.slice(0, -"/package.json".length)] === undefined
-            ? "bundled-package-metadata"
-            : "installed-locked-dependency",
-      };
-    });
-  return {
-    schemaVersion: 1,
-    packages,
-    sbomCoverage: hostSbomCoverage(packages, sbom),
-    noticeFiles: paths.filter((path) =>
-      /\/(?:licen[cs]e|notice|copying|readme)(?:[.-].*)?$/iu.test(path),
-    ),
-    offenders: (sbom.components ?? []).flatMap(offendersForComponent),
-  };
-}
-
-function hostSbomCoverage(packages, sbom) {
-  const keys = new Set(
-    (sbom.components ?? []).map((component) => `${component.name}@${component.version}`),
-  );
-  const installed = packages.filter((entry) => entry.role === "installed-locked-dependency");
-  const covered = new Set(
-    installed
-      .filter((entry) => {
-        const alias = entry.path.slice(0, -"/package.json".length).split("node_modules/").at(-1);
-        return keys.has(`${alias}@${entry.version}`) || keys.has(`${entry.name}@${entry.version}`);
-      })
-      .map((entry) => `${entry.name}@${entry.version}`),
-  );
-  const missing = installed
-    .filter((entry) => !covered.has(`${entry.name}@${entry.version}`))
-    .map(({ path }) => path);
-  if (missing.length > 0) throw new Error("original npm SBOM omits installed locked dependencies");
-  return {
-    semantics: "npm identities resolved through actual installed alias manifests",
-    installedLockedPackageCount: installed.length,
-    missing,
-  };
-}
-
-function completeHostSbom(original, facts, nodeFacts) {
-  const components = [
-    ...(original.components ?? []),
-    {
-      type: "application",
-      name: "node",
-      version: facts.nodeVersion,
-      "bom-ref": `node@${facts.nodeVersion}`,
-      hashes: [{ alg: "SHA-256", content: nodeFacts.executableSha256 }],
-      licenses: [{ license: { id: "MIT" } }],
-    },
-  ];
-  const dependencies = (original.dependencies ?? []).map((entry) =>
-    entry.ref === original.metadata?.component?.["bom-ref"]
-      ? { ...entry, dependsOn: [...entry.dependsOn, `node@${facts.nodeVersion}`] }
-      : entry,
-  );
-  dependencies.push({ ref: `node@${facts.nodeVersion}`, dependsOn: [] });
-  return withCyclonedxSerialNumber({ ...original, components, dependencies });
-}
-
-function serviceThirdPartyNotice() {
-  return [
-    "# Original service host third-party notices",
-    "",
-    "Dependency license and notice files are retained unchanged under node_modules.",
-    "Node.js distribution notices are retained in Node-LICENSE and Node-NOTICE.",
-    "",
-    "## spdx-exceptions 2.5.0",
-    "",
-    "SPDX license exception identifiers. Copyright © 2010–2015 Linux Foundation and its Contributors.",
-    "Package contributor: Kyle E. Mitchell.",
-    "Source: https://github.com/kemitchell/spdx-exceptions.json/tree/3aa64bec339abc6a3eca00c3436aaa7e154b8799.",
-    "License: Creative Commons Attribution 3.0 Unported (CC-BY-3.0), https://creativecommons.org/licenses/by/3.0/.",
-    "Distributed package files are unchanged. Upstream notices remain in node_modules/spdx-exceptions/README.md.",
-    "No endorsement by the original authors is implied.",
-    "",
-    "The documented component dispositions in PR #3895 apply only to the exact original artifacts.",
-    "This remains a private candidate; platform qualification and production activation are separate.",
-    "",
-  ].join("\n");
-}
-
-function lockedHostInputs(source, facts) {
-  const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
-  const lock = JSON.parse(readFileSync(join(source, "package-lock.json"), "utf8"));
-  const expected = {
-    "@opencode/server": facts.moduleVersion,
-    "@opencode/core": facts.moduleVersion,
-    "@opencode/util": facts.moduleVersion,
-    "@opencode/ai": facts.moduleVersion,
-    "@opencode/plugin": facts.moduleVersion,
-    effect: facts.effectVersion,
-    "@effect/platform-node": facts.effectVersion,
-    "@effect/platform-node-shared": facts.effectVersion,
-  };
-  if (
-    manifest.private !== true ||
-    !isDeepStrictEqual(manifest.dependencies, expected) ||
-    !isDeepStrictEqual(lock.packages?.[""].dependencies, expected)
-  ) {
-    throw new Error("fixed host dependency inputs differ from the canonical module facts");
-  }
-  return Object.entries(lock.packages)
-    .filter(([path]) => path !== "")
-    .map(([path, value]) => ({
-      path,
-      version: value.version,
-      integrity: value.integrity ?? null,
-      resolved: value.resolved ?? null,
-      dev: value.dev === true,
-      optional: value.optional === true,
-    }));
-}
-
-async function stageFixedHost(input, owners) {
-  const root = join(input.outDir, SERVICE_HOST_PATH);
-  const source = join(repoRoot, "native/opencode-service-host");
-  const facts = owners.contract.OPENCODE_SERVICE_HOST_FIXED_FACTS;
-  const lockedInputs = lockedHostInputs(source, facts);
-  mkdirSync(root, { recursive: true });
-  for (const member of HOST_SOURCE_MEMBERS) copyFileSync(join(source, member), join(root, member));
-  const assets = fixedHostAssets(owners);
-  const codec = owners.artifact.createOpenCodeServiceHostNativeCodecAsset();
-  copyFileSync(codec.source, join(root, codec.filename));
-  const policyAssets = owners.artifact.createOpenCodeServiceHostNativePolicyAssets();
-  for (const asset of policyAssets) {
-    mkdirSync(dirname(join(root, asset.filename)), { recursive: true });
-    copyFileSync(asset.source, join(root, asset.filename));
-  }
-  for (const [path, body] of Object.entries(assets)) writeFileSync(join(root, path), body);
-  await (input.deps.installHost ?? installFixedHost)(root);
-  const node = await stageFixedHostNode(input, root, facts);
-  const original = await (input.deps.hostSbom ?? originalHostSbom)(root);
-  const sbom = completeHostSbom(original, facts, node);
-  const inventory = hostLicenseInventory(root, original);
-  writeEvidence(root, "evidence/sbom.cdx.json", sbom);
-  writeEvidence(root, "evidence/installed-package-license-inventory.json", inventory);
-  writeFileSync(join(root, "evidence/THIRD-PARTY-NOTICES.md"), serviceThirdPartyNotice());
-  const sourceFiles = HOST_SOURCE_MEMBERS.map((path) => ({
-    path,
-    sha256: sha256File(join(source, path)),
-  }));
-  const generatedFiles = [
-    ...Object.entries(assets).map(([path, body]) => ({
-      path,
-      sha256: createHash("sha256").update(body).digest("hex"),
-    })),
-    { path: codec.filename, sha256: sha256File(codec.source) },
-    ...policyAssets.map((asset) => ({ path: asset.filename, sha256: sha256File(asset.source) })),
-  ];
-  writeEvidence(root, "evidence/build-provenance.json", {
-    schemaVersion: 1,
-    qualification: "private-functional-unapproved",
-    ...facts,
-    builderSha256: sha256File(fileURLToPath(import.meta.url)),
-    sourceFiles,
-    generatedFiles,
-    lockedInputs,
-    node,
-    sourceBuildProvenance: facts.sourceBuildProvenance,
-  });
-  return { root, inventory, node };
-}
-
-async function stageFixedHostNode(input, root, facts) {
-  const staging = mkdtempSync(join(tmpdir(), "keiko-service-node-"));
-  try {
-    const options = { ...input.node, nodeVersion: facts.nodeVersion };
-    const archiveSha256 = await (input.deps.stageNode ?? stageNodeRuntime)(
-      options,
-      portableTargetByName(input.target),
-      staging,
-    );
-    const source = join(staging, "runtime/node");
-    mkdirSync(join(root, "runtime"), { recursive: true });
-    copyFileSync(join(source, "bin/node"), join(root, facts.nodeExecutablePath));
-    for (const name of ["LICENSE", "NOTICE"]) {
-      mkdirSync(join(root, "evidence"), { recursive: true });
-      copyFileSync(join(source, name), join(root, "evidence", `Node-${name}`));
-    }
-    return {
-      archiveSha256,
-      executableSha256: sha256File(join(root, facts.nodeExecutablePath)),
-      licenseSha256: sha256File(join(root, "evidence/Node-LICENSE")),
-      noticeSha256: sha256File(join(root, "evidence/Node-NOTICE")),
-    };
-  } finally {
-    rmSync(staging, { recursive: true, force: true });
-  }
-}
-
-function servicePackedFileFacts(packageDir) {
-  const staged = candidateFilePaths(packageDir).sort();
-  const packed = packFiles({ packageDir })
-    .map(({ path }) => path)
-    .sort();
-  const retained = new Set(packed);
-  const stagedSet = new Set(staged);
-  const excluded = staged.filter((path) => !retained.has(path));
-  if (
-    excluded.some(
-      (path) =>
-        !path.startsWith(`${SERVICE_HOST_PATH}/node_modules/`) || !path.endsWith("/.npmignore"),
-    )
-  ) {
-    throw new Error("npm excluded required service payload files");
-  }
-  if (packed.some((path) => !stagedSet.has(path)))
-    throw new Error("npm added unknown service payload files");
-  return { files: fileFactsForPaths(packageDir, packed), excluded };
-}
-
-async function attestServiceHost(root, owners) {
-  const selected = owners.artifact.OPENCODE_SERVICE_HOST_DISK_EVIDENCE.map(([path]) => path);
-  return owners.security.attestPortableSidecarTree(
-    root,
-    owners.contract.OPENCODE_SERVICE_HOST_FIXED_FACTS.nodeExecutablePath,
-    owners.handoff.portableHandoffOperationFrom({ deadline: Date.now() + 300_000 }),
-    selected,
-  );
-}
-
-async function inspectPackedService(owners, candidate, tarballPath) {
-  const extracted = mkdtempSync(join(tmpdir(), "keiko-service-packed-"));
-  try {
-    extractPackedRuntimePackage(tarballPath, extracted);
-    const actual = fileFactsForPaths(extracted, candidateFilePaths(extracted).sort());
-    if (!isDeepStrictEqual(actual, candidate.files))
-      throw new Error("packed service bytes, inventory or permissions mismatch");
-    const root = join(extracted, SERVICE_HOST_PATH);
-    const attestation = await attestServiceHost(root, owners);
-    const hostFiles = actual.filter((file) => file.path.startsWith(`${SERVICE_HOST_PATH}/`));
-    return {
-      ...attestation,
-      payloadFileCount: hostFiles.length,
-      payloadSizeBytes: hostFiles.reduce((sum, file) => sum + file.sizeBytes, 0),
-      nodeVersion: owners.contract.OPENCODE_SERVICE_HOST_FIXED_FACTS.nodeVersion,
-      moduleVersion: owners.contract.OPENCODE_SERVICE_HOST_FIXED_FACTS.moduleVersion,
-    };
-  } finally {
-    rmSync(extracted, { recursive: true, force: true });
-  }
-}
-
-/** Private nonpublishable engineering artifact; no catalog approval, selector, or license exception. */
-export async function stageCodingRuntimeNpmServiceHost(input) {
-  const target = portableTargetByName(input.target);
-  if (target?.nodePlatform !== "linux" && target?.nodePlatform !== "darwin")
-    throw new TypeError("fixed-host-target-unsupported");
-  if (existsSync(input.outDir)) throw new TypeError("fixed-host-staging-directory-exists");
-  const owners = await serviceHostOwners();
-  const host = await stageFixedHost({ ...input, deps: input.deps ?? {} }, owners);
-  const attestation = await attestServiceHost(host.root, owners);
-  return { ...host, attestation, qualification: "private-functional-unapproved" };
-}
-
-/** Private nonpublishable engineering artifact; no catalog approval, selector, or license exception. */
-export async function buildCodingRuntimeNpmServiceHostCandidate(input) {
-  const deps = input.deps ?? {};
-  const build = await buildCodingRuntimeNpmPackage({ ...input, deps });
-  const owners = await serviceHostOwners();
-  const host = await stageFixedHost({ ...input, deps }, owners);
-  const manifest = { ...codingRuntimePackageManifest(input.target, input.version), private: true };
-  delete manifest.publishConfig;
-  writeEvidence(input.outDir, "package.json", manifest);
-  writeFileSync(
-    join(input.outDir, "LICENSE.md"),
-    licenseNotice(input.target) +
-      "\nThe private original service host retains its full dependency notices and SBOM under\n`runtime/opencode-compatible/service-host/payload/evidence`. Component dispositions in PR #3895\napply only to the documented exact original artifacts; platform qualification, full native parity\nand production activation remain separate.\n",
-  );
-  const stagedAttestation = await attestServiceHost(host.root, owners);
-  const candidate = servicePackedFileFacts(input.outDir);
-  const artifactDir = input.artifactDir ?? join(dirname(input.outDir), "artifacts");
-  prepareArtifactDirectory(artifactDir);
-  const packed = packRuntimeCandidate(input.outDir, artifactDir);
-  assertPackedCandidate(packed, { ...build, version: input.version, files: candidate.files });
-  const tarball = tarballFacts(artifactDir, packed.filename);
-  if (packed.integrity !== tarball.integrity) throw new Error("service tarball integrity mismatch");
-  const final = await inspectPackedService(owners, candidate, join(artifactDir, packed.filename));
-  if (!isDeepStrictEqual(stagedAttestation, await attestServiceHost(host.root, owners)))
-    throw new Error("staged service changed during packing");
-  return sealPrivateServiceReceipt(input, build, host, candidate, tarball, final, artifactDir);
-}
-
-function sealPrivateServiceReceipt(input, build, host, candidate, tarball, final, artifactDir) {
-  const license = {
-    status: host.inventory.offenders.length > 0 ? "blocked" : "unreviewed",
-    offenders: host.inventory.offenders,
-  };
-  const receipt = {
-    schemaVersion: 1,
-    qualification: "private-functional-unapproved",
-    name: build.name,
-    version: input.version,
-    target: input.target,
-    license,
-    tarball,
-    finalPayload: final,
-    excludedNpmMetadata: candidate.excluded,
-    files: candidate.files,
-  };
-  const receiptPath = join(artifactDir, "service-host-private-receipt.json");
-  writeFileSync(receiptPath, `${JSON.stringify(receipt, null, 2)}\n`, { flag: "wx", mode: 0o444 });
-  chmodSync(join(artifactDir, tarball.filename), 0o444);
-  return {
-    ...receipt,
-    outDir: input.outDir,
-    receiptPath,
-    tarballPath: join(artifactDir, tarball.filename),
-  };
-}
-
-async function loadRuntimeApproval(target) {
+/** The approval compiled into this checkout for one target, with its pinned ripgrep. */
+export async function loadRuntimeApproval(target) {
   const { NPM_LANE_RUNTIME_APPROVALS } =
     await import("../packages/keiko-server/dist/coding-runtime/npmLaneRuntimeApprovals.js");
   const approval = NPM_LANE_RUNTIME_APPROVALS[target];
-  if (approval === undefined) throw new TypeError("unsupported npm runtime package target");
-  return approval;
+  const portableTarget = portableTargetByName(target);
+  if (approval === undefined || portableTarget === undefined) {
+    throw new TypeError("unsupported npm runtime package target");
+  }
+  const ripgrep = ripgrepRuntimeApproval(
+    ripgrepRuntimeTargetKey(portableTarget.nodePlatform, portableTarget.nodeArchitecture),
+  );
+  if (ripgrep === undefined) throw new TypeError("unsupported npm runtime package target");
+  return { ...approval, ripgrep };
 }
 
 function verifyHelperSourceCommit(commit) {
@@ -577,10 +272,10 @@ function candidateFilePaths(root, prefix = "") {
   });
 }
 
-function candidateFileFacts(packageDir) {
+function candidateFileFacts(packageDir, ripgrep) {
   const paths = candidateFilePaths(packageDir).sort();
-  if (!isDeepStrictEqual(paths, CANDIDATE_FILES)) {
-    throw new Error("runtime candidate must contain exactly the six approved package files");
+  if (!isDeepStrictEqual(paths, candidateFiles(ripgrep))) {
+    throw new Error("runtime candidate must contain exactly the nine approved package files");
   }
   return fileFactsForPaths(packageDir, paths);
 }
@@ -593,18 +288,28 @@ function fileFactsForPaths(packageDir, paths) {
   });
 }
 
-function assertCandidatePins(files, approval) {
+function assertCandidatePins(files, approval, packageDir, target) {
+  const ripgrep = approval.ripgrep;
+  const ripgrepPath = ripgrepPortableExecutablePath(ripgrep.targetKey);
   const expected = new Map([
     [`runtime/${HELPER_RELATIVE_PATH}`, approval.helperSha256],
     [LICENSE_PATH, approval.licenseSha256],
     [SBOM_PATH, approval.sbomSha256],
+    [ripgrepPath, ripgrep.binarySha256],
+    [RIPGREP_PORTABLE_LICENSE_PATH, ripgrep.licenseSha256],
+    [
+      RIPGREP_SBOM_PATH,
+      createHash("sha256")
+        .update(ripgrepSbomText(target, ripgrep, packageDir))
+        .digest("hex"),
+    ],
   ]);
   for (const file of files) {
     const pin = expected.get(file.path);
     if (pin !== undefined && file.sha256 !== pin)
       throw new Error("runtime candidate digest mismatch");
   }
-  for (const path of [EXECUTABLE_PATH, `runtime/${HELPER_RELATIVE_PATH}`]) {
+  for (const path of [EXECUTABLE_PATH, `runtime/${HELPER_RELATIVE_PATH}`, ripgrepPath]) {
     if (
       process.platform !== "win32" &&
       ((files.find((file) => file.path === path)?.mode ?? 0) & 0o111) === 0
@@ -624,8 +329,8 @@ async function inspectRuntimeCandidate({ target, version, packageDir }, deps) {
   ) {
     throw new Error("runtime candidate manifest, version or architecture mismatch");
   }
-  const files = candidateFileFacts(packageDir);
-  assertCandidatePins(files, approval);
+  const files = candidateFileFacts(packageDir, approval.ripgrep);
+  assertCandidatePins(files, approval, packageDir, target);
   const helper = files.find((file) => file.path === `runtime/${HELPER_RELATIVE_PATH}`);
   if (helper.sizeBytes !== approval.helperSizeBytes)
     throw new Error("runtime helper size mismatch");
@@ -686,6 +391,14 @@ function runtimeCandidateReceipt({
       executableTreeSha256,
       licenseSha256: approval.licenseSha256,
       sbomSha256: approval.sbomSha256,
+    },
+    // The release the server verifies `runtime/native/rg` against at every run launch.
+    ripgrep: {
+      version: approval.ripgrep.version,
+      sourceCommit: approval.ripgrep.sourceCommit,
+      archiveSha256: approval.ripgrep.archiveSha256,
+      binarySha256: approval.ripgrep.binarySha256,
+      licenseSha256: approval.ripgrep.licenseSha256,
     },
     files,
   };

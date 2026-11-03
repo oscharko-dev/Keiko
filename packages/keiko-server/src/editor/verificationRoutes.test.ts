@@ -7,7 +7,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type {
   EditorVerificationCatalog,
   EditorVerificationEvent,
@@ -16,7 +16,7 @@ import type {
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import type { RouteContext } from "../routes.js";
-import type { SseBackpressureSignal } from "../sse-write.js";
+import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "../sse-write.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   handleCreateVerificationRun,
@@ -140,6 +140,11 @@ interface FakeSseRes {
   writeReturns: boolean;
 }
 
+// The frames a reader sees, without the keep-alive comments the heartbeat adds over fake time.
+function eventFrames(fake: FakeSseRes): readonly string[] {
+  return fake.writes.filter((frame) => !frame.startsWith(":"));
+}
+
 function makeFakeSseRes(): FakeSseRes {
   const writes: string[] = [];
   const emitter = new EventEmitter();
@@ -156,13 +161,27 @@ function makeFakeSseRes(): FakeSseRes {
       return state.writeReturns;
     },
     end: (): ServerResponse => res as unknown as ServerResponse,
+    get destroyed(): boolean {
+      return state.destroyCount > 0;
+    },
     destroy: (): void => {
       state.destroyCount += 1;
+      if (state.destroyCount === 1) emitter.emit("close");
     },
     on: (event: string, listener: (...args: unknown[]) => void): ServerResponse => {
       emitter.on(event, listener);
       return res as unknown as ServerResponse;
     },
+    // The shared SSE writer waits for `drain` (or the terminal `close`) after a false write.
+    once: (event: string, listener: (...args: unknown[]) => void): ServerResponse => {
+      emitter.once(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    off: (event: string, listener: (...args: unknown[]) => void): ServerResponse => {
+      emitter.off(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    emit: (event: string): boolean => emitter.emit(event),
   };
   state.res = res as unknown as ServerResponse;
   return state;
@@ -319,69 +338,107 @@ describe("openVerificationSseStream (AC6)", () => {
     );
   });
 
-  it("destroys once and signals when the ready frame itself is refused", () => {
-    const fake = makeFakeSseRes();
-    const manager = new FakeManager();
-    const signals: SseBackpressureSignal[] = [];
-    fake.writeReturns = false;
-    openVerificationSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
+  it("destroys once and signals when the reader never drains the ready frame", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakeSseRes();
+      const manager = new FakeManager();
+      const signals: SseBackpressureSignal[] = [];
+      fake.writeReturns = false;
+      openVerificationSseStream(
+        fake.res,
+        manager,
+        (value) => value,
+        (signal) => {
+          signals.push(signal);
+        },
+      );
 
-    expect(fake.writes).toHaveLength(1);
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    // The refusal aborted the stream before any event: nothing further is written or destroyed.
-    manager.emitExternal({
-      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
-      kind: "run-cancelled",
-      runId: "r",
-    });
-    expect(fake.writes).toHaveLength(1);
-    expect(fake.destroyCount).toBe(1);
+      // A false write is flow control: the stream waits for the reader instead of ending.
+      expect(eventFrames(fake)).toHaveLength(1);
+      expect(fake.destroyCount).toBe(0);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
+      expect(fake.destroyCount).toBe(1);
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.accepted).toBe(false);
+      // The stalled reader aborted the stream: nothing further is written or destroyed.
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "r",
+      });
+      expect(eventFrames(fake)).toHaveLength(1);
+      expect(fake.destroyCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it("destroys the socket exactly once on backpressure (res.write returns false)", () => {
-    const fake = makeFakeSseRes();
-    const manager = new FakeManager();
-    const signals: SseBackpressureSignal[] = [];
-    openVerificationSseStream(
-      fake.res,
-      manager,
-      (value) => value,
-      (signal) => {
-        signals.push(signal);
-      },
-    );
-    // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
-    // is the refused one. A refused ready frame has its own case.
-    expect(fake.writes).toHaveLength(1);
-    fake.writeReturns = false;
-    manager.emitExternal({
-      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
-      kind: "run-cancelled",
-      runId: "r",
-    });
-    expect(fake.destroyCount).toBe(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]?.accepted).toBe(false);
-    expect(fake.writes).toHaveLength(2);
-    expect(fake.writes[1]).toContain("event: verification:run-cancelled");
-    // A second event produces no further work (the abort unsubscribed).
-    const writesAfter = fake.writes.length;
-    manager.emitExternal({
-      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
-      kind: "run-failed",
-      runId: "r",
-      reason: "x",
-    });
-    expect(fake.writes).toHaveLength(writesAfter);
-    expect(fake.destroyCount).toBe(1);
+  it("destroys the socket exactly once when the reader stalls after a false event write", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakeSseRes();
+      const manager = new FakeManager();
+      const signals: SseBackpressureSignal[] = [];
+      openVerificationSseStream(
+        fake.res,
+        manager,
+        (value) => value,
+        (signal) => {
+          signals.push(signal);
+        },
+      );
+      // The client took the ready frame and goes slow only once events flow. The stalled ready
+      // frame has its own case.
+      expect(eventFrames(fake)).toHaveLength(1);
+      fake.writeReturns = false;
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "r",
+      });
+      expect(eventFrames(fake)).toHaveLength(2);
+      expect(eventFrames(fake)[1]).toContain("event: verification:run-cancelled");
+      expect(fake.destroyCount).toBe(0);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
+      expect(fake.destroyCount).toBe(1);
+      expect(signals).toHaveLength(1);
+      expect(signals[0]?.accepted).toBe(false);
+      // A later event produces no further work (the abort unsubscribed).
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-failed",
+        runId: "r",
+        reason: "x",
+      });
+      expect(eventFrames(fake)).toHaveLength(2);
+      expect(fake.destroyCount).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the stream for a reader that drains a false write late", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = makeFakeSseRes();
+      const manager = new FakeManager();
+      fake.writeReturns = false;
+      openVerificationSseStream(fake.res, manager, (value) => value);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      fake.writeReturns = true;
+      fake.res.emit("drain");
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
+      expect(fake.destroyCount).toBe(0);
+      manager.emitExternal({
+        schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+        kind: "run-cancelled",
+        runId: "r",
+      });
+      expect(eventFrames(fake)).toHaveLength(2);
+      fake.res.emit("close");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

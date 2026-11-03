@@ -77,6 +77,10 @@ async function openChat(page: Page, chatId: string): Promise<Locator> {
   await page.goto(`/${editorM11PairingFragment("support-download")}`);
   const window = page.getByRole("region", { name: `Chat — ${title}` });
   await expect(window).toBeVisible();
+  // Session/offline notices can shrink the canvas while floating geometry stays human-owned.
+  // Use the normal full-screen control so this report transport journey follows the live viewport.
+  await window.getByRole("button", { name: "Full screen Chat window", exact: true }).click();
+  await expect(window).toHaveAttribute("data-max", "true");
   return window;
 }
 
@@ -314,10 +318,85 @@ async function assertScrollableNoticeStack(stack: Locator): Promise<void> {
   await expect(stack).toHaveCSS("overflow-y", "auto");
 }
 
+interface BrowserModalFocus {
+  readonly invokerPresent: boolean;
+  readonly invokerActive: boolean;
+  readonly bodyActive: boolean;
+  readonly dialogActive: boolean;
+}
+
+async function browserModalFocus(button: Locator): Promise<BrowserModalFocus> {
+  return button.evaluateAll((elements) => ({
+    invokerPresent: elements[0] !== undefined,
+    invokerActive: elements[0] !== undefined && document.activeElement === elements[0],
+    bodyActive: document.activeElement === document.body,
+    dialogActive: document.activeElement?.matches("dialog[open]") === true,
+  }));
+}
+
+async function observeBrowserInvokerFocus(button: Locator): Promise<BrowserModalFocus> {
+  await button.evaluate((element) => {
+    element.setAttribute("data-e2e-invoker-focused", "false");
+    element.addEventListener(
+      "focus",
+      () => {
+        element.setAttribute("data-e2e-invoker-focused", "true");
+      },
+      { once: true },
+    );
+  });
+  return browserModalFocus(button);
+}
+
+async function checkBrowserNoticeModal(page: Page, recoverInventory: () => void): Promise<void> {
+  const notice = page
+    .locator("header.header")
+    .getByRole("complementary", { name: "Connect this browser", exact: true });
+  await expect(notice.getByRole("button", { name: "Retry", exact: true })).toBeVisible();
+  recoverInventory();
+  await notice.getByRole("button", { name: "Retry", exact: true }).click();
+  const connect = notice.getByRole("button", { name: "Connect browser", exact: true });
+  const before = await observeBrowserInvokerFocus(connect);
+  await connect.click();
+  const dialog = page.getByRole("dialog", { name: "Connect this browser", exact: true });
+  await expect(dialog).toBeVisible();
+  await expect(page.locator(".app")).toHaveAttribute("inert", "");
+  await expect(dialog).toBeFocused();
+  const focusedBeforeDialog =
+    (await page
+      .locator("header.header [data-e2e-invoker-focused]")
+      .getAttribute("data-e2e-invoker-focused")) === "true";
+  await page.keyboard.press("Shift+Tab");
+  await expect(dialog.getByRole("button", { name: "Request approval", exact: true })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(dialog.getByRole("button", { name: "Close", exact: true })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(dialog).toBeHidden();
+  await expect(page.locator(".app")).not.toHaveAttribute("inert");
+  try {
+    await expect(connect).toBeFocused();
+  } finally {
+    const after = await browserModalFocus(connect);
+    const path = test.info().outputPath("browser-modal-focus.json");
+    writeFileSync(path, JSON.stringify({ before, focusedBeforeDialog, after }) + "\n");
+    await test.info().attach("browser-modal-focus", {
+      path,
+      contentType: "application/json",
+    });
+  }
+}
+
 test("keeps stacked workspace error reports reachable on a short narrow viewport @smoke", async ({
   page,
 }, info): Promise<void> => {
   await page.setViewportSize({ width: 320, height: 240 });
+  let inventoryFailed = true;
+  let inventoryReads = 0;
+  await page.route("**/api/coding-workbench/app-session/browser", async (route) => {
+    inventoryReads += 1;
+    if (inventoryFailed) await route.fulfill({ status: 503, json: { error: "unavailable" } });
+    else await route.fulfill({ json: { state: "unavailable" } });
+  });
   await page.route("**/api/health", async (route) => {
     await route.fulfill({
       json: {
@@ -353,6 +432,10 @@ test("keeps stacked workspace error reports reachable on a short narrow viewport
   await expect(readiness.locator("..")).toHaveCSS("position", "static");
   await expect(failure).toHaveCSS("position", "static");
   await assertScrollableNoticeStack(stack);
+  await checkBrowserNoticeModal(page, () => {
+    inventoryFailed = false;
+  });
+  expect(inventoryReads).toBeGreaterThanOrEqual(2);
   await prepareReport(failure);
   await saveClickedReport(page, failure, info, "short-viewport");
   await failure.getByRole("button", { name: "Close", exact: true }).click();

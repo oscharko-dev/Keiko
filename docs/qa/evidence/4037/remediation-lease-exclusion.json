@@ -1,0 +1,340 @@
+{
+  "schemaVersion": 1,
+  "classification": "OS-backed remediation lease exclusion and unknown-owner/release recovery; actual public manager mechanical qualification, not installed updater acceptance",
+  "sourceParent": "41958137c1a63f37e19d490eb27a11e2fde2a58a",
+  "sourceFreeze": {
+    "artifact": "checkpoint64-source-freeze-v2.json",
+    "sha256": "11c92848f1e847817e370d70be9b88981bb60b70b966f31213d42f7c01509f9f"
+  },
+  "runtimeFreeze": {
+    "artifact": "checkpoint64-source-freeze-v1.json",
+    "sha256": "b60dffd72f46519fd14a79e469d815ae9bd2cf2ebe454ebdc4585d90aa327bf7"
+  },
+  "runtimeFreezeUnchanged": "All11 original runtime/test/ADR/registration source hashes remain identical. Final freeze adds only the canonically pruned legacy failure register.",
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "ebcbd18fad6ba4cc450b55b975ccc1a685f840b8f99df96db395d560d3a5aec3"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "8dcd849c9f4ee4d07d525ed0fe789ae02abaf61caf1e82d80eee13189219d2c0"
+    },
+    {
+      "path": "docs/observability/legacy-failure-path-register.json",
+      "sha256": "1061fc6cc145d1a15b428106189e1d020791d95c94e4fd650536557a160c1df0"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "ce267caed620dd02a9ed7b5732d6af9733a7c3f6d38d0730abbb98a68bfceb2e"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "82cb3c486105f8fe2f718c677f8270bf6746dd673af228d851a54d8108bb92fc"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "f9378843a66fb762610bc5c08e38d3cd19f45d5a6fb601cdda3d63219add0cd3"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "8d23ef49a12c15e62f931cb187476b2863750957c47bd9477f353d8f17602781"
+    },
+    {
+      "path": "packages/keiko-server/src/update-local-state.ts",
+      "sha256": "f608d5aaeace62027d802e905de34581ba132ad4b62c7dfe6282acda9effa655"
+    },
+    {
+      "path": "packages/keiko-server/src/update-remediation-lease-guard.test.ts",
+      "sha256": "cea2bc03ef9c80dbbb83bdb2edb1ff90e7f1afeac5f8eef3e911633e506551aa"
+    },
+    {
+      "path": "packages/keiko-server/src/update-remediation.ts",
+      "sha256": "ca62579d69f913dc2c83396755d2568dce074303e45cdc3370fa578818a670c3"
+    },
+    {
+      "path": "packages/keiko-server/src/update-runtime-activity.test.ts",
+      "sha256": "9060c106de2a2ff1961245aba4e47b71407445e1d2df4846f7485e6e9a43614e"
+    },
+    {
+      "path": "packages/keiko-server/src/update-runtime-activity.ts",
+      "sha256": "ca760817823859b459a92f7f127a45318c7371ab168ab7ba4afd5f6f18bad215"
+    }
+  ],
+  "retainedRuntime": {
+    "artifact": "checkpoint64-final-retention-v2.json",
+    "sha256": "a3679364c38443cf5be4526b2dcc9d4a94cb0bcdd0e3c95e210c77651a1c9df8"
+  },
+  "retainedRegister": {
+    "artifact": "checkpoint64-final-register-retained-v1.json",
+    "sha256": "1061fc6cc145d1a15b428106189e1d020791d95c94e4fd650536557a160c1df0"
+  },
+  "fixtures": {
+    "artifact": "checkpoint64-fixtures-final-v1.json",
+    "sha256": "dd8422ae153cff8f86f30a188139bf2c845c51d5f19fc6ae34499c7758ab4f5d"
+  },
+  "pdca": {
+    "plan": {
+      "originalPublicManagerRace": {
+        "artifact": "checkpoint64-remediation-concurrency-red-v1.json",
+        "sha256": "cec8eab94b16c508334da0f8ecda1e600fe0a0846f48c7730081e7c85e8d25a0"
+      },
+      "samePolicyBefore": [
+        {
+          "artifact": "checkpoint64-v1-linux-uid1000-before-contention.json",
+          "sha256": "931d299487b15e002dc2b297bb084e3e91c1b9b776d9dfd35f024f1a962c58fc"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid65534-before-contention.json",
+          "sha256": "6e91d41b4246caf6fab385bf7b9c488dfbae332a23343913ed953a7f0e983758"
+        },
+        {
+          "artifact": "checkpoint64-v2-linux-uid1000-v3-cut-before.json",
+          "sha256": "d1719785a0efd66fa2476b1537c40f1f6da1dd289d39c32b515704099792c845"
+        },
+        {
+          "artifact": "checkpoint64-v2-linux-uid65534-v3-cut-before.json",
+          "sha256": "89ae6c577a5889c69d307479c329906011e58057f55188df7250645c8e79dbc3"
+        }
+      ],
+      "releasePermissionBefore": {
+        "artifact": "checkpoint64-release-permission-red-v1.log",
+        "sha256": "00e9e60ded3ab3c6ed95c2fa33ca465ffb4e463a0eaeed5e378a2989485678bb"
+      },
+      "unreadableLegacyBefore": {
+        "artifact": "checkpoint64-legacy-unreadable-red-v1.log",
+        "sha256": "d4435f9f81e0bac4c327917e262aac8f9b3d544d37adffabdef8a0b6b9d4a702"
+      },
+      "retainedBefore": [
+        {
+          "artifact": "checkpoint64-before-dependencies-retention-v1.json",
+          "sha256": "d5ea80acb314cacea20adc81e4596969629b414514457b85f69896de2a7f3b3a"
+        },
+        {
+          "artifact": "checkpoint64-release-before-retention-v1.json",
+          "sha256": "06c3a2ae930ab9c433dc666a75c0950f585228646d2289e1817b6959509eda28"
+        },
+        {
+          "artifact": "checkpoint64-reader-before-retention-v1.json",
+          "sha256": "19dc60cc7a148a6125c2f01a274953fbe91835a823b96e493d4015ebe8b11c75"
+        }
+      ],
+      "scope": "Real child processes/default liveness and filesystem expose two simultaneous unreleased live grants. Real non-root permissions separately expose a silent failed release and a wrongly quarantined genuinely live legacy owner. Original failures remain retained."
+    },
+    "do": [
+      "Reuse already bundled SQLite as one stable per-action OS-backed guard. Keep its connection/callback in the existing manager until authorized release settles. Different actions remain independent; no schema, WAL, helper, dependency or background scheduler is introduced. SQLite owns its transient rollback journal.",
+      "Place main/sidecar below the existing denied .keiko segment, including custom state roots. Ordinary raw/resolved workspace readers refuse it; existing scan/snapshot/repair inspect metadata/counts/modes only. No raw guard body reads, hashing, unlink, quarantine or recreation. Existing pathname-only SQLite preflight limits remain explicit.",
+      "Reuse the existing bounded state-file descriptor reader for canonical records:4KiB cap, nonblocking/no-follow regular single-link admission, exact BigInt held/name/change checks, and content-specific UTF8/JSON parsing. Actual malformed content retains existing publication grace; IO/unsafe/changed ownership refuses without quarantine.",
+      "Propagate failed release read/rename/unlink. Retain the exact requested callback/guard for a later explicit same-manager retry before new admission. Never retry an unrequested uncertain-outcome hold; old callbacks cannot retire replacement entries.",
+      "Extend the existing update-runtime Activity Log class with closed lease states, opaque attempt ID, action digest and originating correlation; reuse existing ports/diagnostics and strengthen its canonical lifecycle/causal/proof/resource obligations. Canonical generators produce registries; two obsolete catch-register entries are deleted."
+    ],
+    "check": {
+      "actualFinalRuns": [
+        {
+          "artifact": "checkpoint64-v1-macos-contention.json",
+          "sha256": "22dd5f182b2299198deb4ea01a8ca9e2298e52feba12185289d87e0d223d395c"
+        },
+        {
+          "artifact": "checkpoint64-v1-macos-lifetime.json",
+          "sha256": "5ae18379a646f369290a9bdb79f83f5b5a22e509eefa486cf4a6d3863570b650"
+        },
+        {
+          "artifact": "checkpoint64-v1-macos-release.json",
+          "sha256": "895ef7016f7e331bdc6f85a5dd4063e8e0ed2127a31a60a1afd08e55f13cf904"
+        },
+        {
+          "artifact": "checkpoint64-v1-macos-legacy.json",
+          "sha256": "eaf0c669699d6041b19861a6a19e8b335182810038f8ac581f00d007073afb7c"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid1000-contention.json",
+          "sha256": "af990683d7be67e3247589500c0ede355284cc69f7cb30197bfe7130feda5c7f"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid1000-lifetime.json",
+          "sha256": "730b6728a56ee191df4c237c56151990c8965e93c1baa6c14c6bf851be64ed51"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid1000-release.json",
+          "sha256": "78e34cb159e9d222c6a1134621e63cbf6a497461706f20a35f9882d3c086404c"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid1000-legacy.json",
+          "sha256": "e0de7d0bed906baae4a992331e3b83075faa210bb8883fa529fa2c9b6f08664b"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid65534-contention.json",
+          "sha256": "a7c153c4cc6bfd6c1093b126771aecb0b581bae1a7547614b7d505475394e3b7"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid65534-lifetime.json",
+          "sha256": "8340c79b41828b284e61d66f1d124304c0449201951f8fba98738b2635277c0f"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid65534-release.json",
+          "sha256": "e062d288e2ba7f66f872eab86b71a19631b041eb9630916008dedc23dd731626"
+        },
+        {
+          "artifact": "checkpoint64-v1-linux-uid65534-legacy.json",
+          "sha256": "45dab5a282966efdcc60ecb4e1d50b0ca6ac4dffc0d62922306499bbded0afd6"
+        },
+        {
+          "artifact": "checkpoint64-v2-macos-v3-cut-final.json",
+          "sha256": "d1eaf3f9aef39965bce300e6f1bba4c488527f490acf04eb6ff0728a732db7e0"
+        },
+        {
+          "artifact": "checkpoint64-v2-linux-uid1000-v3-cut-final.json",
+          "sha256": "ca33f3c6692e57540f3650e523ce9995ff931f9c9494f19f84b2eea54ea03a4d"
+        },
+        {
+          "artifact": "checkpoint64-v2-linux-uid65534-v3-cut-final.json",
+          "sha256": "3dc8b6cf8cb85b1f45fe9da6bd344fe41e9f65b18f95a2733580915018096262"
+        }
+      ],
+      "environments": [
+        "darwin/arm64 Node24.18.0",
+        "linux/arm64 UID1000 in pinned image",
+        "linux/arm64 UID65534 in same pinned image"
+      ],
+      "controllerHorizonMs": 10000,
+      "fixtureStaleMs": 1,
+      "defaultStalePolicyUnchanged": "24h; fixture mechanics do not establish default-grace or installed restart timing.",
+      "contention": "V1/V2 histories stay distinct. Separately signed V3 keeps byte-identical controller/input/oracle/deadlines and observes actual completed post-read pathname metadata. Original63 admits two owners; final64 admits exactly one with healthy sequential progress.",
+      "causalGuardAblation": {
+        "variant": {
+          "artifact": "checkpoint64-counterfactual-guardless.json",
+          "sha256": "07c2093d75b9c795ae6b4fd38a113744c64578788b7f399b5fc44dc439e02b1e"
+        },
+        "runs": [
+          {
+            "artifact": "checkpoint64-v2-linux-uid1000-v3-cut-counterfactual.json",
+            "sha256": "dacc169c924402c905f41aca634d38e875eda03869222287c4e4e3ca49e6077d"
+          },
+          {
+            "artifact": "checkpoint64-v2-linux-uid65534-v3-cut-counterfactual.json",
+            "sha256": "ec46446db9cac35ce5dc5d9223f526ac68fabfa267435710d0011200deaf6436"
+          }
+        ],
+        "scope": "Explicit non-product counterfactual changes only the factory callee to bypass the guard while preserving the final bounded reader. Both UIDs then reproduce two live owners after final observed metadata. This is not a failure of unchanged final64."
+      },
+      "lifetime": "Actual own SIGKILL/reap after publication and after an interrupted owned read recover to a positive successor. Two eight-live-contender rounds each admit exactly one matching canonical owner. Durations are observations, not general latency guarantees.",
+      "persistentTests": {
+        "passed": 797,
+        "existingSkipped": 2,
+        "suites": 46,
+        "scope": "Complete server updater prefix. New controls include exact4KiB/+1 boundary, actual FIFO with owned-child5s kill bound and reachable positive control, real read/rename permission failures, private path/link/refusal/lifetime/idempotence and sink-failure controls."
+      },
+      "independent": [
+        {
+          "artifact": "independent-checkpoint64/lease64-reader-frozen1-independent.json",
+          "sha256": "5374aae5d32f11c9239befd2989cb9fd8f0683944ebf2a9b66d4c68fc9c5be34"
+        },
+        {
+          "artifact": "independent-checkpoint64/lease64-codec-reader1-independent.json",
+          "sha256": "6b72c385f5f076f671d9a9aca98666271c099e8706689dbe5ae0f0d2b7e97108"
+        },
+        {
+          "artifact": "independent-checkpoint64/lease64-release-after-frozen1-independent.json",
+          "sha256": "029939c2b38e346ecf42efd3b69039f443a69c3804d39053b46ba7fc2634ac80"
+        },
+        {
+          "artifact": "independent-checkpoint64/lease64-unreadable-legacy-after-v1-independent.json",
+          "sha256": "5c674dbe072b12eebef94ac2a0cfef10e105f3a881d7eada99448929a0872275"
+        },
+        {
+          "artifact": "independent-checkpoint64/lease64-release-failure-independent.json",
+          "sha256": "34848624f6bd206c683d3515d2fbf550f75861661fdfdff00bdca0838b5d0ec1"
+        },
+        {
+          "artifact": "independent-checkpoint64/lease64-unreadable-legacy-independent.json",
+          "sha256": "1def0e6cfdcbeef345e15b280918b49d5a509c0f22527aeb6d1fd9bdbfac6c6a"
+        },
+        {
+          "artifact": "independent-checkpoint64/lease64-registered-formatter-independent.json",
+          "sha256": "1e5de00705ab3fddb6e0c119a0b169d943e5b3488db6529d71738879d687587d"
+        },
+        {
+          "artifact": "independent-checkpoint64/nested-guard-denial-independent.json",
+          "sha256": "18b610869e7f17751555841ef28c18112c5a5907ea0a825dcd9e08695d93f966"
+        },
+        {
+          "artifact": "independent-checkpoint64/sqlite-guard-sidecar-lifecycle-independent.json",
+          "sha256": "8250ebe8456ffc471c51cf4857b20ce6e7c4d94c796493dbf910e53bdf0b3446"
+        },
+        {
+          "artifact": "independent-checkpoint64/checkpoint64-frozen-matrix-independent.json",
+          "sha256": "a6cca6955e96949dcb209c82e2aab6db070584a150b481393e997b10d89a76af"
+        },
+        {
+          "artifact": "independent-checkpoint64/checkpoint64-v3-causal-independent.json",
+          "sha256": "a2c8bce63798c2a90f81586c760331b57edd1c05be9c5d5fceefa886adf9a447"
+        }
+      ],
+      "independentScope": "24 reader controls, unchanged53 domain/owner controls, real EACCES/retained retry checks,17 ordinary-consumer path refusals, actual five-state registered formatter plus three negative fields and source/compiled matrix join. Extracted/controlled, formatter-only and actual public-manager evidence retain separate limits.",
+      "localChecks": [
+        {
+          "artifact": "checkpoint64-v1-typecheck.json",
+          "sha256": "a44b956fab5ddac0bf89298e562bcfa5df41ac9edbe79781c1038e70180ceeb0"
+        },
+        {
+          "artifact": "checkpoint64-v1-lint.json",
+          "sha256": "9e26d7ace06c67665d62d1183488d221b0c69e220c21a5d8eb7531205ae11682"
+        },
+        {
+          "artifact": "checkpoint64-v1-updater-tests.json",
+          "sha256": "5c7c2728fd73732e3d4c4245fe19ebae430caf78ebcff64a4f10c42cb27a68d0"
+        },
+        {
+          "artifact": "checkpoint64-v1-sonar.json",
+          "sha256": "70f3788aa0cb1ee9d0a54aa1ba35d5b20f5e804869c9277e5dbd0e2821843686"
+        },
+        {
+          "artifact": "checkpoint64-v1-ui-build.json",
+          "sha256": "fecded734783f98b08e3150ed1798c7c653793082520c6a0a7ebca3a5878f326"
+        },
+        {
+          "artifact": "checkpoint64-v1-package-surface.json",
+          "sha256": "5d5dc511b9f71bf71582c82d978b03f692eeaf77fa1239acbeb6761e415c207e"
+        },
+        {
+          "artifact": "checkpoint64-v1-restore-package-build.json",
+          "sha256": "31bab08586145de75d0385138858bc16c6238f6ee6f77e0c5690f3471caa066b"
+        },
+        {
+          "artifact": "checkpoint64-v1-adr-index.json",
+          "sha256": "a235542c88ead1a3b26dbd561f97eedfa7243c9507526841fb589918fa71a62e"
+        },
+        {
+          "artifact": "checkpoint64-v2-error-observability.json",
+          "sha256": "f16e4b037ac4b33a8f3b420ed45a60700009ed594f73353571a43b4b283145e5"
+        },
+        {
+          "artifact": "checkpoint64-v2-ui-typecheck.json",
+          "sha256": "77283c5fa14d88fb9e1def032d449affc6e7ff90af3e6e518ee133d18a63b367"
+        },
+        {
+          "artifact": "checkpoint64-v2-activity-log.json",
+          "sha256": "99564b56dec8fc061d6a78d6746bf05efa5756681ca6866331714909278a6f54"
+        }
+      ]
+    },
+    "act": {
+      "remaining": [
+        "Initial/detached and successor/rollback W/S ownership; authenticated coordinator outside the old generation and Linux recovery protocol.",
+        "Actual distinct/consecutive packaged updates, restart/cancellation/recovery and SSD/state continuity.",
+        "Final visible UI/search/context, both compact skills and independent unseen tasks; browser and96-criterion reconciliation.",
+        "Exact-head required CI, all review findings/conversations, authorized merge to dev and only then completed issue closure."
+      ],
+      "allAcceptanceComplete": false,
+      "acceptanceLedgersChanged": false
+    }
+  },
+  "limits": [
+    "Exclusion requires cooperating guarded peers and stable protected files. Old active writers must be drained by the installation-generation ownership boundary; guard availability never proves a valid live/unknown legacy owner is dead.",
+    "Foreign PID incarnation auto-recovery, actual installed/native outer-owner transfer, entitled macOS Endpoint Security and Windows runtime are not established by these local manager controls.",
+    "Actual public-manager controls do not execute remediation work, and registered-formatter controls do not establish durable BFF transport. Existing uncertainty interlocks remain authoritative.",
+    "Initial sidecar wording was too broad: separate metadata-only follow-up records main0B plus transient512B rollback journal on this macOS build, with only main remaining after close. Original final-state receipt remains unchanged.",
+    "The first error-observability run detects only two retired catch-register entries; canonical pruning removes them with no new suppression. The first retention helper wrongly expected intentionally nonemitted test JS; its aborted artifact is retained and not counted as a product failure.",
+    "No frozen Gemma task, skill, budget, attempt, oracle or outcome changes."
+  ]
+}

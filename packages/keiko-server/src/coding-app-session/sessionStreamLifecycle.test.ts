@@ -161,6 +161,44 @@ function fixture(
   return { projection, response, record, sessionId };
 }
 
+// The pairing and subscription of `fixture()`, with a response whose buffer is already above its
+// high-water mark when the initial snapshot is written (a reconnect to a near-capacity feed).
+function fixtureWithInitialPressure(): ReturnType<typeof fixture> {
+  const projection = createCodingSafeActivityProjection();
+  projection.open({
+    runId: "run-stream",
+    workspaceId: "workspace-stream",
+    authorityExpiresAt: "2026-09-05T02:00:00.000Z",
+    workspaceIsCurrent: () => true,
+  });
+  const record = vi.fn();
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+    diagnostics: { record },
+    contentSource: {
+      contentFor: () => projection.currentContent(),
+      subscribeContent: (listener) => projection.subscribeContent(listener),
+    },
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("pairing failed");
+  const sessionId = channel.verifySession(paired.cookieToken)?.sessionId;
+  if (sessionId === undefined) throw new Error("session missing");
+  const response = new StreamResponse();
+  response.reject = true;
+  responses.push(response);
+  openCodingAppSessionStream(
+    response as unknown as ServerResponse,
+    new EventEmitter() as IncomingMessage,
+    channel,
+    paired.cookieToken,
+    CORRELATION,
+    { record },
+  );
+  return { projection, response, record, sessionId };
+}
+
 describe("channel lifecycle lines (F65)", () => {
   function channelLines(): readonly ServerLogEvent[] {
     return sink.events.filter((event) => event.op.startsWith("coding-app-session.channel."));
@@ -182,7 +220,12 @@ describe("channel lifecycle lines (F65)", () => {
         op: "coding-app-session.channel.closed",
         correlationId: CORRELATION,
         durationMs: 1_500,
-        extra: { completeness: "complete", loss: "none" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          drainWaitCount: 0,
+          coalescedSnapshotCount: 0,
+        },
       }),
     ]);
     const opened = expectActivityLogProof(
@@ -194,7 +237,12 @@ describe("channel lifecycle lines (F65)", () => {
       "coding-app-session.channel.closed.duration",
       formatActivityLogProofLine(lines[1] ?? {}),
     );
-    expect(closed).toMatchObject({ correlationId: CORRELATION, durationMs: 1_500 });
+    expect(closed).toMatchObject({
+      correlationId: CORRELATION,
+      durationMs: 1_500,
+      drainWaitCount: 0,
+      coalescedSnapshotCount: 0,
+    });
   });
 
   it("logs a stream without a channel as opened, not live", () => {
@@ -319,8 +367,13 @@ describe("app-session stream transport and completion remain distinct", () => {
     expect(terminalReason()).toBe("completed");
   });
 
+  // KEIKO-0225 pin, relocated (#3897, Keiko 1.3.0 test): `write()` answering `false` only says that
+  // Node's buffer passed its high-water mark — Node 24 answers so for any single frame of 64 KiB or
+  // more, even to an idle local browser — so it alone no longer counts as backpressure. A peer that
+  // does not drain within CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS still gets the one body-free
+  // diagnostic, the `backpressure-killed` terminal reason and the ended, not destroyed, response.
   it.each([false, true])(
-    "retains genuine rejected-write diagnostics, terminal=%s",
+    "retains genuine non-draining diagnostics, terminal=%s",
     async (terminal) => {
       const { projection, response, record, sessionId } = fixture();
       response.reject = true;
@@ -328,6 +381,10 @@ describe("app-session stream transport and completion remain distinct", () => {
       else emitContent(projection);
       vi.runAllTicks();
       await Promise.resolve();
+      expect(record).not.toHaveBeenCalled();
+      expect(response.writableEnded).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS);
       expect(record).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           operation: "coding-app-session.channel.subscribe",
@@ -337,7 +394,7 @@ describe("app-session stream transport and completion remain distinct", () => {
           errorClass: "Error",
         }),
       );
-      // A rejected `write` has already placed this one bounded frame in Node's buffer. The
+      // The rejected `write` has already placed this one bounded frame in Node's buffer. The
       // app-session stream stops publishing and ends the response so that frame can flush; an
       // abrupt socket destroy would turn ordinary pressure into a client-visible offline error.
       expect(response.writableEnded).toBe(true);
@@ -348,6 +405,87 @@ describe("app-session stream transport and completion remain distinct", () => {
       expect(vi.getTimerCount()).toBe(0);
     },
   );
+
+  it("keeps a stream live when a buffered frame drains within the bound, newest snapshot first", async () => {
+    const live = liveContentSource();
+    const record = vi.fn();
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+      diagnostics: { record },
+      contentSource: live.source,
+    });
+    const paired = channel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new Error("pairing failed");
+    const response = new StreamResponse();
+    responses.push(response);
+    openCodingAppSessionStream(
+      response as unknown as ServerResponse,
+      new EventEmitter() as IncomingMessage,
+      channel,
+      paired.cookieToken,
+      CORRELATION,
+      { record },
+    );
+
+    response.reject = true;
+    live.emit({ kind: "probe", body: "first" });
+    live.emit({ kind: "probe", body: "superseded" });
+    live.emit({ kind: "probe", body: "newest" });
+    // A draining frame is proof enough of a live stream; no heartbeat is queued behind it.
+    await vi.advanceTimersByTimeAsync(CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS - 1);
+    vi.advanceTimersByTime(0);
+    expect(response.frames).toHaveLength(2);
+
+    response.reject = false;
+    response.emit("drain");
+    expect(response.frames).toHaveLength(3);
+    expect(response.frames.at(-1)).toContain("newest");
+    expect(response.frames.join("")).not.toContain("superseded");
+    await vi.advanceTimersByTimeAsync(CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS);
+    expect(record).not.toHaveBeenCalled();
+    expect(response.writableEnded).toBe(false);
+
+    live.emit({ kind: "probe", body: "after-drain" });
+    expect(response.frames.at(-1)).toContain("after-drain");
+    response.destroy();
+    expect(
+      sink.events.find((event) => event.op === "coding-app-session.channel.closed")?.extra,
+    ).toMatchObject({ drainWaitCount: 1, coalescedSnapshotCount: 1 });
+    expect(terminalReason()).toBe("client-disconnected");
+  });
+
+  it("keeps a stream whose large initial snapshot is still draining live", async () => {
+    const { projection, response, record } = fixtureWithInitialPressure();
+    expect(
+      sink.events.find((event) => event.op === "coding-app-session.channel.opened")?.extra,
+    ).toMatchObject({ live: true });
+    response.reject = false;
+    response.emit("drain");
+    emitContent(projection);
+    vi.runAllTicks();
+    await Promise.resolve();
+    expect(response.frames).toHaveLength(2);
+    expect(record).not.toHaveBeenCalled();
+    expect(response.writableEnded).toBe(false);
+  });
+
+  it("ends a terminal frame that drains within the bound as completed", async () => {
+    const { projection, response, record } = fixture();
+    response.reject = true;
+    projection.purge("run-stream", "stop");
+    vi.runAllTicks();
+    await Promise.resolve();
+    expect(response.writableEnded).toBe(false);
+    response.reject = false;
+    response.emit("drain");
+    vi.runAllTicks();
+    await Promise.resolve();
+    expect(response.writableEnded).toBe(true);
+    expect(record).not.toHaveBeenCalled();
+    expect(terminalReason()).toBe("completed");
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("bounds a real non-draining response and retains admission until transport close", async () => {
     const live = liveContentSource();
@@ -372,7 +510,9 @@ describe("app-session stream transport and completion remain distinct", () => {
     live.emit({ kind: "probe", body: "x".repeat(CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS) });
     vi.runAllTicks();
     await Promise.resolve();
+    expect(record).not.toHaveBeenCalled();
 
+    await vi.advanceTimersByTimeAsync(CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS);
     expect(record).toHaveBeenCalledWith(expect.objectContaining({ message: "sse-backpressure" }));
     expect(response.writableEnded).toBe(true);
     expect(response.writableFinished).toBe(false);

@@ -15,6 +15,7 @@ import {
   catalogPositive,
   catalogString,
   copyCatalogJson,
+  copyCatalogEnvelope,
   exactCatalogKeys,
 } from "./json.js";
 import { requireCatalog } from "./errors.js";
@@ -86,7 +87,9 @@ export function semanticDigest(
     | "keiko.tool-handler-set.v1",
   fields: unknown,
 ): CatalogDigest {
-  const object: CatalogJsonObject = catalogObject(copyCatalogJson(fields));
+  const object: CatalogJsonObject = catalogObject(
+    domain === "keiko.tool-descriptor.v1" ? copyCatalogJson(fields) : copyCatalogEnvelope(fields),
+  );
   requireCatalog(!Object.hasOwn(object, "domain"), "invalid-shape");
   return sha256Hex(canonicalise({ domain, ...object })) as CatalogDigest;
 }

@@ -1,0 +1,428 @@
+{
+  "schemaVersion": 1,
+  "classification": "Linux native app-owner coordinator/successor integration with actual Linux ARM64 process qualification; not complete installed-product updater acceptance.",
+  "sourceParent": "8caa11a2f9a0d877a90eb6f251ca5375cc96cad5",
+  "sourceFiles": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "b3b2606083f147506abbc9866bcfeaaf0bdc5883a41d15f7cebd82a82bcb5e1c"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "0fefc5de6c6a296bf0bbdc975ec1a25a0213d165236e0cee486ef335dbefce83"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "e1fea8bad74a11b35ab78eb71da6a1f79c79b3f2c6ad7900dde7bb4cf52d04c3"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-handoff-linux.h",
+      "sha256": "4327f80ccd45fecc5cda717d606802c875b51720be333920def5b917f0b02d1a"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-owner-linux.h",
+      "sha256": "a9f9fb4161039d080655c478966030d2546aa26123c804cb7cb98779d4d5854b"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.c",
+      "sha256": "3c09f2fd8ae2a10a964d8afb3900d461fe27fdfdd4202c653183a7d0ff2de02e"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.test.c",
+      "sha256": "d70bfbcc78bf15e0e7444141c0cae6f27e4d58e0f062a28e4fe403fed3eb7d94"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-parent-linux.h",
+      "sha256": "3ce0a192ff9caf9d2105527b6a664fbb536f011fce68c148d8c64693172e9722"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-process-linux.h",
+      "sha256": "83390117ed196265bf0abf9ff4c63a0cf9b454dd2ff3ca41fbe4cd99b8bdbf37"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-native-successor-linux.h",
+      "sha256": "c6c40484027666cd3459f3793fd9a3d7798344c5db326fd6216f97fcdb187cec"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-process-scope-linux.h",
+      "sha256": "a341587f4521b6baf6aac7ca2055ecaf5157b72ddc1f9ad55b610360a1a3aea7"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-runtime-owner-linux.h",
+      "sha256": "efa54b995cd6ce7466422cf1438eac928e4b6919fc97412136039cb35eaa32da"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-sha256.h",
+      "sha256": "790f9fdf3328cb6163d31cd3f8f2087dab3b7cca9c0f2c31a347e50de3e16af2"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "392b3a72ec0f3ab785ac75d21e18e1c48c2891747a857f99a0e83812aca35b4b"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-handoff-root-fixture.mjs",
+      "sha256": "8ad7eb611350ec968e9114d7b2b4def62beb6bca2b455e91ec5c7842d62436c7"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-handoff.test.mjs",
+      "sha256": "d29ae76b4aaf9ca135e29faf754d783d528fad0f5c7461d224ef3b00528107a1"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-owner.test.mjs",
+      "sha256": "0d4060a235052ad08b07184daf4f652c6237139a7ed0a02c7e7acc592e980d1d"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app_control_root_fixture.c",
+      "sha256": "17f0d86262fd906be6a09f5e25a955d6c72c45a34990d2b9f07bf1348c9769e7"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/keiko_runtime_supervisor.c",
+      "sha256": "4a021a7acdda76d14f240e77e56fb05dfc1f23e998a1f94fb17b9151c811d32a"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_root_fixture.c",
+      "sha256": "24ce4b2c1ed8d8cd1c8f3d32b7241d13b1a8371b8aa116e216db4a1d720322e1"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-lifecycle.test.ts",
+      "sha256": "a4533626487912866184a1ab8b3ded6f609a7fd7ef2aa3b744a5cda8fdedf840"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui-process-stop.ts",
+      "sha256": "c8d584e624973dbe6b417a46bd528c6ef136c3afd145ef4daafa1c601734a424"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "c3a25bdfcea9969b4e5cd6839082db8c1022b50ffb4b5c278013ab5ec258e524"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "6d7e2becbedf7fe7c30a4112f241c06e675d0afa84fa7dc67ffbc8794c5482ec"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "2e3bfb9e9e4f5e30069d938ce3f9f5627217acf12c99eb732778e8df53a68f1e"
+    },
+    {
+      "path": "packages/keiko-contracts/src/native-runtime-wire.test.ts",
+      "sha256": "255796564514ff43d513c735a9b7b4ce1f6452fa1a8c2e0e85ce839efd456a3d"
+    },
+    {
+      "path": "packages/keiko-contracts/src/native-runtime-wire.ts",
+      "sha256": "2533096533e0ca015b36741086e6b341b7f9fb0af3a51f66992a4981965dc0e8"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-app-control-stream.test.ts",
+      "sha256": "e22d95cdd8c13e5d9d9e075ec3af2f76f69b572e11cf1017b63d99ab11ed5678"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-app-control-stream.ts",
+      "sha256": "a651a91bb09c27fe961bc4691bfa08c09490c7929395e89ba1175a7a4424b67c"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-app-control.test.ts",
+      "sha256": "72cfe120134f9b0a5a9096f8ea8e7a5421f387c6dee64e5121aed4e8620f6e46"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-app-control.ts",
+      "sha256": "0efa21d1b97754fc373e2318f3f5f5d37ac53a87abb3f186253f8e2ef0d26029"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-handoff-activity.test.ts",
+      "sha256": "d0f590810920cf07e6aca14f82921d8c80893841655fd842253aa9bf30f64282"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-handoff-activity.ts",
+      "sha256": "5438afa8b2bdeb303190a4cd3c8dfabc8eab11459ff22cd0e6a379771011a5a8"
+    },
+    {
+      "path": "packages/keiko-server/src/update-native-handoff.test.ts",
+      "sha256": "b63820e9b5f57aae6d7c5717a438faaf3022a6819d238d9ee0976daf0a741758"
+    },
+    {
+      "path": "packages/keiko-server/src/update-portable-handoff-production.ts",
+      "sha256": "d2ec5717e53a7ade41592ab336af8c027de96a2d0df247fef81a6b97348b598d"
+    },
+    {
+      "path": "packages/keiko-server/src/update-portable-handoff.ts",
+      "sha256": "e1496fba112dc2d2cbe4c9f805d6665014d45d0b6caf9228617f9554893a7e32"
+    },
+    {
+      "path": "scripts/check-linux-native-quality.sh",
+      "sha256": "26bbf4dd2d8f34213a5b91ee1c36af6b9e437c135a38483b2bbc215a25aad896"
+    },
+    {
+      "path": "scripts/lib/activity-log-failure-surfaces.mjs",
+      "sha256": "b365296bb7e3eb5145e19f8586f684cb950b3a639ae1184c2b3bcb33807ee7fb"
+    }
+  ],
+  "plan": {
+    "failure": "A coordinator started inside the retiring native generation cannot survive its whole-generation cleanup. New and restored application generations need independent persistent ownership and exact canonical PID publication.",
+    "success": "The existing owner starts and authenticates the actual coordinator outside the retiring scope, gates authorization and commit, observes positive old-generation reaping, and transfers to a committed independent successor or restored owner without losing bounded application configuration."
+  },
+  "implementation": {
+    "mechanism": "Existing private native app owner, supervisor, coordinator, activation plan/WAL, canonical PID record and private receipts; fixed KHU1 control frames and KHO1 old-owner proof; no arbitrary command interface.",
+    "coordinatorPidPublishedBeforeAuthorization": true,
+    "acceptedWalPersistedBeforeCommit": true,
+    "rootLaunchCheckedBeforePrivateChannelClaim": true,
+    "successorRestorationReuseExistingAppOwnerRole": true,
+    "oldCanonicalPidRetainedUntilPositiveSuccessorCommit": true,
+    "explicitPositiveCancelAndWholeReapProof": true,
+    "environmentTransport": "Existing bounded application packet, carried to coordinator in sealed private mode-0600 anonymous descriptor. Native loader environment remains closed.",
+    "deadlines": "Original monotonic operation grants; partial packet and cancellation cleanup are separately bounded. Unknown ownership remains held.",
+    "logging": "Registered update.portable.native-control through the existing security/activity sink; admission, acceptance, commit and cleanup closed states, complete/loss-none.",
+    "modelPromptsSkillsBudgetsChanged": false
+  },
+  "check": {
+    "finalSourceFreeze": {
+      "files": 7554,
+      "sha256": "7c47f50e65fce1e06396d37f88dbaf96a4bd3befb4fe3ae247c12f1d37999f33"
+    },
+    "finalCompiledFreeze": {
+      "files": 6621,
+      "sha256": "23210d8a5d7bcd298eb0e536fb471999eb87a1f220882fe75cceba6a0191688d"
+    },
+    "linuxProfiles": [
+      {
+        "uid": 1000,
+        "architecture": "arm64",
+        "image": "sha256:425a3d0614d70d31d76cadc3787564e4eae5eaa5a7b7021d5fb32b0084046306",
+        "exitCode": 0,
+        "sourceDrift": 0,
+        "compiledDrift": 0,
+        "profile": "Non-root, cap-drop ALL, no-new-privileges, network none, read-only repository, executable private tmpfs. seccomp=unconfined is an explicit qualification-container constraint, not a product fallback.",
+        "actualRuns": [
+          "Complete compiler/analyzer/protocol/kernel lane",
+          "34 process-scope controls",
+          "15 initial app/CLI lifecycle controls",
+          "3 original startup-deadline controls",
+          "Two actual sequential native coordinator/successor transitions using production admission",
+          "Three positively acknowledged coalesced cancellations, then two successful native transitions",
+          "Failed replacement root, positively reaped provisional owner, restored independent owner, then another successful native transition"
+        ]
+      },
+      {
+        "uid": 65534,
+        "architecture": "arm64",
+        "image": "sha256:425a3d0614d70d31d76cadc3787564e4eae5eaa5a7b7021d5fb32b0084046306",
+        "exitCode": 0,
+        "sourceDrift": 0,
+        "compiledDrift": 0,
+        "profile": "Non-root, cap-drop ALL, no-new-privileges, network none, read-only repository, executable private tmpfs. seccomp=unconfined is an explicit qualification-container constraint, not a product fallback.",
+        "actualRuns": [
+          "Complete compiler/analyzer/protocol/kernel lane",
+          "34 process-scope controls",
+          "15 initial app/CLI lifecycle controls",
+          "3 original startup-deadline controls",
+          "Two actual sequential native coordinator/successor transitions using production admission",
+          "Three positively acknowledged coalesced cancellations, then two successful native transitions",
+          "Failed replacement root, positively reaped provisional owner, restored independent owner, then another successful native transition"
+        ]
+      }
+    ],
+    "fixtureLimits": [
+      "Tiny actual HTTP application using production native owner/coordinator/registration/plan/receipt/health mechanisms, with fixture-owned versions 1.0.0, 1.0.1 and 1.0.2; not the assembled Keiko application.",
+      "Initial fixture root uses host Node; new/restored roots use the copied fixture Node.",
+      "Coalesced mode uses an explicit private-channel fault adapter; ordinary mode uses the production main-thread admission getter.",
+      "Restoration timing differs between profiles; no claim that every verify-deadline branch executed.",
+      "Fixed original transaction grants retained; external observers do not increase production deadlines."
+    ],
+    "finalAffectedFamilies": {
+      "files": 342,
+      "tests": 10148,
+      "passed": 10145,
+      "failed": 0,
+      "existingSkips": 3,
+      "skips": [
+        "Windows batch install on non-Windows",
+        "Prerelease updater integration",
+        "Canonical Windows handoff fixture on non-Windows"
+      ]
+    },
+    "failureFirst": [
+      {
+        "artifact": "checkpoint69-native-stop-red.json",
+        "passed": 18,
+        "failed": 2,
+        "cause": "Live native roots without matching owned receipt were signalled before refusal."
+      },
+      {
+        "artifact": "checkpoint69-control-client-red.json",
+        "passed": 11,
+        "failed": 2,
+        "cause": "Late committed/failed frames prevented positive cancellation acknowledgement."
+      },
+      {
+        "artifact": "checkpoint69-wrong-launch-red.json",
+        "exitCode": 1,
+        "cause": "Wrong launch claimed the legitimate private channel before admission rejection."
+      },
+      {
+        "artifact": "checkpoint69-port-rebind-red.json",
+        "cause": "Real listener close left TIME_WAIT falsely interpreted as live port occupancy; matching SO_REUSEADDR fixes positive rebinding while live listener still refuses."
+      },
+      {
+        "artifact": "checkpoint69-native-restoration-red-v1.json",
+        "cause": "Closed STOP pipe returned before consuming the actual positive reap observation. Retained earlier development run overlapped package-build setup; final frozen profiles provide green evidence."
+      },
+      {
+        "artifact": "checkpoint69-handoff-before-inherited-root-fix.json",
+        "cause": "Descriptor 6 retained CLOEXEC when dup2(6,6) was a no-op, breaking the second actual coordinator."
+      }
+    ],
+    "validation": {
+      "wholeTyping": "Package graph typecheck plus final forced package build and final root tsc passed.",
+      "activityLog": "All seven full-inventory checks passed, including normal/negative architecture and release impact.",
+      "actualLocalSonar": "Full analyzer reports PASS, no unresolved finding on changed files.",
+      "assembledSurface": "6414 files; run before final fixture/client-only delta, public exports unchanged afterward.",
+      "format": "Whole format check passed on frozen final sources; new publication evidence checked again before commit.",
+      "macos": "Strict C17 launcher test compilation and execution pass on macOS ARM64; no Endpoint Security app handoff acceptance.",
+      "rootAndUiLint": "Complete root ESLint and UI workspace ESLint passed on frozen final sources, zero warnings and zero source/compiled drift."
+    }
+  },
+  "artifacts": [
+    {
+      "artifact": "checkpoint69-source-freeze-v1.json",
+      "sha256": "7c47f50e65fce1e06396d37f88dbaf96a4bd3befb4fe3ae247c12f1d37999f33"
+    },
+    {
+      "artifact": "checkpoint69-compiled-freeze-v1.json",
+      "sha256": "23210d8a5d7bcd298eb0e536fb471999eb87a1f220882fe75cceba6a0191688d"
+    },
+    {
+      "artifact": "checkpoint69-final-native-linux-uid1000-v1.json",
+      "sha256": "378c4f6cf6c75e1668b12be9d2c106f1fde8dfd3afa7c2e740347f0b015cff2a"
+    },
+    {
+      "artifact": "checkpoint69-final-native-linux-uid1000-v1.log",
+      "sha256": "f2256721e496ccde45de934678d239f9593eddc87b8c869608e9fa116f731546"
+    },
+    {
+      "artifact": "checkpoint69-final-native-linux-uid65534-v1.json",
+      "sha256": "ccfe6ab249adbf37522fc64d037bb32f6c37a1fb973c605f87954ef6e6c05836"
+    },
+    {
+      "artifact": "checkpoint69-final-native-linux-uid65534-v1.log",
+      "sha256": "397269826a71bf696c0614d56579f4f92d8750d6fd982d98f2969d9ccd3fc814"
+    },
+    {
+      "artifact": "checkpoint69-final-unit-families-v1.json",
+      "sha256": "ad8cd070a3dc449cb4fe6cea62bbd59b794449f4074224de29b8c80e26832919"
+    },
+    {
+      "artifact": "checkpoint69-final-unit-families-results-v1.json",
+      "sha256": "c0b5dee8e86d9dc00899eefd9c324702e9d48e66bb8fbf9e8c6d5b8e2d2151ed"
+    },
+    {
+      "artifact": "checkpoint69-final-format-v1.json",
+      "sha256": "3880b33cac02f4d5a1d1d76c66ec722b8f99857c0cd7f4afc4de64838d0f0156"
+    },
+    {
+      "artifact": "checkpoint69-final-macos-compile-v1.json",
+      "sha256": "8b4a78f06c18fb4f4f415e365689911c3d3375106b1ff701834f5ad56b129022"
+    },
+    {
+      "artifact": "checkpoint69-final-macos-run-v1.json",
+      "sha256": "59ace0c6f3445fc06e726c631c9c1a3b6d2c14c2fabd245e843f0fcb780184a6"
+    },
+    {
+      "artifact": "checkpoint69-typecheck-v4.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "artifact": "checkpoint69-root-typecheck-v5.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "checkpoint69-activity-log-v2.log",
+      "sha256": "f76d333bd9dd64e991a78578901ec782b902bccb7a8cfdfe4332ff27337ec91c"
+    },
+    {
+      "artifact": "checkpoint69-error-observability-v2.log",
+      "sha256": "1c2db683732edf3aa5f5ad7d18a3a722ca6650bda806af1910ced7ccea85f6b7"
+    },
+    {
+      "artifact": "checkpoint69-package-surface-v1.log",
+      "sha256": "9fe293af9dd2f7605f9a3d376f8bc614b87cc3a57b73734367f1aad0ad4dfc3f"
+    },
+    {
+      "artifact": "checkpoint69-sonar-v2.log",
+      "sha256": "d8c3224169f75e59f0de232a8aadd69d34581c78a56ba86c7fbb12655d33848e"
+    },
+    {
+      "artifact": "checkpoint69-adr-index-v1.log",
+      "sha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "artifact": "checkpoint69-native-stop-red.json",
+      "sha256": "a9ba2e606a2a4e0c4da4796a43d7aa0bbcc6cf146636317ce3daba6c14410f7c"
+    },
+    {
+      "artifact": "checkpoint69-control-client-red.json",
+      "sha256": "71b38a849f276294efc9e62711254f6a84ebdc5a9161dbc94f371a9ecb7924ea"
+    },
+    {
+      "artifact": "checkpoint69-wrong-launch-red.json",
+      "sha256": "653d08d956c18a6587d55cfef546d1ffe0336667da1d53ebfe9632df83ccd1c3"
+    },
+    {
+      "artifact": "checkpoint69-port-rebind-red.json",
+      "sha256": "803a802fc152610ba837198fc882228570cd05ed8a4710c85530a8bc27779aba"
+    },
+    {
+      "artifact": "checkpoint69-macos-port-red.log",
+      "sha256": "9854c3148df8da9b8471cf8fa78de95d98129996fac72d905d8606f02758fba3"
+    },
+    {
+      "artifact": "checkpoint69-native-restoration-red-v1.json",
+      "sha256": "2e15f26a2b8466819fd7cf7b6dd6ce33899741b4c65e7d962dfdcf19f2f0f30a"
+    },
+    {
+      "artifact": "checkpoint69-handoff-before-inherited-root-fix.json",
+      "sha256": "d079db82af3320d85640b62e3b41bf048a39951af8775ded1e09d2f4f4809d7a"
+    },
+    {
+      "artifact": "checkpoint69-positive-stop-before.json",
+      "sha256": "d5599f979124fcf83771639e3e8604d7339f820814ca3c3c47e60d5a99f45fce"
+    },
+    {
+      "artifact": "checkpoint69-final-root-lint-v3.json",
+      "sha256": "4fe9727a9693b6b1871b8c59e2997e59b7c2251d0e6d77ee5d426bcff9764890"
+    },
+    {
+      "artifact": "checkpoint69-final-ui-lint-v3.json",
+      "sha256": "744303c0fa30ea37f03c5e06f91cc53ed0f69a9cc182289669344c40d9e624b1"
+    }
+  ],
+  "retainedDevelopmentFailures": [
+    {
+      "artifact": "checkpoint69-lint-v1.log",
+      "classification": "Fixture complexity rejected; split into outcome/phase helpers; full final lint run separately retained."
+    },
+    {
+      "artifact": "checkpoint69-sonar-v1.log",
+      "classification": "Length assertion syntax rejected; replaced with toHaveLength without changing protocol expectations."
+    },
+    {
+      "artifact": "checkpoint69-activity-log-v1.log",
+      "classification": "New propagation paths lacked canonical classification; refactored explicit error propagation, no exemption added."
+    }
+  ],
+  "act": {
+    "linuxNativeOwnerIntegrationVerified": true,
+    "fullInstalledProductUpdaterAcceptance": false,
+    "macosEndpointSecurityHandoffQualified": false,
+    "linuxAmd64Qualified": false,
+    "windowsRuntimeQualified": false,
+    "ssdStateContinuityQualified": false,
+    "bothSkillAcceptances": false,
+    "allAcceptanceCriteriaComplete": false,
+    "finalExactHeadCiAndReviewsComplete": false,
+    "mergedToDev": false,
+    "next": [
+      "Genuine assembled distinct-version installed transactions including restart/interruption/recovery/SSD.",
+      "Visible unchanged-skill held-out generation with fixed matched controls and independent prequalified mutation oracles.",
+      "Remaining browser, recursive search, compaction and original acceptance-ledger reconciliation."
+    ]
+  }
+}

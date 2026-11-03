@@ -2,8 +2,11 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { editorM11PairingFragment as launcherPairingFragment } from "./support/editor-m11-app-session.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
+const OVERFLOW_MODEL_ID =
+  "e2e-long-model-identifier-for-overflow-tooltip-coverage-with-an-explicit-readable-suffix-2026-10-19";
 
 function collectPageErrors(page: Page): () => void {
   const errors: string[] = [];
@@ -47,7 +50,7 @@ async function mockModelList(page: Page): Promise<void> {
         models: [
           chatModel("e2e-chat-model"),
           chatModel("gpt-3.5-turbo-0125"),
-          chatModel("gpt-4o-mini-search-preview-2025-03-11"),
+          chatModel(OVERFLOW_MODEL_ID),
           chatModel("gpt-4o-2024-08-06"),
         ],
       }),
@@ -56,7 +59,7 @@ async function mockModelList(page: Page): Promise<void> {
 }
 
 async function openChatModelDropdown(page: Page): Promise<void> {
-  await page.goto("/");
+  await page.goto(`/${launcherPairingFragment("dropdown-tooltips")}`);
   await runVisibleReadiness(page);
   await page.getByRole("button", { name: "New chat" }).click();
   await page
@@ -105,6 +108,15 @@ async function createProjectFixture(request: APIRequestContext): Promise<() => v
 async function expectTooltipOffsetFromOption(page: Page, optionName: string): Promise<void> {
   const longOption = page.getByRole("option", { name: optionName });
   await expect(longOption).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        longOption
+          .locator(".ksel-option-label")
+          .evaluate((label) => label.scrollWidth - label.clientWidth),
+      { timeout: 2_500 },
+    )
+    .toBeGreaterThan(0);
   await longOption.hover({ position: { x: 6, y: 6 } });
   await expect(page.getByRole("tooltip")).toHaveText(optionName, { timeout: 2_500 });
 
@@ -126,13 +138,13 @@ test("model dropdown overflow tooltips appear from row hover and clear consisten
   const assertNoPageErrors = collectPageErrors(page);
   await mockModelList(page);
   await openChatModelDropdown(page);
-  await expectTooltipOffsetFromOption(page, "gpt-4o-mini-search-preview-2025-03-11");
+  await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
 
   const shortOption = page.getByRole("option", { name: "gpt-4o-2024-08-06" });
   await shortOption.hover({ position: { x: 6, y: 6 } });
   await expect(page.getByRole("tooltip")).toBeHidden();
 
-  await expectTooltipOffsetFromOption(page, "gpt-4o-mini-search-preview-2025-03-11");
+  await expectTooltipOffsetFromOption(page, OVERFLOW_MODEL_ID);
 
   await page.mouse.move(1, 1);
   await expect(page.getByRole("tooltip")).toBeHidden();
@@ -155,7 +167,7 @@ test("fresh chats remain distinct and reopening a model picker refetches its cat
   });
 
   try {
-    await page.goto("/");
+    await page.goto(`/${launcherPairingFragment("fresh-chat-catalog")}`);
     await expect.poll(() => modelRequestCount).toBeGreaterThan(0);
     await runVisibleReadiness(page);
     await createFreshChatWindow(page);

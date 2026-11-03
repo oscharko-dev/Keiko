@@ -325,106 +325,6 @@ it("a parent closed while approval waits never sends the later authorized effect
   expect(fixture.bodies[0]?.action).toBe("permission-request");
 });
 
-it.each(["direct", "code-mode"] as const)(
-  "binds an inactive %s fixed host factory to the same parent owner and lexical facade transport",
-  async (profile) => {
-    const create = Reflect.get(runtimeAdapter, "createGeneratedOpenCodeV2HostFactory") as
-      ((profile?: "direct" | "code-mode") => string) | undefined;
-    expect(create, "the default plugin cannot bind a private native host capability").toBeTypeOf(
-      "function",
-    );
-    if (create === undefined) throw new Error("missing-fixed-host-factory");
-    const tools = new Map<string, GeneratedTool>();
-    const hooks = new Map<string, Hook>();
-    const closed: string[] = [];
-    let owner:
-      | {
-          readonly close: (context: NativeContext) => boolean;
-          readonly capture: (context: NativeContext) => Promise<string>;
-        }
-      | undefined;
-    const factory = new Script(
-      `${create(profile).replace("export default", "const generated =")}\ngenerated;`,
-    ).runInNewContext({
-      AbortController,
-      AbortSignal,
-      TextEncoder,
-      TextDecoder,
-      Uint8Array,
-      setTimeout,
-      clearTimeout,
-      fetch: (): never => {
-        throw new Error("ambient-fetch-denied");
-      },
-      process: new Proxy(
-        {},
-        {
-          get: (): never => {
-            throw new Error("ambient-process-denied");
-          },
-        },
-      ),
-    }) as (runtime: unknown) => Plugin;
-    const plugin = factory({
-      process: Object.freeze({
-        env: Object.freeze({
-          KEIKO_CODING_MODE: "autonomous-delivery",
-          KEIKO_CODING_RUN_ID: "run-host-factory",
-          KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/fixture",
-          KEIKO_TOOL_FACADE_CAPABILITY: "fixture",
-        }),
-      }),
-      crypto: webcrypto,
-      fetch: (): Promise<Response> => Promise.resolve(new Response(JSON.stringify(RESPONSE))),
-      bindOwner: (value: typeof owner): void => {
-        owner = value;
-      },
-      onParentClosed: (context: NativeContext): void => {
-        closed.push(context.id);
-      },
-    });
-    await plugin.setup({
-      tool: {
-        hook: (name, callback): Promise<unknown> => {
-          hooks.set(name, callback);
-          return Promise.resolve();
-        },
-        transform: (callback): Promise<unknown> => {
-          callback({
-            add: (value): void => {
-              tools.set(value.name, value);
-            },
-          });
-          return Promise.resolve();
-        },
-      },
-    });
-    expect([...tools.keys()]).toEqual(
-      opencodeRegistrationSet().entries.map((value) => value.alias),
-    );
-    const before = hooks.get("execute.before");
-    if (before === undefined || owner === undefined) throw new Error("host-owner-unbound");
-    const direct = await owner.capture(CONTEXT);
-    await before({ ...CONTEXT, tool: "execute" });
-    const captured = await Promise.all([owner.capture(CONTEXT), owner.capture(CONTEXT)]);
-    expect(new Set([direct, ...captured]).size).toBe(3);
-    expect(
-      await owner.capture({ ...CONTEXT, messageID: "forged-message" }).then(
-        () => false,
-        () => true,
-      ),
-    ).toBe(true);
-    const selected = tools.get("keiko_git_status");
-    if (selected === undefined) throw new Error("host-tool-missing");
-    await expect(selected.execute({}, CONTEXT)).resolves.toMatchObject({ output: RESPONSE });
-    expect(owner.close(CONTEXT)).toBe(true);
-    expect(owner.close(CONTEXT)).toBe(false);
-    await expect(owner.capture(CONTEXT)).rejects.toThrow("keiko-tool-invalid");
-    await expect(selected.execute({}, CONTEXT)).rejects.toThrow("keiko-tool-invalid");
-    expect(closed).toEqual([CONTEXT.id]);
-  },
-);
-
 it("registers every selected Code Mode handler with the original native catalog", async () => {
   const fixture = await registered({ profile: "code-mode" });
   expect([...fixture.tools.keys()]).toEqual(
@@ -446,15 +346,10 @@ it("preserves the direct source while caching each immutable selected profile se
   expect(Object.isFrozen(codeMode)).toBe(true);
 });
 
-it("rejects unsupported generated profiles before constructing a plugin or host factory", () => {
-  for (const factory of [
-    createGeneratedOpenCodeV2Plugins,
-    runtimeAdapter.createGeneratedOpenCodeV2HostFactory,
-  ]) {
-    expect(() => {
-      Reflect.apply(factory, undefined, ["unsupported"]);
-    }).toThrow(TypeError);
-  }
+it("rejects unsupported generated profiles before constructing a plugin", () => {
+  expect(() => {
+    Reflect.apply(createGeneratedOpenCodeV2Plugins, undefined, ["unsupported"]);
+  }).toThrow(TypeError);
 });
 
 it("admits a new CodeMode parent after 2049 completed calls while refusing every late mapped child", async () => {

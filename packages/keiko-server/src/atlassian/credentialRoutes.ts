@@ -1,3 +1,4 @@
+import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
 // Issue #2241 — Atlassian connector credential custody BFF routes (ADR-0128 D2/D3, ADR-0129 D3).
 //
 //   POST   /api/atlassian-connectors/credentials                  create (write-only: responds
@@ -19,9 +20,9 @@
 // diagnostic sink — the exact contract `check:error-observability` enforces.
 
 import type { IncomingMessage } from "node:http";
+import { verifyStoredCredential } from "./credentialVerification.js";
 import {
   AtlassianCredentialCustodyError,
-  verifyAtlassianConnection,
   type AtlassianCredentialCustody,
   type AtlassianCredentialMetadata,
   type AtlassianHttpBodyPort,
@@ -42,6 +43,16 @@ import {
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import {
+  recordCredentialCreated,
+  recordCredentialsListed,
+  recordCredentialUpdated,
+} from "./credentialActivity.js";
+import {
+  jiraChatActorDigest,
+  ownsAtlassianCredential,
+  publicAtlassianCredential,
+} from "./jiraPodAccess.js";
 
 const MAX_CREDENTIAL_BODY_BYTES = 16_000;
 
@@ -62,6 +73,8 @@ const ATLASSIAN_CREDENTIAL_REJECTED_OPERATION = defineActivityLogOperation({
         "unsupported-auth-scheme",
         "credential-not-found",
         "credential-limit-exceeded",
+        "creation-conflict",
+        "credential-changed",
         "credential-unreadable",
         "vault-unavailable",
       ],
@@ -79,15 +92,24 @@ const ATLASSIAN_CREDENTIAL_REJECTED_OPERATION = defineActivityLogOperation({
 // write-only; the narrow execution resolver is NOT here — it lives inside the two port-factory
 // closures, so no route can reach a stored secret (ADR-0128 D2). The body-less port serves the
 // verify probe; the bounded-body port serves the sync lane (Issue #2242).
+export interface AtlassianCredentialHttpOptions extends AtlassianHttpLifecycleOptions {
+  /** Server-owned invocation purpose; explicit probes own their verification observation. */
+  readonly purpose?: "request" | "verification";
+}
+
 export interface AtlassianConnectorCredentialDeps {
+  /** Listener lifecycle owned by the BFF, never exposed through an HTTP request. */
+  readonly registerListener?: (port: number) => () => void;
   readonly custody: AtlassianCredentialCustody;
   readonly httpPortFactory: (
     metadata: AtlassianCredentialMetadata,
     correlationId?: string,
+    lifecycle?: AtlassianCredentialHttpOptions,
   ) => AtlassianHttpPort;
   readonly httpBodyPortFactory: (
     metadata: AtlassianCredentialMetadata,
     correlationId?: string,
+    lifecycle?: AtlassianCredentialHttpOptions,
   ) => AtlassianHttpBodyPort;
   // KEIKO-0826 follow-up: optional sink for body-free activity events emitted on every typed
   // custody-error path (`credential-not-found` 404, `unsupported-auth-scheme` 400, `invalid-input`
@@ -197,6 +219,10 @@ function custodyErrorResult(
       };
     case "credential-not-found":
       return { status: 404, body: errorBody("CREDENTIAL_NOT_FOUND", error.message, correlationId) };
+    case "creation-conflict":
+      return { status: 409, body: errorBody("CREATION_CONFLICT", error.message, correlationId) };
+    case "credential-changed":
+      return { status: 409, body: errorBody("CREDENTIAL_CHANGED", error.message, correlationId) };
     // KEIKO-0826: reject once the custody storage cap
     // (ATLASSIAN_CREDENTIAL_CUSTODY_MAX_ENTRIES) is reached. 429 (Too Many Requests) is the
     // conventional shape for a per-resource rate/cap ceiling — distinct from a validation
@@ -260,6 +286,8 @@ function custodyRejectionErrorKind(
       return "read-failed";
     case "invalid-input":
     case "unsupported-auth-scheme":
+    case "creation-conflict":
+    case "credential-changed":
       return "validation-failed";
   }
 }
@@ -329,7 +357,9 @@ export async function handleCreateAtlassianConnectorCredential(
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, async () => {
     const body = await readJsonObject(ctx.req);
-    return { status: 200, body: guard.custody.create(body) };
+    const metadata = guard.custody.create(body, jiraChatActorDigest(deps));
+    recordCredentialCreated(guard, metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID);
+    return { status: 200, body: publicAtlassianCredential(metadata) };
   });
 }
 
@@ -340,10 +370,14 @@ export function handleListAtlassianConnectorCredentials(
 ): Promise<RouteResult> | RouteResult {
   const guard = requireCustody(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
-  return runHandler(guard, ctx, () => ({
-    status: 200,
-    body: { credentials: guard.custody.list() },
-  }));
+  return runHandler(guard, ctx, () => {
+    const credentials = guard.custody
+      .list()
+      .filter((metadata) => ownsAtlassianCredential(deps, metadata))
+      .map(publicAtlassianCredential);
+    recordCredentialsListed(guard, ctx.correlationId ?? UNKNOWN_CORRELATION_ID, credentials.length);
+    return { status: 200, body: { credentials } };
+  });
 }
 
 // DELETE /api/atlassian-connectors/credentials/:authRef — removes ciphertext and metadata in one
@@ -356,7 +390,10 @@ export function handleDeleteAtlassianConnectorCredential(
   if (isRouteResult(guard)) return guard;
   return runHandler(guard, ctx, () => {
     const authRef = decodeAuthRefParam(ctx);
-    if (authRef === undefined || !guard.custody.delete(authRef)) {
+    const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
+    if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
+      throw new AtlassianCredentialCustodyError("credential-not-found");
+    if (!guard.custody.delete(metadata.authRef, ctx.correlationId)) {
       return credentialNotFound(ctx.correlationId);
     }
     return { status: 200, body: { ok: true } };
@@ -375,14 +412,40 @@ export function handleVerifyAtlassianConnectorCredential(
   return runHandler(guard, ctx, async () => {
     const authRef = decodeAuthRefParam(ctx);
     const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
-    if (metadata === undefined) return credentialNotFound(ctx.correlationId);
-    const status = await verifyAtlassianConnection(
-      guard.httpPortFactory(metadata, ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
-      {
-        provider: metadata.provider,
-        baseUrl: metadata.baseUrl,
-      },
+    if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
+      throw new AtlassianCredentialCustodyError("credential-not-found");
+    const status = await verifyStoredCredential(
+      guard,
+      metadata,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     );
     return { status: 200, body: { authRef: metadata.authRef, status } };
+  });
+}
+
+/** PATCH updates the owned Live-Pod resource; secret-bearing input never enters the response. */
+export function handleUpdateAtlassianConnectorCredential(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> | RouteResult {
+  const guard = requireCustody(deps, ctx.correlationId);
+  if (isRouteResult(guard)) return guard;
+  return runHandler(guard, ctx, async () => {
+    const body = await readJsonObject(ctx.req);
+    const authRef = decodeAuthRefParam(ctx);
+    const metadata = authRef === undefined ? undefined : guard.custody.getMetadata(authRef);
+    if (metadata === undefined || !ownsAtlassianCredential(deps, metadata))
+      throw new AtlassianCredentialCustodyError("credential-not-found");
+    const updated = guard.custody.updateLivePod(metadata.authRef, body, ctx.correlationId);
+    let updateKind: "rename" | "replace-token" | "rename-and-replace-token" = "rename";
+    if (body.apiToken !== undefined)
+      updateKind = body.displayName === undefined ? "replace-token" : "rename-and-replace-token";
+    recordCredentialUpdated(
+      guard,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      updated.generation ?? 1,
+      updateKind,
+    );
+    return { status: 200, body: publicAtlassianCredential(updated) };
   });
 }

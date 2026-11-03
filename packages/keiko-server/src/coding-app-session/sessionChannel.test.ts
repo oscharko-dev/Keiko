@@ -355,6 +355,132 @@ describe("createCodingAppSessionChannel", () => {
   });
 });
 
-function createStatic(content: { kind: string; body: string }): CodingAppSessionContentSource {
+function createStatic(content: CodingAppSessionChannelContent): CodingAppSessionContentSource {
   return { contentFor: () => content };
 }
+
+function rotationExpiryChannel(): {
+  readonly registry: ReturnType<typeof createSessionRegistry>;
+  readonly channel: ReturnType<typeof createCodingAppSessionChannel>;
+  readonly token: string;
+  readonly setNow: (value: number) => void;
+} {
+  let now = 0;
+  const registry = createSessionRegistry({
+    now: () => now,
+    idleTtlMs: 1_000_000,
+    absoluteTtlMs: 500_000,
+  });
+  const channel = createCodingAppSessionChannel({
+    registry,
+    pairingPort: createFakeSessionPairingPort(),
+    contentSource: createStatic(CANARY),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new TypeError("Synthetic approved pairing must succeed");
+  return {
+    channel,
+    registry,
+    token: paired.cookieToken,
+    setNow: (value: number): void => {
+      now = value;
+    },
+  };
+}
+it("rotation cannot extend the original absolute authority lifetime", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(450_000);
+  const rotated = fixture.channel.rotate(fixture.token);
+  expect(rotated.rotated).toBe(true);
+  if (!rotated.rotated) throw new TypeError("Valid rotation must succeed");
+  expect(fixture.channel.snapshot(fixture.token).content).toBeNull();
+  expect(fixture.channel.snapshot(rotated.cookieToken).content).toEqual(CANARY);
+  fixture.setNow(500_001);
+  expect(fixture.channel.snapshot(rotated.cookieToken).content).toBeNull();
+});
+it("rotation cookie repair exposes only the original remaining lifetime", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(450_000);
+  const rotated = fixture.channel.rotate(fixture.token);
+  if (!rotated.rotated) throw new TypeError("Valid rotation must succeed");
+  expect(fixture.channel.ensureLocalSession(rotated.cookieToken)).toEqual({
+    status: "active",
+    maxAgeSeconds: 50,
+  });
+});
+it("rotation still replaces a valid bearer and denies expired or revoked authority", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(100_000);
+  const rotated = fixture.channel.rotate(fixture.token);
+  expect(rotated.rotated).toBe(true);
+  expect(fixture.channel.snapshot(fixture.token).content).toBeNull();
+  if (!rotated.rotated) throw new TypeError("Valid rotation must succeed");
+  expect(fixture.channel.snapshot(rotated.cookieToken).content).toEqual(CANARY);
+  fixture.channel.signOut(rotated.cookieToken);
+  expect(fixture.channel.rotate(rotated.cookieToken)).toEqual({ rotated: false });
+  const expired = rotationExpiryChannel();
+  expired.setNow(500_001);
+  expect(expired.channel.rotate(expired.token)).toEqual({ rotated: false });
+});
+
+it("rotation stops the replacement stream at the original absolute deadline", () => {
+  let now = 0;
+  const live = liveSource();
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry({
+      now: () => now,
+      idleTtlMs: 1_000_000,
+      absoluteTtlMs: 500_000,
+    }),
+    pairingPort: createFakeSessionPairingPort(),
+    contentSource: live.source,
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new TypeError("Synthetic approved pairing must succeed");
+  now = 450_000;
+  const rotated = channel.rotate(paired.cookieToken);
+  if (!rotated.rotated) throw new TypeError("Valid rotation must succeed");
+  const snapshots: unknown[] = [];
+  const subscription = channel.subscribe(rotated.cookieToken, (snapshot) => {
+    snapshots.push(snapshot.content);
+    return true;
+  });
+  try {
+    expect(subscription.live).toBe(true);
+    expect(subscription.snapshot.content).toEqual(CANARY);
+    now = 500_001;
+    live.emit(CANARY);
+    expect(snapshots.at(-1)).toBeNull();
+    expect(live.subscribers()).toBe(0);
+  } finally {
+    subscription.detach();
+  }
+});
+
+it("refuses subsecond rotation before replacing the valid original secret", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(499_001);
+  expect(fixture.channel.rotate(fixture.token)).toEqual({ rotated: false });
+  expect(fixture.channel.snapshot(fixture.token).content).toEqual(CANARY);
+});
+
+it("allows rotation with exactly one full second of original authority", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(499_000);
+  expect(fixture.channel.rotate(fixture.token)).toMatchObject({ rotated: true, maxAgeSeconds: 1 });
+});
+
+it("revokes a replacement that loses its last full second during rotation", () => {
+  const fixture = rotationExpiryChannel();
+  fixture.setNow(499_000);
+  const rotate = fixture.registry.rotate;
+  let replacement: string | undefined;
+  vi.spyOn(fixture.registry, "rotate").mockImplementation((sessionId) => {
+    const mint = rotate(sessionId);
+    replacement = mint?.cookieToken;
+    fixture.setNow(499_001);
+    return mint;
+  });
+  expect(fixture.channel.rotate(fixture.token)).toEqual({ rotated: false });
+  expect(fixture.channel.snapshot(replacement).content).toBeNull();
+});

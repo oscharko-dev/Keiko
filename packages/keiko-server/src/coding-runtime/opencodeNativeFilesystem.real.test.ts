@@ -1,5 +1,4 @@
 import { spawn, spawnSync, type ChildProcessByStdio } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   mkdirSync,
   mkdtempSync,
@@ -25,10 +24,10 @@ import {
   parseOpenCodeV2ChildEndpoint,
 } from "./opencodeV2HttpClient.js";
 import { readBoundedBody } from "./opencodeRuntimeComposition.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
-const PINNED_ARM64_SHA256 = "f2dfe9ad5851219a6bd97b2e3cd2081c0964b5f120530f578d3da3aefc5ccc5a";
 const CONTAINED_SENTINEL = "native-contained-read-fixture";
 const EXTERNAL_SENTINEL = "native-external-read-must-remain-denied";
 
@@ -288,8 +287,10 @@ describe("pinned native OpenCode filesystem service foundation", () => {
       expect(process.arch).toBe("arm64");
       if (BINARY === undefined || RESOURCE_ROOT === undefined)
         throw new Error("fixture-binary-missing");
-      expect(createHash("sha256").update(readFileSync(BINARY)).digest("hex")).toBe(
-        PINNED_ARM64_SHA256,
+      // The executable reports the pinned version, as every native real-binary suite checks it; a
+      // copied file digest went stale with each runtime pin.
+      expect(spawnSync(BINARY, ["--version"], { encoding: "utf8" }).stdout.trim()).toBe(
+        `opencode v${OPENCODE_PINNED_VERSION}`,
       );
       const fixture = filesystemFixture();
       const facts: ProviderFacts = {
@@ -311,7 +312,7 @@ describe("pinned native OpenCode filesystem service foundation", () => {
           endpoint: await childEndpoint(launched.child),
           password: launched.password,
         });
-        expect((await client.info()).version).toBe("2.0.10");
+        expect((await client.info()).version).toBe(OPENCODE_PINNED_VERSION);
         const session = await client.createSession(fixture.workspace);
         if (typeof session.id !== "string") throw new Error("fixture-session-invalid");
         await client.prompt(session.id, "Read the two fixture paths without modifying files.");

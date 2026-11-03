@@ -48,11 +48,12 @@ attachment for run evidence.
 | c. Tab persistence   | Keyboard reorder survives a reload                   | Persisted first-pane `tabOrder` equals the new order, then is restored after reload                                                            | AC2         |
 | d. Split and resize  | Split right, resize, then nested split down          | Pane count 1 then 2 then 3; separator `aria-valuenow` 50 then 54; two separators                                                               | AC2         |
 | e. Dirty buffer      | Typing marks the buffer dirty                        | Tab `data-dirty='true'` and the status `save` field reads `Unsaved`                                                                            | AC2         |
-| f. Dirty close guard | Closing a dirty tab is blocked                       | `role='dialog'` unsaved-changes prompt; Cancel and Escape keep the tab and its dirty state                                                     | AC2         |
+| f. Dirty close guard | Closing a dirty tab is blocked                       | Native `<dialog aria-modal>` unsaved-changes prompt portaled to `document.body`; Cancel and Escape keep the tab and its dirty state            | AC2         |
 | g. Recovery          | Recovery is offered after a reload                   | Hot-exit snapshot key appears in IndexedDB; `.ed-recovery[role='status']` is visible after reload                                              | AC2         |
-| h. Empty state       | No root or file                                      | `.ed-empty[role='note']` is visible and no Monaco surface renders                                                                              | AC1         |
-| i. Load failure      | A missing open file                                  | `role='alert'` with a Retry button and no Monaco surface                                                                                       | AC1         |
+| h. Empty state       | No available project, so no root or file             | `role='note'` "Open a project" prompt is visible and no Monaco surface renders                                                                 | AC1         |
+| i. Load failure      | A retryable (5xx) read failure of an open file       | `role='alert'` with a Retry button that recovers once the server answers, and no Monaco surface                                                | AC1         |
 | j. Accessibility     | Keyboard and focus for tabs, tree, separator, dialog | Stable roles and accessible names; Alt+Arrow tab switch; tree `aria-expanded` toggle; focusable separator; dialog focus containment and Escape | AC1 and AC2 |
+| r. Missing file      | A permanently missing open file (404)                | `role='alert'` "not found" with no Retry button and no Monaco surface                                                                          | AC1         |
 
 The whole file is tagged with the stable `@editor-baseline` annotation in its `test.describe`
 title so it can be selected or excluded as one unit.

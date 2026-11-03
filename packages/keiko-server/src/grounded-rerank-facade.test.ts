@@ -170,6 +170,51 @@ describe("rerankSelection", () => {
     deps.store.close();
   });
 
+  it("hands the activity-log sink and correlation id to the rerank transport", async () => {
+    let captured: LiteLLMRerankRequest | undefined;
+    const deps = depsWith(gatewayConfig(), (request) => {
+      captured = request;
+      return Promise.resolve(successfulOutcome([{ index: 0 }]));
+    });
+    const sink = createBufferedServerLogSink();
+    Object.assign(deps, { activityLog: sink });
+
+    await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: ["alpha document"],
+      documentFor: (candidate) => candidate,
+      topN: 1,
+      fallbackMode: "slice-topN",
+      correlationId: "rerank-wired-1",
+    });
+
+    expect(captured?.log).toBe(sink);
+    expect(captured?.logContext).toEqual({ correlationId: "rerank-wired-1" });
+    deps.store.close();
+  });
+
+  it("falls back to the process sink so an unwired deps graph never loses transport lines", async () => {
+    let captured: LiteLLMRerankRequest | undefined;
+    const deps = depsWith(gatewayConfig(), (request) => {
+      captured = request;
+      return Promise.resolve(successfulOutcome([{ index: 0 }]));
+    });
+
+    await rerankSelection({
+      deps,
+      query: "alpha",
+      candidates: ["alpha document"],
+      documentFor: (candidate) => candidate,
+      topN: 1,
+      fallbackMode: "slice-topN",
+    });
+
+    expect(captured?.log).toBeDefined();
+    expect(captured?.logContext).toBeUndefined();
+    deps.store.close();
+  });
+
   it("passes the shared gateway egress config when the reranker has no override", async () => {
     let captured: LiteLLMRerankRequest | undefined;
     const deps = depsWith(gatewayConfig(), (request) => {

@@ -16,7 +16,6 @@ import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
 import { SSE_HEADERS, writeMessageEvent, writeReadyMessage, startSseHeartbeat } from "./sse.js";
-import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import { getServerLogger } from "./observability/index.js";
 import { correlationIdOrUnknown } from "./correlation.js";
 import type { SseWriter, StreamEvent } from "./sink.js";
@@ -28,6 +27,7 @@ import type {
   CommittedVoiceTranscriptProjection,
   VoiceProfile,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { VOICE_TRANSCRIPT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { createNodeToolResultArtifactStore } from "@oscharko-dev/keiko-evidence";
@@ -38,6 +38,8 @@ import { isVoiceDictationCapable, isVoiceRealtimeCapable } from "./read-handlers
 import { evaluateSpokenActionGovernance } from "./voice-action-governance.js";
 import { resolveRegisteredOrManagedWorkspaceRoot } from "./task-workspace/workspace-root-access.js";
 import { resolveAppSessionReadAuthority } from "./coding-app-session/appSessionReadAuthority.js";
+import { logMarkdownSkillOperation } from "./markdown-skill-log.js";
+import { UiStoreError } from "./store/errors.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   agentRunSessionMatches,
@@ -51,7 +53,7 @@ import { newReferenceId } from "./reference-id.js";
 
 const MAX_BODY_BYTES = 1_000_000;
 const AGGREGATE_RUN_EVENTS_SNAPSHOT_LIMIT = 128;
-const AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES = 65_536;
+const AGENT_RUN_DEFAULT_PATCH_BUDGET_BYTES = EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES;
 
 const SSE_RUN_EVENTS_RESUME_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -73,6 +75,41 @@ const SSE_RUN_EVENTS_RESUME_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["sse-resume-decision"],
   proofIds: ["sse.run-events.resume.line"],
+  releaseImpact: "patch",
+});
+
+type RunApplyOutcome = "applied" | "rejected" | "cancelled" | "failed";
+
+const RUN_APPLY_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "runs.apply.settled",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "run-handlers.logApplySettled",
+  fields: {
+    workflow: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unit-tests", "bug-investigation"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["applied", "rejected", "cancelled", "failed"],
+    },
+    modelCallCount: { type: "integer", dataClass: "count", required: true },
+    fileCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["workflow-run-apply"],
+  proofIds: ["runs.apply.settled.line"],
   releaseImpact: "patch",
 });
 
@@ -263,6 +300,7 @@ function buildEngineContext(
     model,
     registry: deps.registry,
     ...(governance === undefined ? {} : { governance }),
+    markdownSkills: deps.store.markdownSkills,
     evidence: {
       store: deps.evidenceStore,
       env: deps.env,
@@ -380,6 +418,41 @@ function requireVerifyAppSession(
   };
 }
 
+/**
+ * The private skill the human selected for this run (#4025 AC1): readable only from the paired app
+ * session, like the library itself, and only as the exact revision and digest that were selected.
+ * The run then binds that reference; a selection that is already gone refuses the launch instead
+ * of starting the run without the method the human chose.
+ */
+function rejectUnavailableRunSkill(
+  ctx: RouteContext,
+  request: RunRequest,
+  deps: UiHandlerDeps,
+): RouteResult | undefined {
+  const reference = request.markdownSkill;
+  if (reference === undefined) return undefined;
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    logMarkdownSkillOperation(ctx.correlationId, "selection-read", "rejected", 404);
+    return { status: 404, body: errorBody("NOT_FOUND", "Skill not found.", ctx.correlationId) };
+  }
+  try {
+    deps.store.markdownSkills.resolve(reference);
+  } catch (error) {
+    if (!(error instanceof UiStoreError)) throw error;
+    logMarkdownSkillOperation(ctx.correlationId, "selection-read", "rejected", error.status);
+    return {
+      status: 409,
+      body: errorBody(
+        "SKILL_SELECTION_CHANGED",
+        "The skill selected for this run is no longer available.",
+        ctx.correlationId,
+      ),
+    };
+  }
+  logMarkdownSkillOperation(ctx.correlationId, "selection-read", "completed", 200);
+  return undefined;
+}
+
 // Route 5 — POST /api/runs. Validates the body, resolves the ModelPort, starts the run, returns 202.
 export async function handleCreateRun(
   ctx: RouteContext,
@@ -411,6 +484,8 @@ export async function handleCreateRun(
   if (unregistered !== null) {
     return unregistered;
   }
+  const skillRefusal = rejectUnavailableRunSkill(ctx, governed, deps);
+  if (skillRefusal !== undefined) return skillRefusal;
   const model = resolveRunModel(governed, deps);
   if (model === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
@@ -699,12 +774,7 @@ function aggregateRunWriter(
   return {
     write: (event: StreamEvent): boolean => {
       if (!agentRecordSessionMatches(record, ctx, deps)) return false;
-      const accepted = writeMessageEvent(ctx.res, event, deps.redactor, ctx.correlationId);
-      if (!accepted) {
-        markSseStreamBackpressureKilled(ctx.res);
-        ctx.res.destroy();
-      }
-      return accepted;
+      return writeMessageEvent(ctx.res, event, deps.redactor, ctx.correlationId);
     },
     // A single run reaching terminal must not close the aggregate desktop stream.
     close: (): void => {
@@ -734,12 +804,7 @@ function openSseStream(
   startSseHeartbeat(res);
   const writer: SseWriter = {
     write: (event: StreamEvent): boolean => {
-      const accepted = writeMessageEvent(res, event, redactor, correlationId);
-      if (!accepted) {
-        markSseStreamBackpressureKilled(res);
-        res.destroy();
-      }
-      return accepted;
+      return writeMessageEvent(res, event, redactor, correlationId);
     },
     close: (): void => {
       res.end();
@@ -783,6 +848,43 @@ export function handleGetRun(ctx: RouteContext, deps: UiHandlerDeps): RouteResul
     status: 200,
     body: { report: reportWithApply(record.report, record.applyReport, record.appliedAt) },
   };
+}
+
+function applyOutcome(status: unknown): RunApplyOutcome {
+  if (status === "completed" || status === "fix-applied") return "applied";
+  return status === "rejected" || status === "cancelled" ? status : "failed";
+}
+
+function countOf(value: unknown): number {
+  return Array.isArray(value) ? value.length : 0;
+}
+
+// Body-free evidence of a gated apply (#4025 AC4): which workflow, how it settled, how many model
+// calls the apply made (zero: it writes the reviewed patch) and how many files the patch names.
+function logApplySettled(
+  correlationId: string | undefined,
+  workflow: AppliableSnapshot["kind"],
+  report: unknown,
+): void {
+  const fields = isRecord(report) ? report : {};
+  const modelCallCount = fields.modelCallCount;
+  getServerLogger().info(
+    activityLogEvent(
+      RUN_APPLY_SETTLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        workflow,
+        outcome: applyOutcome(fields.status),
+        modelCallCount:
+          typeof modelCallCount === "number" && Number.isSafeInteger(modelCallCount)
+            ? modelCallCount
+            : 0,
+        fileCount: countOf(fields.addedTestFiles) + countOf(fields.changedFiles),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function reportWithApply(
@@ -915,7 +1017,9 @@ export async function handleApplyRun(ctx: RouteContext, deps: UiHandlerDeps): Pr
     deps.redactor,
     record.governance,
     record.runId,
+    deps.store.markdownSkills,
   );
+  logApplySettled(ctx.correlationId, snapshot.kind, report);
   record.applyReport = report;
   record.appliedAt = Date.now();
   return {

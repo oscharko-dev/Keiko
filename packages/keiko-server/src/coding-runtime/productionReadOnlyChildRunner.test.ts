@@ -1,3 +1,4 @@
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { describe, expect, it } from "vitest";
 
 import type { CodeTaskChildRunId } from "@oscharko-dev/keiko-contracts";
@@ -47,13 +48,14 @@ function toolThenFinish(
   return (request): Promise<NormalizedResponse> => {
     turn += 1;
     if (turn !== 1) return Promise.resolve(response());
+    const bound = boundGatewayToolCatalog(request.toolCatalog);
     const invocation =
-      request.toolCatalog === undefined
+      bound === undefined
         ? undefined
         : createToolInvocationNormalizer({
-            catalog: request.toolCatalog.catalog,
-            projection: request.toolCatalog.projection,
-            offered: request.toolCatalog.offered,
+            catalog: bound.catalog,
+            projection: bound.projection,
+            offered: bound.offered,
           }).bindAlias(name, args, 0);
     return Promise.resolve(
       response({
@@ -127,7 +129,7 @@ describe("createProductionReadOnlyChildRunner", () => {
 
     const outcome = await runChild({
       call: (request): Promise<NormalizedResponse> => {
-        const observed = request.toolCatalog?.offered.binding;
+        const observed = boundGatewayToolCatalog(request.toolCatalog)?.offered.binding;
         if (observed !== undefined) {
           binding = {
             catalogRevision: observed.catalogRevision,

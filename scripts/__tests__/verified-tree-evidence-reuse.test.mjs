@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import YAML from "yaml";
 
 import { acceptMergedPullCandidate } from "../resolve-verified-tree-evidence.mjs";
+import { pullRequestJobNames } from "../lib/workflow-trigger-scenarios.mjs";
 import { describe, expect, it } from "vitest";
 
 // ADR-0178. `dev` is protected with linear history and signed squash merges, so the commit that
@@ -37,6 +38,7 @@ const GATED_JOBS = Object.freeze([
   "cross-platform-smoke",
   "node-26-compatibility",
   "portable-secure-read",
+  "firefox-smoke",
   "ui",
 ]);
 
@@ -122,7 +124,10 @@ describe("verified-tree resolver job", () => {
 // `!cancelled()`, never `always()` (ADR-0157): both run a job after a failed need, but GitHub keeps
 // a running job whose `if:` is still true when the run is cancelled, so `always()` left superseded
 // pull-request runs alive and holding the concurrency group the new head's run waits on.
-const COND = (extra) => "${{ !cancelled() && " + (extra ? extra + " && " : "") + GUARD + " }}";
+const LIVE_PR =
+  "(github.event_name != 'pull_request' || github.event.pull_request.state == 'open')";
+const COND = (extra) =>
+  "${{ !cancelled() && " + LIVE_PR + " && " + (extra ? extra + " && " : "") + GUARD + " }}";
 const EDITOR_CLAUSE =
   "(github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor')";
 const DOC_ONLY_CLAUSE = "needs.change-scope.outputs.documentation-only != 'true'";
@@ -132,7 +137,8 @@ const DOC_ONLY_CLAUSE = "needs.change-scope.outputs.documentation-only != 'true'
 // measures the same bytes but never advances `dev`'s branch history. Only a `push` to exactly
 // `refs/heads/dev` qualifies; a pull request, a merge group or another branch keeps the plain guard.
 const DEV_PUSH_CLAUSE = "(github.event_name == 'push' && github.ref == 'refs/heads/dev')";
-const COND_OR_DEV_PUSH = () => "${{ !cancelled() && (" + GUARD + " || " + DEV_PUSH_CLAUSE + ") }}";
+const COND_OR_DEV_PUSH = () =>
+  "${{ !cancelled() && " + LIVE_PR + " && (" + GUARD + " || " + DEV_PUSH_CLAUSE + ") }}";
 
 /**
  * The EXACT condition each gated job must carry. A substring check would also accept a
@@ -150,6 +156,7 @@ const EXPECTED_CONDITIONS = Object.freeze({
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
   "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
   "portable-secure-read": COND(DOC_ONLY_CLAUSE),
+  "firefox-smoke": COND(EDITOR_CLAUSE),
   ui: COND(),
 });
 
@@ -254,7 +261,7 @@ describe("the resolver refuses every event that may not reuse", () => {
 // resolver would let an unmeasured gate pass itself off as proven.
 function gatedDisplayNames(job) {
   const definition = jobs[job];
-  const name = String(definition.name);
+  const name = pullRequestJobNames(definition.name)?.admitted ?? String(definition.name);
   if (name.includes("${{ matrix.shard }}")) {
     return definition.strategy.matrix.shard.map((shard) =>
       name.replace("${{ matrix.shard }}", String(shard)),
@@ -294,6 +301,69 @@ describe("the resolver inventory covers every gated job", () => {
       ).toBe(true);
     }
   });
+});
+
+describe("complete Firefox smoke shards", () => {
+  it("distributes the full selection without increasing workers or the smoke deadline", () => {
+    const job = jobs["firefox-smoke"];
+    expect(job.strategy).toEqual({ "fail-fast": false, matrix: { shard: [1, 2] } });
+    expect(job.permissions).toEqual({ contents: "read" });
+    const smoke = job.steps.find((step) => step.name === "Release smoke E2E (Firefox)");
+    expect(smoke).toEqual({
+      name: "Release smoke E2E (Firefox)",
+      "timeout-minutes": 20,
+      run: "npm run test:e2e:smoke:firefox -- --shard=${{ matrix.shard }}/2",
+    });
+    const manifest = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
+    expect(manifest.scripts["test:e2e:smoke:firefox"]).toBe(
+      "playwright test --config tests/e2e/config/playwright.config.ts --project=firefox --grep @smoke",
+    );
+    expect(readFileSync(join(repoRoot, "tests/e2e/config/playwright.config.ts"), "utf8")).toMatch(
+      /workers: 1,/u,
+    );
+    const upload = job.steps.find((step) => step.name === "Upload Firefox smoke traces on failure");
+    expect(upload.if).toBe("${{ failure() }}");
+    expect(upload.with.name).toBe("playwright-firefox-smoke-traces-${{ matrix.shard }}");
+    expect(jobs.ui.steps.some((step) => step.name === smoke.name)).toBe(false);
+  });
+
+  it("keeps ui required and checks both shard results before candidate work", () => {
+    expect(jobs.ui.needs).toEqual(["verified-tree", "firefox-smoke"]);
+    expect(pullRequestJobNames(jobs.ui.name)?.admitted).toBe("ui");
+    expect(jobs.ui.steps[0]).toMatchObject({
+      name: "Verify required Firefox smoke shards",
+      env: {
+        VERIFIED_TREE_RESULT: "${{ needs.verified-tree.result }}",
+        FIREFOX_RESULT: "${{ needs.firefox-smoke.result }}",
+        FIREFOX_REQUIRED:
+          "${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}",
+      },
+    });
+    expect(jobs.ui.steps[0].if).toBeUndefined();
+    expect(jobs.ui.steps[0]["continue-on-error"]).toBeUndefined();
+  });
+
+  it.each(["success", "failure", "cancelled", "skipped", ""])(
+    "executes the real ui guard for Firefox result %j",
+    (result) => {
+      const guard = jobs.ui.steps[0].run;
+      const run = (treeResult, required = "true") =>
+        spawnSync("/bin/sh", ["-eu", "-c", guard], {
+          env: {
+            VERIFIED_TREE_RESULT: treeResult,
+            FIREFOX_RESULT: result,
+            FIREFOX_REQUIRED: required,
+          },
+          encoding: "utf8",
+        });
+      expect(run("success").status).toBe(result === "success" ? 0 : 1);
+      for (const treeResult of ["failure", "cancelled", "skipped", ""]) {
+        expect(run(treeResult).status).toBe(1);
+        expect(run(treeResult, "false").status).toBe(1);
+      }
+      expect(run("success", "false").status).toBe(0);
+    },
+  );
 });
 
 describe("complete Node 26 qualification shards", () => {
@@ -357,6 +427,9 @@ describe("complete Node 26 qualification shards", () => {
       execFileSync(process.execPath, ["--input-type=module", "-e", code], {
         cwd: repoRoot,
         encoding: "utf8",
+        // Every spec path is listed three times (full inventory plus both shards), so the output
+        // grows with the checkout path: a deep worktree path exceeds the 1 MiB default.
+        maxBuffer: 64 * 1024 * 1024,
         timeout: 10_000,
         killSignal: "SIGKILL",
         stdio: ["ignore", "pipe", "pipe"],

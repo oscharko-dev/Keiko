@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -18,6 +26,7 @@ import {
 } from "./workspace-script-trust.js";
 import { WorkspaceManifestError, WorkspaceManifestService } from "./workspace-manifests.js";
 import { hasCurrentWorkspaceRootMembership } from "./workspace-root-membership.js";
+import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 
 let tmp: string;
 let rootA: string;
@@ -87,15 +96,8 @@ function expectNoOrphanedProjects(): void {
   expect(orphans).toEqual([]);
 }
 
-beforeEach(() => {
-  tmp = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workspace-manifest-")));
-  rootA = join(tmp, "alpha");
-  rootB = join(tmp, "beta");
-  mkdirSync(rootA);
-  mkdirSync(rootB);
-  writeFileSync(join(rootA, "package.json"), '{"name":"alpha"}\n');
-  writeFileSync(join(rootB, "package.json"), '{"name":"beta"}\n');
-  store = createInMemoryUiStore({ now: () => 100 });
+function initializeStore(now: () => number): void {
+  store = createInMemoryUiStore({ now });
   store.createProject(rootA, "Alpha");
   store.createProject(rootB, "Beta");
   service = new WorkspaceManifestService(store);
@@ -106,6 +108,17 @@ beforeEach(() => {
       restrictedRoots.push(root);
     },
   });
+}
+
+beforeEach(() => {
+  tmp = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workspace-manifest-")));
+  rootA = join(tmp, "alpha");
+  rootB = join(tmp, "beta");
+  mkdirSync(rootA);
+  mkdirSync(rootB);
+  writeFileSync(join(rootA, "package.json"), '{"name":"alpha"}\n');
+  writeFileSync(join(rootB, "package.json"), '{"name":"beta"}\n');
+  initializeStore(() => 100);
 });
 
 afterEach(() => {
@@ -114,6 +127,104 @@ afterEach(() => {
 });
 
 describe("WorkspaceManifestService", () => {
+  describe("explicit stored-alias reconnect", () => {
+    beforeEach(() => {
+      store.close();
+      let instant = 100;
+      initializeStore(() => ++instant);
+    });
+
+    function aliasWorkspace(): {
+      readonly alias: string;
+      readonly root: string;
+      readonly manifest: WorkspaceManifest;
+    } {
+      const root = join(tmp, "gamma");
+      mkdirSync(root);
+      writeFileSync(join(root, "package.json"), '{"name":"gamma"}\n');
+      const alias = join(tmp, "gamma-alias");
+      symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+      store.createProject(alias, "Gamma");
+      const manifest = service.list().find((entry) => entry.roots[0]?.canonicalRoot === root);
+      if (manifest === undefined) throw new Error("missing alias workspace");
+      return { alias, root, manifest };
+    }
+
+    function retargetAlias(alias: string, root: string): void {
+      rmSync(alias);
+      symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+    }
+
+    it("keeps a healthy alias identity and trust unchanged without relaxing the strict inspector", () => {
+      const fixture = aliasWorkspace();
+      const ref = rootRefAt(fixture.manifest, 0);
+      expect(trust.grant(fixture.alias)).toEqual({ trusted: true });
+      const previousTrust = store.readWorkspaceTrustRecord(ref);
+      const previousManifest = store.readWorkspaceManifestRecord(fixture.manifest.workspaceId);
+      expect(store.reconnectProject(fixture.alias).path).toBe(fixture.alias);
+      expect(store.readWorkspaceManifestRecord(fixture.manifest.workspaceId)).toEqual(
+        previousManifest,
+      );
+      expect(store.readWorkspaceTrustRecord(ref)).toEqual(previousTrust);
+      expect(hasCurrentWorkspaceRootMembership(store, fixture.alias)).toBe(true);
+      expect(() => inspectWorkspaceRootIdentity(fixture.alias)).toThrow(
+        "WORKSPACE_ROOT_ALIAS_DENIED",
+      );
+      expectNoOrphanedProjects();
+    });
+
+    it("adopts an explicitly retargeted alias atomically and revokes only its former trust", () => {
+      const fixture = aliasWorkspace();
+      const oldRef = rootRefAt(fixture.manifest, 0);
+      expect(trust.grant(fixture.alias)).toEqual({ trusted: true });
+      expect(trust.grant(rootA)).toEqual({ trusted: true });
+      const unrelatedRef = rootRefAt(alphaWorkspace(), 0);
+      const unrelatedTrust = store.readWorkspaceTrustRecord(unrelatedRef);
+      const chat = store.createChat(fixture.alias, "Alias history", "fixture-model");
+      const replacement = join(tmp, "delta");
+      mkdirSync(replacement);
+      writeFileSync(join(replacement, "package.json"), '{"name":"delta"}\n');
+      retargetAlias(fixture.alias, replacement);
+      expect(hasCurrentWorkspaceRootMembership(store, fixture.alias)).toBe(false);
+      expect(store.reconnectProject(fixture.alias).path).toBe(fixture.alias);
+      const refreshed = service.get(fixture.manifest.workspaceId);
+      expect(refreshed.revision).toBe(fixture.manifest.revision + 1);
+      expect(refreshed.roots[0]?.canonicalRoot).toBe(replacement);
+      expect(hasCurrentWorkspaceRootMembership(store, fixture.alias)).toBe(true);
+      expect(store.readWorkspaceTrustRecord(oldRef)).toBeUndefined();
+      expect(store.readWorkspaceTrustRecord(rootRefAt(refreshed, 0))).toBeUndefined();
+      expect(trust.trustLevelForRoot(fixture.alias)).toBe("restricted");
+      expect(store.readWorkspaceTrustRecord(unrelatedRef)).toEqual(unrelatedTrust);
+      expect(store.listChats(fixture.alias).map((entry) => entry.id)).toEqual([chat.id]);
+      expect(realpathSync(fixture.root)).toBe(fixture.root);
+      expectNoOrphanedProjects();
+    });
+
+    it("rolls back a collision with another registered root including project clocks and both trusts", () => {
+      const fixture = aliasWorkspace();
+      const oldRef = rootRefAt(fixture.manifest, 0);
+      const other = service.list().find((entry) => entry.roots[0]?.canonicalRoot === rootB);
+      if (other === undefined) throw new Error("missing beta workspace");
+      expect(trust.grant(fixture.alias)).toEqual({ trusted: true });
+      expect(trust.grant(rootB)).toEqual({ trusted: true });
+      const otherRef = rootRefAt(other, 0);
+      const before = {
+        projects: store.listProjects(),
+        manifests: store.listWorkspaceManifestRecords(),
+        oldTrust: store.readWorkspaceTrustRecord(oldRef),
+        otherTrust: store.readWorkspaceTrustRecord(otherRef),
+      };
+      retargetAlias(fixture.alias, rootB);
+      expect(() => store.reconnectProject(fixture.alias)).toThrow(
+        expect.objectContaining({ code: "PROJECT_EXISTS", status: 409 }),
+      );
+      expect(store.listProjects()).toEqual(before.projects);
+      expect(store.listWorkspaceManifestRecords()).toEqual(before.manifests);
+      expect(store.readWorkspaceTrustRecord(oldRef)).toEqual(before.oldTrust);
+      expect(store.readWorkspaceTrustRecord(otherRef)).toEqual(before.otherTrust);
+    });
+  });
+
   it("refreshes an explicitly reconnected single-root identity and revokes its old trust", () => {
     const initial = alphaWorkspace();
     const initialRoot = initial.roots[0];

@@ -1,3 +1,4 @@
+import type { CodingSessionContinuity } from "./codingSessionContinuity.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type { UiStore } from "../store/types.js";
 import type {
@@ -83,6 +84,11 @@ export interface CodingRuntimeHost {
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
+  /**
+   * Startup sweep of the per-run runtime state no live or recoverable run owns (audit 2026-10,
+   * finding 8). The control plane answers which runs those are; the host owns the directory.
+   */
+  readonly sweepOrphanedRunState?: ((isRetained: (runId: string) => boolean) => void) | undefined;
   // The one secure workspace read the governed `keiko_workspace_read` tool answers through, exposed
   // so `deps.ts` can compose the repository-instructions loader (ADR-0137 D1) over the SAME helper
   // instead of a second filesystem path. Present once a qualified runtime host is composed.
@@ -203,6 +209,8 @@ export interface CodingRuntimeToolFacadeBridge {
 
 export interface CodingRuntimeControlPlaneInput {
   readonly historyStore?: UiStore | undefined;
+  /** The server's native session continuity service, shared with the runtime host. */
+  readonly sessionContinuity?: CodingSessionContinuity | undefined;
   readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
   readonly deploymentCeiling?: CodingWorkbenchMode | undefined;
   readonly snapshots: CodingRuntimeSnapshotStore;
@@ -218,7 +226,8 @@ export interface CodingRuntimeControlPlaneInput {
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
   readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
-  readonly repositoryInstructions?: CodingRuntimeRepositoryInstructionsPort | undefined;
+  readonly repositoryInstructions?:
+    Pick<CodingRuntimeRepositoryInstructionsPort, "loadForRun"> | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -266,11 +275,14 @@ export function createCodingRuntimeControlPlane(
     launchResolver,
   );
   receiver.ingest = (event: CodingWorkbenchRuntimeEvent): void => {
-    void orchestrator.ingest(event);
+    orchestrator.receiveRuntimeEvent(event);
   };
   attachVerifiedHeadNotifier(input.runtimeHost, orchestrator);
   attachEditOutcomeObserver(input.runtimeHost, orchestrator);
   orchestrator.startupReconcileNow();
+  // A run keeps its state while its snapshot is unsettled: live, or recovery-required and not yet
+  // acknowledged. Everything else belongs to no run that could still use it.
+  sweepOrphanedRunState(input);
   return {
     orchestrator,
     eventHub,
@@ -282,6 +294,21 @@ export function createCodingRuntimeControlPlane(
   };
 }
 
+function sweepOrphanedRunState(input: CodingRuntimeControlPlaneInput): void {
+  input.runtimeHost?.sweepOrphanedRunState?.((runId) => {
+    const snapshot = input.snapshots.get(runId);
+    return snapshot !== undefined && snapshot.terminalAt === undefined;
+  });
+}
+
+function controlPlaneHistory(
+  input: CodingRuntimeControlPlaneInput,
+): CodingRuntimeHistory | undefined {
+  return input.historyStore === undefined
+    ? undefined
+    : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog);
+}
+
 // eslint-disable-next-line complexity -- process-lifetime authority composition is intentionally explicit.
 function createControlPlaneOrchestrator(
   input: CodingRuntimeControlPlaneInput,
@@ -291,10 +318,8 @@ function createControlPlaneOrchestrator(
   launchResolver: CodingRuntimeLaunchResolver,
 ): CodingRuntimeOrchestrator {
   return createCodingRuntimeOrchestrator({
-    history:
-      input.historyStore === undefined
-        ? undefined
-        : new CodingRuntimeHistory(input.historyStore, input.serverPrincipal, input.activityLog),
+    history: controlPlaneHistory(input),
+    sessionContinuity: input.sessionContinuity,
     issueIntake: input.issueIntake,
     deploymentCeiling: input.deploymentCeiling,
     manager,

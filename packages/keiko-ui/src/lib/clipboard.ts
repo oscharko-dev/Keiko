@@ -13,6 +13,8 @@
  * clipboard copy as a fallback for contexts where the async Clipboard API is
  * unavailable or denied — `execCommand` remains the only mechanism for that "last
  * resort" role, which is why it is kept here rather than removed.
+ * Owner-approved compatibility exception and regression evidence:
+ * docs/qa/sonarcloud-blocker-medium-2026-10-24.json (additionalScope).
  */
 export interface CopyTextToClipboardOptions {
   /**
@@ -26,11 +28,11 @@ export interface CopyTextToClipboardOptions {
   readonly restoreFocus?: boolean;
 }
 
-async function copyViaHiddenTextarea(
+function copyViaHiddenTextarea(
   text: string,
   restoreFocus: boolean,
   writeTextFailure: unknown,
-): Promise<void> {
+): void {
   const previousFocus =
     restoreFocus && document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const textarea = document.createElement("textarea");
@@ -46,7 +48,7 @@ async function copyViaHiddenTextarea(
   try {
     textarea.focus();
     textarea.select();
-    const copied = typeof document.execCommand === "function" && document.execCommand("copy");
+    const copied = typeof document.execCommand === "function" && document.execCommand("copy"); // NOSONAR typescript:S1874 -- required compatibility fallback; see the evidence above.
     if (!copied) {
       throw new Error("clipboard-fallback-failed", { cause: writeTextFailure });
     }
@@ -79,5 +81,5 @@ export async function copyTextToClipboard(
     throw new Error("clipboard-unavailable", { cause: writeTextFailure });
   }
 
-  await copyViaHiddenTextarea(text, restoreFocus, writeTextFailure);
+  copyViaHiddenTextarea(text, restoreFocus, writeTextFailure);
 }

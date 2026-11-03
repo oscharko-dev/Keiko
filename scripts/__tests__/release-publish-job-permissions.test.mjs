@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { REGISTRY_OBSERVATION_TIMEOUT_MS } from "../lib/npm-registry-observation.mjs";
+import {
+  REGISTRY_OBSERVATION_TIMEOUT_MS,
+  waitForVerifiedPackageState,
+} from "../lib/npm-registry-observation.mjs";
 
 // GITHUB_TOKEN carries only the permissions a job declares, and GitHub's permission data for
 // installation tokens requires attestations:read to list attestations and deployments:read to list
@@ -37,14 +40,53 @@ describe("release publish job token", () => {
     const publishJob = workflow.jobs.publish;
     const publishStep = publishJob.steps.find((step) => step.name === "Publish package");
 
-    expect(publishJob["timeout-minutes"]).toBeGreaterThanOrEqual(75);
-    expect(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS).toBe("30");
-    expect(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS).toBe("30000");
+    expect(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS).toBe("80");
+    expect(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS).toBe("60000");
     const attempts = Number(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS);
     const delayMs = Number(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS);
+    // Every read timing out is the slowest the verification can be. It, plus the work before the
+    // publish (install, build, gates) and after it (registry install smoke), stays inside the job
+    // timeout, so the timeout still bounds the whole wait.
     const worstCaseMs = attempts * REGISTRY_OBSERVATION_TIMEOUT_MS * 2 + (attempts - 1) * delayMs;
-    expect(worstCaseMs).toBeLessThan(30 * 60 * 1_000);
+    const surroundingWorkMs = 30 * 60 * 1_000;
+    expect(worstCaseMs + surroundingWorkMs).toBeLessThanOrEqual(
+      publishJob["timeout-minutes"] * 60 * 1_000,
+    );
     expect(publishStep.env.NODE_AUTH_TOKEN).toBeUndefined();
     expect(publishStep.env.NPM_TOKEN).toBeUndefined();
+  });
+
+  // Release 1.3.2: npm accepted the publish at 06:48:46 UTC and first served the version at 07:44,
+  // 56 minutes later; the 15-minute window then failed a successful publish (#4125).
+  it("waits out the 56-minute quarantine release 1.3.2 met, with margin (#4125)", () => {
+    const publishStep = workflow.jobs.publish.steps.find((step) => step.name === "Publish package");
+    const attempts = Number(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS);
+    const delayMs = Number(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS);
+    const pkg = {
+      name: "@oscharko-dev/keiko",
+      spec: "@oscharko-dev/keiko@1.3.2",
+      version: "1.3.2",
+    };
+    const visibleAfterMs = 75 * 60 * 1_000;
+    let clockMs = 0;
+    const read = () => {
+      const state =
+        clockMs >= visibleAfterMs
+          ? { kind: "available", version: pkg.version }
+          : { kind: "missing" };
+      return { tag: state, version: state };
+    };
+
+    const state = waitForVerifiedPackageState({
+      attempts,
+      onPending: () => undefined,
+      pkg,
+      read,
+      wait: () => {
+        clockMs += delayMs;
+      },
+    });
+
+    expect(state.version).toEqual({ kind: "available", version: "1.3.2" });
   });
 });

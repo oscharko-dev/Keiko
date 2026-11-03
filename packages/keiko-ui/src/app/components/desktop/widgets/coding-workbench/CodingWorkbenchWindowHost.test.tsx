@@ -9,6 +9,7 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { render } from "@testing-library/react";
+import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
 import type { WindowCfgRecord, WindowRenderContext } from "../../windows/WindowsRegistry";
 import { CodingWorkbenchWindowHost } from "./CodingWorkbenchWindowHost";
 import type { CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
@@ -125,6 +126,54 @@ describe("CodingWorkbenchWindowHost", () => {
     );
     const props = windowRendered.mock.calls.at(-1)?.[0];
     expect(props?.selectedRoot).toBe("/repos/shared");
+  });
+
+  // A restored layout mounts the Workbench on first paint, before the shell's project has loaded.
+  // The window must seed from that project once it arrives instead of keeping no repository and
+  // showing the "Code setup" fallback for a project the shell already selected.
+  it("seeds once from a shared selection that arrives after the window mounted", () => {
+    windowRendered.mockClear();
+    const context = contextFixture({ selectedRoot: null });
+    const view = render(<CodingWorkbenchWindowHost cfg={{}} context={context} />);
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
+
+    view.rerender(
+      <CodingWorkbenchWindowHost
+        cfg={{}}
+        context={{ ...context, selectedRoot: "/repos/shared" }}
+      />,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/shared");
+
+    view.rerender(
+      <CodingWorkbenchWindowHost cfg={{}} context={{ ...context, selectedRoot: "/repos/other" }} />,
+    );
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBe("/repos/shared");
+    expect(context.updateCfg).not.toHaveBeenCalled();
+  });
+
+  it("never seeds from the shell once an active task-workspace binding decided the window", () => {
+    windowRendered.mockClear();
+    const binding: WorkspaceBinding = {
+      schemaVersion: "1",
+      workspaceId: "ws-bound",
+      taskId: "task-bound",
+      activeRoot: "/repos/bound",
+      boundSurfaces: [],
+      gitDeliveryRoot: "/repos/bound",
+      editorProjectRoot: "/repos/bound",
+    };
+    const context = contextFixture({ selectedRoot: null, activeBinding: binding });
+    const view = render(<CodingWorkbenchWindowHost cfg={{}} context={context} />);
+
+    view.rerender(
+      <CodingWorkbenchWindowHost
+        cfg={{}}
+        context={{ ...context, activeBinding: null, selectedRoot: "/repos/shared" }}
+      />,
+    );
+
+    expect(windowRendered.mock.calls.at(-1)?.[0]?.selectedRoot).toBeUndefined();
   });
 
   it("persists the bound repository through onSelectRepository without a client diagnostic (#A)", () => {

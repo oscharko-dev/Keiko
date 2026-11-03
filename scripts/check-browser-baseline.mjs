@@ -368,6 +368,75 @@ function isWorkspaceRuntimeSpecifier(specifier) {
   return specifier.startsWith("@oscharko-dev/");
 }
 
+function packageNameAndSubpath(specifier) {
+  const segments = specifier.split("/");
+  const nameLength = specifier.startsWith("@") ? 2 : 1;
+  const rest = segments.slice(nameLength);
+  return {
+    name: segments.slice(0, nameLength).join("/"),
+    subpath: rest.length === 0 ? "." : `./${rest.join("/")}`,
+  };
+}
+
+// The target a browser bundler takes from one export entry: `browser`, then `import`, then
+// `default`, through nested conditions. A `require`-only entry has none.
+function browserExportTarget(entry) {
+  if (typeof entry === "string") return entry;
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) return undefined;
+  for (const condition of ["browser", "import", "default"]) {
+    const target = browserExportTarget(entry[condition]);
+    if (target !== undefined) return target;
+  }
+  return undefined;
+}
+
+function exportEntry(exportsField, subpath) {
+  if (typeof exportsField === "string" || Array.isArray(exportsField)) {
+    return subpath === "." ? exportsField : undefined;
+  }
+  if (exportsField === null || typeof exportsField !== "object") return undefined;
+  const keyed = Object.keys(exportsField).some((key) => key.startsWith("."));
+  if (keyed) return exportsField[subpath];
+  return subpath === "." ? exportsField : undefined;
+}
+
+// The nearest installed copy of `name` above the importer, as Node and a bundler both look it up.
+function installedPackageDirectory(importer, name) {
+  let directory = dirname(resolve(importer));
+  for (;;) {
+    const candidate = join(directory, "node_modules", name);
+    try {
+      if (statSync(join(candidate, "package.json")).isFile()) return candidate;
+    } catch {
+      // Not installed at this level; look one directory up.
+    }
+    const parent = dirname(directory);
+    if (parent === directory) return undefined;
+    directory = parent;
+  }
+}
+
+/**
+ * A package that exports only the `import` condition (ESM-only, like `@mermaid-js/parser`) is
+ * valid for the browser bundler, which resolves `import`, while `require` resolution rejects it.
+ * Resolve such an export the way the bundler does: the nearest installed package, then the
+ * `browser`/`import`/`default` target of the requested subpath. Anything else stays unresolved.
+ */
+function resolveImportOnlyExport(importer, specifier) {
+  const { name, subpath } = packageNameAndSubpath(specifier);
+  const directory = installedPackageDirectory(importer, name);
+  if (directory === undefined) return undefined;
+  const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+  const target = browserExportTarget(exportEntry(manifest.exports, subpath));
+  if (typeof target !== "string" || !target.startsWith("./")) return undefined;
+  const path = resolve(directory, target);
+  try {
+    return statSync(path).isFile() ? path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function resolvePackageRuntimeSpecifier(importer, specifier) {
   try {
     // Keiko workspace packages expose ESM-only runtime entries. createRequire().resolve() applies
@@ -381,6 +450,8 @@ function resolvePackageRuntimeSpecifier(importer, specifier) {
     }
     return createRequire(resolve(importer)).resolve(specifier);
   } catch (error) {
+    const importOnly = resolveImportOnlyExport(importer, specifier);
+    if (importOnly !== undefined) return importOnly;
     throw new Error(`cannot resolve ${JSON.stringify(specifier)} from ${importer}`, {
       cause: error,
     });

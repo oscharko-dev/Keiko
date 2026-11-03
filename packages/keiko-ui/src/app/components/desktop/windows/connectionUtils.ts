@@ -218,7 +218,15 @@ type PairLabelResolver = (a: WinSnapshot, b: WinSnapshot, t: I18nTranslate) => s
 const PAIR_LABEL_RESOLVERS: readonly (readonly [WindowType, PairLabelResolver])[] = [
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
   // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
-  ["connector", (_a, _b, t): string => t("connection.usesKnowledge")],
+  [
+    "connector",
+    (a, b, t): string =>
+      t(
+        resolveSideOfType(a, b, "connector")?.cfg?.["selectedKind"] === "jira-live"
+          ? "connection.usesTools"
+          : "connection.usesKnowledge",
+      ),
+  ],
   ["governedGit", (_a, _b, t): string => t("connection.usesGitChange")],
   ["figmaJson", (_a, _b, t): string => t("connection.usesJson")],
   ["figmaImage", (_a, _b, t): string => t("connection.usesImage")],

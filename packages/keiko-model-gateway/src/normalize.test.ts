@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   MalformedToolCallError,
   ModelRefusalError,
+  ProviderOutputExhaustedError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { normalizeChatResponse } from "./normalize.js";
 
@@ -165,6 +166,56 @@ describe("normalizeChatResponse", () => {
       ],
     });
     expect(() => normalizeChatResponse(payload, "m", BASE_USAGE)).toThrow(MalformedToolCallError);
+  });
+
+  it("raises output exhaustion, not a malformed call, for a tool call cut off by finish_reason length", () => {
+    const payload = toolCallPayload("write", '{"filePath":"a.ts","content":"const x = ');
+    const cut = chatPayload({
+      choices: [
+        {
+          message: (payload as { choices: { message: unknown }[] }).choices[0]?.message,
+          finish_reason: "length",
+        },
+      ],
+      usage: { prompt_tokens: 40, completion_tokens: 16384 },
+    });
+    let caught: unknown;
+    try {
+      normalizeChatResponse(cut, "m", BASE_USAGE);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ProviderOutputExhaustedError);
+    expect(caught).not.toBeInstanceOf(MalformedToolCallError);
+    expect((caught as ProviderOutputExhaustedError).partialUsage).toEqual({
+      promptTokens: 40,
+      completionTokens: 16384,
+      streamedChars: 0,
+    });
+  });
+
+  it("keeps a malformed call with a non-length finish reason malformed", () => {
+    expect(() =>
+      normalizeChatResponse(toolCallPayload("write", '{"filePath":'), "m", BASE_USAGE),
+    ).toThrow(MalformedToolCallError);
+  });
+
+  it("keeps a complete tool call that ended on finish_reason length", () => {
+    const complete = chatPayload({
+      choices: [
+        {
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{ id: "c", function: { name: "write", arguments: '{"a":1}' } }],
+          },
+          finish_reason: "length",
+        },
+      ],
+    });
+    const result = normalizeChatResponse(complete, "m", BASE_USAGE);
+    expect(result.toolCalls).toHaveLength(1);
+    expect(result.finishReason).toBe("length");
   });
 
   it("omits a hostile provider-supplied tool name from the non-JSON-arguments error message", () => {

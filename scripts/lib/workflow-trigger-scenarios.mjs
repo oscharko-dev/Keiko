@@ -109,3 +109,29 @@ export function cancellationImmuneJobIds(workflow) {
     .filter(([, job]) => typeof job?.if === "string" && /\balways\(\)/u.test(job.if))
     .map(([jobId]) => jobId);
 }
+
+// Only this reviewed lifecycle conditional is recognized. Other expressions remain unknown;
+// they cannot manufacture a literal required context in the release-name inventory.
+export function pullRequestJobNames(name) {
+  if (typeof name !== "string") return undefined;
+  const prefix =
+    "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && '";
+  const separator = "' || 'inactive PR - ";
+  const suffix = "' }}";
+  if (!name.startsWith(prefix)) return undefined;
+  const end = name.indexOf(separator, prefix.length);
+  if (end < 0) return undefined;
+  const admitted = name.slice(prefix.length, end);
+  if (admitted.length === 0 || admitted.includes("'")) return undefined;
+  if (name !== `${prefix}${admitted}${separator}${admitted}${suffix}`) return undefined;
+  return { admitted, inactive: `inactive PR - ${admitted}` };
+}
+
+export function workflowJobNameForEvent(name, eventName, pullRequestState) {
+  const names = pullRequestJobNames(name);
+  if (names === undefined)
+    return typeof name === "string" && !name.includes("${{") ? name : undefined;
+  return eventName !== "pull_request" || pullRequestState === "open"
+    ? names.admitted
+    : names.inactive;
+}

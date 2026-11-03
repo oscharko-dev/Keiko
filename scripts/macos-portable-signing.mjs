@@ -157,6 +157,10 @@ function assertManifestCodeObjects(manifest, paths) {
   }
   const addon = `Keiko.app/Contents/Resources/${manifest.nativeAddons[0].executablePath}`;
   if (!paths.has(addon)) fail("manifest native addon is missing from the Mach-O inventory");
+  for (const tool of manifest.nativeTools ?? []) {
+    const executable = `Keiko.app/Contents/Resources/${tool.executablePath}`;
+    if (!paths.has(executable)) fail("manifest native tool is missing from the Mach-O inventory");
+  }
 }
 
 function inventoryCommand(options) {
@@ -259,7 +263,27 @@ function prepareQualifiedPayloadCommand(options) {
     manifest.nativeHelpers,
   );
   markNativeAddonVerified(manifest);
+  markNativeToolsVerified(manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+// The pinned ripgrep executable is a Mach-O file in the payload, so the same inventory-driven
+// Developer ID signing and notarization covers it; the manifest then states what happened to it.
+function markNativeToolsVerified(manifest) {
+  if (manifest.nativeTools === undefined) return;
+  if (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1) {
+    fail("manifest must contain exactly one native tool");
+  }
+  manifest.nativeTools[0].signing = {
+    signatureKind: "developer-id-notarized",
+    verificationStatus: "verified-production",
+    signatureVerified: true,
+    notarizationRequired: true,
+    notarizationVerified: true,
+  };
+  manifest.releaseImpact.reviewedBinding.nativeTools = globalThis.structuredClone(
+    manifest.nativeTools,
+  );
 }
 
 function markNativeAddonVerified(manifest) {

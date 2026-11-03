@@ -261,6 +261,34 @@ is:
    binding nor an approval channel and therefore continues to reject delivery execute in every
    mode.
 
+   **The coding runtime's governed fetch and pull (#3902 AC2, PR #4064 review).** A native or
+   mapped run reaches the same sync owner through one tool, `keiko_git_sync` (`pull: false`
+   fetches the upstream, `pull: true` fast-forwards the run's branch to it); the shell's own
+   `git fetch`/`git pull` stay reserved in every mode. The decision is the owner's own:
+   `codingToolAuthorityPort.ts` asks `gitOperationEnvelopeDecision`
+   (`runBoundAuthority.ts`), the function `authorizeGitDelivery` decides the Git Client's Fetch
+   and Pull through, so the two cannot drift. Full access admits the operation within the
+   envelope's own delivery and network scope; below it, the `approval-required` disposition is
+   redeemed only by the operator's approval of that exact call on the run's governed ask lane
+   (actions `git-fetch`/`git-pull`, a one-use proof bound to the call and its operation), never
+   by a store claim the model could reach. The effect is `runSyncExecute` itself (fixed argv,
+   hardened runner, bounds, closed outcomes, sync evidence ledger), with the run's live authority
+   proven again immediately before the remote dispatch. A fast-forward moves the run's head, which
+   the run's authority is bound to: like a head Keiko's verified commit wrote, the head the
+   governed pull wrote is restamped as the workspace's verified head and recorded for that run
+   (`governedSyncHeads.ts`), and `trustedHeadMatches` accepts it only for that run, that
+   workspace and that exact head. A head anyone else wrote still revokes the run.
+
+   **The coding runtime's governed task branch (#3907, owner decision 2026-10-31).** One tool,
+   `keiko_git_branch`, creates a local branch at the run's current commit and switches the run to
+   it through the Git kernel, for a Local checkout standing on its own base branch (ADR-0137,
+   "A run on its base branch makes its own task branch"). It is a local ref write, not a delivery:
+   Full access creates it inside the validated envelope without an ask; Supervised workspace and
+   Ask for approval ask the operator about the exact branch name on the governed ask lane (action
+   `git-branch`, a one-use proof bound to the digest of the name). The shell's `git checkout -b`,
+   `switch` and `branch` stay reserved in every mode. The hard denials are unchanged and the
+   immutable envelope is not widened: only the server-owned per-run branch record moves.
+
 Every existing policy consumer named above must be enumerated and regression-tested in the
 implementing child (#2385) before merge; no surface may keep a local copy of the old matrix or
 introduce a Code-local parallel matrix.
@@ -290,6 +318,12 @@ are not rewritten; their banners point here, and the retired term must not appea
 contracts, identifiers, or decision text. This register renames concepts, not accepted semantics:
 ADR-0137's server-owned minting, delegation, confinement, and process-tree invariants apply
 unchanged to the runtime host and runtime adapter.
+
+The centrally managed MCP path (#4081, ADR-0181) supplies an executable external-effect path
+through Keiko's existing loopback relay. Both restricted modes use the existing action approval
+before a tool effect; Full access remains bounded by the accepted authority. This does not enable
+direct internet access in a restricted coding process or change the native OAuth transport's
+availability.
 
 ### D5 — Amendment stamping
 

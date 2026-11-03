@@ -50,8 +50,12 @@ describe("bounded terminal envelope qualification", () => {
           ? {}
           : {
               page: null,
-              data: null,
-              metrics: { ...result.metrics, outputBytes: 0, resultCount: 0 },
+              data: reason === "provider-reported-error" ? result.data : null,
+              metrics: {
+                ...result.metrics,
+                outputBytes: reason === "provider-reported-error" ? result.metrics.outputBytes : 0,
+                resultCount: 0,
+              },
             }),
       };
       const parsed = validateToolResultEnvelope(value, binding);
@@ -62,6 +66,32 @@ describe("bounded terminal envelope qualification", () => {
       ).toThrow("result-contract-failed");
     },
   );
+  it("keeps schema-validated provider error data in a failed, unpaged envelope", () => {
+    const { binding, result } = completed();
+    const value = {
+      ...result,
+      status: "failed",
+      reason: "provider-reported-error",
+      page: null,
+      metrics: { ...result.metrics, resultCount: 0 },
+    };
+    const parsed = validateToolResultEnvelope(value, binding);
+    expect(parsed).toEqual(value);
+    expect(Object.isFrozen(parsed.data)).toBe(true);
+    expect(() => validateToolResultEnvelope(value)).toThrow("result-contract-failed");
+    for (const patch of [
+      { data: null },
+      { data: { text: "safe", secret: "private" } },
+      { reason: "handler-failed" },
+      { status: "cancelled" },
+      { page: result.page },
+      { metrics: { ...value.metrics, outputBytes: 0 } },
+      { metrics: { ...value.metrics, resultCount: 1 } },
+    ])
+      expect(() => validateToolResultEnvelope({ ...value, ...patch }, binding)).toThrow(
+        "result-contract-failed",
+      );
+  });
   it.each(TOOL_PAGE_REASONS)("represents completed page reason %s", (reason) => {
     const { binding, result } = completed();
     const page = {

@@ -482,6 +482,8 @@ export interface MountEditor {
       cursorStateComputer: () => monaco.Selection[] | null,
     ): unknown;
     pushStackElement?(): void;
+    getEOL?(): string;
+    pushEOL?(eol: 0 | 1): void;
     // Blame decoration-clear model targeting (Codex P2 / KEIKO-0378 follow-up): a Monaco model
     // exposes its own `deltaDecorations`/`isDisposed`, independent of the editor it is currently
     // attached to -- see `installBlame` below.

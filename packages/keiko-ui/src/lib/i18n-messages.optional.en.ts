@@ -1,4 +1,226 @@
+import { EN_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 export const OPTIONAL_WIDGET_EN_MESSAGES = {
+  ...EN_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.live.rename": "Rename Pod",
+  "atlassianConnectors.live.renameTitle": "Rename Jira Pod",
+  "atlassianConnectors.live.rotateTitle": "Replace Jira token",
+  "atlassianConnectors.live.replaceToken": "Replace token",
+  "atlassianConnectors.live.newToken": "New API token",
+  "atlassianConnectors.live.saveName": "Save name",
+  "atlassianConnectors.live.saveToken": "Save token",
+  "atlassianConnectors.live.saving": "Saving changes…",
+  "atlassianConnectors.live.rotateHint":
+    "The Pod and its Chat connections stay in place. Replacing the token stops current access and pending work. Verify the connection again and grant new Chat consent before continuing.",
+  "atlassianConnectors.live.operationFailed":
+    "The operation could not be confirmed. Refresh the Pod status before making another change.",
+  "atlassianConnectors.live.refresh": "Refresh status",
+  "atlassianConnectors.live.refreshRequired":
+    "The current connection status is unknown. Refresh it before using this Pod.",
+  "atlassianConnectors.live.verifyRequired": "Verify this connection before using it in Chat.",
+  "atlassianConnectors.live.remove": "Remove Pod",
+  "atlassianConnectors.live.keep": "Keep Pod",
+  "atlassianConnectors.live.removeConfirm":
+    "Remove this Jira Pod and its saved token? This disconnects all connected Chats and cancels their pending permissions.",
+  "atlassianConnectors.live.capabilities":
+    "Chat can search and read Jira issues and metadata, and create, edit, assign, comment on or change the status of issues. Jira permissions and Chat approvals govern each action.",
+  "atlassianConnectors.live.readCapabilities":
+    "Chat can search and read Jira issues and metadata after your consent. Access still depends on the Jira account permissions.",
+  "atlassianConnectors.live.patHint":
+    "Create a personal access token in your Jira profile. It is used only to save this connection and is never shown again.",
+
+  "chat.jira.writeApproval.unavailable": "Action approval is currently unavailable",
+  "chat.jira.writeApproval.title": "Review Jira action",
+  "chat.jira.writeApproval.pending": "Waiting for your decision",
+  "chat.jira.writeApproval.approved": "Approved for this action",
+  "chat.jira.writeApproval.claimed": "Approval used for this action",
+  "chat.jira.writeApproval.rejected": "Action declined",
+  "chat.jira.writeApproval.expired": "Action approval expired",
+  "chat.jira.writeApproval.revoked": "Action approval revoked",
+  "chat.jira.writeApproval.disclosure":
+    "Review the proposed action and its exact details below. Approval applies only to this action. An approval is not confirmation that Jira was changed.",
+  "chat.jira.writeApproval.preview": "Proposed action details",
+  "chat.jira.writeApproval.working": "Checking this action…",
+  "chat.jira.writeApproval.failed":
+    "The current action state could not be confirmed. Refresh it before making a decision.",
+  "chat.jira.writeApproval.allow": "Approve this action",
+  "chat.jira.writeApproval.deny": "Decline this action",
+  "chat.jira.writeApproval.refresh": "Refresh action state",
+
+  "chat.jira.resultUnavailable": "Result unavailable",
+  "chat.jira.partial": "Partial Jira result. Some available data is not included.",
+  "chat.jira.write.notDispatched": "Not sent to Jira",
+  "chat.jira.write.rejected": "Jira action rejected",
+  "chat.jira.write.succeeded": "Jira change confirmed",
+  "chat.jira.write.unconfirmed": "Jira accepted the change; confirmation incomplete",
+  "chat.jira.write.unknown": "Jira outcome unknown",
+  "chat.jira.write.pending": "Awaiting a confirmed Jira outcome",
+  "chat.jira.write.unconfirmedHelp":
+    "Check the current Jira state before requesting another change. This action is not retried automatically.",
+  "chat.jira.write.unknownHelp":
+    "The change may have been applied. Check Jira before requesting another change. This action is not retried automatically.",
+  "chat.jira.write.pendingHelp":
+    "No final outcome is available. This does not confirm an active execution, and the action is not retried automatically.",
+
+  "atlassianConnectors.live.empty": "No Jira Pods yet. Create one to connect Jira to a Chat.",
+  "chat.jira.connection": "Jira connection",
+  "chat.jira.podLabel": "Jira Pod",
+  "chat.jira.noPod": "No Jira Pod",
+  "chat.jira.podUnavailable": "Current Pod unavailable",
+  "chat.jira.verifyRequired": "Verification required",
+  "chat.jira.addToWorkspace": "Add to workspace",
+  "chat.jira.workspaceHint":
+    "Drag this Jira Pod onto the workspace, or add it with this button. Connect its port to a Chat.",
+  "chat.jira.liveTools": "Live Jira tools",
+  "chat.jira.liveReady": "Verified Jira Pod",
+  "chat.jira.liveUnavailable": "Jira Pod unavailable; open Knowledge Pods to verify or reconnect.",
+  "chat.jira.effectiveMode": "Effective mode: {mode}",
+  "chat.jira.modeLabel": "Chat autonomy mode",
+  "chat.jira.modeHelp":
+    "The first Jira read always requires consent. Deployment limits and the current Chat permissions continue to apply.",
+  "chat.jira.replaceConfirm": "Replace the current Jira Pod and revoke its pending permissions.",
+  "chat.jira.apply": "Apply Jira settings",
+  "chat.jira.connectionFailed":
+    "Jira settings could not be loaded or saved. Reopen this control to refresh and retry.",
+  "chat.jira.bound": "Jira Pod connected by the server",
+  "chat.jira.unbound": "No Jira Pod connected",
+  "atlassianConnectors.live.title": "Jira Live Pods",
+  "atlassianConnectors.live.subtitle":
+    "Read current Jira data in a connected Chat with explicit read consent. Live access does not create an index or stored document collection.",
+  "atlassianConnectors.live.add": "Create Jira Pod",
+  "chat.tools.connection": "Tool access",
+  "chat.tools.modeHelp":
+    "The selected mode applies to tools in this chat. Reading through MCP or Jira requires consent; writes follow the mode and deployment limits. Configure MCP servers in Settings.",
+  "chat.tools.apply": "Apply tool settings",
+  "chat.mcp.title": "Read MCP data in this chat",
+  "chat.mcp.disclosure":
+    "Content retrieved through configured MCP servers will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the configuration or authority changes. It does not grant permission to write.",
+  "chat.mcp.tool": "MCP action",
+  "chat.mcp.details": "View MCP result",
+  "chat.mcp.writeApproval.title": "Approve MCP action",
+  "chat.mcp.writeApproval.disclosure":
+    "Review this tool and its arguments. Approval permits this action once within the current connection and authority.",
+  "chat.mcp.write.notDispatched": "Not sent to the MCP server",
+  "chat.mcp.write.rejected": "MCP action rejected",
+  "chat.mcp.write.succeeded": "Action confirmed",
+  "chat.mcp.write.unconfirmed": "The server accepted the change; confirmation incomplete",
+  "chat.mcp.write.unknown": "MCP action outcome unknown",
+  "chat.mcp.write.pending": "Awaiting a confirmed MCP outcome",
+  "chat.mcp.write.unconfirmedHelp":
+    "The server reported success, but the final result could not be confirmed. Check the remote state before starting another write.",
+  "chat.mcp.write.unknownHelp":
+    "The change may have been applied. It will not be repeated automatically. Check the remote state before starting another write.",
+  "chat.mcp.write.pendingHelp":
+    "The action has started. Wait for its outcome before starting another write.",
+  "chat.jira.title": "Read Jira in this chat",
+  "chat.jira.disclosure":
+    "Jira content will be sent to the selected model and retained in this conversation. Permission applies to this chat until it expires or the connection or authority changes. It does not grant permission to write.",
+  "chat.jira.approve": "Allow reading",
+  "chat.jira.reject": "Do not allow",
+  "chat.jira.working": "Saving your decision…",
+  "chat.jira.failed": "Your decision could not be saved. Try again.",
+  "chat.jira.pending": "Waiting for your permission",
+  "chat.jira.granted": "Reading allowed",
+  "chat.jira.rejected": "Reading declined",
+  "chat.jira.expired": "Permission expired",
+  "chat.jira.revoked": "Permission revoked",
+  "chat.jira.tool": "Jira action",
+  "chat.jira.complete": "Completed",
+  "chat.jira.running": "Running",
+  "chat.jira.unavailable": "Could not complete",
+  "chat.jira.details": "View Jira result",
+  "browserApproval.title": "Connect this browser",
+  "browserApproval.close": "Close",
+  "browserApproval.notice":
+    "Connect this browser to save private drafts and use protected features.",
+  "browserApproval.open": "Connect browser",
+  "browserApproval.description":
+    "Approve this browser from a browser already connected to this Keiko installation.",
+  "browserApproval.launcherFallback":
+    "You can also open Keiko from its launcher to connect a browser.",
+  "browserApproval.remember": "Remember this browser for up to 30 days on this installation",
+  "browserApproval.request": "Request approval",
+  "browserApproval.working": "Connecting…",
+  "browserApproval.compare": "Compare this code with the request in your connected browser.",
+  "browserApproval.code": "Browser comparison code",
+  "browserApproval.instructions":
+    "In your connected browser, open Settings → Security → Browser approvals. Approve only the request whose code matches this one.",
+  "browserApproval.expiresSoon":
+    "This request expires after five minutes. Keep this window open until approval completes.",
+  "browserApproval.waiting": "Waiting for approval…",
+  "browserApproval.failed":
+    "The browser connection could not be verified. Retry without closing your unsaved work.",
+  "browserApproval.retry": "Retry",
+  "browserApproval.unavailable":
+    "This browser could not be connected. Retry or open Keiko from its launcher.",
+  "browserApproval.expired":
+    "This request is no longer available. Create a new request if this browser still needs approval.",
+  "browserApproval.success.session": "This browser is connected for the current session.",
+  "browserApproval.success.stored":
+    "This browser is connected. Its approved key was saved in this browser profile for future connections until approval expires or is revoked.",
+  "browserApproval.success.unconfirmed":
+    "This browser is connected for the current session. Remembering it for future connections could not be confirmed.",
+  "browserApproval.manage": "Browser approvals",
+  "browserApproval.manageDescription":
+    "Approve only requests you started, after comparing both codes. Revoking an approval also ends its active sessions.",
+  "browserApproval.refresh": "Refresh",
+  "browserApproval.pendingRequests": "Pending requests",
+  "browserApproval.noRequests": "No pending requests.",
+  "browserApproval.approvals": "Approved browsers",
+  "browserApproval.noApprovals": "No browser approvals.",
+  "browserApproval.managementUnavailable":
+    "Connect this browser before managing other browser approvals.",
+  "browserApproval.compared": "I have compared the codes in both browsers and they match",
+  "browserApproval.allowOnce": "Allow this session",
+  "browserApproval.allowRemembered": "Allow and remember for up to 30 days",
+  "browserApproval.remembered": "Remembered browser",
+  "browserApproval.sessionOnly": "Session approval",
+  "browserApproval.fingerprint": "Key fingerprint: {fingerprint}",
+  "browserApproval.expires": "Expires: {time}",
+  "browserApproval.lastUsed": "Last used: {time}",
+  "browserApproval.revoke": "Revoke approval",
+  "browserApproval.forget": "Forget this browser's remembered connection",
+  "browserApproval.forgetDescription":
+    "Forget automatic connections from this browser profile. To end active sessions as well, revoke the approval below.",
+  "browserApproval.forgotten":
+    "The remembered connection was removed from this browser profile. The current session and server approval are unchanged.",
+  "updates.notice.aria": "Keiko update notification",
+  "updates.status.portableSetupRequired": "Portable setup required",
+  "updates.status.portableExternallyManaged": "Updates managed by your organization",
+  "updates.notice.title": "Update available",
+  "updates.notice.criticalTitle": "Critical update available",
+  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
+  "updates.notice.body":
+    "Version {version} is ready to review. Keiko will not install it automatically.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko could not verify update download information right now. It will not install anything.",
+  "updates.notice.portableBody":
+    "Version {version} is ready. Open updates, then click Update when you are ready.",
+  "updates.notice.portableSetupBody":
+    "Portable setup is required before Keiko can use in-app updates.",
+  "updates.notice.portableExternallyManagedBody":
+    "This Keiko install is managed outside the app. Open updates for details.",
+  "updates.notice.review": "Review update",
+  "updates.notice.actionTitle": "Update settings need attention",
+  "updates.notice.actionBody":
+    "Open updates to review the required action. No newer version has been confirmed.",
+  "updates.notice.reviewDetails": "Review details",
+  "updates.notice.notNow": "Not now",
+  "chat.draft.attachmentsUnsaved":
+    "Send or remove the staged attachments before closing this chat. They have not been saved.",
+  "chat.draft.loading": "Loading saved draft…",
+  "chat.draft.saved": "Draft saved privately.",
+  "chat.draft.unsaved": "Draft changes are not saved yet.",
+  "chat.draft.saving": "Saving draft…",
+  "chat.draft.unavailable":
+    "Draft not saved. Connect this browser using the browser notice above, or open Keiko from its launcher. Keep this window open.",
+  "chat.draft.failed": "This draft could not be saved. Keep this window open and retry.",
+  "chat.draft.conflict":
+    "Another window changed the saved draft. Keep this draft to replace it, or use the saved draft to replace this text.",
+  "chat.draft.retry": "Retry draft save",
+  "chat.draft.keepLocal": "Keep this draft",
+  "chat.draft.useSaved": "Use saved draft",
+  "chat.skills.sendBlocked":
+    "Open Skills and select an available skill or remove the current selection before sending.",
   "chat.skills.author.title": "Create from document or text",
   "chat.skills.author.description":
     "Paste the complete concept or load a text file. Keiko uses the selected chat model to prepare a private, editable draft.",
@@ -53,6 +275,12 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "agentLauncher.sourceFilePlaceholder": "src/file.ts",
   "agentLauncher.browseSourceFile": "Browse source file",
   "agentLauncher.selectRepositoryFirst": "Select a repository before browsing source files.",
+  "agentLauncher.skill": "Skill",
+  "agentLauncher.skillNone": "No skill",
+  "agentLauncher.skillNote":
+    "Optional. A private Markdown skill guides every model call of this run. It grants no additional authority.",
+  "agentLauncher.skillUnavailable":
+    "Private skills could not be loaded. The run starts without a skill.",
   "agentLauncher.observedBehavior": "Observed behavior",
   "agentLauncher.observedBehaviorPlaceholder": "Describe the observed bug.",
   "agentLauncher.failingOutput": "Failing output",
@@ -1261,6 +1489,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   // Chat context meter and grounded evidence panel: both render only in the lazily loaded chat
   // window, so their strings stay out of the first-load catalog (editor-bundle-size budget).
   "chat.context.title": "Conversation context",
+  "chat.context.details": "Context usage details",
   "chat.context.heading": "Conversation context {percent}%",
   "chat.context.label": "Conversation context: approximately {percent}% used",
   "chat.context.used": "Estimated tokens used",
@@ -1268,14 +1497,14 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.window": "Full context window",
   "chat.context.outputReserve": "Reserved for the answer",
   "chat.context.safetyMargin": "Safety margin",
-  "chat.context.saved": "{tokens} tokens saved across {count} summarized messages.",
-  "chat.context.saved.one": "{tokens} tokens saved across 1 summarized message.",
+  "chat.context.saved": "{tokens} tokens saved · {count} messages summarized",
+  "chat.context.saved.one": "{tokens} tokens saved · 1 message summarized",
   "chat.context.percent": "{percent}%",
   "chat.context.unavailable": "Context estimate unavailable",
   "chat.context.estimate":
-    "Estimated for the next request; knowledge chats include the latest question's source share. Your draft and attachments are added when you send.",
+    "Estimate for the next request, including the latest source share. Draft and attachments are added on send.",
   "chat.context.automaticGrounded":
-    "Keiko compacts the conversation at 90% of its {tokens}-token lane. Source capacity is separate.",
+    "Automatic compaction at 90% of the {tokens}-token conversation budget. Sources use separate capacity.",
   "chat.context.segment.sourceCapacity": "Additional source capacity",
   "chat.context.segment.inputUnavailable": "Unavailable for input",
   "chat.context.declaredInputLimit": "Model input limit: {tokens} tokens.",
@@ -1283,13 +1512,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.untilConversationCompaction":
     "{tokens} conversation tokens until automatic compaction.",
   "chat.context.sourcesPolicy":
-    "Connected source excerpts are retrieved fresh for each question and are never summarized. Conversation history uses its own input budget.",
+    "Sources are retrieved fresh within the source budget for each question, never summarized. Conversation capacity is separate.",
   "chat.context.sourcesPolicyGrounded":
-    "Connected source excerpts are retrieved fresh for each question and are never summarized. The current conversation input budget is {tokens} tokens.",
+    "Sources are retrieved fresh within the source budget for each question, never summarized.",
   "chat.context.automatic":
-    "Keiko compacts automatically at 90% of usable input capacity before sending the next request.",
+    "Automatic compaction at 90% of usable capacity, before the next request.",
   "chat.context.retained":
-    "Compaction summarizes earlier messages. The full conversation stays saved; summaries can omit details.",
+    "Manual compaction: one pass; available again with new messages and 50% capacity used. System and skill instructions stay unchanged. The full chat stays saved; summaries may omit details.",
   "chat.context.error": "Context could not be updated.",
   "chat.context.retry": "Retry",
   "chat.context.compact": "Compact context now",
@@ -1297,7 +1526,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.wait": "Available after the current response finishes.",
   "chat.context.total": "{used} of {usable} usable input tokens · context window {window}",
   "chat.context.breakdown": "Context window breakdown",
-  "chat.context.segment.skill": "Skill instructions (protected)",
+  "chat.context.segment.skill": "Skill instructions",
+  "chat.context.notCompacted": "Not compacted",
   "chat.context.segment.system": "System instructions",
   "chat.context.segment.summary": "Summary of earlier messages",
   "chat.context.segment.messages": "Messages",
@@ -1312,15 +1542,13 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.context.referencesTrimmed":
     "Only {sent} of {available} references fit the model's context window. The most relevant were used.",
   "chat.context.lastRequestMeasured":
-    "Last knowledge request: {tokens} tokens (measured by the provider).",
+    "Last knowledge request: {tokens} tokens measured by the provider.",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Last knowledge request: {tokens} tokens (measured by the provider). Keiko estimated that request at {estimated} tokens. The breakdown above estimates the next request.",
+    "Last knowledge request: {tokens} tokens measured by the provider; {estimated} estimated for that request.",
   "chat.context.lastRequestEstimated": "Last knowledge request: about {tokens} tokens (estimated).",
   "chat.context.untilCompaction": "{tokens} tokens until automatic compaction.",
-  "chat.context.windowAssumed":
-    "The gateway declares no context window for this model. Keiko plans with the assumed value and adopts the real window automatically as soon as the provider states it.",
-  "chat.context.pending":
-    "The stored history ({before} tokens) is compacted automatically to about {after} tokens before the next request.",
+  "chat.context.windowAssumed": "Context window assumed until the provider reports its size.",
+  "chat.context.pending": "Next request: history reduced from {before} to about {after} tokens.",
   "grounded.inspection.coverageGap.one":
     "This answer reflects only the searchable files in the connected scope. At least {count} file was not searched (recorded exclusions: {detail}). These recorded exclusions may not include every excluded file.",
   "grounded.inspection.coverageGap.other":
@@ -1691,7 +1919,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "chat.error.send": "Could not send message.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
-  "chat.grounding.label": "Grounding",
+  "chat.grounding.dataLabel": "Data sources",
+  "chat.grounding.noDataSources": "No Data sources",
+  "chat.grounding.dataCatalogEmpty": "No ready Data Pods or Pod Sets are available.",
+  "chat.grounding.label": "Sources",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
   "chat.grounding.modelOnly": "Model only",
@@ -2074,8 +2305,6 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "updates.error.title": "Update status unavailable",
   "updates.error.load": "Could not load update status from the local Keiko backend.",
   "updates.window.kicker": "Governed update",
-  "updates.status.portableSetupRequired": "Portable setup required",
-  "updates.status.portableExternallyManaged": "Updates managed by your organization",
   "updates.primary.title": "Recommended action",
   "updates.primary.available": "Review the state impact, then install when you are ready.",
   "updates.primary.portableAvailable":
@@ -2478,17 +2707,28 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.verify.ok.label": "Connection verified",
   "atlassianConnectors.verify.ok.copy": "The credential authenticated successfully.",
   "atlassianConnectors.verify.auth-failed.label": "Authentication failed",
-  "atlassianConnectors.verify.auth-failed.copy":
-    "Check the account email and API token, then verify again.",
+  "atlassianConnectors.verify.auth-failed.copy": "Check the account and token, then verify again.",
   "atlassianConnectors.verify.forbidden.label": "Access forbidden",
   "atlassianConnectors.verify.forbidden.copy":
-    "The account authenticated but lacks permission. Grant access in Atlassian, then verify again.",
+    "Atlassian denied access. Check the account permissions and any site or license restrictions, then verify again.",
   "atlassianConnectors.verify.unreachable.label": "Site unreachable",
   "atlassianConnectors.verify.unreachable.copy":
     "The base URL could not be reached. Check the URL and your network, then verify again.",
   "atlassianConnectors.verify.timeout.label": "Connection timed out",
   "atlassianConnectors.verify.timeout.copy":
     "The site did not respond in time. Try verifying again in a moment.",
+  "atlassianConnectors.verify.redirect-refused.label": "Redirect refused",
+  "atlassianConnectors.verify.redirect-refused.copy":
+    "The address redirects elsewhere. Enter the final HTTPS address of the Atlassian site.",
+  "atlassianConnectors.verify.invalid-response.label": "Invalid Atlassian response",
+  "atlassianConnectors.verify.invalid-response.copy":
+    "The address returned no valid Atlassian JSON response. Check the address and login gateway.",
+  "atlassianConnectors.verify.unsupported-version.label": "Unsupported Jira version",
+  "atlassianConnectors.verify.unsupported-version.copy":
+    "This connection supports Jira Data Center 10.3.26. Verify the deployment and version.",
+  "atlassianConnectors.verify.tls-failed.label": "Certificate verification failed",
+  "atlassianConnectors.verify.tls-failed.copy":
+    "Check the certificate validity, hostname and trusted certificate authority.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence space keys",
   "atlassianConnectors.scope.confluencePlaceholder": "e.g. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira project keys",
@@ -2562,6 +2802,16 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "atlassianConnectors.approvals.rejecting": "Rejecting…",
   "atlassianConnectors.approvals.rejected": "Rejected. The action was not executed.",
   "atlassianConnectors.action.sync-space": "Sync Confluence space",
+  "atlassianConnectors.action.jira.projects": "Read Jira projects",
+  "atlassianConnectors.action.jira.issue-types": "Read Jira issue types",
+  "atlassianConnectors.action.jira.create-fields": "Read Jira create fields",
+  "atlassianConnectors.action.jira.edit-fields": "Read Jira edit fields",
+  "atlassianConnectors.action.jira.search": "Search Jira issues",
+  "atlassianConnectors.action.jira.issue": "Read Jira issue",
+  "atlassianConnectors.action.jira.comments": "Read Jira comments",
+  "atlassianConnectors.action.jira.transitions": "Read Jira transitions",
+  "atlassianConnectors.action.jira.assignable-users": "Find assignable Jira users",
+  "atlassianConnectors.action.assign-issue": "Assign Jira issue",
   "atlassianConnectors.action.sync-project": "Sync Jira project",
   "atlassianConnectors.action.search-issues-live": "Live Jira search",
   "atlassianConnectors.action.create-issue": "Create Jira issue",

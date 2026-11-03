@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
+  useCodingWorkbenchRuntimeStream,
   useCodingWorkbenchPairingEffect,
   useCodingWorkbenchWorkspaceEffect,
   useCodingWorkbenchRuntimeRefreshEffects,
@@ -231,6 +232,31 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     act(() => window.dispatchEvent(new Event("keiko:gateway-model-catalog-updated")));
     expect(refreshSource).not.toHaveBeenCalled();
   });
+  // Customer 1.3.4: the source describes the model chosen in the picker, so choosing another model
+  // reads its profile again (the server then checks exactly that model).
+  it("re-reads the source when the picker selects another model", () => {
+    const refreshSource = vi.fn(async () => undefined);
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    const { rerender } = renderHook(
+      ({ state }: { readonly state: CodingWorkbenchRuntimeState }) => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state,
+          refreshSource,
+          refreshRuntime: vi.fn(async () => undefined),
+          refreshRun: vi.fn(async () => undefined),
+        });
+      },
+      { initialProps: { state: initial } },
+    );
+    expect(refreshSource).toHaveBeenCalledOnce();
+    rerender({ state: { ...initial, selectedModelId: "gpt-coding" } });
+    expect(refreshSource).toHaveBeenCalledTimes(2);
+    rerender({ state: { ...initial, selectedModelId: "gpt-coding", reasoningEffort: "high" } });
+    expect(refreshSource).toHaveBeenCalledTimes(2);
+    rerender({ state: { ...initial, selectedModelId: "sonnet-coding" } });
+    expect(refreshSource).toHaveBeenCalledTimes(3);
+  });
+
   // Settings replaces the gateway configuration and records readiness verdicts without this
   // window knowing; the source stayed "unavailable" after tool calling had just been verified
   // until a reload (workbench end-to-end run, 2026-09-03).
@@ -405,4 +431,62 @@ it("forwards only the actual validated catalog parent into the profile refresh",
   );
   expect(refreshSource).toHaveBeenCalledWith(true, "actual-catalog-123");
   unmount();
+});
+
+// Stability audit item 12: an interrupted EventSource that the browser is already reconnecting must
+// not raise the assertive "event stream could not be refreshed" failure.
+describe("useCodingWorkbenchRuntimeStream reconnect reporting", () => {
+  class StubEventSource {
+    public static instances: StubEventSource[] = [];
+    public onopen: ((event: Event) => void) | null = null;
+    public onerror: ((event: Event) => void) | null = null;
+    public readyState = 0;
+    public readonly close = vi.fn();
+    public constructor(public readonly url: string) {
+      StubEventSource.instances.push(this);
+    }
+    public addEventListener = vi.fn();
+    public removeEventListener = vi.fn();
+  }
+
+  function mountStream(): { readonly dispatch: ReturnType<typeof vi.fn> } {
+    const dispatch = vi.fn();
+    const stateRef = { current: createInitialCodingWorkbenchRuntimeState() };
+    renderHook(() => {
+      useCodingWorkbenchRuntimeStream({
+        runId: "run-1",
+        streamEpoch: 0,
+        stateRef,
+        refreshRun: () => Promise.resolve(),
+        dispatch,
+        setStreamEpoch: vi.fn(),
+      });
+    });
+    return { dispatch };
+  }
+
+  it("projects a browser auto-reconnect as a status and a closed source as a failure", () => {
+    StubEventSource.instances = [];
+    vi.stubGlobal("EventSource", StubEventSource);
+    try {
+      const { dispatch } = mountStream();
+      const source = StubEventSource.instances[0];
+      expect(source).toBeDefined();
+
+      source!.readyState = 0;
+      source!.onerror?.(new Event("error"));
+      expect(dispatch).toHaveBeenCalledWith({ kind: "stream-reconnecting" });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resource-failed", resource: "stream" }),
+      );
+
+      source!.readyState = 2;
+      source!.onerror?.(new Event("error"));
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "resource-failed", resource: "stream" }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

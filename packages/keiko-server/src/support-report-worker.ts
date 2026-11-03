@@ -1,5 +1,9 @@
 import { parentPort, workerData } from "node:worker_threads";
 import {
+  bindWorkerProcessScope,
+  type ProcessScopeWorkerData,
+} from "@oscharko-dev/keiko-security/process-scope-worker";
+import {
   readDesktopSupportReportSelection,
   createPreparedDesktopSupportReport,
   SupportReportError,
@@ -15,6 +19,7 @@ import type {
 interface ReportWork {
   readonly stateDir: string;
   readonly correlationId?: string;
+  readonly processScope?: ProcessScopeWorkerData;
 }
 const work = workerData as ReportWork;
 
@@ -56,6 +61,7 @@ function serializeSupportReportWorkerFailure(error: unknown): SupportReportWorke
 }
 
 try {
+  bindWorkerProcessScope(work.processScope);
   parentPort?.postMessage(await createReport());
 } catch (error) {
   // The main route owns logging. Transport only closed reasons and bounded diagnostic facts.

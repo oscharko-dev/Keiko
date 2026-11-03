@@ -8,6 +8,11 @@ versions, no local setup beyond Docker.
 
 ## Why this exists
 
+The Next development child bounds its optional npm framework-version metadata request to five
+seconds and retains Next's existing `unknown` fallback. A stalled diagnostic lookup therefore
+settles before compiler startup. The product BFF's release transport keeps its own verification and
+deadlines. The end-to-end server-readiness budget remains 120 seconds.
+
 Over the twelve most recent failing CI runs the causes were:
 
 | Cause                    | Runs | Reproducible locally  |
@@ -40,6 +45,16 @@ The first run builds the image and installs the workspaces into a named volume; 
 both. `node_modules` deliberately lives in that volume rather than a bind mount: a macOS host tree
 and a Linux container cannot share one install without swapping platform-native binaries under each
 other.
+
+## Pinned toolchain for a local `npm test`
+
+Run `npm test` under the governed pair that `scripts/check-runtime-toolchain.mjs` approves for exact
+runs: **Node.js 24.18.0 with npm 11.16.0** (the compatibility baseline Node.js 26.8.1 with npm 11.19.0
+is also approved). Required CI provisions exactly that pair. A host inside the supported engine
+range but on another patch, such as Node.js 24.22.0 with npm 11.19.1, is supported for development,
+yet `debug-launch-policy.test.ts` asserts the exact pair: outside CI it skips its npm-policy proof
+and names the reason, and with `CI=true` it never skips, so run `node scripts/check-runtime-toolchain.mjs --exact`
+to see whether your host qualifies (#4111).
 
 ## Git worktrees
 

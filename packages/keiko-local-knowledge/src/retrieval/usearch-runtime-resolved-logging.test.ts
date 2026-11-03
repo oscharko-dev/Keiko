@@ -130,11 +130,14 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
     try {
       // The fixture verifies successfully (its hash matches the mocked approval), so
       // targetRuntime() logs the resolved state before the ANN worker ever starts. The worker
-      // then fails to load the fixture as a real native addon — expected and irrelevant here,
-      // since this test is about the logging boundary, not ANN search correctness (which the
+      // then fails to load the fixture as a real native addon and records a separate Worker
+      // settlement. This test retains cold digest resolution separately from ANN correctness (which the
       // real-binary tests in usearch-ann-index.test.ts already cover).
       await searchUsearchAnnIndex(request);
-      const coldLines = events.filter((event) => event.op === "search.native-runtime-resolved");
+      const coldLines = events.filter(
+        (event) =>
+          event.op === "search.native-runtime-resolved" && event.extra?.workerState === undefined,
+      );
       // resolvedIndex() and buildSearchIndex() both call targetRuntime() for the same request;
       // the second call is already a warm hit against the cache the first call just populated,
       // so exactly one line — not two — is written for one logical search call.
@@ -159,9 +162,12 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
 
       events.length = 0;
       await searchUsearchAnnIndex(request);
-      expect(events.filter((event) => event.op === "search.native-runtime-resolved")).toHaveLength(
-        0,
-      );
+      expect(
+        events.filter(
+          (event) =>
+            event.op === "search.native-runtime-resolved" && event.extra?.workerState === undefined,
+        ),
+      ).toHaveLength(0);
     } finally {
       __resetTargetRuntimeCacheForTests();
       rmSync(fixtureDir, { recursive: true, force: true });

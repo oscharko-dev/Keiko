@@ -350,13 +350,14 @@ static int keiko_coordinator_windows_deadline(
   uint64_t wall_deadline;
   uint64_t wall_now = keiko_coordinator_windows_wall_ms();
   uint64_t monotonic_now = (uint64_t)GetTickCount64();
+  uint64_t tail = keiko_khp_phase_tail((unsigned int)field);
   if (!keiko_khp_decimal_value(
           context->plan.field[field],
           UINT64_C(9007199254740991),
           &wall_deadline
       ) ||
-      wall_now == UINT64_MAX || wall_deadline < wall_now ||
-      wall_deadline - wall_now > KEIKO_COORDINATOR_MAX_CONTROL_MS ||
+      wall_now == UINT64_MAX || wall_deadline <= wall_now ||
+      wall_deadline - wall_now > KEIKO_COORDINATOR_MAX_CONTROL_MS + tail ||
       monotonic_now > UINT64_MAX - (wall_deadline - wall_now)) return 0;
   *deadline_ms = monotonic_now + (wall_deadline - wall_now);
   return 1;
@@ -374,8 +375,9 @@ static int keiko_coordinator_windows_read_exact_fd(
   while (offset < length) {
     DWORD available = 0;
     int count;
-    if (GetTickCount64() > deadline_ms || length - offset > INT_MAX) return 0;
+    if (GetTickCount64() >= deadline_ms || length - offset > INT_MAX) return 0;
     if (!PeekNamedPipe(pipe, NULL, 0, NULL, &available, NULL)) return 0;
+    if (GetTickCount64() >= deadline_ms) return 0;
     if (available == 0) {
       Sleep(10);
       continue;
@@ -385,7 +387,7 @@ static int keiko_coordinator_windows_read_exact_fd(
     if (count <= 0) return 0;
     offset += (size_t)count;
   }
-  return 1;
+  return GetTickCount64() < deadline_ms;
 }
 
 static int keiko_coordinator_windows_write_exact_fd(
@@ -489,14 +491,14 @@ static int keiko_coordinator_windows_ui_identity(
                    &content,
                    &length
                ) &&
-               length == (size_t)expected_length &&
-               memcmp(content, expected, length) == 0;
+               keiko_coordinator_pid_record_matches(
+                   content, length, expected, (size_t)expected_length);
   if (content != NULL) {
     SecureZeroMemory(content, length);
     free(content);
   }
   free(path);
-  return result;
+  return result && GetTickCount64() < deadline_ms;
 }
 
 static int keiko_coordinator_windows_roots_same_volume(
@@ -2581,6 +2583,9 @@ static inline int keiko_coordinator_prepare_resume_windows(
     );
   if (context->state_dir_utf8 == NULL || expected_supervisor == NULL ||
       !keiko_coordinator_windows_load_plan(context, activation_id, deadline) ||
+      !keiko_coordinator_windows_deadline(
+          context, restoring ? KEIKO_KHP_CLEANUP_AT : KEIKO_KHP_START_AT, &deadline
+      ) ||
       !keiko_coordinator_windows_paths_build(context, &paths) ||
       _wcsicmp(paths.launcher, executable) != 0 ||
       !keiko_windows_update_file_digest_matches(

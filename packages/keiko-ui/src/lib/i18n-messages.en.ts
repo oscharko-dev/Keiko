@@ -501,6 +501,11 @@ export const EN_MESSAGES = {
   // broken gateway, and neither text blames the size of the request.
   "chat.modelSelectionUnavailable":
     "The selected model is temporarily unavailable. Choose another available model or wait for it to recover.",
+  "chat.error.capabilityUnavailable.title": "Model capability unavailable",
+  "chat.error.capabilityUnavailable.message":
+    "The selected model cannot currently run the required Chat capabilities.",
+  "chat.error.capabilityUnavailable.remediation":
+    "Select a ready Chat model. For Jira access, run the tool-calling check in Settings > Models or disconnect the Jira Pod.",
   "chat.error.scopeChanged.title": "Connected sources changed",
   "chat.error.scopeChanged.message":
     "The connected sources changed in the meantime. The request was not run with an outdated source list.",
@@ -589,6 +594,9 @@ export const EN_MESSAGES = {
     "Chat grounding is blocked after a timeout. Reload the chat before trying again.",
   "chat.grounding.connectSourceFailed":
     "Keiko could not connect that source. Check that it is still available and try again.",
+  "chat.grounding.sourceUpdatePending": "Updating connected sources. Your draft is preserved.",
+  "chat.grounding.sourceUpdateFailed":
+    "Could not update connected sources. Reconnect the source before sending; your draft is preserved.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
   "chat.grounding.gitChangeSavedRefreshUnavailable":
@@ -626,22 +634,7 @@ export const EN_MESSAGES = {
   "footer.windowAction": "{action} {title} window{suffix}",
   "settings.title": "Settings",
   "settings.language.compactLabel": "Language",
-  "updates.notice.aria": "Keiko update notification",
-  "updates.notice.title": "Update available",
-  "updates.notice.criticalTitle": "Critical update available",
-  "updates.notice.releaseUnavailableTitle": "Update check unavailable",
-  "updates.notice.body":
-    "Version {version} is ready to review. Keiko will not install it automatically.",
-  "updates.notice.releaseUnavailableBody":
-    "Keiko could not verify update download information right now. It will not install anything.",
-  "updates.notice.portableBody":
-    "Version {version} is ready. Open updates, then click Update when you are ready.",
-  "updates.notice.portableSetupBody":
-    "Portable setup is required before Keiko can use in-app updates.",
-  "updates.notice.portableExternallyManagedBody":
-    "This Keiko install is managed outside the app. Open updates for details.",
-  "updates.notice.review": "Review update",
-  "updates.notice.notNow": "Not now",
+  "updates.notice.loadFailed": "The update notice could not be loaded. Open Updates to check.",
   "updates.versionUnknown": "unknown",
 
   "updates.status.current": "Keiko is up to date",
@@ -729,11 +722,6 @@ export const EN_MESSAGES = {
   "connection.armTitle": "Click once to arm removal.",
   "connection.removeQuestion": "Remove?",
   "connection.cancelled": "Removal cancelled — the connection was not removed.",
-  "scope.notice.narrowed": "The connected scope changed to {scope}.",
-  "scope.notice.widened": "The connected scope expanded to {scope}.",
-  "scope.notice.keepFolder": "Keep folder",
-  "scope.notice.ok": "OK",
-  "scope.notice.failed": "The folder could not be kept.",
   "chat.grounding.help":
     "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment. The model has no file tools. Open a file in Files or mention it with @ to include it in the scope.",
   "scope.missing.add": "Add file to scope",
@@ -747,11 +735,6 @@ export const EN_MESSAGES = {
   "scope.missing.failed": "The file could not be added to the scope.",
   "scope.pill.filesInFolder": "{count} files in {name}",
   "scope.pill.accessibleWithPath": "{label} ({path})",
-  "scope.boundary.noun.repository": "the connected root folder",
-  "scope.boundary.noun.folder": "the connected folder",
-  "scope.boundary.noun.fileScope": "the connected file scope",
-  "scope.boundary.description":
-    "Keiko may inspect only {noun}; safe-read exclusions and context budget limits apply before each answer.",
   "scope.disconnect.error": "Unable to disconnect scope.",
   "scope.disconnect.aria": "Disconnect {label} from chat",
   "scope.disconnect.title": "Disconnect {label} from chat",

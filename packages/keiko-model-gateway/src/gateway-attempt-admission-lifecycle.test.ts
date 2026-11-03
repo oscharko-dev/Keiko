@@ -15,25 +15,34 @@ type AttemptReservation = NonNullable<
   ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>
 >;
 
-function providerStream(): {
+function providerStream(content = "partial.\n"): {
   readonly response: Response;
   readonly finish: () => void;
   readonly cancelled: () => boolean;
+  readonly read: Promise<void>;
 } {
   let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   let cancelled = false;
+  let onRead: (() => void) | undefined;
+  const read = new Promise<void>((resolve) => {
+    onRead = resolve;
+  });
   const frame = (value: unknown): Uint8Array =>
     new TextEncoder().encode(`data: ${JSON.stringify(value)}\n\n`);
   const body = new ReadableStream<Uint8Array>({
     start(value): void {
       controller = value;
-      value.enqueue(frame({ choices: [{ index: 0, delta: { content: "partial" } }] }));
+      value.enqueue(frame({ choices: [{ index: 0, delta: { content } }] }));
+    },
+    pull(): void {
+      onRead?.();
     },
     cancel(): void {
       cancelled = true;
     },
   });
   return {
+    read,
     response: new Response(body, { headers: { "content-type": "text/event-stream" } }),
     finish(): void {
       controller?.enqueue(frame({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] }));
@@ -47,7 +56,7 @@ function providerStream(): {
   };
 }
 
-function fixture(): {
+function fixture(content?: string): {
   readonly gateway: Gateway;
   readonly stream: ReturnType<typeof providerStream>;
   readonly admission: NonNullable<GatewayCallRequest["attemptAdmission"]>;
@@ -57,7 +66,7 @@ function fixture(): {
   readonly fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
   readonly events: ModelGatewayLogEvent[];
 } {
-  const stream = providerStream();
+  const stream = providerStream(content);
   const settle = vi.fn<AttemptReservation["settle"]>();
   const spendSettle = vi.fn();
   const reserve = vi.fn(() => ({ settle: spendSettle }));
@@ -78,7 +87,12 @@ function fixture(): {
       capabilities: [{ ...createDefaultChatCapability(MODEL), maxOutputTokens: 1024 }],
     }),
     {
-      adapter: new OpenAiAdapter({ fetchImpl, requestId: "lifecycle", costClass: "low" }),
+      adapter: new OpenAiAdapter({
+        fetchImpl,
+        requestId: "lifecycle",
+        costClass: "low",
+        log: { write: (event): void => void events.push(event) },
+      }),
       spendBudget: { reserve },
       log: { write: (event): void => void events.push(event) },
     },
@@ -88,10 +102,43 @@ function fixture(): {
 }
 
 describe("physical-attempt admission across real provider stream termination", () => {
+  it("settles dispatched unknown output when cancellation discards a private pending block", async () => {
+    const pending = '```ts\nconst password = "private-pending-value';
+    const proof = fixture(pending);
+    const cancellation = new AbortController();
+    const iterator = proof.gateway.chatStream({
+      ...REQUEST,
+      attemptAdmission: proof.admission,
+      cancellationSignal: cancellation.signal,
+    });
+    const reading = iterator.next();
+    const rejected = expect(reading).rejects.toMatchObject({ code: "GATEWAY_CANCELLED" });
+    await proof.stream.read;
+    cancellation.abort();
+    await rejected;
+    expect(proof.settle).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ promptTokens: 0, completionTokens: 0 }),
+      true,
+      "unknown",
+    );
+    expect(proof.spendSettle).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(proof.fetchImpl).toHaveBeenCalledOnce();
+    expect(proof.stream.cancelled()).toBe(true);
+    expect(proof.gateway.circuitStatus(MODEL).consecutiveFailures).toBe(0);
+    expect(
+      proof.events.find((event) => event.op === "chat.response.streamed")?.extra,
+    ).toMatchObject({
+      redactionPendingChars: pending.length,
+      redactionPublishedBlocks: 0,
+      dataEvents: 1,
+    });
+    expect(JSON.stringify(proof.events)).not.toContain("private-pending-value");
+  });
+
   it("retains unknown output and settles once when the consumer returns before terminal usage", async () => {
     const proof = fixture();
     const iterator = proof.gateway.chatStream({ ...REQUEST, attemptAdmission: proof.admission });
-    expect((await iterator.next()).value).toEqual({ type: "delta", token: "partial" });
+    expect((await iterator.next()).value).toEqual({ type: "delta", token: "partial.\n" });
     await iterator.return(undefined);
     expect(proof.settle).toHaveBeenCalledExactlyOnceWith(undefined, true, "unknown");
     expect(proof.spendSettle).toHaveBeenCalledExactlyOnceWith(undefined);

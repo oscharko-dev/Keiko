@@ -1,4 +1,5 @@
 import type { CodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts";
+import { isDraftDeliveryIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import { draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 
@@ -8,7 +9,9 @@ export function ciReadinessSnapshot(
 ): CodingWorkbenchRuntimeSnapshot {
   const snapshot = draftDeliverySnapshot();
   const draft = snapshot.draftDelivery;
-  if (draft?.pullRequest === undefined) throw new Error("Expected fixture delivery");
+  if (draft?.pullRequest === undefined || !isDraftDeliveryIssueBinding(draft.binding))
+    throw new Error("Expected fixture delivery");
+  const binding = draft.binding;
   return {
     ...snapshot,
     state: "running",
@@ -16,7 +19,7 @@ export function ciReadinessSnapshot(
       schemaVersion: "1",
       runId: draft.binding.runId,
       remoteDigest: draft.binding.remoteDigest,
-      repository: draft.binding.repository,
+      repository: binding.repository,
       prNumber: draft.pullRequest.number,
       headRef: draft.binding.headRef,
       headSha: draft.binding.headSha,

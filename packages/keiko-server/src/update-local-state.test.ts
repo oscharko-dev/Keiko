@@ -392,6 +392,40 @@ describe("update local-state repair", () => {
 });
 
 describe("update runtime state and audit events", () => {
+  it.each([
+    { pid: 0, ageMs: 2_000, grant: true },
+    { pid: -1, ageMs: 2_000, grant: true },
+    { pid: 0x80000000, ageMs: 2_000, grant: true },
+    { pid: 9_007_199_254_740_992, ageMs: 2_000, grant: true },
+    { pid: 0, ageMs: 0, grant: false },
+    { pid: -1, ageMs: 0, grant: false },
+    { pid: 0x80000000, ageMs: 0, grant: false },
+    { pid: 9_007_199_254_740_992, ageMs: 0, grant: false },
+  ])(
+    "classifies invalid owner $pid as malformed with publication age $ageMs",
+    ({ pid, ageMs, grant }) => {
+      const stateDir = makeStateDir();
+      const actionId = "local-state-repair:memory-vault";
+      const digest = createHash("sha256").update(actionId).digest("hex");
+      const leasePath = join(stateDir, "updates", "remediation-leases", `${digest}.json`);
+      touch(
+        leasePath,
+        JSON.stringify({ pid, token: "invalid-owner", acquiredAt: "2026-06-30T11:00:00.000Z" }),
+      );
+      const timestamp = new Date(NOW - ageMs);
+      utimesSync(leasePath, timestamp, timestamp);
+      const localState = createUpdateLocalStateManager({
+        stateDir,
+        now: () => NOW,
+        remediationLeaseStaleMs: 1_000,
+      });
+      const release = localState.acquireRemediationLease(actionId);
+      expect(typeof release === "function").toBe(grant);
+      expect(existsSync(`${leasePath}.corrupt.2026-06-30T12-00-00-000Z`)).toBe(grant);
+      release?.();
+    },
+  );
+
   it("keeps a fresh remediation lease when PID liveness is temporarily unavailable", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";
@@ -416,7 +450,7 @@ describe("update runtime state and audit events", () => {
     expect(existsSync(leasePath)).toBe(true);
   });
 
-  it("reclaims an aged remediation lease even when its pid was reused", () => {
+  it("keeps an aged remediation lease without proof that its foreign owner has exited", () => {
     const stateDir = makeStateDir();
     const actionId = "local-state-repair:memory-vault";
     const digest = createHash("sha256").update(actionId, "utf8").digest("hex");
@@ -438,9 +472,8 @@ describe("update runtime state and audit events", () => {
 
     const release = localState.acquireRemediationLease(actionId);
 
-    expect(release).toBeTypeOf("function");
-    release?.();
-    expect(existsSync(leasePath)).toBe(false);
+    expect(release).toBeUndefined();
+    expect(existsSync(leasePath)).toBe(true);
   });
 
   it("keeps a fresh malformed remediation lease during its publication grace window", () => {
@@ -780,7 +813,7 @@ describe("update runtime state and audit events", () => {
       revision: 2,
       targetVersion: "0.2.13",
     });
-    expect(readdirSync(join(stateDir, "updates"))).toEqual(["runtime-state.json"]);
+    expect(readdirSync(join(stateDir, "updates")).sort()).toEqual([".keiko", "runtime-state.json"]);
   });
 
   it("rejects stale revision writes instead of silently losing a concurrent update", () => {

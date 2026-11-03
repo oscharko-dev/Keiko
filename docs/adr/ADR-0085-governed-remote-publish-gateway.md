@@ -124,6 +124,53 @@ live authentication or native Windows credential execution.
 Preparation failures use the production factory's existing activity-log and structured diagnostic
 ports with the run correlation. No remote URL, path or credential enters those events.
 
+#### D1b — An issue-free Workbench run pushes its own task branch to any `origin` (owner decision, 2026-10-30)
+
+The Coding Workbench works without any issue binding; the issue binding is a legacy leftover and
+no longer a precondition of delivery. A run with no accepted issue therefore delivers by pushing
+its verified commit to its own task branch on `origin`, which may be any Git remote (a local bare
+path, GitLab, SSH, GitHub). The model's `keiko_git_push` stays a proposal, redeemed with
+`keiko_git_execute` (`kind: push`, `proposalId`) under the same delivery approval plane as the
+issue-bound push: Full access auto-approves through `policyAllowsWithoutApproval("push")`, the
+other modes ask the operator.
+
+- **Binding.** The durable record carries a `DraftDeliveryBranchBinding` (`kind: "branch-push"`):
+  run, workspace, authority, envelope and remote-identity digests, the `origin` alias, the base and
+  head refs and commits, and the verified-commit and recovery ids. It has no issue, repository or
+  pull request fact. The legacy issue-bound binding is persisted without a `kind` and stays valid
+  unchanged. A branch-push record is admissible only in the push phases (`push-proposed`,
+  `pushing`, `pushed`, `recovery-required`) and only for a run whose snapshot carries no issue.
+  When `origin` is a verified github.com repository the record instead carries a
+  `DraftDeliveryRepositoryBinding` (`kind: "github-repository"`, the same fields plus the
+  `owner/repository`) from its first push, so the draft pull request that may follow shares it
+  (ADR-0086 D13); the push itself is identical and still reads nothing from GitHub.
+- **Same exact commit, same pinned path.** The effect is the unchanged non-force pinned push of the
+  record's `verifiedCommitSha`. When the checkout's single push URL is canonical GitHub and names
+  the repository the run was admitted with, the verified-URL path above applies. Every other
+  remote (and any GitHub URL that is not canonical) is dispatched as
+  `git push origin <sha>:refs/heads/<branch>` through the ordinary transport
+  (`runPinnedPush`), which carries the same pinned refspec, the dedicated push allowlist and the
+  sandboxed environment. Before the proposal and again immediately before the effect, the
+  production composition re-reads `origin` and refuses (`remote-drift`) a remote that is no longer
+  the identity digest the run was admitted with, an `origin` that disappeared, or a push URL it
+  cannot read.
+- **Success is the push's own exit.** No GitHub read exists for a non-GitHub remote, so there is no
+  expected remote head and no pre/post remote read. A non-fast-forward or otherwise rejected push
+  exits non-zero, is classified by D2 and settles the record `recovery-required`; the remote is
+  never rewritten. An interrupted attempt is settled `recovery-required`
+  (`restart-reconciliation`), and a fresh proposal re-pushes the same exact commit, which Git
+  answers as already up to date.
+- **Unchanged hard limits.** Protected targets (`dev`, `main`, `master`, `release/*`, ...) stay
+  blocked by `KEIKO_DEFAULT_PUBLISH_POLICY_PACK`; a force push is never constructed; no pull
+  request is opened for a non-GitHub remote (ADR-0086 D13: it is refused as
+  `github-origin-required`). A repository with no `origin` is refused as `remote-required`, and a
+  run with no verified delivery context as `repository-required`.
+- **Refusals are logged and named.** The controller writes every refusal as a `git.draft-delivery`
+  line with `phase: refused`, a closed `reason` and `errorKind` (`unavailable`, or
+  `authority-denied` for a failed caller guard), under the run's correlation id, and the coding
+  tool facade forwards the closed reason with guidance text so the model is told the true cause
+  instead of inventing one (ADR-0137).
+
 ### D2 — The publish-rejection taxonomy is derived in the trusted layer, surfaced as typed tokens
 
 `GitPublishRejectionReason` is a closed union: `non-fast-forward | fetch-first | no-upstream | auth-failed | permission-denied | protected-ref | remote-unavailable | unknown`. The Node executor (`git-publish-node.ts`) classifies a non-zero `git push` exit by matching git's own English status phrases in the captured (secret-redacted) output via the pure `classifyGitPublishRejection` matcher, then maps the reason to:

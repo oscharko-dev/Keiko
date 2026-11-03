@@ -1,6 +1,6 @@
 // Issue #2245 (Epic #2238) — renders one closed verify-connection status as actionable copy.
 //
-// The five-member union (ok | auth-failed | forbidden | unreachable | timeout) each maps to a
+// Each member of the shared closed status union maps to a
 // distinct label + remediation line and a tone; a raw provider error is never shown. The `<output>`
 // element (implicit role="status", a polite live region) announces the outcome when it replaces the
 // "Verifying…" state.

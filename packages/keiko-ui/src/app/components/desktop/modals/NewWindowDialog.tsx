@@ -33,6 +33,7 @@ import {
 } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import KeikoSelect from "../KeikoSelect";
+import { AgentSkillPicker } from "./AgentSkillPicker";
 import { PermControl, type Cfg, type CfgValue } from "./PermControl";
 import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import { isWorkflowEligibleModel } from "../../../../lib/workflow-eligibility";
@@ -45,6 +46,7 @@ import {
 } from "@/lib/optional-widget-i18n";
 import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -244,18 +246,23 @@ function workflowRunBody(
   modelId: string,
   fields: AgentLauncherFields,
   requestedMode: CodingWorkbenchMode,
+  skill?: MarkdownSkillReference,
 ): {
   workflowId?: string;
   taskType?: string;
   input: Record<string, unknown>;
   modelId: string;
   requestedMode: CodingWorkbenchMode;
+  skill?: MarkdownSkillReference;
 } {
+  // Only the selected skill's identity travels; the server binds that exact revision (#4025 AC1).
+  const selected = skill === undefined ? {} : { skill };
   if (workflow === "unit-test-generation") {
     return {
       workflowId: "unit-test-generation",
       modelId,
       requestedMode,
+      ...selected,
       input: {
         workspaceRoot,
         target: {
@@ -269,6 +276,7 @@ function workflowRunBody(
     workflowId: "bug-investigation",
     modelId,
     requestedMode,
+    ...selected,
     input: {
       workspaceRoot,
       report: {
@@ -810,6 +818,7 @@ function AgentLauncher({
   const [workspaceRoot, setWorkspaceRoot] = useState(filesContext?.root ?? "");
   const [modelId, setModelId] = useState("");
   const [requestedMode, setRequestedMode] = useState<CodingWorkbenchMode>("governed-assist");
+  const [skill, setSkill] = useState<MarkdownSkillReference | undefined>();
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [projects, setProjects] = useState<readonly string[]>([]);
   const [fields, setFields] = useState<AgentLauncherFields>(() =>
@@ -913,7 +922,7 @@ function AgentLauncher({
     }
     setStarting(true);
     setDialogError(null);
-    const body = workflowRunBody(workflow, workspace, modelId, fields, requestedMode);
+    const body = workflowRunBody(workflow, workspace, modelId, fields, requestedMode, skill);
     try {
       const started = await startRun(body);
       if (started.governance === undefined) {
@@ -1069,6 +1078,7 @@ function AgentLauncher({
         onChange={setRequestedMode}
         optionalT={optionalT}
       />
+      <AgentSkillPicker value={skill} onChange={setSkill} optionalT={optionalT} />
       {renderCurrentFileButton(currentFile, useCurrentFile, optionalT)}
       <div className="dlg-agent-task">
         <div className="dlg-agent-task-head">

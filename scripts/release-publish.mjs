@@ -42,6 +42,7 @@ import {
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 import { internalDependencyEntries, scope } from "./release-workspace-policy.mjs";
+import { readZipArchiveUncompressedSize } from "./lib/zip-archive.mjs";
 import { renderReleaseImpactNotes } from "./release-impact-notes.mjs";
 import { parseDotEnvTokenLine } from "./dotenv-token.mjs";
 import {
@@ -881,6 +882,21 @@ function validatePortableArchiveDigest(target, archivePath, archiveStat, manifes
   }
   if (archiveStat !== undefined && manifest.artifact?.sha256 !== sha256FileSync(archivePath)) {
     failures.push(`${target.platformTarget}.artifact.sha256 must match the archive bytes.`);
+  }
+  if (archiveStat !== undefined) {
+    validatePortableExpandedSize(target, archivePath, manifest, failures);
+  }
+}
+
+function validatePortableExpandedSize(target, archivePath, manifest, failures) {
+  try {
+    if (readZipArchiveUncompressedSize(archivePath) !== manifest.artifact?.uncompressedSizeBytes) {
+      failures.push(
+        `${target.platformTarget}.artifact.uncompressedSizeBytes must match the archive.`,
+      );
+    }
+  } catch {
+    failures.push(`${target.platformTarget}.archive expanded size could not be verified.`);
   }
 }
 

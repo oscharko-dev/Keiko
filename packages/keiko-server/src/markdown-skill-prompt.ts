@@ -2,7 +2,7 @@ import type {
   MarkdownSkillDocument,
   MarkdownSkillReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
+import type { ChatMessage, ContextProfile } from "@oscharko-dev/keiko-contracts";
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gateway";
 
@@ -35,6 +35,39 @@ export function withMarkdownSkillInstructions(
   skill: MarkdownSkillDocument | undefined,
 ): string {
   return skill === undefined ? content : renderMarkdownSkillInstructions(skill) + content;
+}
+
+/**
+ * The skill's instructions lead a model call's first user message, once, ahead of its own text; a
+ * call without a user message gets them as one after its system messages. Used where a workflow
+ * builds its own prompt and the selected skill is attached at the model boundary (#4025 AC1).
+ */
+export function withLeadingMarkdownSkillInstructions(
+  messages: readonly ChatMessage[],
+  skill: MarkdownSkillDocument,
+): readonly ChatMessage[] {
+  const instructions = renderMarkdownSkillInstructions(skill);
+  const index = messages.findIndex((message) => message.role === "user");
+  if (index < 0) {
+    const leading = messages.findIndex((message) => message.role !== "system");
+    const at = leading < 0 ? messages.length : leading;
+    return [
+      ...messages.slice(0, at),
+      { role: "user", content: instructions },
+      ...messages.slice(at),
+    ];
+  }
+  return messages.map((message, position) => {
+    if (position !== index) return message;
+    const { contentParts } = message;
+    return {
+      ...message,
+      content: instructions + message.content,
+      ...(contentParts === undefined
+        ? {}
+        : { contentParts: [{ type: "text" as const, text: instructions }, ...contentParts] }),
+    };
+  });
 }
 
 /** Refuse an impossible protected scaffold before even auxiliary prompt-compaction calls. */

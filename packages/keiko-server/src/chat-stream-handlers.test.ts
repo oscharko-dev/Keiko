@@ -7,10 +7,12 @@ import {
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
 import { initializeConfiguredConversationReadiness } from "./gateway-readiness.js";
+import { handleUpdateChat } from "./store-handlers.js";
 import { runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { analyzeLogText } from "@oscharko-dev/keiko-activity-log/reader";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 // Behavioural tests for the desktop chat SSE streaming handler (#152). The regression these guard:
 // the streamed prompt previously built the gateway messages BEFORE persisting the current user turn,
 // so prompt assembly omitted it — a fresh chat sent `[system]`
@@ -28,7 +30,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   handleSendDesktopChatStream,
@@ -51,6 +53,7 @@ import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
 import { STREAMING, type RouteContext } from "./routes.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import type { RuntimeGatewayConfig } from "./deps.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
@@ -162,6 +165,8 @@ interface CapturedResWithEvents {
   destroyed: boolean;
   // Emits "close" on the response so abortOnDisconnect fires — simulates a client disconnect.
   emitClose: () => void;
+  // Emits "drain" on the response — simulates the peer taking what Node buffered.
+  emitDrain: () => void;
   // Controls what res.write() returns (default true; set false to simulate backpressure).
   writeReturns: boolean;
 }
@@ -183,8 +188,17 @@ function captureResWithEvents(): CapturedResWithEvents {
     emitClose: (): void => {
       emitter.emit("close");
     },
+    emitDrain: (): void => {
+      emitter.emit("drain");
+    },
   };
   const res = {
+    get destroyed(): boolean {
+      return result.destroyed;
+    },
+    get writableEnded(): boolean {
+      return result.ended;
+    },
     writeHead(status: number): ServerResponse {
       result.status = status;
       return res as unknown as ServerResponse;
@@ -197,8 +211,10 @@ function captureResWithEvents(): CapturedResWithEvents {
       result.ended = true;
       return res as unknown as ServerResponse;
     },
+    // Like a real response: destroying marks it destroyed and fires `close`.
     destroy(): void {
       result.destroyed = true;
+      emitter.emit("close");
     },
     on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
       emitter.on(event, listener);
@@ -356,6 +372,48 @@ function streamingModel(content: string, onFirstDelta?: () => void): StreamingMo
     },
   };
   return { model, recorded, calls };
+}
+
+interface HeldStreamingModel {
+  readonly model: ModelPort;
+  // Resolves once the first delta has been consumed and published to the response.
+  readonly firstDeltaPublished: Promise<undefined>;
+  // Lets the held stream finish with its terminal `done` chunk.
+  readonly release: () => void;
+  readonly signal: () => AbortSignal | undefined;
+}
+
+// A streaming ModelPort that yields one delta and then holds, like a long generation whose reader
+// has stopped reading. It resumes only when the request's signal aborts or `release()` is called.
+function heldStreamingModel(content: string): HeldStreamingModel {
+  const firstDeltaPublished = deferred<undefined>();
+  const gate = deferred<undefined>();
+  let streamSignal: AbortSignal | undefined;
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse(content)),
+    async *callStream(
+      _request: GatewayCallRequest,
+      signal: AbortSignal,
+    ): AsyncGenerator<GatewayStreamChunk> {
+      streamSignal = signal;
+      // Two blocks: the streaming redactor publishes the first one before the stream ends.
+      yield { type: "delta", token: `${content}.\n\nnext block` };
+      firstDeltaPublished.resolve(undefined);
+      signal.addEventListener("abort", () => {
+        gate.resolve(undefined);
+      });
+      await gate.promise;
+      yield { type: "done", response: normalizedResponse(content) };
+    },
+  };
+  return {
+    model,
+    firstDeltaPublished: firstDeltaPublished.promise,
+    release: (): void => {
+      gate.resolve(undefined);
+    },
+    signal: (): AbortSignal | undefined => streamSignal,
+  };
 }
 
 function pausedActivityModel(
@@ -653,6 +711,7 @@ function contextSelectionFixture(
 function assertContextSelectionEvidence(
   event: ServerLogEvent | undefined,
   expected: NonNullable<ReturnType<typeof selectGatewayPromptAssembly>>,
+  actualPromptTokens: number,
 ): void {
   const line = formatActivityLogProofLine(event ?? {});
   const persisted = expectActivityLogProof("chat.context.selected.budget", line);
@@ -662,7 +721,7 @@ function assertContextSelectionEvidence(
     compactedHistoryMessages: expected.compaction?.itemsBefore,
     tokensBefore: expected.compaction?.tokensBefore,
     tokensAfter: expected.compaction?.tokensAfter,
-    promptTokens: expected.diagnostics.totalEstimatedTokens,
+    promptTokens: actualPromptTokens,
     inputBudget: expected.diagnostics.profile.effectiveInputBudget,
     imageCount: 0,
     imageReserveTokens: 0,
@@ -802,6 +861,50 @@ describe("desktop chat SSE streaming handler", () => {
         contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
       });
       store.markdownSkills.select(chatId, skill, 0);
+      const gateway = streamingModel("Must not dispatch");
+      const bufferedCall = vi.spyOn(gateway.model, "call");
+      const paired = pairedSkillFixture(gateway.model);
+      const handlers = { buffered: handleSendDesktopChat, streamed: handleSendDesktopChatStream };
+      const result = await handlers[transport](
+        routeContext(
+          paired.request({
+            chatId,
+            projectPath: projectDir,
+            content: "Review boundary",
+            modelId: CHAT_MODEL,
+            clientTurnId: "stale-skill",
+            expectedSkillSelectionRevision,
+          }),
+          captureResWithEvents().res,
+        ),
+        paired.deps,
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+      });
+      expect(gateway.calls.count).toBe(0);
+      expect(gateway.recorded.request).toBeUndefined();
+      expect(bufferedCall).not.toHaveBeenCalled();
+      expect(store.listMessages(chatId)).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ["buffered", undefined],
+    ["streamed", undefined],
+    ["buffered", 1],
+    ["streamed", 1],
+  ] as const)(
+    "refuses a deleted skill selection before %s dispatch (observed %s)",
+    async (transport, expectedSkillSelectionRevision) => {
+      const chatId = seedChat();
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Synthetic\nCheck bounds.\n").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      store.markdownSkills.delete(skill.id, skill.revision);
       const gateway = streamingModel("Must not dispatch");
       const bufferedCall = vi.spyOn(gateway.model, "call");
       const paired = pairedSkillFixture(gateway.model);
@@ -1332,14 +1435,19 @@ describe("desktop chat SSE streaming handler", () => {
     setServerLogger(createServerLogger({ sink, level: "debug" }));
     const captured = captureResWithEvents();
     const atProvider: ServerLogEvent[] = [];
+    let sent: GatewayCallRequest | undefined;
     const fail = (): never => {
       atProvider.push(...sink.events.filter((event) => event.op === "chat.context.selected"));
       if (failure === "cancelled") captured.emitClose();
       throw failure === "timeout" ? new TimeoutError("fixture") : new CancelledError("fixture");
     };
     const model: ModelPort = {
-      call: () => Promise.resolve().then(fail),
-      callStream: async function* (): AsyncGenerator<GatewayStreamChunk> {
+      call: (request) => {
+        sent = request;
+        return Promise.resolve().then(fail);
+      },
+      callStream: async function* (request): AsyncGenerator<GatewayStreamChunk> {
+        sent = request;
         yield await Promise.resolve().then(fail);
       },
     };
@@ -1363,7 +1471,15 @@ describe("desktop chat SSE streaming handler", () => {
     await handlers[mode](ctx, dependencies);
     expect(atProvider).toHaveLength(1);
     expect(sink.events.filter((event) => event.op === "chat.context.selected")).toEqual(atProvider);
-    assertContextSelectionEvidence(atProvider[0], fixture.expected());
+    if (sent === undefined) throw new TypeError("Missing provider request");
+    assertContextSelectionEvidence(
+      atProvider[0],
+      fixture.expected(),
+      countGatewayPromptTokens(
+        sent,
+        currentContextProfileForModel(dependencies, CHAT_MODEL)?.tokenAccounting,
+      ),
+    );
   });
 
   it("rejects a tokenless plain stream on a grounded chat before admission or SSE", async () => {
@@ -2261,6 +2377,86 @@ describe("desktop chat SSE streaming handler", () => {
     );
     expect(JSON.stringify(sink.events)).not.toContain("private regeneration question");
   });
+
+  it.each(["buffered", "streamed", "regenerated"] as const)(
+    "cancels a %s readiness waiter on source change without cancelling the shared probe",
+    async (surface) => {
+      const chatId = seedChat();
+      seedMessage(chatId, "user", "Earlier question");
+      seedMessage(chatId, "assistant", "Earlier answer");
+      const history = store.listMessages(chatId);
+      const holder = readyRuntimeGatewayConfig(customModelConfig(CHAT_MODEL));
+      holder.clearVerifiedCapability(CHAT_MODEL, holder.generation());
+      const response = deferred<Response>();
+      const events: ServerLogEvent[] = [];
+      let probeSignal: AbortSignal | null | undefined;
+      const model = streamingModel("must not run");
+      const handlerDeps = deps(model.model, {
+        gatewayConfig: holder,
+        gatewayReadinessFetch: (_input, init): Promise<Response> => {
+          probeSignal = init?.signal;
+          return response.promise;
+        },
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      });
+      initializeConfiguredConversationReadiness(handlerDeps, "scope-readiness-proof");
+      const body =
+        surface === "regenerated"
+          ? { chatId, projectPath: projectDir, assistantMessageId: history.at(-1)?.id }
+          : { chatId, projectPath: projectDir, content: "New question" };
+      const handlers = {
+        buffered: handleSendDesktopChat,
+        streamed: handleSendDesktopChatStream,
+        regenerated: handleRegenerateDesktopChat,
+      };
+      const pending = handlers[surface](routeContext(makeReq(body), captureRes().res), handlerDeps);
+      let outcome: Awaited<typeof pending> | undefined;
+      void pending.then((result) => {
+        outcome = result;
+      });
+      try {
+        await vi.waitFor(() => {
+          expect(events.some((event) => event.op === "gateway.readiness.automatic.joined")).toBe(
+            true,
+          );
+        });
+        const patch = await handleUpdateChat(
+          {
+            ...routeContext(
+              makeReq({
+                connectedScopes: [{ kind: "workspace-root", relativePaths: [], connectedAtMs: 2 }],
+              }),
+              captureRes().res,
+            ),
+            url: new URL(`http://localhost/api/chats?id=${chatId}`),
+          },
+          handlerDeps,
+        );
+        expect(patch.status).toBe(200);
+        await vi.waitFor(
+          () => {
+            expect(outcome).toMatchObject({ status: 499 });
+          },
+          { timeout: 500 },
+        );
+        expect(probeSignal?.aborted).toBe(false);
+        expect(model.calls.count).toBe(0);
+        expect(store.listMessages(chatId)).toEqual(history);
+      } finally {
+        response.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ message: { role: "assistant", content: "OK" } }] }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+        await pending;
+      }
+    },
+  );
 
   it("joins initialization before regenerating without exposing the original turn to its probe", async () => {
     const chatId = seedChat();
@@ -4164,53 +4360,197 @@ describe("desktop chat SSE streaming handler", () => {
     }
   });
 
-  it("destroys the socket and aborts the controller when res.write() returns false (backpressure)", async () => {
+  it("destroys the socket and aborts the controller when the reader stalls after res.write() returns false (backpressure)", async () => {
     // RED reason: before this fix the token write called ctx.res.write() directly and discarded the
     // return value, so a slow client's backpressure signal was silently ignored.
-    // GREEN reason: writeOrDestroy checks the return value and calls controller.abort() + res.destroy().
-    const chatId = seedChat();
-    const captured = captureResWithEvents();
-    // Signal backpressure on the first write so the very first token triggers abort+destroy.
-    captured.writeReturns = false;
-    const req = makeReq({
-      chatId,
-      projectPath: projectDir,
-      modelId: CHAT_MODEL,
-      content: "hello slow client",
-    });
-    const { model } = streamingModel("answer");
-    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+    // GREEN reason: writeSseFrame queues the frame, waits for drain, and once the reader has drained
+    // nothing for SSE_STALLED_READER_TIMEOUT_MS calls controller.abort() + res.destroy().
+    vi.useFakeTimers();
+    try {
+      const chatId = seedChat();
+      const captured = captureResWithEvents();
+      // Signal backpressure on the first write so the very first token starts the stall wait.
+      captured.writeReturns = false;
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello slow client",
+      });
+      const held = heldStreamingModel("answer");
+      const outcome = handleSendDesktopChatStream(
+        routeContext(req, captured.res),
+        deps(held.model),
+      );
+      await held.firstDeltaPublished;
+      await vi.advanceTimersByTimeAsync(0);
 
-    // The socket must have been destroyed.
-    expect(captured.destroyed).toBe(true);
-    // After backpressure the controller was aborted, so no "done" event is written.
-    const events = parseSse(captured.writes).map((record) => record.event);
-    expect(events).not.toContain("done");
+      // The frame is queued, not dropped, and a false write alone tears nothing down.
+      expect(parseSse(captured.writes).map((record) => record.event)).toContain("token");
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await outcome;
+
+      // The socket must have been destroyed and the producer aborted.
+      expect(captured.destroyed).toBe(true);
+      expect(held.signal()?.aborted).toBe(true);
+      // After backpressure the controller was aborted, so no "done" event is written.
+      const events = parseSse(captured.writes).map((record) => record.event);
+      expect(events).not.toContain("done");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does NOT relabel a backpressure kill as a user 'cancelled' event (GEN-PERF-CHAT-006)", async () => {
     // RED reason: pre-fix, a backpressure kill left turn === undefined and the handler unconditionally
     // wrote sseMessage('cancelled') to the already-destroyed socket, so a slow-client termination was
     // indistinguishable downstream from an intentional user cancel.
-    // GREEN reason: streamConversation flags termination.backpressure via the writeOrDestroy signal;
+    // GREEN reason: streamConversation flags termination.backpressure via the writeSseFrame signal;
     // the caller then skips the 'cancelled' terminal frame, keeping the two terminations distinct.
+    vi.useFakeTimers();
+    try {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      const chatId = seedChat();
+      const captured = captureResWithEvents();
+      captured.writeReturns = false; // backpressure on the first token write
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello slow client",
+      });
+      const held = heldStreamingModel("answer");
+      const outcome = handleSendDesktopChatStream(
+        routeContext(req, captured.res),
+        deps(held.model),
+      );
+      await held.firstDeltaPublished;
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await outcome;
+
+      const events = parseSse(captured.writes).map((record) => record.event);
+      expect(captured.destroyed).toBe(true);
+      // The distinguishing assertion: a backpressure kill is NOT surfaced as a user cancel.
+      expect(events).not.toContain("cancelled");
+      expect(events).not.toContain("done");
+      const closed = sink.events.find((event) => event.op === "sse.stream.closed");
+      expect((closed?.extra as { reason?: unknown } | undefined)?.reason).toBe(
+        "backpressure-killed",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pauses model iterator pulls after a false write until the response drains", async () => {
     const chatId = seedChat();
     const captured = captureResWithEvents();
-    captured.writeReturns = false; // backpressure on the first token write
-    const req = makeReq({
-      chatId,
-      projectPath: projectDir,
-      modelId: CHAT_MODEL,
-      content: "hello slow client",
+    captured.writeReturns = false;
+    let drained = false;
+    Object.defineProperty(captured.res, "writableNeedDrain", {
+      get: () => captured.writes.length > 0 && !drained,
     });
-    const { model } = streamingModel("answer");
-    await handleSendDesktopChatStream(routeContext(req, captured.res), deps(model));
+    const next = vi
+      .fn<() => Promise<IteratorResult<GatewayStreamChunk>>>()
+      .mockResolvedValueOnce({
+        done: false,
+        value: { type: "delta", token: "First answer block.\n\nSecond block" },
+      })
+      .mockResolvedValueOnce({
+        done: false,
+        value: {
+          type: "done",
+          response: normalizedResponse("First answer block."),
+        },
+      });
+    const model: ModelPort = {
+      call: () => Promise.resolve(normalizedResponse("buffered")),
+      callStream: () => ({ [Symbol.asyncIterator]: () => ({ next }) }),
+    };
+    const outcome = handleSendDesktopChatStream(
+      routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "respect the reader pace",
+        }),
+        captured.res,
+      ),
+      deps(model),
+    );
+    try {
+      await vi.waitFor(() => {
+        expect(parseSse(captured.writes).map((record) => record.event)).toContain("token");
+      });
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(captured.ended).toBe(false);
+      expect(captured.destroyed).toBe(false);
 
-    const events = parseSse(captured.writes).map((record) => record.event);
-    expect(captured.destroyed).toBe(true);
-    // The distinguishing assertion: a backpressure kill is NOT surfaced as a user cancel.
-    expect(events).not.toContain("cancelled");
-    expect(events).not.toContain("done");
+      drained = true;
+      captured.writeReturns = true;
+      captured.emitDrain();
+      await outcome;
+
+      expect(next).toHaveBeenCalledTimes(2);
+      expect(parseSse(captured.writes).map((record) => record.event)).toContain("done");
+      expect(captured.destroyed).toBe(false);
+    } finally {
+      drained = true;
+      captured.writeReturns = true;
+      captured.emitDrain();
+      await outcome;
+    }
+  });
+
+  it("keeps the stream open when a false write is followed by drain", async () => {
+    vi.useFakeTimers();
+    try {
+      const chatId = seedChat();
+      const captured = captureResWithEvents();
+      captured.writeReturns = false;
+      const req = makeReq({
+        chatId,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "hello draining client",
+      });
+      const held = heldStreamingModel("answer");
+      const outcome = handleSendDesktopChatStream(
+        routeContext(req, captured.res),
+        deps(held.model),
+      );
+      await held.firstDeltaPublished;
+
+      captured.emitDrain();
+      captured.writeReturns = true;
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS * 2);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+
+      held.release();
+      await outcome;
+
+      const events = parseSse(captured.writes).map((record) => record.event);
+      expect(captured.destroyed).toBe(false);
+      expect(held.signal()?.aborted).toBe(false);
+      expect(events).toContain("done");
+      expect(events).not.toContain("cancelled");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("injects retrieved memory text into the streamed prompt's latest user turn", async () => {
@@ -4633,9 +4973,9 @@ describe("concurrent chat stream bulkhead", () => {
     const model: ModelPort = {
       call: () => Promise.resolve(normalizedResponse("buffered")),
       async *callStream(): AsyncGenerator<GatewayStreamChunk> {
-        yield { type: "delta", token: "hi" };
+        yield { type: "delta", token: "Ready.\n" };
         await gate;
-        yield { type: "done", response: normalizedResponse("done") };
+        yield { type: "done", response: normalizedResponse("Ready.\n") };
       },
     };
     const d = deps(model);
@@ -4719,7 +5059,7 @@ describe("concurrent chat stream bulkhead", () => {
 // Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
 // `sse.stream.closed` line on the desktop chat stream. The heartbeat's own write is deferred to
 // its interval timer, so in practice the first model token — written via streamConversation's
-// writeOrDestroy call — is the write that actually attaches it first.
+// writeSseFrame call — is the write that actually attaches it first.
 describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0)", () => {
   afterEach(() => {
     resetServerLogger();
@@ -4796,4 +5136,80 @@ describe("desktop chat SSE stream correlationId threading (#2902 audit finding 0
     expect(closed).toHaveLength(1);
     expect(closed[0]?.correlationId).toBe("corr-chat-stream-early-failure");
   });
+});
+
+async function nativeStreamResponse(
+  d: UiHandlerDeps,
+  body: Record<string, unknown>,
+): Promise<string> {
+  const server = createServer({ highWaterMark: 1024 }, (req, res) => {
+    void handleSendDesktopChatStream(routeContext(req, res), d).then(
+      (outcome) => {
+        if (outcome === STREAMING) return;
+        res.writeHead(outcome.status);
+        res.end(JSON.stringify(outcome.body));
+      },
+      (error: unknown) => res.destroy(error instanceof Error ? error : new Error("handler failed")),
+    );
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    if (address === null || typeof address === "string") throw new Error("missing native listener");
+    const response = await fetch(
+      `http://127.0.0.1:${address.port.toString()}/api/desktop/chat/stream`,
+      {
+        method: "POST",
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(3000),
+        headers: { "content-type": "application/json" },
+      },
+    );
+    expect(response.status).toBe(200);
+    return await response.text();
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error === undefined) resolve();
+        else reject(error);
+      });
+    });
+  }
+}
+
+it("publishes a complete code block larger than the real HTTP high-water mark to a fast client", async () => {
+  const chatId = seedChat();
+  const source =
+    "```typescript\n" +
+    Array.from(
+      { length: 64 },
+      (_, index) => `const marker${index.toString()} = "public-value";`,
+    ).join("\n") +
+    "\n```\n";
+  expect(Buffer.byteLength(source)).toBeGreaterThan(1024);
+  const model: ModelPort = {
+    call: () => Promise.resolve(normalizedResponse(source)),
+    async *callStream(): AsyncGenerator<GatewayStreamChunk> {
+      yield { type: "delta", token: source };
+      await Promise.resolve();
+      yield { type: "done", response: normalizedResponse(source) };
+    },
+  };
+  const body = await nativeStreamResponse(deps(model), {
+    chatId,
+    projectPath: projectDir,
+    modelId: CHAT_MODEL,
+    content: "Generate complete tests",
+  });
+  const records = parseSse([body]);
+  const tokens = records.filter((record) => record.event === "token");
+  expect(tokens.length).toBeGreaterThan(1);
+  expect(tokens.map((record) => (record.data as { text: string }).text).join("")).toBe(source);
+  expect(records.filter((record) => record.event === "done")).toHaveLength(1);
+  expect(store.listMessages(chatId).find((message) => message.role === "assistant")?.content).toBe(
+    source,
+  );
 });

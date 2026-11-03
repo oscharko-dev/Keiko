@@ -2,13 +2,21 @@ import {
   gatewayVerificationContradictsReadiness,
   UNVERIFIED_GATEWAY,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import {
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchAgent,
+  isCodingWorkbenchBuiltInAgent,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
+  CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchMode,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSource,
@@ -110,6 +118,8 @@ export type CodingWorkbenchMutationKind =
   | "pause"
   | "resume"
   | "follow-up"
+  | "revert"
+  | "inbox"
   | "research-revoke";
 
 export interface CodingWorkbenchMutationState {
@@ -117,10 +127,36 @@ export interface CodingWorkbenchMutationState {
   readonly kind: CodingWorkbenchMutationKind | null;
   readonly requestId: string | null;
   readonly error: CodingWorkbenchClientError | null;
+  /**
+   * The run revision the failed action was attempted against. A later snapshot that moves past it
+   * (a newer revision, or another run) supersedes the failure: the alert described a state that no
+   * longer exists. A snapshot that merely repeats the revision proves nothing and keeps the alert.
+   */
+  readonly failedAgainst?: { readonly runId: string | null; readonly revision: number };
 }
 
 export interface CodingWorkbenchRuntimeState {
   readonly requestedMode: CodingWorkbenchMode;
+  /**
+   * The primary agent the next turn runs under (#3897). A built-in `offeredCodingWorkbenchAgents`
+   * lists, or a custom primary agent where the server offers them (#3903 AC1): the reducer returns
+   * it to the default whenever the offer narrows, and the server confirms a custom one against the
+   * run's live listing.
+   */
+  readonly agent: CodingWorkbenchAgent;
+  /**
+   * The agents the server's last readiness read said its tool profile can honour. Kept across a
+   * mode change (which empties `runtime` while the next read loads) so the agent switch does not
+   * disappear and reappear; never widened by the browser.
+   */
+  readonly selectableAgents: readonly CodingWorkbenchBuiltInAgent[];
+  /**
+   * What the server's last readiness read said the composed runtime can do with a prompt's inputs
+   * (ADR-0137 D10): send a message while a turn runs, and attach referenced workspace files. Kept
+   * across a mode change like `selectableAgents`, so the controls do not flicker while the next
+   * read loads; never widened by the browser.
+   */
+  readonly promptInputs: CodingWorkbenchRuntimePromptInputs;
   readonly runtimePreference: CodingWorkbenchRuntimePreference;
   readonly selectedModelId: string | null;
   readonly reasoningEffort: ModelReasoningEffort | null;
@@ -143,6 +179,7 @@ export type CodingWorkbenchResourceKey =
 
 export type CodingWorkbenchRuntimeStateAction =
   | { readonly kind: "select-mode"; readonly mode: CodingWorkbenchMode }
+  | { readonly kind: "select-agent"; readonly agent: CodingWorkbenchAgent }
   | {
       readonly kind: "select-runtime-preference";
       readonly preference: CodingWorkbenchRuntimePreference;
@@ -161,6 +198,7 @@ export type CodingWorkbenchRuntimeStateAction =
     }
   | { readonly kind: "run-set"; readonly snapshot: CodingWorkbenchRuntimeSnapshot }
   | { readonly kind: "stream-set"; readonly stream: CodingWorkbenchStreamProjection }
+  | { readonly kind: "stream-reconnecting" }
   | {
       readonly kind: "resource-failed";
       readonly resource: CodingWorkbenchResourceKey;
@@ -182,6 +220,12 @@ const emptyResource = <T>(
   status: CodingWorkbenchResourceStatus = "idle",
 ): CodingWorkbenchResourceState<T> => ({ status, value: null, error: null });
 
+/** What a runtime that reports nothing can do with a prompt's inputs: neither. */
+export const NO_CODING_WORKBENCH_PROMPT_INPUTS: CodingWorkbenchRuntimePromptInputs = Object.freeze({
+  delivery: false,
+  references: false,
+});
+
 const IDLE_MUTATION: CodingWorkbenchMutationState = {
   status: "idle",
   kind: null,
@@ -195,6 +239,9 @@ export function createInitialCodingWorkbenchRuntimeState(
 ): CodingWorkbenchRuntimeState {
   return {
     requestedMode,
+    agent: DEFAULT_CODING_WORKBENCH_AGENT,
+    selectableAgents: [DEFAULT_CODING_WORKBENCH_AGENT],
+    promptInputs: NO_CODING_WORKBENCH_PROMPT_INPUTS,
     runtimePreference,
     selectedModelId: null,
     reasoningEffort: null,
@@ -288,6 +335,25 @@ function acceptStreamProjection(
   return { ...state, stream: ready(stream) };
 }
 
+// The browser is reconnecting an interrupted source by itself: a polite status, not a failure. The
+// last cursor stays so the next open resumes from it; `stream-set` on the open turns it ready again.
+function markStreamReconnecting(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  const snapshot = state.run.value;
+  if (snapshot === null || !isStreamableSnapshot(snapshot)) return state;
+  const previous = state.stream.value;
+  return {
+    ...state,
+    stream: {
+      status: "loading",
+      value:
+        previous === null || previous.runId !== snapshot.runId
+          ? null
+          : { ...previous, connected: false },
+      error: null,
+    },
+  };
+}
+
 /**
  * #3390 recovery-ack-restart: once the operator has explicitly acknowledged a `recovery-required`
  * predecessor, the server treats that acknowledgement as the reconciliation ADR-0137 D5 requires
@@ -362,20 +428,77 @@ function selectMode(
   return projectReadiness({ ...state, requestedMode: mode, runtime: emptyResource() });
 }
 
+/**
+ * The primary agents the browser may offer right now. Only the managed gateway runs OpenCode, whose
+ * `plan` agent exists on the native tool profile; a Codex subscription run has no agent concept
+ * and the server refuses `plan` for it, so it offers the default agent alone.
+ */
+export function offeredCodingWorkbenchAgents(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "selectableAgents">,
+): readonly CodingWorkbenchBuiltInAgent[] {
+  return state.runtimePreference === "managed-gateway"
+    ? state.selectableAgents
+    : [DEFAULT_CODING_WORKBENCH_AGENT];
+}
+
+/**
+ * The prompt inputs the browser may offer right now. Only the managed gateway runs OpenCode, whose
+ * native profile reads referenced files and takes a message while a turn runs; a Codex
+ * subscription run has neither, and the server refuses both for it.
+ */
+export function offeredCodingWorkbenchPromptInputs(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "promptInputs">,
+): CodingWorkbenchRuntimePromptInputs {
+  return state.runtimePreference === "managed-gateway"
+    ? state.promptInputs
+    : NO_CODING_WORKBENCH_PROMPT_INPUTS;
+}
+
+/**
+ * Whether the browser may offer `agent` right now: a built-in the server lists, or a custom primary
+ * agent (#3903 AC1) where the server's profile runs OpenCode's own agents, the one that offers
+ * `plan`. Which custom agents exist is the run's own listing; the server confirms the one chosen.
+ */
+export function isOfferedCodingWorkbenchAgent(
+  state: Pick<CodingWorkbenchRuntimeState, "runtimePreference" | "selectableAgents">,
+  agent: CodingWorkbenchAgent,
+): boolean {
+  const offered = offeredCodingWorkbenchAgents(state);
+  if (isCodingWorkbenchBuiltInAgent(agent)) return offered.includes(agent);
+  return isCodingWorkbenchAgent(agent) && offered.includes("plan");
+}
+
+// The selection never outlives its offer: whatever narrows the offer returns it to the default.
+function withOfferedAgent(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
+  return isOfferedCodingWorkbenchAgent(state, state.agent)
+    ? state
+    : { ...state, agent: DEFAULT_CODING_WORKBENCH_AGENT };
+}
+
+function selectAgent(
+  state: CodingWorkbenchRuntimeState,
+  agent: CodingWorkbenchAgent,
+): CodingWorkbenchRuntimeState {
+  if (state.agent === agent || !isOfferedCodingWorkbenchAgent(state, agent)) return state;
+  return { ...state, agent };
+}
+
 function selectPreference(
   state: CodingWorkbenchRuntimeState,
   runtimePreference: CodingWorkbenchRuntimePreference,
 ): CodingWorkbenchRuntimeState {
   if (state.runtimePreference === runtimePreference) return state;
-  return projectReadiness({
-    ...state,
-    runtimePreference,
-    selectedModelId: null,
-    reasoningEffort: null,
-    profile: emptyResource(),
-    codexSetup: emptyResource(),
-    source: emptyResource(),
-  });
+  return projectReadiness(
+    withOfferedAgent({
+      ...state,
+      runtimePreference,
+      selectedModelId: null,
+      reasoningEffort: null,
+      profile: emptyResource(),
+      codexSetup: emptyResource(),
+      source: emptyResource(),
+    }),
+  );
 }
 
 function resourceLoading(
@@ -408,6 +531,17 @@ function resourceFailed(
   });
 }
 
+function snapshotSupersedesFailure(
+  mutation: CodingWorkbenchMutationState,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+): boolean {
+  const against = mutation.failedAgainst;
+  if (mutation.status !== "error" || against === undefined || snapshot.runId === undefined) {
+    return false;
+  }
+  return snapshot.runId !== against.runId || snapshot.revision > against.revision;
+}
+
 function acceptSnapshot(
   state: CodingWorkbenchRuntimeState,
   snapshot: CodingWorkbenchRuntimeSnapshot,
@@ -423,6 +557,7 @@ function acceptSnapshot(
     run: ready(snapshot),
     stream: changedRun ? emptyResource() : streamForSnapshot(state, snapshot),
     ...(changedRun ? { events: [] } : {}),
+    ...(snapshotSupersedesFailure(state.mutation, snapshot) ? { mutation: IDLE_MUTATION } : {}),
   });
 }
 
@@ -471,6 +606,7 @@ type RuntimeActionHandlers = {
 
 const runtimeActionHandlers = {
   "select-mode": (state, action): CodingWorkbenchRuntimeState => selectMode(state, action.mode),
+  "select-agent": (state, action): CodingWorkbenchRuntimeState => selectAgent(state, action.agent),
   "select-runtime-preference": (state, action): CodingWorkbenchRuntimeState =>
     selectPreference(state, action.preference),
   "select-model": (state, action): CodingWorkbenchRuntimeState =>
@@ -503,7 +639,14 @@ const runtimeActionHandlers = {
       ? state
       : projectReadiness({ ...state, source: ready(action.source) }),
   "runtime-set": (state, action): CodingWorkbenchRuntimeState =>
-    projectReadiness({ ...state, runtime: ready(action.readiness) }),
+    projectReadiness(
+      withOfferedAgent({
+        ...state,
+        runtime: ready(action.readiness),
+        selectableAgents: action.readiness.selectableAgents,
+        promptInputs: action.readiness.promptInputs ?? NO_CODING_WORKBENCH_PROMPT_INPUTS,
+      }),
+    ),
   "workspace-set": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
@@ -512,6 +655,7 @@ const runtimeActionHandlers = {
   "run-set": (state, action): CodingWorkbenchRuntimeState => acceptSnapshot(state, action.snapshot),
   "stream-set": (state, action): CodingWorkbenchRuntimeState =>
     acceptStreamProjection(state, action.stream),
+  "stream-reconnecting": (state): CodingWorkbenchRuntimeState => markStreamReconnecting(state),
   "mutation-start": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
@@ -527,7 +671,15 @@ const runtimeActionHandlers = {
   "mutation-failed": (state, action): CodingWorkbenchRuntimeState =>
     projectReadiness({
       ...state,
-      mutation: { ...state.mutation, status: "error", error: action.error },
+      mutation: {
+        ...state.mutation,
+        status: "error",
+        error: action.error,
+        failedAgainst: {
+          runId: state.run.value?.runId ?? null,
+          revision: state.run.value?.revision ?? 0,
+        },
+      },
     }),
   "events-received": (state, action): CodingWorkbenchRuntimeState =>
     acceptEvents(state, action.events),

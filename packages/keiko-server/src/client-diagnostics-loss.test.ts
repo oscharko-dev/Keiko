@@ -545,6 +545,38 @@ describe("client diagnostics loss evidence", () => {
     expect(lines("client.diagnostic")).toEqual([]);
   });
 
+  // #4126 review: a window that gave up opening its chat's project records the closed failure with
+  // the attempts it made, never waiting silently.
+  it("persists an exhausted project open as client.binding.project-open-exhausted", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-3",
+      outcome: "project-open-exhausted",
+      referenceShape: "uuid",
+      heuristicFlagged: true,
+      projectOpenAttemptCount: 3,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.project-open-exhausted");
+    expect(
+      expectActivityLogProof("client.binding.project-open-exhausted.line", line ?? ""),
+    ).toMatchObject({
+      correlationId: CORRELATION_ID,
+      errorKind: "conflict",
+      surface: "chat-window",
+      referenceShape: "uuid",
+      heuristicFlagged: true,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-3"),
+      projectOpenAttemptCount: 3,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.binding.target-missing")).toEqual([]);
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
   // #3557 review: a fingerprint that names no listed chat any more persists as that fingerprint, so
   // the failure never reads like a marker that named nothing.
   it("persists a missing fingerprint reference with the fingerprint it no longer finds", async () => {

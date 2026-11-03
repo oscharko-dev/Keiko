@@ -652,3 +652,46 @@ export function logGitChangeApply(
     ),
   );
 }
+
+const CHAT_GROUNDED_TOOL_ROUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.grounded-tool-round.completed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "chat-activity.logGroundedToolRound",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["orchestration", "synthesis"],
+    },
+    toolCallCount: { type: "integer", dataClass: "count", required: true },
+    remainingSynthesisCalls: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-turn"],
+  proofIds: ["chat.grounded-tool-round.completed.schedule"],
+  releaseImpact: "patch",
+});
+
+export function logGroundedToolRound(
+  correlationId: string | undefined,
+  toolCallCount: number,
+  remainingSynthesisCalls: number,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_GROUNDED_TOOL_ROUND_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        phase: toolCallCount > 0 ? "orchestration" : "synthesis",
+        toolCallCount,
+        remainingSynthesisCalls,
+      },
+    ),
+  );
+}

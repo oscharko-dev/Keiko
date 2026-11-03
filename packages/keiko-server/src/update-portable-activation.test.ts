@@ -441,6 +441,7 @@ describe("portable update activation handoff", () => {
       return true;
     });
     const coordinator = createPortableHandoffCoordinator({
+      nativeControl: () => Promise.resolve(undefined),
       stateDir: install.stateDir,
       publishCoordinatorPid: () => true,
       persistPrepared: ({ activationWal }) => {

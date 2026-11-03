@@ -244,6 +244,20 @@ afterEach(() => {
 });
 
 describe("SettingsPanel conversation eligibility badge (Issue #144 AC #3)", () => {
+  it("consumes a central MCP deep link so a later request can select MCP again", async () => {
+    primeFetches([]);
+    const consumed = vi.fn();
+    const view = render(<SettingsPanel initialTab="mcp" onInitialTabHandled={consumed} />);
+    await waitFor(() => expect(consumed).toHaveBeenCalledTimes(1));
+    view.rerender(<SettingsPanel onInitialTabHandled={consumed} />);
+    fireEvent.click(screen.getByRole("button", { name: "Models" }));
+    view.rerender(<SettingsPanel initialTab="mcp" onInitialTabHandled={consumed} />);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "MCP" })).toHaveAttribute("aria-pressed", "true"),
+    );
+    expect(consumed).toHaveBeenCalledTimes(2);
+  });
+
   it("does not claim live conversation readiness from a static chat capability", async () => {
     primeFetches([chatCapability("test-chat-1")]);
     render(<SettingsPanel />);

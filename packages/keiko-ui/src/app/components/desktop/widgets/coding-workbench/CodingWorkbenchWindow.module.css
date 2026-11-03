@@ -55,7 +55,8 @@
 
 .statusBadge[data-tone="warning"],
 .resourceState[data-tone="warning"],
-.activityBadge[data-state="cancelled"] {
+.activityBadge[data-state="cancelled"],
+.activityBadge[data-state="waiting-for-trust"] {
   color: var(--feedback-warning);
 }
 
@@ -374,8 +375,8 @@
   border-radius: var(--radius-pill);
 }
 
-.cmpContextSummary {
-  margin-block-start: var(--space-3) !important;
+.cmpContextUsage .cmpContextSummary {
+  margin-block-start: var(--space-3);
   border-block-start: 1px solid var(--border-subtle);
   padding-block-start: var(--space-3);
 }
@@ -399,11 +400,26 @@
   min-width: 0;
   min-height: 0;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: minmax(6rem, 1fr) minmax(0, auto);
   border-end-start-radius: inherit;
   border-end-end-radius: inherit;
   overflow: hidden;
   background: transparent;
+}
+
+/* Readiness can reflow without moving controls in the separate composer grid row. */
+.cmpSessionContent {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  /* Keep a usable transcript line below its padding when readiness expands. */
+  grid-template-rows: minmax(0, auto) minmax(3rem, 1fr);
+  overflow: clip;
+}
+
+.cmpSessionContent > :first-child {
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .sessionStream {
@@ -561,6 +577,23 @@
   margin-inline: 0;
 }
 
+/* A polite status (a stream the browser is reconnecting): present, but not an alarm. */
+.cmpStreamNotice {
+  display: flex;
+  min-width: 0;
+  gap: var(--space-2);
+  align-items: flex-start;
+  margin: var(--space-3) var(--space-6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-secondary);
+  background: var(--surface-inset);
+  font-size: var(--text-label);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
 .composerDock {
   position: relative;
   z-index: 2;
@@ -568,6 +601,9 @@
   border-end-end-radius: inherit;
   width: min(100% - 2 * var(--space-5), 760px);
   min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow-y: auto;
   justify-self: center;
   padding: var(--space-2) 0 var(--space-4);
   background: transparent;
@@ -632,8 +668,13 @@
   justify-self: start;
 }
 
+/* The trigger hugs its label: the shared select trigger stretches to its container and pushes the
+   caret to the far edge, which left a wide gap after a short name such as "main" (#3897 UI
+   review). */
 .cmpRepositorySelectorTrigger {
   flex: 0 1 auto;
+  width: auto;
+  gap: var(--space-1);
   max-width: min(100%, 19rem);
   min-width: 0;
   min-height: 1.75rem;
@@ -815,6 +856,18 @@
 .reasoningControl {
   flex: 0 1 8.5rem;
   max-width: 8.5rem;
+}
+
+/* The run authority is never cut to "Full a…": it is the one chip that states what Keiko may do.
+   The shared chip trigger is `width: 100%; max-width: 100%`, a cyclic percentage that sized this
+   content-sized chip below its own label; the trigger takes its content width here instead. */
+.authorityControl {
+  flex: 0 0 auto;
+}
+
+.authorityControl > .cmpAuthorityTrigger {
+  width: auto;
+  max-width: none;
 }
 
 .authorityControl[data-full-access="true"] :global(.ksel-trigger) {
@@ -1001,6 +1054,12 @@
   margin-top: var(--space-4);
 }
 
+.cmpDiffPages {
+  min-inline-size: 0;
+  padding: 0;
+  border: 0;
+}
+
 .setupStatus {
   margin: var(--space-3) 0 0;
   color: var(--text-primary);
@@ -1146,6 +1205,27 @@
   overflow-wrap: anywhere;
 }
 
+/* The approval card's bounded policy facts, one click away below the decision (#3907). */
+.cmpApprovalDetails {
+  margin-top: var(--space-4);
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
+.cmpApprovalDetails > summary {
+  width: fit-content;
+  cursor: pointer;
+}
+
+.cmpApprovalDetails > summary:hover {
+  color: var(--text-primary);
+}
+
+.cmpApprovalDetails > summary:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
 .approvalResearch {
   min-width: 0;
   margin: var(--space-4) 0 0;
@@ -1199,6 +1279,14 @@
   font-family: var(--font-mono);
   font-size: var(--text-caption);
   overflow-wrap: anywhere;
+}
+
+/* #3897: the entries of a native ask are model-selected text (a multi-line command, long paths).
+   Their list shares the bounded, scrollable commit-message block; this only tells them apart. */
+.cmp-approval-native-resource + .cmp-approval-native-resource {
+  margin-block-start: var(--space-2);
+  border-block-start: 1px solid var(--border-subtle);
+  padding-block-start: var(--space-2);
 }
 
 /* One content column; compact disclosures share a 32px baseline. */
@@ -1312,21 +1400,6 @@
   border-left: 2px solid var(--border-subtle);
   padding-left: var(--space-3);
   color: var(--text-secondary);
-}
-
-.cmpReasoningBadge {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-pill);
-  padding: 0 var(--space-2);
-  color: var(--feedback-warning);
-  font-size: var(--text-caption);
-}
-
-.cmpReasoningNote {
-  margin: var(--space-1) 0 0;
-  color: var(--text-tertiary);
-  font-size: var(--text-caption);
-  line-height: var(--leading-normal);
 }
 
 .cmpReasoningText {
@@ -1461,15 +1534,55 @@ details[open] > .cmpActivitySummary::after {
   white-space: nowrap;
 }
 
+/* Why a call ended as it did: a plain fact in the card's secondary text, not a second alarm. */
+.cmpToolOutcome {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-body-sm);
+}
+
 .toolCount {
   color: var(--text-tertiary);
   font-family: var(--font-mono);
   font-size: var(--text-caption);
 }
 
-.toolCard[data-tool-state="failed"],
-.toolCard[data-tool-state="denied"] {
+.toolCard[data-tool-state="failed"] .toolIcon,
+.toolCard[data-tool-state="denied"] .toolIcon {
   color: var(--feedback-danger);
+}
+
+/* The facts an opened tool card states (bytes read, returned paths, the affected file, how long
+   the call took): secondary caption text under the outcome. They inherited the card's colour and
+   the browser's paragraph size before, so a failed call's duration read as a red heading
+   (#3897 UI review). */
+.cmpToolFacts {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin-top: var(--space-1);
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  font-variant-numeric: tabular-nums;
+  line-height: var(--leading-normal);
+}
+
+.cmpToolFacts > p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* A verification summary is one compact line of facts, not three paragraphs. */
+.cmpVerificationFacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.cmpVerificationFacts > p {
+  margin: 0;
 }
 .planCard {
   color: var(--text-secondary);
@@ -1531,11 +1644,19 @@ details[open] > .cmpActivitySummary::after {
   font-size: var(--text-caption);
 }
 
+/* An event that needs attention reads as the design system's inline message (`.c-msg--warn`):
+   a quiet card whose severity is a marked edge and the summary's colour, not a tinted fill that
+   turned every verification summary brown (#3897 UI review). */
 .timelineItem[data-event-tone="attention"] .eventCard {
-  border: 1px solid color-mix(in oklch, var(--feedback-warning) 45%, var(--border-subtle));
+  border: 1px solid var(--border-subtle);
+  border-inline-start: 2px solid var(--feedback-warning);
   border-radius: var(--radius-control);
   padding: var(--space-2) var(--space-3);
-  background: var(--feedback-warning-surface);
+  background: var(--surface-primary);
+}
+
+.timelineItem[data-event-tone="attention"] .eventCard > .cmpActivitySummary {
+  color: var(--text-primary);
 }
 
 .timelineItem[data-event-tone="success"] .eventCard .timelineTitle {
@@ -1998,7 +2119,8 @@ details[open] > .cmpActivitySummary::after {
 .timeline[data-virtual="true"] {
   max-height: 60vh;
   overflow-y: auto;
-  overscroll-behavior: contain;
+  /* Chain to the session stream at the list's edges so the wheel never dead-ends inside it. */
+  overscroll-behavior: auto;
 }
 
 .cmpConversation {

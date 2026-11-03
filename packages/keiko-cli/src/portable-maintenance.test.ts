@@ -39,6 +39,24 @@ import {
 } from "./portable-maintenance.js";
 
 const TRUSTED_WINDOWS_POWERSHELL = String.raw`D:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`;
+
+it("admits the Linux supervisor without admitting arbitrary native runtime entries", () => {
+  const root = mkdtempSync(join(tmpdir(), "keiko-linux-runtime-inventory-"));
+  try {
+    const native = join(root, "runtime", "native");
+    mkdirSync(native, { recursive: true });
+    writeFileSync(join(native, "keiko-runtime-supervisor"), "fixture supervisor\n");
+    const layout = layoutFor("linux-x64", root);
+    expect(inspectPortableManagedInstall(layout).issues).toEqual([]);
+    writeFileSync(join(native, "unknown"), "unowned\n");
+    expect(inspectPortableManagedInstall(layout).issues).toEqual([
+      "portable managed install contains unknown entry: runtime/native/unknown",
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // Frozen historical bytes: migration coverage must not move in lockstep with today's generator.
 const PREVIOUSLY_SHIPPED_POWERSHELL_LINE =
   "@powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand " +
@@ -97,6 +115,8 @@ describe("portable native registration policy", () => {
         join(layout.resourceRoot, "runtime", "native", "keiko-secure-workspace-read.exe"),
         join(layout.resourceRoot, "runtime", "native", "usearch.node"),
         join(layout.resourceRoot, "runtime", "licenses", "usearch", "LICENSE"),
+        join(layout.resourceRoot, "runtime", "native", "rg.exe"),
+        join(layout.resourceRoot, "runtime", "licenses", "ripgrep", "LICENSE-MIT"),
         join(layout.resourceRoot, "runtime", "sidecars", "approved", "sidecar.bin"),
       ];
       for (const path of paths) {

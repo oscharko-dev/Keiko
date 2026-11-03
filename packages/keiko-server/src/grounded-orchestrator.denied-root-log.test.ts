@@ -51,6 +51,7 @@ function expectSearchLifecycle(
     | "search.connected-context.completed"
     | "search.connected-context.failed"
     | "search.connected-context.clarification-needed",
+  evidenceStatus: "complete" | "unavailable" = "complete",
 ): void {
   expect(activityLog.events.map((event) => event.op)).toEqual(
     terminalOp === "search.connected-context.completed"
@@ -59,6 +60,7 @@ function expectSearchLifecycle(
           "search.connected-context.completion-details",
           "search.connected-context.source-details",
           "search.connected-context.selection-details",
+          "search.connected-context.evidence-details",
           terminalOp,
         ]
       : ["search.connected-context.started", terminalOp],
@@ -79,6 +81,20 @@ function expectSearchLifecycle(
     completeness: "complete",
     loss: "none",
   });
+  const evidence = expectActivityLogProof(
+    "search.connected-context.evidence-details.line",
+    formatActivityLogProofLine(activityLog.events[4] ?? {}),
+  );
+  expect(evidence).toMatchObject({
+    scopeIdentitySha256: started.scopeIdentitySha256,
+    queryIdentitySha256: started.queryIdentitySha256,
+    activityDetailStatus: evidenceStatus,
+    completeness: "complete",
+    loss: "none",
+  });
+  if (evidenceStatus === "complete")
+    expect(evidence).toMatchObject({ sourceDescriptorPathCount: 0 });
+  else expect(evidence).not.toHaveProperty("sourceDescriptorPathCount");
 }
 
 function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {
@@ -378,7 +394,7 @@ describe("grounded orchestrator denied-root activity", () => {
     expect(output.pack.uncertainty).toContainEqual(
       expect.objectContaining({ kind: "budget-clipped" }),
     );
-    expectSearchLifecycle(activityLog, "search.connected-context.completed");
+    expectSearchLifecycle(activityLog, "search.connected-context.completed", "unavailable");
   });
 
   it.skipIf(process.platform !== "darwin")(
@@ -399,7 +415,7 @@ describe("grounded orchestrator denied-root activity", () => {
       expect(output.pack.uncertainty).toContainEqual(
         expect.objectContaining({ kind: "budget-clipped" }),
       );
-      expectSearchLifecycle(activityLog, "search.connected-context.completed");
+      expectSearchLifecycle(activityLog, "search.connected-context.completed", "unavailable");
     },
   );
 });

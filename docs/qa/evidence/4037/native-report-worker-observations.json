@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "classification": "Supported native report Worker observations and job authority lifetime; not ANN/default-strategy or installed updater acceptance",
+  "sourceParent": "38e7c62bac992ace5b7d5a201988c115c241ca78",
+  "sourceFreeze": {
+    "artifact": "checkpoint60-source-freeze-v2.json",
+    "sha256": "855ac80d2ced6187ba5356790594c72380b6f315a8329050ba08b4f71824b18f"
+  },
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "fcfc2549a297f868b8ce1199c54cacf28175700d7dc948e793c68b0fccbbea40"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process-scope.test.mjs",
+      "sha256": "3c8c183a242706b90ca3d82385af6c37c7a4f7deb3eec7b0fbc9d412333e6a6b"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_node_fixture.mjs",
+      "sha256": "e1db0b8ec0a836a3f49f95d3a515bb7412b429091513d90595599c8e3cb5e1fc"
+    },
+    {
+      "path": "native/runtime-supervisor/process_scope_observer_worker_fixture.mjs",
+      "sha256": "55ded36b7d2bec96b76d89e23ca67dcb5a4cfbafeb9a211a77c42bb7ae2a69e4"
+    },
+    {
+      "path": "packages/keiko-security/package.json",
+      "sha256": "e8a7a82ced43bb72b3eb0ea83813a7f1144e9c818c8c66bef541f5586c174b05"
+    },
+    {
+      "path": "packages/keiko-security/src/process-scope-worker.test.ts",
+      "sha256": "e958bbc4ec26c5f7d85cfc963c012d52f08c23c405bb9e38f1cb79bc213f9571"
+    },
+    {
+      "path": "packages/keiko-security/src/process-scope-worker.ts",
+      "sha256": "11415f50fe38e8214d2123eb4e19b739aac96af9ca20c6587b347890bdd1b9ee"
+    },
+    {
+      "path": "packages/keiko-server/src/support-report-job.test.ts",
+      "sha256": "b661bc523f9f1ad8e5b54e28eaea077eeeb80fd1e36c066d283126c06ae890f6"
+    },
+    {
+      "path": "packages/keiko-server/src/support-report-job.ts",
+      "sha256": "564fec39c1e2d20af879539a29b2c3fca0642e32d8e42e0efe8e1de3968afd78"
+    },
+    {
+      "path": "packages/keiko-server/src/support-report-worker.ts",
+      "sha256": "ea615d8396aaf249e05f0fb67c858b0ca6c6a4bdf7afc0ae64968a98f52f20bb"
+    }
+  ],
+  "pdca": {
+    "plan": {
+      "reportBefore": {
+        "failed": 1,
+        "healthy": 33,
+        "receipt": {
+          "artifact": "checkpoint60-native-support-worker-red-v2.json",
+          "sha256": "bf951e0885ac8cba418d99bf13af7647a485f2467df188ba07fafc050bec0729"
+        },
+        "scope": "Main direct-report positive control passes before the actual Worker positive-record assertion fails. The original redacted harness retains the failing frame, not its exact diagnostic summary."
+      },
+      "jobRetirementBefore": {
+        "failed": 1,
+        "healthy": 23,
+        "receipt": {
+          "artifact": "checkpoint60-worker-retirement-red-v1.json",
+          "sha256": "be3dced9ee4ecc8136938b7e9cb63073631b87758f41d817407ad8ef181872fa"
+        },
+        "scope": "Actual job owner with controlled termination rejection leaves its observation authority open when disposal depends only on exit."
+      },
+      "acceptance": "Supported Worker readers use the already selected main process/file observations. A cancelled or settled job releases its private authority independently of termination success. No Worker consumes/closes the native decoder or creates a writer."
+    },
+    "do": [
+      "The existing main ProcessScope supplies a private MessageChannel for each supported report Worker; the existing default report/preparation protocol stays separate.",
+      "Every synchronous observation has a fresh fixed-size shared reply buffer. Exact closed field/range/initial-state admission and atomic claim prevent reused or terminal buffers from being republished.",
+      "One original process-monotonic five-second caller deadline includes queue time and is checked before dispatch, before completion and after waking. Native lookup retains its own existing bounded protocol. No retry or larger grant is added.",
+      "Payload precedes terminal atomic completion. Expired requests, terminal wakes, late old replies and disposal cannot authorize a fresh result or retire/reinitialize the independently owned main native port.",
+      "The existing report job owns private scope disposal before Worker termination, including cancellation, constructor failure and termination rejection. Main-thread-only writer and caller-owned body-free failures remain authoritative."
+    ],
+    "check": {
+      "native": {
+        "architecture": "linux/arm64",
+        "uids": [1000, 65534],
+        "scopeControlsPerUid": 34,
+        "receipts": [
+          {
+            "artifact": "checkpoint60-native-worker-final-uid1000-v2.json",
+            "sha256": "8a2202e6bd372adbf446665c4c5b3c2218afd18a10853ff54afe372565aa1dd1"
+          },
+          {
+            "artifact": "checkpoint60-native-worker-final-uid65534-v2.json",
+            "sha256": "c6a6606180ce74202c799e46678e215eb4c5b714a1890eab47008fb57771a67a"
+          }
+        ],
+        "retention": {
+          "artifact": "checkpoint60-native-retention-v2.json",
+          "sha256": "d7a1b7fc0fceb29fa89bf03e0df466d15f19c9fbde419e726801de863c596c7a"
+        },
+        "scope": "Real BFF/report Worker, validated report containing exact current registered process.started op/pid/instanceId/seq, opened foreign-directory actual UID and projection-collision refusal, startup report cancellation then fresh successful report, main native root still alive/ready. Existing decoder and forced-reuse controls retained.",
+        "cancellationLimit": "Abort occurs immediately after synchronous Worker construction and first await; this is startup cancellation, not an active native metadata read cancellation. Separate controlled channel/held-identity cases cover those narrower lifetime boundaries.",
+        "compiler": "Strict fixture compilation; C implementation unchanged from published59 full compiler/analyzer lanes.",
+        "policy": "Existing pinned nonprivileged fixture, capabilities dropped, no new privileges/network, read-only root/repository. Unconfined seccomp only for the isolated kernel fixture; no production policy change."
+      },
+      "independent": {
+        "bridge": {
+          "passed": 18,
+          "receipt": {
+            "artifact": "worker60-bridge-independent-v2-sonar.json",
+            "sha256": "aa2d25258cae7b9fef360824cedf59af0ccbb501d684e1d67e6e06a3cb7bac23"
+          },
+          "scope": "Complete current bridge with real Node24 Workers/MessageChannel/SAB and synthetic selected main observation ports: lossless tuples, queued/dispatch expiry, late/fresh isolation, malformed admission, independent default parentPort and disposal; no FD7 or app execution."
+        },
+        "retirement": {
+          "passed": 6,
+          "receipt": {
+            "artifact": "worker60-retirement-independent.json",
+            "sha256": "242f385ccdb7e626d6197463df165a4b6c442d4e83cdcb6ac434edd9e67a763d"
+          },
+          "scope": "Exact unchanged job release/error code with controlled promises; disposal/termination/both failures and held busy capacity. Producer regression supplies the causal before/after proof."
+        }
+      },
+      "securitySuite": {
+        "passed": 971,
+        "existingSkips": 3,
+        "suites": 38,
+        "includesBridgeControls": 48
+      },
+      "supportSuites": {
+        "passed": 145,
+        "suites": 5,
+        "includesJobControls": 24
+      },
+      "assembledPackage": {
+        "files": 6378,
+        "staticJavascriptFiles": 192,
+        "staticSyntax": "ES2019 plus dynamic import",
+        "editorOwnGzipBytes": 78174,
+        "editorCeilingBytes": 102400
+      },
+      "completeActivityLogChecks": 7,
+      "localCommands": [
+        {
+          "artifact": "checkpoint60-v2-typecheck.json",
+          "sha256": "34a8d03a79a881c93d56bb39ec31a44480b264cad7b063b38a1df576499a3f9a"
+        },
+        {
+          "artifact": "checkpoint60-v2-lint.json",
+          "sha256": "7be1c55949ed84c454e918a0480ed74626a561e2677335eff63f3862bc4f2c3d"
+        },
+        {
+          "artifact": "checkpoint60-v2-security-tests.json",
+          "sha256": "f019d31c4e1c9719144f4a29b97c1687ee4beb11c8667cfc375cd49845ebc746"
+        },
+        {
+          "artifact": "checkpoint60-v2-support-tests.json",
+          "sha256": "0508d551e813e67c6fbe5daa89ad2deef8cc58754ece9ac8292bf0ee89688a70"
+        },
+        {
+          "artifact": "checkpoint60-v2-sonar.json",
+          "sha256": "6bff7d24aa523f4d31fe850894a815d0c0bfad0d124563a4fc1b8cc3c9539376"
+        },
+        {
+          "artifact": "checkpoint60-v2-package-surface.json",
+          "sha256": "079e20bff354553d2a7889ebf234316a50b3da8e65fbb75342e84effcf12f1f4"
+        },
+        {
+          "artifact": "checkpoint60-v2-op-catalog.json",
+          "sha256": "c1692f60f69242150bb83f933eb255927ca5f187e2c8e221ff90e54427c76f7b"
+        },
+        {
+          "artifact": "checkpoint60-v2-activity-log.json",
+          "sha256": "813d2d9395f744db5826263eecba5789dcbf5b86254d3b81ab92e20ba7752555"
+        }
+      ]
+    },
+    "act": {
+      "next": "Adapt the existing ANN Worker and its existing index lifecycle using held bigint binary and immediate-parent ownership observations. Keep the already frozen independent loader matrix. Then continue initial/coordinator/successor integration and explicit lease recovery findings.",
+      "prospectiveAnnBefore": {
+        "healthy": 6,
+        "failed": 4,
+        "falseRefusals": 1,
+        "falseGrants": 3,
+        "summary": {
+          "artifact": "checkpoint61-ann-owner-red-summary-v1.json",
+          "sha256": "93178aa863b6fd1bf672d6bbc56566d28a54f731113b9ee55553ee90cc775693"
+        },
+        "independentJoin": {
+          "artifact": "checkpoint61-ann-owner-red-independent-join.json",
+          "sha256": "7215f6adc3348fa3948b2cfc6bad980947bdb6c462a0dff4edcccb2599345081"
+        },
+        "scope": "Unchanged actual product ANN Worker and approved USearch2.26.0 ELF, five immutable owner combinations under both UIDs, real CompiledIndex/add/size1. No loader stub; this is lower-level eligibility, not the default greater-than20k strategy/scale."
+      }
+    }
+  },
+  "retainedIntermediateFailures": [
+    {
+      "receipt": {
+        "artifact": "checkpoint60-v1-sonar.json",
+        "sha256": "5e524ddad7f9e42852aa0f35d4e9fc0c7d3d20f10efae8730c6792f519e9fd8a"
+      },
+      "cause": "Two nested liveness conditional expressions rejected by real S3358. Equivalent if/return branches now pass actual analysis."
+    },
+    {
+      "receipt": {
+        "artifact": "checkpoint60-v1-lint.json",
+        "sha256": "aca53964283cc84fc0a44eacb5db0c83ecb34fbd05ee8d8604e64476e8cdbf86"
+      },
+      "cause": "The native fixture lacked its existing-style AbortController global declaration; corrected before publication without changing its deadline."
+    },
+    {
+      "receipt": {
+        "artifact": "checkpoint60-native-support-worker-green-v1.json",
+        "sha256": "780e980c9acc3ca82901a58e2d5864b8ce73d4d4fb64cc09a00248c2194d0c98"
+      },
+      "limit": "First narrow green precedes final lifecycle/expected-event controls; its old compiled bridge was not archived. Later retained v2 source/output evidence supersedes it; no original-byte reconstruction claim."
+    }
+  ],
+  "limits": [
+    "ANN adaptation/default strategy/scale, initial detached app ownership, authenticated coordinator placement, installed/current/successor identities and both original native P1 conversations remain open.",
+    "Actual installed distinct/two-consecutive version updates, graceful drain/restart, cancellation/recovery/rollback and SSD state continuity remain unqualified. No macOS entitled or Linux x64 installed admission.",
+    "Concrete coordinator PID-record/probe/reconcile and remediation lease input/incarnation/exclusivity findings remain to be repaired with their owner-level proofs.",
+    "No broader Chat/browser/context/skill benefit, original96-criterion, final-head CI/review or merge acceptance. Existing protected quality fixtures, profiles, budgets and failures are unchanged."
+  ]
+}

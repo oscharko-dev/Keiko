@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": 85,
+  "classification": "Scoped actual package-delivery repair; no new UI/model, native updater or complete PR acceptance. Each receipt retains its actual source binding. Final focused regressions, actual consumers and Sonar bind final source; earlier controls and assembly precede equivalent parameter/accumulation and editorial corrections.",
+  "parentCommit": "ac96b4a691f610c98847d38dd39fa70139f5720e",
+  "sourceFreeze": {
+    "sha256": "6007e40bc4b1c0f7c1bbfc55487da9286ef739bc796d0a6cae817b4813348950",
+    "files": 7588
+  },
+  "compiledFreeze": {
+    "sha256": "bf54afda47b4d2cc7b0572911d8d147bfdb8af9fafe2d24220d706d24ca5c3f7",
+    "files": 6627
+  },
+  "behavior": {
+    "owner": "The existing staged workspace/dual npm bundle and Yarn file-archive producer owns one runtime plan and shared lockfile/descriptor helpers.",
+    "projection": "Only reviewed exact flat overrides selected outside an original runtime range trigger selective ancestor staging, including peer-coupled ancestors. Alias identity changes fail closed.",
+    "scope": [
+      "@chevrotain/cst-dts-gen",
+      "@chevrotain/gast",
+      "chevrotain",
+      "chevrotain-allstar",
+      "java-parser"
+    ],
+    "children": "Unchanged children are promoted from actual lockfile owners. Required and optional reachability remains distinct; a required origin wins.",
+    "supplyChain": "Existing versions and reviewed Lodash4.18.1 pins retained. Source manifests/code/licenses remain unchanged. Direct Java/YAML approvals and eleven-package transitive license inventory documented; no consumer overrides, hooks or complete external-closure bundle."
+  },
+  "tests": [
+    {
+      "name": "checkpoint85-focused-regressions-v8",
+      "passed": 195,
+      "failed": 0,
+      "skipped": 0,
+      "reportSha256": "72b66d92b721a3bf23d993de7610b3caf30c80d58632bdb4fba73c0aa47b7d6d"
+    },
+    {
+      "name": "checkpoint85-supply-controls-v1",
+      "passed": 212,
+      "failed": 0,
+      "skipped": 0,
+      "reportSha256": "d56a9f7b5db7aadf623cb29e7aba83f0b48faaad296943f0b0555968e2bf1b29"
+    }
+  ],
+  "actualConsumers": {
+    "reportSha256": "6cf0cd9310d2086cd9e9006697f6102c0635bf53f20c6cb5094fb35f96a500f9",
+    "oldArtifactSha256": "c21bc2b7459ae40d109a07fb7cf72df6e8f1e673dc65f31a550912ddbe2994ed",
+    "newArtifactSha256": "c59ff3aecb7431cffeee221ece3eb983f7748b500f53a508b8a8bc48ac95913d",
+    "published84NegativeExit": 1,
+    "published84LegacyConstraintReproduced": true,
+    "npm": {
+      "exit": 0,
+      "actualJavaParse": true,
+      "reviewedLeafCopies": 2
+    },
+    "yarn": {
+      "actualJavaParse": true,
+      "reviewedLeafCopies": 2
+    }
+  },
+  "assembledPackageFiles": 6613,
+  "sonarScope": {
+    "finalIncrementBase": "ac96b4a691f610c98847d38dd39fa70139f5720e",
+    "finalIncrement": "Actual Sonar analyzer checks every changed increment file via the supported --base HEAD option on unchanged final source.",
+    "fullBranchPredecessor": "v2 reports zero findings, but source drift from later lint/editorial corrections excludes it from final exact-source credit; the final increment scan covers those corrections."
+  },
+  "gates": [
+    {
+      "name": "checkpoint85-focused-regressions-v8",
+      "receiptSha256": "0bae93efd4c3b6a4b88e644f9a100372fdd5f760b97fe327a96d7b70abf19caa",
+      "logSha256": "e89813c2e627f230bd623349b541343790f7a0500fe761e80b13c8c6715af8a6"
+    },
+    {
+      "name": "checkpoint85-supply-controls-v1",
+      "receiptSha256": "a3666c09e733c3d5b3fe6f3b0f2b33810d7ecd201ac219e7d729e4e685a99fb3",
+      "logSha256": "7f150bd8c6f280f657a05ffa47f17e0b0fad5021e40ccd6796f81333ca9b4652"
+    },
+    {
+      "name": "checkpoint85-typecheck-v1",
+      "receiptSha256": "b0e174cca90655a47aa1fb4bc150fa79b8f96932f78f1f513a8c27c8413aebc1",
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "name": "checkpoint85-lint-v6",
+      "receiptSha256": "c44f2f0a99f3495a8f4f9f3f1399d0d696471409af9eb68f2f729630dcf8238e",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "checkpoint85-format-v3",
+      "receiptSha256": "ace2c4369fe715162da708d0d3fbfd7ea871598a6fc76bc6aecd502ff4000202",
+      "logSha256": "90bda2270ac468296e07c2acba78b48faa4917ee74eaed88b14927c08e159a93"
+    },
+    {
+      "name": "checkpoint85-package-assembled-v1",
+      "receiptSha256": "e486ea12959403c1571369a63973c3ac3f6831a630b8076f33afd9ba965cd864",
+      "logSha256": "6232e53a3dcfba78154720ae3f608f90d7fdb4ea86c20890239840ddc968d926"
+    },
+    {
+      "name": "checkpoint85-supply-chain-v3",
+      "receiptSha256": "12a58a2cc4a1487c307e8740216fcd09fb8ef6cdd89fdb5070fc47fac56d13e6",
+      "logSha256": "fb601e9c4ca88d11026faa30dec5c73ae185498ea488f2b960469b6b751b41f7"
+    },
+    {
+      "name": "checkpoint85-adr-v1",
+      "receiptSha256": "e12e08676da48a639c609d9b24f01a8640eace7069cb125d7ccb8254cdd6761e",
+      "logSha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "name": "checkpoint85-arch-v1",
+      "receiptSha256": "31ce071bf2bde3c2ef30580a1a4f4ec5c6fa0c132f80af5d61d8d4c74cfeb2ca",
+      "logSha256": "53a4bf37371c9dd25233644d0215a4c6ad9fae776ffe3b3549eba24f68847a41"
+    },
+    {
+      "name": "checkpoint85-arch-negative-v1",
+      "receiptSha256": "8ca8792fe20ad05a6cc18672652e25c32ea0a419e1e53c0db4f392b5dac2fc6a",
+      "logSha256": "f5fff7f1ef186144f11172eb466a667b08f3aa9257710a02ad08060b3b4c005b"
+    },
+    {
+      "name": "checkpoint85-sonar-v3",
+      "receiptSha256": "c5c8410b2a126f9934a2904f742466f8771fdc491a3fcaf8ce60d9809703f8e2",
+      "logSha256": "a0b11f631c4358a89ecfef08c82946609a14ce5f559a1b4e8f43cf13f926f234"
+    },
+    {
+      "name": "checkpoint85-actual-consumers-v8",
+      "receiptSha256": "72487c77b60934ba655d51df6a6c81de3cac4d20a22b753f6644bcb3d72d9359",
+      "logSha256": "9062a78bd2f316dfc11d049e252bd7a21bcd4136b6b1248bad3abfa0180b7519"
+    }
+  ],
+  "retainedIntermediateFailures": [
+    "Original parent archive missing",
+    "Archive-only npm installation ENOENT",
+    "Unchanged ancestor child unavailable at real Java import",
+    "Peer-coupled ancestor allowed legacy leaf resolution",
+    "Qualification scanner followed executable symlink as a directory; harness-only correction",
+    "Original complete-external-bundle prohibition relocated to exact private inventory plus five-ancestor exception under amended ADR-0021; all other external bundles forbidden",
+    "Sonar optional-parameter ordering and ESLint complexity corrected; final outcomes checked separately",
+    "Incorrect Node test-runner invocation rejected Vitest fixtures; no product acceptance assigned"
+  ],
+  "limits": [
+    "Not actual installed distinct-version updater/restart/SSD acceptance",
+    "Not fresh UI/Gemma skill, unused-task, browser or full-history acceptance",
+    "Final exact-head CI/review settlement and verified owner-authorized integration remain open"
+  ]
+}

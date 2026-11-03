@@ -35,7 +35,7 @@ export function selectionQuality(input: SelectionQualityInput): ContextSelection
     );
   return {
     selectionConfidence: fallback ? "low" : "high",
-    keepOneFallbackApplied: fallback,
+    keepOneFallbackApplied: fallback && input.selected.length === 1,
     ...(fallback
       ? {
           fallbackRankingSource: input.selected.some(

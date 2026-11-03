@@ -5,7 +5,11 @@
 // and the managed worktree the REAL server provisioned without any side channel. Distinct default
 // state id and loopback port keep this journey isolated from the tracer journey.
 
-import { join } from "node:path";
+import {
+  codingRuntimeJourneyManagedWorkspaceRoot,
+  codingRuntimeJourneyRepositoryRoot,
+  codingRuntimeJourneyStateId,
+} from "./coding-runtime-journey-state.js";
 import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const AUTHORITY_DEFAULT_UI_PORT = 32486;
@@ -23,25 +27,10 @@ export const AUTHORITY_ORIGINAL_CONTENT = "export const value = 'ORIGINAL_AUTHOR
 export const AUTHORITY_EDITED_CONTENT = "export const value = 'NEW_AUTHORITY_2386';\n";
 export const AUTHORITY_TARGET_RELATIVE_PATH = "src/example.ts";
 
-// Deterministic (pid-free) state id: the config, the webServer entry, and the workers each re-derive
-// the identical directory. The config's prepare step wipes it before every boot.
 export function authorityStateDir(): string {
-  const runId = process.env.GITHUB_RUN_ID;
-  const stateId =
-    runId === undefined || runId.length === 0
-      ? "code-task-2386-authority"
-      : `code-task-2386-authority-${runId}`;
-  return e2eStateDir(stateId);
+  return e2eStateDir(codingRuntimeJourneyStateId("code-task-2386-authority"));
 }
 
-// The local git checkout the journey binds through the Coding Workbench "Code setup" section.
-export function authorityRepositoryRoot(stateDir: string): string {
-  return join(stateDir, "repository");
-}
+export const authorityRepositoryRoot = codingRuntimeJourneyRepositoryRoot;
 
-// The Keiko-owned managed worktree root. MUST stay `<dirname(uiDbPath)>/task-workspaces` because
-// buildUiHandlerDeps derives `deps.managedTaskWorkspaceRoot` from the ui-db path and the injected
-// resolver/workspace services must agree with the routes on the same containment root.
-export function authorityManagedWorkspaceRoot(stateDir: string): string {
-  return join(stateDir, "bff-state", "ui-db", "task-workspaces");
-}
+export const authorityManagedWorkspaceRoot = codingRuntimeJourneyManagedWorkspaceRoot;

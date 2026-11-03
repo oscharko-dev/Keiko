@@ -1,0 +1,1064 @@
+{
+  "schemaVersion": 1,
+  "classification": "Linux initial native app ownership, detached CLI lifetime and closed commit/cleanup observations. Actual source/kernel/CLI/BFF mechanics; installed transitions, model/UI and overall acceptance remain open.",
+  "sourceParent": "57c50bd35be46bb2cfe94d1cbdfb7d058ed27a73",
+  "sourceFreeze": {
+    "artifact": "checkpoint67-source-freeze-v4.json",
+    "sha256": "7afa8f96076d29f14e726b055330492dc73377160e00d3e4a9b6332ea2bef610"
+  },
+  "compiledFreeze": {
+    "artifact": "checkpoint67-compiled-freeze-v4.json",
+    "sha256": "5cb8820d0eb1680ec02e6be7de66c361150f8021e612f34d20068af9236ff36f"
+  },
+  "retention": {
+    "artifact": "checkpoint67-final-retention-v4.json",
+    "sha256": "9458c147bcf3ea7ba40c9694cf1657582902519dd3f4752ebfad53771f04633b"
+  },
+  "sourceJoin": {
+    "artifact": "checkpoint67-v2-v4-source-join.json",
+    "sha256": "d361598224b8501249c899c66745765b0101583cb0903a9cf074e80cdf21c66f"
+  },
+  "compiledJoin": {
+    "artifact": "checkpoint67-v2-v4-compiled-join.json",
+    "sha256": "328b88eb8215f27d4a8b352fa19bda72a64cc45d40c0b4497643b9bfd1359ee7"
+  },
+  "joinScope": "V4 changes exactly the guard runtime, its policy regression and ADR from V2: 7537 source/config rows and 6610 non-cache compiled/runtime/declaration/assets stay identical. Full CLI/native and changed-owner checks run on V4; unaffected V2 export/log/UI-lint/server/contracts/security/guard evidence retains its stated subject.",
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "64bd13a790c9dfc693fd14fe1ba631d31f9df20ff57c2d185be355e4fe35d15c"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "84c7a3c426b45a6e0d6c3e3dcfbdf65683ebb7bf5c91d7da8285632e66c7bc70"
+    },
+    {
+      "path": "docs/observability/legacy-failure-path-register.json",
+      "sha256": "8d1a6ee26d2a0ca1512584b9fcae488707a257aab09bcf615382822e745dbf2d"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "0e816cb8d5d607de20c6f0c72efd74bedcef274ca3bdd6e81a14671cc1950005"
+    },
+    {
+      "path": "native/keiko-windows-local-volume.h",
+      "sha256": "e6bcde5ddb11d73491d0064f30e45b70c865a216ae217b983682412cbcd61b25"
+    },
+    {
+      "path": "native/keiko-windows-local-volume.windows.test.c",
+      "sha256": "227620696ec601668b27491b8c0ffd6cdff0fba1352a07cbdc57c5f9650c42d5"
+    },
+    {
+      "path": "native/lib/c-source-scanner.mjs",
+      "sha256": "3180c00e09f309801d01629641557a9904f592c6dcdb1ad237ba198788e17770"
+    },
+    {
+      "path": "native/opencode-service-host/compatibility.test.mjs",
+      "sha256": "36852674b511a7953673005a9f07d065d0faf27f6fe5642a770651a08e5dbda7"
+    },
+    {
+      "path": "native/opencode-service-host/entry.mjs",
+      "sha256": "7c7d2d6987029dacbf329cb14fe47ba0c731dae81bf06f01c012746f4c4c071a"
+    },
+    {
+      "path": "native/opencode-service-host/entry.test.mjs",
+      "sha256": "5a3a3fb7c19ffe356f4b1bbfaf6022adc4545a936510a746cf15955fc79ffd56"
+    },
+    {
+      "path": "native/opencode-service-host/guard-seams.mjs",
+      "sha256": "6f341fa12e05e3b929866057757fee95a2629c5a5285181ba6a521f8fd0e301e"
+    },
+    {
+      "path": "native/opencode-service-host/guard-seams.test.mjs",
+      "sha256": "c0fd2e11980087e92c16a49e23b8c398a7f1ede72b8349027c44129e5041fe45"
+    },
+    {
+      "path": "native/opencode-service-host/host.mjs",
+      "sha256": "700bb4cae8d5befdc7f6b62cd3a651fdc1c75de73256c82820863246cbd48142"
+    },
+    {
+      "path": "native/opencode-service-host/host.test.mjs",
+      "sha256": "77dd2bd1935c04013aa175064a3298051ad81789af42359e4141a3b3be74deb5"
+    },
+    {
+      "path": "native/opencode-service-host/package-lock.json",
+      "sha256": "f6adbaf28108dab8abc5309f0f3256cd2c003b62ad08cf3f43faba167af98f7d"
+    },
+    {
+      "path": "native/opencode-service-host/package.json",
+      "sha256": "bb8edc584cbc291d6996a1ff164ba6dc94a575766b258921b6c34c02219b58b9"
+    },
+    {
+      "path": "native/portable-launcher/fixtures/khp-v2-macos.hex",
+      "sha256": "4b9eb8215d7d80138cdcd560d73a248ae9acd911ad347c4999e047f35a20f0e6"
+    },
+    {
+      "path": "native/portable-launcher/fixtures/khp-v3-windows.hex",
+      "sha256": "e7b77edf6e2a4ff69e7d45a95e93f1d596e0cdc17ad202c5c44c16e8ee886d78"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-app-owner-linux.h",
+      "sha256": "7574b73cf0c15c6fd00f02c80ea1eb20727861098559cf6270c6582a22e6b925"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-generation-windows.h",
+      "sha256": "8fac3c2c17c35886b5eb61d7b7b6b1d3fa11f59a0444f4046d9620015174c3e5"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.c",
+      "sha256": "84ecb8cdc43af5d975d3c1ff2b2120e0c75fe33126a814bb9410c05f85e75664"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.rc",
+      "sha256": "d70636014b47ca457e87c497dae9204ff6a27d75d164f2c941a83c8467646188"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.test.c",
+      "sha256": "31631644441cdc514ac91be035b9947d06589edacf82e1871aa880c8fa22b64f"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-launcher.windows.test.c",
+      "sha256": "2bea388ceda8e07d83b899fb6d75258f3646e14d702a56d26fcd613844f27112"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-process-scope-linux.h",
+      "sha256": "b8bd7cd0998c41b737427c161865f352295a8bf19afddf1b81b2e21623366638"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-recovery-control-windows.h",
+      "sha256": "b3fe3e06882d57d89631d3c34d9d61148bbe8b5acfa451a80c7d7cf8950b6ab0"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-recovery-control.h",
+      "sha256": "1caaa92c96308a0ac98c7b90d73ebe59eb5227ab29887ab3ed7050740d359e85"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-runtime-owner-linux.h",
+      "sha256": "9a02b6602179a1808622bcde0a1e2ed42feb345e813025c27ffe946e21bb3c5a"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-sha256.h",
+      "sha256": "907e9c76d440cebc0fe43ad79a5a531933179464e4bff4d9c6c815db4f2df418"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-sha256.test.c",
+      "sha256": "6576a95d6159097841f47ca7a02d8ffb497019dc0f47d4974bcc9a8bae60c157"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-tree-hash-windows.h",
+      "sha256": "a5968fb619d9d3931425f3857ed0773e2be0e59a01a8037cd897d75865f15725"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-tree-hash.h",
+      "sha256": "9b9a0bf101e032e63da990807603deb54782d5b5c947d36ca9bc23cac39a054c"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-tree-hash.test.c",
+      "sha256": "b33f4736e8700d44954f103b5b34ccc352396690031802111d87c3e135885a0c"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator-windows.h",
+      "sha256": "09e50b80ec0395e27a10b74ffe69031afbda9eae9b15af4c74a7ebf16e182f02"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "758998c7cfcd70a0251e212b4c11f2db4ac1de87da8573c6393d8fe192879e6c"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c",
+      "sha256": "01af6d6e9f8787a2db14e403bf9a26777772aab4551ce31ddf9646e9e28a07a8"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-engine.h",
+      "sha256": "a3dd6b26cfc26106193ae9e9ab54b9dd64454d7ac0083a0e1a7fbfdf61b14e5b"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-engine.test.c",
+      "sha256": "65bb3e01ecc9481b5f985d97de573169f41bf49eb5d3d2a2254ca8a26aa5dce4"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-protocol.h",
+      "sha256": "ea7db6f88feeea6064a9fd32c3445ee8bd59f80aa62bab5d2f962212813ac412"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-protocol.test.c",
+      "sha256": "43b1739680306711d53898b9a61da82eaaff04f6e7053b4ee28c85b0da7cb3b6"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-windows-mechanics.h",
+      "sha256": "4c67749137e50f8813f3d37d478ad6822a91d60a77434e76f258bceffdc8ca06"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-windows-atomic-replace.h",
+      "sha256": "518da347ea960fe8724911968e66f0ece059e62f2095975bab83070ec8f9c842"
+    },
+    {
+      "path": "native/portable-launcher/keiko.icns",
+      "sha256": "5126ab06483e838ecdcab2eddd4b1aee0c4c110a031a0b7d155d9213683d57cb"
+    },
+    {
+      "path": "native/portable-launcher/keiko.ico",
+      "sha256": "8064f864f5be7f4f5690af70d42809279bf78ee2e4c791c9d428ed1de20f5056"
+    },
+    {
+      "path": "native/portable-launcher/macos-entitlements.plist",
+      "sha256": "c706e295c8d105efa39a488b2fb7da1256f5652721633b37da9077c1d9145e32"
+    },
+    {
+      "path": "native/portable-launcher/macos-keychain-helper.c",
+      "sha256": "50525d7dd43b0d521b25dd1c547c3859621feeed5ebd279ce0e2ad9c545fde3e"
+    },
+    {
+      "path": "native/portable-launcher/macos-node-entitlements.plist",
+      "sha256": "388be301001eccb288edca1c9f0deb89285ef94bff6d26ab436275b82b41d1a0"
+    },
+    {
+      "path": "native/portable-launcher/windows-cutover-probe.test.c",
+      "sha256": "41c8ee7bce41efd3ab75558abb70733b8105844faf88f7b47f7c5ccf6a4dfd32"
+    },
+    {
+      "path": "native/runtime-attestation/windows/keiko_runtime_attestation.c",
+      "sha256": "b212c7c236c2356ab81775f2397993bd0a6d583b7076d6b34a6f529b846ca2cf"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-owner-cli-fixture.mjs",
+      "sha256": "756dee4a77d19b149942d2d0de8dfaceaa4227842476df544defb31c6fffbe28"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-owner-deadline.test.mjs",
+      "sha256": "0ba540d81516218fc90b38fb20955c1f63bc2dd6f3f3a963c2025b0118160585"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-owner-harness.mjs",
+      "sha256": "e5189cba8789c550efc5c230d0f690642067b5fd9560a230d80782ff81c4145b"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/app-owner.test.mjs",
+      "sha256": "d5d01b8a8209897822dc2c04fd621cd89a3f45a10860b073dd166abaee9e2ca2"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/coordinator_encoder_fixture.c",
+      "sha256": "52d35f61f8bd465bdfd7dda1653220182da0d4d836bfd8a34277c7ca55c29d56"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/deadline_fixture.c",
+      "sha256": "5a9fab4c9630fd0728b2561514d71152b3496e1c234cde7261685ad80d9affbe"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/keiko_runtime_supervisor.c",
+      "sha256": "8fdf2da8f61a494a940417a938b50ddc4bd45d1a1d77369624749160858a2373"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/outer-owner.test.mjs",
+      "sha256": "207b66cc26ea4b3675fd969012b790828fd211d9939d797de8e6c143aecd6bfa"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner-channel.test.mjs",
+      "sha256": "46d9e103a192559f39ab5fe634caee9b86fb0043289105782286b309e66fd926"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner_channel_fixture.c",
+      "sha256": "9fb26bc1f530b4453c84a49b3902e0861cc2287d0c5fc70c8bb58bbb699acf02"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/owner_receiver_fixture.c",
+      "sha256": "5e258358300908a26eae448176ae714c216fe536bc95faef60d4623e06bacdad"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process-scope.test.mjs",
+      "sha256": "a65ea945b0412216695c3fc4bcc93747e24a8451e07f4121d5a68352d6290cec"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_decoder_worker_fixture.mjs",
+      "sha256": "2796bb998593fbc53901a2c26488d80051c4b8e1427f797b2f7d9d094fa2adac"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_node_fixture.mjs",
+      "sha256": "aa40df4adfb69de2306d0d6d8a09cc5cd9adccb1e3f49a27549af1840a2b6198"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_receiver_fixture.c",
+      "sha256": "a58dcdf675e168fb9c367d87e232caed6e4a5590d1ea16aa0727e57ec30435f0"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/process_scope_root_fixture.c",
+      "sha256": "bc804097709c4712483883a829724a4efc863404b9ac29cf036da743ea604db6"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/protocol.test.mjs",
+      "sha256": "48020450a275ede65b2c77654f2b83a87d2c32c654efab3c74fa8f202042eebf"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/qualification_fixture.c",
+      "sha256": "53858dc5420f1ecf95ce8d2fc795b5944a9c8c69a1267c981b7feb35d8a55bb5"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/qualification_observer.c",
+      "sha256": "581f624b186bff7b99cfce6383d33fbc4d48b129780de193162f615179492171"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h",
+      "sha256": "abc34210d3accf75581e457750962c81819f5f838f0337a79090c785175e8970"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_protocol.h",
+      "sha256": "3e4b072bcfac31db6881235eba18b5b3ab3f98eee3a6fb756360b065291a35dd"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/keiko_runtime_supervisor.c",
+      "sha256": "c4c1c6c1a273e3aff445b4b9d396aeaf48c9e6d36cd92184b9f750bcc2ab1916"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/qualification_fixture.c",
+      "sha256": "ac931fb19f91e87690060a538b981f5161edee5f6a537bee418e9b807e9946d1"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/Info.plist",
+      "sha256": "9ad50ffae5bf9bd9bdedbc077e392aff1cefd0b08652104184ff12dee727adf8"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/endpoint-security.entitlements.plist",
+      "sha256": "2d3a90bc45b2cf702bcb88ee34bc2b68019f6ccd6b59f0fdd30bfd62365bec22"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/keiko_runtime_monitor.m",
+      "sha256": "9a987d5b7a03d213df62786282dd5a88d90f1d861ff66bad7a401e5c64727c29"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/keiko_system_extension_manager.m",
+      "sha256": "6177f208c3e9def27f72c760d6ddd8412299c483e98a587501dabd5abd824ff0"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/system-extension/system-extension-install.entitlements.plist",
+      "sha256": "673fb8d63d63c8dc1f7abeee63889539baed8344b603fc99eea5e5ebc6a25d4b"
+    },
+    {
+      "path": "native/runtime-supervisor/macos/test-protocol.mjs",
+      "sha256": "3c2eebfce34221728bc542dbba6d7ec826a0882b49f43ebf6e6b19a5bc591ad4"
+    },
+    {
+      "path": "native/runtime-supervisor/process_scope_observer_worker_fixture.mjs",
+      "sha256": "55ded36b7d2bec96b76d89e23ca67dcb5a4cfbafeb9a211a77c42bb7ae2a69e4"
+    },
+    {
+      "path": "native/runtime-supervisor/protocol-harness.mjs",
+      "sha256": "1759cd80e0200afebcbfba79f0cb0dc796b3653b0106e60b4eebf81a695197db"
+    },
+    {
+      "path": "native/runtime-supervisor/test-protocol.mjs",
+      "sha256": "dce452baa95654b90e30a8fb9d8d7ac0b65c7d3395b42ff6cb2e150ad986fe12"
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_socket.test.c",
+      "sha256": "32ac9483e96f6d8e1c4ca9ac92815da76a9347295c32f31096e383d62a9fb841"
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_wfp.c",
+      "sha256": "617fc62fb084354653a4e0cfd1c26016bd010e74b3a7025f2c77012314fb3378"
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_wfp.h",
+      "sha256": "b5201f40263797ed494851cc341325536d119f80212a12ba055b7c3e84736683"
+    },
+    {
+      "path": "native/runtime-supervisor/windows/gateway_wfp.test.c",
+      "sha256": "d8cf0bf627a366572f5454f441e955aa326e31f92a6c601d95f4dcc6288237a3"
+    },
+    {
+      "path": "native/runtime-supervisor/windows/keiko_runtime_supervisor.c",
+      "sha256": "6659d8305623d530efb458cc0694d41c56e04bbcf14140902d34843ce6fdba8d"
+    },
+    {
+      "path": "native/runtime-supervisor/windows/qualification_fixture.c",
+      "sha256": "ac0427c60e08294642b4277bda5fe45eb1e1092d59e6669d79032f355fbc5981"
+    },
+    {
+      "path": "native/secure-workspace-read/secure_workspace_read.c",
+      "sha256": "7580d0745a5f1ee41303627cfcdb56624d9c934cbe43201643f98b2226a5582e"
+    },
+    {
+      "path": "native/secure-workspace-read/test-protocol.mjs",
+      "sha256": "903e07dde5c5e8bf2b86ed89a98fb0eb857d7640abcf9639d18d63b46e7d7f62"
+    },
+    {
+      "path": "native/setup-bootstrap/keiko-setup-bootstrap.c",
+      "sha256": "50758f075aa9b5fef4f4b4e334e32ba3829147a5663a026b2f9420aa566f8388"
+    },
+    {
+      "path": "native/setup-bootstrap/keiko-setup-bootstrap.rc",
+      "sha256": "d70636014b47ca457e87c497dae9204ff6a27d75d164f2c941a83c8467646188"
+    },
+    {
+      "path": "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c",
+      "sha256": "e1ebc51dd1d994854f70aed7dbc999a681dd36c2aaf65ce048ad1c2ea8a6c751"
+    },
+    {
+      "path": "packages/keiko-cli/src/launcher-paths.ts",
+      "sha256": "03450ec1b82ca650e93443788e46cf0f0cca84ad83e986e657179fafeacc51cf"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-health-activity.ts",
+      "sha256": "3a1849975cf712d6c96224b00bb35bea471e5f6dff9b534873d4f15b10e50daf"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-native-activity.test.ts",
+      "sha256": "35cf5095d16df5b42376a6dc05346d3ab7c7b79341ee02732ffb69c52d2f495a"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-native-activity.ts",
+      "sha256": "cbf169dc9b6a5a974f50593f25bbd85fb2bd7f593ff86426f1258fe8a4ce5dce"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle.test.ts",
+      "sha256": "19d32b6fa07aa7b2e292fff3bf004c309ceb568fff3299e7ac855c6a174ef2a5"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle.ts",
+      "sha256": "938c57d70e9d4d9006a04675ac9b6c40954398ad99b4af75aa61e29ad49dc6e3"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-channel.test.ts",
+      "sha256": "331f999804c5ff133d5c4119c1d06a56f791069f59fb9b471d5f3cd4c863914c"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-channel.ts",
+      "sha256": "cbf64f1d1f4a0468a3bbf69de9521366199708c4184394c941e726a6c62e70b3"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-lifecycle.test.ts",
+      "sha256": "33cc5f9b53fe67d007a61b01f4627ccd6c4501ba11fb394b03cfbc514f548009"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-pid-publication.test.ts",
+      "sha256": "748f1bdbaa621abe493bf895b6c42f90366a036dc2f046d1c53ff94115b676bb"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-reap.ts",
+      "sha256": "80be5013e3b8b3a290e02093bd6af1d2e4b4c0c9914baf7d19754d7f3e6a54e0"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-runtime.test.ts",
+      "sha256": "0367aa33c0aa09b07c93f6d110d98234d08b3f9708902f83da9f4b1818fc9b86"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-runtime.ts",
+      "sha256": "4b2d9ff25fcc49f248bd327a96ad3955ae885f0f4bfd513c68f9383c51552c3a"
+    },
+    {
+      "path": "packages/keiko-cli/src/portable.ts",
+      "sha256": "dde6b331e01e2de9fc1f9da475aa2016b83898fda6e97a5b335d44e91ff07151"
+    },
+    {
+      "path": "packages/keiko-cli/src/repair.ts",
+      "sha256": "5d01733cfa55e8d6deb5ccbbcbeb03d7d912e76ab3811e4b81525ac31b362650"
+    },
+    {
+      "path": "packages/keiko-cli/src/state-paths.ts",
+      "sha256": "167969b904c63f094965b42534ef99545debe5eb52afe353ec41933d952ddfee"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui-lifecycle-guard.test.ts",
+      "sha256": "dcdb298bb602cf3890e3b2d0cd48b5d197869a3fd18ef98760d3c5d2abc4bf1e"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui-lifecycle-guard.ts",
+      "sha256": "69d6f3d5283a40081bca8976bdde03fc06eaf4152c8da4ff5b97b8c0d76e9188"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui-process-stop.ts",
+      "sha256": "6f80d3b9bdceb92e9a4d5306aea6f3b1c697114e4a9bc1da202721c4ded33ddb"
+    },
+    {
+      "path": "packages/keiko-cli/src/uninstall.test.ts",
+      "sha256": "3b93bb79fefd305e558db13ac487e8e24568b17f493084a78df669779a4bd46e"
+    },
+    {
+      "path": "packages/keiko-cli/src/uninstall.ts",
+      "sha256": "e1a35cb35cf18b99eb1223f43afc038cba3bb9397b9fa49976bf5e02ae112253"
+    },
+    {
+      "path": "packages/keiko-contracts/package.json",
+      "sha256": "f4678f1158b5e2eb7b0fe60f10b5daa17a15ecd9aec9eaa5b5ee04967b153447"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "60a2e982acb9f852faebff4eede8bc91c0176afb497c8401fa40215646da21d2"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "e4c7b580437d7e148bd0d50547b1a7f3a4bf7b2ad5314d33243ae28eda576218"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "d064568a879f986732a76ff7d41b264208e8de60491a7888316b944158ec71e8"
+    },
+    {
+      "path": "packages/keiko-contracts/src/native-runtime-wire.test.ts",
+      "sha256": "ea313f97b4b34d56362498ad1d78ae400468e07d444a8a7fc049263625c8e115"
+    },
+    {
+      "path": "packages/keiko-contracts/src/native-runtime-wire.ts",
+      "sha256": "c3d24a3c7e439ff40d9b5f59a11bff97f68df15b93feeeaac38558d44503aae5"
+    },
+    {
+      "path": "packages/keiko-security/package.json",
+      "sha256": "53dc320d6a2da25960b489b8fdd63b70e27905c0d579d7db22f267c3747adda9"
+    },
+    {
+      "path": "packages/keiko-security/src/sqlite-file-guard.ts",
+      "sha256": "47ad923923e994f52bd511719f70833df71dda17664bd58aabd54118c048aac1"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessProtocol.ts",
+      "sha256": "48149ca81f5e42fbc7311c6de914b3d219ef9ee22feeaf833378fdadc159f37f"
+    },
+    {
+      "path": "packages/keiko-server/src/update-local-state.ts",
+      "sha256": "f504bc679dbc586033fad2bcc22e911a1f85bd83e82e4dfbdcc1f79b1618806f"
+    },
+    {
+      "path": "scripts/check-linux-native-quality.sh",
+      "sha256": "80a86c659f8278625227f8a8b665fd0a6989678528b8dbe1298c0435f01b22ef"
+    },
+    {
+      "path": "scripts/lib/activity-log-failure-surfaces.mjs",
+      "sha256": "e56714c87c4ffcba554db784d5cbb304489b657a808f343827e2658d5d74aecc"
+    }
+  ],
+  "verifiedBehaviors": [
+    "Launching CLI exits after explicit native commit while actual BFF health remains launch-bound; independent stop obtains native whole-generation completion. Two cycles include retaining the same committed generation from another CLI.",
+    "Uncommitted EOF, original startup deadline, malformed/mismatched PID or commit, lost first receipt and lost commit ACK preserve their closed refusal or uncertainty semantics. No second start is admitted without matching committed ownership.",
+    "Known no-child spawn failures and native no-supervisor-fork outcomes retire only their matching pending attempt. Root-zero not-started records never establish reap of an admitted generation.",
+    "Application environment crosses the private control pipe as bounded KAE1 data. 140 benign entries/provider/certificate/browser values reach only the admitted app root, with selected identity/grant overrides. Native W/S environments stay closed.",
+    "Native packet intake, supervisor generation creation and final root exec consume the same original monotonic grant. Independent physical delayed-supervisor controls observe late root execution before and none after under the same one-second grant.",
+    "Native PID publication uses complete flushed staging and atomic rename; partial writes never expose a legacy prefix. Unknown/truncated capability markers remain refused.",
+    "The existing SQLite exclusion primitive is shared. Canonical path aliases converge, state removal cannot replace the held sibling guard, and its nested .keiko location retains the existing workspace denial.",
+    "Unexpected new observation failures propagate to their owning diagnostic path. Registered body-free native ownership and direct spawn-refusal outcomes are retained; no new catch exemption is added."
+  ],
+  "testCounts": {
+    "finalCli": {
+      "passed": 1482,
+      "existingSkipped": 1,
+      "files": 78
+    },
+    "unchangedServerOwners": {
+      "passed": 852,
+      "existingSkipped": 2,
+      "files": 52
+    },
+    "unchangedContracts": {
+      "passed": 7804,
+      "files": 213
+    },
+    "unchangedSecurity": {
+      "passed": 971,
+      "existingSkipped": 3,
+      "files": 38
+    },
+    "nativeAppPerLinuxUid": 15,
+    "processScopePerLinuxUid": 34,
+    "packetDeadlinePerLinuxUid": 3,
+    "guardAliasDeveloperReplay": 5,
+    "completeActivityLogChecks": 7
+  },
+  "commands": [
+    {
+      "scope": "typecheck",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-typecheck.json",
+        "sha256": "ff615138fe36d4fa93ad4caea23b4766ddcb80cf84903f11093e199962ac4432"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-typecheck.log",
+        "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+      }
+    },
+    {
+      "scope": "assembled",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-assembled.json",
+        "sha256": "657c60dd7785f123807c9582c71e4a1076cf2f9fdaac00efe37c41e1d5b33337"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-assembled.log",
+        "sha256": "6f77f0184463ad7e5d44d4c00cea8a4207e0e5ec872bb27ce71bf67695ae2f88"
+      }
+    },
+    {
+      "scope": "restore-packages",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-restore-packages.json",
+        "sha256": "f1abacf146c68776b8751f1d41d3af8acde23e01dc778274a734e962edea7e9b"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-restore-packages.log",
+        "sha256": "3b804ea9bb2a88af24e3185b35b38b48b72142a11f62131070fb50f415d312cf"
+      }
+    },
+    {
+      "scope": "activity-log",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-activity-log.json",
+        "sha256": "2485aba5c348840f8a82008aca85d3f86e46de4ee9d35f44ecb04aa2aee3b896"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-activity-log.log",
+        "sha256": "cf9f1a2d1ec545c7b7f6f3037973903620e6eec29a3fbe9da7d3e0a2ff2951c7"
+      }
+    },
+    {
+      "scope": "root-lint",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-root-lint.json",
+        "sha256": "99693efc40d6bbea6c57f20d22158cf6004a22090dfbf1f1a1bfbb1e9cb084b5"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-root-lint.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "scope": "ui-lint",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-ui-lint.json",
+        "sha256": "dad2a0454d7b8988e3d4039f38fdeb72a788b6a844715f0d19468fe965895ec1"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-ui-lint.log",
+        "sha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382"
+      }
+    },
+    {
+      "scope": "server-tests",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-server-tests.json",
+        "sha256": "08ece0228f1cb0aab8c16b538b510984034556089476539f829d0eed2a09d4e0"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-server-tests.log",
+        "sha256": "1926438a3d9da4af141843796c478542b7a167a066c94a60b34ad96dc7a67437"
+      }
+    },
+    {
+      "scope": "contract-tests",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-contract-tests.json",
+        "sha256": "f9548188743802f9ef0c2b7a6159c2eba53adccb5871aff29838140bc73e8b26"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-contract-tests.log",
+        "sha256": "8dc1d2144865ebb256f5143ec600230ee58e9caeaba3d065f8bb2766168c1890"
+      }
+    },
+    {
+      "scope": "security-tests",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-security-tests.json",
+        "sha256": "41bbde834f1620ac1f2f48875b8ccf51bc303b0db0e26ec22c44cd3ad04f20b0"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-security-tests.log",
+        "sha256": "4b39d216e8fa28f5e8451d4a971899ca5d10932129fc3ccff9605cc57319cda5"
+      }
+    },
+    {
+      "scope": "macos-native",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-macos-native.json",
+        "sha256": "9692ef3f021bb6a56bcdf62730382831174d82cac08a7c8818e2818449ec81fb"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-macos-native.log",
+        "sha256": "bfc52d667f2a0112fb832355746b15063881403ac38daea08f1618d81d72a31d"
+      }
+    },
+    {
+      "scope": "typecheck",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-typecheck.json",
+        "sha256": "264a26da6a36bb3fdeae0b5ba4357b9213cedfde0c6bbf5455caabc0baabb85f"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-typecheck.log",
+        "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+      }
+    },
+    {
+      "scope": "cli-tests",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-cli-tests.json",
+        "sha256": "c727b57a0aff6f1d0af2a5bc131deddac89a7a0a0ae3980ebd3eca52d00b9a73"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-cli-tests.log",
+        "sha256": "97dc0f99b95be7509c05d2513bcf92838fa2096cbc60b392d39b4ebfd8fad828"
+      }
+    },
+    {
+      "scope": "guard-lint",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-guard-lint.json",
+        "sha256": "d25c23799bbe233c34b7a68c72fa1a584794cb5fe6d75a9b6448ec190bb2b6e1"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-guard-lint.log",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    },
+    {
+      "scope": "sonar",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-sonar.json",
+        "sha256": "e5fb2a9fea9e5a2340ab1270ef7e3d8c5c70fc501b7e3326f9b609ad93d464e1"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-sonar.log",
+        "sha256": "835777ccc0e24ae90da27f35d1248665122124c265dfdce1502c54599de77883"
+      }
+    },
+    {
+      "scope": "arch",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-arch.json",
+        "sha256": "997d08ff57d693504d05147e5f0418eefd5cc860fdc6dde575030083f19874c1"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-arch.log",
+        "sha256": "39f78613bdeea94a9f3c372a5e64c6c9f6b46feae494bc9ecb572022bd3529cc"
+      }
+    },
+    {
+      "scope": "adr",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-adr.json",
+        "sha256": "536537b2c2e9a979097f01270e34f4e14c6dda8d7954b411f4b9d59ed809be1b"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-adr.log",
+        "sha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+      }
+    },
+    {
+      "scope": "guard-alias-current",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-guard-alias-current.json",
+        "sha256": "af9f6cba5250a22df8f64dd30862a6aeec13c014dc1470ab188b3a4a8ba29e51"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-guard-alias-current.log",
+        "sha256": "d94cd46e0716d11ad050c3aaaddddf3228b6b9b78d2c9abc9a9cb89ae8aaaf52"
+      }
+    },
+    {
+      "scope": "linux-uid1000-kernel",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-linux-uid1000-kernel.json",
+        "sha256": "6e5afe6a029bda14c6c6eefad3c5ea814a7c952aa118ea9a3f0c2aa24c6bc68c"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-linux-uid1000-kernel.log",
+        "sha256": "427f86af6209ea734bdd76ea0689d9adfc081454458e8712dffe79d81dd8aa1e"
+      }
+    },
+    {
+      "scope": "linux-uid65534-kernel",
+      "subjectFreezeVersion": 4,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v4-linux-uid65534-kernel.json",
+        "sha256": "946d9ee79e23aeb8ff6461f1e60a34220762577e25f3ef2e14b8143ff991495e"
+      },
+      "log": {
+        "artifact": "checkpoint67-v4-linux-uid65534-kernel.log",
+        "sha256": "384bdea1a7728324966325881786e1ebb0ff794095b2d1004ea02068c3a8c022"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid1000-contention",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-contention.json",
+        "sha256": "c745113eed3843a3d2fcda8876516ae72f6317567c08aae9f07ca855b1e8c6d6"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-contention.log",
+        "sha256": "e8b415d9bd66d883a7a50af38ec1ec05930a9c806a0799f3ba159321613d8aa3"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid1000-lifetime",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-lifetime.json",
+        "sha256": "ffc8b5651b356a62c2082464057a77187d3ed94770a3e1bf39531d9838112298"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-lifetime.log",
+        "sha256": "1eef83f4dd2b5c2affefecfdc86762d2b7312f501959970d25a01bf592fe027b"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid1000-release",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-release.json",
+        "sha256": "d0e47af3764a678798fd52ef2c55706b23da4a808e63938f01b2d50b13d6db4e"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-release.log",
+        "sha256": "62fc077100c8b0cd8c243edb82fa13ff1f9c7ae2a3424b1b5e6041b5edb0bf7e"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid1000-legacy",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-legacy.json",
+        "sha256": "f2b16538307a8b8c74f0b22feefa7c3ca7837388e4ec774256daf5714804a423"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid1000-guard-legacy.log",
+        "sha256": "14c231c678cf3b2f5a77ae878de592214dd97a16da3f8f2300926b999b7dc35f"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid65534-contention",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-contention.json",
+        "sha256": "a6d5ac6e5a388d7346b9f883702615a55c7ab482b75fab625dd8b52ca7685979"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-contention.log",
+        "sha256": "e8b415d9bd66d883a7a50af38ec1ec05930a9c806a0799f3ba159321613d8aa3"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid65534-lifetime",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-lifetime.json",
+        "sha256": "a363a41b5ed0a54a1d27ce66df3baa56c84a661e3a678dbb41374103345585d1"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-lifetime.log",
+        "sha256": "ffc0421faa8f2dc70bb1a214ec1ded780dd242aeaaa1c6f752e8efbaf84fbddf"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid65534-release",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-release.json",
+        "sha256": "d5931eb0b7a567834dba87a049500ef81853c391565d18f69cf0235d8e553efc"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-release.log",
+        "sha256": "62fc077100c8b0cd8c243edb82fa13ff1f9c7ae2a3424b1b5e6041b5edb0bf7e"
+      }
+    },
+    {
+      "scope": "unchanged-updater-guard-uid65534-legacy",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-legacy.json",
+        "sha256": "812cc406ded5cc860dd6c6b52d7141cc78bedaa45237de32e4fc48def6f4f0dd"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid65534-guard-legacy.log",
+        "sha256": "14c231c678cf3b2f5a77ae878de592214dd97a16da3f8f2300926b999b7dc35f"
+      }
+    },
+    {
+      "scope": "macos-admission",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-macos-admission.json",
+        "sha256": "5fb0c1c88e2ecc1a391c919d2ec6ebf3b150609f3d8d39c5ff303834d1bf39e5"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-macos-admission.log",
+        "sha256": "a1aaf1507b067b945c7f52a21b5b04f620b0f982bfcd90cedce3bb78b7dcc34c"
+      }
+    },
+    {
+      "scope": "linux-uid1000-admission",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid1000-admission.json",
+        "sha256": "b8337c968a3feb2771528b326ee798d2192e7b813f146e89b9f3371a6cf73e7e"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid1000-admission.log",
+        "sha256": "57316ab0e9a149cbcafdf3903934128495d6f6ce1442841ae31b743dcfcc85e5"
+      }
+    },
+    {
+      "scope": "linux-uid65534-admission",
+      "subjectFreezeVersion": 2,
+      "exitCode": 0,
+      "receipt": {
+        "artifact": "checkpoint67-v2-linux-uid65534-admission.json",
+        "sha256": "3c981a8d55a0ea6bf4f51685e8de63332bd1a5c90d3d911af106a2a56b8aad8f"
+      },
+      "log": {
+        "artifact": "checkpoint67-v2-linux-uid65534-admission.log",
+        "sha256": "4acf7e91b3c748fb747540b4a1ed79413a7bcd91fe461255707db96d7ea677a1"
+      }
+    }
+  ],
+  "independentEvidence": [
+    {
+      "artifact": "independent-checkpoint67/native-app-loader-boundary-before-v1-independent.json",
+      "sha256": "c59fe50b85322ee3bbc88ed0b61827b1b634f0dec3b494f9dd16db944573afc9"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-app-parent-path-safe-after-v2-independent.json",
+      "sha256": "4152b0714c09c67be0ff548c198e324ad2cc8f90cc94a1814859e3342bf920c4"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-app-parent-path-safe-before-v2-independent.json",
+      "sha256": "428b5bbf30f8edded3bb06ca31c9dab561176b7adb1ccaf4329523e699144f62"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-app-receipt-mode-safe-after-v2-independent.json",
+      "sha256": "dbc5e25f90a4bdaab594909224f84825215357cc4cd8af11d590af48a03ba7a3"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-app-receipt-mode-safe-before-v1-independent.json",
+      "sha256": "49d5d1c2ab33d89c2def807f13941279bf0e625f3fe0413ef2ec9039863c3df8"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-channel-final-deadline-safe-after-v3-independent.json",
+      "sha256": "6aa013b4fd998d946419fd98db16c11dc2882b09fb1da196a569499e637d0058"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-channel-final-deadline-safe-before-v2-independent.json",
+      "sha256": "91f0cd2bb5886b77c76513ea63edf992a7dde3f605485a130bab081bc1a3e396"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-delayed-s-before-after-v1-independent.json",
+      "sha256": "35658c151a9557f0e628b0bc862b726ece3e3b6d31873bd44f09372d441405bf"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-delayed-s-before-after-v2-independent.json",
+      "sha256": "045b40a5ec63677e1a7abaa8779633129cf4789ad043bea53889b2c37d9224e1"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-loader-carrier-before-after-v2-independent.json",
+      "sha256": "162170ebf96ffe30596b6104bcc6f16c2ede081854f72b98a7b900cc07501435"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-owner-environment-carrier-before-v1-independent.json",
+      "sha256": "de5dfc5a9828add5fa47b8ec252dc0f913e8d0b4775cc8d3a7a2fba82ef618ba"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-pid-partial-publication-after-v2-independent.json",
+      "sha256": "20b712e1bb7eb69b391dbe6da66411420036e641a009e6bd45fbe0b96da8b8bb"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-pid-partial-publication-before-v1-independent.json",
+      "sha256": "77a73979b6bef6c7ac1cebc9c84ac1a71bbfb2ee60779e50a7aff470ab9788b0"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-reap-parent-binding-current-v3-independent.json",
+      "sha256": "3bc8338bf03112770201f1a424bbc471bf3059274256b56b92a9d0ea361ea906"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-tracked-adoption-after-v2-independent.json",
+      "sha256": "5bd88af6cced9ffe2acbc339c57c1a91a9074f97f5c88f363d7318dd0536a385"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-tracked-adoption-before-v1-independent.json",
+      "sha256": "95c9e353069662075ce8e8a920e2f49b9127d407fa16361445dae924d5fd954a"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-ui-environment-count-before-v1-independent.json",
+      "sha256": "4c526e5436d2bab24a7605704641d4269fefdcf6e6aa563c7505188e738f5490"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-ui-lifecycle-guard-alias-before-v1-independent.json",
+      "sha256": "1958da27eed7398fd1b5df4c3c5cba86772ffb8cd819e33b5ed08de38954270d"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-ui-marker-grammar-after-v2-independent.json",
+      "sha256": "eb3b5e96d8c9937e09e4c4c43f900ff6f6d0b05b62c1aeaa808075b5522320ce"
+    },
+    {
+      "artifact": "independent-checkpoint67/native-ui-marker-grammar-before-v1-independent.json",
+      "sha256": "ce75cc085eadbe4aefbefb9534f629aafcf47bb9c32fea633781e86d4d057454"
+    }
+  ],
+  "developerGuardAliasReplay": {
+    "artifact": "checkpoint67-guard-alias-current-v4.json",
+    "sha256": "f5d2a9a715638ad09371188dfac0715f6ec7ddb157d07c503dab33df101103b5"
+  },
+  "guardBoundaryBefore": {
+    "artifact": "checkpoint67-guard-boundary-v1/before.json",
+    "sha256": "ce7c361c12f49c8719cc2034e3f5319990ecb3d6946e8f4f61dd1b2818afbb1f"
+  },
+  "guardBoundaryAfter": {
+    "artifact": "checkpoint67-guard-boundary-v1/after.json",
+    "sha256": "afa7df94e892d23c890b0387e5f7b2ba904d1c4553948d430fad788fab5389b6"
+  },
+  "dispositions": {
+    "artifact": "checkpoint67-run-dispositions-v1.json",
+    "sha256": "722af881f8e6f5140da7296f6a2591227f10e835bed3917e762e98d9869ffeb8"
+  },
+  "limits": [
+    "Linux native mechanics execute on ARM64 under UID 1000 and 65534 with pinned compiler/runtime image and explicit isolated kernel qualification profile. CLI/BFF controls inject the actual fixture runtime paths; they do not attest a shipped linux-x64 package.",
+    "macOS compiler/analyzer/Seatbelt boundary controls pass; native macOS app/EndpointSecurity and Windows runtime execution are unqualified here.",
+    "Outside-old-generation coordinator admission, persistent successor/restoration ownership, actual distinct-version packaged updates, interruption/recovery/SSD/state continuity and older released startup paths remain open.",
+    "Private ownership files are CLI lifecycle observations; they never become branded server RuntimeReapReceipt objects. Same-UID hostile pathname replacement is outside the atomicity claim.",
+    "Fresh visible browser/Gemma/skills/retrieval/context acceptance, the original 96 criterion reconciliation, final exact-head CI/reviews and merge are not established by these controls."
+  ],
+  "allAcceptanceCriteriaComplete": false,
+  "mergedToDev": false,
+  "autoMergeEnabled": false
+}

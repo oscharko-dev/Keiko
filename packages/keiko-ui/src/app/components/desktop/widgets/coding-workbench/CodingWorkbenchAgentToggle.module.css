@@ -1,0 +1,75 @@
+/* The composer's Build | Plan switch: the design system's segmented control (`.c-seg`,
+   design-system/components.css). An inset track the height of the neighbouring model and
+   authority chips holds the options; the selected option is a raised segment, so the choice reads
+   by shape and contrast, not by a tint alone. A grid track stretches every option to the full
+   inner height, which a flex fieldset did not (#3897 UI review: the selection was a 15px strip at
+   the top of a 34px box); the fieldset keeps the native group semantics. */
+.cmpAgentControl {
+  display: inline-grid;
+  flex: 0 0 auto;
+  grid-auto-columns: minmax(0, auto);
+  grid-auto-flow: column;
+  min-width: 0;
+  min-inline-size: 0;
+  height: 34px;
+  box-sizing: border-box;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  margin: 0;
+  padding: 3px;
+  background: var(--surface-inset);
+  font-size: 12.5px;
+}
+
+.cmpAgentOption {
+  appearance: none;
+  display: inline-flex;
+  min-width: 0;
+  height: 100%;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0 var(--space-5);
+  color: var(--text-secondary);
+  background: transparent;
+  font: inherit;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease-standard),
+    color var(--dur-fast) var(--ease-standard);
+}
+
+.cmpAgentOption:hover:not(:disabled, [aria-pressed="true"]) {
+  color: var(--text-primary);
+}
+
+.cmpAgentOption[aria-pressed="true"] {
+  color: var(--text-primary);
+  background: var(--surface-secondary);
+  box-shadow: 0 0 0 1px var(--border-subtle);
+  font-weight: var(--weight-medium);
+}
+
+.cmpAgentOption:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.cmpAgentOption:disabled {
+  cursor: default;
+}
+
+.cmpAgentControl:has(.cmpAgentOption:disabled) {
+  opacity: 0.72;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmpAgentOption {
+    transition: none;
+  }
+}

@@ -1,6 +1,7 @@
 // Deterministic query-term expansion for repository retrieval. Kept in keiko-workspace so both
 // candidate ordering and line matching interpret code-shaped prompts the same way.
 
+import { withoutAnswerPresentationInstructions } from "./repoSearchPresentation.js";
 import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
 
 const QUERY_TOKEN_RE = /[\p{L}\p{N}_$@./:-]+/gu;
@@ -30,7 +31,7 @@ export function containsNumberedCompoundQueryTerm(
   ).test(haystack);
 }
 
-const MAX_EXPANDED_QUERY_TERMS = 48;
+export const MAX_EXPANDED_QUERY_TERMS = 48;
 
 const CITATION_DIRECTIVE_VERBS: ReadonlySet<string> = new Set([
   "cite",
@@ -107,9 +108,12 @@ export function naturalLanguageSubject(text: string): NaturalLanguageSubject {
   if (/["'`“”‘’«»]/u.test(text)) return unchanged;
   const clauses = text.split(/(?<=[.!?;])\s+|\n+/u);
   const retained = clauses.filter((clause) => !isCitationOnlyDirective(clause));
-  if (retained.length === 0 || retained.length === clauses.length) return unchanged;
+  if (retained.length === 0) return unchanged;
+  const subject = retained.length === clauses.length ? text : retained.join(" ");
+  const normalized = withoutAnswerPresentationInstructions(subject);
+  if (!/[\p{L}\p{N}]/u.test(normalized)) return unchanged;
   return {
-    text: retained.join(" "),
+    text: normalized,
     citationDirectiveClauseCount: clauses.length - retained.length,
   };
 }
@@ -451,6 +455,22 @@ function buildSingleCharacterGroups(tokens: readonly string[], caseSensitive: bo
   return groups;
 }
 
+function* naturalLanguageGroupTokens(queryText: string): Generator<string> {
+  for (const match of queryText.matchAll(QUERY_TOKEN_RE)) {
+    const token = match[0];
+    // Separate words are independent evidence, not interchangeable aliases. Keep known
+    // domain aliases and numbered/path identifiers on their existing expansion path.
+    if (
+      /^\p{L}[\p{L}\p{M}]*(?:-\p{L}[\p{L}\p{M}]*)+$/u.test(token) &&
+      !DOMAIN_ALIASES.has(token.toLowerCase())
+    ) {
+      yield* token.split("-");
+    } else {
+      yield token;
+    }
+  }
+}
+
 export function expandedQueryTermGroups(
   queryText: string,
   caseSensitive: boolean,
@@ -458,11 +478,11 @@ export function expandedQueryTermGroups(
   const groups: string[][] = [];
   const singleCharacterFallbacks: string[] = [];
   let total = 0;
-  for (const match of queryText.matchAll(QUERY_TOKEN_RE)) {
-    if (match[0].length === 1) {
-      singleCharacterFallbacks.push(match[0]);
+  for (const token of naturalLanguageGroupTokens(queryText)) {
+    if (token.length === 1) {
+      singleCharacterFallbacks.push(token);
     }
-    const group = expandTokenGroup(match[0], caseSensitive);
+    const group = expandTokenGroup(token, caseSensitive);
     const result = appendExpandedGroup(groups, group, total);
     total = result.total;
     if (result.shouldStop) {

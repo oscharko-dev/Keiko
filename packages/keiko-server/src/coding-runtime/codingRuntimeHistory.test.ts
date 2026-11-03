@@ -597,3 +597,111 @@ describe("paired coding conversation history", () => {
     });
   });
 });
+
+// S03 (#3904): a run that forks a task begins a NEW task that shows the source's conversation ahead
+// of the fork point and then the run's own intent, in the same workspace and for the same operator.
+describe("forking a task through Coding History", () => {
+  const request = {
+    requestId: "history-fork-start",
+    taskIntent: "PRIVATE_FORK_INTENT",
+    requestedMode: "governed-assist" as const,
+  };
+
+  function sourceWithTurns(history: CodingRuntimeHistory): string {
+    history.begin(
+      { ...request, taskIntent: "First question" },
+      activeWorkspace(),
+      "fork-source-run-1",
+    );
+    const task = history.forRun("fork-source-run-1");
+    if (task === undefined) throw new Error("Missing task");
+    store.codingHistory?.append(task.id, "fork-source-run-1", "answer-1", "assistant", "Answer");
+    history.begin(
+      { ...request, taskIntent: "Second question", conversationId: task.id },
+      activeWorkspace(),
+      "fork-source-run-2",
+    );
+    return task.id;
+  }
+
+  it("plans and begins a fork of the whole task, recording counts and digests only", () => {
+    const sink = createBufferedServerLogSink();
+    const history = new CodingRuntimeHistory(store, () => operator, sink);
+    const source = sourceWithTurns(history);
+
+    const plan = history.planFork({ taskId: source }, activeWorkspace());
+    const fork = history.beginFork(
+      { ...request, fork: { taskId: source } },
+      activeWorkspace(),
+      "fork-run-1",
+    );
+
+    expect(plan).toEqual({ boundary: { kind: "end" }, inheritedCount: 3, sourceCount: 3 });
+    expect(fork).toMatchObject({ boundary: { kind: "end" }, inheritedCount: 3 });
+    expect(fork.task.id).not.toBe(source);
+    expect(history.forRun("fork-run-1")?.id).toBe(fork.task.id);
+    expect(
+      history.detail(fork.task.id, "read-fork")?.messages.map((message) => message.content),
+    ).toEqual(["First question", "Answer", "Second question", "PRIVATE_FORK_INTENT"]);
+    const event = sink.events.find((entry) => entry.extra?.event === "forked");
+    if (event === undefined) throw new Error("Missing event");
+    const line = formatActivityLogProofLine(event);
+    expect(JSON.parse(line)).toMatchObject({
+      op: "coding-runtime.history",
+      correlationId: "fork-run-1",
+      event: "forked",
+      conversationId: fork.task.id,
+      messageCount: 4,
+      sourceMessageCount: 3,
+      projectDigest: createHash("sha256").update(root).digest("hex"),
+    });
+    expect(line).not.toContain("PRIVATE_FORK_INTENT");
+    expect(line).not.toContain(root);
+    expectActivityLogProof("coding-runtime.history.emitted-line", line);
+  });
+
+  it("forks just before a user turn, and names the turns the runtime has to count the same way", () => {
+    const history = new CodingRuntimeHistory(store, () => operator, undefined);
+    const source = sourceWithTurns(history);
+    const second = history
+      .detail(source, "read-source")
+      ?.messages.find((message) => message.content === "Second question");
+
+    const plan = history.planFork(
+      { taskId: source, beforeMessageId: second?.id ?? "" },
+      activeWorkspace(),
+    );
+
+    expect(plan).toEqual({
+      boundary: { kind: "turn", ordinal: 1, userTurnCount: 2 },
+      inheritedCount: 2,
+      sourceCount: 3,
+    });
+  });
+
+  it("does not plan a fork of another operator's task, of another workspace's, or for no operator", () => {
+    const history = new CodingRuntimeHistory(store, () => operator, undefined);
+    const source = sourceWithTurns(history);
+
+    const stranger = new CodingRuntimeHistory(store, () => "someone-else", undefined);
+    const anonymous = new CodingRuntimeHistory(store, () => undefined, undefined);
+    const elsewhere = {
+      ...activeWorkspace(),
+      instance: { ...activeWorkspace().instance, workspaceId: "ws-other" },
+    };
+
+    expect(stranger.planFork({ taskId: source }, activeWorkspace())).toBeUndefined();
+    expect(anonymous.planFork({ taskId: source }, activeWorkspace())).toBeUndefined();
+    expect(history.planFork({ taskId: source }, elsewhere)).toBeUndefined();
+    expect(() =>
+      anonymous.beginFork(
+        { ...request, fork: { taskId: source } },
+        activeWorkspace(),
+        "fork-run-x",
+      ),
+    ).toThrow("Coding History unavailable.");
+    expect(() => history.beginFork(request, activeWorkspace(), "fork-run-y")).toThrow(
+      "Coding History unavailable.",
+    );
+  });
+});

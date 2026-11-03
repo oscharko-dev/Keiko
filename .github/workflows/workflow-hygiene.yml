@@ -25,7 +25,6 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
-      - codex/epic-anti-slop-quality
       - "release/**"
   pull_request:
     branches:
@@ -44,7 +43,6 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
-      - codex/epic-anti-slop-quality
       - "release/**"
     # `ready_for_review` comes from osv-scanner.yml's pull-request lane, which this job absorbs. The
     # other three types are GitHub's default set, made explicit so the union is readable in one place.
@@ -98,7 +96,7 @@ jobs:
     steps:
       - name: Check out repository
         id: checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Download and verify actionlint
@@ -153,9 +151,9 @@ jobs:
         # The standalone `zizmor` job's job-level `if:` reproduced verbatim at step level. A job
         # never skips because a sibling job failed, so `!cancelled()` is what makes the step-level
         # evaluation surface identical to the job-level one - the trigger condition itself is
-        # preserved for existing events, with exact epic eligibility under #3915.
-        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' && ((github.event_name == 'pull_request' && (github.base_ref == 'dev' || github.base_ref == 'codex/epic-anti-slop-quality')) || (github.event_name == 'push' && (github.ref == 'refs/heads/dev' || github.ref == 'refs/heads/codex/epic-anti-slop-quality')) || github.event_name == 'merge_group') }}
-        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        # unchanged, character for character.
+        if: ${{ !cancelled() && steps.checkout.outcome != 'failure' && ((github.event_name == 'pull_request' && github.base_ref == 'dev') || (github.event_name == 'push' && github.ref == 'refs/heads/dev') || github.event_name == 'merge_group') }}
+        uses: zizmorcore/zizmor-action@85b2b9fb8e3325e7a23d7d0a9d7ba5ae0f999e3e # v0.7.1
         with:
           version: "1.26.1"
           config: .github/zizmor.yml
@@ -163,7 +161,7 @@ jobs:
           annotations: true
       - name: Scan dependency manifests with OSV Scanner
         if: ${{ !cancelled() && steps.checkout.outcome != 'failure' }}
-        uses: google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc # v2.6.0
+        uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
           # `--config` is passed explicitly rather than relying on directory auto-discovery, so the
           # committed triage record in osv-scanner.toml is the single, reviewable source of every

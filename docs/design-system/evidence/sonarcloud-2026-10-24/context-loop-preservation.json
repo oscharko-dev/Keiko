@@ -1,0 +1,127 @@
+{
+  "baseline": "c8fb7e2d78720a8ba51d3d3ae7dd0e82f2df7add",
+  "producer": "docs/design-system/evidence/sonarcloud-2026-10-24/context-loop-preservation.mjs",
+  "producerSha256": "f23b97663cbddcd51cbb47fe23dbc4cee50878b5c31550b9bb66a9d1ecd9dc91",
+  "sources": {
+    "scripts/check-context-quality.mjs": "f50746575e7b8816b436cb2f2e6c8b1a9961538d01b408101bf507684ae01406",
+    "scripts/lib/context-quality-corpus.mjs": "79a910021282ab8b3c4381fe20643a9471ee5032f8d23e0c8700dad88f577442"
+  },
+  "comparison": {
+    "before": {
+      "scenarioCount": 2,
+      "corpusSha256": "576c667e2de8675bd517b1aabd452a936bca5c8ac48fb3b04b67d5bde01c4722",
+      "stableSummary": {
+        "schemaVersion": "1",
+        "measured": {
+          "scenarios": 2,
+          "budgetOverflowRate": 0,
+          "criticalFactPreservationRecall": 1,
+          "userInstructionPreservation": 1,
+          "currentDiffPreservation": 1,
+          "failingTestPreservation": 1,
+          "repoEvidenceLineRefAccuracy": 1,
+          "promptInjectionIsolationRate": 1,
+          "redactionCorrectness": 1,
+          "pathFreeComplianceRate": 1,
+          "calibratedTokenAccounting": true,
+          "determinism": true,
+          "rehydrationReadiness": 1,
+          "compactionPreservation": 1,
+          "invalidationDetected": true,
+          "excludedRepoFiles": 3,
+          "toolObservationShapingFidelity": 1,
+          "shapingRedactionClean": true,
+          "shapingInjectionFlagged": true,
+          "chatLongSessionCompaction": true,
+          "chatManyShortBudgetSafeUnchanged": true,
+          "chatCurrentInstructionPreserved": true,
+          "chatShortSessionByteIdentical": true,
+          "chatNoProfileUnchanged": true,
+          "chatNoProfileOverflowCompaction": true
+        },
+        "perScenario": [
+          {
+            "id": "long-agentic-refund-session",
+            "criticalRecall": 1,
+            "budgetOverflow": false,
+            "injectionIsolationRate": 1,
+            "estimatedTokensByLane": {
+              "system-contract": 40,
+              "user-task": 55,
+              "active-plan": 27,
+              "repo-evidence": 154,
+              "tool-observations": 16825,
+              "working-memory": 979,
+              "history-summary": 9212,
+              "verification-evidence": 43
+            }
+          },
+          {
+            "id": "budget-pressure-eviction",
+            "criticalRecall": 1,
+            "budgetOverflow": false,
+            "injectionIsolationRate": 1,
+            "estimatedTokensByLane": {
+              "system-contract": 24,
+              "user-task": 25,
+              "active-plan": 13,
+              "repo-evidence": 47997,
+              "tool-observations": 31301,
+              "working-memory": 16,
+              "history-summary": 15244,
+              "verification-evidence": 17
+            }
+          }
+        ]
+      },
+      "budgetResult": {
+        "ok": true,
+        "failures": []
+      },
+      "vacuity": {
+        "ok": true,
+        "observed": 3,
+        "required": 2
+      }
+    },
+    "productSnapshot": {
+      "fileCount": 5717,
+      "sha256": "2711b84c41fa6f30a9cf7c00b532d94d8fe2357a5c5fb798143f65fb1b080ec7"
+    }
+  },
+  "targetedEslintRule": {
+    "rule": "no-await-in-loop",
+    "originalFindings": [
+      {
+        "file": "scripts/check-context-quality.mjs",
+        "line": 802,
+        "column": 36
+      },
+      {
+        "file": "scripts/check-context-quality.mjs",
+        "line": 815,
+        "column": 21
+      },
+      {
+        "file": "scripts/check-context-quality.mjs",
+        "line": 1255,
+        "column": 23
+      },
+      {
+        "file": "scripts/lib/context-quality-corpus.mjs",
+        "line": 250,
+        "column": 19
+      }
+    ],
+    "currentFindings": []
+  },
+  "corpusAndNonTimingMetricsIdentical": true,
+  "bothTimingBudgetsPassed": true,
+  "limitations": [
+    "Compares the complete deterministic fixture corpus and all non-timing summary fields.",
+    "Wall-clock latency samples differ by nature; both original and current budgets must pass.",
+    "The product snapshot checks that executing the producer does not change tracked product files.",
+    "This is a targeted QA-fixture equivalence check, not proof of complete product correctness.",
+    "The targeted ESLint rule supplements local Sonar; it does not substitute for a Cloud analysis."
+  ]
+}

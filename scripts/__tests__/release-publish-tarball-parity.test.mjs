@@ -7,9 +7,9 @@ import { describe, expect, it } from "vitest";
 // was the tarball the smoke proved; #3565 removed that bundling from both. 1.1.2 embedded 20
 // third-party packages and doubled the artefact, and a customer's repository firewall refused to
 // evaluate it, so the release could not be installed at all. The two scripts must keep staging the
-// same way: the vendored workspaces only, third-party runtime dependencies declared, never
-// embedded. A bundling call reappearing in one of them is the parity hole and the artefact change
-// at once.
+// same way through the single staging producer. ADR-0021 D1 now admits only affected reviewed-
+// override ancestors through that producer; unchanged external children remain declared. Restoring
+// full external-closure bundling in either caller would reopen both the parity and artefact defects.
 const root = join(import.meta.dirname, "..", "..");
 
 function stagingCalls(file) {

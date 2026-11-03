@@ -31,4 +31,4 @@ Weekly calibration is proposed, not approved. The example reading is not a requi
 
 ## Source references
 
-Synthetic garden concept, final section: calibration ownership remains undecided.
+- Source lines 1-1: Synthetic garden concept: confirmed missing readings; weekly calibration is proposed. Final section: calibration ownersh…

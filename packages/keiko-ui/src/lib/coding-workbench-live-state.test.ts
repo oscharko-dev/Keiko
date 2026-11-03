@@ -10,6 +10,9 @@ import {
   codingWorkbenchRuntimeReducer,
   codingWorkbenchSourceFromManaged,
   createInitialCodingWorkbenchRuntimeState,
+  NO_CODING_WORKBENCH_PROMPT_INPUTS,
+  offeredCodingWorkbenchAgents,
+  offeredCodingWorkbenchPromptInputs,
   type CodingWorkbenchPairingState,
   type CodingWorkbenchRuntimeState,
 } from "./coding-workbench-live-state";
@@ -71,13 +74,16 @@ function statusEvent(
   };
 }
 
-function readiness(): CodingWorkbenchRuntimeReadiness {
+function readiness(
+  selectableAgents: CodingWorkbenchRuntimeReadiness["selectableAgents"] = ["build"],
+): CodingWorkbenchRuntimeReadiness {
   return {
     schemaVersion: "1",
     requestedMode: "supervised-coding",
     deploymentCeiling: "autonomous-delivery",
     effectiveMode: "supervised-coding",
     runtimeAvailable: true,
+    selectableAgents,
   };
 }
 
@@ -478,6 +484,102 @@ describe("app-session pairing readiness (release-audit F-08/RG-12)", () => {
   });
 });
 
+describe("primary agent selection (#3897)", () => {
+  const offering = (state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState =>
+    codingWorkbenchRuntimeReducer(state, {
+      kind: "runtime-set",
+      readiness: readiness(["build", "plan"]),
+    });
+
+  it("starts on the default agent and offers only it until readiness says otherwise", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(initial).toMatchObject({ agent: "build", selectableAgents: ["build"] });
+    expect(offeredCodingWorkbenchAgents(initial)).toEqual(["build"]);
+    expect(codingWorkbenchRuntimeReducer(initial, { kind: "select-agent", agent: "plan" })).toBe(
+      initial,
+    );
+  });
+
+  it("records the agents readiness offers and lets the operator select one of them", () => {
+    const offered = offering(readyState());
+    expect(offeredCodingWorkbenchAgents(offered)).toEqual(["build", "plan"]);
+    const planned = codingWorkbenchRuntimeReducer(offered, { kind: "select-agent", agent: "plan" });
+    expect(planned.agent).toBe("plan");
+    expect(codingWorkbenchRuntimeReducer(planned, { kind: "select-agent", agent: "plan" })).toBe(
+      planned,
+    );
+    expect(
+      codingWorkbenchRuntimeReducer(planned, { kind: "select-agent", agent: "build" }).agent,
+    ).toBe("build");
+  });
+
+  // #3903 AC1: a custom primary agent is selectable only where the server offers plan.
+  it("selects a custom primary agent only where the server runs OpenCode's own agents", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(
+      codingWorkbenchRuntimeReducer(initial, { kind: "select-agent", agent: "reviewer" }),
+    ).toBe(initial);
+    const offered = offering(readyState());
+    const custom = codingWorkbenchRuntimeReducer(offered, {
+      kind: "select-agent",
+      agent: "reviewer",
+    });
+    expect(custom.agent).toBe("reviewer");
+    for (const reserved of ["general", "Plan"])
+      expect(
+        codingWorkbenchRuntimeReducer(offered, { kind: "select-agent", agent: reserved }).agent,
+      ).toBe("build");
+  });
+
+  it("keeps the offered agents and the selection while a mode change reloads readiness", () => {
+    const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
+      kind: "select-agent",
+      agent: "plan",
+    });
+    const reloading = codingWorkbenchRuntimeReducer(planned, {
+      kind: "select-mode",
+      mode: "governed-assist",
+    });
+    expect(reloading.runtime).toMatchObject({ status: "idle", value: null });
+    expect(reloading.agent).toBe("plan");
+    expect(offeredCodingWorkbenchAgents(reloading)).toEqual(["build", "plan"]);
+  });
+
+  it("falls back to the default agent when readiness stops offering the selected one", () => {
+    const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
+      kind: "select-agent",
+      agent: "plan",
+    });
+    const narrowed = codingWorkbenchRuntimeReducer(planned, {
+      kind: "runtime-set",
+      readiness: readiness(["build"]),
+    });
+    expect(narrowed.agent).toBe("build");
+    expect(offeredCodingWorkbenchAgents(narrowed)).toEqual(["build"]);
+  });
+
+  it("offers only the default agent for a source that has no agent concept", () => {
+    const planned = codingWorkbenchRuntimeReducer(offering(readyState()), {
+      kind: "select-agent",
+      agent: "plan",
+    });
+    const codex = codingWorkbenchRuntimeReducer(planned, {
+      kind: "select-runtime-preference",
+      preference: "codex-subscription",
+    });
+    expect(codex.agent).toBe("build");
+    expect(offeredCodingWorkbenchAgents(codex)).toEqual(["build"]);
+    expect(codingWorkbenchRuntimeReducer(codex, { kind: "select-agent", agent: "plan" })).toBe(
+      codex,
+    );
+    const managed = codingWorkbenchRuntimeReducer(codex, {
+      kind: "select-runtime-preference",
+      preference: "managed-gateway",
+    });
+    expect(offeredCodingWorkbenchAgents(managed)).toEqual(["build", "plan"]);
+  });
+});
+
 describe("mode selection, setup plans, and mutation failures", () => {
   it("stores model and reasoning selections while resetting stale effort on model changes", () => {
     const modelSelected = codingWorkbenchRuntimeReducer(
@@ -577,6 +679,72 @@ describe("mode selection, setup plans, and mutation failures", () => {
     const recovered = codingWorkbenchRuntimeReducer(failed, { kind: "mutation-complete" });
     expect(recovered.mutation).toMatchObject({ status: "idle", error: null });
   });
+
+  // Stability audit item 7: a failed Stop/Approve alert outranks every other alert, so it must not
+  // outlive the server state that made it stale.
+  describe("a failed action superseded by a newer snapshot", () => {
+    const failure = {
+      code: "CODING_RUNTIME_STALE_REVISION",
+      message: "redacted",
+      retryable: false,
+    } as const;
+    const failedAt = (revision: number): CodingWorkbenchRuntimeState => {
+      const withRun = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "run-set",
+        snapshot: snapshot({ revision }),
+      });
+      return codingWorkbenchRuntimeReducer(withRun, { kind: "mutation-failed", error: failure });
+    };
+
+    it("clears the error when a newer revision of the same run arrives", () => {
+      const next = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "run-set",
+        snapshot: snapshot({ revision: 5, state: "running", pendingPermission: undefined }),
+      });
+      expect(next.mutation).toMatchObject({ status: "idle", error: null });
+    });
+
+    it("clears the error when a different run replaces the one the action targeted", () => {
+      const next = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "run-set",
+        snapshot: snapshot({ runId: "run-2", revision: 1 }),
+      });
+      expect(next.mutation).toMatchObject({ status: "idle", error: null });
+    });
+
+    it("keeps the error while the re-read shows the same revision (the action still failed)", () => {
+      const next = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "run-set",
+        snapshot: snapshot({ revision: 4 }),
+      });
+      expect(next.mutation).toMatchObject({ status: "error", error: { code: failure.code } });
+    });
+
+    it("keeps a refused start's error across a snapshot that binds no run", () => {
+      const refused = codingWorkbenchRuntimeReducer(readyState(), {
+        kind: "mutation-failed",
+        error: failure,
+      });
+      const next = codingWorkbenchRuntimeReducer(refused, {
+        kind: "run-set",
+        snapshot: snapshot({ state: "idle", runId: undefined, pendingPermission: undefined }),
+      });
+      expect(next.mutation).toMatchObject({ status: "error" });
+    });
+
+    it("never clears a mutation that is still pending", () => {
+      const pending = codingWorkbenchRuntimeReducer(failedAt(4), {
+        kind: "mutation-start",
+        mutation: "stop",
+        requestId: "req-2",
+      });
+      const next = codingWorkbenchRuntimeReducer(pending, {
+        kind: "run-set",
+        snapshot: snapshot({ revision: 9 }),
+      });
+      expect(next.mutation).toMatchObject({ status: "pending", requestId: "req-2" });
+    });
+  });
 });
 
 it("keeps the actual managed-gateway Start projection closed when its model selection clears", () => {
@@ -594,4 +762,90 @@ it("keeps the actual managed-gateway Start projection closed when its model sele
     modelId: null,
   });
   expect(cleared.canStart).toBe(false);
+});
+
+// ADR-0137 D10: the prompt inputs the composer offers are what the server's readiness read said the
+// composed runtime can do, kept across a mode change and never widened by the browser.
+describe("prompt inputs the server offers", () => {
+  const withPromptInputs = (
+    state: CodingWorkbenchRuntimeState,
+    promptInputs?: CodingWorkbenchRuntimeReadiness["promptInputs"],
+  ): CodingWorkbenchRuntimeState =>
+    codingWorkbenchRuntimeReducer(state, {
+      kind: "runtime-set",
+      readiness: { ...readiness(), ...(promptInputs === undefined ? {} : { promptInputs }) },
+    });
+
+  it("starts with neither input and offers neither until readiness says otherwise", () => {
+    const initial = createInitialCodingWorkbenchRuntimeState();
+    expect(initial.promptInputs).toEqual({ delivery: false, references: false });
+    expect(offeredCodingWorkbenchPromptInputs(initial)).toBe(NO_CODING_WORKBENCH_PROMPT_INPUTS);
+  });
+
+  it("records what readiness offers", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    expect(offered.promptInputs).toEqual({ delivery: true, references: true });
+    expect(offeredCodingWorkbenchPromptInputs(offered)).toEqual({
+      delivery: true,
+      references: true,
+    });
+    const partial = withPromptInputs(readyState(), { delivery: true, references: false });
+    expect(offeredCodingWorkbenchPromptInputs(partial)).toEqual({
+      delivery: true,
+      references: false,
+    });
+  });
+
+  it("reads a readiness that states nothing as none, and a narrowing as a narrowing", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    expect(withPromptInputs(offered).promptInputs).toEqual({ delivery: false, references: false });
+    expect(withPromptInputs(offered, { delivery: false, references: false }).promptInputs).toEqual({
+      delivery: false,
+      references: false,
+    });
+  });
+
+  it("keeps the offer while a mode change reloads readiness", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    const reloading = codingWorkbenchRuntimeReducer(offered, {
+      kind: "select-mode",
+      mode: "governed-assist",
+    });
+    expect(reloading.runtime).toMatchObject({ status: "idle", value: null });
+    expect(offeredCodingWorkbenchPromptInputs(reloading)).toEqual({
+      delivery: true,
+      references: true,
+    });
+  });
+
+  // The slash command menu is a prompt input of its own (ADR-0137 D10): an older server never states
+  // it, which reads as not offered, and the Codex source never gets it.
+  it("records the slash command offer beside the other inputs and reads its absence as none", () => {
+    const withCommands = withPromptInputs(readyState(), {
+      delivery: true,
+      references: true,
+      commands: true,
+    });
+    expect(offeredCodingWorkbenchPromptInputs(withCommands).commands).toBe(true);
+    const without = withPromptInputs(readyState(), { delivery: true, references: true });
+    expect(offeredCodingWorkbenchPromptInputs(without).commands).not.toBe(true);
+    const narrowed = withPromptInputs(withCommands, {
+      delivery: true,
+      references: true,
+      commands: false,
+    });
+    expect(offeredCodingWorkbenchPromptInputs(narrowed).commands).toBe(false);
+    expect(withPromptInputs(withCommands).promptInputs.commands).not.toBe(true);
+    const codex = { ...withCommands, runtimePreference: "codex-subscription" as const };
+    expect(offeredCodingWorkbenchPromptInputs(codex).commands).not.toBe(true);
+  });
+
+  it("offers neither input to a Codex subscription run, whatever the managed runtime reported", () => {
+    const offered = withPromptInputs(readyState(), { delivery: true, references: true });
+    const codex = { ...offered, runtimePreference: "codex-subscription" as const };
+    expect(offeredCodingWorkbenchPromptInputs(codex)).toEqual({
+      delivery: false,
+      references: false,
+    });
+  });
 });

@@ -300,9 +300,10 @@ function defaultRuntimeFetch(): typeof fetch {
   return vi.fn((input: Parameters<typeof fetch>[0]) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-    if (url.startsWith("https://registry.npmjs.org/")) {
+    // The preflight reads only the dist-tags document (#3904), whose body is the tag map itself.
+    if (url === "https://registry.npmjs.org/-/package/%40oscharko-dev%2Fkeiko/dist-tags") {
       return Promise.resolve(
-        new Response(JSON.stringify({ "dist-tags": { latest: "0.2.11" } }), {
+        new Response(JSON.stringify({ latest: "0.2.11" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),

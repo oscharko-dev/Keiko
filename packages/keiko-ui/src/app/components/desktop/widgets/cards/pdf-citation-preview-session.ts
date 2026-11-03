@@ -13,6 +13,8 @@ import type { LocalKnowledgeEvidenceCitation } from "@/lib/types";
 import type { WorkspaceApi } from "../../hooks/useWorkspace.types";
 import type { AppWindow, WindowCfgValue } from "../../windows/types";
 
+export type PdfPreviewWorkspaceWindow = Pick<AppWindow, "id" | "type" | "cfg" | "minimized">;
+
 export type PdfCitationPreviewZoomMode = "fit-width" | "fit-page" | "manual";
 
 export interface PdfCitationPreviewSafeWindowCfg {
@@ -626,7 +628,7 @@ function reconcilePreviewSessionsWithActiveWindows(
 }
 
 function collectWorkspaceChatWindows(
-  wins: readonly AppWindow[] | null,
+  wins: readonly PdfPreviewWorkspaceWindow[] | null,
 ): Map<string, PdfCitationPreviewWorkspaceChatWindow> {
   const nextWorkspaceChatWindows = new Map<string, PdfCitationPreviewWorkspaceChatWindow>();
   for (const win of wins ?? []) {
@@ -665,7 +667,9 @@ function applyWorkspaceChatWindowUpdates(
   return changedChatWindowIds;
 }
 
-export function syncPdfCitationPreviewWindowRegistry(wins: readonly AppWindow[] | null): void {
+export function syncPdfCitationPreviewWindowRegistry<T extends PdfPreviewWorkspaceWindow>(
+  wins: readonly T[] | null,
+): void {
   const activeWindowIds = new Set(
     (wins ?? []).filter((win) => win.type === "pdfCitationPreview").map((win) => win.id),
   );

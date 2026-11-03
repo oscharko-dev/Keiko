@@ -1,5 +1,8 @@
-import { readFileSync } from "node:fs";
-import { URL } from "node:url";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(
@@ -288,15 +291,61 @@ describe("macOS system-extension activation manager", () => {
       }
     });
 
-    it("replies ALREADY_ACTIVE only for the live case and keeps ZERO_LIVE for unknown handles", () => {
+    it("keeps unknown and non-owner handles indistinguishable without claiming zero", () => {
       const connection = functionBody(monitorSource, "static void *serve_client(");
       expect(connection).toContain("RECONCILE_ALREADY_LIVE");
-      expect(connection).toContain("KEIKO_MONITOR_ALREADY_ACTIVE");
-      expect(connection).toContain("KEIKO_MONITOR_ZERO_LIVE");
+      expect(connection).toContain("reconcile_refusal_reply(reconcile_outcome)");
       // An owner mismatch must stay indistinguishable from an unknown handle: telling a different
       // uid that the handle exists is an information leak, not a diagnostic.
       expect(connection).toMatch(/session->uid != uid[\s\S]{0,400}RECONCILE_UNKNOWN_HANDLE/u);
     });
+
+    it.skipIf(process.platform === "win32")(
+      "compiles the actual refusal owner and never treats unavailable session state as zero",
+      () => {
+        const root = mkdtempSync(join(tmpdir(), "keiko-monitor-reconcile-"));
+        try {
+          const protocol = new URL(
+            "../../native/runtime-supervisor/macos/keiko_runtime_monitor_protocol.h",
+            import.meta.url,
+          );
+          writeFileSync(join(root, "protocol.h"), readFileSync(protocol));
+          const enumeration = functionBody(monitorSource, "enum reconcile_outcome");
+          const owner = functionBody(monitorSource, "static uint16_t reconcile_refusal_reply(");
+          writeFileSync(
+            join(root, "test.c"),
+            `#include "protocol.h"\n#include <stdio.h>\n${enumeration};\n${owner}\nint main(void) {\n  printf("%u %u %u %u\\n",\n    (unsigned)reconcile_refusal_reply(RECONCILE_UNKNOWN_HANDLE),\n    (unsigned)reconcile_refusal_reply(RECONCILE_ALREADY_LIVE),\n    (unsigned)reconcile_refusal_reply(RECONCILE_ADOPTED),\n    (unsigned)reconcile_refusal_reply((enum reconcile_outcome)99));\n  return 0;\n}\n`,
+          );
+          const compiled = spawnSync(
+            "/usr/bin/cc",
+            [
+              "-std=c11",
+              "-Wall",
+              "-Wextra",
+              "-Werror",
+              "-I",
+              fileURLToPath(new URL("../../native/runtime-supervisor/macos/", import.meta.url)),
+              join(root, "test.c"),
+              "-o",
+              join(root, "test"),
+            ],
+            { encoding: "utf8", timeout: 10_000, maxBuffer: 16_384 },
+          );
+          expect(compiled.error).toBeUndefined();
+          expect(compiled.status, compiled.stderr).toBe(0);
+          const result = spawnSync(join(root, "test"), [], {
+            encoding: "utf8",
+            timeout: 5_000,
+            maxBuffer: 1_024,
+          });
+          expect(result.error).toBeUndefined();
+          expect(result.status).toBe(0);
+          expect(result.stdout.trim().split(" ").map(Number)).toEqual([5, 9, 5, 5]);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      },
+    );
 
     it("gives the supervisor its own branch instead of the generic observe error", () => {
       const reconcile = functionBody(supervisorSource, "static int reconcile(");

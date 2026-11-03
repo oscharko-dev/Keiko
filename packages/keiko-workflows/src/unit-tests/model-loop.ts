@@ -10,11 +10,11 @@ import type { ContextPack, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { validatePatch, type PatchValidation } from "@oscharko-dev/keiko-tools";
 import { governedPatchRejectionCode } from "../governed-handoff.js";
 import { isTestPath } from "./conventions.js";
-import { parseModelOutput } from "./parse.js";
+import { parseModelOutput, type ParsedModelOutput } from "./parse.js";
 import { buildPrompt } from "./prompt.js";
 import type { AcceptedPatch, ModelLoopResult, RunState } from "./internal.js";
 import type { TestStrategy } from "./frontend.js";
-import type { TestConventions } from "./types.js";
+import type { ReviewedTestPatch, TestConventions } from "./types.js";
 
 // The production-code guard (D6): every changed path must satisfy isTestPath. Returns "out-of-scope"
 // when any path is a non-test/traversal path, or undefined when all pass. The guard runs on
@@ -86,7 +86,15 @@ async function attemptOnce(
 ): Promise<AttemptResult> {
   const messages = buildPrompt(state.input, conventions, strategy, pack, rejectionReason);
   const content = await callModel(state, messages, attempt, pack.usedBytes);
-  const parsed = parseModelOutput(content);
+  return acceptCandidate(state, workspace, parseModelOutput(content));
+}
+
+// Validate -> guard: the one acceptance path for a model answer and for a reviewed patch alike.
+function acceptCandidate(
+  state: RunState,
+  workspace: WorkspaceInfo,
+  parsed: ParsedModelOutput,
+): AttemptResult {
   const validation = validatePatch(workspace, parsed.diff, {
     fs: state.deps.fs ?? nodeWorkspaceFs,
   });
@@ -107,6 +115,29 @@ async function attemptOnce(
     return { accepted, rejectionCode: undefined };
   }
   return { accepted: undefined, rejectionCode: guardCode ?? "malformed" };
+}
+
+/**
+ * The reviewed dry-run patch (#4025 AC4): the apply writes exactly what the human confirmed. It
+ * passes the same validation and guards as a model answer, and no model is called; a patch that no
+ * longer validates (a changed workspace, say) is rejected and nothing is written.
+ */
+export function reviewedPatchLoop(
+  state: RunState,
+  workspace: WorkspaceInfo,
+  reviewed: ReviewedTestPatch,
+): ModelLoopResult {
+  const result = acceptCandidate(state, workspace, {
+    diff: reviewed.diff,
+    coveredBehavior: reviewed.coveredBehavior,
+    knownGaps: reviewed.knownGaps,
+  });
+  return {
+    accepted: result.accepted,
+    modelCallCount: 0,
+    patchRetryCount: 0,
+    lastRejectionCode: result.rejectionCode,
+  };
 }
 
 export async function runModelLoop(

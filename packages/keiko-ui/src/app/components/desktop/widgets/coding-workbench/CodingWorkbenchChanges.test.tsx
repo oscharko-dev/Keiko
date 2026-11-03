@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
+import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GitChangedFile,
@@ -8,8 +9,22 @@ import type {
   GitRepositoryStatusResponse,
 } from "@oscharko-dev/keiko-contracts";
 
-import type { CodingWorkbenchChangesClient } from "@/lib/useCodingWorkbenchChanges";
-import { CodingWorkbenchChanges } from "./CodingWorkbenchChanges";
+import type { CodingWorkbenchPairingState } from "@/lib/coding-workbench-live-state";
+import {
+  useCodingWorkbenchChanges,
+  type CodingWorkbenchChangesClient,
+  type UseCodingWorkbenchChangesInput,
+} from "@/lib/useCodingWorkbenchChanges";
+import { CodingWorkbenchChangesView } from "./CodingWorkbenchChanges";
+
+// The window reads the run's changes once and hands the result to the view; this panel is that
+// pairing, so the suite exercises the real hook through the real list.
+function ChangesPanel(
+  props: UseCodingWorkbenchChangesInput & { readonly pairing: CodingWorkbenchPairingState },
+): ReactNode {
+  const changes = useCodingWorkbenchChanges(props);
+  return <CodingWorkbenchChangesView changes={changes} pairing={props.pairing} />;
+}
 
 const ROOT = "/managed/repository/workspace";
 
@@ -107,10 +122,10 @@ function client(
 
 function renderChanges(
   changesClient: CodingWorkbenchChangesClient,
-  overrides: Partial<Parameters<typeof CodingWorkbenchChanges>[0]> = {},
+  overrides: Partial<Parameters<typeof ChangesPanel>[0]> = {},
 ): ReturnType<typeof render> {
   return render(
-    <CodingWorkbenchChanges
+    <ChangesPanel
       root={ROOT}
       runId="run-2482"
       changeSignal={null}
@@ -245,7 +260,7 @@ describe("CodingWorkbenchChanges", () => {
     expect(await screen.findByText("As of aaaaaaaa")).toBeVisible();
 
     view.rerender(
-      <CodingWorkbenchChanges
+      <ChangesPanel
         root="/managed/other/workspace"
         runId="run-2482"
         changeSignal="cursor-other-root"
@@ -337,7 +352,7 @@ describe("CodingWorkbenchChanges", () => {
 
     for (const changeSignal of ["cursor-1", "cursor-2", "cursor-3"]) {
       view.rerender(
-        <CodingWorkbenchChanges
+        <ChangesPanel
           root={ROOT}
           runId="run-2482"
           changeSignal={changeSignal}

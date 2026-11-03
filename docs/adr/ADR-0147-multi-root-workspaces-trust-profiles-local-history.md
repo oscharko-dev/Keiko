@@ -232,7 +232,37 @@ for a registered root, and the trust surfaces list registered roots. Registratio
 grant; the repository stays restricted until the operator decides. The first explicit browser
 selection of a newly registered folder supplies its initial grant through the trust service.
 Reopening an existing canonical project, including through a path alias, preserves its current
-trust decision; revocation or invalidation requires a new explicit Trust command. A project
+trust decision; revocation or invalidation requires a new explicit Trust command. Ordinary project
+registration and Chat resolve aliases through the same read-only manifest membership check,
+preserving the original registered project path. Both an existing requested path and the mapped
+stored path must still resolve to their recorded root reference. A missing or retargeted stored alias
+returns `PROJECT_IDENTITY_CHANGED` before any project or manifest mutation and requires explicit
+reconnect. The existing workspace-root denial event records the closed refusal and correlation;
+ordinary path coherence grants no trust and does not impose governed object-identity requirements.
+Projects intentionally left pre-manifest by V15 retain their exact existing lexical project identity
+for ordinary Chat, even when another registered project reaches the same physical root. This does
+not backfill membership, redirect existing conversation history, or enable governed operations.
+Explicit project registration retains its existing canonical mapping and single-project backfill;
+explicit reconnect retains its existing conflict and membership rules. Neither path widens V15's
+single-most-recent migration.
+An explicit reconnect resolves an existing registered alias to one canonical anchor for both live
+identity inspection and the refreshed descriptor, while retaining its lexical project and history.
+A healthy identity is a metadata/trust no-op. Adopting a different available root revokes only the
+former root's trust; the new root remains restricted. A target already held by another workspace
+returns `PROJECT_EXISTS` before any identity write, with the enclosing transaction rolling back
+project timestamps as well. Multi-root reconnect semantics and the strict identity inspector's
+global alias denial remain unchanged. The existing registered reconnect event records the actual
+availability outcome without paths, names or source bodies.
+A Coding Workbench bridge registration (#4117, owner decision 2026-10-29) performs the same
+reconnect, through the same store writer, for a single-root project registered at exactly the
+requested path whose canonical path is unchanged and whose strict live inspection succeeds with a
+different identity (a folder deleted and recreated in place). A missing folder, a path that now
+resolves elsewhere or through an alias, and a multi-root workspace refresh nothing and keep the
+`root-binding-invalid` refusal. The former root's trust is revoked as above, and a binding minted
+against the former identity stays invalid: only a registration after the refresh holds the new one.
+The registration's Activity Log operation records `identity-refreshed` with the previous and new
+manifest revision counts only.
+A project
 selection explicitly attested by a trusted launcher remains a local-human selection path through
 the same trust service. An ambient process working directory may
 seed the preferred project, but carries no grant; restoring a stored project row or opening an

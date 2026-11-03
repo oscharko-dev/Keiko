@@ -54,7 +54,7 @@ import {
   type RouteResult,
 } from "../../routes.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../../sse.js";
-import { writeOrDestroy } from "../../sse-write.js";
+import { writeSseFrame } from "../../sse-write.js";
 import {
   breakpointStoreWorkspaceFingerprint,
   createBreakpointStore,
@@ -2414,12 +2414,12 @@ function openDebugStream(
     result.unsubscribe();
   };
   ctx.res.on("close", stop);
-  writeOrDestroy(ctx.res, frameDebugSnapshot(result.snapshot, result.snapshotRequired), controller);
+  writeSseFrame(ctx.res, frameDebugSnapshot(result.snapshot, result.snapshotRequired), controller);
   for (const event of result.replay) {
     if (controller.signal.aborted) break;
-    writeOrDestroy(ctx.res, frameDebugEvent(event), controller);
+    writeSseFrame(ctx.res, frameDebugEvent(event), controller);
   }
-  if (!controller.signal.aborted) writeOrDestroy(ctx.res, readyMessage(), controller);
+  if (!controller.signal.aborted) writeSseFrame(ctx.res, readyMessage(), controller);
   return STREAMING;
 }
 
@@ -2439,7 +2439,7 @@ export async function handleDebugEvents(
       browserSessionBinding: authorized.workspace.browserSessionBinding,
     },
     lastSequence: parseLastSequence(ctx),
-    onEvent: (event) => writeOrDestroy(ctx.res, frameDebugEvent(event), controller),
+    onEvent: (event) => writeSseFrame(ctx.res, frameDebugEvent(event), controller),
   });
   if (result.kind === "subscriberLimit") {
     return { status: 429, body: errorBody("SUBSCRIBER_LIMIT", "Too many debug subscribers.") };

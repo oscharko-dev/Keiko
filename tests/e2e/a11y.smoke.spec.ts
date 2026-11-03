@@ -366,9 +366,16 @@ for (const surface of A11Y_SURFACES) {
 
 for (const theme of A11Y_THEMES) {
   test(`desktop shell holds up across contrast modes — ${theme} theme @smoke`, async ({ page }) => {
+    await page.route("**/api/coding-workbench/app-session/browser", async (route) => {
+      await route.fulfill({ json: { state: "unavailable" } });
+    });
     await shellReady(page, theme);
+    const connect = page
+      .locator("header.header")
+      .getByRole("button", { name: "Connect browser", exact: true });
     for (const mode of A11Y_CONTRAST_MODES) {
       await applyContrastMode(page, mode);
+      await expect(connect).toBeVisible();
       await expectNoViolations(page, "body", `launcher shell (${theme}, ${mode})`);
     }
   });

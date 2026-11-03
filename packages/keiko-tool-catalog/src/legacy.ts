@@ -1,4 +1,9 @@
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  GOVERNED_PATCH_APPLY_TOOL_ID,
+  GOVERNED_PATCH_PROPOSE_TOOL_ID,
+  TOOL_CATALOG_LIMITS,
+  toolArgumentLimits,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type {
   CatalogEffect,
@@ -40,7 +45,7 @@ function registration(
       policyReferences: [effect],
       handlerRequirement: { id: "legacy-tool-port", contractVersion: 1 },
       bounds: {
-        maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+        maxArgumentBytes: toolArgumentLimits(canonicalId).maxArgumentBytes,
         maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
         maxResultCount: 1,
         maxDurationMs: DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
@@ -117,13 +122,13 @@ function patches(): readonly LegacyRegistration[] {
   );
   return [
     registration(
-      "keiko.patch.propose",
+      GOVERNED_PATCH_PROPOSE_TOOL_ID,
       "propose_patch",
       "Validate a unified diff and return a dry-run preview. Never writes to disk.",
       schema,
     ),
     registration(
-      "keiko.patch.apply",
+      GOVERNED_PATCH_APPLY_TOOL_ID,
       "apply_patch",
       "Apply a validated unified diff atomically. Fail-closed: refuses unless apply is enabled.",
       schema,

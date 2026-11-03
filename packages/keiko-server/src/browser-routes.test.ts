@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
@@ -17,7 +17,7 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { handleBrowserEvents, openBrowserSseStream } from "./browser.js";
-import type { SseBackpressureSignal } from "./sse-write.js";
+import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -672,15 +672,17 @@ describe("GET /api/browser/sessions/:id/events (SSE)", () => {
 });
 
 // KEIKO-0142: browser.ts hand-rolled the write+destroy backpressure check instead of the shared
-// writeOrDestroy helper, so it had no per-connection AbortController, no unsubscribe on a
+// writeSseFrame helper, so it had no per-connection AbortController, no unsubscribe on a
 // backpressure kill, and no observable signal. Mirrors command-runner-routes.test.ts's block.
 interface FakeSseRes {
   res: ServerResponse;
   readonly writes: string[];
   destroyCount: number;
+  destroyed: boolean;
   ended: boolean;
   writeReturns: boolean;
   readonly emitClose: () => void;
+  readonly emitDrain: () => void;
 }
 
 function makeFakeSseRes(): FakeSseRes {
@@ -690,13 +692,23 @@ function makeFakeSseRes(): FakeSseRes {
     res: undefined as unknown as ServerResponse,
     writes,
     destroyCount: 0,
+    destroyed: false,
     ended: false,
     writeReturns: true,
     emitClose: (): void => {
       emitter.emit("close");
     },
+    emitDrain: (): void => {
+      emitter.emit("drain");
+    },
   };
   const res = {
+    get destroyed(): boolean {
+      return state.destroyed;
+    },
+    get writableEnded(): boolean {
+      return state.ended;
+    },
     writeHead(): ServerResponse {
       return res as unknown as ServerResponse;
     },
@@ -708,11 +720,23 @@ function makeFakeSseRes(): FakeSseRes {
       state.ended = true;
       return res as unknown as ServerResponse;
     },
+    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
+    // route's own close handler unsubscribes on.
     destroy(): void {
       state.destroyCount += 1;
+      state.destroyed = true;
+      emitter.emit("close");
     },
     on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
       emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.once(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.off(event, listener);
       return res as unknown as ServerResponse;
     },
   };
@@ -735,7 +759,12 @@ function browserEvent(sessionId: string, kind: string, seq: number): BrowserEven
 }
 
 describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
-  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeBrowserSessionManager();
     const signals: SseBackpressureSignal[] = [];
@@ -750,8 +779,17 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
       },
     );
 
+    // A false write is flow control: the stream stays open and keeps queueing frames.
     manager.emit("session-bp", browserEvent("session-bp", "navigated", 1));
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
 
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.accepted).toBe(false);
@@ -769,6 +807,7 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
   });
 
   it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeBrowserSessionManager();
     const signals: SseBackpressureSignal[] = [];
@@ -782,12 +821,21 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
         signals.push(signal);
       },
     );
+    expect(fake.writes.length).toBeGreaterThan(0);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
 
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
   });
 
-  it("kills on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+  it("kills a stalled reader on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeBrowserSessionManager();
     const signals: SseBackpressureSignal[] = [];
@@ -804,14 +852,49 @@ describe("openBrowserSseStream backpressure (KEIKO-0142)", () => {
 
     fake.writeReturns = false;
     manager.emit("session-late", browserEvent("session-late", "navigated", 1));
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
 
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
   });
 
+  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSseRes();
+    const manager = new FakeBrowserSessionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openBrowserSseStream(
+      fake.res,
+      manager,
+      "session-drain",
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    fake.emitDrain();
+    fake.writeReturns = true;
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    const writesBefore = fake.writes.length;
+    manager.emit("session-drain", browserEvent("session-drain", "navigated", 1));
+    expect(fake.writes).toHaveLength(writesBefore + 1);
+    expect(fake.destroyCount).toBe(0);
+  });
+
   it("keeps the session-closed early-return intact while wired to the controller", () => {
     // The session-closed branch must still unsubscribe and end the response — migrating to
-    // writeOrDestroy must not drop or reorder it.
+    // writeSseFrame must not drop or reorder it.
     const fake = makeFakeSseRes();
     const manager = new FakeBrowserSessionManager();
     openBrowserSseStream(fake.res, manager, "session-close", (value) => value);
@@ -874,9 +957,14 @@ describe("openBrowserSseStream correlationId threading (#2902 audit finding 0)",
 });
 
 describe("handleBrowserEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
-    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    fake.writeReturns = false; // the ready frame is queued; the reader never drains -> stall kill.
     const manager = new FakeBrowserSessionManager();
     manager.opened.push("session-thread");
     const records: ServerDiagnosticRecord[] = [];
@@ -911,7 +999,12 @@ describe("handleBrowserEvents backpressure correlation (ADR-0173 D5 / g12)", () 
     };
 
     handleBrowserEvents(ctx, baseDeps);
+    expect(records).toHaveLength(0);
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(records).toHaveLength(0);
+    vi.advanceTimersByTime(1);
 
+    expect(fake.destroyCount).toBe(1);
     expect(records).toHaveLength(1);
     expect(records[0]?.source).toBe("sse.browser.backpressure");
     expect(records[0]?.correlationId).toBe("req-browser-thread-01");

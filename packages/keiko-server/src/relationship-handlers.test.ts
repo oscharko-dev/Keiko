@@ -42,6 +42,7 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 
 interface FakeReq extends EventEmitter {
@@ -85,7 +86,12 @@ function makeCtx(
   let body = "";
   let ended = false;
   let destroyed = false;
-  const res = {
+  // An emitter, like the real ServerResponse, so the shared SSE writer can wait for `drain` and the
+  // stalled-reader bound can tear the stream down with its terminal `close`.
+  const res = Object.assign(new EventEmitter(), {
+    get destroyed(): boolean {
+      return destroyed;
+    },
     writeHead(status: number, headers: Record<string, string>): void {
       writtenHead.status = status;
       writtenHead.headers = headers;
@@ -102,7 +108,9 @@ function makeCtx(
       ended = true;
     },
     destroy(): void {
+      if (destroyed) return;
       destroyed = true;
+      res.emit("close");
     },
     _sse: {
       writtenHead,
@@ -110,8 +118,14 @@ function makeCtx(
       ended: (): boolean => ended,
       destroyed: (): boolean => destroyed,
     },
-  } as unknown as ServerResponse;
-  return { correlationId: undefined, req: req as unknown as IncomingMessage, res, params, url };
+  });
+  return {
+    correlationId: undefined,
+    req: req as unknown as IncomingMessage,
+    res: res as unknown as ServerResponse,
+    params,
+    url,
+  };
 }
 
 function trackingRedactor(): {
@@ -1424,7 +1438,7 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
   // ignored res.write()'s backpressure boolean: a minimized/throttled window grew the
   // response buffer without bound. A rejected write must abort + destroy that client
   // and stop feeding it, while an unrelated healthy stream keeps working.
-  it("destroys a non-draining events client instead of buffering without bound", () => {
+  it("destroys an events client that drains nothing within the stall bound instead of buffering without bound", () => {
     vi.useFakeTimers();
     try {
       const store = freshStore();
@@ -1438,6 +1452,10 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
       expect(handleRelationshipEvents(healthyCtx, deps)).toBe(STREAMING);
       const slowSse = (slowCtx.res as unknown as { _sse: { destroyed(): boolean; body(): string } })
         ._sse;
+      // A false write is flow control: the client keeps its stream until it drains nothing for the
+      // whole stall bound, then it is torn down.
+      expect(slowSse.destroyed()).toBe(false);
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
       expect(slowSse.destroyed()).toBe(true);
       const slowBytes = slowSse.body().length;
       // Neither the refresh tick nor the ping keeps writing to the killed client.

@@ -4,12 +4,14 @@ import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
 } from "../../../tests/support/buffered-server-log.js";
-// GEN-PERF-CHAT-006: a backpressure kill (res.write -> false) must emit a distinct, observable signal
-// exactly once BEFORE the socket is destroyed, so a slow-client termination is not silently relabeled
-// as a user cancel. The signal must carry only non-secret counts (no body bytes) and an observer throw
-// must never break the protective abort+destroy path.
+// GEN-PERF-CHAT-006: a stalled-reader kill must emit a distinct, observable signal exactly once
+// BEFORE the socket is destroyed, so a stalled-reader termination is not silently relabeled as a user
+// cancel. The signal must carry only non-secret counts (no body bytes) and an observer throw must
+// never break the protective abort+destroy path. A write that merely returns false is flow control.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ServerResponse } from "node:http";
+import { EventEmitter } from "node:events";
+import { createServer, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -18,109 +20,231 @@ import { mockResponse } from "./_support.js";
 import {
   currentOpenSseStreamCount,
   markServerShuttingDown,
+  markSseStreamBackpressureKilled,
   markSseStreamServerErrored,
   resetServerShuttingDownForTests,
+  SSE_STALLED_READER_TIMEOUT_MS,
   sseBackpressureReporter,
-  writeOrDestroy,
+  whenSseWritable,
+  writeSseFrame,
   type SseBackpressureSignal,
 } from "./sse-write.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 
-function fakeRes(writeReturns: boolean): {
-  res: ServerResponse;
-  destroy: ReturnType<typeof vi.fn>;
-  aborted: () => boolean;
-  destroyed: () => boolean;
-} {
-  let destroyed = false;
-  const destroy = vi.fn().mockImplementation(() => {
-    destroyed = true;
-  });
-  const res = {
-    write: vi.fn().mockReturnValue(writeReturns),
-    destroy,
-  } as unknown as ServerResponse;
-  return { res, destroy, aborted: () => false, destroyed: () => destroyed };
+interface DrainableFakeRes {
+  readonly res: ServerResponse;
+  readonly write: ReturnType<typeof vi.fn>;
+  readonly destroy: ReturnType<typeof vi.fn>;
+  readonly drain: () => void;
+  readonly close: () => void;
 }
 
-describe("writeOrDestroy backpressure signal (GEN-PERF-CHAT-006)", () => {
-  it("invokes onBackpressure exactly once with the frame byte count when the write is rejected", () => {
-    const { res, destroy } = fakeRes(false);
-    const controller = new AbortController();
-    const signals: SseBackpressureSignal[] = [];
+// An EventEmitter-backed response double: `write` answers as told, `drain`/`close` fire on demand and
+// `destroy` behaves like a real socket teardown (marks destroyed, then emits close).
+function drainableFakeRes(writeReturns: boolean): DrainableFakeRes {
+  const emitter = new EventEmitter();
+  const res = Object.assign(emitter, {
+    destroyed: false,
+    writableEnded: false,
+    write: vi.fn().mockReturnValue(writeReturns),
+    destroy: vi.fn(),
+  });
+  res.destroy.mockImplementation(() => {
+    res.destroyed = true;
+    emitter.emit("close");
+  });
+  return {
+    res: res as unknown as ServerResponse,
+    write: res.write,
+    destroy: res.destroy,
+    drain: () => emitter.emit("drain"),
+    close: () => emitter.emit("close"),
+  };
+}
 
-    const accepted = writeOrDestroy(res, "event: token\ndata: {}\n\n", controller, (s) => {
-      signals.push(s);
-    });
-
-    expect(accepted).toBe(false);
-    expect(controller.signal.aborted).toBe(true);
-    expect(destroy).toHaveBeenCalledTimes(1);
-    expect(signals).toHaveLength(1);
-    expect(signals[0]).toEqual({
-      frameBytes: Buffer.byteLength("event: token\ndata: {}\n\n", "utf8"),
-      accepted: false,
-    });
+// Node 24 answers `false` for any single write of 64 KiB or more, even to an idle local reader. A
+// false write is flow control: the frame is queued and the stream waits for `drain`. Only a reader
+// that drains nothing within SSE_STALLED_READER_TIMEOUT_MS is torn down (GEN-PERF-CHAT-006 keeps
+// its distinct, observable signal for exactly that case).
+describe("writeSseFrame flow control", () => {
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  it("does NOT invoke onBackpressure on a successful (accepted) write", () => {
-    const { res, destroy } = fakeRes(true);
+  it("keeps the stream open when a write is buffered and the reader drains it", () => {
+    vi.useFakeTimers();
+    const { res, destroy, drain } = drainableFakeRes(false);
     const controller = new AbortController();
     const onBackpressure = vi.fn();
 
-    const accepted = writeOrDestroy(res, "frame", controller, onBackpressure);
+    expect(writeSseFrame(res, "event: big\ndata: {}\n\n", controller, onBackpressure)).toBe(true);
+    drain();
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
 
-    expect(accepted).toBe(true);
-    expect(onBackpressure).not.toHaveBeenCalled();
-    expect(controller.signal.aborted).toBe(false);
     expect(destroy).not.toHaveBeenCalled();
+    expect(controller.signal.aborted).toBe(false);
+    expect(onBackpressure).not.toHaveBeenCalled();
   });
 
-  it("emits the signal BEFORE destroying the socket", () => {
-    const order: string[] = [];
-    const res = {
-      write: vi.fn().mockReturnValue(false),
-      destroy: vi.fn().mockImplementation(() => order.push("destroy")),
-    } as unknown as ServerResponse;
+  it("tears down a reader that drains nothing within the stall bound, signalling exactly once", () => {
+    vi.useFakeTimers();
+    const { res, destroy } = drainableFakeRes(false);
     const controller = new AbortController();
+    const signals: SseBackpressureSignal[] = [];
+    const frame = "event: token\ndata: {}\n\n";
 
-    writeOrDestroy(res, "frame", controller, () => order.push("signal"));
+    writeSseFrame(res, frame, controller, (s) => signals.push(s));
+    writeSseFrame(res, frame, controller, (s) => signals.push(s));
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(destroy).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+
+    expect(destroy).toHaveBeenCalledTimes(1);
+    expect(controller.signal.aborted).toBe(true);
+    expect(signals).toEqual([{ frameBytes: Buffer.byteLength(frame, "utf8"), accepted: false }]);
+    expect(writeSseFrame(res, frame, controller)).toBe(false);
+  });
+
+  it("emits the stalled-reader signal BEFORE destroying the socket", () => {
+    vi.useFakeTimers();
+    const order: string[] = [];
+    const { res, destroy } = drainableFakeRes(false);
+    destroy.mockImplementation(() => order.push("destroy"));
+
+    writeSseFrame(res, "frame", new AbortController(), () => order.push("signal"));
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
 
     expect(order).toEqual(["signal", "destroy"]);
   });
 
-  it("still aborts and destroys even if the observer throws", () => {
-    const { res, destroy } = fakeRes(false);
+  it("still aborts and destroys a stalled reader even if the observer throws", () => {
+    vi.useFakeTimers();
+    const { res, destroy } = drainableFakeRes(false);
     const controller = new AbortController();
 
-    expect(() =>
-      writeOrDestroy(res, "frame", controller, () => {
-        throw new Error("observer boom");
-      }),
-    ).not.toThrow();
+    writeSseFrame(res, "frame", controller, () => {
+      throw new Error("observer boom");
+    });
+    expect(() => vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS)).not.toThrow();
 
     expect(controller.signal.aborted).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps backwards-compatible behavior when no observer is supplied", () => {
-    const { res, destroy } = fakeRes(false);
+  it("ends the wait without a kill when the reader closes first", () => {
+    vi.useFakeTimers();
+    const { res, destroy, close } = drainableFakeRes(false);
     const controller = new AbortController();
 
-    const accepted = writeOrDestroy(res, "frame", controller);
+    writeSseFrame(res, "frame", controller);
+    close();
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
 
-    expect(accepted).toBe(false);
-    expect(controller.signal.aborted).toBe(true);
+    expect(destroy).not.toHaveBeenCalled();
+    expect(controller.signal.aborted).toBe(false);
+  });
+
+  it("tears down an ended stream whose reader never takes the queued tail", () => {
+    vi.useFakeTimers();
+    const { res, destroy } = drainableFakeRes(false);
+    const controller = new AbortController();
+    const onBackpressure = vi.fn();
+
+    writeSseFrame(res, "frame", controller, onBackpressure);
+    Object.assign(res, { writableEnded: true, writableFinished: false });
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
+
     expect(destroy).toHaveBeenCalledTimes(1);
+    expect(onBackpressure).toHaveBeenCalledTimes(1);
   });
 
-  it("never throws when res.on is not implemented (a minimal write/destroy-only double)", () => {
-    const { res } = fakeRes(true);
+  it("ends the wait without a kill once an ended stream has flushed", () => {
+    vi.useFakeTimers();
+    const { res, destroy } = drainableFakeRes(false);
     const controller = new AbortController();
 
-    expect(() => writeOrDestroy(res, "frame", controller)).not.toThrow();
+    writeSseFrame(res, "frame", controller);
+    Object.assign(res, { writableEnded: true, writableFinished: true });
+    res.emit("finish");
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+    expect(destroy).not.toHaveBeenCalled();
+    expect(controller.signal.aborted).toBe(false);
   });
+
+  it("refuses to queue on a stream that is already gone", () => {
+    const { res, write } = drainableFakeRes(true);
+    (res as { destroyed: boolean }).destroyed = true;
+
+    expect(writeSseFrame(res, "frame", new AbortController())).toBe(false);
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("does NOT signal or wait on an accepted write", () => {
+    const { res, destroy } = drainableFakeRes(true);
+    const controller = new AbortController();
+    const onBackpressure = vi.fn();
+
+    expect(writeSseFrame(res, "frame", controller, onBackpressure)).toBe(true);
+    expect(onBackpressure).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+  });
+
+  it("never throws for a minimal write/destroy-only double", () => {
+    const res = {
+      write: vi.fn().mockReturnValue(false),
+      destroy: vi.fn(),
+    } as unknown as ServerResponse;
+
+    expect(() => writeSseFrame(res, "frame", new AbortController())).not.toThrow();
+  });
+});
+
+// The 1.3.1 blocker (2026-10-28): a frame of 64 KiB or more — a large tool call, a buffered answer —
+// made res.write() return false and the old writer destroyed a healthy stream; the reader got
+// nothing. Proven over a real loopback socket, not a mocked write.
+describe("writeSseFrame over a real socket", () => {
+  async function streamOneFrame(
+    frameBytes: number,
+  ): Promise<{ received: number; killed: boolean }> {
+    const frame = `data: ${"x".repeat(frameBytes)}\n\n`;
+    let killed = false;
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      const controller = new AbortController();
+      writeSseFrame(res, frame, controller, () => {
+        killed = true;
+      });
+      res.end();
+    });
+    try {
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const { port } = server.address() as AddressInfo;
+      const response = await fetch(`http://127.0.0.1:${String(port)}/`);
+      const body = await response.text();
+      return { received: Buffer.byteLength(body, "utf8"), killed };
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve();
+        });
+      });
+    }
+  }
+
+  it.each([70_000, 1_048_576, 8_388_608])(
+    "delivers a single %i-byte frame whole and keeps the stream alive",
+    async (bytes) => {
+      const result = await streamOneFrame(bytes);
+
+      expect(result.killed).toBe(false);
+      expect(result.received).toBe(bytes + "data: \n\n".length);
+    },
+  );
 });
 
 // The terminal `sse.stream.closed` line (#2902 w5-sse-counters): a per-response frame/byte counter
@@ -156,13 +280,13 @@ describe("sse.stream.closed terminal line", () => {
     resetServerShuttingDownForTests();
   });
 
-  it("counts every frame written through writeOrDestroy and reports reason=completed on a real stream end", async () => {
+  it("counts every frame written through writeSseFrame and reports reason=completed on a real stream end", async () => {
     const sink = captureServerLog();
     const { res } = mockResponse();
     const controller = new AbortController();
     const frames = ["event: a\ndata: {}\n\n", "event: b\ndata: {}\n\n", "event: c\ndata: {}\n\n"];
 
-    for (const frame of frames) writeOrDestroy(res, frame, controller);
+    for (const frame of frames) writeSseFrame(res, frame, controller);
     const closed = new Promise<void>((resolve) => res.once("close", resolve));
     res.end();
     await closed;
@@ -188,7 +312,7 @@ describe("sse.stream.closed terminal line", () => {
     const { res } = mockResponse();
     const controller = new AbortController();
 
-    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller, undefined, "corr-sse-closed-proof");
+    writeSseFrame(res, "event: a\ndata: {}\n\n", controller, undefined, "corr-sse-closed-proof");
     const closed = new Promise<void>((resolve) => res.once("close", resolve));
     res.end();
     await closed;
@@ -210,7 +334,7 @@ describe("sse.stream.closed terminal line", () => {
     const { res } = mockResponse();
     const controller = new AbortController();
 
-    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller);
+    writeSseFrame(res, "event: a\ndata: {}\n\n", controller);
     const closed = new Promise<void>((resolve) => res.once("close", resolve));
     res.destroy();
     await closed;
@@ -229,8 +353,8 @@ describe("sse.stream.closed terminal line", () => {
     const disconnected = listenableFakeRes(true);
     const controller = new AbortController();
 
-    writeOrDestroy(killed.res, "event: a\ndata: {}\n\n", controller, undefined, "corr-kill");
-    writeOrDestroy(disconnected.res, "event: a\ndata: {}\n\n", controller, undefined, "corr-open");
+    writeSseFrame(killed.res, "event: a\ndata: {}\n\n", controller, undefined, "corr-kill");
+    writeSseFrame(disconnected.res, "event: a\ndata: {}\n\n", controller, undefined, "corr-open");
     expect(currentOpenSseStreamCount()).toBe(before + 2);
 
     markServerShuttingDown();
@@ -254,7 +378,7 @@ describe("sse.stream.closed terminal line", () => {
     const { res } = mockResponse();
     const controller = new AbortController();
 
-    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller);
+    writeSseFrame(res, "event: a\ndata: {}\n\n", controller);
     markServerShuttingDown();
     const closed = new Promise<void>((resolve) => res.once("close", resolve));
     res.end();
@@ -263,13 +387,15 @@ describe("sse.stream.closed terminal line", () => {
     expect(sink.events[0]?.extra).toMatchObject({ reason: "completed" });
   });
 
-  it("reports reason=backpressure-killed and threads the supplied correlation id", () => {
+  it("reports reason=backpressure-killed for a stalled reader and threads the supplied correlation id", () => {
+    vi.useFakeTimers();
     const sink = captureServerLog();
-    const { res, fireClose } = listenableFakeRes(false);
+    const { res } = drainableFakeRes(false);
     const controller = new AbortController();
 
-    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller, undefined, "corr-sse-1");
-    fireClose();
+    writeSseFrame(res, "event: a\ndata: {}\n\n", controller, undefined, "corr-sse-1");
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS);
+    vi.useRealTimers();
 
     expect(sink.events).toEqual([
       {
@@ -286,6 +412,7 @@ describe("sse.stream.closed terminal line", () => {
           loss: "none",
           frameCount: 1,
           bytesStreamed: Buffer.byteLength("event: a\ndata: {}\n\n"),
+          drainWaitCount: 1,
           reason: "backpressure-killed",
         },
       },
@@ -295,7 +422,7 @@ describe("sse.stream.closed terminal line", () => {
   it("preserves a caught server error when destroy does not emit a response error", () => {
     const sink = captureServerLog();
     const { res, fireClose } = listenableFakeRes(true);
-    writeOrDestroy(res, "bounded-frame", new AbortController(), undefined, "corr-sse-error");
+    writeSseFrame(res, "bounded-frame", new AbortController(), undefined, "corr-sse-error");
     markSseStreamServerErrored(res);
     res.destroy(new TypeError("private body"));
     fireClose();
@@ -312,7 +439,7 @@ describe("sse.stream.closed terminal line", () => {
     const { res, fireClose } = listenableFakeRes(true);
     const controller = new AbortController();
 
-    writeOrDestroy(res, "frame", controller);
+    writeSseFrame(res, "frame", controller);
     fireClose();
     fireClose();
 
@@ -323,9 +450,11 @@ describe("sse.stream.closed terminal line", () => {
     "preserves the actual %s terminal diagnostic when optional context is exhausted",
     (reason) => {
       const sink = captureServerLog();
-      const { res, fireClose } = listenableFakeRes(reason !== "backpressure-killed");
-      writeOrDestroy(res, "PRIVATE_FRAME", new AbortController(), undefined, "sse-query-failure");
+      const { res, fireClose } = listenableFakeRes(true);
+      writeSseFrame(res, "PRIVATE_FRAME", new AbortController(), undefined, "sse-query-failure");
       if (reason === "server-error") markSseStreamServerErrored(res);
+      // The stalled-reader teardown marks the stream exactly like this before destroying it.
+      if (reason === "backpressure-killed") markSseStreamBackpressureKilled(res);
       fireClose();
       expect(sink.events[0]?.extra?.reason).toBe(reason);
       const query = observedFailureQuery(sink.events);
@@ -348,7 +477,7 @@ describe("sse.stream.closed terminal line", () => {
     } as unknown as ServerResponse;
     const controller = new AbortController();
 
-    writeOrDestroy(res, "frame", controller);
+    writeSseFrame(res, "frame", controller);
     listeners.get("error")?.();
     listeners.get("close")?.();
 
@@ -357,10 +486,13 @@ describe("sse.stream.closed terminal line", () => {
 
   it("never tracks or logs a response that does not implement .on", () => {
     const sink = captureServerLog();
-    const { res } = fakeRes(true);
+    const res = {
+      write: vi.fn().mockReturnValue(true),
+      destroy: vi.fn(),
+    } as unknown as ServerResponse;
     const controller = new AbortController();
 
-    writeOrDestroy(res, "frame", controller);
+    writeSseFrame(res, "frame", controller);
 
     expect(sink.events).toEqual([]);
   });
@@ -395,5 +527,43 @@ describe("sseBackpressureReporter correlation id (ADR-0173 D5 / g12)", () => {
     expect(records).toHaveLength(3);
     expect(records[0]?.correlationId).toBe(records[1]?.correlationId);
     expect(records[0]?.correlationId).not.toBe(records[2]?.correlationId);
+  });
+});
+
+describe("whenSseWritable", () => {
+  function writableRes(needDrain: boolean): ServerResponse {
+    return Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writableEnded: false,
+      writableNeedDrain: needDrain,
+    }) as unknown as ServerResponse;
+  }
+
+  it("resolves at once while the buffer is below the high-water mark", async () => {
+    await expect(whenSseWritable(writableRes(false))).resolves.toBeUndefined();
+  });
+
+  it("waits for drain while the buffer is above the high-water mark", async () => {
+    const res = writableRes(true);
+    let resolved = false;
+    const waiting = whenSseWritable(res).then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    res.emit("drain");
+    await waiting;
+    expect(resolved).toBe(true);
+    expect(res.listenerCount("drain")).toBe(0);
+    expect(res.listenerCount("close")).toBe(0);
+  });
+
+  it("stops waiting when the stream closes", async () => {
+    const res = writableRes(true);
+    const waiting = whenSseWritable(res);
+    res.emit("close");
+    await expect(waiting).resolves.toBeUndefined();
+    expect(res.listenerCount("drain")).toBe(0);
   });
 });

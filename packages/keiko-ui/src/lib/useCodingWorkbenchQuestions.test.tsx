@@ -510,6 +510,44 @@ describe("useCodingWorkbenchQuestions", () => {
     }
   });
 
+  // Stability audit item 6: a failed re-list replaced the state with an empty list, which unmounted
+  // the answer form and the draft typed into it. The last known questions stay, with the failure.
+  it("keeps the last known questions when a re-list fails, and drops them for another run", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(pending)
+        .mockRejectedValueOnce(new TypeError("offline"))
+        .mockResolvedValue(emptyActive);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      expect(view.result.current.status).toBe("ready");
+
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      await flush();
+
+      expect(view.result.current).toMatchObject({
+        status: "offline",
+        questions: pending.questions,
+        errorCode: "CODING_RUNTIME_QUESTION_FAILED",
+      });
+
+      // Questions belong to one run: another run's failed listing must not inherit them.
+      vi.mocked(listCodingWorkbenchRuntimeQuestions).mockRejectedValue(new TypeError("offline"));
+      view.rerender({ ...activeInput(), runId: "run-2", runtimeEventSignal: 1 });
+      await flush();
+      expect(view.result.current).toMatchObject({ status: "offline", questions: [] });
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // A question can also be raised while the run is paused (the in-flight turn keeps running); the
   // sticky-paused orchestrator suppresses adapter events, so the resume transition must re-list.
   it("re-lists when the run state transitions while active", async () => {

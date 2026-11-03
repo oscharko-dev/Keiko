@@ -460,6 +460,25 @@ describe("coverage baseline reality guard", () => {
 // helper's copy does not, the live inventory silently starts measuring something else — and the
 // reality guard above would keep passing over a wrong answer.
 describe("coverage source-glob parity", () => {
+  it.each(["keiko-probe", "keiko-ui"])(
+    "omits declarations from %s while keeping runtime sources",
+    (packageName) => {
+      const root = makeRoot();
+      try {
+        const src = join(root, "packages", packageName, "src");
+        mkdirSync(src, { recursive: true });
+        writeFileSync(join(src, "runtime.ts"), "export const enabled = true;\n");
+        writeFileSync(join(src, "runtime.d.ts"), "declare module 'external-runtime';\n");
+
+        expect(listPackageSourceFiles(root, packageName)).toEqual([
+          `packages/${packageName}/src/runtime.ts`,
+        ]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("counts files with the same include/exclude globs the package coverage run declares", async () => {
     const config = (await import("../../vitest.coverage.packages.config.ts")).default;
 

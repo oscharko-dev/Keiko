@@ -1127,6 +1127,48 @@ describe("OpenAiAdapter.call", () => {
       tool_call_id: "call_1",
     });
   });
+
+  // #3907 AC3: the text a model wrote next to its tool calls is part of the conversation it sees
+  // again on the next turn, exactly as a standalone OpenCode run resends it. Only an assistant turn
+  // without text keeps the bare `content: null` of a tool-only call.
+  it("resends the text an assistant turn wrote next to its tool calls", async () => {
+    let sentBody: unknown;
+    const adapter = adapterWith((_url, init) => {
+      const raw = init?.body;
+      sentBody = typeof raw === "string" ? JSON.parse(raw) : null;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "done" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        messages: [
+          { role: "user", content: "search" },
+          {
+            role: "assistant",
+            content: "I will search for it first.",
+            toolCalls: [{ id: "call_1", name: "search", arguments: { q: "hi" } }],
+          },
+          { role: "tool", content: "result", toolCallId: "call_1" },
+          {
+            role: "assistant",
+            content: "  \n",
+            toolCalls: [{ id: "call_2", name: "search", arguments: { q: "again" } }],
+          },
+          { role: "tool", content: "result", toolCallId: "call_2" },
+        ],
+      },
+      CONFIG,
+    );
+    const body = sentBody as { messages: { role: string; content: string | null }[] };
+    expect(body.messages[1]).toMatchObject({
+      role: "assistant",
+      content: "I will search for it first.",
+      tool_calls: [{ id: "call_1", function: { name: "search", arguments: '{"q":"hi"}' } }],
+    });
+    expect(body.messages[3]).toMatchObject({ role: "assistant", content: null });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1170,11 +1212,8 @@ describe("OpenAiAdapter.callStream", () => {
       ),
     );
     const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
-    expect(chunks.slice(0, 2)).toEqual([
-      { type: "delta", token: "Hel" },
-      { type: "delta", token: "lo" },
-    ]);
-    const done = chunks[2];
+    expect(chunks.slice(0, 1)).toEqual([{ type: "delta", token: "Hello" }]);
+    const done = chunks[1];
     if (done?.type !== "done") throw new Error("expected a done chunk");
     expect(done.response.content).toBe("Hello");
     expect(done.response.finishReason).toBe("stop");
@@ -1326,7 +1365,7 @@ describe("OpenAiAdapter.callStream", () => {
     expect(serialized).not.toContain(customSecret);
   });
 
-  it("emits only the safe prefix while holding back a possible secret suffix", async () => {
+  it("retains an incomplete block until terminal before releasing a nonsecret suffix", async () => {
     const customSecret = "opaque-buffered-secret-value";
     const heldPrefix = customSecret.slice(0, 6);
     const adapter = adapterWith(() =>
@@ -1340,10 +1379,7 @@ describe("OpenAiAdapter.callStream", () => {
       (chunk): chunk is Extract<typeof chunk, { type: "delta" }> => chunk.type === "delta",
     );
 
-    expect(deltaTokens).toEqual([
-      { type: "delta", token: "safe-" },
-      { type: "delta", token: heldPrefix },
-    ]);
+    expect(deltaTokens).toEqual([{ type: "delta", token: `safe-${heldPrefix}` }]);
   });
 
   it("holds back a streamed secret prefix until the following delta proves it redacted", async () => {
@@ -1541,5 +1577,36 @@ describe("OpenAiAdapter.callStream mid-stream usage retention", () => {
       completionTokens: 7,
       streamedChars: "partial".length,
     });
+  });
+});
+
+describe("streamed redaction agrees with completed code and secret protection", () => {
+  it.each([
+    { text: 'password = "opaque-streaming-value"', hidden: "opaque-streaming-value" },
+    { text: "password:\nopaque-streaming-value\nPublic fact\n", hidden: "opaque-streaming-value" },
+    {
+      text: '```ts\nconst token: string = "opaque-streaming-value";\n```\n',
+      hidden: "opaque-streaming-value",
+    },
+    { text: "```tsx\nlet complete: (token: string) => void;\n```\n", hidden: undefined },
+    { text: "```java\nclass Basic extends Base {}\n```\n", hidden: undefined },
+    { text: "First complete line.\nSecond complete line.\n", hidden: undefined },
+  ])("protects every two-fragment split of $text", async ({ text, hidden }) => {
+    for (let at = 1; at < text.length; at += 1) {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          sseResponse([deltaLine(text.slice(0, at)), deltaLine(text.slice(at)), "data: [DONE]\n"]),
+        ),
+      );
+      const chunks = await collectStream(adapter.callStream(REQUEST, CONFIG));
+      const emitted = chunks
+        .filter((chunk) => chunk.type === "delta")
+        .map((chunk) => chunk.token)
+        .join("");
+      const done = chunks.find((chunk) => chunk.type === "done");
+      expect(done?.response.content, `terminal split ${at.toString()}`).toBe(emitted);
+      if (hidden === undefined) expect(emitted, `public code split ${at.toString()}`).toBe(text);
+      else expect(JSON.stringify(chunks), `secret split ${at.toString()}`).not.toContain(hidden);
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
 import { connectedFollowUpConfiguration } from "./grounded-answer-activity.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
@@ -11,6 +11,37 @@ import {
 
 describe("canonical grounded answer and follow-up evidence", () => {
   afterEach(resetServerLogger);
+  it("records unsupported repair size without dispatching or disclosing the answer", async () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const content = "PRIVATE_ANSWER_CANARY " + "x".repeat(131_073);
+    const repair = vi.fn((): Promise<string> => Promise.resolve("Changed text."));
+    const result = await runConnectedRetrievalEval({
+      files: { "src/Feature.ts": "export function Feature() { return true; }" },
+      query: "Explain src/Feature.ts",
+      answerer: {
+        answer: () =>
+          Promise.resolve({ content, usage: { promptTokens: 17, completionTokens: 7 } }),
+        repair,
+      },
+    });
+    expect(repair).not.toHaveBeenCalled();
+    expect(result.answer?.assistantContent).toBe(content);
+    expect(result.pack.usage).toMatchObject({ modelInputTokens: 17, modelOutputTokens: 7 });
+    expect(result.pack.uncertainty.some((marker) => marker.kind === "uncited-answer")).toBe(true);
+    const event = sink.events.find(
+      (entry) => entry.op === "search.connected-context.answer-details",
+    );
+    const line = formatActivityLogProofLine(event ?? {});
+    const persisted = expectActivityLogProof("search.connected-context.answer-details.line", line);
+    expect(persisted).toMatchObject({
+      citationRepairDisposition: "skipped-capability",
+      citationBehaviour: "never",
+    });
+    expect(line).not.toContain("PRIVATE_ANSWER_CANARY");
+    expect(line).not.toContain("Feature");
+  });
+
   it("persists same-turn follow-up outcomes without paths, prompts or model bodies", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));

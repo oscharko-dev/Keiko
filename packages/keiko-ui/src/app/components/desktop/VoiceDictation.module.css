@@ -1,0 +1,64 @@
+.cmpWaveform {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 36px;
+  overflow: hidden;
+  color: var(--text-secondary);
+}
+
+.cmpWaveform[data-recording="true"] {
+  /* New samples enter beside the microphone on the right, softened over the last few
+     pixels so a bar never pops in. Older samples disappear across the leftmost third,
+     before the adjacent model and skill controls. */
+  mask-image: linear-gradient(to right, transparent, #000 33%, #000 96%, transparent);
+}
+
+.cmpWaveform svg {
+  display: block;
+  width: 100%;
+  min-width: 384px;
+  flex-shrink: 0;
+  height: 24px;
+  opacity: 0.72;
+}
+
+/* Each sample glides one step left over the 80ms sampling interval (VoiceDictationWaveform),
+   so the trace drifts continuously; silence stays a row of faint dots and speech reads by
+   height and a slightly firmer tone, never by colour. Shared by Chat and the Coding Workbench. */
+.cmpWaveform line {
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.5;
+  transition:
+    transform 80ms linear,
+    opacity var(--dur-fast, 120ms) var(--ease-standard, ease);
+}
+
+.cmpWaveform line[data-speech="true"] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmpWaveform line {
+    transition: none;
+  }
+}
+
+.cmpStatus {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.85rem;
+}
+
+.cmpStop {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: currentColor;
+}

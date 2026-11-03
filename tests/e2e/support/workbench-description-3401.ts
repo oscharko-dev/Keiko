@@ -2,6 +2,11 @@ import { expect, type Page, type Route } from "@playwright/test";
 import { activeWorkspace } from "./coding-workbench-live-runtime-fixtures.js";
 
 const RUN_ID = "run-description-race-3401";
+// Since #3561 (task history) the Workbench keeps a SETTLED run on display only while it belongs to
+// the Coding History task the window shows (`useCodingTaskSession.sessionRunVisible`): a snapshot
+// without a `conversationId` that has left its active states is dropped from the window. The run
+// below therefore belongs to a task whose detail the window reads exactly as it does in the product.
+const CONVERSATION_ID = "task-description-race-3401";
 const OLD_PROPOSAL = "proposal-old-3401";
 const NEW_PROPOSAL = "proposal-new-3401";
 const OLD_SNAPSHOT = "a".repeat(64);
@@ -61,6 +66,7 @@ function runtimeSnapshot(current: "old" | "new"): Record<string, unknown> {
     revision: next ? 1 : 2,
     updatedAt: OBSERVED_AT,
     runId: RUN_ID,
+    conversationId: CONVERSATION_ID,
     descriptionStatus: next
       ? descriptionStatus(OLD_PROPOSAL, OLD_SNAPSHOT, OLD_HEAD, "c".repeat(64))
       : descriptionStatus(NEW_PROPOSAL, NEW_SNAPSHOT, NEW_HEAD, "d".repeat(64)),
@@ -144,6 +150,34 @@ async function fulfillJson(route: Route, body: unknown): Promise<void> {
   await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(body) });
 }
 
+// The Coding History task the run belongs to. Its project and workspace must match the window's
+// repository and active workspace, or `taskScopeMatches` rejects the detail and the run stays hidden.
+async function installTaskHistoryRoute(
+  page: Page,
+  root: string,
+  instance: { readonly workspaceId: string; readonly taskId: string; readonly taskBranch: string },
+): Promise<void> {
+  await page.route(`**/api/coding-workbench/history/${CONVERSATION_ID}`, (route) =>
+    fulfillJson(route, {
+      task: {
+        id: CONVERSATION_ID,
+        title: "Workbench description race",
+        projectPath: root,
+        modelId: "functional-model",
+        branch: instance.taskBranch,
+        workspaceId: instance.workspaceId,
+        taskId: instance.taskId,
+        status: "active",
+        createdAt: Date.parse(OBSERVED_AT),
+        updatedAt: Date.parse(OBSERVED_AT),
+        latestRunId: RUN_ID,
+      },
+      messages: [],
+      truncated: false,
+    }),
+  );
+}
+
 export async function seedWorkbenchDescriptionWindow(page: Page, root: string): Promise<void> {
   const fixture = activeWorkspace();
   const instance = {
@@ -169,6 +203,7 @@ export async function seedWorkbenchDescriptionWindow(page: Page, root: string): 
   await page.route("**/api/task-workspaces/active", (route) =>
     fulfillJson(route, { active: { instance, binding, pointer: fixture.pointer } }),
   );
+  await installTaskHistoryRoute(page, root, instance);
   await page.addInitScript(
     ({ repositoryRoot }) => {
       window.localStorage.setItem(

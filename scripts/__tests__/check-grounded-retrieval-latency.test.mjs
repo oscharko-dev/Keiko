@@ -207,9 +207,9 @@ describe("assertMeasurableBudget", () => {
   });
 });
 
-// The runner, driven end to end over the REAL pipeline with a one-iteration budget so the suite pays
-// for two evaluations rather than fifteen. This is what covers collectSamples, the reporting, and
-// the failure branch — the pure helpers above cannot reach any of it.
+// Drive the REAL pipeline with the committed warmups and sample counts. One cold sample is not a
+// representative percentile under coverage and parallel worker load. Keep the production ceilings
+// and regression probes: the pure helpers above cannot cover collection, reporting or runner failure.
 describe("runGroundedRetrievalLatencyGate", () => {
   // A named no-op: an empty arrow is a lint error, and the point is that these runs discard their
   // log output rather than that nothing happens.
@@ -230,15 +230,8 @@ describe("runGroundedRetrievalLatencyGate", () => {
     }
   }
 
-  const FAST = {
-    warmupIterations: 0,
-    iterations: 1,
-    regressionProbe: { judgeDelayMs: 1300 },
-    boundedFollowUp: { ...budget.boundedFollowUp, warmupIterations: 0, iterations: 1 },
-  };
-
   it("measures the real pipeline, reports both percentiles, and proves the probe fires", async () => {
-    await withBudgetFile(FAST, async (budgetPath) => {
+    await withBudgetFile({}, async (budgetPath) => {
       const logs = [];
       const failures = [];
       const result = await runGroundedRetrievalLatencyGate({
@@ -264,22 +257,19 @@ describe("runGroundedRetrievalLatencyGate", () => {
   it("fails when the measured percentiles breach an impossible budget", async () => {
     // Positive but unreachable: a zero ceiling is now rejected up front as unmeasurable, so the
     // breach has to be forced with a budget that is valid and still cannot be met.
-    await withBudgetFile(
-      { ...FAST, p50BudgetMs: 0.001, p95BudgetMs: 0.001 },
-      async (budgetPath) => {
-        const failures = [];
-        const result = await runGroundedRetrievalLatencyGate({
-          budgetPath,
-          log: () => discard(),
-          fail: (m) => failures.push(m),
-        });
+    await withBudgetFile({ p50BudgetMs: 0.001, p95BudgetMs: 0.001 }, async (budgetPath) => {
+      const failures = [];
+      const result = await runGroundedRetrievalLatencyGate({
+        budgetPath,
+        log: () => discard(),
+        fail: (m) => failures.push(m),
+      });
 
-        expect(result.ok).toBe(false);
-        expect(failures).toHaveLength(1);
-        expect(failures[0]).toContain("p50");
-        expect(failures[0]).toContain("p95");
-      },
-    );
+      expect(result.ok).toBe(false);
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toContain("p50");
+      expect(failures[0]).toContain("p95");
+    });
   }, 180_000);
 
   // An absent or malformed budget aborts the run either way. The point of catching it is that CI
@@ -310,28 +300,24 @@ describe("runGroundedRetrievalLatencyGate", () => {
   // The self-proving half, exercised for real: with a budget wide enough to absorb the injected
   // delay, the probe must report the gate as tautological rather than passing quietly.
   it("fails closed when the budget is loose enough to absorb the injected regression", async () => {
-    await withBudgetFile(
-      { ...FAST, p50BudgetMs: 600_000, p95BudgetMs: 600_000 },
-      async (budgetPath) => {
-        const failures = [];
-        const result = await runGroundedRetrievalLatencyGate({
-          budgetPath,
-          log: () => discard(),
-          fail: (m) => failures.push(m),
-        });
+    await withBudgetFile({ p50BudgetMs: 600_000, p95BudgetMs: 600_000 }, async (budgetPath) => {
+      const failures = [];
+      const result = await runGroundedRetrievalLatencyGate({
+        budgetPath,
+        log: () => discard(),
+        fail: (m) => failures.push(m),
+      });
 
-        expect(result.probe.detected).toBe(false);
-        expect(result.ok).toBe(false);
-        expect(failures.join(" ")).toContain("tautological gate");
-      },
-    );
+      expect(result.probe.detected).toBe(false);
+      expect(result.ok).toBe(false);
+      expect(failures.join(" ")).toContain("tautological gate");
+    });
   }, 180_000);
 
   it("fails the complete gate when only the bounded follow-up ceiling is breached", async () => {
     await withBudgetFile(
       {
-        ...FAST,
-        boundedFollowUp: { ...FAST.boundedFollowUp, p50BudgetMs: 0.001, p95BudgetMs: 0.001 },
+        boundedFollowUp: { ...budget.boundedFollowUp, p50BudgetMs: 0.001, p95BudgetMs: 0.001 },
       },
       async (budgetPath) => {
         const failures = [];
@@ -353,8 +339,7 @@ describe("runGroundedRetrievalLatencyGate", () => {
   it("fails closed when only the follow-up regression is absorbed", async () => {
     await withBudgetFile(
       {
-        ...FAST,
-        boundedFollowUp: { ...FAST.boundedFollowUp, p50BudgetMs: 600_000, p95BudgetMs: 600_000 },
+        boundedFollowUp: { ...budget.boundedFollowUp, p50BudgetMs: 600_000, p95BudgetMs: 600_000 },
       },
       async (budgetPath) => {
         const failures = [];

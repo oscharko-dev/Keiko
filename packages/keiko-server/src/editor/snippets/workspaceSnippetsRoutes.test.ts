@@ -15,6 +15,7 @@ import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contra
 
 import type { UiHandlerDeps } from "../../deps.js";
 import { createRunRegistry } from "../../runs.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "../../sse-write.js";
 import { createInMemoryUiStore, type UiStore } from "../../store/index.js";
 import { STREAMING, type RouteContext } from "../../routes.js";
 import type {
@@ -128,8 +129,14 @@ function makeFakeSnippetsSseRes(): FakeSnippetsSseRes {
       chunks.push(chunk);
       return state.writeReturns;
     },
+    destroyed: false,
+    writableEnded: false,
+    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
+    // route's own close handler unsubscribes on.
     destroy: (): void => {
       state.destroyCount += 1;
+      res.destroyed = true;
+      emitter.emit("close");
     },
   });
   state.res = res as unknown as ServerResponse;
@@ -319,40 +326,78 @@ describe("workspace snippet routes", () => {
 
   // GEN-PERF-SSE-STREAMING-CHAT-PERF-001 (KEIKO-0366): a client that stops draining must not be
   // allowed to grow Node's write buffer without bound. Mirrors command-runner-routes.test.ts's
-  // "openCommandSseStream backpressure" block: a fake res whose write() always returns false must
-  // cause the handler to destroy the socket (via writeOrDestroy) and unsubscribe from the service.
-  it("destroys the socket and unsubscribes when res.write reports backpressure", () => {
-    const service = fakeService();
-    const fake = makeFakeSnippetsSseRes();
-    fake.writeReturns = false;
-    const eventContext = context("/api/editor/snippets/events", undefined, {}, fake.res);
+  // "openCommandSseStream backpressure" block: a fake res whose write() always returns false and
+  // that never drains must, once SSE_STALLED_READER_TIMEOUT_MS has passed, cause the handler to
+  // destroy the socket (via writeSseFrame) and unsubscribe from the service.
+  describe("backpressure", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
 
-    const result = handleWorkspaceSnippetsEvents(eventContext, deps(service));
-
-    expect(result).toBe(STREAMING);
-    // The ready frame itself is rejected, which must trip the abort+destroy path exactly once and
-    // unsubscribe from the service immediately.
-    expect(fake.destroyCount).toBe(1);
-    expect(service.listenerCount()).toBe(0);
-
-    const chunksBeforeEvent = fake.chunks.length;
-    service.emit({
+    const change = {
       schemaVersion: EDITOR_M7_SNIPPET_COLLECTION_VERSION,
       sequence: 1,
       workspaceFingerprint: "abcdef1234567890",
       revision: 1,
       action: "replace",
       snippetCount: 1,
+    } as const;
+
+    it("destroys the socket and unsubscribes when the reader stalls after res.write returns false", () => {
+      vi.useFakeTimers();
+      const service = fakeService();
+      const fake = makeFakeSnippetsSseRes();
+      fake.writeReturns = false;
+      const eventContext = context("/api/editor/snippets/events", undefined, {}, fake.res);
+
+      const result = handleWorkspaceSnippetsEvents(eventContext, deps(service));
+
+      expect(result).toBe(STREAMING);
+      // A false write on the ready frame is flow control: nothing is torn down yet.
+      expect(fake.destroyCount).toBe(0);
+      expect(service.listenerCount()).toBe(1);
+
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(fake.destroyCount).toBe(0);
+      expect(service.listenerCount()).toBe(1);
+
+      // The reader drained nothing for the whole bound: abort+destroy exactly once and unsubscribe.
+      vi.advanceTimersByTime(1);
+      expect(fake.destroyCount).toBe(1);
+      expect(service.listenerCount()).toBe(0);
+
+      const chunksBeforeEvent = fake.chunks.length;
+      service.emit(change);
+
+      // Already unsubscribed by the abort, so a subsequent change event produces no further writes
+      // and does not re-trigger destroy.
+      expect(fake.chunks).toHaveLength(chunksBeforeEvent);
+      expect(fake.destroyCount).toBe(1);
+
+      expect(() => {
+        fake.res.emit("close");
+      }).not.toThrow();
     });
 
-    // Already unsubscribed by the abort, so a subsequent change event produces no further writes
-    // and does not re-trigger destroy.
-    expect(fake.chunks).toHaveLength(chunksBeforeEvent);
-    expect(fake.destroyCount).toBe(1);
+    it("keeps the stream open and subscribed when a false write is followed by drain", () => {
+      vi.useFakeTimers();
+      const service = fakeService();
+      const fake = makeFakeSnippetsSseRes();
+      fake.writeReturns = false;
+      const eventContext = context("/api/editor/snippets/events", undefined, {}, fake.res);
 
-    expect(() => {
-      fake.res.emit("close");
-    }).not.toThrow();
+      handleWorkspaceSnippetsEvents(eventContext, deps(service));
+      fake.res.emit("drain");
+      fake.writeReturns = true;
+      vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+      expect(fake.destroyCount).toBe(0);
+      expect(service.listenerCount()).toBe(1);
+      const chunksBeforeEvent = fake.chunks.length;
+      service.emit(change);
+      expect(fake.chunks.length).toBeGreaterThan(chunksBeforeEvent);
+      expect(fake.destroyCount).toBe(0);
+    });
   });
 
   it("rejects a new stream with 429 SUBSCRIBER_LIMIT before opening the SSE response", () => {

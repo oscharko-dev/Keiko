@@ -38,41 +38,38 @@ export const APPROVED_LICENSES = new Set([
 // Engineering-reviewed component disposition in #3895: exact original npm artifacts and their
 // preserved full notices only; no global license allowance.
 // GitHub's pinned license-exclusion matcher ignores versions. The same decision owner therefore
-// validates both canonical locks before emitting package-wide exclusions to that action.
+// validates the canonical lock before emitting package-wide exclusions to that action.
 const COMPONENT_LICENSE_DECISIONS = new Map([
   [
-    "pkg:npm/spdx-exceptions@2.5.0",
+    // Mermaid's colour library (#3906, owner decision of 2026-10-24). The manifest declares no
+    // license; the artifact's own `license` file is the MIT text (SHA-256
+    // 66b333b0f66759a0b710459e03f7029abe17f4358114a128d2c972e642961b49), and the pinned integrity
+    // binds that file. Only this exact artifact may stand without a declaration.
+    "pkg:npm/khroma@2.1.0",
     {
-      name: "spdx-exceptions",
-      version: "2.5.0",
+      name: "khroma",
+      version: "2.1.0",
       integrity:
-        "sha512-PiU42r+xO4UbUS1buo3LPJkjlO7430Xn5SVAhdpzzsPHsjbYVflnnFdATgabnLude+Cqu25p6N+g2lw/PFsa4w==",
-      resolved: "https://registry.npmjs.org/spdx-exceptions/-/spdx-exceptions-2.5.0.tgz",
-      declaredLicense: "CC-BY-3.0",
-      licenses: ["CC-BY-3.0"],
+        "sha512-Ls993zuzfayK269Svk9hzpeGUKob/sIgZzyHYdjQoAdQetRKpOLj+k/QQQ/6Qi0Yz65mlROrfd+Ev+1+7dz9Kw==",
+      resolved: "https://registry.npmjs.org/khroma/-/khroma-2.1.0.tgz",
+      declaredLicense: undefined,
+      licenses: ["MIT"],
+      undeclaredLicense: "MIT",
     },
   ],
   [
-    "pkg:npm/bowser@2.14.1",
+    // Mermaid's geometry predicates, through d3-delaunay (#3906, owner decision of 2026-10-24). The
+    // manifest declares Unlicense and the artifact's LICENSE is the Unlicense text (SHA-256
+    // 88d9b4eb60579c191ec391ca04c16130572d7eedc4a86daa58bf28c6e14c9bcd); GitHub's scanner reads the
+    // same text as `LicenseRef-scancode-public-domain AND Unlicense`. No other license is admitted.
+    "pkg:npm/robust-predicates@3.0.3",
     {
-      name: "bowser",
-      version: "2.14.1",
+      name: "robust-predicates",
+      version: "3.0.3",
       integrity:
-        "sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==",
-      resolved: "https://registry.npmjs.org/bowser/-/bowser-2.14.1.tgz",
-      declaredLicense: "MIT",
-      licenses: ["MITNFA"],
-    },
-  ],
-  [
-    "pkg:npm/json-schema@0.4.0",
-    {
-      name: "json-schema",
-      version: "0.4.0",
-      integrity:
-        "sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==",
-      resolved: "https://registry.npmjs.org/json-schema/-/json-schema-0.4.0.tgz",
-      declaredLicense: "(AFL-2.1 OR BSD-3-Clause)",
+        "sha512-NS3levdsRIUOmiJ8FZWCP7LG3QpJyrs/TE0Zpf1yvZu8cAJJ6QMW92H1c7kWpdIHo8RvmLxN/o2JXTKHp74lUA==",
+      resolved: "https://registry.npmjs.org/robust-predicates/-/robust-predicates-3.0.3.tgz",
+      declaredLicense: "Unlicense",
       licenses: [],
     },
   ],
@@ -124,7 +121,7 @@ function reviewedRecordMatches(path, entry, decision) {
       name: decision.name,
       version: decision.version,
       purl: `pkg:npm/${decision.name}@${decision.version}`,
-      licenses: [{ expression: entry.license }],
+      licenses: entry.license === undefined ? [] : [{ expression: entry.license }],
     }).length === 0
   );
 }
@@ -155,8 +152,8 @@ function reviewedLockFailures(lock, seen) {
 }
 
 export function reviewedDependencyLicenseFailures(lockfiles) {
-  if (!Array.isArray(lockfiles) || lockfiles.length !== 2) {
-    return ["both canonical root and native npm locks are required"];
+  if (!Array.isArray(lockfiles) || lockfiles.length !== 1) {
+    return ["the canonical root npm lock is required"];
   }
   const seen = new Set();
   const failures = lockfiles.flatMap((lock) => reviewedLockFailures(lock, seen));
@@ -169,11 +166,9 @@ export function reviewedDependencyLicenseFailures(lockfiles) {
 function reviewedDependencyLicensePreflight() {
   let locks;
   try {
-    locks = ["package-lock.json", "native/opencode-service-host/package-lock.json"].map((path) =>
-      JSON.parse(readFileSync(join(repoRoot, path), "utf8")),
-    );
+    locks = [JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf8"))];
   } catch {
-    fail("cannot read both canonical dependency license lockfiles");
+    fail("cannot read the canonical dependency license lockfile");
   }
   const failures = reviewedDependencyLicenseFailures(locks);
   if (failures.length > 0) fail(failures.join("; "));
@@ -204,30 +199,95 @@ function listWorkspacePackages() {
   return packages;
 }
 
-function generateSbom(workspaceName, outPath) {
-  const result = spawnSync(
-    resolveHostExecutable("npm"),
-    ["sbom", "--sbom-format", "cyclonedx", "--omit", "dev", "--workspace", workspaceName],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    fail(`npm sbom --workspace ${workspaceName} exited ${String(result.status)}: ${result.stderr}`);
+function runtimeNodeReference(node) {
+  if (!isRecord(node)) throw new TypeError("Invalid npm production dependency node.");
+  // npm ls leaves empty nodes for optional platform packages that are not installed. A missing
+  // required dependency makes npm ls fail before this projection is called.
+  if (Object.keys(node).length === 0) return undefined;
+  if (typeof node.name !== "string" || typeof node.version !== "string") {
+    throw new TypeError("npm production dependency identity is incomplete.");
   }
-  writeFileSync(outPath, result.stdout);
+  return `${node.name}@${node.version}`;
+}
+
+function runtimeDependencyGraph(tree, graph = new Map()) {
+  const ref = runtimeNodeReference(tree);
+  if (ref === undefined) return graph;
+  const edges = graph.get(ref) ?? new Set();
+  graph.set(ref, edges);
+  for (const child of Object.values(tree.dependencies ?? {})) {
+    const childRef = runtimeNodeReference(child);
+    if (childRef !== undefined) edges.add(childRef);
+    runtimeDependencyGraph(child, graph);
+  }
+  return graph;
+}
+
+/** npm's .dev selector also matches shared prod/dev ancestry; npm ls supplies the actual closure. */
+export function projectProductionSbom(sbom, runtimeTree) {
+  const graph = runtimeDependencyGraph(runtimeTree);
+  const rootRef = sbom.metadata?.component?.["bom-ref"];
+  if (!graph.has(rootRef) || !Array.isArray(sbom.components)) {
+    throw new TypeError("SBOM and npm production root do not match.");
+  }
+  const components = sbom.components.filter((component) => graph.has(component["bom-ref"]));
+  const available = new Set([rootRef, ...components.map((component) => component["bom-ref"])]);
+  if ([...graph.keys()].some((ref) => !available.has(ref))) {
+    throw new Error("SBOM is missing a productive dependency component.");
+  }
+  const dependencies = [...graph.keys()].sort(compareCodeUnits).map((ref) => ({
+    ref,
+    dependsOn: [...graph.get(ref)].sort(compareCodeUnits),
+  }));
+  return { ...sbom, components, dependencies };
+}
+
+// Match Array#sort's default UTF-16 code-unit ordering without locale-dependent collation.
+function compareCodeUnits(left, right) {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function npmJson(arguments_, purpose) {
+  const result = spawnSync(resolveHostExecutable("npm"), arguments_, {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  if (result.status !== 0) {
+    fail(`${purpose} exited ${String(result.status)}: ${result.stderr}`);
+  }
   return JSON.parse(result.stdout);
 }
 
+function productionSbom(workspaceName) {
+  const workspace = workspaceName === undefined ? [] : ["--workspace", workspaceName];
+  // The unfiltered official SBOM owns license/hash metadata. The actual productive npm tree owns
+  // inclusion and edges; filtering .dev would erase packages also reached by development tools.
+  const complete = npmJson(
+    ["sbom", "--sbom-format", "cyclonedx", "--include=dev", ...workspace],
+    "npm sbom",
+  );
+  const runtimeTree = npmJson(
+    ["ls", "--omit=dev", "--all", "--long", "--json", ...workspace],
+    "npm ls production closure",
+  );
+  return projectProductionSbom(complete, runtimeTree);
+}
+
+function generateSbom(workspaceName, outPath) {
+  const sbom = productionSbom(workspaceName);
+  writeFileSync(outPath, `${JSON.stringify(sbom, null, 2)}\n`);
+  return sbom;
+}
+
 function generateRootSbom(outPath) {
-  // Reuse the CI-generated `sbom.cdx.json` at the repo root when present (CI emits it in the
-  // step just before this gate runs, see ci.yml). Standalone local runs fall through to a fresh
-  // `npm sbom` so the script remains usable outside CI (Copilot review on #169).
+  // CI's initial npm --omit=dev document has the same shared-dependency omission. Replace it
+  // with this owner-validated productive graph before license checks and artifact upload.
   const ciRootSbomPath = join(repoRoot, "sbom.cdx.json");
-  const sbomJson = existsSync(ciRootSbomPath)
-    ? readFileSync(ciRootSbomPath, "utf8")
-    : runRootSbom();
   const lockfile = JSON.parse(readFileSync(join(repoRoot, "package-lock.json"), "utf8"));
   const sbom = addTypeScriptRuntimeToSbom(
-    JSON.parse(sbomJson),
+    productionSbom(),
     lockfile.packages?.["node_modules/typescript"],
   );
   const renderedSbom = `${JSON.stringify(sbom, null, 2)}\n`;
@@ -236,18 +296,6 @@ function generateRootSbom(outPath) {
     writeFileSync(ciRootSbomPath, renderedSbom);
   }
   return sbom;
-}
-
-function runRootSbom() {
-  const result = spawnSync(
-    resolveHostExecutable("npm"),
-    ["sbom", "--sbom-format", "cyclonedx", "--omit", "dev"],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    fail(`npm sbom (root) exited ${String(result.status)}: ${result.stderr}`);
-  }
-  return result.stdout;
 }
 
 // Evaluate an SPDX license expression (CycloneDX `licenses[].expression`) against the allow-list
@@ -337,9 +385,10 @@ export function offendersForComponent(component) {
   const id = `${component.name}@${component.version}`;
   const licenses = Array.isArray(component.licenses) ? component.licenses : [];
   // CycloneDX entries without an explicit `licenses` array are treated as offenders — we cannot
-  // prove they are acceptable without a declaration.
+  // prove they are acceptable without a declaration — unless this exact artifact's license was
+  // reviewed from its own license file.
   if (licenses.length === 0) {
-    return [{ id, license: "<missing>" }];
+    return undeclaredLicenseReviewed(component) ? [] : [{ id, license: "<missing>" }];
   }
   const offenders = [];
   for (const entry of licenses) {
@@ -349,6 +398,15 @@ export function offendersForComponent(component) {
     }
   }
   return offenders;
+}
+
+function undeclaredLicenseReviewed(component) {
+  const decision = COMPONENT_LICENSE_DECISIONS.get(component.purl);
+  return (
+    decision?.undeclaredLicense !== undefined &&
+    decision.name === component.name &&
+    decision.version === component.version
+  );
 }
 
 function collectLicenseOffenders(sbom) {

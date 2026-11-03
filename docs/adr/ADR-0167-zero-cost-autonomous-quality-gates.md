@@ -69,10 +69,15 @@ be reconsidered only after a later live probe proves durable zero-cost, fail-clo
 
 ### D3 — Add zero-tolerance OSS gates for semantic clones and secrets
 
-Fallow 3.9.1 is exact-version locked and runs semantic duplicate analysis only over the changed
+Fallow 3.34.0 is exact-version locked and runs semantic duplicate analysis only over the changed
 surface. Any introduced semantic clone group of at least 100 tokens and 10 lines fails. Ignoring
 imports avoids punishing required module boilerplate while still detecting renamed-variable and
 restructured copy/paste that text-only duplication misses.
+
+The 2026-10-24 security repair raises the original 3.9.1 pin to 3.34.0 for
+GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5. The command, token/line floors and zero-issue
+requirement are unchanged. Newly exposed inherited clones remain gate failures until resolved;
+the upgrade grants no baseline exemption or suppression authority.
 
 Gitleaks 8.30.1 runs from an official checksum-pinned release binary, never from the non-OSS hosted
 action. It redacts all finding output and scans the complete pull-request commit range. That range

@@ -11,6 +11,10 @@ import {
   generateOpCatalog,
   runtimeOperationsModule,
   runtimeRegistryModule,
+  runtimeIdentityModule,
+  runtimeMetadataModule,
+  runtimeRegistryData,
+  formatGeneratedJson,
 } from "../generate-op-catalog.mjs";
 
 const catalog = JSON.parse(
@@ -40,11 +44,25 @@ function withGeneratedRuntime(check) {
       join(root, "activity-log-operations.generated.js"),
       transpileGenerated(runtimeOperationsModule(catalog.typedRegistry)),
     );
-    const identityPath = join(root, "activity-log-registry.generated.js");
+    const data = runtimeRegistryData(catalog.typedRegistry, inventory);
     writeFileSync(
-      identityPath,
-      transpileGenerated(runtimeRegistryModule(catalog.typedRegistry, inventory)),
+      join(root, "activity-log-failure-class-coverage.generated.json"),
+      JSON.stringify(data.failureClassCoverage),
     );
+    writeFileSync(
+      join(root, "activity-log-operation-surfaces.generated.json"),
+      JSON.stringify(data.operationSurfaces),
+    );
+    writeFileSync(
+      join(root, "activity-log-identity.generated.js"),
+      transpileGenerated(runtimeIdentityModule(catalog.typedRegistry)),
+    );
+    writeFileSync(
+      join(root, "activity-log-runtime-metadata.generated.js"),
+      transpileGenerated(runtimeMetadataModule()),
+    );
+    const identityPath = join(root, "activity-log-registry.generated.js");
+    writeFileSync(identityPath, transpileGenerated(runtimeRegistryModule()));
     const result = spawnSync(
       process.execPath,
       [
@@ -64,14 +82,33 @@ function withGeneratedRuntime(check) {
 }
 
 describe("generated Activity Log runtime module ownership", () => {
+  it("keeps both independently loadable metadata assets synchronized with the producer", async () => {
+    const data = runtimeRegistryData(catalog.typedRegistry, inventory);
+    for (const [name, value] of [
+      ["activity-log-failure-class-coverage", data.failureClassCoverage],
+      ["activity-log-operation-surfaces", data.operationSurfaces],
+    ]) {
+      const expected = await formatGeneratedJson(value);
+      const actual = readFileSync(
+        new URL("../../packages/keiko-contracts/src/" + name + ".generated.json", import.meta.url),
+        "utf8",
+      );
+      expect(actual).toBe(expected);
+    }
+  });
+
   it("keeps the full operation array out of the shared identity module", () => {
     const source = runtimeRegistryModule(catalog.typedRegistry, inventory);
     expect(source.includes("export const ACTIVITY_LOG_OPERATION_REGISTRY =")).toBe(false);
     expect(source).toContain(
       'export { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-operations.generated.js";',
     );
-    expect(source).toContain(catalog.typedRegistry.schemaDigest);
-    expect(source).toContain(catalog.typedRegistry.catalogDigest);
+    expect(runtimeIdentityModule(catalog.typedRegistry)).toContain(
+      catalog.typedRegistry.schemaDigest,
+    );
+    expect(runtimeIdentityModule(catalog.typedRegistry)).toContain(
+      catalog.typedRegistry.catalogDigest,
+    );
   });
 
   it("preserves public registry values and reexports the exact internal operation array", () => {

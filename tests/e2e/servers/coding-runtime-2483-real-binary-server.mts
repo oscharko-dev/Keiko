@@ -1,6 +1,6 @@
-// Real OpenCode 1.18.30 entry for #2483. Runtime resolution is deliberately absent from this
-// entry: the shared harness enables the macOS dev lane and buildUiHandlerDeps must discover the
-// staged approved payload through production discovery and production composition.
+// Real OpenCode entry for #2483 (the pinned production runtime). Runtime resolution is deliberately
+// absent from this entry: the shared harness enables the macOS dev lane and buildUiHandlerDeps must
+// discover the staged approved payload through production discovery and production composition.
 
 import {
   AUTHORITY_APP_SESSION_LAUNCHER_SECRET,

@@ -1,0 +1,169 @@
+{
+  "schemaVersion": 1,
+  "classification": "Generic prompt serialization optimization; actual production assembler and final protected-skill fitting. Not model acceptance or a new citation-authority repair.",
+  "parentHead": "24dcc9a3f74df4861ad7fcb3888b79823510b05c",
+  "regression": {
+    "testPath": "packages/keiko-server/src/grounded-empty-alias.test.ts",
+    "observed": [
+      {
+        "phase": "before",
+        "exitCode": 1,
+        "sourceSha256": "db1641a3754837f858f86f3c3a1f7973ccc0924d502bf3d738505887bd5839ad",
+        "testSha256": "4c674b0e956086be030e1809ec7a68a19a1abbe593a7980d224aa56d09db875a",
+        "passed": 2,
+        "failed": 5,
+        "durationSeconds": 6.27
+      },
+      {
+        "phase": "after",
+        "exitCode": 0,
+        "sourceSha256": "688f2df87c5904b1b61ca67283caf926be2c81b264334233a082856bd86fdb73",
+        "testSha256": "4c674b0e956086be030e1809ec7a68a19a1abbe593a7980d224aa56d09db875a",
+        "passed": 7,
+        "failed": 0,
+        "durationSeconds": 5.52
+      }
+    ]
+  },
+  "actualCorpusFinalFitting": {
+    "classification": "actual production retrieval and final selected-skill fitting with model profile accounting; no provider call or model acceptance",
+    "beforeSourceSha256": "db1641a3754837f858f86f3c3a1f7973ccc0924d502bf3d738505887bd5839ad",
+    "afterSourceSha256": "688f2df87c5904b1b61ca67283caf926be2c81b264334233a082856bd86fdb73",
+    "fixtureFilesDigest": "83845ca63cddaefb31f116caf058a730a19c2de12dd738434e4ebf7fe50d6787",
+    "observed": [
+      {
+        "phase": "before",
+        "promptBytes": 19298,
+        "promptTokens": 6350,
+        "promptDigest": "794f04d8e46828265f2ce5a332cad50b677edcb376cd81881dd8644d81448755",
+        "inputGrant": 118784,
+        "originalPackBudget": {
+          "searchCallsMax": 16,
+          "filesReadMax": null,
+          "excerptBytesMax": 131072,
+          "modelInputTokensMax": 116000,
+          "modelOutputTokensMax": 4096,
+          "elapsedMsMax": null,
+          "rerankCallsMax": 1,
+          "followUpPassesMax": 1
+        },
+        "skillDigest": "a88c58dfc8df3d49890f1530fc733a98abfc440a3c369c3d8ed969282f14a5d2",
+        "skillOccurrences": 1,
+        "completeSourcePresent": true,
+        "completeRequirementCount": 8,
+        "sentReferences": 6,
+        "availableReferences": 6,
+        "sentPackDigest": "1687b9dd936689ff6812d282a7baa0c278a50888fdb4a079ff8913b00d7d16f3",
+        "positive": [
+          {
+            "pathDigest": "4c24932e7daee4b125a5d67060176368527a0cca2e1c5a063e487badf48a3fdc",
+            "atomDigest": "aaecc0377e8b60ffc9ad99ffb57c0adced5194b9488ec94f2c12da7766743d11",
+            "contentDigest": "fb60dcde19ad083821184c573344b1c0cead74521d3e82bf4779c33b178bb41e",
+            "bytes": 234
+          },
+          {
+            "pathDigest": "da6498268e99511d9ba0df3c13e439d10556a812881c9d03955b2ef7c6c1c655",
+            "atomDigest": "374a5a32961f2bc8fcb096a2d431a5f4314efecfc4101a601b14247db8678fa4",
+            "contentDigest": "bdd5eecbfe3a9ba413dba10276c529244481c4315a42e6894bc7bc4c319c2116",
+            "bytes": 620
+          },
+          {
+            "pathDigest": "8138e1e663a06f77f6ae757bf54bf943adb440925adc6ca85f91ad28d1eaea99",
+            "atomDigest": "61de61adb9837b9d3c25a1bffe4b5bb77c7bd69e3f4bf3e895a8728fcf0673c9",
+            "contentDigest": "ce41eab50e57ac43045c728de43426c83114b4a56f60e7839179f7f8e2c9f202",
+            "bytes": 2836
+          },
+          {
+            "pathDigest": "5c19f37df4b2357c35db7a97f2f4830e67ccd39200a49040b01e2e49bcac0709",
+            "atomDigest": "d92f239015c3485dac50b2f6d88c79efe9a872b02bc61427f608b72e016a6cf3",
+            "contentDigest": "9018877fc17392f877bad05a4c0eea96b682fd7de6d9ae15646154987333d975",
+            "bytes": 352
+          },
+          {
+            "pathDigest": "1f666cf4095bc64c8125f8c8f7fcb556ffd46e5bebc60440a35219a04284f223",
+            "atomDigest": "29f777d3e558caf814a991b5706c843400d79637a40d5549b52870c99a9198b4",
+            "contentDigest": "c2ccf2417a8183a91935356b3d91c9aefc75b23abe2e72e335e671c12654f65d",
+            "bytes": 150
+          },
+          {
+            "pathDigest": "b335630551682c19a781afebcf4d07bf978fb1f8ac04c6bf87428ed5106870f5",
+            "atomDigest": "8e882929cfb7e9f9602a7dae603a34476c5af7c9b19fdc6625fe1975e8e9bc96",
+            "contentDigest": "9204d27970bdcd998f3ea225a613c8be8e771b011029a7e9a2100f65d2d5d51c",
+            "bytes": 1762
+          }
+        ],
+        "zeroBodyAliases": 38
+      },
+      {
+        "phase": "after",
+        "promptBytes": 14170,
+        "promptTokens": 4641,
+        "promptDigest": "1ca664bc848ef401e9404a8f49bce889257fe50793a474cd69164735c6a48266",
+        "inputGrant": 118784,
+        "originalPackBudget": {
+          "searchCallsMax": 16,
+          "filesReadMax": null,
+          "excerptBytesMax": 131072,
+          "modelInputTokensMax": 116000,
+          "modelOutputTokensMax": 4096,
+          "elapsedMsMax": null,
+          "rerankCallsMax": 1,
+          "followUpPassesMax": 1
+        },
+        "skillDigest": "a88c58dfc8df3d49890f1530fc733a98abfc440a3c369c3d8ed969282f14a5d2",
+        "skillOccurrences": 1,
+        "completeSourcePresent": true,
+        "completeRequirementCount": 8,
+        "sentReferences": 6,
+        "availableReferences": 6,
+        "sentPackDigest": "1687b9dd936689ff6812d282a7baa0c278a50888fdb4a079ff8913b00d7d16f3",
+        "positive": [
+          {
+            "pathDigest": "4c24932e7daee4b125a5d67060176368527a0cca2e1c5a063e487badf48a3fdc",
+            "atomDigest": "aaecc0377e8b60ffc9ad99ffb57c0adced5194b9488ec94f2c12da7766743d11",
+            "contentDigest": "fb60dcde19ad083821184c573344b1c0cead74521d3e82bf4779c33b178bb41e",
+            "bytes": 234
+          },
+          {
+            "pathDigest": "da6498268e99511d9ba0df3c13e439d10556a812881c9d03955b2ef7c6c1c655",
+            "atomDigest": "374a5a32961f2bc8fcb096a2d431a5f4314efecfc4101a601b14247db8678fa4",
+            "contentDigest": "bdd5eecbfe3a9ba413dba10276c529244481c4315a42e6894bc7bc4c319c2116",
+            "bytes": 620
+          },
+          {
+            "pathDigest": "8138e1e663a06f77f6ae757bf54bf943adb440925adc6ca85f91ad28d1eaea99",
+            "atomDigest": "61de61adb9837b9d3c25a1bffe4b5bb77c7bd69e3f4bf3e895a8728fcf0673c9",
+            "contentDigest": "ce41eab50e57ac43045c728de43426c83114b4a56f60e7839179f7f8e2c9f202",
+            "bytes": 2836
+          },
+          {
+            "pathDigest": "5c19f37df4b2357c35db7a97f2f4830e67ccd39200a49040b01e2e49bcac0709",
+            "atomDigest": "d92f239015c3485dac50b2f6d88c79efe9a872b02bc61427f608b72e016a6cf3",
+            "contentDigest": "9018877fc17392f877bad05a4c0eea96b682fd7de6d9ae15646154987333d975",
+            "bytes": 352
+          },
+          {
+            "pathDigest": "1f666cf4095bc64c8125f8c8f7fcb556ffd46e5bebc60440a35219a04284f223",
+            "atomDigest": "29f777d3e558caf814a991b5706c843400d79637a40d5549b52870c99a9198b4",
+            "contentDigest": "c2ccf2417a8183a91935356b3d91c9aefc75b23abe2e72e335e671c12654f65d",
+            "bytes": 150
+          },
+          {
+            "pathDigest": "b335630551682c19a781afebcf4d07bf978fb1f8ac04c6bf87428ed5106870f5",
+            "atomDigest": "8e882929cfb7e9f9602a7dae603a34476c5af7c9b19fdc6625fe1975e8e9bc96",
+            "contentDigest": "9204d27970bdcd998f3ea225a613c8be8e771b011029a7e9a2100f65d2d5d51c",
+            "bytes": 1762
+          }
+        ],
+        "zeroBodyAliases": 38
+      }
+    ],
+    "positiveBodiesIdentical": true,
+    "retainedPacksIdentical": true,
+    "promptBytesSaved": 5128,
+    "promptTokensSaved": 1709,
+    "activityEventCount": 6
+  },
+  "preserved": "All positive source bodies, line ranges, document labels, nonempty whitespace lines, retained metadata/provenance, usage, uncertainty and original grants. Existing final-prompt and gateway accounting remain the logging owners.",
+  "remaining": "Native untouched React dispatch and strict correct-application/mutation/profile/citation qualification; all previously declared wider acceptance holds."
+}

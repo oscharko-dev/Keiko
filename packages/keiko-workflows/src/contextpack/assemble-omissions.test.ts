@@ -53,6 +53,50 @@ function largeOmissionInput(): AssembleInput {
 }
 
 describe("large connected-context omission projection", () => {
+  it.each(["budget-exhausted", "low-relevance"] as const)(
+    "preserves uncertainty for inherited %s omissions without inventing a new clip",
+    async (reason) => {
+      const input = largeOmissionInput();
+      const { pack } = await assembleContextPack(
+        {
+          ...input,
+          atoms: input.atoms.slice(0, 1),
+          ranked: input.ranked.slice(0, 1),
+          omittedFromRanking: [{ scopePath: "facts/unread.md", reason, omittedAtMs: 0 }],
+        },
+        { nowMs: () => 0 },
+      );
+      expect(validateConnectedContextPack(pack)).toEqual({ ok: true });
+      expect(pack.uncertainty.filter((marker) => marker.kind === "budget-clipped")).toHaveLength(
+        reason === "budget-exhausted" ? 1 : 0,
+      );
+      expect(pack.omitted).toContainEqual({ scopePath: "facts/unread.md", reason, omittedAtMs: 0 });
+    },
+  );
+
+  it("retains an existing budget marker without adding a second one for inherited omissions", async () => {
+    const input = largeOmissionInput();
+    const marker = {
+      kind: "budget-clipped" as const,
+      claim: "Original budget observation.",
+      impactedAtomIds: [],
+      emittedAtMs: 0,
+    };
+    const { pack } = await assembleContextPack(
+      {
+        ...input,
+        atoms: input.atoms.slice(0, 1),
+        ranked: input.ranked.slice(0, 1),
+        omittedFromRanking: [
+          { scopePath: "facts/unread.md", reason: "budget-exhausted", omittedAtMs: 0 },
+        ],
+        initialUncertainty: [marker],
+      },
+      { nowMs: () => 0 },
+    );
+    expect(pack.uncertainty.filter((entry) => entry.kind === "budget-clipped")).toEqual([marker]);
+  });
+
   it("keeps 8000 known candidates valid while retaining bounded details and exact totals", async () => {
     const input = largeOmissionInput();
     const { pack } = await assembleContextPack(input, { nowMs: () => 0 });

@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayStreamChunk, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
@@ -214,6 +215,38 @@ describe("agent-run governance", () => {
     expect(String(error)).not.toContain("secret-prompt-marker");
   });
 
+  it("preserves lazy asynchronous delegation, consumer errors and iterator cleanup", async () => {
+    const first: GatewayStreamChunk = { type: "delta", token: "first" };
+    const recovered: GatewayStreamChunk = { type: "delta", token: "recovered" };
+    const next = vi.fn().mockResolvedValue({ done: false, value: first });
+    const thrown = vi.fn().mockResolvedValue({ done: false, value: recovered });
+    const returned = vi.fn().mockResolvedValue({ done: true, value: undefined });
+    const upstream: AsyncIterator<GatewayStreamChunk> = { next, throw: thrown, return: returned };
+    const callStream = vi.fn((): AsyncIterable<GatewayStreamChunk> => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => upstream,
+    }));
+    const guarded = createAgentRunBudgetedModelPort({
+      binding: mint("supervised-coding"),
+      workspaceRoot: "/repo",
+      model: { call: (): Promise<NormalizedResponse> => Promise.resolve(response()), callStream },
+      nowIso: () => NOW,
+    });
+    const iterator = guarded
+      .callStream?.({ modelId: "model-1", messages: [] }, new AbortController().signal)
+      [Symbol.asyncIterator]();
+    expect(callStream).not.toHaveBeenCalled();
+    await expect(iterator?.next()).resolves.toEqual({ done: false, value: first });
+    expect(callStream).toHaveBeenCalledOnce();
+    const consumerError = new Error("consumer-recovery");
+    await expect(iterator?.throw?.(consumerError)).resolves.toEqual({
+      done: false,
+      value: recovered,
+    });
+    expect(thrown).toHaveBeenCalledWith(consumerError);
+    await expect(iterator?.return?.()).resolves.toEqual({ done: true, value: undefined });
+    expect(returned).toHaveBeenCalledOnce();
+  });
+
   it("charges each tool dispatch and makes the exhausted attempt a zero-call denial", () => {
     const binding = mint("supervised-coding");
     let toolCalls = 0;
@@ -232,5 +265,25 @@ describe("agent-run governance", () => {
     for (let index = 0; index < 4; index += 1) guarded("node", [], options);
     expect(() => guarded("node", [], options)).toThrow("Agent run budget exhausted.");
     expect(toolCalls).toBe(4);
+  });
+
+  // Owner decision 2026-10-28: no coding path refuses a patch at 64 KiB. An agent run's apply
+  // reserves one changeset's worth of patch bytes, so its envelope budget is the changeset cap.
+  it("carries a patch budget of exactly one changeset", () => {
+    const binding = mint("supervised-coding");
+    const reserve = (patchBytes: number): ReturnType<typeof reserveAgentRunBudget> =>
+      reserveAgentRunBudget({
+        binding,
+        workspaceRoot: "/repo",
+        usage: { toolCalls: 0, patchBytes, promptTokens: 0 },
+        nowIso: NOW,
+      });
+
+    expect(reserve(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES + 1)).toEqual({
+      ok: false,
+      reason: "budget-exceeded",
+    });
+    expect(reserve(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES)).toEqual({ ok: true });
+    expect(reserve(1)).toEqual({ ok: false, reason: "budget-exceeded" });
   });
 });

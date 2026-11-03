@@ -32,7 +32,9 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    `caBundlePath`. On a TLS trust failure of the direct path, `gatewayFetch` retries once via a
    `node:https` fallback carrying that composed CA set; in many corporate-CA environments the
    system trust store alone suffices with zero configuration. An unreadable configured bundle
-   warns once instead of silently degrading.
+   warns once instead of silently degrading. A caller requiring `singleAttempt` starts native HTTPS
+   with the same composed trust set and disables fallback, including when an injected transport
+   produces a TLS-shaped error. The option cannot disable certificate verification or DNS pinning.
 4. **Proxy semantics.** HTTPS targets tunnel via CONNECT (with connect/header timeouts mapping to
    `PROXY_UNREACHABLE`); the in-tunnel request sends a default-port-free `Host` header so
    pre-signed (SigV4) URLs survive proxying. `NO_PROXY` supports `*`, exact host, `.suffix` and
@@ -104,6 +106,14 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    paragraph read as "enabling the flag lifts the denyLoopback refusal," which two independent
    reviewers correctly read as a possible bypass; it was imprecise about *which* refusal — the
    blanket pre-flight one, not the per-address policy denial — and is corrected here.
+   **Correction (#4082, 2026-10-26), bodyless responses.** Native adapters construct HTTP
+   204, 205 and 304 responses with a null body. Their upstream completion still controls
+   socket reuse; an aborted or unexpectedly nonempty response retires its connection.
+   Response-construction failures reject the request promise rather than escaping a Node
+   response callback. The existing completion/failure events retain the closed outcome.
+   A Jira mutation may already have committed before response adaptation fails: transport
+   failure is never proof that a mutation had no effect or permission to replay it.
+
    **Correction (#3156, 2026-08-15), pool identity.** The vetting guarantee above only holds if a
    vetted connection is never handed to a call other than the one that vetted it.
    `fetchHttpsViaProxy`'s CONNECT-tunnel pool (`idleHttpsProxyTunnels`, a short-lived, same-process
@@ -190,6 +200,19 @@ single-credential posture: the proxy layer may not introduce additional secrets.
    here for `resolveGatewayDns`'s per-call vetting to lose track of. A dedicated test now asserts
    this directly: one physical connection serves both an unpinned and a pinned call to the same
    proxy, and the second request line still carries only its own call's target.
+
+### Final request preparation (epic #4081)
+
+A trusted in-process `prepareHeaders` callback may revalidate consumer-owned authority and
+materialize credentials immediately before a physical request. Native paths call it after DNS
+validation and body preparation; HTTPS proxy paths additionally wait for CONNECT/TLS completion.
+It must return `Headers` synchronously. Cancellation is checked around preparation; a rejected
+callback sends no target HTTP request, and an acquired proxy tunnel is disposed. Injected test
+transports receive only the prepared standard request options, never the callback or control flags.
+Existing requests without a callback preserve their original header semantics and trust behavior.
+The gateway grants no product authority: the existing consumer owns binding/generation checks,
+approvals and durable mutation admission. Lifecycle evidence remains on the existing registered
+HTTP start/completion/failure operations without headers or private content.
 
 ## Consequences
 

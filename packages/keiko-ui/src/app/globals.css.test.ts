@@ -1,3 +1,6 @@
+import { designEvidenceSourceHashes } from "../../../../scripts/lib/design-evidence-sources.mjs";
+import postcss, { type Root, type Rule, type AtRule, type ChildNode } from "postcss";
+import { readStylesheet } from "../../read-stylesheet.mjs";
 /**
  * globals.css regression tests — Issue #627
  *
@@ -19,11 +22,22 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
+const css = readStylesheet(resolve(here, "globals.css")).replace(/\r\n?/g, "\n");
 
 interface StyleSource {
   readonly path: string;
   readonly source: string;
+}
+
+function skipNeutralMigrationSelector(selector: string, rootPattern: RegExp): boolean {
+  return selector === "" || rootPattern.test(selector) || selector.includes('[data-theme="light"]');
+}
+
+function productionStyleFilename(name: string): boolean {
+  return (
+    name.endsWith(".module.css") ||
+    (/\.tsx?$/u.test(name) && !/\.d\.ts$/u.test(name) && !/\.(test|spec)\.tsx?$/u.test(name))
+  );
 }
 
 function productionStyleSources(directory: string): readonly StyleSource[] {
@@ -34,18 +48,11 @@ function productionStyleSources(directory: string): readonly StyleSource[] {
       sources.push(...productionStyleSources(path));
       continue;
     }
-    const productionModule = entry.name.endsWith(".module.css");
-    const productionComponent =
-      entry.name.endsWith(".tsx") &&
-      !entry.name.endsWith(".test.tsx") &&
-      !entry.name.endsWith(".spec.tsx");
-    const productionStyleHelper =
-      entry.name.endsWith(".ts") &&
-      !entry.name.endsWith(".d.ts") &&
-      !entry.name.endsWith(".test.ts") &&
-      !entry.name.endsWith(".spec.ts");
-    if (productionModule || productionComponent || productionStyleHelper) {
-      sources.push({ path, source: readFileSync(path, "utf8") });
+    if (productionStyleFilename(entry.name)) {
+      sources.push({
+        path,
+        source: path.endsWith(".css") ? readStylesheet(path) : readFileSync(path, "utf8"),
+      });
     }
   }
   return sources;
@@ -61,31 +68,34 @@ function declaredGlobalTokens(source: string): ReadonlySet<string> {
   );
 }
 
+function cssQuoteEnd(source: string, opening: number): number {
+  for (let index = opening + 1; index < source.length; index += 1) {
+    if (source[index] === source[opening] && source[index - 1] !== "\\") return index;
+  }
+  return source.length;
+}
+function fallbackValuePresent(source: string, start: number | undefined, end: number): boolean {
+  return withoutCssComments(source.slice(start ?? end, end)).trim().length > 0;
+}
+function topLevelFallbackComma(
+  character: string,
+  depth: number,
+  start: number | undefined,
+): boolean {
+  return character === "," && depth === 0 && start === undefined;
+}
 function hasNonEmptyFallback(source: string, varStart: number): boolean {
   let depth = 0;
   let fallbackStart: number | undefined;
-  let quote: '"' | "'" | undefined;
   for (let index = varStart + 4; index < source.length; index += 1) {
     const character = source[index];
     if (character === undefined) return false;
-    if (quote !== undefined) {
-      if (character === quote && source[index - 1] !== "\\") quote = undefined;
-      continue;
-    }
-    if (character === '"' || character === "'") {
-      quote = character;
-    } else if (character === "(") {
-      depth += 1;
-    } else if (character === ")") {
-      if (depth === 0) {
-        if (fallbackStart === undefined) return false;
-        const fallback = withoutCssComments(source.slice(fallbackStart, index));
-        return fallback.trim().length > 0;
-      }
+    if (character === '"' || character === "'") index = cssQuoteEnd(source, index);
+    else if (character === "(") depth += 1;
+    else if (character === ")") {
+      if (depth === 0) return fallbackValuePresent(source, fallbackStart, index);
       depth -= 1;
-    } else if (character === "," && depth === 0 && fallbackStart === undefined) {
-      fallbackStart = index + 1;
-    }
+    } else if (topLevelFallbackComma(character, depth, fallbackStart)) fallbackStart = index + 1;
   }
   return false;
 }
@@ -111,9 +121,8 @@ function unresolvedTokenReferences(
 }
 
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
-const pdfViewerModuleCss = readFileSync(
+const pdfViewerModuleCss = readStylesheet(
   resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css"),
-  "utf8",
 ).replace(/\r\n?/g, "\n");
 const pdfViewerComponent = readFileSync(
   resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.tsx"),
@@ -254,14 +263,94 @@ function expectLazyCssModuleImport(component: string, fileName: string): void {
   expect(component).toContain("styles.lazyWidgetScope");
 }
 
+const parsedStyleCache = new Map<string, Root>();
+
+function parsedStyleSource(source: string): Root {
+  const cached = parsedStyleCache.get(source);
+  if (cached !== undefined) return cached;
+  const tree = postcss.parse(source);
+  parsedStyleCache.set(source, tree);
+  return tree;
+}
+
+function normalizedStyleSelector(value: string): string {
+  return value.trim().replace(/\s+/gu, " ");
+}
+
+function styleNodeBeforeIndex(node: ChildNode, index: number): boolean {
+  return (node.source?.start?.offset ?? 0) < index;
+}
+
+function eligibleStyleRule(node: ChildNode, selector: string, query: string): node is Rule {
+  return (
+    node.type === "rule" &&
+    !query.startsWith("@") &&
+    (!selector.startsWith("\n") || node.parent?.type === "root")
+  );
+}
+
+function cssDefinesSelector(selector: string): boolean {
+  const query = normalizedStyleSelector(selector.replace(/\s*\{$/u, ""));
+  return matchingStyleNodes(css, selector).some(
+    (node) =>
+      node.type === "rule" &&
+      node.selectors.some((part) => normalizedStyleSelector(part) === query),
+  );
+}
+
+function matchingStyleNodes(source: string, selector: string, fromIndex = 0): (Rule | AtRule)[] {
+  const query = normalizedStyleSelector(
+    selector
+      .trim()
+      .replace(/\s*\{$/u, "")
+      .replace(/,$/u, ""),
+  );
+  const nodes: (Rule | AtRule)[] = [];
+  const prefixes: (Rule | AtRule)[] = [];
+  parsedStyleSource(source).walk((node) => {
+    if (styleNodeBeforeIndex(node, fromIndex)) return;
+    if (node.type === "atrule" && query.startsWith("@")) {
+      if (normalizedStyleSelector("@" + node.name + " " + node.params) === query) nodes.push(node);
+      return;
+    }
+    if (!eligibleStyleRule(node, selector, query)) return;
+    const normalized = normalizedStyleSelector(node.selector);
+    if (
+      normalized === query ||
+      node.selectors.some((item) => normalizedStyleSelector(item) === query)
+    )
+      nodes.push(node);
+    else if (normalized.startsWith(query)) prefixes.push(node);
+  });
+  if (nodes.length === 0) return prefixes;
+  return nodes;
+}
+
+function effectiveStyleRule(nodes: readonly (Rule | AtRule)[], selector: string): string {
+  const rules = nodes.filter(
+    (node): node is Rule => node.type === "rule" && node.parent?.type === "root",
+  );
+  if (rules.length === 0) return nodes[0]?.toString() ?? "";
+  const result = postcss.rule({ selector });
+  for (const rule of rules) {
+    for (const node of rule.nodes) result.append(node.clone());
+  }
+  result.raws.semicolon = true;
+  return result.toString();
+}
+
 function cssBlockFrom(
   source: string,
   selector: string,
   opts: { readonly fromLast?: boolean } = {},
 ): string {
-  const idx = opts.fromLast === true ? source.lastIndexOf(selector) : source.indexOf(selector);
-  expect(idx, `selector "${selector}" not found`).toBeGreaterThan(-1);
-  return source.slice(idx, source.indexOf("}", idx) + 1);
+  const nodes = matchingStyleNodes(source, selector);
+  const node = opts.fromLast === true ? nodes.at(-1) : nodes[0];
+  expect(node, `selector "${selector}" not found`).toBeDefined();
+  if (node === undefined) throw new Error("CSS selector is unavailable");
+  return opts.fromLast === true
+    ? node.toString()
+    : effectiveStyleRule(nodes, node.type === "rule" ? node.selector : selector);
 }
 
 function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}): string {
@@ -1348,8 +1437,10 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(keyboardBlock).toContain("border-color: var(--accent-line)");
 
     const pointerBlock = cssBlock(':root[data-input-modality="pointer"] .wf-dialog-input:focus');
-    expect(pointerBlock).toContain("outline: none !important");
-    expect(pointerBlock).toContain("border-color: var(--line) !important");
+    expect(pointerBlock).toContain("outline: none;");
+    expect(pointerBlock).not.toContain("outline: none !important");
+    expect(pointerBlock).toContain("border-color: var(--line);");
+    expect(pointerBlock).not.toContain("border-color: var(--line) !important");
   });
 
   it("keeps chat history rename mouse focus neutral while preserving keyboard focus", () => {
@@ -1363,8 +1454,10 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const pointerInputBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-open:focus,\n:root[data-input-modality="pointer"] .chat-history-title-input:focus',
     );
-    expect(pointerInputBlock).toContain("outline: none !important");
-    expect(pointerInputBlock).toContain("box-shadow: none !important");
+    expect(pointerInputBlock).toContain("outline: none;");
+    expect(pointerInputBlock).not.toContain("outline: none !important");
+    expect(pointerInputBlock).toContain("box-shadow: none;");
+    expect(pointerInputBlock).not.toContain("box-shadow: none !important");
 
     const pointerRowBlock = cssBlock(
       ':root[data-input-modality="pointer"] .chat-history-row:focus-within',
@@ -1386,8 +1479,10 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const groundingBlock = cssBlock(
       ':root[data-input-modality="pointer"] .scope-grounding-select:focus',
     );
-    expect(groundingBlock).toContain("box-shadow: none !important");
-    expect(groundingBlock).toContain("border-color: var(--line-soft) !important");
+    expect(groundingBlock).toContain("box-shadow: none;");
+    expect(groundingBlock).not.toContain("box-shadow: none !important");
+    expect(groundingBlock).toContain("border-color: var(--line-soft);");
+    expect(groundingBlock).not.toContain("border-color: var(--line-soft) !important");
   });
 
   it("keeps the grounding select at its default width in compact chat layouts", () => {
@@ -1418,31 +1513,44 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const block = cssBlock(
       ':root[data-input-modality="pointer"] .qi-input:focus,\n:root[data-input-modality="pointer"] .qi-textarea:focus,\n:root[data-input-modality="pointer"] .qi-select:focus',
     );
-    expect(block).toContain("outline: none !important");
-    expect(block).toContain("border-color: var(--line) !important");
-    expect(block).toContain("box-shadow: none !important");
+    expect(block).toContain("outline: none;");
+    expect(block).not.toContain("outline: none !important");
+    expect(block).toContain("border-color: var(--line);");
+    expect(block).not.toContain("border-color: var(--line) !important");
+    expect(block).toContain("box-shadow: none;");
+    expect(block).not.toContain("box-shadow: none !important");
   });
 
   it("suppresses pointer focus rings on dialog and gateway inputs", () => {
     expect(cssBlock(':root[data-input-modality="pointer"] .dlg-input:focus')).toContain(
+      "box-shadow: none;",
+    );
+    expect(cssBlock(':root[data-input-modality="pointer"] .dlg-input:focus')).not.toContain(
       "box-shadow: none !important",
     );
     expect(cssBlock(':root[data-input-modality="pointer"] .gw-input:focus')).toContain(
+      "box-shadow: none;",
+    );
+    expect(cssBlock(':root[data-input-modality="pointer"] .gw-input:focus')).not.toContain(
       "box-shadow: none !important",
     );
   });
 
   it("suppresses pointer focus rings on memory and template manager fields", () => {
     const memoryBlock = cssBlock(':root[data-input-modality="pointer"] .mem-add input:focus');
-    expect(memoryBlock).toContain("border-color: var(--line-soft) !important");
-    expect(memoryBlock).toContain("box-shadow: none !important");
+    expect(memoryBlock).toContain("border-color: var(--line-soft);");
+    expect(memoryBlock).not.toContain("border-color: var(--line-soft) !important");
+    expect(memoryBlock).toContain("box-shadow: none;");
+    expect(memoryBlock).not.toContain("box-shadow: none !important");
 
     const templateBlock = cssBlockFrom(
       auditedProductCss,
       ':root[data-input-modality="pointer"] .tm-field input:focus,\n:root[data-input-modality="pointer"] .tm-field select:focus',
     );
-    expect(templateBlock).toContain("border-color: var(--line-strong) !important");
-    expect(templateBlock).toContain("box-shadow: none !important");
+    expect(templateBlock).toContain("border-color: var(--line-strong);");
+    expect(templateBlock).not.toContain("border-color: var(--line-strong) !important");
+    expect(templateBlock).toContain("box-shadow: none;");
+    expect(templateBlock).not.toContain("box-shadow: none !important");
   });
 
   it("renders connector create actions as buttons, not text links", () => {
@@ -1459,6 +1567,19 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     expect(fabIdx, "base .ws-fab block not found").toBeGreaterThan(-1);
     const fabBlock = css.slice(fabIdx, css.indexOf("}", fabIdx) + 1);
     expect(fabBlock).toContain("z-index: 1");
+    const workspaceCss = readFileSync(
+      resolve(here, "components/desktop/WorkspaceControls.module.css"),
+      "utf8",
+    );
+    const workspaceComponent = readFileSync(
+      resolve(here, "components/desktop/Workspace.tsx"),
+      "utf8",
+    );
+    expect(cssBlockFrom(css, ".ws-scene")).toContain("z-index: 2");
+    expect(cssBlockFrom(workspaceCss, ".cmpWorkspaceControl.cmpWorkspaceControl")).toContain(
+      "z-index: 3",
+    );
+    expect(workspaceComponent.match(/controlStyles\.cmpWorkspaceControl/gu)).toHaveLength(2);
     expect(css).toContain("z-index: 14000");
     expect(css).toContain("z-index: 99999");
   });
@@ -1481,8 +1602,10 @@ describe("uiux-fix A11Y — pointer vs keyboard focus modality", () => {
     const pointerBlock = cssBlock(
       ':root[data-input-modality="pointer"] .mc-dialog-textarea:focus,\n:root[data-input-modality="pointer"] .mc-dialog-input:focus,\n:root[data-input-modality="pointer"] .mc-dialog-select:focus',
     );
-    expect(pointerBlock).toContain("outline: none !important");
-    expect(pointerBlock).toContain("box-shadow: none !important");
+    expect(pointerBlock).toContain("outline: none;");
+    expect(pointerBlock).not.toContain("outline: none !important");
+    expect(pointerBlock).toContain("box-shadow: none;");
+    expect(pointerBlock).not.toContain("box-shadow: none !important");
   });
 });
 
@@ -1680,8 +1803,10 @@ describe("Figma snapshot button target size (WCAG 2.5.8) — #756 audit", () => 
     const pointerBlock = cssBlock(
       ':root[data-input-modality="pointer"] .figma-snapshot-input:focus',
     );
-    expect(pointerBlock).toContain("outline: none !important");
-    expect(pointerBlock).toContain("box-shadow: none !important");
+    expect(pointerBlock).toContain("outline: none;");
+    expect(pointerBlock).not.toContain("outline: none !important");
+    expect(pointerBlock).toContain("box-shadow: none;");
+    expect(pointerBlock).not.toContain("box-shadow: none !important");
   });
 
   it(".figma-snapshot-revoke-confirm-btn:focus-visible has an accent outline (WCAG 2.4.7)", () => {
@@ -1853,24 +1978,32 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(codeBlock).toContain(
       "scrollbar-color: var(--ed-scrollbar-thumb) var(--ed-scrollbar-track)",
     );
-    const monacoSliderBlock = cssBlock(".monaco-editor .scrollbar .slider {");
-    expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb) !important");
-    expect(monacoSliderBlock).toContain("border-radius: 999px !important");
-    expect(monacoSliderBlock).toContain(
+    const monacoSliderBlock = cssBlock(":root .monaco-editor .scrollbar .slider {");
+    expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb);");
+    expect(monacoSliderBlock).not.toContain("background: var(--ed-scrollbar-thumb) !important");
+    expect(monacoSliderBlock).toContain("border-radius: 999px;");
+    expect(monacoSliderBlock).not.toContain("border-radius: 999px !important");
+    expect(monacoSliderBlock).toContain("transition: background var(--dur-fast) var(--ease-out);");
+    expect(monacoSliderBlock).not.toContain(
       "transition: background var(--dur-fast) var(--ease-out) !important",
     );
     expect(monacoSliderBlock).not.toContain("background-clip");
     expect(monacoSliderBlock).not.toContain("border:");
-    const monacoHoverBlock = cssBlock(".monaco-editor .scrollbar .slider:hover,");
-    expect(monacoHoverBlock).toContain("background: var(--ed-scrollbar-thumb-hover) !important");
+    const monacoHoverBlock = cssBlock(":root .monaco-editor .scrollbar .slider:hover,");
+    expect(monacoHoverBlock).toContain("background: var(--ed-scrollbar-thumb-hover);");
+    expect(monacoHoverBlock).not.toContain(
+      "background: var(--ed-scrollbar-thumb-hover) !important",
+    );
     const monacoVerticalRailBlock = cssBlock(".ed-host .monaco-editor .scrollbar.vertical {");
     expect(monacoVerticalRailBlock).toContain("background: var(--ed-bg)");
-    const monacoVerticalBlock = cssBlock(".monaco-editor .scrollbar.vertical .slider {");
-    expect(monacoVerticalBlock).toContain("min-width: 8px !important");
+    const monacoVerticalBlock = cssBlock(":root .monaco-editor .scrollbar.vertical .slider {");
+    expect(monacoVerticalBlock).toContain("min-width: 8px;");
+    expect(monacoVerticalBlock).not.toContain("min-width: 8px !important");
     expect(monacoVerticalBlock).not.toContain("border-right-width");
     expect(monacoVerticalBlock).not.toContain("border-left-width");
-    const monacoHorizontalBlock = cssBlock(".monaco-editor .scrollbar.horizontal .slider {");
-    expect(monacoHorizontalBlock).toContain("min-height: 8px !important");
+    const monacoHorizontalBlock = cssBlock(":root .monaco-editor .scrollbar.horizontal .slider {");
+    expect(monacoHorizontalBlock).toContain("min-height: 8px;");
+    expect(monacoHorizontalBlock).not.toContain("min-height: 8px !important");
     expect(monacoHorizontalBlock).not.toContain("border-top-width");
     expect(monacoHorizontalBlock).not.toContain("border-bottom-width");
 
@@ -2374,8 +2507,9 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     const verticalScrollbarBlock = cssBlock(".ed-host .monaco-editor .scrollbar.vertical {");
     expect(verticalScrollbarBlock).toContain("background: var(--ed-bg)");
 
-    const verticalSliderBlock = cssBlock(".monaco-editor .scrollbar.vertical .slider {");
-    expect(verticalSliderBlock).toContain("min-width: 8px !important");
+    const verticalSliderBlock = cssBlock(":root .monaco-editor .scrollbar.vertical .slider {");
+    expect(verticalSliderBlock).toContain("min-width: 8px;");
+    expect(verticalSliderBlock).not.toContain("min-width: 8px !important");
 
     const overviewRulerBlock = cssBlock(
       ".ed-host .monaco-editor canvas.decorationsOverviewRuler {",
@@ -2401,15 +2535,19 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     expect(hoverFrameBlock).toContain("overflow: hidden");
 
     const resizableHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-resizable-hover {");
-    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
-    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating) !important");
-    expect(resizableHoverBlock).toContain("background: var(--surface-primary) !important");
+    expect(resizableHoverBlock).toContain("border: 1px solid var(--popover-border);");
+    expect(resizableHoverBlock).not.toContain("border: 1px solid var(--popover-border) !important");
+    expect(resizableHoverBlock).toContain("border-radius: var(--radius-floating);");
+    expect(resizableHoverBlock).not.toContain("border-radius: var(--radius-floating) !important");
+    expect(resizableHoverBlock).toContain("background: var(--surface-primary);");
+    expect(resizableHoverBlock).not.toContain("background: var(--surface-primary) !important");
     expect(resizableHoverBlock).toContain("box-shadow: var(--popover-shadow)");
 
     const monacoHoverBlock = cssBlock(".ed-host .monaco-editor .monaco-hover {", {
       fromLast: true,
     });
-    expect(monacoHoverBlock).toContain("color: var(--text-primary) !important");
+    expect(monacoHoverBlock).toContain("color: var(--text-primary);");
+    expect(monacoHoverBlock).not.toContain("color: var(--text-primary) !important");
     expect(monacoHoverBlock).toContain("font-size: var(--text-body-sm)");
     expect(monacoHoverBlock).toContain("line-height: var(--leading-normal)");
   });
@@ -2418,18 +2556,21 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     const contentBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .monaco-hover-content,", {
       fromLast: true,
     });
-    expect(contentBlock).toContain("white-space: normal !important");
+    expect(contentBlock).toContain("white-space: normal;");
+    expect(contentBlock).not.toContain("white-space: normal !important");
     expect(contentBlock).toContain("overflow-wrap: anywhere");
 
     const codeBlock = cssBlock(".ed-host .monaco-editor .monaco-hover code,");
     expect(codeBlock).toContain("white-space: pre-wrap");
     expect(codeBlock).toContain("overflow-wrap: anywhere");
-    expect(codeBlock).toContain("background: var(--surface-inset) !important");
+    expect(codeBlock).toContain("background: var(--surface-inset);");
+    expect(codeBlock).not.toContain("background: var(--surface-inset) !important");
 
     const actionsBlock = cssBlock(".ed-host .monaco-editor .monaco-hover .hover-row .actions {");
     expect(actionsBlock).toContain("flex-wrap: wrap");
     expect(actionsBlock).toContain("border-top: 1px solid var(--border-subtle)");
-    expect(actionsBlock).toContain("background: var(--surface-secondary) !important");
+    expect(actionsBlock).toContain("background: var(--surface-secondary);");
+    expect(actionsBlock).not.toContain("background: var(--surface-secondary) !important");
   });
 
   it("skins Monaco copy affordances and nested copy tooltips with Keiko feedback states", () => {
@@ -2444,12 +2585,16 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
     const copyIconBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button.codicon,",
     );
-    expect(copyIconBlock).toContain("color: currentColor !important");
+    expect(copyIconBlock).toContain("color: currentColor;");
+    expect(copyIconBlock).not.toContain("color: currentColor !important");
 
     const copyHoverBlock = cssBlock(
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button:hover {",
     );
     expect(copyHoverBlock).toContain(
+      "background: color-mix(in oklch, var(--text-primary) 10%, transparent);",
+    );
+    expect(copyHoverBlock).not.toContain(
       "background: color-mix(in oklch, var(--text-primary) 10%, transparent) !important",
     );
     expect(copyHoverBlock).toContain("border-color: transparent");
@@ -2464,20 +2609,34 @@ describe("Issue #1424 — editor Monaco hover chrome", () => {
       ".ed-host .monaco-editor .monaco-hover .hover-copy-button:active {",
     );
     expect(copyActiveBlock).toContain("transform: translateY(1px) scale(0.98)");
-    expect(copyActiveBlock).toContain(
+    expect(copyActiveBlock).toContain("background: var(--button-secondary-surface-hover);");
+    expect(copyActiveBlock).not.toContain(
       "background: var(--button-secondary-surface-hover) !important",
     );
 
-    const workbenchHoverBlock = cssBlock(".monaco-hover.workbench-hover {");
+    const workbenchHoverBlock = cssBlock(":root .monaco-hover.workbench-hover,");
     expect(workbenchHoverBlock).toContain("max-width: min(220px, calc(100vw - 24px))");
-    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border) !important");
-    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control) !important");
-    expect(workbenchHoverBlock).toContain("background: var(--surface-primary) !important");
-    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow) !important");
+    expect(workbenchHoverBlock).toContain(":root .monaco-hover.workbench-hover.with-pointer");
+    expect(workbenchHoverBlock).toContain("border: 1px solid var(--popover-border);");
+    expect(workbenchHoverBlock).not.toContain("border: 1px solid var(--popover-border) !important");
+    expect(workbenchHoverBlock).toContain("border-radius: var(--radius-control);");
+    expect(workbenchHoverBlock).not.toContain("border-radius: var(--radius-control) !important");
+    expect(workbenchHoverBlock).toContain("background: var(--surface-primary);");
+    expect(workbenchHoverBlock).not.toContain("background: var(--surface-primary) !important");
+    expect(workbenchHoverBlock).toContain("box-shadow: var(--popover-shadow);");
+    expect(workbenchHoverBlock).not.toContain("box-shadow: var(--popover-shadow) !important");
 
-    const workbenchPointerBlock = cssBlock(".workbench-hover-pointer:after {");
-    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary) !important");
+    const workbenchPointerBlock = cssBlock(":root .workbench-hover-pointer:after,");
     expect(workbenchPointerBlock).toContain(
+      ":root .workbench-hover-container:not(:focus-within).locked",
+    );
+    expect(workbenchPointerBlock).toContain(":root .workbench-hover-container:focus-within");
+    expect(workbenchPointerBlock).toContain("background-color: var(--surface-primary);");
+    expect(workbenchPointerBlock).not.toContain(
+      "background-color: var(--surface-primary) !important",
+    );
+    expect(workbenchPointerBlock).toContain("border-right: 1px solid var(--popover-border);");
+    expect(workbenchPointerBlock).not.toContain(
       "border-right: 1px solid var(--popover-border) !important",
     );
   });
@@ -2536,20 +2695,11 @@ function cssRuleFrom(
   selector: string,
   opts: { readonly fromIndex?: number } = {},
 ): string {
-  const start = source.indexOf(selector, opts.fromIndex ?? 0);
-  expect(start, `selector "${selector}" not found`).toBeGreaterThan(-1);
-  let depth = 0;
-  let started = false;
-  for (let i = source.indexOf("{", start); i < source.length; i++) {
-    if (source[i] === "{") {
-      depth++;
-      started = true;
-    } else if (source[i] === "}") {
-      depth--;
-    }
-    if (started && depth === 0) return source.slice(start, i + 1);
-  }
-  throw new Error(`unterminated rule for "${selector}"`);
+  const nodes = matchingStyleNodes(source, selector, opts.fromIndex ?? 0);
+  const node = nodes[0];
+  expect(node, `selector "${selector}" not found`).toBeDefined();
+  if (node === undefined) throw new Error("CSS selector is unavailable");
+  return node.type === "atrule" ? node.toString() : effectiveStyleRule(nodes, node.selector);
 }
 
 function cssRule(selector: string, opts: { readonly fromIndex?: number } = {}): string {
@@ -2694,12 +2844,38 @@ describe("Issue #1292 — full [data-hc] hook (previously editor-only)", () => {
     expect(block).toContain("--ed-fg: #000000");
   });
 
-  it("keeps each product-wide theme selector in one canonical top-level rule", (): void => {
-    expect(css.match(/^:root \{$/gm)).toHaveLength(1);
-    expect(css.match(/^\[data-theme="light"\] \{$/gm)).toHaveLength(1);
-    expect(css.match(/^\[data-hc="more"\] \{$/gm)).toHaveLength(1);
-    expect(css.match(/^\[data-hc="more"\]\[data-theme="light"\] \{$/gm)).toHaveLength(1);
-    expect(css.match(/^@media \(prefers-contrast: more\) \{$/gm)).toHaveLength(1);
+  it("keeps each product-wide palette in one canonical binding and prevents parallel source blocks", (): void => {
+    const bindings = JSON.parse(
+      readFileSync(resolve(here, "../../../../design-system/product-token-bindings.json"), "utf8"),
+    ) as {
+      readonly rules: readonly {
+        readonly selector: string;
+        readonly conditions: readonly unknown[];
+        readonly declarations: readonly { readonly property?: string }[];
+      }[];
+    };
+    const selectors = [
+      ":root",
+      '[data-theme="light"]',
+      '[data-hc="more"]',
+      '[data-hc="more"][data-theme="light"]',
+    ];
+    for (const selector of selectors) {
+      const palettes = bindings.rules.filter(
+        (rule) =>
+          rule.selector === selector &&
+          rule.conditions.length === 0 &&
+          rule.declarations.some((field) => field.property === "--bg"),
+      );
+      expect(palettes, selector).toHaveLength(1);
+    }
+    postcss.parse(readFileSync(resolve(here, "globals.css"), "utf8")).walkRules((rule) => {
+      if (selectors.includes(rule.selector))
+        expect(
+          rule.nodes.filter((node) => node.type === "decl" && node.prop.startsWith("--")),
+          rule.selector,
+        ).toEqual([]);
+    });
   });
 });
 
@@ -2973,8 +3149,7 @@ describe("Issue #1293 — global shell + workspace chrome token migration", () =
     while ((match = ruleRe.exec(source)) !== null) {
       const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
       const body = match[2] ?? "";
-      if (selector === "" || /^(@|:root|html|body|\*|#)/.test(selector)) continue;
-      if (selector.includes('[data-theme="light"]')) continue; // approved deviations
+      if (skipNeutralMigrationSelector(selector, /^(@|:root|html|body|\*|#)/u)) continue; // approved deviations
       const parts = selector
         .split(",")
         .map((p) => p.trim())
@@ -3574,8 +3749,7 @@ describe("Issue #1295 — high-traffic product-surface token migration", () => {
     while ((match = ruleRe.exec(source)) !== null) {
       const selector = (match[1] ?? "").trim().replace(/\s+/g, " ");
       const body = match[2] ?? "";
-      if (selector === "" || selector.startsWith("@")) continue;
-      if (selector.includes('[data-theme="light"]')) continue; // approved deviations
+      if (skipNeutralMigrationSelector(selector, /^@/u)) continue; // approved deviations
       if (controlExclude.some((ex) => selector.includes(ex))) continue; // #1294 controls
       if (scrim.test(selector)) continue; // Category-C scrim/shadow rows
       if (!productLead.test(selector)) continue; // not a #1295 product surface
@@ -4689,6 +4863,7 @@ describe("Issue #1299 — component state matrix", () => {
 // missing child-evidence link re-fails a named assertion.
 
 interface Issue1300ConsolidatedProof {
+  readonly sourceFiles: readonly { readonly path: string; readonly sha256: string }[];
   readonly verdict: string;
   readonly postCssSha256: string;
   readonly referenceFiles: readonly string[];
@@ -4711,6 +4886,7 @@ interface Issue1300ConsolidatedProof {
   readonly missingSelectors: readonly string[];
 }
 interface Issue1300EditorProof {
+  readonly sourceFiles: readonly { readonly path: string; readonly sha256: string }[];
   readonly verdict: string;
   readonly postCssSha256: string;
   readonly tokenFidelity: { readonly totalProbes: number; readonly gatedDiffCount: number };
@@ -4727,6 +4903,7 @@ interface Issue1300EditorProof {
   readonly missingReferenceTokenCount: number;
 }
 interface Issue1300A11yProof {
+  readonly sourceFiles: readonly { readonly path: string; readonly sha256: string }[];
   readonly verdict: string;
   readonly postCssSha256: string;
   readonly seriousCriticalTotal: number;
@@ -4763,6 +4940,7 @@ interface Issue1300A11yProof {
   >;
 }
 interface Issue1300BrowserManifest {
+  readonly sourceFiles: readonly { readonly path: string; readonly sha256: string }[];
   readonly captureSha256: string;
   readonly postCssSha256: string;
   readonly renderedCssBundleSha256: string;
@@ -4843,6 +5021,12 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
     ),
     "utf8",
   );
+
+  it("pins the complete shared producer, fixture and stylesheet input set", () => {
+    const expected = designEvidenceSourceHashes(resolve(here, "../../../.."));
+    for (const proof of [consolidatedProof, editorProof, a11yProof, browserManifest])
+      expect(proof.sourceFiles).toEqual(expected);
+  });
 
   // ── 1. Component reference fidelity gate is green and broad ───────────────────
   it("the consolidated component fidelity proof passes with zero gated diffs", () => {
@@ -5180,7 +5364,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
       ".c-steps {",
     ]) {
       expect(
-        css.includes(selector),
+        cssDefinesSelector(selector),
         `migrated surface "${selector}" must remain in globals.css`,
       ).toBe(true);
     }

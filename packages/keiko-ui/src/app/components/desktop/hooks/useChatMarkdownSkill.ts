@@ -10,6 +10,7 @@ import { clientErrorEvidence } from "@/lib/client-error-evidence";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { bffRequestErrorKind } from "@/lib/http";
 import { ApiError } from "@/lib/api";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 
 export interface ChatMarkdownSkill {
   readonly chatId: string | undefined;
@@ -66,6 +67,7 @@ function failedSelectionRead(
 }
 
 export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSkill {
+  const redemptions = useCodingAppSessionRedemptions();
   const [state, setState] = useState<SelectionState>({ busy: false, failed: false });
   const current = useRef(chatId);
   current.current = chatId;
@@ -94,7 +96,7 @@ export function useChatMarkdownSkill(chatId: string | undefined): ChatMarkdownSk
       requests.current++;
       window.removeEventListener("focus", refresh);
     };
-  }, [refresh]);
+  }, [refresh, redemptions]);
   const view = state.chatId === chatId ? state.view : undefined;
   const requireNoSkill =
     view === undefined && state.chatId === chatId && state.accessUnavailable === true;

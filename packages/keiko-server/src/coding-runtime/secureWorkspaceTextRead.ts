@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { isDenied } from "@oscharko-dev/keiko-workspace";
+import { isDenied, isRepositoryClaudeSkillPath } from "@oscharko-dev/keiko-workspace";
 
 import {
   proveWorkspacePathAbsent,
@@ -86,6 +86,25 @@ export type SecureWorkspaceTextSnapshotResult =
 export interface SecureWorkspaceTextReadRequest {
   readonly relativePath: string;
   readonly signal?: AbortSignal | undefined;
+  /**
+   * The one owner-approved exception to the always-on deny list a caller may name (#3903): the
+   * coding runtime's repository-item admission reading `.claude/skills/<name>/SKILL.md` and listing
+   * that directory (`isRepositoryClaudeSkillPath`). Every other caller leaves it absent; it never
+   * covers any other path.
+   */
+  readonly denyListException?: "repository-claude-skill" | undefined;
+}
+
+/** The always-on deny list for one request, with the exception the request names, if any. */
+function deniedFor(
+  request: Pick<SecureWorkspaceTextReadRequest, "denyListException">,
+  relativePath: string,
+): boolean {
+  if (!isDenied(relativePath)) return false;
+  return !(
+    request.denyListException === "repository-claude-skill" &&
+    isRepositoryClaudeSkillPath(relativePath)
+  );
 }
 
 export type SecureWorkspaceNativeIOFailure =
@@ -235,7 +254,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
       ): Promise<SecureWorkspaceNativeListResult> => {
         const captured = captureNativeRequest(request);
         const result = await this.nativeRead(captured, "list");
-        return nativeListResult(result, captured.relativePath);
+        return nativeListResult(result, captured);
       },
     });
   }
@@ -420,7 +439,7 @@ class SecureWorkspaceTextReadPortImpl implements SecureWorkspaceTextReadPort {
     // it is the same answer whether or not the path exists and cannot be used to probe for it.
     if (
       !isSecureWorkspaceTextRelativePath(request.relativePath) ||
-      isDenied(request.relativePath)
+      deniedFor(request, request.relativePath)
     ) {
       return { ok: false, reason: "denied" };
     }
@@ -749,12 +768,14 @@ function validNativeContent(
 
 function nativeListResult(
   result: SecureWorkspaceNativeBytesResult,
-  relativePath: string,
+  request: SecureWorkspaceNativeIORequest,
 ): SecureWorkspaceNativeListResult {
   if (!result.ok) return result;
+  const { relativePath } = request;
   try {
     const entries = decodeSecureWorkspaceNativeDirectory(result.bytes).filter(
-      (entry) => !isDenied(relativePath === "" ? entry.name : `${relativePath}/${entry.name}`),
+      (entry) =>
+        !deniedFor(request, relativePath === "" ? entry.name : `${relativePath}/${entry.name}`),
     );
     return { ok: true, entries: Object.freeze(entries), info: result.info };
   } catch {
@@ -805,7 +826,7 @@ function validNativeRequest(
 ): boolean {
   return (
     isSecureWorkspaceNativeRelativePath(request.relativePath) &&
-    !isDenied(request.relativePath) &&
+    !deniedFor(request, request.relativePath) &&
     isSecureWorkspaceNativeRange(request.range) &&
     (operation === "read" || request.range === undefined)
   );
@@ -835,9 +856,11 @@ function captureNativeRequest(
   const signal = request.signal;
   const range = request.range;
   const guard = request.isCurrent;
+  const exception = request.denyListException;
   return Object.freeze({
     relativePath,
     ...(signal === undefined ? {} : { signal }),
+    ...(exception === "repository-claude-skill" ? { denyListException: exception } : {}),
     ...(range === undefined ? {} : { range: Object.freeze({ ...range }) }),
     ...(current === undefined && guard === undefined
       ? {}

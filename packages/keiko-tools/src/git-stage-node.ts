@@ -7,7 +7,7 @@ import {
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
-import type { GitStageExecRequest } from "./git-mutation-adapter.js";
+import type { GitMutationArgvPlan, GitStageExecRequest } from "./git-mutation-adapter.js";
 
 export interface GitStageEffectContext {
   readonly workspaceRoot: string;
@@ -114,7 +114,7 @@ export async function stageExactFiles(
     new Set(request.pathspecs).size !== request.pathspecs.length
   )
     return false;
-  return withGitIndexTransaction(
+  return await withGitIndexTransaction(
     ctx.workspaceRoot,
     async (transaction): Promise<boolean> => {
       if (!(await ctx.check()) || !(await gitStageAttributesSupported(ctx, request.pathspecs)))
@@ -134,6 +134,35 @@ export async function stageExactFiles(
     },
     (result) => {
       if (result && !ctx.authorized()) throw new Error("git-stage-authority-denied");
+      return result;
+    },
+    ctx.fs,
+  );
+}
+
+/**
+ * Restores the reviewed paths' index entries from HEAD (`git restore --staged`, as the plan builder
+ * validated it) in a private copy of the index under its lock. The copy replaces the live index only
+ * when the reviewed head, base and staged tree still held before and after, and the run's authority
+ * holds at the swap (#3902 AC2).
+ */
+export async function unstageExactFiles(
+  ctx: GitStageEffectContext,
+  plan: GitMutationArgvPlan,
+): Promise<boolean> {
+  const [argv] = plan;
+  if (argv === undefined || plan.length !== 1 || !ctx.authorized()) return false;
+  return await withGitIndexTransaction(
+    ctx.workspaceRoot,
+    async (transaction): Promise<boolean> => {
+      if (!(await ctx.check())) return false;
+      const result = await ctx.run(argv, undefined, transaction.temporaryIndexPath);
+      return (
+        result.exitCode === 0 && !result.truncated && transaction.check() && (await ctx.check())
+      );
+    },
+    (result) => {
+      if (result && !ctx.authorized()) throw new Error("git-unstage-authority-denied");
       return result;
     },
     ctx.fs,

@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   APPROVED_LICENSES,
+  projectProductionSbom,
   addTypeScriptRuntimeToSbom,
   isLicenseExpressionApproved,
   offendersForComponent,
@@ -199,18 +200,17 @@ describe("offendersForComponent", () => {
 });
 
 describe("version-bound component license decisions", () => {
-  const component = {
-    name: "spdx-exceptions",
-    version: "2.5.0",
-    purl: "pkg:npm/spdx-exceptions@2.5.0",
-    licenses: [{ license: { id: "CC-BY-3.0" } }],
-  };
-  it("accepts only the reviewed SPDX data identity with its actual declared license", () => {
-    expect(offendersForComponent(component)).toEqual([]);
-    expect(APPROVED_LICENSES.has("CC-BY-3.0")).toBe(false);
-    expect(isLicenseExpressionApproved("CC-BY-3.0")).toBe(false);
-  });
-  it("accepts the reviewed Bowser variant without globally admitting MITNFA", () => {
+  // #3897: the original OpenCode host and its private lock were removed; the decisions that only
+  // its components needed went with them, and nothing admits their licenses any more.
+  it("refuses the retired host-only components instead of keeping their exceptions", () => {
+    expect(
+      offendersForComponent({
+        name: "spdx-exceptions",
+        version: "2.5.0",
+        purl: "pkg:npm/spdx-exceptions@2.5.0",
+        licenses: [{ license: { id: "CC-BY-3.0" } }],
+      }),
+    ).not.toEqual([]);
     expect(
       offendersForComponent({
         name: "bowser",
@@ -218,23 +218,30 @@ describe("version-bound component license decisions", () => {
         purl: "pkg:npm/bowser@2.14.1",
         licenses: [{ expression: "MIT AND MITNFA" }],
       }),
-    ).toEqual([]);
+    ).not.toEqual([]);
+    expect(APPROVED_LICENSES.has("CC-BY-3.0")).toBe(false);
+    expect(isLicenseExpressionApproved("CC-BY-3.0")).toBe(false);
     expect(isLicenseExpressionApproved("MITNFA")).toBe(false);
   });
-  it.each([
-    { purl: undefined },
-    { purl: "pkg:npm/spdx-exceptions@2.6.0" },
-    { version: "2.6.0" },
-    { name: "other" },
-    { purl: "pkg:npm/other@2.5.0" },
-    { licenses: [] },
-    { licenses: [{ license: { id: "GPL-3.0-only" } }] },
-    { licenses: [{ expression: "CC-BY-3.0 AND GPL-3.0-only" }] },
-    { licenses: [{ expression: "CC-BY-3.0 WITH unknown-exception" }] },
-    { licenses: [{ license: { id: "unknown" } }] },
-  ])("retains refusals for identity or license drift %j", (drift) => {
-    expect(offendersForComponent({ ...component, ...drift })).not.toEqual([]);
+
+  // #3906, owner decision of 2026-10-24: khroma declares no license; its own file is MIT.
+  it("accepts the reviewed undeclared khroma artifact and keeps every other missing license an offender", () => {
+    const khroma = { name: "khroma", version: "2.1.0", purl: "pkg:npm/khroma@2.1.0" };
+    expect(offendersForComponent({ ...khroma, licenses: [] })).toEqual([]);
+    expect(offendersForComponent(khroma)).toEqual([]);
+    for (const drift of [
+      { version: "2.1.1", purl: "pkg:npm/khroma@2.1.1" },
+      { name: "other", purl: "pkg:npm/other@2.1.0" },
+      { purl: undefined },
+      { licenses: [{ license: { id: "GPL-3.0-only" } }] },
+    ]) {
+      expect(offendersForComponent({ ...khroma, ...drift }), JSON.stringify(drift)).not.toEqual([]);
+    }
+    expect(
+      offendersForComponent({ name: "bowser", version: "2.14.1", purl: "pkg:npm/bowser@2.14.1" }),
+    ).not.toEqual([]);
   });
+
   it("still chooses the existing BSD option of json-schema without a local exception", () => {
     expect(
       offendersForComponent({
@@ -248,63 +255,72 @@ describe("version-bound component license decisions", () => {
 });
 
 function canonicalLicenseLocks() {
-  return [
-    JSON.parse(readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8")),
-    JSON.parse(
-      readFileSync(
-        new URL("../../native/opencode-service-host/package-lock.json", import.meta.url),
-        "utf8",
-      ),
-    ),
-  ];
+  return [JSON.parse(readFileSync(new URL("../../package-lock.json", import.meta.url), "utf8"))];
 }
 
 describe("reviewed dependency license preflight", () => {
-  it("qualifies both actual canonical lock producers before package-wide GitHub exclusions", () => {
+  it("qualifies the canonical root lock before package-wide GitHub exclusions", () => {
     expect(reviewedDependencyLicenseFailures(canonicalLicenseLocks())).toEqual([]);
   });
 
-  it.each(["bowser", "json-schema", "spdx-exceptions"])(
-    "rejects version, artifact, declaration and identity drift for %s",
-    (name) => {
-      const variants = [
-        { version: "99.0.0" },
-        { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` },
-        { integrity: undefined },
-        { license: "GPL-3.0-only" },
-        { license: "MIT AND GPL-3.0-only" },
-        { license: undefined },
-        { resolved: "https://example.invalid/other.tgz" },
-        { name: "other" },
-      ];
-      for (const drift of variants) {
-        const locks = canonicalLicenseLocks();
-        Object.assign(locks[1].packages[`node_modules/${name}`], drift);
-        expect(reviewedDependencyLicenseFailures(locks), JSON.stringify(drift)).not.toEqual([]);
-      }
-    },
-  );
+  it("requires exactly the canonical root lock", () => {
+    const [root] = canonicalLicenseLocks();
+    expect(reviewedDependencyLicenseFailures([])).not.toEqual([]);
+    expect(reviewedDependencyLicenseFailures([root, root])).not.toEqual([]);
+  });
 
-  it.each(["bowser", "json-schema", "spdx-exceptions"])("rejects missing %s metadata", (name) => {
+  it("rejects version, artifact, declaration and identity drift for robust-predicates", () => {
+    const variants = [
+      { version: "99.0.0" },
+      { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` },
+      { integrity: undefined },
+      { license: "GPL-3.0-only" },
+      { license: "Unlicense AND GPL-3.0-only" },
+      { license: undefined },
+      { resolved: "https://example.invalid/other.tgz" },
+      { name: "other" },
+    ];
+    for (const drift of variants) {
+      const locks = canonicalLicenseLocks();
+      Object.assign(locks[0].packages["node_modules/robust-predicates"], drift);
+      expect(reviewedDependencyLicenseFailures(locks), JSON.stringify(drift)).not.toEqual([]);
+    }
+  });
+
+  it("rejects version, artifact and declaration drift for the undeclared khroma artifact", () => {
+    for (const drift of [
+      { version: "2.1.1" },
+      { integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` },
+      { resolved: "https://example.invalid/khroma.tgz" },
+      { license: "MIT" },
+      { license: "GPL-3.0-only" },
+    ]) {
+      const locks = canonicalLicenseLocks();
+      Object.assign(locks[0].packages["node_modules/khroma"], drift);
+      expect(reviewedDependencyLicenseFailures(locks), JSON.stringify(drift)).not.toEqual([]);
+    }
+  });
+
+  it.each(["khroma", "robust-predicates"])("rejects missing %s metadata", (name) => {
     const locks = canonicalLicenseLocks();
-    Reflect.deleteProperty(locks[1].packages, `node_modules/${name}`);
+    Reflect.deleteProperty(locks[0].packages, `node_modules/${name}`);
     expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
   });
 
-  it.each(["bowser", "json-schema", "spdx-exceptions"])("rejects npm aliases of %s", (name) => {
+  it.each(["khroma", "robust-predicates"])("rejects npm aliases of %s", (name) => {
     const locks = canonicalLicenseLocks();
-    const entry = locks[1].packages[`node_modules/${name}`];
-    Reflect.deleteProperty(locks[1].packages, `node_modules/${name}`);
-    locks[1].packages["node_modules/alias"] = { ...entry, name };
+    const entry = locks[0].packages[`node_modules/${name}`];
+    Reflect.deleteProperty(locks[0].packages, `node_modules/${name}`);
+    locks[0].packages["node_modules/alias"] = { ...entry, name };
     expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
   });
 
-  it("inspects nested root records in addition to the approved native instance", () => {
+  it("inspects nested root records in addition to the top-level instance", () => {
     const locks = canonicalLicenseLocks();
-    const entry = locks[1].packages["node_modules/bowser"];
-    locks[0].packages["node_modules/other/node_modules/bowser"] = { ...entry };
+    const entry = locks[0].packages["node_modules/robust-predicates"];
+    locks[0].packages["node_modules/other/node_modules/robust-predicates"] = { ...entry };
     expect(reviewedDependencyLicenseFailures(locks)).toEqual([]);
-    locks[0].packages["node_modules/other/node_modules/bowser"].version = "99.0.0";
+    locks[0].packages["node_modules/other/node_modules/robust-predicates"].version = "99.0.0";
     expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
   });
 
@@ -316,14 +332,12 @@ describe("reviewed dependency license preflight", () => {
     { lockfileVersion: 2, packages: {} },
     { lockfileVersion: 3, packages: [] },
   ])("rejects malformed canonical lock metadata %j", (lock) => {
-    const locks = canonicalLicenseLocks();
-    locks[0] = lock;
-    expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
+    expect(reviewedDependencyLicenseFailures([lock])).not.toEqual([]);
   });
 
   it("refuses malformed package records rather than silently skipping them", () => {
     const locks = canonicalLicenseLocks();
-    locks[1].packages["node_modules/bowser"] = null;
+    locks[0].packages["node_modules/khroma"] = null;
     expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
   });
 });
@@ -333,32 +347,30 @@ describe("required GitHub license exclusion preflight", () => {
     const locks = canonicalLicenseLocks();
     locks[0].packages["node_modules/alias"] = {
       version: "99.0.0",
-      resolved: "https://registry.npmjs.org/bowser/-/bowser-99.0.0.tgz",
+      resolved: "https://registry.npmjs.org/khroma/-/khroma-99.0.0.tgz",
       integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}`,
       license: "GPL-3.0-only",
     };
     expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
   });
 
-  it("requires canonical root metadata even when the native instances remain intact", () => {
+  it("requires canonical root metadata", () => {
     const locks = canonicalLicenseLocks();
     delete locks[0].packages[""];
     expect(reviewedDependencyLicenseFailures(locks)).not.toEqual([]);
   });
 
-  it("emits package-wide exclusions only after the actual standalone CLI accepts both locks", () => {
+  it("emits package-wide exclusions only after the actual standalone CLI accepts the root lock", () => {
     const locks = canonicalLicenseLocks();
     const result = runLicensePreflight(locks);
     expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      "pkg:npm/spdx-exceptions, pkg:npm/bowser, pkg:npm/json-schema",
-    );
+    expect(result.stdout.trim()).toBe("pkg:npm/khroma, pkg:npm/robust-predicates");
     expect(result.stderr).toBe("");
-    locks[1].packages["node_modules/bowser"].version = "99.0.0";
+    locks[0].packages["node_modules/khroma"].version = "99.0.0";
     const refused = runLicensePreflight(locks);
     expect(refused.status).toBe(1);
     expect(refused.stdout).toBe("");
-    expect(refused.stderr).toContain("bowser: reviewed artifact, identity or license drift");
+    expect(refused.stderr).toContain("khroma: reviewed artifact, identity or license drift");
   });
 
   it("makes the same-job guard mandatory before the pinned package-wide license action", () => {
@@ -390,12 +402,7 @@ describe("required GitHub license exclusion preflight", () => {
 function runLicensePreflight(locks) {
   const fixture = mkdtempSync(join(tmpdir(), "keiko-license-preflight-"));
   try {
-    mkdirSync(join(fixture, "native/opencode-service-host"), { recursive: true });
     writeFileSync(join(fixture, "package-lock.json"), JSON.stringify(locks[0]));
-    writeFileSync(
-      join(fixture, "native/opencode-service-host/package-lock.json"),
-      JSON.stringify(locks[1]),
-    );
     return spawnSync(
       process.execPath,
       [
@@ -408,3 +415,79 @@ function runLicensePreflight(locks) {
     rmSync(fixture, { recursive: true, force: true });
   }
 }
+
+describe("projectProductionSbom", () => {
+  function fixture() {
+    const component = (name) => ({
+      "bom-ref": `${name}@1.0.0`,
+      name,
+      version: "1.0.0",
+      licenses: [{ license: { id: "MIT" } }],
+      hashes: [{ alg: "SHA-512", content: "preserved" }],
+    });
+    const node = (name, dependencies = {}) => ({ name, version: "1.0.0", dependencies });
+    const child = node("shared-child");
+    const shared = node("shared-validator", { "shared-child": child });
+    return {
+      sbom: {
+        metadata: { component: component("root") },
+        components: ["catalog", "shared-validator", "shared-child", "dev-tool"].map(component),
+        dependencies: [
+          { ref: "root@1.0.0", dependsOn: ["catalog@1.0.0", "dev-tool@1.0.0"] },
+          { ref: "catalog@1.0.0", dependsOn: ["shared-validator@1.0.0"] },
+          { ref: "dev-tool@1.0.0", dependsOn: ["shared-validator@1.0.0"] },
+          { ref: "shared-validator@1.0.0", dependsOn: ["shared-child@1.0.0"] },
+          { ref: "shared-child@1.0.0", dependsOn: [] },
+        ],
+      },
+      tree: node("root", {
+        catalog: node("catalog", { "shared-validator": shared, "uninstalled-optional": {} }),
+      }),
+    };
+  }
+
+  it("retains shared prod/dev components and complete production edges without shipping dev tools", () => {
+    const { sbom, tree } = fixture();
+    const before = structuredClone(sbom);
+    const result = projectProductionSbom(sbom, tree);
+    expect(result.components.map((entry) => entry.name)).toEqual([
+      "catalog",
+      "shared-validator",
+      "shared-child",
+    ]);
+    expect(result.components[1]).toEqual(before.components[1]);
+    expect(result.dependencies).toEqual([
+      { ref: "catalog@1.0.0", dependsOn: ["shared-validator@1.0.0"] },
+      { ref: "root@1.0.0", dependsOn: ["catalog@1.0.0"] },
+      { ref: "shared-child@1.0.0", dependsOn: [] },
+      { ref: "shared-validator@1.0.0", dependsOn: ["shared-child@1.0.0"] },
+    ]);
+    expect(sbom).toEqual(before);
+  });
+
+  it("refuses an npm --omit=dev document that lost a shared productive component", () => {
+    const { sbom, tree } = fixture();
+    sbom.components = sbom.components.filter((entry) => entry.name !== "shared-validator");
+    expect(() => projectProductionSbom(sbom, tree)).toThrow(
+      "SBOM is missing a productive dependency component.",
+    );
+  });
+
+  it("unions repeated productive identities and refuses incomplete identities or a foreign root", () => {
+    const { sbom, tree } = fixture();
+    tree.dependencies["shared-validator"] = { name: "shared-validator", version: "1.0.0" };
+    expect(projectProductionSbom(sbom, tree).dependencies).toContainEqual({
+      ref: "shared-validator@1.0.0",
+      dependsOn: ["shared-child@1.0.0"],
+    });
+    expect(() => projectProductionSbom(sbom, { name: "root" })).toThrow(
+      "npm production dependency identity is incomplete.",
+    );
+    expect(() => projectProductionSbom(sbom, { name: "foreign", version: "1.0.0" })).toThrow(
+      "SBOM and npm production root do not match.",
+    );
+    expect(() => projectProductionSbom(sbom, null)).toThrow(
+      "Invalid npm production dependency node.",
+    );
+  });
+});

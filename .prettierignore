@@ -34,3 +34,6 @@ packages/keiko-ui/eslint-suppressions.json
 # Live Coding Workbench lab baseline (#3872): deliberately defective, byte-exact data. The patches in
 # tests/fixtures/coding-workbench-lab/patches/ apply to exactly these bytes, so they are never restyled.
 tests/fixtures/coding-workbench-lab/ledger-lab/
+# fallow writes the shrink-only duplication baseline itself (`check-semantic-duplication.mjs
+# --save-baseline`); its bytes are fallow's, so a prune never needs a formatter pass.
+docs/qa/fallow/dupes-baseline.json

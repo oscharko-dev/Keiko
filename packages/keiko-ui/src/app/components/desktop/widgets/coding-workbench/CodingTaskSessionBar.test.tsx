@@ -1,6 +1,10 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CodingTaskSessionBar, CodingTaskTranscript } from "./CodingTaskSessionBar";
+import {
+  CodingTaskSessionBar,
+  CodingTaskTranscript,
+  TRANSCRIPT_WINDOW_MESSAGES,
+} from "./CodingTaskSessionBar";
 import { CodingWorkbenchProgress } from "./CodingWorkbenchProgress";
 import type { ShownRun } from "./codingWorkbenchRestoredRun";
 import type { CodingTaskSession } from "./useCodingTaskSession";
@@ -14,6 +18,11 @@ function session(): CodingTaskSession {
     error: false,
     newTask: vi.fn(async () => undefined),
     finish: vi.fn(async () => undefined),
+    fork: null,
+    beginFork: vi.fn(),
+    cancelFork: vi.fn(),
+    forkTargets: [],
+    continueIn: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -100,6 +109,36 @@ describe("CodingTaskTranscript", () => {
     expect(transcript).not.toHaveTextContent("First prompt of the run");
   });
 
+  // Stability audit item 9: a task of up to 200 long messages mounted all of them at once.
+  describe("with a long task", () => {
+    const many = Array.from({ length: 130 }, (_, index) =>
+      historyMessage(`m-${String(index + 1)}`, undefined, `Message number ${String(index + 1)}`),
+    );
+
+    it("mounts only the newest window and reveals earlier messages on request", () => {
+      render(<CodingTaskTranscript session={sessionWith(many)} shownRun={undefined} />);
+      const transcript = screen.getByRole("region", { name: "Previous conversation" });
+
+      expect(transcript.querySelectorAll("article")).toHaveLength(TRANSCRIPT_WINDOW_MESSAGES);
+      expect(transcript).toHaveTextContent("Message number 130");
+      expect(transcript).not.toHaveTextContent("Message number 1 ");
+      const more = screen.getByRole("button", { name: "Show earlier messages (90 hidden)" });
+
+      fireEvent.click(more);
+
+      expect(transcript.querySelectorAll("article")).toHaveLength(2 * TRANSCRIPT_WINDOW_MESSAGES);
+      fireEvent.click(screen.getByRole("button", { name: "Show earlier messages (50 hidden)" }));
+      fireEvent.click(screen.getByRole("button", { name: "Show earlier messages (10 hidden)" }));
+      expect(transcript.querySelectorAll("article")).toHaveLength(130);
+      expect(screen.queryByRole("button", { name: /Show earlier messages/u })).toBeNull();
+    });
+
+    it("offers nothing to reveal for a task that fits one window", () => {
+      render(<CodingTaskTranscript session={sessionWith(many.slice(0, 5))} shownRun={undefined} />);
+      expect(screen.queryByRole("button", { name: /Show earlier messages/u })).toBeNull();
+    });
+  });
+
   it("renders no region when the timeline carries every message, and says history was cut", () => {
     const own = [historyMessage("m-2", "run-7", "First prompt of the run")];
     const wholeRun: ShownRun = { runId: "run-7", overflowMessageIds: new Set() };
@@ -110,6 +149,88 @@ describe("CodingTaskTranscript", () => {
 
     rerender(<CodingTaskTranscript session={sessionWith(messages, true)} shownRun={wholeRun} />);
     expect(screen.getByText("Only the most recent saved messages are shown.")).toBeVisible();
+  });
+});
+
+// S03 (#3904): forking is the person's own request, from a settled task or from one of its user
+// messages. Nothing offers it while a run is active, and it never changes the task it forks.
+describe("forking from the task chrome", () => {
+  it("forks the loaded task as it ended", () => {
+    const forked = sessionWith([historyMessage("m-1", "run-6", "Earlier request")]);
+    render(<CodingTaskSessionBar session={forked} active={false} onHistory={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Fork task" }));
+
+    expect(forked.beginFork).toHaveBeenCalledOnce();
+    expect(forked.beginFork).toHaveBeenCalledWith();
+  });
+
+  it.each([
+    ["a run is active", sessionWith([]), true],
+    ["the task is still loading", { ...sessionWith([]), pending: true }, false],
+    [
+      "a fork is already pending",
+      { ...sessionWith([]), fork: { taskId: "task-7", title: "t" } },
+      false,
+    ],
+  ])("cannot fork while %s", (_name, current, active) => {
+    render(<CodingTaskSessionBar session={current} active={active} onHistory={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Fork task" })).toBeDisabled();
+  });
+
+  // #3903 AC4: a workspace provisioned from the task's own is offered for the task to continue in.
+  it("offers each workspace provisioned from the task's own to continue the task in", () => {
+    const target = { workspaceId: "workspace-2", name: "feature-x" };
+    const offered = { ...sessionWith([]), forkTargets: [target] };
+    const { rerender } = render(
+      <CodingTaskSessionBar session={offered} active={false} onHistory={vi.fn()} />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Continue in “feature-x”" }));
+
+    expect(offered.continueIn).toHaveBeenCalledWith(target);
+    rerender(<CodingTaskSessionBar session={offered} active onHistory={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
+  });
+
+  // #3904 AC4: an imported task's implicit fork does not hold continuing it in another workspace.
+  it("keeps continuing an imported task elsewhere open beside its implicit fork", () => {
+    const target = { workspaceId: "workspace-2", name: "feature-x" };
+    const imported = {
+      ...sessionWith([]),
+      fork: { taskId: "task-7", title: "t", implicit: true as const },
+      forkTargets: [target],
+    };
+    const { rerender } = render(
+      <CodingTaskSessionBar session={imported} active={false} onHistory={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("button", { name: "Fork task" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeEnabled();
+    const requested = { ...imported, fork: { taskId: "task-7", title: "t" } };
+    rerender(<CodingTaskSessionBar session={requested} active={false} onHistory={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Continue in “feature-x”" })).toBeDisabled();
+  });
+
+  it("offers a fork before each user message, and only to a caller that can fork", () => {
+    const assistant = {
+      ...historyMessage("m-2", "run-6", "An answer"),
+      role: "assistant" as const,
+    };
+    const current = sessionWith([historyMessage("m-1", "run-6", "Earlier request"), assistant]);
+    const onFork = vi.fn();
+    const { rerender } = render(
+      <CodingTaskTranscript session={current} shownRun={undefined} onFork={onFork} />,
+    );
+
+    const forks = screen.getAllByRole("button", { name: "Fork from here" });
+    expect(forks).toHaveLength(1);
+    fireEvent.click(forks[0] as HTMLElement);
+    expect(onFork).toHaveBeenCalledExactlyOnceWith("m-1");
+
+    rerender(<CodingTaskTranscript session={current} shownRun={undefined} />);
+    expect(screen.queryByRole("button", { name: "Fork from here" })).toBeNull();
   });
 });
 

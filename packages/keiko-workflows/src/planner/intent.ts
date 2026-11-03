@@ -1,8 +1,10 @@
 // Deterministic retrieval-intent classification for connected-context planning.
 // This module is intentionally pure: no IO, no clock, no model calls.
 
-import { extractAnchors, matchesNextFrameworkTerm } from "./anchors.js";
+import { extractAnchors, matchesNextFrameworkTerm, queryContextOutsideQuotes } from "./anchors.js";
+import { markdownCodeRanges } from "@oscharko-dev/keiko-contracts/runtime/citation-markers";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
+import { REQUEST_COMMAND_PATTERNS } from "./request-command-patterns.js";
 import type { SelectedScope } from "@oscharko-dev/keiko-contracts/connected-context";
 import { sortedStrings } from "@oscharko-dev/keiko-contracts/runtime/stable-order";
 import {
@@ -365,3 +367,71 @@ function classifyRequestedIntent(
     }
   );
 }
+
+export function requestsDependencyMetadata(queryText: string): boolean {
+  const question = dependencyMetadataQuestion(queryText);
+  const loweredQuery = question.toLowerCase();
+  const metadataTerms = classifyRetrievalIntent(question).normalizedTerms;
+  return (
+    metadataTerms.some((term) => LOCKFILE_METADATA_TERMS.has(term)) ||
+    /\b(?:versions?|dependencies|dependency|transitive|resolved|locked)\b/u.test(loweredQuery) ||
+    loweredQuery.includes("lockfile") ||
+    loweredQuery.includes("package manager") ||
+    loweredQuery.includes("packagemanager")
+  );
+}
+
+const METADATA_REQUEST_ACTION_RE =
+  /^(?:tell\s+(?:me|us)|report|list|check|verify|nenne|ermittle|prüfe|pruefe)\b/iu;
+const METADATA_REQUEST_QUESTION_RE =
+  /^[^,;.!?\n]*\b(?:which|what|how|why|whether|welche[rns]?|was|wie|warum|ob)\b/iu;
+const COMPLETE_PRESERVATION_RE =
+  /\b(?:keep|leave|retain|lass(?:e|en)?|behalte(?:n)?)\b[^.!?;\n]*?\b(?:unchanged|unmodified|unverändert|unveraendert)\b/giu;
+const METADATA_PRESERVATION_PATTERNS = [
+  /\b(?:do\s+not|never|without)\s+/iu,
+  /(?:^|\s)(?:ändere|aendere|aktualisiere|ersetze|entferne|füge|fuege)\b.*\b(?:keine?|nicht)\b/iu,
+];
+
+function withoutPreservationConstraint(clause: string): string {
+  for (const pattern of METADATA_PRESERVATION_PATTERNS) {
+    const match = pattern.exec(clause);
+    if (match !== null) return clause.slice(0, match.index);
+  }
+  return clause;
+}
+
+function metadataIntentClauses(question: string): readonly string[] {
+  const separated = question
+    .replace(COMPLETE_PRESERVATION_RE, " ")
+    .replace(
+      /,\s*|\b(?:and|und)\s+/giu,
+      (separator: string, offset: number, text: string): string => {
+        const suffix = text.slice(offset + separator.length);
+        const independentRequest =
+          REQUEST_COMMAND_PATTERNS.some((pattern) => pattern.exec(suffix)?.index === 0) ||
+          METADATA_REQUEST_ACTION_RE.test(suffix) ||
+          METADATA_REQUEST_QUESTION_RE.test(suffix);
+        return independentRequest ? ";" : separator;
+      },
+    );
+  return separated.split(/[.!?;\n]|\b(?:but|however|aber|jedoch)\b/iu);
+}
+
+function dependencyMetadataQuestion(queryText: string): string {
+  let question = parseDiagnosticTraceText(queryText).questionText;
+  for (const range of [...markdownCodeRanges(question)].reverse()) {
+    question = question.slice(0, range.start) + " " + question.slice(range.end);
+  }
+  question = queryContextOutsideQuotes(question.replace(/\bdon['’]t\b/giu, "do not"));
+  const { anchors } = extractAnchors({
+    text: question,
+    maxAnchors: question.length,
+    caseSensitive: true,
+  });
+  for (const anchor of anchors) {
+    if (anchor.kind === "path") question = question.replaceAll(anchor.term, " ");
+  }
+  return metadataIntentClauses(question).map(withoutPreservationConstraint).join(" ");
+}
+
+const LOCKFILE_METADATA_TERMS = new Set(["version", "dependency", "package-manager"]);

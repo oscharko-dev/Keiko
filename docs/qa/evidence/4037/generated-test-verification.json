@@ -1,0 +1,766 @@
+{
+  "schemaVersion": 1,
+  "classification": "bounded test-verifier regression and manual fixture commissioning; no model or customer-skill acceptance",
+  "parentHead": "d68fec3994d1a1bb2e7855ff269b5f031a7d8f75",
+  "modelAgnostic": true,
+  "customerPromptsAndSkillsChanged": false,
+  "sourceDigests": {
+    "scripts/testing/chat-skills-lab/verify-tests.mjs": "c1ce62cd1ca66405ae4d330cd157943a52a503cde810c02de57b74d2d7dcbdbd",
+    "scripts/testing/chat-skills-lab/qualification-reporter.mjs": "4c9b6ae9f408de05ed888c8af70ffb0196ed3d2ffd5f2fb85e4a7197c1f45da6",
+    "scripts/testing/chat-skills-lab/verification-result.mjs": "1eeb26cef5843a4dd2da98eb82d328a2bd3b9fb89d86caa8758c9950a88d4148",
+    "scripts/__tests__/chat-skills-verification.test.mjs": "3c5481bcb2eaf534f153daca5d50dc83bc4798be2c930ae0b0d1455c5c2150a1",
+    "scripts/__tests__/chat-skills-qualification-reporter.test.mjs": "4875fbda862152a739b045a55253996ceaab99ad8c8c86e606560acfc148e63c"
+  },
+  "entrypointCausalPair": {
+    "classification": "same actual final owning entrypoint tests; inert Docker ports; exact published parent source vs candidate; no model/container execution",
+    "before": {
+      "exitCode": 1,
+      "failed": 17,
+      "passed": 1,
+      "tests": 18,
+      "verifierSha256": "71ad163daf17f12f4b6b21e668b52d0f3ef696a27f2f7c2a01f594063813dbda",
+      "testSha256": "3c5481bcb2eaf534f153daca5d50dc83bc4798be2c930ae0b0d1455c5c2150a1"
+    },
+    "after": {
+      "exitCode": 0,
+      "failed": 0,
+      "passed": 18,
+      "tests": 18,
+      "verifierSha256": "c1ce62cd1ca66405ae4d330cd157943a52a503cde810c02de57b74d2d7dcbdbd",
+      "testSha256": "3c5481bcb2eaf534f153daca5d50dc83bc4798be2c930ae0b0d1455c5c2150a1"
+    }
+  },
+  "image": "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+  "actualRunnerControls": [
+    {
+      "case": "healthy",
+      "exitCode": 0,
+      "actualJsonSha256": "2b400ef34d304d24a9c9f33379779e2c77c4a1b018e240b43b45bab2c341dfe8",
+      "counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "passed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "passed",
+        "observedTests": 1,
+        "passedTests": 1,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "assertion",
+      "exitCode": 1,
+      "actualJsonSha256": "8cc0d490d294c4ab157cb7769b30b4ef37f12387270ef8e121914186715c3eaf",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 1,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "runtime",
+      "exitCode": 1,
+      "actualJsonSha256": "fbe11f08605c2a70f468c266338a020d0a67ed3fbee0c8a8123d8cf2731a4042",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 1,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 1,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "mixed",
+      "exitCode": 1,
+      "actualJsonSha256": "04949ec16959031160e5c2a23bf67b90e748a9ade640f06b1a211b3abb4206f2",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 1,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 1,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "unhandled",
+      "exitCode": 1,
+      "actualJsonSha256": "004f52e7d6ee3e83a2f62478e0a607fa4fd1764d1d1463cc34fe743af6837020",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 1,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 1,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 1
+      }
+    },
+    {
+      "case": "expected-failure",
+      "exitCode": 0,
+      "actualJsonSha256": "1f6073c982f121107d6c623b39a24e04208dc7a44608618be87f2bd06481b76d",
+      "counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "passed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "passed",
+        "observedTests": 1,
+        "passedTests": 1,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 1,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "skipped",
+      "exitCode": 0,
+      "actualJsonSha256": "df9c8c201c1c947aaff8b15c93e1af6b43e915215904f9e5e5baa3add93db510",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "passed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "passed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 1,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 1,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "focused",
+      "exitCode": 1,
+      "actualJsonSha256": "1884b0559a0d09463d0961a1df60ba041d4394b9ef3a781d458783c137a81f1c",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 1,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 1,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "focused-suite",
+      "exitCode": 1,
+      "actualJsonSha256": "8604898915edecc8301c3c91f4030f7f6b78abb2ed8c0ebda68cb19f35c8ab45",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 0,
+        "runtimeErrors": 1,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 1,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 1,
+        "missingDiagnostics": 1,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "retry-option",
+      "exitCode": 0,
+      "actualJsonSha256": "116c20769d1b08f7f6e1e9e2659f5d0ab13d566d902c2c2c9771ffbf2e975596",
+      "counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "passed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "passed",
+        "observedTests": 1,
+        "passedTests": 1,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 1,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "repeat-option",
+      "exitCode": 0,
+      "actualJsonSha256": "1be71d1ec76357c983a5ade175c01ccf96b44c46ed42c61513878367b9bc708c",
+      "counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "passed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "passed",
+        "observedTests": 1,
+        "passedTests": 1,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 1,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "unknown-error",
+      "exitCode": 1,
+      "actualJsonSha256": "35e94a4e8c859bb84576451a924f4670744acae614de8878b07ab92988a3919b",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 1,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "query-assertion",
+      "exitCode": 1,
+      "actualJsonSha256": "370923ff48013fd5c6b83de72e7064eaab2263e84a8ab4161e973ef57f49b8ca",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 1,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "matcher-assertion",
+      "exitCode": 1,
+      "actualJsonSha256": "4370f7a26f11bd75f324639bb85f4c0b1019530eeb724f73e2b6a7bac8ef6598",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 1,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "matcher-pass",
+      "exitCode": 0,
+      "actualJsonSha256": "35c4f905931bb7f75aa235c94746d53954c662579fef0a0b1e89fdec003b6990",
+      "counts": {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "passed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "passed",
+        "observedTests": 1,
+        "passedTests": 1,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "matcher-negated",
+      "exitCode": 1,
+      "actualJsonSha256": "678fa283401033688ec09e58461ffce7c512fb72a0f67b9d875342cec60d33f5",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 1,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "matcher-mixed",
+      "exitCode": 1,
+      "actualJsonSha256": "1e47353a9ce740b9511657e92e7c20360968d8d17513506dc7d93c0a539cd4a7",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 1,
+        "runtimeErrors": 1,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 1,
+        "unclassifiedFailures": 0,
+        "skippedTests": 0,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 0,
+        "missingDiagnostics": 0,
+        "unhandledErrors": 0
+      }
+    },
+    {
+      "case": "hook-error",
+      "exitCode": 1,
+      "actualJsonSha256": "9f85c45406793fbecb3234a7d6c16c4d12b1596306423f281d6ffcea608cbcf6",
+      "counts": {
+        "tests": 1,
+        "passed": 0,
+        "failed": 0,
+        "runtimeErrors": 1,
+        "reportComplete": true,
+        "cleanExecution": false,
+        "endReason": "failed"
+      },
+      "qualification": {
+        "schemaVersion": 1,
+        "endReason": "failed",
+        "observedTests": 1,
+        "passedTests": 0,
+        "assertionFailures": 0,
+        "runtimeFailures": 0,
+        "unclassifiedFailures": 0,
+        "skippedTests": 1,
+        "expectedFailureTests": 0,
+        "focusedTests": 0,
+        "retriedTests": 0,
+        "repeatedTests": 0,
+        "collectionErrors": 1,
+        "missingDiagnostics": 1,
+        "unhandledErrors": 0
+      }
+    }
+  ],
+  "publicVerifierControl": {
+    "classification": "actual public verifier, trusted manual control, actual offline containers; not model output or skill acceptance",
+    "codeSha256": "3bfb914460f82728924735b2e4e437ced201ec598f7e69624a39c46ab1022984",
+    "result": {
+      "image": "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+      "network": "none",
+      "baseline": {
+        "status": 0,
+        "tests": 3,
+        "passed": 3,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "passed",
+        "typechecks": true
+      },
+      "mutation": {
+        "status": 1,
+        "tests": 3,
+        "passed": 1,
+        "failed": 2,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "endReason": "failed",
+        "typechecks": true
+      },
+      "passed": true
+    }
+  },
+  "reactManualSensitivity": {
+    "originalOracleSha256": "6035d121aa49c680f42d95eb1243c707dcacfed7ba460317d96defb6074252a0",
+    "currentOracleSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+    "fixtureSha256": "948e155e252763c40ff17992726b7cdc4fe5b3199a5626ba5f60c49612b9ebcd",
+    "repair": "one contract-correct Promise implementation added to an invalid-input test double; all13 cases, all8 mutations and all model-supplied source bytes unchanged",
+    "priorReexecution": "original oracle with the new observer has one global unhandled error on the fractional-input mutant; no credit assigned",
+    "variants": [
+      {
+        "variant": "correct",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "be9490b44074933c892576317bf5ba8f7ca64e95b992a9b27a4d20e78f714dea",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 13,
+        "failed": 0,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": true,
+        "assertionDetection": false
+      },
+      {
+        "variant": "reject-upper-unit-bound",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "3c2a8bd289568b15007a9a7e5129d7983aa67080fd53aeeebd73759e53714cd1",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 12,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "accept-fractional-units",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "9f9f8d45600882a1d88ccf90555d8b062dd7cc95c0d143b05dbce92ea2d4a1ac",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 12,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "omit-pending-presentation",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "10b7097877e3f28f9088682d1f73cfc81d6c5f5db4f6837d5e44e82a63318ed9",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 10,
+        "failed": 3,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "accept-stale-success",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "b03f41ec3b695fc3efccdc75c3f1091d4a7f7646d55d2e7e87d05c32ed46d646",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 11,
+        "failed": 2,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "accept-stale-error",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "81255b6b11abfa11b9e4a278cea1848a48a229aca6da74dbf27be2ae0fcb711b",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 12,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "wrong-observer-account",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "c4a85ad1e02e47cbef7d32aae633e19dced96b258a4fd2c072e898c61ffeabb1",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 7,
+        "failed": 6,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "omit-unmount-abort",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "07e6a03be0cfc7e9c6b03782726f04b563f2ebb8bca8354fae57d390b90fb259",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 12,
+        "failed": 1,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      },
+      {
+        "variant": "wrong-reserve-units",
+        "generatedSha256": "65c892bc733064e0fb41f5b8bdc280fc0f318572e67d55385d237f69d6b4a15a",
+        "actualJsonSha256": "07bfc0284ef958d999a743c93ca4d8b24015ff718393ea983630c7ac50e37939",
+        "typechecks": true,
+        "tests": 13,
+        "passed": 7,
+        "failed": 6,
+        "runtimeErrors": 0,
+        "reportComplete": true,
+        "cleanExecution": true,
+        "baselineEligible": false,
+        "assertionDetection": true
+      }
+    ]
+  },
+  "limits": [
+    "Historical missing counters remain unavailable; no old receipt is rewritten.",
+    "These are trusted synthetic/manual controls, not a sandbox tamper-resistance qualification.",
+    "Native generated React comparisons have not been dispatched; the held-out model inputs remain unseen.",
+    "This measurement repair does not qualify skill superiority or complete the acceptance ledger."
+  ]
+}

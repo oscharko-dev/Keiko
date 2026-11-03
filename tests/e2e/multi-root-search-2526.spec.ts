@@ -7,8 +7,10 @@ import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime
 import {
   cleanupEditorWorkspaces,
   createEditorWorkspace,
+  openEditorWorkspace,
   revokeEditorWorkspaceTrust,
 } from "./support/editorWorkspace.js";
+import { expectEditorWorkspaceRestricted } from "./support/editorWorkspaceTrust.js";
 import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
@@ -101,10 +103,17 @@ async function seedIssueWindows(page: Page, root: string): Promise<void> {
   );
 }
 
-async function stayRestricted(page: Page): Promise<void> {
-  const prompt = page.getByRole("alertdialog", { name: "Trust this workspace?" });
-  await expect(prompt).toBeVisible();
-  await prompt.getByRole("button", { name: "Stay restricted" }).click();
+// Opening a multi-root editor never raises a trust dialog (ADR-0147 as amended by PR #3685, which
+// removed the opening prompt). The catalog settles, no dialog is mounted, and both roots stay
+// restricted until a human grants trust through the Workspace Trust management window.
+async function expectRestrictedWithoutPrompt(page: Page, harness: IssueHarness): Promise<void> {
+  await openEditorWorkspace(page, { dismissTrustPrompt: false });
+  await expect(page.getByRole("alertdialog", { name: "Trust this workspace?" })).toHaveCount(0);
+  const roots = page.getByRole("tablist", { name: "Editor workspace roots" });
+  await expect(roots.getByRole("tab", { name: "Root A Restricted Mode" })).toBeVisible();
+  await expect(roots.getByRole("tab", { name: "Root B Restricted Mode" })).toBeVisible();
+  await expectEditorWorkspaceRestricted(page.request, harness.rootA.root);
+  await expectEditorWorkspaceRestricted(page.request, harness.rootB.root);
 }
 
 function requestTargetsRoot(requestUrl: string, route: string, root: string): boolean {
@@ -143,7 +152,19 @@ async function setupIssue(page: Page, harness: IssueHarness): Promise<void> {
   await seedIssueWindows(page, harness.rootA.root);
   await page.setViewportSize({ width: 1600, height: 1000 });
   await page.goto("/");
-  await stayRestricted(page);
+  await expectRestrictedWithoutPrompt(page, harness);
+}
+
+// Header Quick Access and its Cmd/Ctrl+P file picker were retired by the owner decision of
+// 2026-09-29 (ADR-0028 amendment, PR #3676). Root-qualified file discovery now belongs to
+// Workspace Search alone, so the retired control, shortcut and file/symbol query must stay absent.
+async function expectQuickOpenRetired(page: Page): Promise<void> {
+  await expect(page.getByRole("button", { name: "Open quick access" })).toHaveCount(0);
+  await page.keyboard.press("ControlOrMeta+KeyP");
+  await expect(page.getByRole("dialog", { name: "Quick access" })).toHaveCount(0);
+  await expect(
+    page.getByRole("combobox", { name: /workspace file or symbol query/iu }),
+  ).toHaveCount(0);
 }
 
 async function verifyDiscovery(
@@ -166,11 +187,7 @@ async function verifyDiscovery(
     body: Buffer.from(`${String(Date.now() - searchStartedAt)} ms\n`, "utf8"),
     contentType: "text/plain",
   });
-  await page.getByRole("button", { name: "Open quick access" }).click();
-  await page.getByRole("combobox", { name: /Workspace file or symbol query/u }).fill("shared");
-  await expect(page.getByRole("option", { name: /Root A · src\/shared\.ts:1/u })).toBeVisible();
-  await expect(page.getByRole("option", { name: /Root B · src\/shared\.ts:1/u })).toBeVisible();
-  await page.keyboard.press("Escape");
+  await expectQuickOpenRetired(page);
   const editor = page.locator('[data-window-id="issue-2526-editor"]');
   await editor.getByRole("tab", { name: /Root A/u }).click();
   await expect(editor.getByRole("tab", { name: /Root A/u })).toHaveAttribute(
@@ -238,7 +255,7 @@ test.afterEach(() => {
   cleanupEditorWorkspaces();
 });
 
-test("search, Quick Open, replace, and bound windows retain explicit root identity", async ({
+test("search, replace, and bound windows retain explicit root identity and Quick Open stays retired", async ({
   page,
 }, testInfo) => {
   const harness = createIssueHarness();

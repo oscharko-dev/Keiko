@@ -1,5 +1,9 @@
 import { deepFreeze } from "./deep-freeze.js";
 import type { CodingWorkbenchActionClass } from "./coding-workbench.js";
+import {
+  EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+} from "./editor-agent.js";
 
 declare const canonicalToolIdBrand: unique symbol;
 declare const catalogDigestBrand: unique symbol;
@@ -27,6 +31,59 @@ export const TOOL_CATALOG_LIMITS = Object.freeze({
   maxCursorLifetimeMs: 300_000,
   maxCompatibilityLifetimeMs: 604_800_000,
 });
+
+/** The byte ceilings of one tool call's arguments: the whole call, and any one string in it. */
+export interface ToolArgumentLimits {
+  readonly maxArgumentBytes: number;
+  readonly maxStringBytes: number;
+}
+
+/** The canonical id of the governed changeset edit, the one tool whose arguments are file content. */
+export const GOVERNED_CHANGESET_EDIT_TOOL_ID = "keiko.changeset.edit";
+/** The name the model and the coding runtime know the governed changeset edit by. */
+export const GOVERNED_CHANGESET_EDIT_TOOL_ALIAS = "keiko_changeset_edit";
+/**
+ * The canonical ids of the legacy patch tools (`propose_patch`, `apply_patch`): their one argument
+ * is a unified diff, the same content the changeset edit carries (owner decision, 2026-10-29, #4110).
+ */
+export const GOVERNED_PATCH_PROPOSE_TOOL_ID = "keiko.patch.propose";
+export const GOVERNED_PATCH_APPLY_TOOL_ID = "keiko.patch.apply";
+
+// The tools whose arguments are file content and so follow the shared patch ceiling.
+const PATCH_CONTENT_TOOL_IDS: ReadonlySet<string> = new Set([
+  GOVERNED_CHANGESET_EDIT_TOOL_ID,
+  GOVERNED_PATCH_PROPOSE_TOOL_ID,
+  GOVERNED_PATCH_APPLY_TOOL_ID,
+]);
+
+/** The ceilings every tool call is held to unless `toolArgumentLimits` names a larger one. */
+export const GENERIC_TOOL_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze({
+  maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+  maxStringBytes: TOOL_CATALOG_LIMITS.maxStringBytes,
+});
+
+/**
+ * The ceilings of one call whose arguments are file content: a `keiko_changeset_edit` call (owner
+ * decision, 2026-10-28: Keiko refuses no coding data at 64 KiB) and, since the owner decision of
+ * 2026-10-29 (#4110), a `propose_patch` or `apply_patch` call. They are the shared patch cap, not a
+ * second figure: one `oldString`, `newString` or `diff` may carry up to
+ * `EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES` (`GOVERNED_PATCH_MAX_BYTES`) UTF-8 bytes, and one call
+ * may carry what one editor action may (`EDITOR_AGENT_ACTION_MAX_BODY_BYTES`: the old and new text
+ * of a changeset at the cap, JSON escaping of quotes and line breaks, and a mebibyte of envelope).
+ * The materialized diff stays bounded by the cap itself, so these remain runaway safeguards of the
+ * wire, and the generic catalog ceilings are unchanged for every other tool.
+ */
+export const CHANGESET_EDIT_ARGUMENT_LIMITS: ToolArgumentLimits = Object.freeze({
+  maxArgumentBytes: EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
+  maxStringBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+});
+
+/** The argument ceilings of the tool with this canonical id. */
+export function toolArgumentLimits(canonicalId: string): ToolArgumentLimits {
+  return PATCH_CONTENT_TOOL_IDS.has(canonicalId)
+    ? CHANGESET_EDIT_ARGUMENT_LIMITS
+    : GENERIC_TOOL_ARGUMENT_LIMITS;
+}
 
 export interface ToolRef {
   readonly canonicalId: CanonicalToolId;
@@ -176,6 +233,7 @@ export const TOOL_RESULT_REASONS = deepFreeze({
     "cursor-expired",
     "cursor-replayed",
     "workspace-stale",
+    "consumer-stale",
     "replay-conflict",
     "recovery-required",
   ],
@@ -186,6 +244,7 @@ export const TOOL_RESULT_REASONS = deepFreeze({
     "handler-unavailable",
     "handler-mismatch",
     "handler-failed",
+    "provider-reported-error",
     "result-contract-failed",
     "effect-outcome-unknown",
     "budget-port-failed",
@@ -228,7 +287,7 @@ interface ToolResultIdentity {
 type ToolFailureEnvelope = {
   readonly [S in Exclude<ToolResultStatus, "completed">]: ToolResultIdentity & {
     readonly status: S;
-    readonly reason: ToolResultReason<S>;
+    readonly reason: Exclude<ToolResultReason<S>, "provider-reported-error">;
     readonly page: null;
     readonly data: null;
   };
@@ -239,5 +298,11 @@ export type ToolResultEnvelope =
       readonly reason: "none";
       readonly page: ToolResultPage;
       readonly data: CatalogJsonValue;
+    })
+  | (ToolResultIdentity & {
+      readonly status: "failed";
+      readonly reason: "provider-reported-error";
+      readonly page: null;
+      readonly data: CatalogJsonObject;
     })
   | ToolFailureEnvelope;

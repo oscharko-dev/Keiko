@@ -129,6 +129,33 @@ describe("normalizeNaturalLanguageToken", () => {
 });
 
 describe("contextual compound subject scoring", () => {
+  it.each(["Datura-Partner", "Maple-Account"])(
+    "ranks a complete word compound above its generic fragment: %s",
+    (subject) => {
+      const [name, fragment] = subject.split("-");
+      const matcher = buildMatcher(nlq(`Welche Bedingungen gelten für ${subject}?`));
+      const complete = matcher.match(`Approved ${String(name)} ${String(fragment)} conditions.`);
+      const partial = matcher.match(`Unrelated ${String(fragment)} conditions.`);
+      expect(complete).toBeGreaterThan(partial);
+    },
+  );
+
+  it("keeps explicitly literal hyphenated identifiers distinct from their separate words", () => {
+    const query = nlq("Describe re-sign rather than resign or re sign.");
+    const literal = buildMatcher(query, { kind: "literal", terms: ["re-sign"] });
+    expect(literal.match("re-sign the document")).toBe(1);
+    expect(literal.match("resign from office")).toBe(0);
+    expect(literal.match("re sign the document")).toBe(0);
+    expect(buildMatcher({ ...query, kind: "exact-symbol", text: "re-sign" }).match("resign")).toBe(
+      0,
+    );
+  });
+
+  it("gives known hyphenated domain aliases the same full match as their canonical spelling", () => {
+    const matcher = buildMatcher(nlq("front-end"));
+    expect(matcher.match("web ui client")).toBe(1);
+  });
+
   const question =
     "For Unit-G42, how long may a shipment wait, what happens afterward, and who records the event?";
 

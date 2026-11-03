@@ -37,6 +37,9 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => ({
 
 const UPDATED_AT = "2026-07-13T12:00:00.000Z";
 
+// The queue's preemption signal: every command must hand it to the API call it makes (#4109).
+const SIGNAL = new AbortController().signal;
+
 function snapshot(
   overrides: Partial<CodingWorkbenchRuntimeSnapshot> = {},
 ): CodingWorkbenchRuntimeSnapshot {
@@ -124,9 +127,10 @@ describe("createStartMutation", () => {
       stateWithRun(null, { canStart: true }),
       { issue, projectMemoryEnabled: true },
     );
-    await mutation.run();
+    await mutation.run(SIGNAL);
     expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ ...issue, issuePurpose: "context" }),
+      SIGNAL,
     );
   });
 
@@ -143,14 +147,17 @@ describe("createStartMutation", () => {
     });
     expect(mutation.mayInstallNewRun).toBe(true);
     expect(mutation.expected).toBeUndefined();
-    await mutation.run();
-    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
-      requestId: mutation.requestId,
-      taskIntent: "add a regression test",
-      requestedMode: "supervised-coding",
-      runtimePreference: "managed-gateway",
-      projectMemory: { enabled: true },
-    });
+    await mutation.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      {
+        requestId: mutation.requestId,
+        taskIntent: "add a regression test",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+        projectMemory: { enabled: true },
+      },
+      SIGNAL,
+    );
   });
 
   it("can disable project memory for the next run without sending browser-authored scopes", async () => {
@@ -159,15 +166,55 @@ describe("createStartMutation", () => {
       projectMemoryEnabled: false,
     });
 
-    await mutation.run();
+    await mutation.run(SIGNAL);
 
-    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
-      requestId: mutation.requestId,
-      taskIntent: "inspect the repository",
-      requestedMode: "supervised-coding",
-      runtimePreference: "managed-gateway",
-      projectMemory: { enabled: false },
-    });
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      {
+        requestId: mutation.requestId,
+        taskIntent: "inspect the repository",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+        projectMemory: { enabled: false },
+      },
+      SIGNAL,
+    );
+  });
+
+  // S03 (#3904): a fork starts a NEW task from another task, optionally just before one of its
+  // user messages; the request names the task and the message and nothing about the saved session.
+  it("sends the task to fork and the message to fork before, without a conversation id", async () => {
+    const mutation = createStartMutation(
+      "try another approach",
+      stateWithRun(null, { canStart: true }),
+      {
+        projectMemoryEnabled: true,
+        fork: { taskId: "task-source", beforeMessageId: "message-3" },
+      },
+    );
+
+    await mutation.run(SIGNAL);
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      {
+        requestId: mutation.requestId,
+        taskIntent: "try another approach",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+        projectMemory: { enabled: true },
+        fork: { taskId: "task-source", beforeMessageId: "message-3" },
+      },
+      SIGNAL,
+    );
+  });
+
+  it("refuses to send a fork that also continues a task", () => {
+    expect(() =>
+      createStartMutation("task", stateWithRun(null, { canStart: true }), {
+        projectMemoryEnabled: true,
+        conversationId: "task-source",
+        fork: { taskId: "task-source" },
+      }),
+    ).toThrowError("A fork cannot continue a task.");
   });
 
   it("does not leak stale gateway model settings into a Codex subscription start", async () => {
@@ -181,15 +228,35 @@ describe("createStartMutation", () => {
       projectMemoryEnabled: true,
     });
 
-    await mutation.run();
+    await mutation.run(SIGNAL);
 
-    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
-      requestId: mutation.requestId,
-      taskIntent: "inspect the repository",
-      requestedMode: "supervised-coding",
-      runtimePreference: "codex-subscription",
-      projectMemory: { enabled: true },
-    });
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      {
+        requestId: mutation.requestId,
+        taskIntent: "inspect the repository",
+        requestedMode: "supervised-coding",
+        runtimePreference: "codex-subscription",
+        projectMemory: { enabled: true },
+      },
+      SIGNAL,
+    );
+  });
+
+  it("sends the Jira Pod the person picked, and no key when none was", async () => {
+    const jiraPodId = "d5f5681e-ce98-4c3c-b27e-51d707c9d018";
+    const state = stateWithRun(null, { canStart: true });
+
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+      jiraPodId,
+    }).run(SIGNAL);
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+    }).run(SIGNAL);
+
+    const [picked, bare] = apiMocks.startCodingWorkbenchRuntime.mock.calls.slice(-2);
+    expect(picked?.[0]).toMatchObject({ jiraPodId });
+    expect(bare?.[0]).not.toHaveProperty("jiraPodId");
   });
 
   it("sends the selected model settings for the managed gateway", async () => {
@@ -202,10 +269,11 @@ describe("createStartMutation", () => {
       projectMemoryEnabled: true,
     });
 
-    await mutation.run();
+    await mutation.run(SIGNAL);
 
     expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
       expect.objectContaining({ modelId: "coding-model", reasoningEffort: "high" }),
+      SIGNAL,
     );
   });
 });
@@ -233,12 +301,16 @@ describe("createApprovalMutation", () => {
     const run = snapshot({ state: "awaiting-approval", pendingPermission });
     const mutation = createApprovalMutation("denied", stateWithRun(run));
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
-    await mutation.run();
-    expect(apiMocks.decideCodingWorkbenchRuntimeApproval).toHaveBeenCalledWith("run-1", {
-      requestId: "permission-1",
-      expectedRevision: 4,
-      decision: "denied",
-    });
+    await mutation.run(SIGNAL);
+    expect(apiMocks.decideCodingWorkbenchRuntimeApproval).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "permission-1",
+        expectedRevision: 4,
+        decision: "denied",
+      },
+      SIGNAL,
+    );
   });
 });
 
@@ -250,15 +322,23 @@ describe("createRunBoundMutation", () => {
   });
 
   it("routes stop and takeover to their run-bound endpoints", async () => {
-    await createRunBoundMutation("stop", stateWithRun(snapshot())).run();
-    expect(apiMocks.stopCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
-      requestId: "run-1",
-    });
+    await createRunBoundMutation("stop", stateWithRun(snapshot())).run(SIGNAL);
+    expect(apiMocks.stopCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "run-1",
+      },
+      SIGNAL,
+    );
 
-    await createRunBoundMutation("takeover", stateWithRun(snapshot())).run();
-    expect(apiMocks.takeOverCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
-      requestId: "run-1",
-    });
+    await createRunBoundMutation("takeover", stateWithRun(snapshot())).run(SIGNAL);
+    expect(apiMocks.takeOverCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "run-1",
+      },
+      SIGNAL,
+    );
   });
 });
 
@@ -273,13 +353,17 @@ describe("createRetryMutation", () => {
     const mutation = createRetryMutation("retry it", stateWithRun(snapshot(), { canRetry: true }));
     expect(mutation.mayInstallNewRun).toBe(true);
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
-    await mutation.run();
-    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
-      requestId: mutation.requestId,
-      taskIntent: "retry it",
-      requestedMode: "supervised-coding",
-      runtimePreference: "managed-gateway",
-    });
+    await mutation.run(SIGNAL);
+    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        taskIntent: "retry it",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+      },
+      SIGNAL,
+    );
   });
 
   it("drops stale gateway model settings when retrying through a Codex subscription", async () => {
@@ -291,14 +375,18 @@ describe("createRetryMutation", () => {
     });
     const mutation = createRetryMutation("retry it", state);
 
-    await mutation.run();
+    await mutation.run(SIGNAL);
 
-    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
-      requestId: mutation.requestId,
-      taskIntent: "retry it",
-      requestedMode: "supervised-coding",
-      runtimePreference: "codex-subscription",
-    });
+    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        taskIntent: "retry it",
+        requestedMode: "supervised-coding",
+        runtimePreference: "codex-subscription",
+      },
+      SIGNAL,
+    );
   });
 });
 
@@ -317,10 +405,16 @@ describe("createLifecycleMutation", () => {
   });
 
   it("routes pause and resume to their run-bound endpoints", async () => {
-    await createLifecycleMutation("pause", stateWithRun(snapshot({ state: "running" }))).run();
-    expect(apiMocks.pauseCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
-      requestId: "run-1",
-    });
+    await createLifecycleMutation("pause", stateWithRun(snapshot({ state: "running" }))).run(
+      SIGNAL,
+    );
+    expect(apiMocks.pauseCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "run-1",
+      },
+      SIGNAL,
+    );
 
     await createLifecycleMutation(
       "resume",
@@ -332,11 +426,15 @@ describe("createLifecycleMutation", () => {
         }),
       ),
       "supervised-coding",
-    ).run();
-    expect(apiMocks.resumeCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
-      requestId: "run-1",
-      requestedMode: "supervised-coding",
-    });
+    ).run(SIGNAL);
+    expect(apiMocks.resumeCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "run-1",
+        requestedMode: "supervised-coding",
+      },
+      SIGNAL,
+    );
   });
 
   it("fails closed when resume would widen the server-confirmed effective mode", () => {
@@ -370,12 +468,117 @@ describe("createFollowUpMutation", () => {
     );
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
     expect(mutation.mayInstallNewRun).toBe(false);
-    await mutation.run();
-    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenCalledWith("run-1", {
-      requestId: mutation.requestId,
-      expectedRevision: 4,
-      taskIntent: "add a test",
-    });
+    await mutation.run(SIGNAL);
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "add a test",
+      },
+      SIGNAL,
+    );
+  });
+});
+
+describe("primary agent on the mutations (#3897)", () => {
+  const offered = { selectableAgents: ["build", "plan"] } as const;
+
+  it("sends the selected agent on start and retry only where the server offers a choice", async () => {
+    for (const agent of ["plan", "build"] as const) {
+      const started = createStartMutation(
+        "outline the change",
+        stateWithRun(null, { canStart: true, ...offered, agent }),
+        { projectMemoryEnabled: true },
+      );
+      await started.run(SIGNAL);
+      expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+        expect.objectContaining({ agent }),
+        SIGNAL,
+      );
+      const retried = createRetryMutation(
+        "outline the change",
+        stateWithRun(snapshot(), { canRetry: true, ...offered, agent }),
+      );
+      await retried.run(SIGNAL);
+      expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+        "run-1",
+        expect.objectContaining({ agent }),
+        SIGNAL,
+      );
+    }
+  });
+
+  it("omits the agent when only the default is offered, even if the selection says plan", async () => {
+    const stale = { selectableAgents: ["build"], agent: "plan" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...stale }), {
+      projectMemoryEnabled: true,
+    }).run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
+    await createRetryMutation("task", stateWithRun(snapshot(), { canRetry: true, ...stale })).run(
+      SIGNAL,
+    );
+    expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).not.toHaveProperty("agent");
+    await createFollowUpMutation("task", stateWithRun(snapshot({ state: "paused" }), stale)).run(
+      SIGNAL,
+    );
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).not.toHaveProperty(
+      "agent",
+    );
+  });
+
+  it("starts and retries a run under build when the selection is a custom primary agent (#3903 AC1)", async () => {
+    // A custom agent lives in a running run's own listing; a new run always begins under a built-in.
+    const custom = { ...offered, agent: "reviewer" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...custom }), {
+      projectMemoryEnabled: true,
+    }).run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).toHaveProperty(
+      "agent",
+      "build",
+    );
+    await createRetryMutation("task", stateWithRun(snapshot(), { canRetry: true, ...custom })).run(
+      SIGNAL,
+    );
+    expect(apiMocks.retryCodingWorkbenchRuntime.mock.lastCall?.[1]).toHaveProperty(
+      "agent",
+      "build",
+    );
+    await createFollowUpMutation("task", stateWithRun(snapshot({ state: "paused" }), custom)).run(
+      SIGNAL,
+    );
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).toHaveProperty(
+      "agent",
+      "reviewer",
+    );
+  });
+
+  it("never sends the selected agent for a source without an agent concept", async () => {
+    const codex = { ...offered, agent: "plan", runtimePreference: "codex-subscription" } as const;
+    await createStartMutation("task", stateWithRun(null, { canStart: true, ...codex }), {
+      projectMemoryEnabled: true,
+    }).run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0]).not.toHaveProperty("agent");
+  });
+
+  it("sends the agent with a follow-up, including a switch back to build", async () => {
+    for (const agent of ["plan", "build"] as const) {
+      const mutation = createFollowUpMutation(
+        "now implement it",
+        stateWithRun(snapshot({ state: "paused" }), { ...offered, agent }),
+      );
+      await mutation.run(SIGNAL);
+      expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+        "run-1",
+        {
+          requestId: mutation.requestId,
+          expectedRevision: 4,
+          taskIntent: "now implement it",
+          agent,
+        },
+        SIGNAL,
+      );
+    }
   });
 });
 
@@ -392,12 +595,16 @@ describe("createResearchRevokeMutation", () => {
     const mutation = createResearchRevokeMutation(stateWithRun(snapshot()), grant);
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
     expect(mutation.mayInstallNewRun).toBe(false);
-    await mutation.run();
-    expect(apiMocks.revokeCodingWorkbenchRuntimeResearchGrant).toHaveBeenCalledWith("run-1", {
-      requestId: mutation.requestId,
-      expectedRevision: 4,
-      grantId: "grant-1",
-    });
+    await mutation.run(SIGNAL);
+    expect(apiMocks.revokeCodingWorkbenchRuntimeResearchGrant).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        grantId: "grant-1",
+      },
+      SIGNAL,
+    );
   });
 });
 
@@ -412,10 +619,292 @@ describe("createRecoveryAcknowledgementMutation", () => {
     const run = snapshot({ state: "recovery-required" });
     const mutation = createRecoveryAcknowledgementMutation(stateWithRun(run));
     expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
-    await mutation.run();
-    expect(apiMocks.acknowledgeCodingWorkbenchRuntimeRecovery).toHaveBeenCalledWith("run-1", {
-      requestId: "run-1",
-      acknowledged: true,
+    await mutation.run(SIGNAL);
+    expect(apiMocks.acknowledgeCodingWorkbenchRuntimeRecovery).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: "run-1",
+        acknowledged: true,
+      },
+      SIGNAL,
+    );
+  });
+});
+
+// ADR-0137 D10: a message sent while a turn runs and the workspace files a prompt references ride on
+// the follow-up request; the browser authors the intent and the server decides.
+describe("prompt inputs on the follow-up mutation", () => {
+  const offered = { selectableAgents: ["build", "plan"], agent: "plan" } as const;
+
+  it.each(["steer", "queue"] as const)(
+    "sends a %s message to a running turn bound to the current revision, without an agent",
+    async (delivery) => {
+      const mutation = createFollowUpMutation(
+        "also cover the empty case",
+        stateWithRun(snapshot({ state: "running" }), offered),
+        { delivery },
+      );
+      expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+      expect(mutation.mayInstallNewRun).toBe(false);
+      await mutation.run(SIGNAL);
+      // The turn in flight keeps its agent: a delivery never names one, even where a choice exists.
+      expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+        "run-1",
+        {
+          requestId: mutation.requestId,
+          expectedRevision: 4,
+          taskIntent: "also cover the empty case",
+          delivery,
+        },
+        SIGNAL,
+      );
+    },
+  );
+
+  it("admits a delivery only against a running run with a non-empty message", () => {
+    for (const state of ["paused", "idle", "awaiting-approval", "succeeded", "stopping"] as const) {
+      expect(() =>
+        createFollowUpMutation("ping", stateWithRun(snapshot({ state })), { delivery: "steer" }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(snapshot({ state: "running" })), {
+        delivery: "queue",
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(null), { delivery: "steer" }),
+    ).toThrow();
+  });
+
+  it("keeps an ordinary follow-up to a paused run, whatever references it carries", async () => {
+    expect(() =>
+      createFollowUpMutation("ping", stateWithRun(snapshot({ state: "running" })), {
+        references: [{ path: "src/app.ts" }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    const mutation = createFollowUpMutation(
+      "look at the file",
+      stateWithRun(snapshot({ state: "paused" }), offered),
+      { references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }] },
+    );
+    await mutation.run(SIGNAL);
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "look at the file",
+        agent: "plan",
+        references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+      },
+      SIGNAL,
+    );
+  });
+
+  it("sends the references of a delivery beside it, and omits an empty list", async () => {
+    const running = stateWithRun(snapshot({ state: "running" }));
+    await createFollowUpMutation("see @a.ts", running, {
+      delivery: "steer",
+      references: [{ path: "a.ts" }],
+    }).run(SIGNAL);
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).toMatchObject({
+      delivery: "steer",
+      references: [{ path: "a.ts" }],
     });
+    await createFollowUpMutation("plain", running, { delivery: "queue", references: [] }).run(
+      SIGNAL,
+    );
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp.mock.lastCall?.[1]).not.toHaveProperty(
+      "references",
+    );
+  });
+});
+
+// ADR-0137 D10: the first prompt carries the files it references with `@` exactly as a follow-up
+// does, and a start or a follow-up may run as one of the runtime's slash commands, its text then
+// being the command's arguments (and empty for a bare command).
+describe("references and a slash command on the start mutation", () => {
+  const ready = { canStart: true } as const;
+
+  it("sends the first prompt's references and the command beside its text", async () => {
+    const mutation = createStartMutation("the last commit", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+      command: { name: "review" },
+    });
+    expect(mutation.mayInstallNewRun).toBe(true);
+    expect(mutation.expected).toBeUndefined();
+    await mutation.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+      {
+        requestId: mutation.requestId,
+        taskIntent: "the last commit",
+        requestedMode: "supervised-coding",
+        runtimePreference: "managed-gateway",
+        projectMemory: { enabled: true },
+        references: [{ path: "src/app.ts" }, { path: "docs/My Notes.md" }],
+        command: { name: "review" },
+      },
+      SIGNAL,
+    );
+  });
+
+  it("starts a bare command with an empty text", async () => {
+    const mutation = createStartMutation("", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      command: { name: "init" },
+    });
+    await mutation.run(SIGNAL);
+    const body = apiMocks.startCodingWorkbenchRuntime.mock.lastCall?.[0] as Record<string, unknown>;
+    expect(body).toMatchObject({ taskIntent: "", command: { name: "init" } });
+    expect(body).not.toHaveProperty("references");
+  });
+
+  it("keeps the ordinary start body exactly as it was, whatever empty inputs ride along", async () => {
+    const plain = createStartMutation("fix it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+    });
+    await plain.run(SIGNAL);
+    const empty = createStartMutation("fix it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      references: [],
+      command: undefined,
+    });
+    await empty.run(SIGNAL);
+    const [first, second] = apiMocks.startCodingWorkbenchRuntime.mock.calls.map(
+      (call) => call[0] as Record<string, unknown>,
+    );
+    expect(second).toEqual({ ...first, requestId: empty.requestId });
+    expect(second).not.toHaveProperty("references");
+    expect(second).not.toHaveProperty("command");
+  });
+
+  it("sends references beside an accepted issue, but never a command beside one", async () => {
+    const issue = {
+      issueRef: "https://github.com/owner/repo/issues/42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    };
+    const withFiles = createStartMutation("implement it", stateWithRun(null, ready), {
+      projectMemoryEnabled: true,
+      issue,
+      references: [{ path: "src/app.ts" }],
+    });
+    await withFiles.run(SIGNAL);
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ...issue, references: [{ path: "src/app.ts" }] }),
+      SIGNAL,
+    );
+    apiMocks.startCodingWorkbenchRuntime.mockClear();
+    expect(() =>
+      createStartMutation("implement it", stateWithRun(null, ready), {
+        projectMemoryEnabled: true,
+        issue,
+        command: { name: "review" },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    expect(apiMocks.startCodingWorkbenchRuntime).not.toHaveBeenCalled();
+  });
+
+  it("still refuses to start while the readiness gate is closed, command or not", () => {
+    expect(() =>
+      createStartMutation("", stateWithRun(null), {
+        projectMemoryEnabled: true,
+        command: { name: "init" },
+      }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("gives each mutation its own request id and keeps it when the same mutation runs again", async () => {
+    const options = {
+      projectMemoryEnabled: true,
+      references: [{ path: "a.ts" }],
+      command: { name: "review" },
+    };
+    const first = createStartMutation("x", stateWithRun(null, ready), options);
+    const second = createStartMutation("x", stateWithRun(null, ready), options);
+    expect(first.requestId).not.toBe(second.requestId);
+    await first.run(SIGNAL);
+    await first.run(SIGNAL);
+    const calls = apiMocks.startCodingWorkbenchRuntime.mock.calls.map(
+      (call) => (call[0] as { requestId: string }).requestId,
+    );
+    expect(calls).toEqual([first.requestId, first.requestId]);
+  });
+});
+
+describe("a slash command on the follow-up mutation", () => {
+  const paused = stateWithRun(snapshot({ state: "paused" }));
+
+  it("sends the command with an empty text, bound to the current revision", async () => {
+    const mutation = createFollowUpMutation("", paused, { command: { name: "review" } });
+    expect(mutation.expected).toEqual({ runId: "run-1", revision: 4 });
+    expect(mutation.mayInstallNewRun).toBe(false);
+    await mutation.run(SIGNAL);
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "",
+        command: { name: "review" },
+      },
+      SIGNAL,
+    );
+  });
+
+  it("sends the command's arguments and the files they reference together with the agent", async () => {
+    const offered = stateWithRun(snapshot({ state: "paused" }), {
+      selectableAgents: ["build", "plan"],
+      agent: "plan",
+    });
+    const mutation = createFollowUpMutation("branch main", offered, {
+      command: { name: "review" },
+      references: [{ path: "src/app.ts" }],
+    });
+    await mutation.run(SIGNAL);
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).toHaveBeenLastCalledWith(
+      "run-1",
+      {
+        requestId: mutation.requestId,
+        expectedRevision: 4,
+        taskIntent: "branch main",
+        agent: "plan",
+        references: [{ path: "src/app.ts" }],
+        command: { name: "review" },
+      },
+      SIGNAL,
+    );
+  });
+
+  it("keeps an empty text refused for everything that is not a command", () => {
+    expect(() => createFollowUpMutation("", paused)).toThrowError(
+      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+    );
+    expect(() =>
+      createFollowUpMutation("", paused, { references: [{ path: "a.ts" }] }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+  });
+
+  it("is admitted only against a paused run, and is never a delivery", () => {
+    for (const state of ["running", "idle", "awaiting-approval", "succeeded"] as const) {
+      expect(() =>
+        createFollowUpMutation("", stateWithRun(snapshot({ state })), {
+          command: { name: "init" },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(() =>
+      createFollowUpMutation("", stateWithRun(null), { command: { name: "init" } }),
+    ).toThrow();
+    for (const delivery of ["steer", "queue"] as const) {
+      expect(() =>
+        createFollowUpMutation("go", stateWithRun(snapshot({ state: "running" })), {
+          delivery,
+          command: { name: "init" },
+        }),
+      ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
+    }
+    expect(apiMocks.submitCodingWorkbenchRuntimeFollowUp).not.toHaveBeenCalled();
   });
 });

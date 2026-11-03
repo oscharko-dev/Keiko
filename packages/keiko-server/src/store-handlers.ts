@@ -1,3 +1,7 @@
+import {
+  revokeChangedJiraChatAuthority,
+  revokeJiraChatAccess,
+} from "./atlassian/jiraPodLifecycle.js";
 import { readChatContextStatus, compactChatContext } from "./chat-context-status.js";
 import { logChatContextManagement } from "./chat-context-log.js";
 import {
@@ -9,6 +13,7 @@ import {
 // applied uniformly by the server layer. JSON body reading is bounded by MAX_STORE_BODY_BYTES.
 
 import type { IncomingMessage } from "node:http";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
@@ -28,6 +33,7 @@ import {
   parseExpectedGroundingScopeIdentity,
 } from "./store/chat-grounding-scope-identity.js";
 import { logChatScopeUpdate } from "./chat-scope-update-log.js";
+import { jiraChatPatchFields, jiraChatUpdateOptions } from "./atlassian/jiraChatBindingPatch.js";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig, currentGroundingLimits } from "./deps.js";
@@ -47,7 +53,11 @@ import {
   type UpdateProjectPatch,
   type WorkflowStatus,
 } from "./store/index.js";
-import { MAX_GIT_CHANGE_SCOPES, parseChatGitChangeScope } from "./store/chats.js";
+import {
+  MAX_GIT_CHANGE_SCOPES,
+  parseChatGitChangeScope,
+  previewChatScopeUpdate,
+} from "./store/chats.js";
 import { gitChangeObjectId } from "./gitChangeRoutes.js";
 import type { StoredRelationship } from "./store/relationships.js";
 import {
@@ -73,7 +83,12 @@ import {
   clearGroundedTurnsForWorkspace,
 } from "./grounded-turn-registry.js";
 import { isLegacyEmptyAssistantPlaceholder } from "./assistant-response.js";
-import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
+import {
+  CHAT_TURN_WAIT_CANCELLED,
+  interruptChangedChatGenerations,
+  hasChatGenerations,
+  runSerializedChatTurn,
+} from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -468,7 +483,7 @@ export async function handleCreateProject(
     // transaction (`createProjectRecord`). A successful response therefore exposes a current
     // membership projection; consumers never synthesize or assume membership client-side.
     const registeredPaths = new Set(deps.store.listProjects().map((project) => project.path));
-    const project = deps.store.createProject(normalizedPath, name);
+    const project = deps.store.createProject(normalizedPath, name, ctx.correlationId);
     // The first explicit folder selection grants trust; reopening an existing canonical project
     // preserves its trust decision, including revocation and invalidation. The store resolves aliases
     // to that same registered path. The trust service resolves
@@ -598,6 +613,7 @@ export function handleDeleteProject(ctx: RouteContext, deps: UiHandlerDeps): Rou
     const deletedChats = deps.store.listChats(normalizedPath);
     deps.store.deleteProject(normalizedPath);
     for (const chat of deletedChats) {
+      revokeJiraChatAccess(deps, chat.id, ctx.correlationId);
       clearGroundedContextIndexesForConversation(chat.id);
       clearGroundedTurnsForConversation(chat.id);
     }
@@ -632,12 +648,27 @@ export function handleListChats(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     );
     if (ctx.url.searchParams.has("id")) {
       const selected = findChatById(deps, requireQuery(ctx, "id"));
-      const chats = selected?.projectPath === projectPath ? [selected] : [];
+      const chats =
+        selected?.projectPath === projectPath ? [chatWithToolModePolicy(selected, deps)] : [];
       return { status: 200, body: { chats } };
     }
-    const chats = deps.store.listChats(projectPath, limit);
+    const chats = deps.store
+      .listChats(projectPath, limit)
+      .map((chat) => chatWithToolModePolicy(chat, deps));
     return { status: 200, body: { chats } };
   });
+}
+
+function chatWithToolModePolicy(chat: Chat, deps: UiHandlerDeps): Chat {
+  const toolModeCeiling = resolveEffectiveCodingWorkbenchMode(
+    "autonomous-delivery",
+    deps.autonomousDeliveryDeploymentCeiling,
+  );
+  return {
+    ...chat,
+    toolModeCeiling,
+    effectiveToolMode: resolveEffectiveCodingWorkbenchMode(chat.toolMode, toolModeCeiling),
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -658,7 +689,7 @@ export async function handleCreateChat(
       ...(branchLabel === undefined ? {} : { branchLabel }),
       correlationId: ctx.correlationId,
     });
-    return { status: 201, body: { chat } };
+    return { status: 201, body: { chat: chatWithToolModePolicy(chat, deps) } };
   });
 }
 
@@ -1129,6 +1160,7 @@ function buildChatPatch(
   deps: UiHandlerDeps,
   body: Record<string, unknown>,
   expectedGroundingScopeIdentity: string | undefined,
+  onJiraDenied: () => void,
 ): UpdateChatPatch {
   const title = optionalString(body, "title");
   const selectedModel = optionalChatModelId(deps, body, "selectedModel");
@@ -1139,6 +1171,7 @@ function buildChatPatch(
     ...(selectedModel !== undefined ? { selectedModel } : {}),
     ...(branchLabel !== undefined ? { branchLabel } : {}),
     ...groundingScopePatchFields(body, deps),
+    ...jiraChatPatchFields(body, expectedGroundingScopeIdentity, onJiraDenied),
     ...(expectedGroundingScopeIdentity === undefined ? {} : { expectedGroundingScopeIdentity }),
   };
   if (statusRaw === undefined) return patch;
@@ -1229,7 +1262,9 @@ function patchTouchesGroundingScope(patch: UpdateChatPatch): boolean {
     patch.connectedScope !== undefined ||
     patch.localKnowledgeScopes !== undefined ||
     patch.localKnowledgeScope !== undefined ||
-    patch.gitChangeScopes !== undefined
+    patch.gitChangeScopes !== undefined ||
+    patch.jiraPodId !== undefined ||
+    patch.toolMode !== undefined
   );
 }
 
@@ -1244,7 +1279,14 @@ export async function handleUpdateChat(
       const body = await readJsonObject(ctx.req);
       const expected = parseExpectedGroundingScopeIdentity(body.expectedGroundingScopeIdentity);
       if (expected !== undefined && typeof expected !== "string") return expected;
-      const patch = buildChatPatch(deps, body, expected);
+      const patch = buildChatPatch(deps, body, expected, () => {
+        const chat = findChatById(deps, id);
+        if (chat !== undefined) logChatScopeUpdate("denied", chat, chat, {}, ctx.correlationId);
+      });
+      if (cancellation.signal.aborted)
+        return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+      const denial = interruptChangedScopeTurn(deps, id, patch, ctx.req, ctx.correlationId);
+      if (denial !== undefined) return denial;
       const apply = (): RouteResult => applyChatUpdate(deps, id, patch, ctx.req, ctx.correlationId);
       if (
         !patchTouchesGroundingScope(patch) &&
@@ -1260,6 +1302,32 @@ export async function handleUpdateChat(
   } finally {
     cancellation.dispose();
   }
+}
+
+function interruptChangedScopeTurn(
+  deps: UiHandlerDeps,
+  id: string,
+  patch: UpdateChatPatch,
+  req: IncomingMessage,
+  correlationId: string | undefined,
+): RouteResult | undefined {
+  if (!patchTouchesGroundingScope(patch) || !hasChatGenerations(deps, id)) return undefined;
+  const existing = findChatById(deps, id);
+  if (existing === undefined) return notFoundResult("Chat not found.");
+  const conflict = groundingPatchConflict(deps, existing, patch, correlationId);
+  if (conflict !== undefined) return conflict;
+  const safePatch = canonicalizeGitChangeScopePatch(
+    deps,
+    existing,
+    req,
+    canonicalizeConnectedScopePatch(deps, existing, patch),
+  );
+  const preview = previewChatScopeUpdate(existing, safePatch, {
+    ...currentGroundingLimits(deps),
+    ...jiraChatUpdateOptions(deps, safePatch, existing, correlationId),
+  });
+  interruptChangedChatGenerations(deps, existing, preview, correlationId, patch);
+  return undefined;
 }
 
 function groundingPatchConflict(
@@ -1309,15 +1377,28 @@ function applyChatUpdate(
   const chat = deps.store.updateChat(id, safePatch, {
     maxConnectedSources: limits.maxConnectedSources,
     maxLocalKnowledgeSources: limits.maxLocalKnowledgeSources,
+    ...jiraChatUpdateOptions(deps, safePatch, existing, correlationId),
+    ...(correlationId === undefined ? {} : { correlationId }),
   });
-  if (patchTouchesGroundingScope(safePatch) || patch.expectedGroundingScopeIdentity !== undefined) {
-    logChatScopeUpdate("applied", existing, chat, patch, correlationId);
-  }
+  revokeChangedJiraChatAuthority(deps, existing, chat, correlationId);
+  recordAppliedChatUpdate(existing, chat, patch, correlationId);
   if (patchTouchesGroundingScope(safePatch) || safePatch.status !== undefined) {
     clearGroundedContextIndexesForConversation(id);
     clearGroundedTurnsForConversation(id);
   }
-  return { status: 200, body: { chat } };
+  return { status: 200, body: { chat: chatWithToolModePolicy(chat, deps) } };
+}
+
+function recordAppliedChatUpdate(
+  existing: Chat,
+  chat: Chat,
+  patch: UpdateChatPatch,
+  correlationId: string | undefined,
+): void {
+  // The store already records Jira generation changes after their transaction commits.
+  if (existing.jiraBindingGeneration !== chat.jiraBindingGeneration) return;
+  if (patchTouchesGroundingScope(patch) || patch.expectedGroundingScopeIdentity !== undefined)
+    logChatScopeUpdate("applied", existing, chat, patch, correlationId);
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -1353,6 +1434,7 @@ export async function handleDeleteChat(
         // leaves the chat intact, so the UI can retry rather than orphaning content-bearing blobs.
         deps.conversationAttachmentStore?.deleteForChat(projectPath, id);
         deps.store.deleteChat(id);
+        revokeJiraChatAccess(deps, id, ctx.correlationId);
         clearGroundedContextIndexesForConversation(id);
         clearGroundedTurnsForConversation(id);
         return { status: 204, body: null };

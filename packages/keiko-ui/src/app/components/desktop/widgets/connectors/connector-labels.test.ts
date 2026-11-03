@@ -14,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
+import { OPTIONAL_WIDGET_DE_MESSAGES } from "@/lib/i18n-messages.optional.de";
 import { ATLASSIAN_CONNECTOR_VERIFY_STATUSES } from "@/lib/atlassian-connectors-api";
 import {
   actionTypeLabelKey,
@@ -41,6 +42,7 @@ describe("connector-labels — every mapped key exists in the widget or shared c
     }
     for (const action of ATLASSIAN_CONNECTOR_ACTION_TYPES) {
       expect(catalogHas(actionTypeLabelKey(action))).toBe(true);
+      expect(Object.hasOwn(OPTIONAL_WIDGET_DE_MESSAGES, actionTypeLabelKey(action))).toBe(true);
     }
     for (const risk of ["low", "medium", "high", "critical"] as const) {
       expect(catalogHas(riskLabelKey(risk))).toBe(true);

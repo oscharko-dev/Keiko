@@ -1,6 +1,7 @@
 export { ToolCatalogError } from "./errors.js";
 export type { CatalogFailureReason, CatalogSchemaMismatch } from "./errors.js";
 export { describeCatalogSchemaMismatch } from "./schema.js";
+export { compileExternalCatalogSchema } from "./external-schema.js";
 export { createToolRef } from "./identity.js";
 export { createToolDescriptor, verifyToolDescriptor } from "./descriptor.js";
 export { createCatalogProfileDeclaration } from "./profile.js";
@@ -27,8 +28,9 @@ export {
   opencodeRegistrationSet,
   nativeTextSnapshotRegistrationSet,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
+  OPENCODE_TOOL_PROFILES,
 } from "./opencode.js";
-export type { OpenCodeNativeExtensionDefinition } from "./opencode.js";
+export type { OpenCodeNativeExtensionDefinition, OpenCodeToolProfile } from "./opencode.js";
 export { createKeikoToolCatalog } from "./composer.js";
 export type { CatalogRegistrationSet, CatalogSetEntry } from "./composer.js";
 export { assertIdentityCompatibility, assertCompatibilityTime } from "./compatibility.js";
@@ -36,3 +38,5 @@ export { validateToolArguments } from "./arguments.js";
 export { copyCatalogJson as captureCatalogJson, catalogBytes as catalogJsonBytes } from "./json.js";
 export { createToolInvocationNormalizer } from "./invocation.js";
 export type { ToolInvocationNormalizer } from "./invocation.js";
+
+export { copyCatalogEnvelope as captureCatalogEnvelope } from "./json.js";

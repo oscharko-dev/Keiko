@@ -28,6 +28,7 @@ import {
   writeSync,
 } from "node:fs";
 import { join } from "node:path";
+import { isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import {
   SafeArtifactFileError,
   assertSafeArtifactAncestors,
@@ -599,7 +600,7 @@ export function isSoleActivityLogWriter(
 ): boolean {
   return files.every((entry) => {
     if (entry.file.kind !== "active") return true;
-    if (entry.file.instanceId === identity.instanceId || entry.file.pid === identity.pid) {
+    if (entry.file.pid === identity.pid) {
       return true;
     }
     return !identity.isAlive(entry.file.pid);
@@ -1039,7 +1040,8 @@ export function activityLogOrphanOwner(
   context: ActivityLogOrphanContext,
 ): ActivityLogOrphanOwner | undefined {
   if (entry.file.kind !== "active" || entry.file.name === context.currentName) return undefined;
-  if (entry.file.instanceId === context.instanceId) return "same-process";
+  if (entry.file.pid === context.pid && entry.file.instanceId === context.instanceId)
+    return "same-process";
   if (entry.file.pid === context.pid || !context.isAlive(entry.file.pid)) return "exited";
   const windowMs = context.segmentSeconds * 1000;
   const stale =
@@ -1047,14 +1049,9 @@ export function activityLogOrphanOwner(
   return stale ? "stale" : undefined;
 }
 
-/** `process.kill(pid, 0)` probes existence; only ESRCH proves the owner is gone. */
+/** The shared coordinate probe keeps unavailable observations live for ownership purposes. */
 export function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errorCode(error) !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 export interface ActivityLogSegmentTail {

@@ -634,6 +634,7 @@ export function createUiServer(deps: UiServerDeps): Server {
     deps.liveDictationInitialFrameTimeoutMs,
   );
   const activityLog: ServerLogSink = deps.activityLog ?? processServerLogSink();
+  let unregisterAtlassianListener: (() => void) | undefined;
   const server = createServer((req, res) => {
     const correlationId = resolveCorrelationId(req);
     res.setHeader(CORRELATION_RESPONSE_HEADER, correlationId);
@@ -662,8 +663,17 @@ export function createUiServer(deps: UiServerDeps): Server {
     socket.destroy();
   });
   server.on("close", () => {
+    unregisterAtlassianListener?.();
     voiceControl.closeAll();
     liveDictation.closeAll();
+  });
+  server.on("listening", () => {
+    const address = server.address();
+    if (address !== null && typeof address !== "string") {
+      unregisterAtlassianListener = handlerDeps.atlassianConnectorCredentials?.registerListener?.(
+        address.port,
+      );
+    }
   });
   return server;
 }

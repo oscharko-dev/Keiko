@@ -1,0 +1,712 @@
+{
+  "schemaVersion": 1,
+  "parentCommit": "ad82b45c96ec5ae697ce88151c5afb93f2d6dd1c",
+  "patchedSourceCheckpoint": "e2aab34ae92c4dcb1bed1d8db92ab179681ef90d",
+  "classification": "Current compatible runtime parser security repair and source-bound qualification",
+  "followUp": "https://github.com/oscharko-dev/Keiko/issues/4051",
+  "recordedAt": "2026-10-20T22:51:47.489124+00:00",
+  "sourceBindings": [
+    {
+      "path": "package-lock.json",
+      "sha256": "d86e78a0f20606f588bafa85deb3589dea6c54de93fce487554a930f01973418"
+    },
+    {
+      "path": "docs/release/2296-dependency-security-closeout.md",
+      "sha256": "de8635f3415d33ac0729396c06278df89239c7cc8d86f17f4c575e02e8881d8c"
+    },
+    {
+      "path": "release-impact.catalog.json",
+      "sha256": "116093429d0f03c5d44a02704bb94211e61875629421c27a0f7f699f522e62a8"
+    },
+    {
+      "path": "docs/release/3415-tool-catalog-perf-evidence.json",
+      "sha256": "b472f64c97fac3b5d59768f6cc7d34913d9d6e6aeff8993484369ba822976f11"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx",
+      "sha256": "9e2e2b087c1dcbdde3e8b23868ac142b5eb0a6908f2baaafa78afd0ee26ed317"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
+      "sha256": "e8a2863951d14e6c80579564b8f1ba6aa1c61f4489e5f0995079c1be5595d896"
+    },
+    {
+      "path": "tests/e2e/coding-workbench-selector-layout.spec.ts",
+      "sha256": "e24f82ef6002b0be653490e1a811c38cb00ced5b731d0d04e3fdb32ba5bcae62"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "1ffca120dd6d58bc7c1ce52bb940424c4d7d59be7654a110ba88345b86bf36be"
+    },
+    {
+      "path": "scripts/__tests__/dev-quality-workflows.test.mjs",
+      "sha256": "a80fb34da242728e3ea426d39601722d256319fd842154e2a4c7565d0307f772"
+    }
+  ],
+  "advisories": [
+    {
+      "id": "GHSA-gfr2-rv44-r23c",
+      "severity": 7.5,
+      "scope": "Browser Composer default-parser reference-definition availability",
+      "fixed": "14.3.3"
+    },
+    {
+      "id": "GHSA-vfgh-jcmw-g37q",
+      "severity": 3.7,
+      "scope": "Inline HTML parsing; existing Composer html:false remains disabled",
+      "fixed": "14.3.3"
+    }
+  ],
+  "dependencyChange": {
+    "package": "markdown-it",
+    "from": "14.3.2",
+    "to": "14.3.3",
+    "changedCanonicalLockEntries": ["node_modules/markdown-it"],
+    "changedRecordFields": ["version", "resolved", "integrity"],
+    "parent": "prosemirror-markdown 1.13.8",
+    "parserOptionsChanged": false,
+    "waiversChanged": false,
+    "earlierCatalogEntriesPreserved": 62,
+    "automaticUpdateEligibilityChanged": false
+  },
+  "failureFirst": {
+    "label": "delivery-release125-markdown-security-red-v1",
+    "command": [
+      "<private-diagnostic>/osv260/osv-scanner_darwin_arm64",
+      "scan",
+      "source",
+      "--config",
+      "osv-scanner.toml",
+      "--recursive",
+      "./",
+      "--format",
+      "json"
+    ],
+    "exitCode": 1,
+    "sourceUnchanged": true,
+    "completedAt": "2026-10-20T21:45:51.781031+00:00",
+    "receiptSha256": "8d54f7451957908c6635e9d47c4313d133a8218ba98d169c07eef1a27f4bb151",
+    "logSha256": "c8ae85ad4a52609810b24c0a35c188fae6ca720d6f8919f4551e4b19ee75ccac"
+  },
+  "cleanInstallation": {
+    "label": "delivery-release125-markdown-clean-install-v1",
+    "command": ["npm", "ci"],
+    "exitCode": 0,
+    "sourceUnchanged": true,
+    "completedAt": "2026-10-20T21:48:44.771582+00:00",
+    "receiptSha256": "f9d6c2f4805e1f7c38a1a08082f30859c467fe67114bd6fb7540c03d83e6998e",
+    "logSha256": "f074ddb8d04a6b407c5528d6d7aab57e368affa9e514fb25c94a523981269cce"
+  },
+  "nativePrerequisite": {
+    "label": "delivery-release125-markdown-usearch-v1",
+    "command": ["npm", "run", "provision:usearch"],
+    "exitCode": 0,
+    "sourceUnchanged": true,
+    "completedAt": "2026-10-20T21:49:12.910940+00:00",
+    "receiptSha256": "2567fa2106b91a88e1346e0464fc4e5354c9cd9a5f45bcf5471c48d1d52679a1",
+    "logSha256": "5554861efa0bd1dfcbc4610a5c9bb5157371d3bc3ca042068042a4decc7ce9fa"
+  },
+  "actualInstalledResolution": {
+    "report": {
+      "classification": "Actual installed parser entrypoint metadata and bytes; not lock-only evidence",
+      "parserHtmlEnabled": false,
+      "node": "v24.18.0",
+      "vite": "8.3.3",
+      "vitest": "4.1.11",
+      "contexts": [
+        {
+          "context": "root",
+          "version": "14.3.3",
+          "entrySha256": "1a155c73e253afa946cc92a8e99e5f3e9a16da1305e82507be129df132efeb93"
+        },
+        {
+          "context": "ui",
+          "version": "14.3.3",
+          "entrySha256": "1a155c73e253afa946cc92a8e99e5f3e9a16da1305e82507be129df132efeb93"
+        },
+        {
+          "context": "prosemirror",
+          "version": "14.3.3",
+          "entrySha256": "1a155c73e253afa946cc92a8e99e5f3e9a16da1305e82507be129df132efeb93"
+        }
+      ]
+    },
+    "scope": "Node CommonJS resolution and installed byte identity; browser execution is qualified separately by the fresh UI build and complete browser lanes",
+    "receipt": {
+      "label": "delivery-release125-markdown-actual-resolution-v2",
+      "command": ["node", "<private-diagnostic>/verify-markdown-resolution92.mjs"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:50:19.520894+00:00",
+      "receiptSha256": "102684c46f631e9d7f807c63d4545fdd61df715463d75b94b4051a3dbbf3461c",
+      "logSha256": "70278eb417692c6868af19fd5bc54d9100db603663c6ae7a37c1d14984c9a5fa"
+    }
+  },
+  "fixedScanner": {
+    "label": "delivery-release125-markdown-security-green-v1",
+    "command": [
+      "<private-diagnostic>/osv260/osv-scanner_darwin_arm64",
+      "scan",
+      "source",
+      "--config",
+      "osv-scanner.toml",
+      "--recursive",
+      "./",
+      "--format",
+      "json"
+    ],
+    "exitCode": 0,
+    "sourceUnchanged": true,
+    "completedAt": "2026-10-20T21:49:33.296105+00:00",
+    "receiptSha256": "24785140bc40bdd856c0a73e946e98ecdcd59995ccdd4e2a4c553500a82ebd1b",
+    "logSha256": "5e74c1a192393a228b0b3f257f0a8de511bb9e757f2444bc99402b7d6b6de5f7"
+  },
+  "composerPreservation": {
+    "passed": 74,
+    "receipts": [
+      {
+        "label": "delivery-release125-markdown-composer-controls-v1",
+        "command": [
+          "npm",
+          "test",
+          "--workspace",
+          "@oscharko-dev/keiko-ui",
+          "--",
+          "src/app/components/desktop/composer/composer-markdown.test.ts",
+          "src/app/components/desktop/composer/MarkdownComposer.test.tsx"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:49:45.878032+00:00",
+        "receiptSha256": "87535ac50f67ea8559128231c9920173f1af0fa7cb1bae105d0899f3568a2bf9",
+        "logSha256": "b13de5863af6979a25f6b3378cccf9ecbdb02ff1df01a993725fe5d31ffc397d"
+      },
+      {
+        "label": "delivery-release125-markdown-currency-v1",
+        "command": ["npm", "run", "check:dependency-currency"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:50:52.737589+00:00",
+        "receiptSha256": "e08f1a6e89af64fd30e29a9f73561d4f9597dca5621d77e3bba08030f07417cd",
+        "logSha256": "80603f70147bd62be5cf39ce3c585cd9efa5ba291aa792e7cddc264d792fba58"
+      },
+      {
+        "label": "delivery-release125-markdown-release-impact-v1",
+        "command": ["npm", "run", "check:release-impact"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:50:53.028397+00:00",
+        "receiptSha256": "67d85d68854f0ba8adbf5ed7ba513ba4a3097a6d7fc71744c0a5786fe1c71797",
+        "logSha256": "04855147a6eea1d6866494e0f33b55439456085fe579d29b358446c9419d122c"
+      }
+    ]
+  },
+  "referenceMeasurement": {
+    "command": ["npm", "run", "perf:evidence:regen:tool-catalog"],
+    "sourceCommit": "e2aab34ae92c4dcb1bed1d8db92ab179681ef90d",
+    "procedure": "Original default producer; no recalibration, identity rebinding, runtime extension or changed ceilings",
+    "subject": {
+      "sourceTreeSha256": "bd327fd5990835d3dde8e9e37a58b710879263efe60f38a549df0a6d0071db03",
+      "lockfileSha256": "b8bcfecba1b587f53c9187522d757612d79b07fb7ea68a79fffc10e38f95158d",
+      "measurementHarnessSha256": "3f9c626b0f4604b24987fe325675bed087eb5cb43a3c0113004c5b6478d22895"
+    },
+    "sampleCount": 90,
+    "calibrationSha256": "3d189c66ef9752792518fdfed0b8e1b5c2d056288b7fd0a25d34eda5a2eb969c",
+    "budgetSha256": "97635c5939efece06528e8a3dd4e40e7bb0ee255a7cce6745d3feef3bbd687d3",
+    "measurementFileSha256": "b472f64c97fac3b5d59768f6cc7d34913d9d6e6aeff8993484369ba822976f11",
+    "orchestrationStateSha256": "72b58cc9cd9203424179d724a38aa647b3a5c010c057a5d61e293a24e270ef31",
+    "orchestrationLogSha256": "1d9c4f4d8c5a172a4bd32c0b2683ccd7a0b90c2f60cce4040e0f2838a04a3765",
+    "actualEnvironment": {
+      "platform": "linux",
+      "architecture": "arm64",
+      "nodeVersion": "v24.18.0",
+      "logicalCores": 16,
+      "totalMemoryBytes": 67302940672
+    },
+    "otherRunningContainers": 0,
+    "loadedModels": 0,
+    "restoredMemoryMiB": 24576,
+    "restoredCpuKeyPresent": false,
+    "restoredTaskContainerCount": 3,
+    "firstPreflight": "Refused loaded task Gemma before any Docker mutation or measurement; unloaded before the valid window"
+  },
+  "freshVerification": {
+    "uiPassed": 10866,
+    "existingUiSkips": 1,
+    "chromiumPassed": 121,
+    "webkitPassed": 119,
+    "initialStaticJavaScript": {
+      "fileCount": 22,
+      "totalGzipBytes": 345472,
+      "ceilingBytes": 349184,
+      "ok": true
+    },
+    "minimumAndActivityReceipts": [
+      {
+        "label": "delivery-release125-markdown-typecheck-v1",
+        "command": ["npm", "run", "typecheck"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:01:42.420435+00:00",
+        "receiptSha256": "8743473ce84623b6ef7fe1f8d0a20f369d0b05849cef1406a7c1c59d9cf3de9e",
+        "logSha256": "2de1e03e60e93d1f894b58387cfb071e98fa697455b0bedcbf5b45e903069614"
+      },
+      {
+        "label": "delivery-release125-markdown-ui-typecheck-v1",
+        "command": ["npm", "run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:01:44.813607+00:00",
+        "receiptSha256": "48c6cc02857736fc51bcc15b9f49c41b4e974455e8a77bfa92b031bdc99e7d64",
+        "logSha256": "164275fc19a33a4256a5f69fd08cce49b3b7271499e0d36cbb5afb257bae8a71"
+      },
+      {
+        "label": "delivery-release125-markdown-lint-v1",
+        "command": ["npm", "run", "lint"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:06:01.717622+00:00",
+        "receiptSha256": "b4d660f9cf550c88972d9a2ae7fb6316c0483f73fd3fb6ef7a8ac846a123496b",
+        "logSha256": "30ca5df4c5b12b8b904f65b8b2d0b19471e29aeb59bee080683dc3012e88ecbb"
+      },
+      {
+        "label": "delivery-release125-markdown-format-v1",
+        "command": ["npm", "run", "format:check"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:06:57.026339+00:00",
+        "receiptSha256": "0972f7c89a5ba2c247cad2f933e0c91b4c67a1fe9be75ad122e98ad79f65e8dd",
+        "logSha256": "3a8149c56e5cabb143ebf48322ea0ae3c932d26acbdd1171e0072789c4f4767b"
+      },
+      {
+        "label": "delivery-release125-markdown-ui-coverage-v1",
+        "command": ["npm", "run", "test:coverage:ui"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:08:06.946348+00:00",
+        "receiptSha256": "e98988795a1afb5bab41d52c8a11e5610d296b4d52070d4493dba61e202b22ad",
+        "logSha256": "998a89b7ead8e63bc3e636301a4a7fd9ea17935d841e3a66749f0b294dcb2025"
+      },
+      {
+        "label": "delivery-release125-markdown-coverage-quality-v1",
+        "command": ["npm", "run", "check:coverage:quality"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:08:07.197284+00:00",
+        "receiptSha256": "c6a23e3f24336d8153a93632f1d93d06ff43e6910506eaa229b7d74e4a5c5153",
+        "logSha256": "a5bdc69c63f0c17eecdc9e31ee5d5d0ed00821f47b80ece4730722e7cfb67e0b"
+      },
+      {
+        "label": "delivery-release125-markdown-ui-build-v1",
+        "command": ["npm", "run", "build:ui"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:08:19.815251+00:00",
+        "receiptSha256": "1ef1b2574fa40f372d334f5ce9fd53469dfa9c2dd61e07ec75ad7084e9c75edf",
+        "logSha256": "030efc7a084c1fe8fe865979e2b4ff795d2d598ed6173c1f47b0ba79f9c85c68"
+      },
+      {
+        "label": "delivery-release125-markdown-editor-evidence-v1",
+        "command": ["npm", "run", "check:editor-release-evidence"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:08:20.245305+00:00",
+        "receiptSha256": "5cd10c85805d3b254ff968cfec8f270e87bb45c6bbab0fba032581d717f13227",
+        "logSha256": "20a19c8c9cfba91d369d387206e895361b4ca99a46f81961a1f7eb8265003c09"
+      },
+      {
+        "label": "delivery-release125-markdown-wiring-v1",
+        "command": ["npm", "run", "check:e2e-suite-wiring"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:08:22.333930+00:00",
+        "receiptSha256": "a9d71d82255f3f8c6612508b946eb6494029032572e0874090c474d1da01f20d",
+        "logSha256": "dc2e77c9f723a241ab7c784389e77179ec525a320e390bab33ab8e64fd80c316"
+      },
+      {
+        "label": "delivery-release125-markdown-sonar-v1",
+        "command": [
+          "npm",
+          "run",
+          "gates:sonar",
+          "--",
+          "--base",
+          "ad82b45c96ec5ae697ce88151c5afb93f2d6dd1c"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:08:36.127888+00:00",
+        "receiptSha256": "9b86205d0e5e37b378ca1ee6cf504766089a70b5dacf06c6d497e8ea46a67cd6",
+        "logSha256": "d02d8bc67978d83370809abe1442d96adb1fbbc91dac065a9cf1c9252f2dd5d9"
+      },
+      {
+        "label": "delivery-release125-markdown-activity-v1",
+        "command": ["npm", "run", "check:activity-log"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:59:38.705553+00:00",
+        "receiptSha256": "4880299adc51b1d335ca5997fa5018ca73f448ac3e624a9b65d179df1d4cb012",
+        "logSha256": "e4306b99c55c670c81468ed0a41165c45910dd65a6eb624397e069eab4eb6ebf"
+      },
+      {
+        "label": "delivery-release125-markdown-initial-byte-budget-v1",
+        "command": ["npm", "run", "check:editor-bundle-size", "--", "--require-static-export"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:12:02.911599+00:00",
+        "receiptSha256": "5910cfea377a1584c88c75f11e8d73926b8cc7047a799a7fe248caf60bfcc24e",
+        "logSha256": "23bb5766b908f79ca7f55aae15d5107fd52bdeaa6eb52e0d26b550b31ded806b"
+      },
+      {
+        "label": "delivery-release125-markdown-initial-byte-projection-v1",
+        "command": ["node", "<private-diagnostic>/markdown92-initial-byte-projection.mjs"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:12:45.932304+00:00",
+        "receiptSha256": "81ef26cf51e79b0721f0811de33ca60a8bca0fd37f86b566355953d2a8f58bf4",
+        "logSha256": "c05456af679fa0525d4903a7b084170f2e7a1d378b907aaac24e17a173b78ff3"
+      }
+    ],
+    "browserReceipts": [
+      {
+        "label": "delivery-release125-ci92-full-chromium-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=chromium",
+          "--grep",
+          "@smoke|Issue #2253 (an unavailable runtime|the readiness facts)"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:47:00.528421+00:00",
+        "receiptSha256": "910aba8ee9332acf28623732f2765e6caf7545c77193c30faf0292529bded18a",
+        "logSha256": "0b14cbb71bf69d7c18b71aed90e9c8b1f78ad7555baf42b64307187163692a44"
+      },
+      {
+        "label": "delivery-release125-ci92-full-webkit-v1",
+        "command": ["npm", "run", "test:e2e:smoke:webkit"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:40:29.790488+00:00",
+        "receiptSha256": "a8044dd142ef803ce79ca7370ad27be0a61b52ddb72719abd5d287a5ec76596f",
+        "logSha256": "5ee9ff34e97980cca9d33d5367de11257a0da4975917d86146f8b0cee6d83565"
+      }
+    ],
+    "postFocusReadinessReceipts": [
+      {
+        "label": "delivery-release125-markdown-focus-typecheck-v1",
+        "command": [
+          "node",
+          "node_modules/@typescript/native/bin/tsc",
+          "-p",
+          "tsconfig.json",
+          "--noEmit"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:26:10.053976+00:00",
+        "receiptSha256": "b7d3653432bbc6c503467b8f90706c830a3f829da6b894b7b412bb818780b6dc",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "delivery-release125-markdown-focus-lint-v1",
+        "command": [
+          "node",
+          "node_modules/eslint/bin/eslint.js",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts",
+          "--max-warnings=0"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:26:15.570133+00:00",
+        "receiptSha256": "0ebb812a28ffa5f9af72ef833a7f6963548541179a9977e6116b551c58bedcbb",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "delivery-release125-markdown-focus-format-v1",
+        "command": [
+          "node",
+          "node_modules/prettier/bin/prettier.cjs",
+          "--check",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:26:15.777807+00:00",
+        "receiptSha256": "f1248a8849111fdc35feeafffd744e741de3120f380d58e4270b97805af16b3a",
+        "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+      },
+      {
+        "label": "delivery-release125-markdown-focus-wiring-v1",
+        "command": ["npm", "run", "check:e2e-suite-wiring"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:26:17.998288+00:00",
+        "receiptSha256": "5c762e9f2805c86a35969dc36ca187b551a21417ab0fa9314d8472a01e04aee1",
+        "logSha256": "dc2e77c9f723a241ab7c784389e77179ec525a320e390bab33ab8e64fd80c316"
+      },
+      {
+        "label": "delivery-release125-markdown-focus-sonar-v1",
+        "command": [
+          "npm",
+          "run",
+          "gates:sonar",
+          "--",
+          "--base",
+          "ad82b45c96ec5ae697ce88151c5afb93f2d6dd1c"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:27:10.796361+00:00",
+        "receiptSha256": "0e8a87c45742d3ea1972c8291ea9fc06c5233d257c6b10979f2e39f33937dc35",
+        "logSha256": "c53a2de88be7036bf88692f037de3d5ef33b6b7f2c807e9cb3e3d3800204422a"
+      },
+      {
+        "label": "delivery-release125-markdown-focus-repeat-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=webkit",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts",
+          "--grep",
+          "active narrow transcript",
+          "--repeat-each=3"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:24:45.926703+00:00",
+        "receiptSha256": "d53251a87533865a1f04b782879e40f0d05c358c8e5d679f65acf658aed5581b",
+        "logSha256": "7c35266b6475446ea359f95f3142d963be4f5f7ae18a28f1b13b24d4b5563e08"
+      }
+    ],
+    "workflowDistributionReceipts": [
+      {
+        "label": "delivery-release125-ci92-workflow-consumers-v1",
+        "command": [
+          "node",
+          "node_modules/vitest/vitest.mjs",
+          "run",
+          "--config",
+          "vitest.coverage.scripts.config.ts",
+          "scripts/__tests__/check-activity-log.test.mjs",
+          "scripts/__tests__/check-dependency-currency.test.mjs",
+          "scripts/__tests__/check-infra-failure-signature.test.mjs",
+          "scripts/__tests__/check-workflow-branch-parity.test.mjs",
+          "scripts/__tests__/check-zizmor-anchors.test.mjs",
+          "scripts/__tests__/ci-provenance-authority.test.mjs",
+          "scripts/__tests__/ci-test-gate-wiring.test.mjs",
+          "scripts/__tests__/dev-quality-workflows.test.mjs",
+          "scripts/__tests__/documentation-only-change.test.mjs",
+          "scripts/__tests__/list-workflow-consumers.test.mjs",
+          "scripts/__tests__/osv-scanner-workflow.test.mjs",
+          "scripts/__tests__/registry-install-smoke-security.test.mjs",
+          "scripts/__tests__/release-automation.test.mjs",
+          "scripts/__tests__/release-portable-assets-workflow.test.mjs",
+          "scripts/__tests__/resolve-verified-tree-evidence-unit.test.mjs",
+          "scripts/__tests__/retired-quality-providers.test.mjs",
+          "scripts/__tests__/sonar-analysis-scope.test.mjs",
+          "scripts/__tests__/verified-tree-evidence-reuse.test.mjs",
+          "scripts/__tests__/workflow-hygiene-job.test.mjs",
+          "scripts/__tests__/workflow-node-toolchain-parity.test.mjs",
+          "scripts/__tests__/workflow-trigger-scenarios.test.mjs"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:47:29.677164+00:00",
+        "receiptSha256": "5b728391fd3e245e0580c335a05f749ddfe9aebf4c7c1cedbdd0dea4556e9f5a",
+        "logSha256": "7926530a35156e4d2ffab76f3f8969c99426708c9599ee15caea8801546951fc"
+      },
+      {
+        "label": "delivery-release125-ci92-check-zizmor-anchors-v1",
+        "command": ["npm", "run", "check:zizmor-anchors"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:47:29.902674+00:00",
+        "receiptSha256": "9b326d2049c958076dcb8481a8dad423f767aafd4ff2eca71f76911bc6529f68",
+        "logSha256": "2888dcfad121b6768d7f3ab8311a33a62a7ee4abae45227c090d70c1a0833ad4"
+      },
+      {
+        "label": "delivery-release125-ci92-check-e2e-suite-wiring-v1",
+        "command": ["npm", "run", "check:e2e-suite-wiring"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:47:31.998558+00:00",
+        "receiptSha256": "2d9d9a297605c1968ee22bc30fdb6e97257c122e3dc1d5d1dca0e1dd12924c52",
+        "logSha256": "dc2e77c9f723a241ab7c784389e77179ec525a320e390bab33ab8e64fd80c316"
+      },
+      {
+        "label": "delivery-release125-ci92-check-workflow-branch-parity-v1",
+        "command": ["npm", "run", "check:workflow-branch-parity"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:47:32.215039+00:00",
+        "receiptSha256": "ee99903fff89e3fb4ba41b35ff78f3078acdaabd53ee00f3c8db292b135e4b4f",
+        "logSha256": "06e0e80b986207d2cc877150a2193db2919b30b8f57846923b2391232a3d6b8a"
+      },
+      {
+        "label": "delivery-release125-ci92-check-release-required-workflows-v1",
+        "command": ["npm", "run", "check:release-required-workflows"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:47:32.445104+00:00",
+        "receiptSha256": "a2a6bb8c49dd9daa9c5ffa1cec7f227d3168bf219f60fba656a2da4cd7b8d470",
+        "logSha256": "c1bc456936b2e1e7af1c83a78f0d223c33f7905c9dfaafcd5fe07fa034afc48e"
+      },
+      {
+        "label": "delivery-release125-ci92-check-activity-log-v1",
+        "command": ["npm", "run", "check:activity-log"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:48:51.326260+00:00",
+        "receiptSha256": "4b27d175e75dcd142dcf04c7feb9cce9228c29ff39ceaa5eec4f3134b16ee7fa",
+        "logSha256": "e967d7b9cc049a2ad96ae11f916e25c6764db85f4bb1208cec28cc33d4e85846"
+      },
+      {
+        "label": "delivery-release125-ci92-check-dependency-currency-v1",
+        "command": ["npm", "run", "check:dependency-currency"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:48:51.576146+00:00",
+        "receiptSha256": "e7c8612f3e153af0f454978a5933740efa7f469d3e43e64fc810ea9d83a0822f",
+        "logSha256": "80603f70147bd62be5cf39ce3c585cd9efa5ba291aa792e7cddc264d792fba58"
+      },
+      {
+        "label": "delivery-release125-ci92-arch-check-v1",
+        "command": ["npm", "run", "arch:check"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:49:12.022024+00:00",
+        "receiptSha256": "69b504fdb4eabb42483a2ec4cb971261f3b4b8f19c8a204276b1f25f00748dc2",
+        "logSha256": "083d3c44bd309664bcc684fea0b3fa49774f35fe725b45dc759add79ef89912e"
+      },
+      {
+        "label": "delivery-release125-ci92-arch-check-negative-v1",
+        "command": ["npm", "run", "arch:check:negative"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:49:16.634067+00:00",
+        "receiptSha256": "d81a91be9a1463b3baf9a6de83daf404ccfe4177a9786bbdc5b57f0d598aee3a",
+        "logSha256": "e68174d4b07ba0701427b21cf4e9ce0a302560e1572fc05afc02919397f093b6"
+      },
+      {
+        "label": "delivery-release125-ci92-test-lint-v1",
+        "command": [
+          "node",
+          "node_modules/eslint/bin/eslint.js",
+          "scripts/__tests__/dev-quality-workflows.test.mjs",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts",
+          "--max-warnings=0"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:49:22.794569+00:00",
+        "receiptSha256": "9c55fadafaa5249faad91e07c2e27533f4373145995b91bf26bd4a52781fdab6",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "delivery-release125-ci92-format-v1",
+        "command": ["npm", "run", "format:check"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:50:17.229781+00:00",
+        "receiptSha256": "dd10e873465fb510be28970c7894c881b64a34889d1750699792acfab788a058",
+        "logSha256": "3a8149c56e5cabb143ebf48322ea0ae3c932d26acbdd1171e0072789c4f4767b"
+      },
+      {
+        "label": "delivery-release125-ci92-sonar-v1",
+        "command": [
+          "npm",
+          "run",
+          "gates:sonar",
+          "--",
+          "--base",
+          "ad82b45c96ec5ae697ce88151c5afb93f2d6dd1c"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:51:12.656301+00:00",
+        "receiptSha256": "336b41b03d424153982b228abb6ed2176f70c77418f0298afe9600f2a19a0d20",
+        "logSha256": "b4c31ca4648836b5018b87c8adb9c862d130b6e9f8d84ee6efc0911c8aa33d07"
+      },
+      {
+        "label": "delivery-release125-ci92-actionlint-v1",
+        "command": [
+          "<private-diagnostic>/workflow-tools92/actionlint",
+          "-color",
+          ".github/workflows/ci.yml"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:49:17.055203+00:00",
+        "receiptSha256": "81de1ae460dd7d233c50172377e9e97b77d49cdc64fd179c992b5b4fc35f6abd",
+        "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "label": "delivery-release125-ci92-zizmor-v1",
+        "command": [
+          "<private-diagnostic>/workflow-tools92/zizmor",
+          "--config",
+          ".github/zizmor.yml",
+          "--offline",
+          ".github/workflows/ci.yml"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T22:49:17.200780+00:00",
+        "receiptSha256": "c54a658d75bb0225194f9256166058e7be9e10d9be58e7ba436f6111ece3ec42",
+        "logSha256": "5b0063bd124b378dca573a0d010e74e84d699f21ea84fcb8c5ffd46f0db7f1b4"
+      }
+    ]
+  },
+  "preservedFailures": {
+    "firstPatchedParserWebKit": {
+      "label": "delivery-release125-markdown-full-webkit-v1",
+      "command": ["npm", "run", "test:e2e:smoke:webkit"],
+      "exitCode": 1,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T22:23:29.285282+00:00",
+      "receiptSha256": "560ba97db40931be7d8ec66ae264c55a64610cef6e4b30acb93274182c05e5b8",
+      "logSha256": "fa0915138ecd795918ff22422f7890068ff5719ed73cfec800384fb15718bbe1"
+    },
+    "firstPatchedParserWebKitResult": "118 passed, one English transcript Home assertion remained at 298",
+    "publishedAd82ChromiumResult": "118 passed, one German transcript Home assertion remained at 41; job 118903605402",
+    "publishedAd82ChromiumLogSha256": "72a077f85f0514956f78a0b21ad9f1b469baccd283532d4dec26f2d65db5cbcb",
+    "change": "Require a fresh full-viewport observation after native Tab focus and before native Home; all original scrolling predicates remain unchanged",
+    "interpretation": "Explicit rendered-focus readiness, not a proven shared-follow or browser-specific root-cause repair"
+  },
+  "ciDistribution": {
+    "publishedRun": 39502567733,
+    "failedJob": 118903605247,
+    "cause": "Second observed configured 30-minute coverage shard deadline without a test-failure summary",
+    "packageShardsBefore": 3,
+    "packageShardsAfter": 4,
+    "timeoutMinutes": 30,
+    "workers": 2,
+    "workerHeapMiB": 3072,
+    "allOriginalTestsRetained": true,
+    "allCoverageFloorsRetained": true,
+    "allSuitesMustSucceedBeforeMerge": true,
+    "actualExistingShellGuardCases": [
+      "empty refused",
+      "missing refused",
+      "complete accepted",
+      "extra refused"
+    ],
+    "scope": "CI workload distribution; no repaired product slowdown or toolchain-causality claim"
+  },
+  "qualificationBoundaries": [
+    "The ad82 readiness and preceding security packets remain historical evidence for their original dependency inputs. Their hashes/outcomes are not rebound to 14.3.3.",
+    "The current packet qualifies installed parser bytes, preserved Composer behavior, fresh current UI/build/browser gates and genuine reference measurements. The complete final local release-coverage chain is an additional integration condition, recorded separately on the final signed source before merge.",
+    "The local static-export byte projection is macOS evidence; required CI/Linux remains authoritative.",
+    "Local Firefox profile-launch refusals establish no application acceptance; final-head hosted Firefox and every required app-bound check remain mandatory.",
+    "Native keyboard layout checks are after initial fixture channels settle; no live-growth/startup keyboard admission or shared-follow defect is claimed.",
+    "The owner-authorized protected merge, release workflow and actual SSD updater UI observation remain separate delivery stages. No installed automatic-update cycle, skill advantage, model ceiling or recovered private-history acceptance is inferred."
+  ]
+}

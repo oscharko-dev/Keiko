@@ -18,7 +18,12 @@ import {
 // The symbol-relation vocabulary is owned by keiko-workspace (repoSearchPolicy.ts), where the
 // retrieval ranker applies the same source-over-prose bias to the same question shape. One
 // definition, imported inward, so planner classification and candidate ranking cannot drift.
-import { hasSymbolRelationshipQuery, type SearchLimits } from "@oscharko-dev/keiko-workspace";
+import {
+  hasSymbolRelationshipQuery,
+  hasSourceAdviceAttribution,
+  isSourceAdviceNoun,
+  type SearchLimits,
+} from "@oscharko-dev/keiko-workspace";
 
 import {
   extractAnchors,
@@ -39,6 +44,7 @@ import {
   type SearchReference,
 } from "./references.js";
 import { parseDiagnosticTraceText } from "../bug-investigation/failure-parse.js";
+import { REQUEST_COMMAND_PATTERNS } from "./request-command-patterns.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -427,10 +433,6 @@ const INDEPENDENT_REQUEST_GRAMMAR_PATTERNS = [
   /\b(?:then|instead|otherwise|what|which|where|who|how|why|und|oder|aber|während)\b/iu,
   /\b(?:außerdem|zudem|zusätzlich|auch|dann|sowie|was|welche|wo|wie|warum)\b/iu,
 ];
-const REQUEST_COMMAND_PATTERNS = [
-  /\b(?:read|show|open|explain|describe|summarize|inspect|find|search|locate)(?:s|ed|ing)?\b/iu,
-  /\b(?:lies|zeige|öffne|erkläre|erklären|erklärst|beschreibe|beschreiben|suche|finde)\b/iu,
-];
 
 function matchesQueryPattern(text: string, patterns: readonly RegExp[]): boolean {
   return patterns.some((pattern) => pattern.test(text));
@@ -770,19 +772,11 @@ const GENERAL_ADVICE_QUESTION_PATTERNS = [
   /^how (?:should|could|can) (?:a|an|one|we) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu,
   /^wie (?:sollte|könnte|kann) (?:man|wir|ein|eine) [\p{L}\p{N},()-]+(?: [\p{L}\p{N},()-]+)*$/iu,
 ];
-const SOURCE_ADVICE_ATTRIBUTION_RE =
-  /\b(?:according\s+to|as\s+(?:specified|documented)\s+in|based\s+on|laut|gemäß)\b/iu;
 const SOURCE_ADVICE_DETERMINER_PATTERNS = [
   /^(?:the|this|these|that|those|our|my|your|his|her|its|their)$/iu,
   /^(?:der|die|das|den|dem|des|dies(?:e|en|em|er|es))$/iu,
   /^(?:(?:unser|mein|dein|sein|ihr)(?:e|en|em|er|es)?)$/iu,
   /^(?:euer(?:e|en|em|er|es)?|eur(?:e|en|em|er|es))$/iu,
-];
-const SOURCE_ADVICE_NOUN_PATTERNS = [
-  /^(?:sources?|manuals?|documents?|files?|folders?)$/iu,
-  /^(?:repositor(?:y|ies)|evidence|codes?|implementations?)$/iu,
-  /^(?:handbuch(?:e?s)?|handbüchern?|quellen?|datei(?:en)?|ordner[sn]?)$/iu,
-  /^(?:dokument(?:e[sn]?|s)?|repositorys?|implementierung(?:en)?)$/iu,
 ];
 const SOURCE_ADVICE_TOKEN_RE =
   /[\p{L}\p{M}\p{N}_-]+(?:['’][\p{L}\p{M}\p{N}_-]+)*|[^\p{L}\p{M}\p{N}\s_-]/gu;
@@ -796,11 +790,11 @@ const SOURCE_ADVICE_BOUNDARY_PATTERNS = [
 
 /** Source modifiers stay inside their noun phrase, never across a predicate or preposition. */
 function sourceConstrainedAdvice(clause: string): boolean {
-  if (SOURCE_ADVICE_ATTRIBUTION_RE.test(clause)) return true;
+  if (hasSourceAdviceAttribution(clause)) return true;
   let determined = false;
   for (const match of clause.toLowerCase().matchAll(SOURCE_ADVICE_TOKEN_RE)) {
     const token = match[0];
-    if (determined && matchesQueryPattern(token, SOURCE_ADVICE_NOUN_PATTERNS)) return true;
+    if (determined && isSourceAdviceNoun(token)) return true;
     if (matchesQueryPattern(token, SOURCE_ADVICE_DETERMINER_PATTERNS) || /['’]s$/u.test(token))
       determined = true;
     else if (sourceAdviceBoundary(token)) determined = false;
@@ -1041,11 +1035,13 @@ interface PlannedRings {
 
 function composeRings(
   anchors: readonly SearchAnchor[],
-  scope: SelectedScope,
-  query: RetrievalQuery,
+  input: CreatePlanInput,
   budget: ExplorationBudget,
   targetDecision: QueryTargetDecision,
+  classification: RetrievalIntentClassification,
 ): PlannedRings {
+  const { scope, query } = input;
+  const intent = classification.effectiveIntent ?? classification.intent;
   const rings: RetrievalRing[] = [buildRing("lexical", anchors, budget)];
   const directLookup =
     isDirectRouteLookup(query) || isDirectEvidenceLookup(query, anchors, targetDecision);
@@ -1054,7 +1050,8 @@ function composeRings(
   }
   if (
     !directLookup &&
-    (scope.relativePaths.length === 0 || requiresRelationshipOrHistoryRings(query))
+    ((scope.relativePaths.length === 0 && intent === "diagnostic-search") ||
+      requiresRelationshipOrHistoryRings(query))
   ) {
     rings.push(buildRing("git-history", anchors, budget));
   }
@@ -1265,31 +1262,25 @@ function buildSelectedScopePlan(
   resolved: ResolvedInputs,
   classification: RetrievalIntentClassification,
 ): ExplorationPlan {
-  const extraction = extractRetrievalChannels(
+  const channels = extractRetrievalChannels(
     input.query.text,
     resolved.maxAnchors,
     input.references,
   );
-  const searchAnchors = [...extraction.anchors, ...searchReferenceAnchors(extraction.references)];
-  const targetDecision = resolveQueryTargetDecision(input.query, searchAnchors, input.maxAnchors);
+  const anchors = [...channels.anchors, ...searchReferenceAnchors(channels.references)];
+  const targetDecision = resolveQueryTargetDecision(input.query, anchors, input.maxAnchors);
   const { classification: plannedClassification, decision } = plannedRequestDecision(
     targetDecision,
-    extraction.references,
+    channels.references,
     classification,
-    searchAnchors,
+    anchors,
     input.scope,
   );
   const { rings, directEvidenceLookup } =
     decision.state === "ready"
-      ? composeRings(searchAnchors, input.scope, input.query, resolved.budget, targetDecision)
+      ? composeRings(anchors, input, resolved.budget, targetDecision, plannedClassification)
       : { rings: [], directEvidenceLookup: false };
-  const seed = readyPlanSeed(
-    input,
-    plannedClassification,
-    searchAnchors,
-    extraction.references,
-    rings,
-  );
+  const seed = readyPlanSeed(input, plannedClassification, anchors, channels.references, rings);
   return {
     schemaVersion: CONNECTED_CONTEXT_SCHEMA_VERSION,
     planId: derivePlanId(seed),
@@ -1301,8 +1292,8 @@ function buildSelectedScopePlan(
     directEvidenceLookup,
     scope: input.scope,
     query: input.query,
-    anchors: extraction.anchors,
-    references: extraction.references,
+    anchors: channels.anchors,
+    references: channels.references,
     targetDecision,
     rings,
     budget: resolved.budget,

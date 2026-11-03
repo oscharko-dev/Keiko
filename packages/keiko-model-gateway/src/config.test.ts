@@ -26,6 +26,7 @@ import {
   type ParseGatewayConfigOptions,
 } from "./config.js";
 import { resolveCodingSafeSidecarGatewayProfile } from "./model-selection.js";
+import type { ModelCapability } from "./types.js";
 
 describe("source-bound discovered provider credentials", () => {
   function linkedRaw(change: Record<string, unknown> = {}): Record<string, unknown> {
@@ -902,6 +903,101 @@ describe("parseGatewayConfig", () => {
     expect(
       resolveCodingSafeSidecarGatewayProfile(parseGatewayConfig(provenAt(Date.now()))),
     ).toMatchObject({ status: "available", modelAlias: provider.modelId });
+  });
+
+  // #3905: an alias the gateway re-points to another deployment keeps its name, endpoint and
+  // protocol, so none of the four values the fingerprint used to cover moved. The proof of the
+  // previous deployment must not survive for the rest of its 24 hours on the new one.
+  describe("deployment identity binding of the tool-calling proof", () => {
+    const OBSERVED_DEPLOYMENT = "a".repeat(64);
+    const REPOINTED_DEPLOYMENT = "b".repeat(64);
+
+    function provenFor(
+      deploymentIdentitySha256: string | undefined,
+      currentIdentity: string | undefined,
+    ): ModelCapability | undefined {
+      const raw = rawToolCallingProof();
+      const rawProvider = raw.providers[0];
+      const proofProvider = parseGatewayConfig({
+        ...raw,
+        providers: [
+          {
+            ...rawProvider,
+            ...(deploymentIdentitySha256 === undefined ? {} : { deploymentIdentitySha256 }),
+          },
+        ],
+      }).providers[0];
+      if (proofProvider === undefined) throw new Error("expected provider");
+      const reloaded = parseGatewayConfig({
+        ...raw,
+        providers: [
+          {
+            ...rawProvider,
+            ...(currentIdentity === undefined ? {} : { deploymentIdentitySha256: currentIdentity }),
+            capability: {
+              ...rawProvider.capability,
+              toolCallingVerification: {
+                status: "verified",
+                checkedAt: new Date().toISOString(),
+                probe: "gateway-tool-calling-v1",
+                configurationFingerprint: toolCallingConfigurationFingerprint(proofProvider),
+              },
+            },
+          },
+        ],
+      });
+      return reloaded.capabilities?.[0];
+    }
+
+    it("keeps the proof while the observed deployment is unchanged", () => {
+      expect(provenFor(OBSERVED_DEPLOYMENT, OBSERVED_DEPLOYMENT)?.toolCalling).toBe(true);
+    });
+
+    it("withdraws the proof when the same alias is re-pointed to another deployment", () => {
+      const capability = provenFor(OBSERVED_DEPLOYMENT, REPOINTED_DEPLOYMENT);
+      expect(capability?.toolCalling).toBe(false);
+      // The record stays: the Workbench reads a demoted proof as one to renew, not as refuted.
+      expect(capability?.toolCallingVerification?.status).toBe("verified");
+    });
+
+    it("withdraws a proof issued before any deployment was observed once one is observed", () => {
+      expect(provenFor(undefined, OBSERVED_DEPLOYMENT)?.toolCalling).toBe(false);
+    });
+
+    it("keeps a proof for a provider that has never observed a deployment", () => {
+      expect(provenFor(undefined, undefined)?.toolCalling).toBe(true);
+    });
+
+    it("leaves the fingerprint of a provider without an observed deployment unchanged", () => {
+      const raw = rawToolCallingProof();
+      const [first, second] = [
+        parseGatewayConfig(raw).providers[0],
+        parseGatewayConfig({
+          ...raw,
+          providers: [{ ...raw.providers[0], deploymentIdentitySha256: OBSERVED_DEPLOYMENT }],
+        }).providers[0],
+      ];
+      if (first === undefined || second === undefined) throw new Error("expected providers");
+      expect(toolCallingConfigurationFingerprint(first)).not.toBe(
+        toolCallingConfigurationFingerprint(second),
+      );
+      expect(toolCallingConfigurationFingerprint(first)).toBe(
+        toolCallingConfigurationFingerprint({ ...first, deploymentIdentitySha256: undefined }),
+      );
+    });
+
+    it.each(["short", "A".repeat(64), "g".repeat(64), 7, {}])(
+      "refuses a malformed deployment identity %j",
+      (deploymentIdentitySha256) => {
+        const raw = rawToolCallingProof();
+        expect(() =>
+          parseGatewayConfig({
+            ...raw,
+            providers: [{ ...raw.providers[0], deploymentIdentitySha256 }],
+          }),
+        ).toThrow(ConfigInvalidError);
+      },
+    );
   });
 
   it("round-trips calibrated token accounting through the inline provider capability path", () => {

@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "6123b9be91c7e52dc1f266bf40a1421efb66d827",
+  "classification": "Test-only hermetic Worker lifetime fixture; no product runtime or native approval change",
+  "repair": "Use a canonical private temporary directory and a tiny fixture with a fixed independently checked SHA-256. The existing file-scoped manifest-mock pattern approves only that fixture in this test module. Reset the target-runtime cache before and after each test; dispose bridges and remove the owned fixture after each test.",
+  "preserved": "All 17 existing disposal, construction, build/query failure, timeout, cache eviction and content-free final-state assertions are unchanged. Actual native-addon, Worker and M2 proof modules retain the production manifest and provisioning prerequisite.",
+  "source": {
+    "path": "packages/keiko-local-knowledge/src/retrieval/usearch-worker-lifetime.test.ts",
+    "sha256": "b3d8d603a7315f995b7bfbc06c59968277b9abbf5bef33e2b8da3dcef6c5461e"
+  },
+  "causalControl": {
+    "artifact": "checkpoint75-worker-owned-fixture-red-v2.tests.json",
+    "sha256": "41f7d693821b12d5ffa740f70e2f7031c43acd7f4d4d9082e00bd2a207ff33ca",
+    "passed": 0,
+    "failed": 1,
+    "unselected": 16,
+    "scope": "The owned fixture under the unchanged production approval is rejected before the simulated Worker can report ready. The test-scoped matching approval is required; digest validation is not bypassed."
+  },
+  "retainedInvalidAttempt": {
+    "artifact": "checkpoint75-worker-owned-fixture-red-v1.json",
+    "sha256": "7bfa7bc9dbb174ca44ba5fa067d4d64a45b021365c737152e8c2d519c7669982",
+    "passed": 0,
+    "failed": 0,
+    "unselected": 17,
+    "reason": "A quoted test-name filter matched no generated parameterized title. Exit zero is not a successful run or a failure-first proof.",
+    "acceptanceCredit": false
+  },
+  "finalTests": {
+    "passed": 100,
+    "failed": 0,
+    "skipped": 0,
+    "files": 6,
+    "workerLifetime": 17,
+    "actualNativeAnn": 9,
+    "actualWorker": 17,
+    "m2Closeout": 41,
+    "m2CleanCheckout": 15,
+    "runtimeLogging": 1,
+    "artifact": "checkpoint75-ann-m2-final-v1.tests.json",
+    "sha256": "0c057e55b7effe45b5a6683d40d3b0d9f86d35d976bb70f7f5424f0f6669e300"
+  },
+  "sourceFreezeSha256": "9f4f16fe0c59e834ba3be92d3f5d4f34800fb097531a85e5d7b0ee2c7128970e",
+  "compiledFreezeSha256": "2e29c13582b95a77ec3e4c2c934010aa53a15d214a25018a23453f1eb581fbfd",
+  "checks": [
+    {
+      "artifact": "checkpoint75-ann-m2-final-v1.json",
+      "sha256": "664fb72974da074e8296e62aab905cc1a430f654748f0d39b518c855bc4a9f57",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint75-typecheck-v1.json",
+      "sha256": "9ba42912169362405c544515a1d5d718acf2a5869c3edb7d279c288b2d76eec1",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint75-test-lint-v1.json",
+      "sha256": "83956c237f6cb7e5cbb5d48aba1368836fed3554611931aebc5ca739ec694880",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint75-arch-v1.json",
+      "sha256": "aa0653cb9a90af1cffcd2418a04e9c55873ddece16d0b1b354176294b32215f7",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint75-arch-negative-v1.json",
+      "sha256": "4ddd062ffbcb055f3bf1178f7f2e62e22d3ee960e6db07ee802681c1f1785746",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint75-sonar-v1.json",
+      "sha256": "81a3f2176d2550b9c056c1604ee5877099719c279018fb0d4781e8cef4b790fb",
+      "exitCode": 0
+    }
+  ],
+  "productRuntimeSourcesChanged": false,
+  "productionManifestChanged": false,
+  "provisioningRequirementChanged": false,
+  "skillsChanged": false,
+  "modelOutputsRegraded": false,
+  "overallAcceptance": false,
+  "mergeAcceptance": false
+}

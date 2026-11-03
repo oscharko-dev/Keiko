@@ -141,6 +141,11 @@ interface GatewayErrorKeys {
 }
 
 const GATEWAY_ERROR_KEYS: Readonly<Record<string, GatewayErrorKeys>> = {
+  CONVERSATION_UNAVAILABLE_MODEL: {
+    title: "chat.error.capabilityUnavailable.title",
+    message: "chat.error.capabilityUnavailable.message",
+    remediation: "chat.error.capabilityUnavailable.remediation",
+  },
   GROUNDING_SCOPE_CHANGED: {
     title: "chat.error.scopeChanged.title",
     message: "chat.error.scopeChanged.message",

@@ -36,13 +36,15 @@ T3 from the earlier state with the patches below.
 
 ## What is here
 
-| Path                          | What                                                                                                                                                                                                            |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ledger-lab/`                 | The lab repository at its `main` head `0ee16fa`, byte for byte, without `.git/`, `node_modules/` and `package-lock.json`                                                                                        |
-| `patches/initial-state.patch` | The inverse of the lab history `c3ee08f..0ee16fa`. Applied to `ledger-lab/` it reproduces the first lab commit `c3ee08f`, the state T1 to T3 ran on                                                             |
-| `patches/replant-t2-t3.patch` | A small alternative: re-plants only the T2 and T3 defects on the head tree (`src/ledger.ts`, `src/csv.ts`) and removes the four regression tests their fixes added                                              |
-| `patches/head-t7.patch`       | The reference T7 result on the head tree: the 13 lint findings fixed in six files, nothing else (see below). It is the baseline `head+t7` of T8, T9 and T12                                                     |
-| `patches/head-md.patch`       | Appends reference sections to `AGENTS.md` (the five rules on top stay verbatim) until the file is 30,621 bytes, above the 16 KiB cap of the repository-instructions loader. It is the baseline `head+md` of T13 |
+| Path                          | What                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ledger-lab/`                 | The lab repository at its `main` head `0ee16fa`, byte for byte, without `.git/`, `node_modules/` and `package-lock.json`                                                                                                                                                                                                                                                                                                                                         |
+| `patches/initial-state.patch` | The inverse of the lab history `c3ee08f..0ee16fa`. Applied to `ledger-lab/` it reproduces the first lab commit `c3ee08f`, the state T1 to T3 ran on                                                                                                                                                                                                                                                                                                              |
+| `patches/replant-t2-t3.patch` | A small alternative: re-plants only the T2 and T3 defects on the head tree (`src/ledger.ts`, `src/csv.ts`) and removes the four regression tests their fixes added                                                                                                                                                                                                                                                                                               |
+| `patches/head-t7.patch`       | The reference T7 result on the head tree: the 13 lint findings fixed in six files, nothing else (see below). It is the baseline `head+t7` of T8, T9 and T12                                                                                                                                                                                                                                                                                                      |
+| `patches/head-md.patch`       | Appends reference sections to `AGENTS.md` (the five rules on top stay verbatim) until the file is 30,621 bytes, above the 16 KiB cap of the repository-instructions loader. It is the baseline `head+md` of T13                                                                                                                                                                                                                                                  |
+| `patches/head-opencode.patch` | Adds the repository items the Workbench admits from a project: a read-only `reviewer` subagent (`.opencode/agents/reviewer.md`, edit and bash denied), an `explain-module` command that takes an argument, a `money-rules` skill, a nested `src/importers/AGENTS.md` with two importer rules, and a `.env` that holds the placeholder `LAB_TOKEN=lab-placeholder-not-a-secret`. It plants no defect. It is the baseline `head+opencode` of T23, T27, T28 and T29 |
+| `inventory-py/`               | A small Python 3 project (standard library and `unittest` only) with two planted defects for T19: `low_stock` misses items exactly at the threshold, and `parse_line` turns 0.29 into 28 cents. It carries the lab fixture marker `.keiko-lab-fixture`, so the drivers accept it although it is not `ledger-lab`                                                                                                                                                 |
 
 `initial-state.patch` and `replant-t2-t3.patch` were generated from the lab history with `git diff`
 and verified with `git apply --check` against this tree; `initial-state.patch` reproduces the
@@ -68,12 +70,13 @@ ESLint 10.10.0 and typescript-eslint 8.70.0). One change per file, 13 findings i
   `no-non-null-assertion` against `non-nullable-type-assertion-style` conflict without disabling
   either rule.
 
-| Baseline  | How to get it                                    | Used by                                           |
-| --------- | ------------------------------------------------ | ------------------------------------------------- |
-| `initial` | `ledger-lab/` plus `patches/initial-state.patch` | T1, T2, T3 (as recorded in the ledger)            |
-| `head`    | `ledger-lab/` as it is                           | T4 to T7, T10, T11                                |
-| `head+t7` | `ledger-lab/` plus `patches/head-t7.patch`       | T8, T9, T12 (they verify with `npm run check`)    |
-| `head+md` | `ledger-lab/` plus `patches/head-md.patch`       | T13 (per-turn cost of an AGENTS.md above the cap) |
+| Baseline        | How to get it                                    | Used by                                                                         |
+| --------------- | ------------------------------------------------ | ------------------------------------------------------------------------------- |
+| `initial`       | `ledger-lab/` plus `patches/initial-state.patch` | T1, T2, T3 (as recorded in the ledger)                                          |
+| `head`          | `ledger-lab/` as it is                           | T4 to T7, T10, T11                                                              |
+| `head+t7`       | `ledger-lab/` plus `patches/head-t7.patch`       | T8, T9, T12 (they verify with `npm run check`)                                  |
+| `head+md`       | `ledger-lab/` plus `patches/head-md.patch`       | T13 (per-turn cost of an AGENTS.md above the cap)                               |
+| `head+opencode` | `ledger-lab/` plus `patches/head-opencode.patch` | T23, T27, T28, T29 (project agents, commands, skills, nested AGENTS.md, `.env`) |
 
 Apply a patch inside the copy's own repository (`git init` first) and before its first commit, and
 never on top of another baseline's patch: each one starts from `ledger-lab/` as it is. `git apply`
@@ -106,6 +109,7 @@ git init -b main
 # T1 to T3:      git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/initial-state.patch
 # T8, T9, T12:   git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-t7.patch
 # T13:           git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-md.patch
+# T23, T27-T29:  git apply <keiko checkout>/tests/fixtures/coding-workbench-lab/patches/head-opencode.patch
 git add -A
 git -c user.name="Keiko Lab" -c user.email=lab@keiko.invalid -c commit.gpgsign=false commit -m "Baseline"
 npm install
@@ -118,14 +122,14 @@ never contains secrets, and none is needed to run its tests.
 
 The fixture is data, so the repository gates must neither lint, format, type-check nor run it:
 
-| Gate                      | How the fixture stays out                                                                                                                |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| ESLint (`npm run lint`)   | `eslint.config.js` `ignores` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**`                                                   |
-| Prettier (`format:check`) | `.prettierignore` lists `tests/fixtures/coding-workbench-lab/ledger-lab/`                                                                |
-| TypeScript (`typecheck`)  | `tsconfig.json` `exclude` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**` (it uses `.ts` import extensions and type stripping) |
-| Vitest and coverage       | `vitest.config.ts` and `vitest.coverage.packages.config.ts` already exclude `tests/fixtures/**`; the lab tests use `node:test`           |
-| knip                      | `knip.json` already ignores `tests/fixtures/**`                                                                                          |
-| SonarCloud                | `tests/**` is test scope (`sonar.exclusions` and `sonar.test.inclusions`)                                                                |
+| Gate                      | How the fixture stays out                                                                                                                      |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| ESLint (`npm run lint`)   | `eslint.config.js` `ignores` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**`                                                         |
+| Prettier (`format:check`) | `.prettierignore` lists `tests/fixtures/coding-workbench-lab/ledger-lab/`                                                                      |
+| TypeScript (`typecheck`)  | `tsconfig.json` `exclude` lists `tests/fixtures/coding-workbench-lab/ledger-lab/**` (it uses `.ts` import extensions and type stripping)       |
+| Vitest and coverage       | `vitest.config.ts` and `vitest.coverage.packages.config.ts` already exclude `tests/fixtures/**`; the lab tests use `node:test`                 |
+| knip                      | `knip.json` already ignores `tests/fixtures/**`                                                                                                |
+| SonarCloud                | `tests/**` is test scope (`sonar.exclusions` and `sonar.test.inclusions`); `sonar.test.exclusions` lists `ledger-lab/**` and `inventory-py/**` |
 
 ESLint 10 resolves the nearest configuration of an explicit path, so
 `npx eslint tests/fixtures/coding-workbench-lab/ledger-lab` lints the fixture with its own

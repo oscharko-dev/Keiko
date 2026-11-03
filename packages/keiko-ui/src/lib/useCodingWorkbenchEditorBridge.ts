@@ -16,7 +16,10 @@
 // structured "Provider unavailable" descriptor when its controller is left undefined.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/editor-agent";
+import {
+  EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+  EDITOR_AGENT_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   postEditorAgentResult,
   postEditorAgentResultRequest,
@@ -29,6 +32,7 @@ import {
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
 import { ApiError, postEditorAgentSessionSnapshot } from "./api";
 import { reportClientDiagnostic, type ClientDiagnosticMeta } from "./client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "./coding-workbench-interaction";
 import { clientErrorEvidence } from "./client-error-evidence";
 import { bffRequestErrorKind } from "./http";
 import { useRunLockedRoot } from "./useCodingWorkbenchChanges";
@@ -179,6 +183,39 @@ function registrationFailureMeta(error: unknown, runId: string | undefined): Cli
       : {}),
     ...(runId === undefined ? {} : { parentCorrelationId: runId }),
   };
+}
+
+// #4117: the server refuses a root its boundary does not admit (a project folder replaced at the
+// same path keeps its recorded identity) and a lease another tab holds. Both are closed outcomes, not
+// browser failures: they travel as an info interaction under the refused request's correlation.
+// Only a held lease can clear by itself, so only it is retried; a root refusal holds until the run
+// or its root changes, instead of re-registering for as long as the run stays active.
+const ROOT_BOUNDARY_REFUSAL_CODES: ReadonlySet<string> = new Set([
+  "EDITOR_AGENT_ROOT_BINDING_INVALID",
+  "EDITOR_AGENT_ROOT_BINDING_REQUIRED",
+  "EDITOR_AGENT_DECOMPOSE_PER_ROOT",
+]);
+
+function registrationRefusal(error: unknown): "root-boundary" | "lease" | undefined {
+  if (!(error instanceof ApiError) || error.status !== 403) return undefined;
+  if (ROOT_BOUNDARY_REFUSAL_CODES.has(error.code)) return "root-boundary";
+  return error.code === "BRIDGE_CAPABILITY_INVALID" ? "lease" : undefined;
+}
+
+function reportRegistrationFailure(error: unknown, runId: string | undefined): void {
+  const refusal = registrationRefusal(error);
+  if (refusal === undefined) {
+    reportClientDiagnostic(
+      "[keiko] coding workbench bridge registration failed; retrying with backoff",
+      registrationFailureMeta(error, runId),
+    );
+    return;
+  }
+  reportCodingWorkbenchInteraction(
+    { interaction: "bridge-registration-refused", refusal },
+    error instanceof ApiError ? error.correlationId : undefined,
+    runId,
+  );
 }
 
 function registrationRetryDelayMs(consecutiveFailures: number): number {
@@ -337,10 +374,15 @@ export function useCodingWorkbenchEditorBridge(
       return;
     }
     decidingRef.current = false;
-    const diff = parseUnifiedDiff(action.changeset?.patch ?? "");
-    reportClientDiagnostic(
-      `[keiko] coding workbench changeset review prepared: files ${String(diff.files.length)}`,
-    );
+    // The operator decides about the whole changeset, so the review parses all of it (up to the
+    // changeset cap), not the 512 KB display cut of the other diff surfaces.
+    const diff = parseUnifiedDiff(action.changeset?.patch ?? "", {
+      maxBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
+    });
+    reportCodingWorkbenchInteraction({
+      interaction: "changeset-review-prepared",
+      fileCount: diff.files.length,
+    });
     setPending({
       action,
       diff,
@@ -391,14 +433,10 @@ export function useCodingWorkbenchEditorBridge(
         return response;
       } catch (error) {
         consecutiveFailuresRef.current += 1;
-        if (consecutiveFailuresRef.current === 1) {
-          reportClientDiagnostic(
-            "[keiko] coding workbench bridge registration failed; retrying with backoff",
-            registrationFailureMeta(error, runId),
-          );
-        }
+        if (consecutiveFailuresRef.current === 1) reportRegistrationFailure(error, runId);
         setRegistrationFailed(true);
-        setRegistrationFailureEpoch((value) => value + 1);
+        if (registrationRefusal(error) !== "root-boundary")
+          setRegistrationFailureEpoch((value) => value + 1);
         // The underlying bridge's own registration effect (editorAgentBridge.ts) already treats a
         // rejected `registerSnapshot` as availability-only and continues without a lease; this
         // hook re-throws only so THAT existing handling is unchanged, after recording the

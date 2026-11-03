@@ -81,7 +81,8 @@ describe("CodingWorkbenchTrustAffordance", () => {
     );
 
     const action = await screen.findByRole("button", { name: ALLOW });
-    expect(action).toBeEnabled();
+    // The action is already visible (disabled) while the trust read is pending.
+    await waitFor(() => expect(action).toBeEnabled());
     expect(screen.getByText(RUN_WAITING_NOTICE)).toBeInTheDocument();
   });
 

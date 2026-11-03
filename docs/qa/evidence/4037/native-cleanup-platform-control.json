@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "classification": "Cross-platform correction of a test expectation; no product runtime change, native generation ownership or updater acceptance.",
+  "parentHead": "357849d10012fc853304bc37ab170b97460340ad",
+  "source": {
+    "path": "native/opencode-service-host/entry.test.mjs",
+    "sha256": "5a3a3fb7c19ffe356f4b1bbfaf6022adc4545a936510a746cf15955fc79ffd56"
+  },
+  "failure": {
+    "runId": 39185765986,
+    "jobId": 117848158880,
+    "passed": 67,
+    "failed": 1,
+    "observation": "Windows reports SIGTERM because Node unconditionally terminates a Windows child for this request. The test incorrectly required POSIX SIGKILL escalation after an ignored SIGTERM.",
+    "logSha256": "412077c2b159d69923c7ca381e382c0c43a085c3e4d3922e5ff3b3f9af116d63"
+  },
+  "repair": "Keep the real fixture, original bounded disposal and awaited owned exit on every platform. Require SIGTERM on Windows and actual SIGKILL escalation on POSIX, and confirm the child signalCode agrees. No owner suite is skipped.",
+  "primarySource": "https://nodejs.org/api/child_process.html#subprocesskillsignal",
+  "local": {
+    "platform": "darwin-arm64",
+    "passed": 68,
+    "failed": 0,
+    "skipped": 0,
+    "logSha256": "23970027fde052167017facd8242608dd96be63ac7ce061f3934a05e644073c7"
+  },
+  "limitations": [
+    "Corrected head 35 Windows CI passes all 68 controls without a skip. This is actual CI evidence, not local Windows execution or full updater acceptance.",
+    "The prior cold-refusal timeouts and failures remain retained. Both macOS-x64 jobs on head33 pass; those later successes do not explain older timeouts.",
+    "The separate Node26 timed-writer and development proxy CI failures remain under investigation."
+  ],
+  "windowsFollowup": {
+    "sourceHead": "d74ff864574168d822b3e3bf6c1b1e96781efec3",
+    "runId": 39189733740,
+    "jobId": 117860066278,
+    "conclusion": "success",
+    "passed": 68,
+    "failed": 0,
+    "skipped": 0,
+    "sourceTestUnchanged": true,
+    "logSha256": "8d887aca2f23f8dc82cd259d3e166341175b2279ed59f2a810a74f933267ba30",
+    "scope": "Actual corrected Windows CI owner suite; not whole updater, generation ownership or final integrated-head qualification."
+  }
+}

@@ -18,6 +18,8 @@ import {
   computePortableSidecarPayloadTreeDigest,
   DEV_LANE_MANIFEST_FILE,
   DEV_LANE_RUNTIME_SUPERVISOR_RELATIVE_PATH,
+  DEV_LANE_STAGED_PAYLOADS_DIR,
+  devLaneCheckoutRoot,
   discoverDevLaneOpenCode,
   devLaneEnvEnabled,
   KEIKO_CODING_RUNTIME_DEV_LANE_ENV,
@@ -25,6 +27,7 @@ import {
   type DevLaneOpenCodeTarget,
 } from "./devLanePortableCodingRuntime.js";
 import { OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_PINNED_VERSION } from "./opencodeRuntimeVersions.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
 import { attestPortableSidecarTree } from "@oscharko-dev/keiko-security/portable-tree-attestation";
@@ -275,7 +278,7 @@ describe("dev-lane OpenCode discovery", () => {
     expect(runtime.installRoot).toBe(join(staged.paths.stagedTargetRoot, "opencode-compatible"));
     expect(runtime.sidecar.summary).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "2.0.10",
+      upstreamVersion: OPENCODE_PINNED_VERSION,
       platformTarget: "macos-arm64",
       status: "verified",
     });
@@ -559,5 +562,36 @@ describe("computePortableSidecarPayloadTreeDigest (KEIKO-0180)", () => {
     expect(computePortableSidecarPayloadTreeDigest([])).toBe(
       createHash("sha256").update("", "utf8").digest("hex"),
     );
+  });
+});
+
+describe("devLaneCheckoutRoot", () => {
+  const stagedRoot = join(
+    "/work",
+    "keiko",
+    DEV_LANE_STAGED_PAYLOADS_DIR,
+    "macos-arm64",
+    "opencode-compatible",
+  );
+
+  it("names the checkout a dev-checkout runtime was staged from", () => {
+    expect(devLaneCheckoutRoot({ lane: "dev-checkout", installRoot: stagedRoot })).toBe(
+      join("/work", "keiko"),
+    );
+  });
+
+  it("names no checkout for the npm runtime package lane, even under a lookalike layout", () => {
+    expect(
+      devLaneCheckoutRoot({ lane: "npm-runtime-package", installRoot: stagedRoot }),
+    ).toBeUndefined();
+  });
+
+  it("names no checkout for an install root outside the staged-payload layout", () => {
+    expect(
+      devLaneCheckoutRoot({
+        lane: "dev-checkout",
+        installRoot: join("/work", "keiko", "elsewhere", "macos-arm64", "opencode-compatible"),
+      }),
+    ).toBeUndefined();
   });
 });

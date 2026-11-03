@@ -83,7 +83,12 @@ The Realtime owner keeps only the short continuation buffer, then transfers a fi
 through a synchronous handoff. The canonical Chat session captures the immutable chat/model/memory
 target and optimistic user projection during that handoff and owns the bounded FIFO from then on. Its
 queue survives Voice mode leave, media replacement, and active-chat changes; Realtime never polls or
-retries a turn after transfer. The per-item completion promise is used only to bind canonical TTS to
+retries a turn after transfer. Navigation alone does not revoke the captured target. A subsequent
+source-change intent for that target cancels its actual in-flight request immediately, even when
+the owning window now displays another chat. Cancellation is matched to the controller's captured
+conversation identity, never the displayed chat: an unrelated request and its draft remain intact.
+Pending and failed source intents retain the existing send-admission hold; the server still
+validates the captured source identity before admission and persistence. The per-item completion promise is used only to bind canonical TTS to
 the matching assistant message.
 
 The browser-side Voice handoff FIFO is not the only concurrency boundary. At the BFF, every canonical
@@ -189,9 +194,19 @@ rendering diagnostics join the same support timeline, including replay and regen
 Markdown evidence uses the coding run correlation and a separately validated provider message ID;
 short message IDs never stand in for transport correlation IDs.
 
-Composer dictation
-remains a distinct draft-editing feature; it never silently sends a
-message. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
+Composer dictation remains a distinct draft-editing feature; it never silently sends a message.
+Ordinary Chat uses one microphone/stop control: stop appends the completed transcript directly to the
+editable draft. A measured waveform occupies only the free footer space, with new samples beside the
+stop control and a fade before the persistent model/skill controls. There is no separate confirmation
+panel; editing and sending remain the normal composer actions. The Coding Workbench retains its explicit
+preview. Empty completion leaves the draft unchanged and announces retry through the same microphone.
+When the existing draft and transcript exceed the message limit, neither is truncated. The completed
+transcript remains in the capture's local state, an inline message explains how to make room, and the
+same control inserts it after an explicit retry without another recording or provider request. The
+existing `input-limit` Activity Log category records the refusal without either text body.
+The capture is bound to its starting conversation; a conversation change cancels the flow and rejects
+late completion. Completion and context cancellation emit only closed categories on the existing
+Activity Log. A Realtime-only deployment without mapped TTS must never report `speaks: true`.
 
 No default transcription deployment or output voice is inherited when a deployment changes. An
 unchanged existing provider-specific value may be preserved by an unrelated update; selecting a new

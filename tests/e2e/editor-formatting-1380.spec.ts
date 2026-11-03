@@ -5,6 +5,10 @@ import { inferEditorLanguageModeId } from "@oscharko-dev/keiko-contracts/runtime
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  documentAction,
+  expectFormatActionAvailability,
+} from "./support/editor-document-actions.js";
 import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 // Issue #1380 (Epic #1491), ADR-0068 D8 item 4 — packaged-app browser e2e for the built-in editor
@@ -16,8 +20,9 @@ import { clickWindowChromeButton } from "./support/window-chrome.js";
 //   AC1 — basic-languages grammars actually tokenise (colourised Monaco tokens, not flat plaintext).
 //   AC2 — theme + tokenisation stay stable across a page reload (dark theme persists; tokens reapply).
 //   AC5 — the Format affordance reflects the registry-derived formatting source consistently:
-//         enabled ("Format ready") for keiko-language-service (ts/js) and disabled
-//         ("Format unavailable") for release-packaged "none" languages, including json/css.
+//         offered in the "More file actions" menu ("Format ready") for keiko-language-service
+//         (ts/js) and omitted from it ("Format unavailable") for release-packaged "none"
+//         languages, including json/css.
 //   AC3/AC4 — Format applies deterministic edits for TypeScript through the governed language
 //         service, while a "none" language leaves the buffer byte-identical.
 //
@@ -151,25 +156,55 @@ async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
     headers: { "x-keiko-csrf": "1" },
   });
   expect(created.ok(), await created.text()).toBe(true);
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "e2e-files-window",
-          type: "files",
-          x: 64,
-          y: 56,
-          w: 640,
-          h: 680,
-          z: 10,
-          cfg: { root },
-          max: false,
-        },
-      ]),
-    );
+  seededRoots.set(page, projectPath);
+  await page.addInitScript((windows) => {
+    // The blank page a fresh load passes through has no storage of its own to seed.
+    if (window.location.protocol === "about:") return;
+    window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
     window.localStorage.removeItem("keiko.conns.v1");
-  }, projectPath);
+  }, seededWorkspaceWindows(projectPath));
+}
+
+// The fixture root each page seeded, so every fresh load can seed the server layout to match.
+const seededRoots = new WeakMap<Page, string>();
+
+function seededWorkspaceWindows(root: string): readonly Record<string, unknown>[] {
+  return [
+    {
+      id: "e2e-files-window",
+      type: "files",
+      x: 64,
+      y: 56,
+      w: 640,
+      h: 680,
+      z: 10,
+      cfg: { root },
+      max: false,
+    },
+  ];
+}
+
+// #1580: the workspace layout is shared through the server (`/api/workspace/state`), and a freshly
+// loaded page adopts the server's newer layout over the one seeded into localStorage. The server
+// therefore still held the previous open's editor window and Files preview, depending on whether
+// that page's debounced write had landed, and the next open intermittently found its file row or
+// its editor region covered. Leave the previous page first, so it can no longer retry a layout
+// write, then write the seeded Files window as the server's layout. A stale write from the old page
+// is refused by the revision precondition, so the fresh load starts from exactly this layout.
+async function seedServerWorkspaceLayout(page: Page): Promise<void> {
+  const root = seededRoots.get(page);
+  if (root === undefined) throw new Error("seedFilesWindow must run before a fresh load.");
+  await page.goto("about:blank");
+  await expect.poll(() => writeServerWorkspaceLayout(page, root)).toBe(200);
+}
+
+async function writeServerWorkspaceLayout(page: Page, root: string): Promise<number> {
+  const current = await page.request.get("/api/workspace/state");
+  const written = await page.request.put("/api/workspace/state", {
+    data: { windows: seededWorkspaceWindows(root), connections: [] },
+    headers: { "If-Match": current.headers().etag ?? "", "x-keiko-csrf": "1" },
+  });
+  return written.status();
 }
 
 // Select a root-level file row. Clicking a `.tr-file` row sets `selectedPath`, which makes the Files
@@ -189,10 +224,12 @@ async function selectTreeFile(
 // Open a single fixture file into the editor and return its editor region. The region aria-label is
 // `Editor: <relativePath> in <root>` (EditorRuntimeWidget.editorAriaLabel), so the active file's path
 // identifies the region. Each call starts from a FRESH page load: `addInitScript` re-seeds the Files
-// window on every navigation, so the tree always begins at the root listing and no editor windows
-// from a prior open can stack and occlude the FilePreview "Open in editor" button. Selecting the file
+// window on every navigation and `seedServerWorkspaceLayout` gives the server the same layout, so the
+// tree always begins at the root listing and no editor windows from a prior open can stack and
+// occlude the FilePreview "Open in editor" button. Selecting the file
 // swaps the tree for the FilePreview pane (FilesWidget.tsx:481), which exposes "Open in editor".
 async function openInEditor(page: Page, file: FixtureFile): Promise<ReturnType<Page["getByRole"]>> {
+  await seedServerWorkspaceLayout(page);
   await page.goto("/");
   const filesWindow = page.getByRole("region", { name: /^Files/u });
   await expect(filesWindow).toBeVisible();
@@ -214,15 +251,6 @@ async function closeFilesWindow(page: Page): Promise<void> {
 
 function statusBar(editorWindow: ReturnType<Page["getByRole"]>): ReturnType<Page["getByRole"]> {
   return editorWindow.getByTestId("editor-status-bar");
-}
-
-function formatButton(editorWindow: ReturnType<Page["getByRole"]>): ReturnType<Page["getByRole"]> {
-  // The explicit Format Document action button in the editor toolbar (EditorRuntimeWidget.tsx),
-  // carrying a dynamic `aria-disabled` driven by the registry-derived `formattingAvailable` value
-  // (ADR-0068 D3/D4). Resolved by accessible name — the same locator the CI-covered editor suites
-  // use. The former `data-tip="Format document"` attribute no longer exists, so that selector
-  // matched nothing and every Format assertion here failed on a missing element.
-  return editorWindow.getByRole("button", { name: "Format", exact: true });
 }
 
 // The current Monaco editor buffer text, read from the rendered `.view-line`s. Two correctness
@@ -247,15 +275,20 @@ async function readEditorBuffer(editorWindow: ReturnType<Page["getByRole"]>): Pr
 }
 
 // Trigger Format reliably: focus the buffer by clicking a `.view-line` (so the keybinding targets
-// the editor), click the explicit Format button, then issue Monaco's native Format Document
-// keybinding belt-and-braces. The caller first waits until the Format affordance is ready, which is
-// the editor-tier signal that the governed language-service formatter is reachable.
+// the editor), choose the explicit Format action from the "More file actions" menu (a secondary
+// document action since #3685, offered only when formatting is available), return focus to the
+// buffer (choosing a menu action hands focus back to the menu's trigger), then issue Monaco's
+// native Format Document keybinding belt-and-braces. The caller first waits until the Format
+// affordance is ready, which is the editor-tier signal that the governed language-service formatter
+// is reachable.
 async function triggerFormat(
   page: Page,
   editorWindow: ReturnType<Page["getByRole"]>,
 ): Promise<void> {
-  await editorWindow.locator(".monaco-editor .view-lines").first().click();
-  await formatButton(editorWindow).click();
+  const buffer = editorWindow.locator(".monaco-editor .view-lines").first();
+  await buffer.click();
+  await (await documentAction(editorWindow, "Format")).click();
+  await buffer.click();
   await page.keyboard.press("Shift+Alt+KeyF");
 }
 
@@ -381,10 +414,7 @@ test(`AC5 Format availability + status field reflect the formatting source consi
     await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
       available ? "Format ready" : "Format unavailable",
     );
-    await expect(formatButton(editorWindow)).toHaveAttribute(
-      "aria-disabled",
-      available ? "false" : "true",
-    );
+    await expectFormatActionAvailability(editorWindow, available);
   }
 
   assertNoPageErrors();
@@ -442,11 +472,12 @@ test(`AC4 a "none"-source file has no reachable formatter and its buffer is unto
   // Close the Files window so nothing overlaps the editor when we focus it for the keybinding.
   await closeFilesWindow(page);
 
-  // The status + button agree that no formatter is reachable for this "none" source (ADR-0068 D3/D4).
+  // The status + menu agree that no formatter is reachable for this "none" source (ADR-0068 D3/D4):
+  // the status reads unavailable and the opened "More file actions" menu offers no Format action.
   await expect(statusBar(editorWindow).locator('[data-field="formatting"]')).toHaveText(
     "Format unavailable",
   );
-  await expect(formatButton(editorWindow)).toHaveAttribute("aria-disabled", "true");
+  await expectFormatActionAvailability(editorWindow, false);
 
   const before = await readEditorBuffer(editorWindow);
   // Issue Monaco's native Format Document shortcut directly: with no provider registered for JSON

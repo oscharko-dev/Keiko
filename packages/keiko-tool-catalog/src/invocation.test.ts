@@ -3,11 +3,16 @@ import type { ToolInvocationBinding } from "@oscharko-dev/keiko-contracts/runtim
 import { createInitialToolCatalog } from "./legacy.js";
 import { compileToolProjection } from "./projection.js";
 import { createToolInvocationNormalizer } from "./invocation.js";
-import { fixture } from "./__fixtures__/catalog.js";
+import { createToolDescriptor, createToolCatalog, captureCatalogJson } from "./index.js";
+import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { fixture, declaration, profile } from "./__fixtures__/catalog.js";
 
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
-function binding(legacy = false): ToolInvocationBinding {
-  const catalog = legacy ? createInitialToolCatalog() : fixture().catalog;
+function binding(
+  legacy = false,
+  custom?: ReturnType<typeof createToolCatalog>,
+): ToolInvocationBinding {
+  const catalog = custom ?? (legacy ? createInitialToolCatalog() : fixture().catalog);
   const projection = compileToolProjection(catalog, {
     id: legacy ? "legacy-native" : "fixture",
     version: 1,
@@ -39,7 +44,31 @@ function bound(input = binding()): object {
   };
 }
 
+function nestedSchema(levels: number): CatalogJsonObject {
+  let schema: CatalogJsonObject = { type: "string", maxLength: 64 };
+  for (let i = 0; i < levels; i++)
+    schema = {
+      type: "object",
+      properties: { nested: schema },
+      required: ["nested"],
+      additionalProperties: false,
+    };
+  return schema;
+}
 describe("catalog invocation bridge", () => {
+  it("qualifies schema depth independently from transport wrappers without widening argument limits", () => {
+    const descriptor = createToolDescriptor({ ...declaration(), resultSchema: nestedSchema(6) });
+    const catalog = createToolCatalog(
+      { descriptors: [descriptor], profiles: [profile(descriptor)], compatibility: [] },
+      { referenceTimeMs: 0 },
+    );
+    const serialized = structuredClone(binding(false, catalog));
+    expect(() => captureCatalogJson(serialized)).toThrow();
+    expect(createToolInvocationNormalizer(serialized).tools(NOW)).toHaveLength(1);
+    expect(() =>
+      createToolDescriptor({ ...declaration(), resultSchema: nestedSchema(8) }),
+    ).toThrow();
+  });
   it("accepts only an offered subset when unavailable aggregate includes omitted handlers", () => {
     const input = binding(true);
     const tool = input.projection.tools.find((entry) => entry.alias === "read_file");

@@ -1,0 +1,669 @@
+{
+  "schemaVersion": 1,
+  "parentCommit": "e0106e65e51f6bc045d4f949502056f382096124",
+  "classification": "Scoped readiness-layout correction and verification; original epic acceptance remains deferred",
+  "followUp": "https://github.com/oscharko-dev/Keiko/issues/4051",
+  "recordedAt": "2026-10-20T21:41:19.301213+00:00",
+  "sourceBindings": [
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx",
+      "sha256": "9e2e2b087c1dcbdde3e8b23868ac142b5eb0a6908f2baaafa78afd0ee26ed317"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
+      "sha256": "e8a2863951d14e6c80579564b8f1ba6aa1c61f4489e5f0995079c1be5595d896"
+    },
+    {
+      "path": "tests/e2e/coding-workbench-selector-layout.spec.ts",
+      "sha256": "4be10fea4a4ad127a7d70d7402be9874cc3daa2a3b0bcb85a23509dd00e0b2c8"
+    },
+    {
+      "path": "release-impact.catalog.json",
+      "sha256": "753631b7ddac0dd3cc453cab0957ba055ab084f75d569bbeced1b08601a16d24"
+    },
+    {
+      "path": "docs/qa/evidence/4037/security-dependency-repair.json",
+      "sha256": "df1f0399d68522bc15ba6ec336a4b98442263d08e67227c467363994383b69ac"
+    }
+  ],
+  "implementation": {
+    "owner": "Existing Coding Workbench session grid",
+    "change": "Put volatile readiness and the transcript in the bounded first track; retain the interaction dock in its existing second track. Keep a three-rem transcript minimum beyond padding and independent status/transcript scrolling. The framing grid clips rather than scrolling.",
+    "observability": "Existing registered browser readiness/progress and server session observations are retained. No new authority, model prompt or logging subsystem is introduced.",
+    "nativeSemantics": "Visible polite/atomic attention, expanded disclosure, native pointer cancellation and keyboard focus/scroll assertions remain."
+  },
+  "failureFirst": [
+    {
+      "case": "Real BFF pairing completion during native pointer press",
+      "originalResult": {
+        "failedConcurrent": 2,
+        "passedSettledControls": 2,
+        "englishTriggerShiftPx": 18.5,
+        "germanTriggerShiftPx": 33,
+        "germanFrameWidthPx": 300
+      },
+      "receipt": {
+        "label": "delivery-release125-selector-final-red-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=chromium",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts"
+        ],
+        "exitCode": 1,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:00:22.366627+00:00",
+        "receiptSha256": "b0269409da7b02accc8addfa5caa1d7f8d61667b4d50caa63dce6ddb54ad4f55",
+        "logSha256": "098258c4c7b58e7e77255654c9009eee6930439c8db8eb8b8e095bab6110691c"
+      }
+    },
+    {
+      "case": "Expanded readiness must not clip the active narrow transcript",
+      "originalCandidateResult": {
+        "failed": 2,
+        "assertion": "Full viewport intersection"
+      },
+      "receipt": {
+        "label": "delivery-release125-selector-preservation-red-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=chromium",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts",
+          "--grep",
+          "active narrow transcript"
+        ],
+        "exitCode": 1,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:09:13.369559+00:00",
+        "receiptSha256": "f9dbe8801eb6952bf7a32841c1e4b3ef58a6cdc0513a595ca4128d68ea90eca9",
+        "logSha256": "d2d1821080f995b84bc37e37115a3c6bd4a7734c787f084e145950e3057f682f"
+      }
+    }
+  ],
+  "finalBrowsers": {
+    "chromiumFull": {
+      "passed": 121,
+      "composition": "All 119 smoke cases plus two unchanged Chromium-only Issue #2253 certification cases"
+    },
+    "chromiumCurrentFixture": {
+      "passed": 6
+    },
+    "webkitCurrentFixture": {
+      "passed": 6
+    },
+    "webkitFull": {
+      "passed": 119
+    },
+    "receipts": [
+      {
+        "label": "delivery-release125-selector-full-chromium-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=chromium",
+          "--grep",
+          "@smoke|Issue #2253 (an unavailable runtime|the readiness facts)"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:24:00.585291+00:00",
+        "receiptSha256": "e3ba9467dbf54fe67d6e549daefb76472b25fda9123098ae1d25d07311dfb55a",
+        "logSha256": "53bf14080c790842277cc180b215cd6151fa582ac6467678fbd00bb3c1df99cd"
+      },
+      {
+        "label": "delivery-release125-selector-final-chromium-v2",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=chromium",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:34:03.941283+00:00",
+        "receiptSha256": "3471be0595fc72bf6e36a1b7f0eaded7b7ecf2b95fc897ace6c73bc563738bb8",
+        "logSha256": "06bd13972c6feee3ac0d39cfad0e8d5b1207412fa3438985af09b5aca366bb48"
+      },
+      {
+        "label": "delivery-release125-selector-webkit-v2",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=webkit",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:32:05.488049+00:00",
+        "receiptSha256": "ca3bfa8f5102dd5834ea89eeced58938940e69f10aa56d3d66c1f911b0e38e86",
+        "logSha256": "a08bd3000cbf5072b7bac617a7172d6f4a349689ce642cc5d2a1ebc5e8d70d18"
+      },
+      {
+        "label": "delivery-release125-selector-full-webkit-v2",
+        "command": ["npm", "run", "test:e2e:smoke:webkit"],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:40:35.586237+00:00",
+        "receiptSha256": "49640d308013d887aaaf0774e8144b54605cc3106310d97c3881f98bb0b4404a",
+        "logSha256": "2e36ab5b87a9e471f280be3256fabcbf514478483604a27505d9dd0ffe12c0f2"
+      }
+    ],
+    "geometry": [
+      {
+        "case": "coding-workbench-selector--9bfeb-eflow-de-during-press-smoke-webkit",
+        "observation": {
+          "before": {
+            "x": 100,
+            "y": 517,
+            "width": 124.4375,
+            "height": 28
+          },
+          "after": {
+            "x": 100,
+            "y": 517,
+            "width": 124.4375,
+            "height": 28
+          },
+          "frame": {
+            "x": 68,
+            "y": 264,
+            "width": 300,
+            "height": 481
+          },
+          "status": {
+            "x": 80,
+            "y": 417,
+            "width": 276,
+            "height": 44
+          }
+        },
+        "sha256": "4543fa9f881e3f1c07dc797928ad713ab800a1a6155bb89ea4f1dcff634a5c39"
+      },
+      {
+        "case": "coding-workbench-selector--9c689-ow-en-settled-control-smoke-webkit",
+        "observation": {
+          "before": {
+            "x": 149,
+            "y": 400,
+            "width": 124.4375,
+            "height": 28
+          },
+          "after": {
+            "x": 149,
+            "y": 400,
+            "width": 124.4375,
+            "height": 28
+          },
+          "frame": {
+            "x": 88,
+            "y": 201,
+            "width": 858,
+            "height": 455
+          },
+          "status": {
+            "x": 100,
+            "y": 300,
+            "width": 834,
+            "height": 16.5
+          }
+        },
+        "sha256": "d84c921177ca2074105794941b6a1c6b6593baf6060b947240c2a198a4cc4861"
+      },
+      {
+        "case": "coding-workbench-selector--a1a34-expanded-readiness-en-smoke-webkit",
+        "observation": {
+          "frame": {
+            "x": 68,
+            "y": 246,
+            "width": 300,
+            "height": 499
+          },
+          "log": {
+            "x": 68,
+            "y": 627,
+            "width": 300,
+            "height": 48
+          },
+          "status": {
+            "x": 80,
+            "y": 579,
+            "width": 276,
+            "height": 44
+          }
+        },
+        "sha256": "cdb065779912dc43617914485e0f3ff202c0acfce33e282a6f6f53a6dd183889"
+      },
+      {
+        "case": "coding-workbench-selector--acec7-eflow-en-during-press-smoke-webkit",
+        "observation": {
+          "before": {
+            "x": 149,
+            "y": 400,
+            "width": 124.4375,
+            "height": 28
+          },
+          "after": {
+            "x": 149,
+            "y": 400,
+            "width": 124.4375,
+            "height": 28
+          },
+          "frame": {
+            "x": 88,
+            "y": 201,
+            "width": 858,
+            "height": 455
+          },
+          "status": {
+            "x": 100,
+            "y": 300,
+            "width": 834,
+            "height": 16.5
+          }
+        },
+        "sha256": "d84c921177ca2074105794941b6a1c6b6593baf6060b947240c2a198a4cc4861"
+      },
+      {
+        "case": "coding-workbench-selector--b6e7a-ow-de-settled-control-smoke-webkit",
+        "observation": {
+          "before": {
+            "x": 100,
+            "y": 517,
+            "width": 124.4375,
+            "height": 28
+          },
+          "after": {
+            "x": 100,
+            "y": 517,
+            "width": 124.4375,
+            "height": 28
+          },
+          "frame": {
+            "x": 68,
+            "y": 264,
+            "width": 300,
+            "height": 481
+          },
+          "status": {
+            "x": 80,
+            "y": 417,
+            "width": 276,
+            "height": 44
+          }
+        },
+        "sha256": "4543fa9f881e3f1c07dc797928ad713ab800a1a6155bb89ea4f1dcff634a5c39"
+      },
+      {
+        "case": "coding-workbench-selector--f934f-expanded-readiness-de-smoke-webkit",
+        "observation": {
+          "frame": {
+            "x": 68,
+            "y": 264,
+            "width": 300,
+            "height": 481
+          },
+          "log": {
+            "x": 68,
+            "y": 663,
+            "width": 300,
+            "height": 48
+          },
+          "status": {
+            "x": 80,
+            "y": 615,
+            "width": 276,
+            "height": 44
+          }
+        },
+        "sha256": "75cdd76b41c0211b656cbecbec951cde236eb6be7fd080fc4f78e9bd9c1ffcac"
+      }
+    ]
+  },
+  "keyboardFixture": {
+    "precondition": "Settle questions, activity, skill discovery and the independently mounted Changes disclosure before keyboard measurement. Concurrent pairing cases still deliberately update during native press.",
+    "assertions": [
+      "Native Tab focuses the actual log",
+      "Full log viewport intersection before and after scrolling",
+      "At least 48 px log height at the default fixture scale",
+      "Home reaches scrollTop 0",
+      "End scrolls away from 0",
+      "Framing parent scrollTop remains0"
+    ],
+    "retainedFailedAttempt": {
+      "webkitFirstResult": "Four pointer cases pass; two Home predicates fail during initial fixture content settlement",
+      "receipt": {
+        "label": "delivery-release125-selector-webkit-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=webkit",
+          "tests/e2e/coding-workbench-selector-layout.spec.ts"
+        ],
+        "exitCode": 1,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:24:56.861970+00:00",
+        "receiptSha256": "1d43c57862d8f9dbabf63fb2d31bdccc6edfa8e0c93fdd938dc4e1c3e7eb6fc7",
+        "logSha256": "d7049217166af0415ab5382663da17460033a3a428c6cb027eb12d61e44a11b2"
+      }
+    },
+    "nativeReference": {
+      "classification": "Diagnostic control, not application acceptance",
+      "passed": 4,
+      "receipt": {
+        "label": "delivery-release125-webkit-native-nested-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "<private-diagnostic>/selector-gesture-repro90/native-nested.playwright.config.ts",
+          "--project=webkit"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:29:00.363616+00:00",
+        "receiptSha256": "f1720a495a16d111457e7d4e124532f2e0326ac7e59eddf9eecefa524db0bb44",
+        "logSha256": "ceb9cf39bbfb090b925a295735b88af7027803f234087d83d308ca7e24d1a071"
+      }
+    },
+    "instrumentedObservation": {
+      "classification": "Timing-sensitive diagnostic, not application acceptance or proof of a shared-follow defect",
+      "result": "Home reached 0 natively while log content height changed 323 to 346; no JS follow/scrollToEnd assignment occurred after Home",
+      "receipt": {
+        "label": "delivery-release125-webkit-scroll-cause-v1",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "<private-diagnostic>/selector-gesture-repro90/focus-instrumented.playwright.config.ts",
+          "--project=webkit",
+          "--grep",
+          "active narrow.* en"
+        ],
+        "exitCode": 0,
+        "sourceUnchanged": true,
+        "completedAt": "2026-10-20T21:30:27.251818+00:00",
+        "receiptSha256": "6c6560b5175534608d18f1c814691c04d2dfe3ca9ef7c2ba1bf3cddc6d8c484e",
+        "logSha256": "dbe074c34881bebf4c482e8a7737253ddbbe8df4ef34db281a250c5c67990baa"
+      }
+    },
+    "limits": [
+      "No keyboard admission during arbitrary live content growth is certified.",
+      "Original-product native-Tab countercontrol has a different DOM order and does not reach Home; it proves no original Home defect.",
+      "No product scroll/follow hook or browser keyboard handler was changed."
+    ]
+  },
+  "localChecks": [
+    {
+      "label": "delivery-release125-selector-typecheck-v3",
+      "command": ["npm", "run", "typecheck"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:14:12.591659+00:00",
+      "receiptSha256": "4cd069726e712c55a1216ca2c5a3d47eb715c720c50d695b79a457abe2e64161",
+      "logSha256": "2de1e03e60e93d1f894b58387cfb071e98fa697455b0bedcbf5b45e903069614"
+    },
+    {
+      "label": "delivery-release125-selector-ui-typecheck-v3",
+      "command": ["npm", "run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:14:14.640130+00:00",
+      "receiptSha256": "aaa5a0189bb067de1eb55e5cd41758b3ef1b719869692a2c8e7c3914cea135f4",
+      "logSha256": "164275fc19a33a4256a5f69fd08cce49b3b7271499e0d36cbb5afb257bae8a71"
+    },
+    {
+      "label": "delivery-release125-selector-ui-lint-v3",
+      "command": ["npm", "run", "lint", "--workspace", "@oscharko-dev/keiko-ui"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:14:23.003842+00:00",
+      "receiptSha256": "e4bf1215ebfc1cddc8b15152abfd27543d269e26e1b59646a534c06cfeb4166e",
+      "logSha256": "dee1d0914d2f2062295b61c59511e551ce27de26bfd214fa5c24b09549855f94"
+    },
+    {
+      "label": "delivery-release125-selector-test-lint-v3",
+      "command": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "tests/e2e/coding-workbench-selector-layout.spec.ts",
+        "--max-warnings=0"
+      ],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:14:28.177075+00:00",
+      "receiptSha256": "7ee7ab6c6dc66a1f026c23353ece5cfad76517bb1369c19519e2a5d01cc6d690",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "delivery-release125-selector-format-v3",
+      "command": ["npm", "run", "format:check"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:15:21.051384+00:00",
+      "receiptSha256": "ffd7fe89c686e36e35b5e82c5a6792e589da6243bc09f6d78eadfbd9d141e5a6",
+      "logSha256": "3a8149c56e5cabb143ebf48322ea0ae3c932d26acbdd1171e0072789c4f4767b"
+    },
+    {
+      "label": "delivery-release125-selector-ui-coverage-v3",
+      "command": ["npm", "run", "test:coverage:ui"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:16:33.480193+00:00",
+      "receiptSha256": "edd3913758714e34378d06cfb42c22d8ae956a9108a8dce2eb3d39625ce1ea3c",
+      "logSha256": "97068bc21bb00c5a1d3685c8c9ed0c9b8d119435f48e9c428a5828776ed4d4c0"
+    },
+    {
+      "label": "delivery-release125-selector-coverage-quality-v3",
+      "command": ["npm", "run", "check:coverage:quality"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:16:33.730823+00:00",
+      "receiptSha256": "1192609c293fa9e222a4ad7c2403b515de3bc76d55b56fd6b3d810b4b7002c31",
+      "logSha256": "04f4047b7e3966cf5e9f95f4c93bf1273e8289568cee74e7bc50a761afd98fb6"
+    },
+    {
+      "label": "delivery-release125-selector-support-inventory-v3",
+      "command": ["npm", "run", "check:support-code-inventory"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:16:36.348315+00:00",
+      "receiptSha256": "965388b28f035bec6fe39a10b456918c6a3e68f7887ac4b4cd1368642c40cf77",
+      "logSha256": "32b0e58f68e4c6bdb5ab3b404e78d8ad7a6f3741ffd875bdc5ae362258cf7cfb"
+    },
+    {
+      "label": "delivery-release125-selector-release-impact-v3",
+      "command": ["npm", "run", "check:release-impact"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:16:36.630297+00:00",
+      "receiptSha256": "7c4127aa265da83be22e2714c9c336e5d5d9a3eb2b958ea46843a524ed163b96",
+      "logSha256": "04855147a6eea1d6866494e0f33b55439456085fe579d29b358446c9419d122c"
+    },
+    {
+      "label": "delivery-release125-selector-wiring-v3",
+      "command": ["npm", "run", "check:e2e-suite-wiring"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:16:38.665062+00:00",
+      "receiptSha256": "8c1655e3fe8d132f524b59c23de2c3fcdc211e02d01ef508a9f5b3670a4ade1e",
+      "logSha256": "dc2e77c9f723a241ab7c784389e77179ec525a320e390bab33ab8e64fd80c316"
+    },
+    {
+      "label": "delivery-release125-selector-arch-v3",
+      "command": ["npm", "run", "arch:check"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:16:59.190816+00:00",
+      "receiptSha256": "fefbcba07d37d2d448e93022432e81dd82f651ac7ed5e3d561cdf895d7c314bb",
+      "logSha256": "abd43ed4bc2d3ae87b6cf9db4f5c392e5eb16fedb0730d931c970e5a4c097c8c"
+    },
+    {
+      "label": "delivery-release125-selector-arch-negative-v3",
+      "command": ["npm", "run", "arch:check:negative"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:17:03.954934+00:00",
+      "receiptSha256": "a03380c7a48dfe291f29ac2c7b22a6f3465a6cc761c15b74dc243c5d08a33d53",
+      "logSha256": "e68174d4b07ba0701427b21cf4e9ce0a302560e1572fc05afc02919397f093b6"
+    },
+    {
+      "label": "delivery-release125-selector-ui-build-v3",
+      "command": ["npm", "run", "build:ui"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:17:14.591852+00:00",
+      "receiptSha256": "206f3774017e2d82718958b1a1cfcdc61bb29564877fae17bbc6d5e4f7394589",
+      "logSha256": "a3a99e9dd195c76712b5d3540e08262f32a558a02c1ddf3a70d72e9c8c59408d"
+    },
+    {
+      "label": "delivery-release125-selector-editor-evidence-v3",
+      "command": ["npm", "run", "check:editor-release-evidence"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:17:15.023852+00:00",
+      "receiptSha256": "7ce773862ba83a1c0fbb7ef9d18a3a9d0334234c6e944b8ab2ace44e9336e3df",
+      "logSha256": "20a19c8c9cfba91d369d387206e895361b4ca99a46f81961a1f7eb8265003c09"
+    },
+    {
+      "label": "delivery-release125-selector-sonar-v3",
+      "command": [
+        "npm",
+        "run",
+        "gates:sonar",
+        "--",
+        "--base",
+        "e0106e65e51f6bc045d4f949502056f382096124"
+      ],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:18:18.022871+00:00",
+      "receiptSha256": "23aff1111459ad8480ac70e98f20622f447c7e49dc0d36ac699755cbdb4ce38a",
+      "logSha256": "cb78529632c69414d7c866078a5ecad6093addb118cecddc4efe9516b74ec2b7"
+    },
+    {
+      "label": "delivery-release125-selector-op-catalog-v1",
+      "command": ["npm", "run", "check:op-catalog"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:17:57.506117+00:00",
+      "receiptSha256": "116fc0d7c04a7524b7900fe3297f613117fd7924da3c09d39915fda6eed2740e",
+      "logSha256": "764c1e93621f4f9a5308a07dbfbbbb1b2339385acde8f01e1e4399f84f48585b"
+    },
+    {
+      "label": "delivery-release125-selector-test-typecheck-v4",
+      "command": ["npm", "run", "typecheck"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:32:42.360031+00:00",
+      "receiptSha256": "13e6ce8edc4b56b220fceafb042ac7adbf0142ef7496919c8f28d2565756013a",
+      "logSha256": "2de1e03e60e93d1f894b58387cfb071e98fa697455b0bedcbf5b45e903069614"
+    },
+    {
+      "label": "delivery-release125-selector-test-lint-v4",
+      "command": [
+        "node",
+        "node_modules/eslint/bin/eslint.js",
+        "tests/e2e/coding-workbench-selector-layout.spec.ts",
+        "--max-warnings=0"
+      ],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:32:47.445459+00:00",
+      "receiptSha256": "f707368ba960810781f693c9548e79ecd3b7e243eff5b8255ff00826c3451377",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "delivery-release125-selector-test-format-v4",
+      "command": [
+        "node",
+        "node_modules/prettier/bin/prettier.cjs",
+        "--check",
+        "tests/e2e/coding-workbench-selector-layout.spec.ts"
+      ],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:32:47.644059+00:00",
+      "receiptSha256": "2450d800e8634f3a3b41e40a66d9dbcd955d090ffb2f9e1de7935458908a1153",
+      "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "label": "delivery-release125-selector-test-wiring-v4",
+      "command": ["npm", "run", "check:e2e-suite-wiring"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:32:49.635006+00:00",
+      "receiptSha256": "ad3a6f7202a4152e8a530b17f61fb734573ae93b19914f4637d416047866fec5",
+      "logSha256": "dc2e77c9f723a241ab7c784389e77179ec525a320e390bab33ab8e64fd80c316"
+    },
+    {
+      "label": "delivery-release125-selector-test-sonar-v4",
+      "command": [
+        "npm",
+        "run",
+        "gates:sonar",
+        "--",
+        "--base",
+        "e0106e65e51f6bc045d4f949502056f382096124"
+      ],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T21:33:45.241042+00:00",
+      "receiptSha256": "6ecaf434405d041a4a8b28e057b88429e3326248cc432e125a5182455b56cd6e",
+      "logSha256": "5de925a37828bf1156fb1aa72436f254c4ba80b557f4d0404a0c8ba535180a73"
+    }
+  ],
+  "fullReleaseBaseline": {
+    "commit": "e0106e65e51f6bc045d4f949502056f382096124",
+    "packageIntegrationPassed": 57224,
+    "uiPassed": 10866,
+    "scriptsPassed": 7618,
+    "existingSkips": {
+      "packageIntegration": 63,
+      "ui": 1,
+      "scripts": 27
+    },
+    "receipt": {
+      "label": "delivery-release125-final-release-coverage-v1",
+      "command": ["npm", "run", "test:coverage:quality"],
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "completedAt": "2026-10-20T20:45:03.477043+00:00",
+      "receiptSha256": "23e4c4cc0e0d37ff5c4aaad2e361466a4d171802e5594ae6b5a00e1b428130df",
+      "logSha256": "89ac3608b61f9bf799bab10b8b34bd1be760ff1652f4b9b4a9c6944684b91767"
+    },
+    "currentJoin": "Final increment changes UI presentation, its browser fixtures and release/QA metadata. Other production code, tools, dependency locks and coverage floors remain identical. Final UI coverage and every coverage floor are repeated on these exact product bytes; the complete Chromium run precedes only the additional independently requalified fixture-settlement predicate."
+  },
+  "releaseMetadata": {
+    "version": "1.2.5",
+    "earlierCatalogRowsPreserved": 62,
+    "automaticEligibility": "Existing manual review, oneClickEligible:false and verifiedCarryForward:false remain unchanged"
+  },
+  "hostedAndDeliveryLimits": [
+    "The earlier head failed the real Firefox selector assertion; this correction still requires final-head hosted Firefox. Local Firefox profile lookup refusals establish no browser acceptance.",
+    "Earlier package shard2 exceeded its unchanged 30-minute deadline without an assertion-failure summary. No old-head retry executed; no runner-cause conclusion is claimed.",
+    "All exact-head required app-bound checks and review conversations must settle before the protected owner-authorized merge.",
+    "The owner-authorized Release workflow and actual SSD updater observation follow verified merge/publication. On-disk version names alone do not prove running version or installed update success.",
+    "Full original skill, retrieval, browser, installed-cycle and private-history acceptance remains in #4051. MacOS Playwright WebKit is not native Safari OS-integration certification."
+  ]
+}

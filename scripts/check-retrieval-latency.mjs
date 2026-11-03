@@ -1,3 +1,5 @@
+import { percentile } from "./lib/percentile.mjs";
+export { percentile } from "./lib/percentile.mjs";
 // Deterministic retrieval-latency gate (enterprise retrieval M3). Mirrors the standalone
 // budget-script pattern of editor-bundle-size.mjs: pure exported helpers (unit-tested in
 // scripts/__tests__/) plus a runner that measures `searchText` over a FIXED synthetic in-memory
@@ -32,15 +34,6 @@ const MEM_ROOT = "/bench";
 // ─── Pure helpers (unit-tested) ─────────────────────────────────────────────────
 
 // Nearest-rank percentile over a copy of `samples` (ascending). `p` is 0..100. Empty → 0.
-export function percentile(samples, p) {
-  if (samples.length === 0) {
-    return 0;
-  }
-  const sorted = [...samples].sort((a, b) => a - b);
-  const rank = Math.ceil((p / 100) * sorted.length);
-  const index = Math.min(sorted.length - 1, Math.max(0, rank - 1));
-  return sorted[index];
-}
 
 export function evaluateLatencyBudget({ observedMs, budgetMs }) {
   return { ok: observedMs <= budgetMs, observedMs, budgetMs };

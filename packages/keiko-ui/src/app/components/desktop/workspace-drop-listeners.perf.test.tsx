@@ -10,7 +10,7 @@
  *    actually changes.
  */
 import { createRef } from "react";
-import { render } from "@testing-library/react";
+import { render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Workspace } from "./Workspace";
 import type { UseWorkspaceResult, WorkspaceApi } from "./hooks/useWorkspace.types";
@@ -151,13 +151,13 @@ describe("Workspace drop-listener / registry perf (STEP 07 cluster B)", () => {
     expect(countRemoves()).toBe(removesAfterMount);
   });
 
-  it("does not re-sync the pdf registry on a geometry-only drag frame (WORKSPACE-002)", () => {
+  it("does not re-sync the pdf registry on a geometry-only drag frame (WORKSPACE-002)", async () => {
     const api = makeApi({ x: 0, y: 0, zoom: 1 });
     const win = appWindow({ id: "agents-1", type: "agents" });
     const ws = workspace(api, { wins: [win] });
     const wsRef = createRef<HTMLDivElement>();
     const { rerender } = render(<Workspace ws={ws} wsRef={wsRef} openPalette={() => undefined} />);
-    expect(syncSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(syncSpy).toHaveBeenCalledTimes(1));
     syncSpy.mockClear();
 
     // Geometry-only drag: same id/type, moved x — new wins array identity.
@@ -178,40 +178,46 @@ describe("Workspace drop-listener / registry perf (STEP 07 cluster B)", () => {
         openPalette={() => undefined}
       />,
     );
-    expect(syncSpy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(syncSpy).toHaveBeenCalledTimes(1));
   });
 
-  it("accepts capsule-set connector drop events and creates connector windows", () => {
-    const baseApi = makeApi({ x: 0, y: 0, zoom: 1 });
-    const add = vi.fn<WorkspaceApi["add"]>(() => "connector-1");
-    const update = vi.fn<WorkspaceApi["update"]>();
-    const api: WorkspaceApi = { ...baseApi, add, update };
-    const ws = workspace(api, { wins: [] });
-    const wsRef = createRef<HTMLDivElement>();
-    render(<Workspace ws={ws} wsRef={wsRef} openPalette={() => undefined} />);
+  it.each(["capsule-set", "jira-live"] as const)(
+    "accepts %s connector drop events and creates connector windows",
+    (kind) => {
+      const baseApi = makeApi({ x: 0, y: 0, zoom: 1 });
+      const add = vi.fn<WorkspaceApi["add"]>(() => "connector-1");
+      const update = vi.fn<WorkspaceApi["update"]>();
+      const api: WorkspaceApi = { ...baseApi, add, update };
+      const ws = workspace(api, { wins: [] });
+      const wsRef = createRef<HTMLDivElement>();
+      render(<Workspace ws={ws} wsRef={wsRef} openPalette={() => undefined} />);
 
-    window.dispatchEvent(
-      new CustomEvent("keiko:local-knowledge-connector-drop", {
-        detail: {
-          payload: {
-            kind: "capsule-set",
-            id: "set-release",
-            label: "Release Readiness",
-            lifecycleState: "degraded",
+      window.dispatchEvent(
+        new CustomEvent("keiko:local-knowledge-connector-drop", {
+          detail: {
+            payload: {
+              kind,
+              id: "set-release",
+              label: "Release Readiness",
+              lifecycleState: "degraded",
+            },
+            clientX: 0,
+            clientY: 0,
           },
-          clientX: 0,
-          clientY: 0,
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(add).toHaveBeenCalledWith("connector", {
-      presentation: "node",
-      selectedKind: "capsule-set",
-      selectedId: "set-release",
-      selectedLabel: "Release Readiness",
-      selectedState: "degraded",
-    });
-    expect(update).toHaveBeenCalledWith("connector-1", expect.objectContaining({ w: 260, h: 220 }));
-  });
+      expect(add).toHaveBeenCalledWith("connector", {
+        presentation: "node",
+        selectedKind: kind,
+        selectedId: "set-release",
+        selectedLabel: "Release Readiness",
+        selectedState: "degraded",
+      });
+      expect(update).toHaveBeenCalledWith(
+        "connector-1",
+        expect.objectContaining({ w: 260, h: 220 }),
+      );
+    },
+  );
 });

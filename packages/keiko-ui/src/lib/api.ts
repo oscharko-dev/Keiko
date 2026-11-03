@@ -182,14 +182,18 @@ import {
   DESKTOP_CHAT_STREAM_EVENT_TYPES,
   isDesktopChatStreamEvent,
   type ChatContextStatusWire,
+  type DesktopChatCreateRequestWire,
   type DesktopChatSendRequestWire,
   type ConversationAttachmentUploadRequestWire,
   type ConversationAttachmentUploadResponseWire,
   type DesktopChatStreamDoneEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
+  type DesktopChatStreamReadConsentEvent,
+  type DesktopChatStreamWriteApprovalEvent,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
+  type MarkdownSkillReference,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   DEFAULT_GROUNDING_LIMITS,
@@ -897,6 +901,8 @@ export interface StartRunInput {
   limits?: Record<string, unknown>;
   governedHandoff?: Record<string, unknown>;
   governedHandoffSourceGroundedRunId?: string;
+  // The private Markdown skill the human selected for a governed workflow run (#4025 AC1).
+  skill?: MarkdownSkillReference;
   voiceOrigin?: {
     readonly profile: string;
     readonly turnIndex: number;
@@ -1229,6 +1235,8 @@ export async function createChat(input: CreateChatInput): Promise<ChatResponse> 
 }
 
 export interface UpdateChatInput {
+  jiraPodId?: string | null;
+  toolMode?: CodingWorkbenchMode;
   expectedGroundingScopeIdentity?: string;
   title?: string;
   selectedModel?: string;
@@ -1401,11 +1409,7 @@ export async function patchChatMessage(
 // Desktop canvas V1 — real chat through the existing model gateway
 // ---------------------------------------------------------------------------
 
-export interface CreateDesktopChatInput {
-  projectPath?: string;
-  title?: string;
-  modelId?: string;
-}
+export type CreateDesktopChatInput = DesktopChatCreateRequestWire;
 
 export async function createDesktopChat(
   input: CreateDesktopChatInput = {},
@@ -1503,6 +1507,8 @@ export type SseDonePayload = DesktopChatStreamDoneEvent["data"];
 export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 
 export interface StreamHandlers {
+  readonly onWriteApproval?: (payload: DesktopChatStreamWriteApprovalEvent["data"]) => void;
+  readonly onReadConsent?: (payload: DesktopChatStreamReadConsentEvent["data"]) => void;
   readonly onStarted?: (correlationId: string) => void;
   readonly onToken: (text: string) => void;
   readonly onDone: (payload: SseDonePayload) => void;
@@ -1537,6 +1543,12 @@ function dispatchSseEvent(
   const candidate = { event: eventName, data: parsed };
   if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
   switch (candidate.event) {
+    case "tool-write-approval":
+      handlers.onWriteApproval?.(candidate.data);
+      break;
+    case "tool-read-consent":
+      handlers.onReadConsent?.(candidate.data);
+      break;
     case "token": {
       handlers.onToken(candidate.data.text);
       break;
@@ -1660,6 +1672,10 @@ async function fetchWithinIdleLimit(
 function terminalAwareHandlers(handlers: StreamHandlers, onTerminal: () => void): StreamHandlers {
   return {
     onToken: handlers.onToken,
+    ...(handlers.onReadConsent === undefined ? {} : { onReadConsent: handlers.onReadConsent }),
+    ...(handlers.onWriteApproval === undefined
+      ? {}
+      : { onWriteApproval: handlers.onWriteApproval }),
     onDone: (payload): void => {
       onTerminal();
       handlers.onDone(payload);

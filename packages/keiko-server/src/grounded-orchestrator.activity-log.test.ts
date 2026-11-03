@@ -332,6 +332,7 @@ function expectRegisteredCompletionSiblings(
     "search.connected-context.completion-details",
     "search.connected-context.source-details",
     "search.connected-context.selection-details",
+    "search.connected-context.evidence-details",
   ];
   for (const [index, operation] of operations.entries()) {
     const event = activityLog.events[index + 1];
@@ -352,7 +353,7 @@ function lifecycleEvents(
     | "search.connected-context.clarification-needed",
 ): readonly [ServerLogEvent, ServerLogEvent] {
   expect(activityLog.events).toHaveLength(
-    terminalOp === "search.connected-context.completed" ? 5 : 2,
+    terminalOp === "search.connected-context.completed" ? 6 : 2,
   );
   const started = activityLog.events[0];
   const terminal = activityLog.events.at(-1);
@@ -694,8 +695,9 @@ describe("retrieveConnectedContextPack activity log", () => {
 
       const raw = readPersistedActivityLog(stateDir);
       const persisted = producerLogLines(raw);
-      expect(persisted).toHaveLength(5);
-      const [started, details, sourceDetails, selectionDetails, completed] = persisted;
+      expect(persisted).toHaveLength(6);
+      const [started, details, sourceDetails, selectionDetails, evidenceDetails, completed] =
+        persisted;
       if (started === undefined || details === undefined || completed === undefined) {
         throw new Error("expected persisted connected-context lifecycle lines");
       }
@@ -753,6 +755,20 @@ describe("retrieveConnectedContextPack activity log", () => {
       });
       expect(["high", "low"]).toContain(selectionDetails?.selectionConfidence);
       expect(selectionDetails).not.toHaveProperty("_truncatedFieldCount");
+      expect(evidenceDetails).toMatchObject({
+        op: "search.connected-context.evidence-details",
+        correlationId: CORRELATION_ID,
+        scopeIdentitySha256: started.scopeIdentitySha256,
+        queryIdentitySha256: started.queryIdentitySha256,
+        activityDetailStatus: "complete",
+        sourceDescriptorPathCount: 0,
+        completeness: "complete",
+        loss: "none",
+      });
+      expectActivityLogProof(
+        "search.connected-context.evidence-details.line",
+        JSON.stringify(evidenceDetails),
+      );
       expectSha256(started.scopeIdentitySha256);
       expectSha256(started.queryIdentitySha256);
       expectNonNegativeNumberFields(completed, ["durationMs"]);

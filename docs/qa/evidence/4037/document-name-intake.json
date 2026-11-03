@@ -1,0 +1,219 @@
+{
+  "schemaVersion": 1,
+  "classification": "Owning-layer source intake and inherited-budget uncertainty repair from actual live UI observations; new post-repair live skill acceptance is still open.",
+  "sourceParent": "8359d0e449f18e14f78ecec8d39db4bb1ae2135b",
+  "sourceFiles": [
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "2f55b8682a9fb2886d358c0ccbce9b3a72fb4417f5c4adfff3c750e20c955b7f"
+    },
+    {
+      "path": "docs/qa/evidence/4037/code-only-citation-repair.json",
+      "sha256": "76bcdc6e73d84fab5b6e891a7b2561064740ddd4a983b6851f1b5a96169659b1"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-explicit-paths.security.test.ts",
+      "sha256": "a237af5088ac26b46aa8b96397511fbf16ce38aa93a25c2745753c6cd3fe476a"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-explicit-paths.test.ts",
+      "sha256": "59e65ffaeb69436d073f8afee88ded1ca3dd0cd885ebfd11f695bc416d866f4b"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-explicit-paths.ts",
+      "sha256": "3a63593d5e879f1c3fb0eafe547da959ccf3a80517391322dade612b571d054f"
+    },
+    {
+      "path": "packages/keiko-workflows/src/contextpack/assemble-omissions.test.ts",
+      "sha256": "867c7ac18ed69d77333d53879ff4880334e37663e9b78357b85bad47e039d4b0"
+    },
+    {
+      "path": "packages/keiko-workflows/src/contextpack/assemble.ts",
+      "sha256": "dd61526e450830c49196414eea24c924fe64a0f5cd0e650f2e0b050a38cf3127"
+    },
+    {
+      "path": "packages/keiko-workflows/src/planner/references-wrapper-regression.test.ts",
+      "sha256": "f64ea0b386718b24c7abdf958596ba5ac9d66ccd21b5db0892a97772cd2671fc"
+    },
+    {
+      "path": "packages/keiko-workflows/src/planner/references.ts",
+      "sha256": "a33b2967e42d3bf90bb1edbf486ec9390926b012c94eaed1e31ce1034cb5f31b"
+    },
+    {
+      "path": "packages/keiko-workspace/src/index.ts",
+      "sha256": "395fbf6c8b5fb851982ef96bb18d8c97281389958a38b510fc1eb7469b9b0523"
+    },
+    {
+      "path": "packages/keiko-workspace/src/workspacePathDiscovery.test.ts",
+      "sha256": "c3434aed82a4194540f587b3e1e421f8a26d012a4ecbcb5b8ff42a382731447e"
+    },
+    {
+      "path": "packages/keiko-workspace/src/workspacePathDiscovery.ts",
+      "sha256": "cedaa9be36de94f6db7747612b6de1473ec6ad354083183e6069d6b9e7b2b74e"
+    },
+    {
+      "path": "scripts/root-package-surface.contract.json",
+      "sha256": "227650bf4fd4244efcd3e69ccbfdd8fb6aaae6ef7b31123e5286fde7ca2f7101"
+    }
+  ],
+  "plan": {
+    "observedFailure": "Actual Java UI requests expressly name README requirements, but README.md is omitted for low relevance. All six completed AAA outputs pass the correct subject and detect three of six independent defects with and without the unchanged skill. Required contract input is missing.",
+    "success": "Admit a whole conventional document basename shorthand through the existing bounded filename path; retain application/build/neighbor evidence, all containment and resource ceilings, and honest uncertainty for unread budget omissions."
+  },
+  "implementation": {
+    "referenceRecognition": "Existing candidate classification recognizes conventional overview basenames without another filename registry or task-specific vocabulary.",
+    "discovery": "Existing path-only streaming discovery matches the complete basename stem case-insensitively with an optional already supported text/web document extension, before bounded retention. Extra suffixes and source-code extensions do not match. Explicit extensions retain exact basename semantics.",
+    "sharedOwner": "matchesDocumentBasenameStem is shared by streaming discovery and exact selected-files admission. The generated runtime/type export contract adds this one intended helper only.",
+    "selectedFiles": "Only selected paths are matched; no sibling enumeration or body read outside the selected membership.",
+    "authority": "Existing canonical path, denied-path, ignore, generated-file, classification, search/read/byte, deadline and cancellation gates remain authoritative.",
+    "uncertainty": "The existing context-pack assembler adds one budget-clipped marker for validated inherited budget omissions only when none already exists; non-budget omissions do not gain this claim. Stable identity includes the retained uncertainty.",
+    "activityLog": "Existing source-details discovery/admission/omission counts and completion uncertainty counts describe the changed behavior without names or bodies.",
+    "promptInstructionsAdded": 0,
+    "skillsChanged": false,
+    "budgetsChanged": false
+  },
+  "check": {
+    "documentNameFailureFirst": {
+      "passed": 0,
+      "failed": 3,
+      "notRunOrSkipped": 35,
+      "files": 1
+    },
+    "inheritedBudgetFailureFirst": {
+      "passed": 1,
+      "failed": 1,
+      "notRunOrSkipped": 7,
+      "files": 1
+    },
+    "finalAffected": {
+      "passed": 76,
+      "failed": 0,
+      "notRunOrSkipped": 0,
+      "files": 3
+    },
+    "finalBroad": {
+      "passed": 3597,
+      "failed": 0,
+      "notRunOrSkipped": 1,
+      "files": 196
+    },
+    "sourceFilesFrozen": 7556,
+    "compiledFilesFrozen": 6621,
+    "sourceFreezeSha256": "127d0230a1ec603160ad4851c6293b56a2b59a9d96f9d75ffcb2f8c6e2cbdcc0",
+    "compiledFreezeSha256": "65d880f3a52e129f083bcfce92bbdbf0623ada31b0c9480ce3ed54eb297f17e3",
+    "finalFrozenDrift": 0,
+    "gates": "Package/root typing, affected-owner ESLint, whole formatting, full Activity Log inventory including normal/negative architecture and release impact, context quality, retrieval quality, grounded retrieval, faithfulness, error observability, ADR indexing, actual local Sonar and assembled package surface pass.",
+    "assembledSurfaceFiles": 6414,
+    "editorOwnCodeGzipBytes": 78174,
+    "unchangedEditorCeilingBytes": 102400
+  },
+  "retainedDevelopmentFindings": [
+    "The first extended 136-test run has one failure: the file is correctly omitted for budget, but the context-pack uncertainty marker is missing. That lower-owner defect is separately reproduced before repair, not hidden by changing the assertion.",
+    "Initial assembled surface rejects the newly intended export. The canonical generator adds only its runtime/type names. A generation attempt then reports stale build outputs after a test-source edit; final complete assembled build and surface repeat pass.",
+    "Checkpoint71 proof metadata now distinguishes 43 controls unselected by the targeted RED invocation from existing skipped tests. Counts, outputs and outcomes are unchanged."
+  ],
+  "limits": [
+    "No new live after-repair skill benefit or latency measurement is claimed yet. The original frozen campaign remains unchanged and unaccepted.",
+    "Observed README admission is not a claim that every model assertion is faithful or every requested test is generated.",
+    "Native installed updater/platform/SSD qualification, wider chat/search/context/browser acceptance, original ledger reconciliation, exact-head required CI/reviews and merge remain open.",
+    "No acceptance checkbox, issue state or historical model outcome changes."
+  ],
+  "artifacts": [
+    {
+      "artifact": "checkpoint72-document-stem-red-v1.json",
+      "sha256": "75e1cedf332cef74ed2d10841729e261fd366071a4c914c22e16d8633e5c39f7"
+    },
+    {
+      "artifact": "checkpoint72-document-stem-green-v1.json",
+      "sha256": "6ac6dc4173787c0a3b49a7af14650f97cf946b16dc4d91338e51f2be77da8011"
+    },
+    {
+      "artifact": "checkpoint72-document-stem-green-v2.json",
+      "sha256": "1d7f6f4b4bae3e5344e8d10b093f50f9b2529c150f5ac54e7360fbc723eea330"
+    },
+    {
+      "artifact": "checkpoint72-budget-observation-v1.log",
+      "sha256": "84e62e1d82d340e1cb3228b3b5057f18f93934502d548f561a552053d99193bf"
+    },
+    {
+      "artifact": "checkpoint72-inherited-omission-red-v1.json",
+      "sha256": "4e0978d10b9979cd047e3d876fd19aa471c2891cd351dfe44a7a7378d19c8a0d"
+    },
+    {
+      "artifact": "checkpoint72-document-stem-green-v3.json",
+      "sha256": "aece9f38bf0daff55ae925c4a7bc8fcf00a22be66b721270119bddc813e5ea4c"
+    },
+    {
+      "artifact": "checkpoint72-grounded-planner-context-tests-v1.json",
+      "sha256": "94ddc6ec0356022f1e29d2efec6cb291b2f3d3fca09bc275093fbf49bb34f646"
+    },
+    {
+      "artifact": "checkpoint72-grounded-planner-context-v1.json",
+      "sha256": "b2d25ded0c369a6acc87d1c275a0f30d76f10649fbec4478588479d6cb25b103"
+    },
+    {
+      "artifact": "checkpoint72-typecheck-v2.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "artifact": "checkpoint72-final-lint-v1.json",
+      "sha256": "e0cd8eb2b3081ed17cfa0c48da90ab04f2b3b73cc7203db78755d2b8eca24018"
+    },
+    {
+      "artifact": "checkpoint72-activity-log-v1.log",
+      "sha256": "ba3d96b4634530060a3e55619538e1b9b6a81308a98ad3b10d3536a0b9993692"
+    },
+    {
+      "artifact": "checkpoint72-context-quality-v1.json",
+      "sha256": "a86efbf05e8a5b626a583a48f313acebe9455ca3ac36ed71a1d4a758d70db50b"
+    },
+    {
+      "artifact": "checkpoint72-retrieval-quality-v1.json",
+      "sha256": "9c2c6ca3096849c1cdc98a01b486b5d21c3b47bd9838912bc60d1d0466e8a1f0"
+    },
+    {
+      "artifact": "checkpoint72-grounded-retrieval-v1.json",
+      "sha256": "1d9eaae03bbab2468e1d382875d39698acaeb594c9c1f42a583aeab89d923077"
+    },
+    {
+      "artifact": "checkpoint72-faithfulness-v1.json",
+      "sha256": "81d170fc338d0e2a319c77117ddabef1dce42c9328cd948ad66ce3b1c25f9d6c"
+    },
+    {
+      "artifact": "checkpoint72-sonar-v1.log",
+      "sha256": "79ea417be00fc191a815b35484171e8b04d471947bca9c243d231e0356b544a4"
+    },
+    {
+      "artifact": "checkpoint72-format-v1.json",
+      "sha256": "a7b50e8872932039ce48e5acdd4eee59274d543346e9050ac88ab5c42344e175"
+    },
+    {
+      "artifact": "checkpoint72-final-adr-v1.json",
+      "sha256": "57a96cd3225b2532f17302f696b25df5005bdb3cb37050a6f9a1f0456543a742"
+    },
+    {
+      "artifact": "checkpoint72-error-observability-v1.json",
+      "sha256": "96450633174186b1db46823a94dceb793f5b65fb707363c4deb84ee0c024007f"
+    },
+    {
+      "artifact": "checkpoint72-assembled-v1.log",
+      "sha256": "9811efe511d0dc96975e0e54534ef2cae850dd298cd70eefaca756cd893e0a7a"
+    },
+    {
+      "artifact": "checkpoint72-surface-contract-v1.log",
+      "sha256": "596d91b2df39ed2675596414c92c1d6fc325aa0219bca3f632d67bff070eef8b"
+    },
+    {
+      "artifact": "checkpoint72-assembled-v2.log",
+      "sha256": "a4109e629041c376fe0bc80103da6381740405881c4bc52a6e1408c4672466b9"
+    },
+    {
+      "artifact": "checkpoint72-source-freeze-v1.json",
+      "sha256": "127d0230a1ec603160ad4851c6293b56a2b59a9d96f9d75ffcb2f8c6e2cbdcc0"
+    },
+    {
+      "artifact": "checkpoint72-compiled-freeze-v1.json",
+      "sha256": "65d880f3a52e129f083bcfce92bbdbf0623ada31b0c9480ce3ed54eb297f17e3"
+    }
+  ]
+}

@@ -1,7 +1,112 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
-import { MIGRATIONS, runMigrations } from "./schema.js";
+import { MIGRATIONS, SCHEMA_VERSION, runMigrations } from "./schema.js";
+import { buildUiStoreOverDatabase } from "./db.js";
+import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
+
+function legacyConversation(version = 54): DatabaseSync {
+  const db = openWithForeignKeys();
+  applyMigrationsUpTo(db, version);
+  db.prepare(
+    "INSERT INTO projects (path, name, created_at, last_opened_at) VALUES (?, ?, ?, ?)",
+  ).run("/fixture", "Fixture", 1, 1);
+  db.prepare(
+    "INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run("existing-chat", "/fixture", "Existing", "model", 1, 1);
+  db.prepare(
+    "INSERT INTO chat_messages (id, chat_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+  ).run("existing-user", "existing-chat", "user", "Preserve the original request.", 1);
+  db.prepare(
+    "INSERT INTO chat_messages (id, chat_id, role, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+  ).run("existing-assistant", "existing-chat", "assistant", "Acknowledged.", 2);
+  return db;
+}
+
+it("backfills both v56 indexes from v55 originals and preserves index integrity", () => {
+  const db = legacyConversation(55);
+  try {
+    runMigrations(db);
+    runMigrations(db);
+    const store = buildUiStoreOverDatabase(db);
+    const ids: string[] = [];
+    store.searchGatewayMessageUnits(
+      "existing-chat",
+      [{ kind: "word-prefix", value: "original" }],
+      (unit) => {
+        ids.push(...unit.map((message) => message.id));
+      },
+    );
+    expect(ids).toEqual(["existing-user", "existing-assistant"]);
+    expect(store.countMessages("existing-chat")).toBe(2);
+    db.exec(
+      "INSERT INTO chat_history_words(chat_history_words, rank) VALUES ('integrity-check', 1)",
+    );
+    db.exec(
+      "INSERT INTO chat_history_fragments(chat_history_fragments, rank) VALUES ('integrity-check', 1)",
+    );
+    expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  } finally {
+    db.close();
+  }
+});
+
+describe("v55 migration — private chat continuity", () => {
+  it("preserves a v54 conversation and admits its private checkpoint after an idempotent upgrade", () => {
+    const db = legacyConversation();
+    try {
+      runMigrations(db);
+      runMigrations(db);
+      const store = buildUiStoreOverDatabase(db);
+      expect(store.countMessages("existing-chat")).toBe(2);
+      expect(store.listMessages("existing-chat")[0]?.content).toBe(
+        "Preserve the original request.",
+      );
+      expect(
+        store.writeChatContinuityCheckpoint(
+          "existing-chat",
+          {
+            schemaVersion: "1",
+            laneId: "history-summary",
+            reason: "Migration fixture",
+            itemsBefore: 2,
+            itemsAfter: 1,
+            tokensBefore: 100,
+            tokensAfter: 20,
+            conversationCoverage: {
+              version: 1,
+              throughMessageId: "existing-assistant",
+              historyRevision: store.chatHistoryRevision("existing-chat"),
+              contextWindowTokens: 4096,
+            },
+          },
+          undefined,
+        ),
+      ).toBe(true);
+      expect(store.readChatContinuityCheckpoint("existing-chat")?.generation).toBe(1);
+      expect(() =>
+        db.prepare("UPDATE chat_continuity_checkpoints SET generation = ?").run(1.5),
+      ).toThrow();
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("keeps the shared historical-schema fixture able to rewind and reapply the current schema", () => {
+    const db = legacyConversation();
+    try {
+      runMigrations(db);
+      rewindSchemaFixture(db, 54);
+      runMigrations(db);
+      expect(db.prepare("SELECT count(*) AS count FROM chat_messages").get()).toEqual({ count: 2 });
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+});
 
 // KEIKO-0573: runMigrations filters and applies pending migrations in declaration order (no
 // .sort()), so the array's order-of-declaration is trusted to equal ascending version order. This
@@ -15,6 +120,33 @@ describe("keiko-server store MIGRATIONS", () => {
     for (const m of MIGRATIONS) {
       expect(m.version).toBeGreaterThan(previous);
       previous = m.version;
+    }
+  });
+});
+
+describe("v46 migration — durable chat creation intents", () => {
+  it("retains existing conversations and private drafts across repeated migration runs", () => {
+    const db = openWithForeignKeys();
+    try {
+      applyMigrationsUpTo(db, 45);
+      db.prepare("INSERT INTO projects VALUES (?, ?, ?, ?, ?)").run("/fixture", "Fixture", 0, 1, 1);
+      db.prepare(
+        "INSERT INTO chats (id, project_path, title, selected_model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run("existing-chat", "/fixture", "Existing", "model", 1, 1);
+      db.prepare("INSERT INTO chat_drafts VALUES (?, ?, ?)").run("existing-chat", "Unsent", 3);
+      runMigrations(db);
+      runMigrations(db);
+      expect(db.prepare("SELECT title FROM chats WHERE id = ?").get("existing-chat")).toEqual({
+        title: "Existing",
+      });
+      expect(
+        db.prepare("SELECT text, revision FROM chat_drafts WHERE chat_id = ?").get("existing-chat"),
+      ).toEqual({ text: "Unsent", revision: 3 });
+      expect(db.prepare("SELECT COUNT(*) AS count FROM chat_creation_intents").get()).toEqual({
+        count: 0,
+      });
+    } finally {
+      db.close();
     }
   });
 });
@@ -509,3 +641,33 @@ describe("v40 migration — terminal run causes (F9, #3873)", () => {
     db.close();
   });
 });
+
+it.each([46, 47, 48, 49, 50])(
+  "upgrades the actual v%i schema to current Jira storage without collisions",
+  (version) => {
+    const db = openWithForeignKeys();
+    try {
+      applyMigrationsUpTo(db, version);
+      runMigrations(db);
+      runMigrations(db);
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: SCHEMA_VERSION });
+      for (const [table, column] of [
+        ["chats", "jira_state_json"],
+        ["chat_messages", "tool_transcript_json"],
+      ] as const) {
+        expect(
+          db
+            .prepare(`PRAGMA table_info(${table})`)
+            .all()
+            .filter((row) => row.name === column),
+        ).toHaveLength(1);
+      }
+      expect(db.prepare("SELECT COUNT(*) AS count FROM chat_tool_read_grants").get()).toEqual({
+        count: 0,
+      });
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    } finally {
+      db.close();
+    }
+  },
+);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { runBugModelLoop } from "./model-loop.js";
 import { buildBugRunState } from "./internal.js";
 import { computeBugFingerprint } from "./emit.js";
@@ -11,6 +12,7 @@ import {
   type WorkspaceFs,
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
+import { createDiffOfBytes } from "./_patch-fixture.js";
 import { makePack, response, scriptedModel } from "./_support.js";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { BugRunState } from "./internal.js";
@@ -282,5 +284,57 @@ describe("runBugModelLoop (D6/D10)", () => {
     );
     expect(model.calls()).toBe(2);
     expect(result.modelCallCount).toBe(2);
+  });
+  // #4110: the bug workflow default is the one shared governed patch cap, and the boundary is exact.
+  describe("the governed patch cap under the default limits (#4110)", () => {
+    // The fence hands the parser the diff without its final line break, one byte shorter.
+    function answerWithPatchOf(bytes: number): ReturnType<typeof response> {
+      const diff = createDiffOfBytes("src/generated.ts", bytes + 1);
+      return response({
+        content: ["```diff", diff.trimEnd(), "```", "## Root cause", "x"].join("\n"),
+      });
+    }
+
+    it("accepts a patch of exactly the cap", async () => {
+      const { fs, workspace } = ws();
+      const model = scriptedModel([answerWithPatchOf(GOVERNED_PATCH_MAX_BYTES)]);
+      const result = await runBugModelLoop(
+        state(model.port, fs),
+        workspace,
+        { description: "bug" },
+        evidence,
+        makePack([]),
+      );
+      expect(result.lastRejectionCode).toBeUndefined();
+      expect(result.accepted?.validation.totalBytes).toBe(GOVERNED_PATCH_MAX_BYTES);
+    });
+
+    it("refuses a patch one byte over the cap with the size-limit reason, visible on the event", async () => {
+      const { fs, workspace } = ws();
+      const model = scriptedModel([answerWithPatchOf(GOVERNED_PATCH_MAX_BYTES + 1)]);
+      const events: unknown[] = [];
+      const result = await runBugModelLoop(
+        state(
+          model.port,
+          fs,
+          { maxRetries: 0, maxModelCalls: 1 },
+          { sink: { emit: (e) => events.push(e) } },
+        ),
+        workspace,
+        { description: "bug" },
+        evidence,
+        makePack([]),
+      );
+      expect(result.accepted).toBeUndefined();
+      expect(result.lastRejectionCode).toBe("size-limit");
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "bug:patch:validated",
+          ok: false,
+          rejectionCode: "size-limit",
+          patchBytes: GOVERNED_PATCH_MAX_BYTES + 1,
+        }),
+      );
+    });
   });
 });

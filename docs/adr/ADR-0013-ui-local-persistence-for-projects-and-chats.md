@@ -254,6 +254,23 @@ below them are still refused.
 
 ### D5 — Schema, PRAGMA user_version, and migration runner
 
+**Chat continuity, schema v55 (#4155).** `chat_continuity_checkpoints` is private operational
+Chat state in the existing database. One bounded, whitelisted JSON record per chat is bound to
+history revision and message boundary, with a generation for transactional compare-and-swap
+and a payload digest for integrity checking. Foreign-key cascades remove derived state with its
+chat/boundary; revision changes invalidate it. Late completion of an earlier pending turn advances
+the revision when later turns are already eligible. Ordinary append completion retains the
+existing append-only behavior. Audit retention does not own these rows. See ADR-0172 D1 for
+failure behavior, compatibility reads, content projection and asynchronous enrichment.
+
+**Chat history discovery, schema v56 (#4155).** Complementary SQLite FTS5 word and trigram
+indexes are external-content indexes of the existing private `chat_messages` table. They support
+short identifiers and internal German compound fragments without creating another canonical
+message or memory store. Transactional insert/delete/content-update triggers maintain both;
+the migration backfills existing messages and enables FTS index secure deletion. Completed-turn
+admission is applied before the bounded candidate limit and rechecked by the canonical resolver.
+Current content projection still applies before any excerpt reaches the model. See ADR-0172 D2.
+
 We will use `PRAGMA user_version` as the schema version counter. An ordered migration runner
 in `src/ui/store/schema.ts` applies migrations idempotently, checking the current
 `user_version` and running only the migrations whose index is >= the current version, then
@@ -325,6 +342,85 @@ delete projects with missing paths. `listProjects` returns all rows; the BFF han
 response, derived from that check. Missing paths remain listed as `available: false`. A developer
 can see and explicitly delete a stale project. This preserves the history and makes the system
 fail-open (show the record) rather than silently destructive (delete the record).
+
+#### Durable Chat tool mutation intents (schemas 47–48, epic #4081)
+
+The existing UiStore owns `chat_tool_mutations`, initially for the five Jira write operations.
+It stores canonical user-turn references, actor/Pod identity, binding and authentication generation
+counters, authority/action digests and closed lifecycle/outcome metadata. `authentication_generation`
+is an integer invalidation counter; credential material remains exclusively in the existing vault.
+No request, response body, private endpoint or token is copied into this journal.
+
+A standalone `BEGIN IMMEDIATE` transaction with SQLite FULL-or-stronger synchronization records
+possible dispatch before the caller may send HTTP. Nested transactions are refused because a
+released savepoint is not a durable commit. A synchronous final guard may redeem existing approval
+state in the same transaction; a denied guard rolls its changes back. One action digest per canonical
+turn prevents a new model call ID from repeating that action. Writes within a turn are serialized,
+with at most 32 retained intents. Unknown effects and acknowledged-but-unconfirmed outcomes block
+further writes in that turn, including already prepared actions. A new explicitly admitted user turn
+has its own scope.
+
+Response acknowledgement is stored separately from body parsing and later confirmation. Known
+local rejection before dispatch, success, success without confirmation, unknown effect and no
+dispatch are distinct. Every non-2xx response after possible dispatch remains unknown: a status code
+alone cannot prove that no mutation occurred, including 400/401/403/429 and proxy-generated replies.
+The transport's diagnostic reason (such as permission denied or rate limited) remains separate
+from this effect classification. Schema 48 repairs the earlier journal's retained post-dispatch
+rejections to unknown before work resumes. An observed 2xx cannot be downgraded to unknown/rejected;
+normal terminal settlement is immutable.
+The server mutation composer connects this journal to the final Atlassian HTTP admission and
+response-observation callbacks. Only the creator of a new intent executes provider code; replaying
+prepared, in-flight or completed records never takes over execution. An unsettled replay reports
+`pending`, a non-terminal result state distinct from stored terminal outcomes. It does not assert an
+active executor or permit takeover: the same state covers orphaned records after restart. If current
+admission or journal access prevents qualifying prior state, the composer also reports `pending`;
+it cannot infer that a possibly earlier attempt had no effect. Only a retained settlement is replayed
+as a terminal outcome. Metadata GET responses do not
+acknowledge a mutation. Final dispatch repeats the composing owner's synchronous admission inside
+the durable transaction, and a provider invocation may dispatch at most one mutation request.
+Confirmed results require the operation's validated receipt identities. Failed terminal persistence
+retains the journal barrier and returns an uncertain result rather than inventing completion.
+Removing a message preserves its mutation tombstone; deleting its owning Chat removes the journal.
+Registered body-free state events follow committed state. A pre-effect log failure prevents the
+caller from proceeding, preserving the durable tombstone; terminal log failure cannot overwrite
+an observed result. The existing loss ledger records failures of the logging sink.
+
+This persistence primitive grants no execution authority. Consumer composition must supply current
+binding, mode, grants/approvals and budgets, use the returned dispatch admission exactly once and
+record the actual HTTP observation. Jira HTTP wiring and ordinary Chat integration are separate
+acceptance requirements. This is local duplicate-dispatch suppression, not a universal exactly-once
+or lost-update guarantee for Jira operations without atomic remote preconditions.
+
+#### Durable chat creation intents (schema 46, issues #4040/#4043)
+
+The existing private UiStore retains `chat_creation_intents` in the same transactional database.
+One framed digest identifies the project and opaque creation request; a second binds the initial
+title, requested model choice and branch. An omitted model is distinct from every explicit model;
+the model originally elected for that automatic request belongs to the accepted chat result.
+A replay recovers that result before current model admission, even if the default changed or is
+now unavailable. Genuinely new creation retains its original model admission guards.
+Pending Chat windows retain the same bounded, opaque creation request through browser-local and
+shared workspace serialization. Independently connected browsers therefore replay the same intent
+instead of substituting a window fallback. Persistence applies the canonical request-id grammar
+and the unchanged secret-shape heuristic. The browser generates a fresh secure id outside that
+heuristic, using at most 32 draws; exhaustion reports a body-free diagnostic before a window is
+created. An accepted chat binding removes the pending request. Legacy unbound windows retain
+their existing stable window identity; this reference grants no session or source authority.
+New pending windows also capture the originating automatic or explicit model selection through
+the existing session selection owner. A restored host forwards that same choice; its local model
+catalog or selected conversation cannot reinterpret the request. Automatic selection still omits
+`modelId`, and explicit selection retains the exact original id. The private server replay and
+fresh readiness/authority guards remain authoritative. Legacy absence preserves existing behavior;
+incomplete or unsafe new snapshots retain a closed unavailable marker and a visible, logged refusal
+instead of falling back to a local election. Unsafe explicit selections refuse before window
+acceptance. A successful canonical binding clears the pending identity and model metadata together.
+A `BEGIN IMMEDIATE` transaction inserts the conversation and
+intent together, or returns the existing conversation without reverting subsequent edits.
+Conflicting parameters and closed or deleted targets are refused. The nullable chat reference
+uses `ON DELETE SET NULL`, retaining a tombstone after chat or project deletion. The table stores
+only those two digests and the chat reference, with no new copy of user text or browser authority.
+The forward migration preserves existing conversations and drafts. Older readers continue to
+reject a newer schema; this migration alone does not establish updater rollback compatibility.
 
 #### Private Markdown instruction library (issue #4023)
 
@@ -402,6 +498,22 @@ OpenCode and separate coding-workflow integration belong to #4025 under epic #38
 Chat epic #4022. They must reuse this library and preserve the same invariants through their own
 final prompt owners. Until then the connected Git-description workflow refuses an active skill
 explicitly; ordinary Chat remains available.
+
+### Private composer drafts (schema 44, #4026)
+
+The same permission-protected UI database retains one private text draft and monotonic revision
+per chat in `chat_drafts`. The chat foreign key cascades deletion. The existing paired app session
+guards reads and writes through `/api/chats/:id/draft`; writes revalidate the session after reading
+the bounded request. A `BEGIN IMMEDIATE` compare-and-set rejects stale revisions. Empty text remains
+an explicit revisioned tombstone, so an earlier writer cannot resurrect a cleared draft. Drafts
+accept at most 256,000 characters and 256,000 UTF-8 bytes, using the existing chat-content limits.
+
+Draft text remains outside browser storage, chat-list metadata and Activity Log records. The
+existing `chat.draft.operation` lifecycle exposes only action, phase and HTTP status. Drafts inherit
+this database's permission-protected plaintext storage; they introduce neither an encryption claim
+nor a credential store. Attachments remain transient and are not represented as restored files.
+ADR-0114 defines per-chat hydration, conflict resolution, acknowledged window closure, and the
+unload warning while a private write or attachment remains unsaved.
 
 ### D6 — Path validation policy (fail-closed)
 
@@ -511,9 +623,21 @@ or authentication credential. The BFF accepts only capability registry entries w
 can be written. A registry id can retain one trailing `@region` qualifier (letters, digits and
 hyphens), as regional OpenAI-compatible gateways require. This does not admit email domains,
 repeated qualifiers or credential-bearing URLs, and the existing length bound still applies.
-The `short_result` column (chat messages) is passed through
-`deepRedactStrings(value, redactor)` before persistence, using the same `UiHandlerDeps.redactor`
-the BFF already applies to live payloads (ADR-0011 D9). No reasoning traces, no evidence
+The `short_result` column (chat messages) is redacted and truncated before persistence.
+Grounded answer metadata uses the existing `deepRedactStrings(value, redactor)` on string
+leaves before JSON serialization. A free-text redactor must never consume serialized JSON:
+escaped quotes in code or quoted assignments can otherwise corrupt its structure. Retrieval
+activity validation still runs before and after that redaction. The BFF uses the same
+content-policy redactor for live payloads (ADR-0011 D9). Under the explicit deployment setting
+`KEIKO_CONTENT_REDACTION=off` (#4098), resolved once at startup, the BFF composes the store with a
+separate content redactor that preserves authorized private chat messages and grounded-answer
+metadata while removing the credential floor and configured infrastructure-secret literals. The
+unconditional redactor still serves `short_result` and audit data. The store never reads the
+environment: composed without a content redactor, it projects content with its unconditional
+redactor (fail closed). Default content redaction remains unchanged; no database migration or
+historical unmasking is performed. Text saved during the opt-out is not rewritten when the
+deployment returns to the default: history rehydration and compaction redact it again, while the
+recent verbatim turns of that conversation are resent as stored. No reasoning traces, no evidence
 payloads, no SSE event data are stored in the DB.
 
 **DB location never inside a target repository.** The default path is
@@ -728,3 +852,14 @@ process so that DB operations do not block the main event loop.
 ## Date
 
 2026-05-30
+
+### Ordinary Chat tool transcripts (#4091 / #4081)
+
+Migration 50 adds a nullable `tool_transcript_json` column to existing user-message rows. The
+canonical human message owns a bounded ordered list of structured call/result pairs and an optional
+public read-consent card. The server-only store method atomically starts or settles a call, rejects
+conflicting duplicate identities/results, applies the existing redactor and increments the existing
+history revision. Terminal canonical turns cannot be updated. Legacy null rows retain their shape;
+corrupt non-null transcripts fail closed. Coding History isolation also applies to this method.
+This storage does not authorize or replay execution; authority, approvals and the mutation journal
+retain those decisions. The registered Activity Log records only identity digests, phase and counts.

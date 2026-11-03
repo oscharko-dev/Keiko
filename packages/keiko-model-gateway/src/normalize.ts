@@ -4,6 +4,7 @@
 import {
   MalformedToolCallError,
   ModelRefusalError,
+  ProviderOutputExhaustedError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   CostClass,
@@ -106,6 +107,32 @@ function parseToolCalls(message: Record<string, unknown>): readonly NormalizedTo
   return parseNormalizedToolCalls(message.tool_calls);
 }
 
+// A tool call whose arguments were cut off by the output budget is not a model error: the provider
+// stopped at `finish_reason: "length"` mid-arguments (a large file written in one call). It takes the
+// existing output-exhausted path, so the one steered repair applies and the cause stays visible,
+// instead of ending the turn as a malformed call. A call that is malformed for any other finish
+// reason stays a MalformedToolCallError.
+function parseToolCallsOrExhaustion(
+  message: Record<string, unknown>,
+  finishReason: FinishReason,
+  modelId: string,
+  secrets: readonly string[],
+  usage: UsageMetadata,
+): readonly NormalizedToolCall[] {
+  try {
+    return parseToolCalls(message);
+  } catch (error) {
+    if (finishReason !== "length" || !(error instanceof MalformedToolCallError)) throw error;
+    const exhausted = new ProviderOutputExhaustedError(modelId, secrets);
+    exhausted.partialUsage = {
+      promptTokens: usage.promptTokens,
+      completionTokens: usage.completionTokens,
+      streamedChars: 0,
+    };
+    throw exhausted;
+  }
+}
+
 function parseStructuredOutput(content: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(content);
@@ -192,6 +219,7 @@ export function normalizeChatResponse(
   modelId: string,
   seed: UsageSeed,
   expectStructured = false,
+  secrets: readonly string[] = [],
 ): NormalizedResponse {
   const payload = isRecord(rawPayload) ? rawPayload : {};
   const usage = buildUsage(payload, seed);
@@ -199,7 +227,7 @@ export function normalizeChatResponse(
   const message = firstMessage(payload);
   const finishReason = mapFinishReason(choice?.finish_reason);
   assertNotRefusal(message, finishReason);
-  const toolCalls = parseToolCalls(message);
+  const toolCalls = parseToolCallsOrExhaustion(message, finishReason, modelId, secrets, usage);
   const content = textFromContent(message.content);
   const structuredOutput =
     expectStructured && content.length > 0 ? parseStructuredOutput(content) : null;

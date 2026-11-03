@@ -9,7 +9,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -42,8 +42,14 @@
         display: flex;
         min-height: 0;
       }
-      .gw-hide {
-        display: none !important;
+      .gw-changes {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .gw-win .gw-hide {
+        display: none;
       }
 
       /* Toolbar (connected) */
@@ -968,6 +974,8 @@
 
       /* State switcher (preview affordance only) */
       .gw-states {
+        margin: 0;
+        min-inline-size: 0;
         display: inline-flex;
         align-items: center;
         gap: 4px;
@@ -1039,11 +1047,11 @@
               Connect panel and mutes the toolbar.
             </p>
           </div>
-          <div class="gw-states" role="group" aria-label="Preview state">
+          <fieldset class="gw-states" aria-label="Preview state">
             <button type="button" data-go="changes" class="on" aria-pressed="true">Changes</button>
             <button type="button" data-go="history" aria-pressed="false">History</button>
             <button type="button" data-go="empty" aria-pressed="false">Empty</button>
-          </div>
+          </fieldset>
         </div>
 
         <div class="gw-frame">
@@ -1208,10 +1216,7 @@
                 </div>
 
                 <!-- changes -->
-                <div
-                  style="flex: 1; min-height: 0; display: flex; flex-direction: column"
-                  data-when="changes"
-                >
+                <div class="gw-changes" data-when="changes">
                   <div class="gw-summary">
                     <span class="gw-sumcheck"
                       ><span class="ico" data-licon="check" data-size="11"></span

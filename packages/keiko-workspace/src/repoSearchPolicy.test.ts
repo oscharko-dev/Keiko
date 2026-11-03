@@ -26,6 +26,15 @@ const query = (text: string): RetrievalQuery => ({
   emittedAtMs: 0,
 });
 
+describe("document overview ranking", () => {
+  it.each(["architecture.md", "docs/architecture.md", "AGENTS.md"])(
+    "retains %s in overview ranking without making its stem a shorthand reference",
+    (path) => {
+      expect(candidateBucketForPath(path)).toBe("overview-doc");
+    },
+  );
+});
+
 describe("hasSymbolRelationshipQuery", () => {
   it.each([
     "Use only read values, no guesses.",

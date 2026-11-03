@@ -11,6 +11,7 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
+import { activeAgentIsPlan } from "./codingWorkbenchAgent";
 import {
   activeRunState,
   readinessFacts,
@@ -115,6 +116,23 @@ function RunPhase({
   );
 }
 
+// Build is every run's baseline and needs no label; the read-only plan agent is named, so an
+// operator never mistakes a planning turn for one that changes files (#3897).
+function ActiveAgent({
+  state,
+  t,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (!activeAgentIsPlan(state)) return null;
+  return (
+    <span className={styles.cmpRunStatusFact} data-testid="coding-runtime-agent">
+      {t("codingWorkbench.runStatus.agent.plan")}
+    </span>
+  );
+}
+
 function NativeRetry({
   state,
   t,
@@ -196,6 +214,7 @@ export function CodingWorkbenchRunStatus({
           {runStatusAnnouncement(state, t, researchGrant, phase)}
         </span>
         <ElapsedTime elapsed={elapsed} t={t} />
+        <ActiveAgent state={state} t={t} />
         <RunPhase phase={phase} t={t} />
         <NativeRetry state={state} t={t} />
       </p>

@@ -78,6 +78,9 @@
     },
     {
       "path": "./packages/keiko-cli/tsconfig.json"
+    },
+    {
+      "path": "./packages/keiko-mcp/tsconfig.json"
     }
   ]
 }

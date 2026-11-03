@@ -155,6 +155,17 @@ export interface EvidenceAtom {
 export interface EvidenceAtomMetrics {
   readonly gitRecency?: number | undefined;
   readonly gitChurn?: number | undefined;
+  /** Same-query lexical group identity, never a source-content or authority certificate. */
+  readonly lexicalQueryGroupKey?: string | undefined;
+  /** Fresh lexical relevance for a complete user-requested source description, never authority. */
+  readonly sourceDescriptorMatch?: true | undefined;
+}
+
+/** Canonical, body-free bitset of at least two query groups; at most 128 groups. */
+export function isLexicalQueryGroupKey(value: unknown): value is string {
+  if (typeof value !== "string" || !/^[1-9a-f][a-f0-9]{0,31}$/u.test(value)) return false;
+  const mask = BigInt(`0x${value}`);
+  return (mask & (mask - 1n)) !== 0n;
 }
 
 // ─── Exploration budget + usage ───────────────────────────────────────────────
@@ -924,6 +935,17 @@ function validateEvidenceAtomMetrics(
     reasons,
     metrics.gitChurn !== undefined && !isScoreInUnitInterval(metrics.gitChurn),
     "atom.metrics.gitChurn out of range",
+  );
+  pushIf(
+    reasons,
+    metrics.lexicalQueryGroupKey !== undefined &&
+      !isLexicalQueryGroupKey(metrics.lexicalQueryGroupKey),
+    "atom.metrics.lexicalQueryGroupKey invalid",
+  );
+  pushIf(
+    reasons,
+    metrics.sourceDescriptorMatch !== undefined && metrics.sourceDescriptorMatch !== true,
+    "atom.metrics.sourceDescriptorMatch invalid",
   );
 }
 

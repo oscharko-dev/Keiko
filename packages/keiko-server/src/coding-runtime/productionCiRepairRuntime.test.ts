@@ -180,6 +180,7 @@ function fixture(
     readonly predecessorReadiness?: ReadinessSnapshot;
     readonly seedExhaustedBudget?: boolean;
     readonly starting?: boolean;
+    readonly issueFree?: boolean;
   } = {},
 ): {
   readonly snapshots: CodingRuntimeSnapshotStore;
@@ -191,7 +192,7 @@ function fixture(
 } {
   const db = new DatabaseSync(":memory:");
   databases.push(db);
-  const snapshots = createDraftRun(db);
+  const snapshots = createDraftRun(db, { issueFree: options.issueFree === true });
   if (options.starting)
     db.prepare("UPDATE coding_runtime_snapshots SET state = ? WHERE run_id = ?").run(
       "starting",
@@ -691,6 +692,21 @@ describe("production CI repair accounting availability", () => {
         limits: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 1_000 },
       }).record,
     ).toMatchObject({ attempts: [{ runId: "run-2", status: "active" }] });
+  });
+  // #3907 AC3 lab (Jira flow): an issue-free run that opened its pull request was refused every later
+  // model prompt as `invalid-binding`, so it could not comment on the issue tracker after its PR.
+  // CI repair accounting belongs to issue-bound delivery, so such a run has no ledger to charge.
+  it("admits the prompts of an issue-free run after it opened its pull request", () => {
+    const test = fixture(false, { seedExhaustedBudget: false, issueFree: true });
+    const draft = test.snapshots.get("run-1")?.draftDelivery;
+    expect(draft?.binding.kind).toBe("github-repository");
+    expect(draft?.pullRequest?.state).toBe("open");
+    expect(test.current.context.issueBinding).toBeUndefined();
+    const budget = createProductionCiRepairBudget(test.deps, test.verified, test.current);
+    expect(budget?.canChargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.chargePrompt(1)).toEqual({ accepted: true });
+    expect(budget?.admitTool(request)?.check()).toBe(true);
+    expect(test.events.filter((event) => event.extra?.status === "blocked")).toEqual([]);
   });
   it("fails closed on a missing current snapshot with healthy accounting dependencies", () => {
     const test = fixture(true);

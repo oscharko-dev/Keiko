@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  VERIFICATION_DEPENDENCY_REFUSAL_REASONS,
   isVerificationDependencySummary,
   isVerificationReport,
   matchesOverallStatus,
@@ -109,6 +110,31 @@ describe("isVerificationDependencySummary", () => {
       detail: "package.json unreadable; dependency installation refused",
     });
     expect(isVerificationDependencySummary(summary)).toBe(true);
+  });
+
+  // #3897: a refused bootstrap names its closed reason, so the coding runtime can tell a host whose
+  // own shell can run the check (`install-target-foreign`) from a genuine blocker.
+  it.each(VERIFICATION_DEPENDENCY_REFUSAL_REASONS)(
+    "accepts the closed refusal reason %s on a refused summary",
+    (refusalReason) => {
+      expect(
+        isVerificationDependencySummary(dependencySummary({ state: "refused", refusalReason })),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects a refusal reason on a summary that was not refused, or outside the closed set", () => {
+    expect(
+      isVerificationDependencySummary(
+        dependencySummary({ state: "failed", refusalReason: "install-target-foreign" }),
+      ),
+    ).toBe(false);
+    expect(
+      isVerificationDependencySummary({
+        ...dependencySummary({ state: "refused" }),
+        refusalReason: "the host is darwin",
+      }),
+    ).toBe(false);
   });
 
   it("accepts the install's egress counts", () => {

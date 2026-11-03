@@ -9,6 +9,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
 import { EventEmitter } from "node:events";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import {
   subscribeActivityBroadcast,
   _activeBroadcastCountForTests,
@@ -23,26 +24,48 @@ const PING_MS = 30_000;
 interface FakeSseRes {
   readonly written: string[];
   readonly destroyed: () => boolean;
+  readonly drain: () => void;
   readonly res: ServerResponse;
 }
 
 function fakeSseRes(writeReturns: (frame: string) => boolean = () => true): FakeSseRes {
   const written: string[] = [];
+  const emitter = new EventEmitter();
   let destroyed = false;
-  const res = {
+  const res = Object.assign(emitter, {
+    get destroyed(): boolean {
+      return destroyed;
+    },
+    writableEnded: false,
     write(chunk: string): boolean {
       written.push(chunk);
       return writeReturns(chunk);
     },
+    // Like a real response: destroying marks it destroyed and fires `close`.
     destroy(): void {
       destroyed = true;
+      emitter.emit("close");
     },
-  } as unknown as ServerResponse;
-  return { written, destroyed: (): boolean => destroyed, res };
+  }) as unknown as ServerResponse;
+  return {
+    written,
+    destroyed: (): boolean => destroyed,
+    drain: (): void => {
+      emitter.emit("drain");
+    },
+    res,
+  };
 }
 
-function subscriberFor(fake: FakeSseRes): ActivitySubscriber {
-  return { res: fake.res, controller: new AbortController() };
+function subscriberFor(
+  fake: FakeSseRes,
+  onBackpressure?: ActivitySubscriber["onBackpressure"],
+): ActivitySubscriber {
+  return {
+    res: fake.res,
+    controller: new AbortController(),
+    ...(onBackpressure === undefined ? {} : { onBackpressure }),
+  };
 }
 
 function frame(id: string, revision: number): ActivityFrame {
@@ -116,7 +139,7 @@ describe("subscribeActivityBroadcast", () => {
     unsubLate();
   });
 
-  it("destroys a non-draining subscriber and keeps serving the healthy one", () => {
+  it("destroys a subscriber that drains nothing for the stall bound and keeps serving the healthy one", () => {
     vi.useFakeTimers();
     const scope = {};
     let revision = 1;
@@ -124,17 +147,35 @@ describe("subscribeActivityBroadcast", () => {
     const source = { collectFrames, refreshMs: REFRESH_MS, pingMs: PING_MS };
     const healthy = fakeSseRes();
     const slow = fakeSseRes(() => false);
-    const slowSubscriber = subscriberFor(slow);
+    const onBackpressure = vi.fn();
+    const slowSubscriber = subscriberFor(slow, onBackpressure);
     const unsubHealthy = subscribeActivityBroadcast(scope, "ws-a", subscriberFor(healthy), source);
     subscribeActivityBroadcast(scope, "ws-a", slowSubscriber, source);
-    // The join emission already trips backpressure: aborted + destroyed, not buffered.
-    expect(slowSubscriber.controller.signal.aborted).toBe(true);
-    expect(slow.destroyed()).toBe(true);
-    const slowWrites = slow.written.length;
+    // The join emission is a false write: flow control, so the subscriber is queued, not killed.
+    expect(slowSubscriber.controller.signal.aborted).toBe(false);
+    expect(slow.destroyed()).toBe(false);
+    expect(onBackpressure).not.toHaveBeenCalled();
+
+    // Until the bound it keeps receiving frames (queued behind the ones it has not drained).
     revision = 2;
     vi.advanceTimersByTime(REFRESH_MS);
-    expect(slow.written).toHaveLength(slowWrites);
+    expect(slow.written.filter((w) => w.includes('"rev":2'))).toHaveLength(1);
     expect(healthy.written.filter((w) => w.includes('"rev":2'))).toHaveLength(1);
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - REFRESH_MS - 1);
+    expect(slowSubscriber.controller.signal.aborted).toBe(false);
+    expect(slow.destroyed()).toBe(false);
+    expect(onBackpressure).not.toHaveBeenCalled();
+
+    // The bound passes with nothing drained: aborted + destroyed, not buffered.
+    vi.advanceTimersByTime(1);
+    expect(slowSubscriber.controller.signal.aborted).toBe(true);
+    expect(slow.destroyed()).toBe(true);
+    expect(onBackpressure).toHaveBeenCalledTimes(1);
+    const slowWrites = slow.written.length;
+    revision = 3;
+    vi.advanceTimersByTime(REFRESH_MS);
+    expect(slow.written).toHaveLength(slowWrites);
+    expect(healthy.written.filter((w) => w.includes('"rev":3'))).toHaveLength(1);
     unsubHealthy();
   });
 
@@ -173,7 +214,7 @@ describe("subscribeActivityBroadcast", () => {
     expect(collectFrames).not.toHaveBeenCalled();
   });
 
-  it("releases a joiner whose very first write already hits backpressure", () => {
+  it("releases a joiner that stalls on its very first write once the stall bound passes", () => {
     vi.useFakeTimers();
     const scope = {};
     const source = {
@@ -183,8 +224,45 @@ describe("subscribeActivityBroadcast", () => {
     };
     const dead = fakeSseRes(() => false);
     subscribeActivityBroadcast(scope, "ws-a", subscriberFor(dead), source);
+    expect(dead.destroyed()).toBe(false);
+    expect(_activeBroadcastCountForTests(scope)).toBe(1);
+
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(dead.destroyed()).toBe(false);
+    expect(_activeBroadcastCountForTests(scope)).toBe(1);
+
+    vi.advanceTimersByTime(1);
     expect(dead.destroyed()).toBe(true);
     expect(_activeBroadcastCountForTests(scope)).toBe(0);
+  });
+
+  it("keeps a subscriber attached when a false write is followed by drain", () => {
+    vi.useFakeTimers();
+    const scope = {};
+    let revision = 1;
+    const source = {
+      collectFrames: (): readonly ActivityFrame[] => [frame("snap-1", revision)],
+      refreshMs: REFRESH_MS,
+      pingMs: PING_MS,
+    };
+    let accept = false;
+    const reader = fakeSseRes(() => accept);
+    const onBackpressure = vi.fn();
+    const subscriber = subscriberFor(reader, onBackpressure);
+    const unsub = subscribeActivityBroadcast(scope, "ws-a", subscriber, source);
+
+    reader.drain();
+    accept = true;
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+    expect(subscriber.controller.signal.aborted).toBe(false);
+    expect(reader.destroyed()).toBe(false);
+    expect(onBackpressure).not.toHaveBeenCalled();
+    expect(_activeBroadcastCountForTests(scope)).toBe(1);
+    revision = 2;
+    vi.advanceTimersByTime(REFRESH_MS);
+    expect(reader.written.filter((w) => w.includes('"rev":2'))).toHaveLength(1);
+    unsub();
   });
 
   it("isolates broadcasters across scopes and workspaces", () => {
@@ -214,7 +292,7 @@ describe("subscribeActivityBroadcast", () => {
 
 // Finding 0 (#2902 audit): a fanned-out subscriber's OWN request correlationId never reached its
 // own stream's terminal `sse.stream.closed` line — ActivitySubscriber had no field to carry it and
-// writeTo() (the shared fan-out write path) never passed one to writeOrDestroy.
+// writeTo() (the shared fan-out write path) never passed one to writeSseFrame.
 describe("ActivitySubscriber correlationId threading (#2902 audit finding 0)", () => {
   function listenableFakeRes(): { res: ServerResponse; fireClose: () => void } {
     const emitter = new EventEmitter();

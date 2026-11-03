@@ -20,57 +20,115 @@ interface PendingChange {
   readonly cursor: number;
 }
 
+interface ComposerAcknowledgement {
+  readonly value: string;
+  revision: number | undefined;
+}
+
+interface ComposerValueSnapshot {
+  readonly value: string;
+  readonly revision: number | undefined;
+}
+
+function publishComposerDraft(
+  current: RefObject<MarkdownComposerProps>,
+  publishedValues: RefObject<ComposerAcknowledgement[]>,
+  value: string,
+  cursor: number,
+): void {
+  const acknowledgement: ComposerAcknowledgement = { value, revision: undefined };
+  publishedValues.current.push(acknowledgement);
+  const revision = current.current.onChange(value, cursor);
+  if (typeof revision === "number") acknowledgement.revision = revision;
+}
+
 const DRAFT_PUBLICATION_DELAY_MS = 16;
+
+function useComposerUnloadFlush(flush: () => boolean): void {
+  useLayoutEffect(() => {
+    const publish = (): void => {
+      if (!flush()) return;
+      reportClientDiagnostic("Keiko composer departure flushed the current draft.", {
+        composerActivity: "literal-input-preserved",
+      });
+    };
+    const visibilityChanged = (): void => {
+      if (document.visibilityState === "hidden") publish();
+    };
+    // Publish the editor's final frame before the Chat draft persistence listener runs.
+    window.addEventListener("beforeunload", publish, true);
+    window.addEventListener("pagehide", publish, true);
+    document.addEventListener("visibilitychange", visibilityChanged, true);
+    return (): void => {
+      window.removeEventListener("beforeunload", publish, true);
+      window.removeEventListener("pagehide", publish, true);
+      document.removeEventListener("visibilitychange", visibilityChanged, true);
+    };
+  }, [flush]);
+}
 
 function useDeferredComposerChange(
   controller: RefObject<ComposerEditorController | null>,
   current: RefObject<MarkdownComposerProps>,
-  publishedValues: RefObject<string[]>,
+  publishedValues: RefObject<ComposerAcknowledgement[]>,
 ): { publishChange: (value: string, cursor: number) => void; cancel: () => void } {
   const pending = useRef<PendingChange | null>(null);
   const pendingTimer = useRef<number | null>(null);
-  const publishChange = useCallback(
-    (value: string, cursor: number): void => {
-      const owner = controller.current;
-      pending.current = { owner, value, cursor };
-      if (pendingTimer.current !== null) return;
-      pendingTimer.current = window.setTimeout(() => {
-        pendingTimer.current = null;
-        const change = pending.current;
-        if (change?.owner !== owner) return;
-        pending.current = null;
-        if (owner === null || controller.current !== owner) return;
-        publishedValues.current.push(change.value);
-        current.current.onChange(change.value, change.cursor);
-      }, DRAFT_PUBLICATION_DELAY_MS);
-    },
-    [controller, current, publishedValues],
-  );
   const cancel = useCallback((): void => {
     if (pendingTimer.current !== null) window.clearTimeout(pendingTimer.current);
     pendingTimer.current = null;
     pending.current = null;
   }, []);
+  const flush = useCallback((): boolean => {
+    const change = pending.current;
+    cancel();
+    if (!change?.owner || controller.current !== change.owner) return false;
+    publishComposerDraft(current, publishedValues, change.value, change.cursor);
+    return true;
+  }, [cancel, controller, current, publishedValues]);
+  useComposerUnloadFlush(flush);
+  const publishChange = useCallback(
+    (value: string, cursor: number): void => {
+      const owner = controller.current;
+      pending.current = { owner, value, cursor };
+      if (pendingTimer.current !== null) return;
+      pendingTimer.current = window.setTimeout(flush, DRAFT_PUBLICATION_DELAY_MS);
+    },
+    [controller, flush],
+  );
   return { publishChange, cancel };
 }
 
-function shouldApplyDraft(
-  value: string,
-  previousValue: RefObject<string>,
-  publishedValues: RefObject<string[]>,
+function olderComposerRevision(
+  revision: number | undefined,
+  previous: number | undefined,
 ): boolean {
-  const acknowledged = publishedValues.current.indexOf(value);
-  const isPreviousValue = value === previousValue.current;
-  previousValue.current = value;
+  return revision !== undefined && previous !== undefined && revision < previous;
+}
+
+function shouldApplyDraft(
+  props: MarkdownComposerProps,
+  previous: RefObject<ComposerValueSnapshot>,
+  publishedValues: RefObject<ComposerAcknowledgement[]>,
+): boolean {
+  if (olderComposerRevision(props.valueRevision, previous.current.revision)) return false;
+  const acknowledged = publishedValues.current.findIndex(
+    (entry) =>
+      entry.value === props.value &&
+      (entry.revision === undefined || entry.revision === props.valueRevision),
+  );
+  const unchanged =
+    previous.current.value === props.value && previous.current.revision === props.valueRevision;
+  previous.current = { value: props.value, revision: props.valueRevision };
   if (acknowledged >= 0) publishedValues.current.splice(0, acknowledged + 1);
-  else if (!isPreviousValue) publishedValues.current = [];
-  return !isPreviousValue && acknowledged < 0;
+  else if (!unchanged) publishedValues.current = [];
+  return !unchanged && acknowledged < 0;
 }
 
 function useComposerKeyDown(
   controller: RefObject<ComposerEditorController | null>,
   current: RefObject<MarkdownComposerProps>,
-  publishedValues: RefObject<string[]>,
+  publishedValues: RefObject<ComposerAcknowledgement[]>,
   cancel: () => void,
 ): (event: ComposerKeyEvent, value: string) => void {
   return useCallback(
@@ -82,8 +140,14 @@ function useComposerKeyDown(
         !event.nativeEvent?.isComposing;
       if (isEnter && value !== current.current.value) {
         cancel();
-        publishedValues.current.push(value);
-        flushSync(() => current.current.onChange(value, controller.current?.selectionStart ?? -1));
+        flushSync(() =>
+          publishComposerDraft(
+            current,
+            publishedValues,
+            value,
+            controller.current?.selectionStart ?? -1,
+          ),
+        );
         reportClientDiagnostic("Keiko composer Enter flushed the current draft.", {
           composerActivity: "literal-input-preserved",
         });
@@ -98,8 +162,11 @@ export function MarkdownComposer(props: MarkdownComposerProps): ReactNode {
   const host = useRef<HTMLDivElement>(null);
   const controller = useRef<ComposerEditorController | null>(null);
   const current = useRef(props);
-  const publishedValues = useRef<string[]>([]);
-  const previousValue = useRef(props.value);
+  const publishedValues = useRef<ComposerAcknowledgement[]>([]);
+  const previousValue = useRef<ComposerValueSnapshot>({
+    value: props.value,
+    revision: props.valueRevision,
+  });
   const [notice, setNotice] = useState("");
   const { publishChange, cancel } = useDeferredComposerChange(controller, current, publishedValues);
   const onKeyDown = useComposerKeyDown(controller, current, publishedValues, cancel);
@@ -114,7 +181,10 @@ export function MarkdownComposer(props: MarkdownComposerProps): ReactNode {
       setNotice,
     );
     controller.current = editor;
-    previousValue.current = current.current.value;
+    previousValue.current = {
+      value: current.current.value,
+      revision: current.current.valueRevision,
+    };
     publishedValues.current = [];
     const inputRef = current.current.inputRef;
     inputRef.current = editor;
@@ -127,7 +197,7 @@ export function MarkdownComposer(props: MarkdownComposerProps): ReactNode {
     };
   }, [props.documentKey, publishChange, onKeyDown, cancel]);
   useLayoutEffect(() => {
-    const applyValue = shouldApplyDraft(props.value, previousValue, publishedValues);
+    const applyValue = shouldApplyDraft(props, previousValue, publishedValues);
     if (applyValue) cancel();
     controller.current?.update({ ...props, onChange: publishChange, onKeyDown }, applyValue);
   });

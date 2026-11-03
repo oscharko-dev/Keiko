@@ -18,13 +18,19 @@
 // to nobody, and once the ring buffer's TTL expired it left no trace anywhere, including
 // `server.log`. The tee makes the terminal outcome durable regardless of who, if anyone, was
 // listening on SSE at the moment it happened.
+//
+// (d) it records every REFUSED workflow patch validation (`patch:validated`, `bug:patch:validated`
+// with `ok: false`) as one `runs.patch.refused` activity line (#4110): the closed refusal reason and
+// the sizes, under the run's id, so a patch the size bound refused is distinguishable from one the
+// scope guard refused after the SSE frame is gone.
 
 import {
   emitServerDiagnostic,
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
-import { machineToken } from "@oscharko-dev/keiko-activity-log";
+import { machineToken, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { logRunPatchRefusal } from "./run-patch-refusal-log.js";
 
 // The structural event envelope every harness/workflow event satisfies. Extra members vary per
 // event type and are not accessed here (the sink only needs `seq` for replay and `type` for SSE
@@ -157,6 +163,9 @@ export interface QueueEventSinkOptions {
   // the production `defaultServerDiagnosticSink` (via `emitServerDiagnostic(undefined, ...)`) when
   // omitted, so production callers get the durable trace for free; tests inject a capturing sink.
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Where a refused workflow patch validation is recorded as activity (#4110). Defaults to the
+  // process-wide Activity Log; tests inject a capturing sink.
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 interface BufferedEntry {
@@ -178,6 +187,7 @@ export class QueueEventSink {
   private readonly maxBytes: number;
   private readonly writers = new Set<SseWriter>();
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink | undefined;
   private terminated = false;
 
   // Bound so the sink can be passed directly as an `EventSink`/`WorkflowEventSink`/`BugWorkflowEventSink`.
@@ -191,6 +201,7 @@ export class QueueEventSink {
       this.bufferedBytes -= dropped.bytes;
     }
     this.teeTerminalDiagnostic(event);
+    logRunPatchRefusal(event, this.activityLog);
     const failed: SseWriter[] = [];
     for (const writer of this.writers) {
       try {
@@ -238,6 +249,7 @@ export class QueueEventSink {
     }
     this.maxBytes = maxBytes;
     this.diagnostics = options.diagnostics;
+    this.activityLog = options.activityLog;
   }
 
   // Attaches an SSE writer: replays the buffered events with `seq` strictly greater than

@@ -104,7 +104,21 @@ This amendment is scoped to Coding. Memory retains the previous explicitly confi
 persisted Memory maintenance authority. Both surfaces continue to use the same canonical mode
 ordering and minimum calculation.
 
-No caller may widen authority by passing a higher requested mode than the environment allows. The
+**Owner amendment, 2026-10-30 (folder workspaces):** the Coding Workbench always works, also in a
+plain folder that is not a Git repository. Git delivery (stage, commit, push, pull request, sync, CI)
+is an optional capability of a workspace that has a repository, never a precondition for a run. For a
+folder workspace (ADR-0088 D1) the trusted context carries `workspaceKind: "folder"` with the
+contract's branch and head stand-ins; run admission uses the folder's identity instead of a Git HEAD,
+launch preparation reads no repository identity, and no commit, stage, draft-delivery or CI service
+exists for the run. File edits, vetted commands and `keiko_verification` are Git-independent and work
+as in a repository. Every Git and delivery tool stays registered (the plugin's fixed tool list is
+unchanged) and answers with the closed reason `repository-required`, recorded as
+`coding-runtime.tool-result` with `state: "refused"` and `reason: "repository-required"` under the
+run's correlation id; the model is told the workspace is a plain folder and not to initialize a
+repository or run Git another way. Containment, deny lists, sensitive-path denials and budgets are
+unchanged, and `worktree_create` answers `unavailable` because there is no branch to cut from.
+
+No caller may widen authority by passing a higher requested mode than the environment allows. Explicit composition options and environment ceilings are intersected: neither can widen or conceal an invalid value in the other. The retained legacy delivery-ceiling option can only narrow this same Coding/connector result (#4083). The
 effective mode, not the requested mode, is the authority-bearing value for validation, runtime
 policy, and evidence.
 
@@ -216,17 +230,20 @@ is the selected model source, the profile read also lets the server verify what 
 needs and the stored configuration does not prove — an expired or missing tool-call proof, and a
 context window below the coding minimum that the gateway never declared — so the operator is not
 sent to Gateway Settings for something Keiko can determine itself (owner decision for 1.1.1,
-amending #3561; mechanics and log lines in ADR-0173). That verification is bounded: only models
-that claim tool calling, one attempt per deployment identity within a six-hour cooldown, under the
-existing probe spend ledger. A model claims tool calling when it is admitted to call tools or when
-Keiko's forced tool-call probe verified it before. The gateway config loader stores a proof that
-aged out, or that is bound to another deployment configuration, as `toolCalling: false`; such a
-model still claims tool calling and gets its proof renewed, so a restart the day after setup does
-not leave the Workbench blocked (1.1.8 lab). A model whose probe refuted tool calling
-(`unsupported`) or never concluded claims nothing and is not probed from here. Only a fresh proof
-admits a model to a run. It never runs when a subscription source is selected, when the
-deployment policy disables the gateway source, or when the gateway is not configured. The same
-gateway capability evidence gates all models.
+amending #3561; mechanics and log lines in ADR-0173). That verification is bounded: only chat
+models, one attempt per deployment identity within a six-hour cooldown, under the existing probe
+spend ledger. A model claims tool calling when it is admitted to call tools or when Keiko's forced
+tool-call probe verified it before. The gateway config loader stores a proof that aged out, or that
+is bound to another deployment configuration, as `toolCalling: false`; such a model still claims
+tool calling and gets its proof renewed, so a restart the day after setup does not leave the
+Workbench blocked (1.1.8 lab). A chat model nobody has proven tool calling for, or whose earlier
+probe never concluded, is asked for its first proof by the same verification, behind any gateway
+(#3578): the profile read of a plain OpenAI-compatible or Azure endpoint probes it exactly as the
+startup readiness of a recognised LiteLLM connection does, and the model is admitted once the probe
+proves tool calling. A model whose probe refuted tool calling (`unsupported`) and a model that is
+no chat model are not probed from here. Only a fresh proof admits a model to a run. It never runs
+when a subscription source is selected, when the deployment policy disables the gateway source, or
+when the gateway is not configured. The same gateway capability evidence gates all models.
 
 A run start admits the chosen model — the default one or one picked in the model selector — only
 when its prompt window holds the coding minimum, the rule the default model's readiness already
@@ -314,6 +331,18 @@ late ask took the expired one's place (1.1.9 lab: the expired card stayed on scr
 failed as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is
 decided, retired, or whose run settles takes its expiry timer with it.
 
+A mapped research fetch (`keiko_research_fetch`, #2387) asks through the research grant, not
+through an approval proof. Below Full access a deployment opens research only through the
+`governed-egress` network policy, and the tool facade hands such an `egress` request to the research
+port, whose fetch needs a human-approved grant bound to the exact request line. When no grant covers
+the request, the port raises the content-free `network-egress` request
+(`coding-runtime.approval.waiting`), fails the call closed, and the next ask after approval fetches
+under the minted grant. Any other envelope below Full access still refuses `egress` at the facade
+(`coding-runtime.tool-authority.denied`); in particular, narrowing keeps `governed-egress` only for
+an envelope already minted with it, so a broad envelope narrowed below Full access stays refused.
+From #3394 until this repair the facade required an approval proof that `egress` cannot carry, so
+research could not ask in Ask for approval or Supervised workspace.
+
 ### D7 — Coding evidence is content-free by construction
 
 Coding Workbench evidence records are contract-validated and redacted before persistence or review.
@@ -379,3 +408,26 @@ mistake, and weaker at package boundaries than a small closed mode set.
 
 Rejected. Subscription-backed Codex/ChatGPT routing has different credential semantics and must not
 be represented as a generic OpenAI Platform API key.
+
+## Amendment — native OpenCode actions ask through the same lane (2026-10-23, #3897)
+
+With the native tool profile (ADR-0137 D10) the sidecar runtime no longer asks through a mapped
+`keiko_governed_action` permission. OpenCode evaluates its own permission for every tool call and
+the server-owned policy decides the final effect per mode: D1's reads and planning stay allowed in
+every mode; workspace edits follow the owner decision of 2026-09-26 (an ask in Ask for approval,
+applied in Supervised workspace and Full access); vetted verification commands are routine in
+Supervised workspace while other commands and internet use ask below Full access; the
+mode-independent hard denials refuse the action outright. An ask that reaches the human is the
+same typed, content-free permission request of D6, carrying a closed `native-*` label; the action's
+own command, paths or address ride the authenticated approval-review channel only. A denied or
+expired ask answers the native call with the D6 guidance so the native loop continues without it.
+
+## Amendment — a Jira Pod the human chose for a run (2026-10-30, #3907)
+
+The Workbench composer lets the human choose one of their own Jira Pods for the next run. The
+choice is an explicit, per-run grant of the Pod's Jira read tools (allowed in all three modes);
+the Pod's write tools are external effects that follow the mode matrix: Ask for approval and
+Supervised workspace ask, Full access acts inside the validated Authority Envelope. An invalid,
+revoked, changed, not-ready or foreign Pod is a mode-independent hard denial that fails closed
+before any request. A run without a choice has no Jira tools and is unchanged. See
+[ADR-0181](ADR-0181-shared-managed-mcp-host.md) for the mechanism.

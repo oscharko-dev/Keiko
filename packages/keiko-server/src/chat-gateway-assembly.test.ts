@@ -37,13 +37,115 @@ import {
   renderConversationDocumentContextBlock,
 } from "./conversation-prompt.js";
 import type {
+  ChatToolExchange,
   ConversationMemoryContextEntryWire,
   ConversationMemoryResultWire,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  withGatewayConversationImages,
+  type GatewayConversationMessage,
+} from "./conversation-gateway.js";
 
 const CHAT_MODEL = "example-chat-model";
 const PROJECT_PATH = "/repo";
 const NOW = 1_700_000_000_000;
+
+const RECORDED_UNKNOWN_WRITE: ChatToolExchange = {
+  call: {
+    id: "recorded-call",
+    name: "jira_comment",
+    arguments: { issueKey: "SYN-1", body: "Synthetic stored action. ".repeat(80) },
+  },
+  mutationOutcome: "unknown",
+};
+
+function protectedObservationInput(): Parameters<typeof selectGatewayPromptAssembly>[0] {
+  const { store, chatId } = createStore();
+  seedHistory(
+    chatId,
+    store,
+    Array.from({ length: 40 }, () => "Earlier context. ".repeat(50)),
+  );
+  return {
+    historyPrefix: store.listMessages(chatId),
+    historyTurnCount: 40,
+    request: {
+      content: "Explain the recorded action outcome; do not perform another action.",
+      discussionMode: undefined,
+      toolExchanges: [RECORDED_UNKNOWN_WRITE],
+    },
+    profile: deriveContextProfile({
+      maxInputTokens: 2048,
+      reservedOutputTokens: 256,
+      safetyMarginTokens: 64,
+    }),
+    memoryEntries: [],
+    documentContext: [],
+    redactionSecrets: [],
+    proactiveCompaction: true,
+  };
+}
+
+it("protects complete current tool observations inside the context budget while compacting history", () => {
+  const input = protectedObservationInput();
+  const result = selectGatewayPromptAssembly(input);
+  expect(result?.compaction).toBeDefined();
+  if (result === undefined) throw new Error("Missing bounded observation assembly");
+  expect(result.messages.filter((message) => message.role === "tool")).toHaveLength(1);
+  expect(result.messages.at(-2)?.toolCalls).toEqual([RECORDED_UNKNOWN_WRITE.call]);
+  expect(result.messages.at(-1)?.toolCallId).toBe(RECORDED_UNKNOWN_WRITE.call.id);
+  expect(JSON.parse(result.messages.at(-1)?.content ?? "null")).toMatchObject({
+    mutationOutcome: "unknown",
+  });
+  expect(
+    countGatewayPromptTokens({ messages: result.messages }, input.profile.tokenAccounting),
+  ).toBeLessThanOrEqual(
+    input.profile.maxInputTokens -
+      input.profile.safetyMarginTokens -
+      (result.maxOutputTokens ?? input.profile.reservedOutputTokens),
+  );
+});
+
+it("refuses an oversized current observation instead of omitting or splitting the pair", () => {
+  const input = protectedObservationInput();
+  const exchange = {
+    ...RECORDED_UNKNOWN_WRITE,
+    call: {
+      ...RECORDED_UNKNOWN_WRITE.call,
+      arguments: { body: "Synthetic observation. ".repeat(10_000) },
+    },
+  };
+  expect(
+    selectGatewayPromptAssembly({
+      ...input,
+      request: { ...input.request, toolExchanges: [exchange] },
+    }),
+  ).toBeUndefined();
+  expect(
+    selectGatewayPromptAssembly({ ...input, request: { ...input.request, toolExchanges: [] } }),
+  ).toBeDefined();
+});
+
+it("attaches images to the latest human request when recorded tool observations follow it", () => {
+  const messages: GatewayConversationMessage[] = [
+    { role: "user", content: "Earlier human request" },
+    { role: "assistant", content: "Earlier answer" },
+    { role: "user", content: "Current human request" },
+    { role: "assistant", content: "", toolCalls: [RECORDED_UNKNOWN_WRITE.call] },
+    { role: "tool", toolCallId: RECORDED_UNKNOWN_WRITE.call.id, content: "Unknown remote effect" },
+  ];
+  const image = {
+    type: "image_url" as const,
+    image_url: { url: "data:image/png;base64,c3ludGhldGlj" },
+  };
+  const projected = withGatewayConversationImages(messages, [image]);
+  expect(projected[2]?.contentParts).toEqual([
+    { type: "text", text: "Current human request" },
+    image,
+  ]);
+  expect(projected[0]?.contentParts).toBeUndefined();
+  expect(projected.slice(-2)).toEqual(messages.slice(-2));
+});
 
 function customModelConfig(modelId = CHAT_MODEL): GatewayConfig {
   return {

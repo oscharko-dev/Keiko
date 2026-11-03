@@ -487,6 +487,7 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
       live: false,
       stop: () => undefined,
       detach: () => undefined,
+      reportBackpressure: () => undefined,
     }),
   };
 }

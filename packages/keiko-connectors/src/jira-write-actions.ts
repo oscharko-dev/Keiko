@@ -246,7 +246,7 @@ function updatedFieldsOf(input: UpdateJiraIssueFieldsInput): Record<string, unkn
 }
 
 // PUT /rest/api/3/issue/{issueKey} — bounded edits to assignable standard fields (summary,
-// description, labels, priority). Idempotent: the D3 retry helper may replay it on 429/5xx.
+// description, labels, priority). The shared transport dispatches mutations once; concurrent changes forbid blind replay.
 export async function updateJiraIssueFields(
   deps: JiraWriteActionDeps,
   input: UpdateJiraIssueFieldsInput,

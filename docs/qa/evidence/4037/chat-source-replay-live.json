@@ -1,0 +1,326 @@
+{
+  "schemaVersion": 1,
+  "classification": "Narrow model-choice and first Files acknowledgement replay correction, with actual two-browser UI evidence; not full epic acceptance",
+  "liveCandidate": {
+    "sha": "3748ca66b801fc939b857e06419bb1837456b2e7",
+    "tree": "f350da3f5aaa609bf41a23f40d0c38302a43ec0a",
+    "signatureLocallyVerified": true
+  },
+  "postLiveRefactor": {
+    "reason": "Required SonarJS S3776 identified cognitive complexity16 over15 in the source mutation callback. The existing canonical acknowledgement function now returns its confirmed Chat and validated correlation. An earlier observation callback extraction did not address the finding and was removed; no rule or guard changed.",
+    "sourceFreezeSha256": "7da410b46820263330d64192a0a6a128254e2ad80dd0befaac313dc50b591227",
+    "retainedSonarFailures": [
+      {
+        "receipt": "checkpoint57-v1-sonar.json",
+        "sha256": "068cee37b29ec813b5ebe36f55a30bf37921fd2b98eebb3f009db3c98cf82dc3"
+      },
+      {
+        "receipt": "checkpoint57-v2-sonar.json",
+        "sha256": "f5b99da51911850a56a933501380a14b273daab3b7a391334d84d898e436a59b"
+      }
+    ],
+    "limitation": "Actual live replay remains source57 before this pure canonical receipt return. Final visible acceptance remains open; final-source type/lint/coverage/Sonar and independent full-owner acknowledgement controls cover the return.",
+    "finalRuntimeSourceEqualsLiveCandidate": false
+  },
+  "liveCandidateParent": "3185d0b634b62a2f54b4af111625d35d46a16820",
+  "liveSourceFreezeSha256": "0c3f40020e3c738996abe790c34c3aba3f496e3d8480b4786bbc5ebac9e98b03",
+  "verificationSources": [
+    {
+      "path": "docs/adr/ADR-0013-ui-local-persistence-for-projects-and-chats.md",
+      "sha256": "4d3cb54f10f5374cdd1253b2a18cb30cf8def86cb7cac72d0d6e7ce6dc1407a1"
+    },
+    {
+      "path": "docs/adr/ADR-0057-context-status-panel-and-chat-compaction-wiring.md",
+      "sha256": "82d30498d96bf49e7fbd81c6f0a4e8a24bd012e403048a35070660298d435719"
+    },
+    {
+      "path": "docs/adr/ADR-0114-per-conversation-chat-sessions.md",
+      "sha256": "322ba41b40519ef2787dca59eaf8e8f5da4a993730d6f4b0519bc7372d33f3c8"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.grounding.test.tsx",
+      "sha256": "08c8ed341385b56f91ec8c2e798a932a7d40274ed2110ac99739f7c9d4038b8e"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.test.tsx",
+      "sha256": "4e11e63662b193efbc472d1960c9357d1e31be670bd2775021dae46163cd6e94"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.tsx",
+      "sha256": "f60c399000699faf2078840046c5ca5a9b6e4b48ebd374fd670ba76bb2975eed"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.workspace-scope-sync.test.tsx",
+      "sha256": "99a91e321a165cfcee5f7184acbecf11825061f8853ef61d11cd48dd9b9ae55f"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/chatCreationModelChoice.test.ts",
+      "sha256": "9273439444ce991b08a2a9c09bc82c5adc0c07ba75d87afa9f7cb0200a440291"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/chatCreationModelChoice.ts",
+      "sha256": "946c73e2a879c06899dab49e343e3583ea3ad349257f611daa5f61fa604f5860"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.test.tsx",
+      "sha256": "b2582d6fb8c713b5f26e6b3e060d2a7c1d50a9fba21b1b4c3fdd83ce881d7ef3"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",
+      "sha256": "d94363ca70a7ae705e59db1a994f26f92d1ccb2f6b3d86e67872bdaa2ae8a61a"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspace-persistence.test.ts",
+      "sha256": "43067e62366f223e1bd60765633203fc1cb7d552eae7d0dd0081ff99b8c10923"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/workspace-persistence.ts",
+      "sha256": "c1315c39d043b4deaed6705bb673c548c6f9fc1a87875985a18127f2a0a3577e"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.test.tsx",
+      "sha256": "96a0a7e2e81a4b225d0f4fa6d73fa8970354681bc8b74e8352dc8fbf875abbe4"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx",
+      "sha256": "e34dacb62ab8c2a80c066309217bb08f116436ad7425d7624aa676f010dfee00"
+    }
+  ],
+  "problem": "A newly connected full Files edge did not retain its canonical acknowledgement before a second browser replayed the privacy-elided edge, causing an unnecessary source intent and cancellation. Pending Chat creation also lost the originating automatic or explicit model selection.",
+  "changes": [
+    "Snapshot the originating model selection with the existing pending creation identity; reject incomplete or unavailable selection instead of silently adopting another browser selection.",
+    "Retain canonical acknowledgement provenance in the existing confirmed Chat cache and seed the existing edge ledger only for the same conversation and a unique canonical scope matching the bound fingerprint.",
+    "Keep missing, malformed, foreign, ambiguous, failed and actual-navigation cases on the existing admission and recovery path; no new prompt, authority, endpoint or persistence store."
+  ],
+  "failureFirst": {
+    "mountedOriginalRed": {
+      "failed": 1,
+      "healthyPassed": 65,
+      "logSha256": "fe147153b3ac604eb375cc6fc86b142721a9273f04d03a5d78a86a0d622c719d"
+    },
+    "finalMountedScopeControls": 68,
+    "finalSevenSuitePassed": 638,
+    "retainedLaboratoryMistakes": [
+      "Expanded test fixture initially used singular file instead of contract kind files; corrected fixture vocabulary, original failure retained.",
+      "First UI57 driver preflight failed before runtime/model startup because label replacement also changed hash algorithm; corrected only driver label replacement, retained original driver and failure receipt."
+    ]
+  },
+  "actualUi": {
+    "runtimeHead": "3748ca66b801fc939b857e06419bb1837456b2e7",
+    "assets": {
+      "path": "checkpoint57-built-ui-assets.json",
+      "sha256": "261b9e6210cb8895dbc1e790abb10b48c9c8fdf10eecf43fee2e904821ab38a3",
+      "files": 301
+    },
+    "buildReceiptSha256": "11ac69dc05711aa01e02a92148af3f974c658c5123d3bd55b17908fea49fd31f",
+    "finalRuntimeClosed": {
+      "status": "completed",
+      "drain": "fulfilled",
+      "close": "fulfilled"
+    },
+    "driverExitCode": 0,
+    "terminalManifestSha256": "a8c771dd4607f5a71f0ae81997a2af065e60afc6b6604edf230cacf83d70bf54",
+    "terminalManifestFiles": 33,
+    "physicalRequests": 6,
+    "taskRequests": 2,
+    "readinessRequests": 4,
+    "allPhysicalComplete": true,
+    "checks": {
+      "oneChatOneIntent": true,
+      "exactlyTwoQuestionsAndTwoReplies": true,
+      "eachQuestionExactlyOnce": true,
+      "sameConnections": true,
+      "sameChatFilesConfigs": true,
+      "noNewSourceIntent": true,
+      "noNewSourcePatch": true,
+      "exactlyTwoCompletedStreams": true,
+      "canonicalStoredGroundedContentEqual": true
+    },
+    "finalCitationCounts": [2, 3],
+    "finalCitedRangesExist": [true, true],
+    "copyMatchesRenderedCanonicalCitations": [true, true],
+    "sourceCounts": [4, 5],
+    "diagnosticGrants": {
+      "contextWindow": 131072,
+      "input": 118784,
+      "output": 8192,
+      "providerTimeoutMs": 300000,
+      "feedbackTurns": 0
+    },
+    "limitations": [
+      "Actual Copy answer intentionally renders citation labels without square brackets; raw copy is not byte-identical to canonical stored Markdown.",
+      "Uncertainty and unavailable semantic/whole-folder context dispositions retained for separate retrieval qualification.",
+      "Five physical requests include two task requests and three readiness requests; raw provider bodies/witnesses are not recorded.",
+      "Original diagnostic provider300000ms differs from native quality1365000ms; no unchanged-native-budget claim.",
+      "Terminal drain adds a fourth automatic readiness request; the retained pre-drain result contained five total requests and remains unchanged.",
+      "Generic assembly uncertainty, unavailable semantic retrieval and refused optional whole-folder context remain separate retrieval qualification items."
+    ]
+  },
+  "verification": {
+    "fullUi": {
+      "suites": 563,
+      "passed": 10857,
+      "existingSkipped": 1
+    },
+    "commands": [
+      {
+        "label": "root-typecheck",
+        "exitCode": 0,
+        "receiptSha256": "a1bbe2cc3d64f49a7b2ddc4be04d7a4cef2534eec0180217d5e239fdcd109471",
+        "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29",
+        "command": ["npm", "run", "typecheck"]
+      },
+      {
+        "label": "root-lint",
+        "exitCode": 0,
+        "receiptSha256": "1b7de78e3e8088df09b5661d10990e8b84562236b87475be8c8acb5423761d53",
+        "logSha256": "13c3b8c614fe6773027b77d75ed516807cf7bd0813959cc8cfd680dc86681550",
+        "command": ["npm", "run", "lint"]
+      },
+      {
+        "label": "ui-coverage",
+        "exitCode": 0,
+        "receiptSha256": "dac5315e4ea8b7bab86a6193ef041e4d0da32fc50f1a0b4e53ec3fdbcd9a2efe",
+        "logSha256": "4d654da235e64104f618df93b85f9df6e60f7334731455660ea7a5c26f8307b7",
+        "command": ["npm", "run", "test:coverage:ui"]
+      },
+      {
+        "label": "editor-evidence",
+        "exitCode": 0,
+        "receiptSha256": "c60613be57204a9ed94911a53a835d87516a89696aed1817863f2aca25eb668e",
+        "logSha256": "4fbebddfd6c8f111327a91d30fdbd65299f85a4d5e12d5f4c39c66ca5894097f",
+        "command": ["npm", "run", "check:editor-release-evidence"]
+      },
+      {
+        "label": "ui-i18n",
+        "exitCode": 0,
+        "receiptSha256": "3d311755f323d5f9e4e99ab9ff76099cd47f4ede2f2d05d2016cbbb0de671852",
+        "logSha256": "956aa758435568e03a7725670fb13a45b9b82b07c5421aa8ab5ea08c72033510",
+        "command": ["npm", "run", "check:ui-i18n"]
+      },
+      {
+        "label": "retrieval",
+        "exitCode": 0,
+        "receiptSha256": "92a041eff32d833400fa1a0f8ad86079a28982743b15bee21b9a57f30c5cb93b",
+        "logSha256": "445e6b8f0bbe8000a835aeb9638b2e825cefa7fa72f2e299d50a63e77d457540",
+        "command": ["npm", "run", "check:retrieval-quality"]
+      },
+      {
+        "label": "grounded-retrieval",
+        "exitCode": 0,
+        "receiptSha256": "6edba9b52a100416f5735e4eabc328144355f58df691861212a502bab957c2d2",
+        "logSha256": "e67d8c1c0dd1eb7195e6135d7e761636176e7b6f8cdaeda7b24b75670f26db8f",
+        "command": ["npm", "run", "check:grounded-retrieval-quality"]
+      },
+      {
+        "label": "faithfulness",
+        "exitCode": 0,
+        "receiptSha256": "a5452ac35f927378d95bfbd10f5cb02b473bbea513425b36fa8617fa802078f7",
+        "logSha256": "fdd38052b4664f551a607833d9165fcf7aeb9f337195541781bf2d7f2c63c5e2",
+        "command": ["npm", "run", "check:grounded-faithfulness"]
+      },
+      {
+        "label": "post-canonical-receipt-ui-typecheck",
+        "exitCode": 0,
+        "receiptSha256": "f32c7f5464d3fd43bd2a143d434cff7fdc23bf624739f21b7b54bb00952f4352",
+        "logSha256": "bec09a74b9b71b5348d1fe72720400ca5afb55d241d0fcca59f0b7046c31fd4e",
+        "command": ["npm", "run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"]
+      },
+      {
+        "label": "post-canonical-receipt-ui-lint",
+        "exitCode": 0,
+        "receiptSha256": "08000f04eb71e4652b2a6a4456f12597a4fa292627418aaa6cf5065ffc46d94a",
+        "logSha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382",
+        "command": ["npm", "run", "lint", "--workspace", "@oscharko-dev/keiko-ui"]
+      },
+      {
+        "label": "post-canonical-receipt-ui-build",
+        "exitCode": 0,
+        "receiptSha256": "b3747ea08e4d1f83344113bf64b9cf12a132266a2630da3834e53a98e173063f",
+        "logSha256": "c3b594317696624047c4564df7f36d87533c195611c4ac382efd230c9fdb99fa",
+        "command": ["npm", "run", "build:ui"]
+      },
+      {
+        "label": "post-canonical-receipt-ui-coverage",
+        "exitCode": 0,
+        "receiptSha256": "4d12b287967cd443d6d4fd439596d3454c4ba86f0b650e976f34126b069a1c8d",
+        "logSha256": "4c7464c0f8ab7ab2519c0ee3bf12bde3956cb783a7d177e51f1723abcb2f6f12",
+        "command": ["npm", "run", "test:coverage:ui"]
+      },
+      {
+        "label": "post-canonical-receipt-sonar",
+        "exitCode": 0,
+        "receiptSha256": "4df4476dedf855766183dd3c5ec42c71e6acbf3553c99ea4080c75fe360eaad8",
+        "logSha256": "e9f55572e2a403a5902a478f655a86236bca5dabc4da65e81e3c74305eeb7963",
+        "command": ["npm", "run", "gates:sonar"]
+      },
+      {
+        "label": "post-canonical-receipt-op-catalog",
+        "exitCode": 0,
+        "receiptSha256": "d387b481e980853ad6d622c6bb1146c5b1ef232afc892486d68a375e3553c9ef",
+        "logSha256": "98b6a3c3452a5ad75edf44df17c2f64f040eb1e4c9dabde653394ef0f88a8282",
+        "command": ["npm", "run", "generate:op-catalog"]
+      },
+      {
+        "label": "post-canonical-receipt-activity-log",
+        "exitCode": 0,
+        "receiptSha256": "bb397ff4215fa9b1ce55527487393817050ab428b2011b0c6ffaf52174effc86",
+        "logSha256": "ec65bb083ae8c9bc38162b0d1bec3958ffead0503d86fbdc049935b6a9a9ba08",
+        "command": ["npm", "run", "check:activity-log"]
+      },
+      {
+        "label": "seven-suites",
+        "exitCode": 0,
+        "receiptSha256": "04c8495f59d4ff374d6916698731b54091c000560e4b6f4ac2ab517e7b10e52f",
+        "logSha256": "4a34778f39035fef92300b080934796b616880eb4a11cb07512b26c97fa897cf",
+        "command": [
+          "npm",
+          "test",
+          "--workspace",
+          "@oscharko-dev/keiko-ui",
+          "--",
+          "src/app/components/desktop/AppShell.test.tsx",
+          "src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.test.tsx",
+          "src/app/components/desktop/hooks/useChatSession.test.tsx",
+          "src/app/components/desktop/hooks/workspace-persistence.test.ts",
+          "src/app/components/desktop/AppShell.grounding.test.tsx",
+          "src/app/components/desktop/hooks/chatCreationModelChoice.test.ts",
+          "src/app/components/desktop/AppShell.workspace-scope-sync.test.tsx"
+        ]
+      },
+      {
+        "label": "ui-typecheck",
+        "exitCode": 0,
+        "receiptSha256": "28b1c1a645f40ae64b7331a44bda72eb6acb5e97bb9f0650f8d46a573952d32b",
+        "logSha256": "bec09a74b9b71b5348d1fe72720400ca5afb55d241d0fcca59f0b7046c31fd4e",
+        "command": ["npm", "run", "typecheck", "--workspace", "@oscharko-dev/keiko-ui"]
+      },
+      {
+        "label": "ui-lint",
+        "exitCode": 0,
+        "receiptSha256": "a5e60bb1f6fb09fa2506e11b8beee1ecf04674a7576a1ad69391544f38604565",
+        "logSha256": "aa1139af35e1ad54de9feb01df6fea0272e2e9c4b58255446260dab02ab07382",
+        "command": ["npm", "run", "lint", "--workspace", "@oscharko-dev/keiko-ui"]
+      }
+    ]
+  },
+  "independentAudit": [
+    {
+      "artifact": "checkpoint57-local-candidate-source-controls-independent-v1.json",
+      "sha256": "2f37973435db1c6bd318fd2cf7e5c6e7847b38a68a07fc449c805ece90014179"
+    },
+    {
+      "artifact": "checkpoint57-local-evidence-independent-v1.json",
+      "sha256": "a0cc13257d8e11ab98894a4ace06ae656d118bb494faff61f10f9b9a3e36442e"
+    },
+    {
+      "artifact": "checkpoint57-live-replay-independent-v1.json",
+      "sha256": "f67a07085e359b0de604d0f8d2a7eee2da08c687be4ce115c77223c326ab7e8e"
+    },
+    {
+      "artifact": "checkpoint57-canonical-return-freeze3-independent-join.json",
+      "sha256": "b227c846f076a30dccdfc0ba5ecd5d077ba26e1c41915a17200a51e0f0b60960"
+    }
+  ],
+  "acceptanceDisposition": "Existing 34-criterion addendum and original 96-criterion ledger unchanged. Updater installed/native lifecycle, complete browser/retrieval/skill qualification, exact-head required CI, unresolved reviews and authorized dev merge remain open."
+}

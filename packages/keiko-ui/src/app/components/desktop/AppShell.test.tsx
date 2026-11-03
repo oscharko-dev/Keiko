@@ -7,8 +7,50 @@ import {
   persistedChatProjectPath,
   prepareNewWindowCfg,
   LeftRailLoading,
+  clearAppBootRecoveryReloadMarker,
 } from "./AppShell";
 import type { AppWindow } from "./windows/types";
+import { sanitizePersistedWindows } from "./hooks/workspace-persistence";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+
+describe("successful app boot recovery", () => {
+  it.each(["1", "2"])(
+    "reports the closed retry count %s through the existing writer once",
+    (count) => {
+      const writer = vi.fn();
+      const key = "keiko.app-boot-recovery-reload-count";
+      sessionStorage.setItem(key, count);
+      setClientDiagnosticWriter(writer);
+      try {
+        clearAppBootRecoveryReloadMarker();
+        clearAppBootRecoveryReloadMarker();
+        expect(writer).toHaveBeenCalledExactlyOnceWith(
+          `[keiko] App boot recovered after ${count} automatic reloads.`,
+          undefined,
+        );
+        expect(sessionStorage.getItem(key)).toBeNull();
+      } finally {
+        sessionStorage.removeItem(key);
+        resetClientDiagnosticWriter();
+      }
+    },
+  );
+
+  it("discards an untrusted marker without publishing its contents", () => {
+    const writer = vi.fn();
+    const key = "keiko.app-boot-recovery-reload-count";
+    sessionStorage.setItem(key, "private-untrusted-value");
+    setClientDiagnosticWriter(writer);
+    try {
+      clearAppBootRecoveryReloadMarker();
+      expect(writer).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem(key)).toBeNull();
+    } finally {
+      sessionStorage.removeItem(key);
+      resetClientDiagnosticWriter();
+    }
+  });
+});
 
 describe("LeftRailLoading", () => {
   it("keeps the stable layout slot out of navigation and the keyboard order", async () => {
@@ -110,6 +152,95 @@ describe("persistedChatProjectPath", (): void => {
 });
 
 describe("prepareNewWindowCfg", (): void => {
+  it.each([
+    [{ kind: "automatic" } as const, { newChatModelSelection: "automatic" }],
+    [
+      { kind: "explicit", modelId: "model-original" } as const,
+      { newChatModelSelection: "explicit", newChatModelId: "model-original" },
+    ],
+  ])("captures the original creation model choice (%j)", (choice, expected): void => {
+    const cfg = prepareNewWindowCfg("chat", {}, "shared-creation", "/repo", choice);
+    expect(cfg).toMatchObject(expected);
+    const saved = sanitizePersistedWindows([{ ...chatWindow("/repo"), cfg }]);
+    expect(saved[0]?.cfg).toMatchObject(expected);
+  });
+
+  it("refuses a secret-shaped explicit model snapshot before accepting a window", (): void => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    try {
+      expect(() =>
+        prepareNewWindowCfg("chat", {}, "shared-creation", "/repo", {
+          kind: "explicit",
+          modelId: `ghp_${"A".repeat(36)}`,
+        }),
+      ).toThrow(TypeError);
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Chat creation model selection cannot be persisted.",
+        expect.objectContaining({ errorKind: "unavailable", errorEvidence: expect.any(Object) }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("ghp_");
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it("clears a prior explicit snapshot before accepting a fresh automatic choice", (): void => {
+    const cfg = prepareNewWindowCfg(
+      "chat",
+      { newChatModelSelection: "explicit", newChatModelId: "previous-model" },
+      "fresh-creation",
+      "/repo",
+      { kind: "automatic" },
+    );
+    expect(cfg["newChatModelSelection"]).toBe("automatic");
+    expect(cfg["newChatModelId"]).toBeUndefined();
+  });
+
+  it("redraws a generated intent that the unchanged persistence heuristic rejects", (): void => {
+    const draw = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValueOnce("1404206d-9ab6-4bca-8853-813867352087")
+      .mockReturnValueOnce("12345678-1234-4123-8123-123456789abc");
+    try {
+      const cfg = prepareNewWindowCfg("chat", { title: "Shared conversation" });
+      const saved = sanitizePersistedWindows([{ ...chatWindow("/repo"), cfg }]);
+      expect(saved[0]?.cfg["newChatRequestId"]).toBe("12345678-1234-4123-8123-123456789abc");
+      expect(draw).toHaveBeenCalledTimes(2);
+    } finally {
+      draw.mockRestore();
+    }
+  });
+
+  it("fails before creating a window when every generated intent is rejected", (): void => {
+    const diagnostic = vi.fn();
+    setClientDiagnosticWriter(diagnostic);
+    const draw = vi
+      .spyOn(crypto, "randomUUID")
+      .mockReturnValue("12345678-1234-4123-8123-123456789abc");
+    for (let rejected = 0; rejected < 32; rejected += 1) {
+      draw.mockReturnValueOnce("1404206d-9ab6-4bca-8853-813867352087");
+    }
+    try {
+      expect(() => prepareNewWindowCfg("chat", {})).toThrow(TypeError);
+      // One additional id correlates the existing body-free failure diagnostic.
+      expect(draw).toHaveBeenCalledTimes(33);
+      expect(diagnostic).toHaveBeenCalledWith(
+        "Chat creation identity allocation failed.",
+        expect.objectContaining({
+          correlationId: expect.any(String),
+          kind: "other",
+          errorKind: "internal",
+          errorEvidence: expect.any(Object),
+        }),
+      );
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain("1404206d");
+    } finally {
+      draw.mockRestore();
+      resetClientDiagnosticWriter();
+    }
+  });
+
   it("isolates mutable array configuration between chat window requests", (): void => {
     const sourceIds = ["source-a"];
     const cfg = prepareNewWindowCfg("chat", { title: "Isolated", sourceIds }, "request-isolated");

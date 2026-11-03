@@ -9,18 +9,13 @@ import type { ServerResponse } from "node:http";
 import type { StreamEvent } from "./sink.js";
 import type { Redactor } from "./deps.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
-import {
-  markSseStreamBackpressureKilled,
-  recordSseStreamFrame,
-  writeOrDestroy,
-  type SseBackpressureSignal,
-} from "./sse-write.js";
+import { writeSseFrame, type SseBackpressureSignal } from "./sse-write.js";
 
 /**
- * Optional protective wiring for the heartbeat. A heartbeat can be the FIRST write rejected on an
- * idle stream, so without this the connection is destroyed with no abort of the producer and no
- * backpressure signal — the slow-client kill is silent and indistinguishable from a normal close.
- * Omitting it preserves the historical behaviour exactly (plain write + destroy).
+ * Optional stalled-reader wiring for the heartbeat. A heartbeat can be the first frame written to an
+ * idle stream whose reader has gone quiet; with this supplied, tearing that reader down also aborts
+ * the producer and emits the stalled-reader signal, so the termination is never silent. Without it a
+ * stalled heartbeat stream is still destroyed after the shared bound, only without those two effects.
  */
 export interface SseHeartbeatBackpressure {
   readonly controller: AbortController;
@@ -30,16 +25,6 @@ export interface SseHeartbeatBackpressure {
   readonly correlationId?: string | undefined;
 }
 
-function writeOrDestroyLegacy(res: ServerResponse, frame: string): boolean {
-  recordSseStreamFrame(res, frame);
-  const accepted = res.write(frame);
-  if (!accepted) {
-    markSseStreamBackpressureKilled(res);
-    res.destroy();
-  }
-  return accepted;
-}
-
 export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "Content-Type": "text/event-stream; charset=utf-8",
   "Cache-Control": "no-store",
@@ -47,25 +32,25 @@ export const SSE_HEADERS: Readonly<Record<string, string>> = {
   "X-Accel-Buffering": "no",
 };
 
+/** The default keep-alive interval of an SSE stream. */
+export const SSE_HEARTBEAT_INTERVAL_MS = 15_000;
+
 export function startSseHeartbeat(
   res: ServerResponse,
-  intervalMs = 15000,
+  intervalMs = SSE_HEARTBEAT_INTERVAL_MS,
   observableEvent?: "heartbeat",
   backpressure?: SseHeartbeatBackpressure,
 ): () => void {
-  // With `backpressure` supplied every heartbeat frame goes through the same protective path as
-  // event frames: abort the producer, signal the observer, then destroy. Without it the historical
-  // plain write + destroy is kept byte-for-byte so the six other SSE callers are unaffected.
+  // Every heartbeat frame goes through the shared flow control. With `backpressure` supplied a
+  // stalled reader also aborts the producer and signals the observer before the socket is destroyed.
   const writeFrame = (frame: string): boolean =>
-    backpressure === undefined
-      ? writeOrDestroyLegacy(res, frame)
-      : writeOrDestroy(
-          res,
-          frame,
-          backpressure.controller,
-          backpressure.onBackpressure,
-          backpressure.correlationId,
-        );
+    writeSseFrame(
+      res,
+      frame,
+      backpressure?.controller ?? null,
+      backpressure?.onBackpressure,
+      backpressure?.correlationId,
+    );
   const timer = setInterval(() => {
     if (res.destroyed || res.writableEnded) return;
     if (!writeFrame(": keep-alive\n\n")) {
@@ -118,19 +103,15 @@ export function readyMessage(): string {
 // record-then-write shape, so a caller that opens with `ready` gets the same guarantee those get.
 // `correlationId`, when supplied, is bound to the stream by the same set-once-wins rule
 // `recordSseStreamFrame` already applies — most openers call this before their first event write, so
-// it is normally this call that actually attaches the id (mirrors `writeOrDestroy`'s own parameter).
+// it is normally this call that actually attaches the id (mirrors `writeSseFrame`'s own parameter).
 export function writeReadyMessage(res: ServerResponse, correlationId?: string): boolean {
-  const frame = readyMessage();
-  recordSseStreamFrame(res, frame, correlationId);
-  return res.write(frame);
+  return writeSseFrame(res, readyMessage(), null, undefined, correlationId);
 }
 
-// Writes one framed event to the response stream. Returns Node's backpressure signal so the caller can
-// detach a slow client instead of letting the HTTP response buffer grow without bound.
+// Writes one framed event to the response stream through the shared flow control (sse-write.ts):
+// a buffered frame waits for `drain`, and `false` means only that the stream is already gone.
 export function writeEvent(res: ServerResponse, event: StreamEvent, redactor: Redactor): boolean {
-  const frame = frameEvent(event, redactor);
-  recordSseStreamFrame(res, frame);
-  return res.write(frame);
+  return writeSseFrame(res, frameEvent(event, redactor), null);
 }
 
 export function writeMessageEvent(
@@ -139,7 +120,5 @@ export function writeMessageEvent(
   redactor: Redactor,
   correlationId?: string,
 ): boolean {
-  const frame = frameMessageEvent(event, redactor);
-  recordSseStreamFrame(res, frame, correlationId);
-  return res.write(frame);
+  return writeSseFrame(res, frameMessageEvent(event, redactor), null, undefined, correlationId);
 }

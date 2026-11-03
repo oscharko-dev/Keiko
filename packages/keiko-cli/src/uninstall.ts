@@ -1,3 +1,5 @@
+import { withUiLifecycleGuard } from "./ui-lifecycle-guard.js";
+import { nativeUiGenerationReaped } from "./native-ui-reap.js";
 // `keiko uninstall` — reverses the runtime artifacts Keiko creates on a machine so a
 // user can clean their device and reinstall a clean version. CLI-only surface; no UI
 // route, no server change, no new runtime dependency.
@@ -80,6 +82,7 @@ import {
   type RetainedNode,
   type RuntimeStateScan,
   type StateRootInspection,
+  type PidClassification,
 } from "./state-paths.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 import { terminateUiProcess, type WindowsTreeKill } from "./ui-process-stop.js";
@@ -273,6 +276,7 @@ async function ensureServerStoppable(
 ): Promise<"ok" | "refused"> {
   if (!opts.scopes.state) return "ok";
   const probe = classifyPid(join(stateDir, "ui.pid"), deps.isProcessAlive);
+  if (refuseUncertainUiTracking(stateDir, probe, io)) return "refused";
   if (probe.state !== "running" || probe.pid === undefined) return "ok";
   if (!opts.force) {
     io.err(
@@ -307,6 +311,27 @@ async function ensureServerStoppable(
     return "refused";
   }
   return "ok";
+}
+
+function refuseUncertainUiTracking(stateDir: string, probe: PidClassification, io: CliIo): boolean {
+  if (
+    probe.state === "starting" ||
+    probe.state === "unknown" ||
+    nativeTrackingHeld(stateDir, probe)
+  ) {
+    io.err("keiko uninstall: UI lifecycle ownership is uncertain; state was not removed.\n");
+    return true;
+  }
+  return false;
+}
+
+function nativeTrackingHeld(stateDir: string, record: PidClassification): boolean {
+  return (
+    record.nativeAppRuntime === true &&
+    record.state === "stale" &&
+    (record.pid === undefined ||
+      !nativeUiGenerationReaped(stateDir, { pid: record.pid, launchId: record.launchId }))
+  );
 }
 
 function removeLaunchersStep(
@@ -1054,7 +1079,14 @@ export async function runUninstallCli(
   if (activity.kind === "refused") return 1;
   try {
     // Preflight stays inside this catch: EACCES/EIO is a scoped command failure, not a fatal crash.
-    return await executeUninstall(opts, io, env, resolved, stateDir, activity);
+    const operation = (): Promise<number> =>
+      executeUninstall(opts, io, env, resolved, stateDir, activity);
+    if (!opts.scopes.state || opts.dryRun) return await operation();
+    const guarded = await withUiLifecycleGuard(stateDir, true, operation, resolved.homedir());
+    if (guarded.kind === "complete") return guarded.value;
+    emitUninstallFailure(activity, "UninstallStateInUseError", "server-stop-refused");
+    io.err("keiko uninstall: another UI lifecycle operation is in progress; state retained.\n");
+    return 1;
   } catch (error) {
     return reportUninstallException(error, io, activity);
   }

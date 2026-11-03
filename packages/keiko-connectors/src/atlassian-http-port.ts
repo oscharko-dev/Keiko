@@ -27,7 +27,7 @@ export interface AtlassianHttpRequest {
 export type AtlassianHttpResult =
   | { readonly kind: "response"; readonly status: number }
   | { readonly kind: "timeout" }
-  | { readonly kind: "network-error" };
+  | { readonly kind: "network-error"; readonly reason?: "tls" };
 
 export type AtlassianHttpPort = (request: AtlassianHttpRequest) => Promise<AtlassianHttpResult>;
 
@@ -83,7 +83,7 @@ export type AtlassianHttpBodyResult =
       readonly retryAfterMs?: number | undefined;
     }
   | { readonly kind: "timeout" }
-  | { readonly kind: "network-error" };
+  | { readonly kind: "network-error"; readonly reason?: "tls" };
 
 export type AtlassianHttpBodyPort = (
   request: AtlassianHttpBodyRequest,

@@ -3,7 +3,10 @@ import { expectDiagnosticWireAccepted } from "@/test-utils/diagnostic-wire";
 // buffers instead of dropping.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  CLIENT_STAGE_DURATION_MS_MAX,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import {
   clientDiagnosticFailureFacts,
   recordClientDiagnosticLoss,
@@ -285,6 +288,8 @@ describe("clientDiagnosticFailureFacts", () => {
     [{ moduleLoadFailure: "git-sync" }, ["module:git-sync"]],
     [{ moduleLoadFailure: "git-read" }, ["module:git-read"]],
     [{ moduleLoadFailure: "widget-locale" }, ["module:widget-locale"]],
+    [{ moduleLoadFailure: "browser-approval" }, ["module:browser-approval"]],
+    [{ moduleLoadFailure: "update-startup" }, ["module:update-startup"]],
     [{ failureStage: "files source preview" }, ["stage:files-source-preview"]],
   ] as const)("retains only the canonical closed context for %j", (meta, context) => {
     expect(clientDiagnosticFailureFacts(meta)).toEqual({ errorKind: "unknown", context });
@@ -298,6 +303,27 @@ describe("clientDiagnosticFailureFacts", () => {
       errorEvidence,
     });
   });
+});
+
+it("records the genuine catalog read latency on an adoption and keeps a selection instant", () => {
+  const received: (ClientDiagnosticMeta | undefined)[] = [];
+  setClientDiagnosticWriter((_message, meta) => received.push(meta));
+  const evidence = {
+    surface: "chat" as const,
+    source: "background" as const,
+    outcome: "changed" as const,
+    configuredModelCount: 2,
+    usableModelCount: 2,
+  };
+  reportModelCatalogStage("gateway catalog adoption", evidence, "catalog-request-1", 1_234.6);
+  reportModelCatalogStage("gateway catalog adoption", evidence, "catalog-request-2", -5);
+  reportModelCatalogStage("gateway catalog adoption", evidence, "catalog-request-3", Number.NaN);
+  reportModelCatalogStage("gateway catalog adoption", evidence, "catalog-request-4", 2 ** 40);
+  reportModelCatalogStage("gateway catalog adoption", evidence, "catalog-request-5");
+  const settled = received.flatMap((meta) =>
+    meta?.stageReport?.phase === "settled" ? [meta.stageReport.durationMs] : [],
+  );
+  expect(settled).toEqual([1_235, 0, 0, CLIENT_STAGE_DURATION_MS_MAX, 0]);
 });
 
 it("emits one paired instant model decision without publishing a global failure", () => {

@@ -12,7 +12,7 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { buildTestGenContext } from "./context.js";
 import { detectConventions } from "./conventions.js";
 import { computeFingerprint } from "./emit.js";
-import { runModelLoop } from "./model-loop.js";
+import { reviewedPatchLoop, runModelLoop } from "./model-loop.js";
 import { resolveTestStrategy } from "./strategy.js";
 import {
   cancelledReport,
@@ -63,7 +63,12 @@ async function runPipeline(state: RunState): Promise<UnitTestWorkflowReport> {
   if (strategy.style === "unsupported") {
     return unsupportedReport(state, strategy);
   }
-  const loop = await runModelLoop(state, workspace, conventions, strategy, pack);
+  // An apply writes the patch the human reviewed; only a dry run asks the model (#4025 AC4).
+  const reviewed = state.input.apply === true ? state.input.reviewedPatch : undefined;
+  const loop =
+    reviewed === undefined
+      ? await runModelLoop(state, workspace, conventions, strategy, pack)
+      : reviewedPatchLoop(state, workspace, reviewed);
   return finishPipeline(state, workspace, loop, strategy);
 }
 

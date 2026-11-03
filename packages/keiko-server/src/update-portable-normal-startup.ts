@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import { spawn } from "node:child_process";
 import {
   closeSync,
@@ -339,12 +340,7 @@ function recoveryRequired(
 }
 
 function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 function validNativeFile(stat: Stats): boolean {
@@ -715,7 +711,7 @@ function claimStartupOwnership(
   if (lock === undefined || !validRecoveryLock(lock, authority, isAlive, unaccepted))
     return recoveryRequired(options, localState, "ownership-live-or-mismatch", authority);
   const ownershipOptions = {
-    currentPid: options.currentPid ?? process.pid,
+    currentPid: options.currentPid ?? currentProcessId(),
     processIdentity: options.processIdentity ?? randomUUID(),
     pidAlive: isAlive,
   };
@@ -774,7 +770,7 @@ function recordConfirmedNativeRecoveryFailure(
     attempt.outcome.process === "confirmed-dead" &&
     !attempt.nativePidPublished
   ) {
-    ownedLock.updateChildPid(authority.session.sessionId, options.currentPid ?? process.pid);
+    ownedLock.updateChildPid(authority.session.sessionId, options.currentPid ?? currentProcessId());
   }
 }
 

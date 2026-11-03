@@ -1,3 +1,4 @@
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 // #3878: LiteLLM normalises a provider's reasoning as `reasoning_content` on chat-completion deltas
 // and messages (vLLM or Gemma behind a reasoning parser, Anthropic thinking blocks). The adapter
 // used to discard it. It now reads it into its own chunk kind and response field, never into the
@@ -94,13 +95,35 @@ function doneOf(
 }
 
 describe("OpenAiAdapter reasoning (#3878)", () => {
+  it("retains an unresolved YAML reasoning owner until its private values are masked", async () => {
+    const adapter = adapterAnswering(() =>
+      sse([
+        streamDelta({ reasoning_content: "password:\n" }),
+        streamDelta({ reasoning_content: '  value: "private-reasoning-value"\n' }),
+        streamDelta({ content: "Public answer.\n" }),
+        finish("stop"),
+        DONE,
+      ]),
+    );
+    const chunks = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS));
+    const reasoning = chunks
+      .filter((chunk) => chunk.type === "reasoning")
+      .map((chunk) => chunk.token)
+      .join("");
+    expect(reasoning).not.toContain("private-reasoning-value");
+    expect(reasoning).toContain("password:");
+    const { response } = doneOf(chunks);
+    expect(response.reasoning).toBe(reasoning);
+    expect(response.content).toBe("Public answer.\n");
+  });
+
   it("streams reasoning deltas as reasoning chunks and never inside the answer", async () => {
     const adapter = adapterAnswering(() =>
       sse([
-        streamDelta({ role: "assistant", content: null, reasoning_content: "Look at " }),
-        streamDelta({ reasoning_content: "the parser." }),
-        streamDelta({ content: "Fixed " }),
-        streamDelta({ content: "it." }),
+        streamDelta({ role: "assistant", content: null, reasoning_content: "Inspect.\n" }),
+        streamDelta({ reasoning_content: "The parser.\n" }),
+        streamDelta({ content: "Fixed.\n" }),
+        streamDelta({ content: "Done.\n" }),
         finish("stop"),
         DONE,
       ]),
@@ -109,26 +132,25 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
     const chunks = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS));
 
     expect(sequence(chunks)).toEqual([
-      "reasoning:Look at ",
-      "reasoning:the parser.",
-      "delta:Fixed ",
-      "delta:it.",
+      "reasoning:Inspect.\n",
+      "reasoning:The parser.\n",
+      "delta:Fixed.\n",
+      "delta:Done.\n",
     ]);
     const { response } = doneOf(chunks);
-    expect(response.content).toBe("Fixed it.");
-    expect(response.reasoning).toBe("Look at the parser.");
+    expect(response.content).toBe("Fixed.\nDone.\n");
+    expect(response.reasoning).toBe("Inspect.\nThe parser.\n");
   });
 
-  // No delta here ends in a prefix of a configured secret ("h" of the base URL, "f" of the key), so
-  // no lane holds back a suffix and every token surfaces with the event that carried it.
-  it("keeps interleaved reasoning and text apart, in arrival order", async () => {
+  // Complete safe blocks retain lane order; unresolved code/credential context is withheld.
+  it("keeps interleaved complete reasoning and text blocks apart, in arrival order", async () => {
     const adapter = adapterAnswering(() =>
       sse([
-        streamDelta({ reasoning_content: "first idea" }),
+        streamDelta({ reasoning_content: "First idea.\n" }),
         // One provider event may carry both: the reasoning comes before the answer it led to.
-        streamDelta({ reasoning_content: " last idea", content: "Answer" }),
-        streamDelta({ content: " text" }),
-        streamDelta({ reasoning_content: " late note" }),
+        streamDelta({ reasoning_content: "Last idea.\n", content: "Answer.\n" }),
+        streamDelta({ content: "Text.\n" }),
+        streamDelta({ reasoning_content: "Late note.\n" }),
         finish("stop"),
         DONE,
       ]),
@@ -137,15 +159,15 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
     const chunks = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS));
 
     expect(sequence(chunks)).toEqual([
-      "reasoning:first idea",
-      "reasoning: last idea",
-      "delta:Answer",
-      "delta: text",
-      "reasoning: late note",
+      "reasoning:First idea.\n",
+      "reasoning:Last idea.\n",
+      "delta:Answer.\n",
+      "delta:Text.\n",
+      "reasoning:Late note.\n",
     ]);
     const { response } = doneOf(chunks);
-    expect(response.content).toBe("Answer text");
-    expect(response.reasoning).toBe("first idea last idea late note");
+    expect(response.content).toBe("Answer.\nText.\n");
+    expect(response.reasoning).toBe("First idea.\nLast idea.\nLate note.\n");
   });
 
   it("reads a reasoning parser's `reasoning` field when `reasoning_content` is absent", async () => {
@@ -162,7 +184,7 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
 
     const chunks = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS));
 
-    expect(sequence(chunks)).toEqual(["reasoning:newer field", "reasoning: named", "delta:done"]);
+    expect(sequence(chunks)).toEqual(["reasoning:newer field named", "delta:done"]);
     expect(doneOf(chunks).response.reasoning).toBe("newer field named");
   });
 
@@ -199,7 +221,7 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
       })(),
     ).rejects.toBeInstanceOf(ProviderOutputExhaustedError);
 
-    expect(seen).toEqual(["reasoning:spent the whole ", "reasoning:budget thinking"]);
+    expect(seen).toEqual(["reasoning:spent the whole budget thinking"]);
     const line = log.events.find((event) => event.op === "chat.response.streamed");
     expect(line?.extra).toMatchObject({
       outcome: "failed",
@@ -467,4 +489,31 @@ describe("OpenAiAdapter reasoning (#3878)", () => {
     expect(response.usage).not.toHaveProperty("reasoningTokens");
     expect(response.usage).not.toHaveProperty("reasoningBytes");
   });
+  it.each([false, true])(
+    "records code projection and depth refusal without bodies (%s)",
+    async (deep) => {
+      const content =
+        '```typescript\nconst token: string = "opaque-log-witness";\n' +
+        (deep ? "const value = " + "(".repeat(4000) + "1" + ")".repeat(4000) + ";\n" : "") +
+        "```\n";
+      const log = recorder();
+      const adapter = adapterAnswering(
+        () => sse([streamDelta({ content }), finish("stop"), DONE]),
+        log.sink,
+      );
+      const chunks = await chunksOf(adapter.callStream(REQUEST, CONFIG, BOUNDS));
+      expect(doneOf(chunks).response.content).not.toContain("opaque-log-witness");
+      const event = log.events.find((entry) => entry.op === "chat.response.streamed");
+      expect(event?.extra).toMatchObject({
+        codeRedactionRevision: CODE_REDACTION_REVISION,
+        streamCodeRegions: 1,
+        streamCodeDepthRefusals: deep ? 1 : 0,
+        streamCodeSizeRefusals: 0,
+        redactionPendingChars: 0,
+        redactionPublishedBlocks: 1,
+      });
+      expect(JSON.stringify(log.events)).not.toContain("opaque-log-witness");
+      expect(JSON.stringify(log.events)).not.toContain("const token");
+    },
+  );
 });

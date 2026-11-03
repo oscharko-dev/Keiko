@@ -1,3 +1,4 @@
+import type { AtlassianPrivateTarget } from "@oscharko-dev/keiko-contracts";
 // Issue #2241 — gatewayFetch-backed AtlassianHttpPort adapter tests. Hermetic: an injected
 // fetchImpl fake replaces the platform fetch, so no request leaves the process. Asserts the
 // ADR-0128 D2/D3 posture directly: the Authorization header is materialised only at the outbound
@@ -13,6 +14,8 @@ import {
   atlassianAuthorizationHeaderValue,
   type AtlassianCredentialExecutionResolver,
   type AtlassianResolvedCredential,
+  type AtlassianHttpRequest,
+  type AtlassianHttpBodyRequest,
 } from "@oscharko-dev/keiko-connectors";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import {
@@ -80,6 +83,21 @@ function port(
 }
 
 describe("createGatewayAtlassianHttpPort", () => {
+  it("refuses escape from the configured context path before credential resolution", async () => {
+    const credentials = resolver();
+    const { fetchImpl, calls } = fetchFake(200);
+    const scoped = createGatewayAtlassianHttpPort({
+      baseUrl: "https://acme.example/jira",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+    });
+    await expect(
+      scoped({ method: "GET", url: "https://acme.example/admin", timeoutMs: 100 }),
+    ).rejects.toThrow(AtlassianCredentialCustodyError);
+    expect(calls).toHaveLength(0);
+    expect(credentials.resolvedRefs).toHaveLength(0);
+  });
   it("materialises Basic auth from the execution resolver only at the outbound hop", async () => {
     const credentials = resolver();
     const { fetchImpl, calls } = fetchFake(200);
@@ -178,6 +196,28 @@ describe("createGatewayAtlassianHttpPort", () => {
     expect(result).toEqual({ kind: "network-error" });
     expect(JSON.stringify(result)).not.toContain(SYNTHETIC_TOKEN);
   });
+
+  it.each(["CERT_HAS_EXPIRED", "ERR_TLS_CERT_ALTNAME_INVALID", "TLS_CA_FAILURE"])(
+    "classifies %s without exposing certificate or endpoint data",
+    async (code) => {
+      const fetchImpl = (): Promise<Response> =>
+        Promise.reject(
+          new TypeError("synthetic transport failure", {
+            cause: Object.assign(new Error("synthetic certificate"), { code }),
+          }),
+        );
+      const result = await bodyPort(
+        fetchImpl,
+        resolver(),
+      )({
+        method: "GET",
+        url: "https://acme.example/rest/api/2/serverInfo",
+        timeoutMs: 100,
+        maxBodyBytes: 65536,
+      });
+      expect(result).toEqual({ kind: "network-error", reason: "tls" });
+    },
+  );
 
   it("clamps a hostile timeout budget instead of honoring it", async () => {
     const credentials = resolver();
@@ -519,6 +559,61 @@ const INTERNAL_BASE_URLS = [
 ] as const;
 
 describe("Atlassian connector egress posture", () => {
+  it("admits only the exact configured private origin, port, path and address class", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    const privateTargets = (): readonly AtlassianPrivateTarget[] => [
+      { baseUrl: "https://10.0.0.5:8443/jira", addressClass: "private" as const },
+    ];
+    for (const baseUrl of [
+      "https://10.0.0.5:8443/jira",
+      "https://10.0.0.5:8444/jira",
+      "https://10.0.0.6:8443/jira",
+      "https://10.0.0.5:8443/other",
+    ]) {
+      const result = await createGatewayAtlassianHttpPort({
+        baseUrl,
+        authRef: AUTH_REF,
+        credentials: resolver(),
+        privateTargets,
+        fetchImpl,
+      })({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 });
+      expect(result.kind).toBe(
+        baseUrl === "https://10.0.0.5:8443/jira" ? "response" : "network-error",
+      );
+    }
+    expect(calls).toHaveLength(1);
+  });
+
+  it("rechecks revocation on every request and refuses active BFF loopback ports", async () => {
+    const { fetchImpl, calls } = fetchFake(200);
+    let enabled = true;
+    const baseUrl = "https://127.0.0.1:18443/jira";
+    const privateTargets = (): readonly AtlassianPrivateTarget[] =>
+      enabled ? [{ baseUrl, addressClass: "loopback" as const }] : [];
+    const connection = createGatewayAtlassianHttpPort({
+      baseUrl,
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      privateTargets,
+      fetchImpl,
+    });
+    const request = { method: "GET" as const, url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 100 };
+    expect((await connection(request)).kind).toBe("response");
+    enabled = false;
+    expect((await connection(request)).kind).toBe("network-error");
+    enabled = true;
+    const blocked = createGatewayAtlassianHttpPort({
+      baseUrl,
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      privateTargets,
+      deniedLoopbackPorts: () => [18443],
+      fetchImpl,
+    });
+    expect((await blocked(request)).kind).toBe("network-error");
+    expect(calls).toHaveLength(1);
+  });
+
   it.each(INTERNAL_BASE_URLS)(
     "blocks %s even when the shared gateway egress opts into private networks",
     async (baseUrl) => {
@@ -685,6 +780,45 @@ describe("Atlassian connector egress posture — proxied DNS-rebinding refusal (
     }
   });
 
+  it.each([false, true])(
+    "refuses mixed private/public DNS before dispatch (proxy=%s)",
+    async (proxied) => {
+      const proxy = createHttpServer();
+      let contacts = 0;
+      proxy.on("connect", (_request, socket) => {
+        contacts += 1;
+        socket.destroy();
+      });
+      const port = await listenLocal(proxy);
+      const baseUrl = "https://jira.operator.test/context";
+      try {
+        vi.resetModules();
+        const lookup = vi.fn(() =>
+          Promise.resolve([
+            { address: "10.0.0.5", family: 4 },
+            { address: "203.0.113.10", family: 4 },
+          ]),
+        );
+        vi.doMock("node:dns/promises", () => ({ lookup }));
+        const { createGatewayAtlassianHttpPort: freshPort } = await import("./httpPort.js");
+        const result = await freshPort({
+          baseUrl,
+          authRef: AUTH_REF,
+          credentials: resolver(),
+          privateTargets: () => [{ baseUrl, addressClass: "private" }],
+          egress: () => (proxied ? { httpsProxy: `http://127.0.0.1:${String(port)}` } : undefined),
+        })({ method: "GET", url: `${baseUrl}/rest/api/2/myself`, timeoutMs: 1000 });
+        expect(result).toEqual({ kind: "network-error" });
+        expect(lookup).toHaveBeenCalled();
+        expect(contacts).toBe(0);
+      } finally {
+        vi.doUnmock("node:dns/promises");
+        vi.resetModules();
+        await closeServer(proxy);
+      }
+    },
+  );
+
   it("does not blanket-refuse ordinary proxied traffic — DNS is actually attempted, not short-circuited", async () => {
     // Proves the fix does not reintroduce the exact regression connectorEgressConfig's own comment
     // warns about: denyLoopback alone, WITHOUT pinProxiedConnectTarget, makes
@@ -777,4 +911,261 @@ describe("Atlassian write-channel body ceiling — fails closed on a non-finite 
       vi.resetModules();
     }
   });
+});
+
+describe("final Atlassian request lifecycle", () => {
+  it("refuses final admission before resolving credentials or sending HTTP", async () => {
+    const credentials = resolver();
+    const { fetchImpl, calls } = fetchFake(204);
+    const beforeDispatch = vi.fn(() => false);
+    const http = createGatewayAtlassianHttpBodyPort({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+      beforeDispatch,
+    });
+    await expect(
+      http({
+        method: "PUT",
+        url: "https://acme.example/rest/api/2/issue/SYN-1",
+        bodyJson: "{}",
+        timeoutMs: 1000,
+        maxBodyBytes: 100,
+      }),
+    ).rejects.toMatchObject({ code: "invalid-input" });
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("records response acknowledgement before a body stream can fail", async () => {
+    const observed: number[] = [];
+    const onResponse = vi.fn(
+      (_request: AtlassianHttpRequest | AtlassianHttpBodyRequest, status: number): boolean => {
+        observed.push(status);
+        return true;
+      },
+    );
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream(
+            {
+              pull(controller): void {
+                expect(observed).toEqual([201]);
+                controller.error(new Error("synthetic-private-body-error"));
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { status: 201 },
+        ),
+      ),
+    );
+    const http = createGatewayAtlassianHttpBodyPort({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      onResponse,
+    });
+    expect(
+      await http({
+        method: "POST",
+        url: "https://acme.example/rest/api/2/issue",
+        bodyJson: "{}",
+        timeoutMs: 1000,
+        maxBodyBytes: 100,
+      }),
+    ).toEqual({ kind: "network-error" });
+    expect(onResponse).toHaveBeenCalledOnce();
+    expect(observed).toEqual([201]);
+  });
+
+  it("does not materialize credentials for a request cancelled before transport admission", async () => {
+    const credentials = resolver();
+    const controller = new AbortController();
+    controller.abort();
+    const { fetchImpl, calls } = fetchFake(204);
+    const http = createGatewayAtlassianHttpBodyPort({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+    });
+    expect(
+      await http({
+        method: "GET",
+        url: "https://acme.example/rest/api/2/issue/SYN-1",
+        signal: controller.signal,
+        timeoutMs: 1000,
+        maxBodyBytes: 100,
+      }),
+    ).toEqual({ kind: "timeout" });
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe.each([
+  ["status", createGatewayAtlassianHttpPort],
+  ["body", createGatewayAtlassianHttpBodyPort],
+] as const)("%s port lifecycle failure preservation", (_name, factory) => {
+  const request = {
+    method: "GET" as const,
+    url: "https://acme.example/rest/api/2/myself",
+    timeoutMs: 1000,
+    maxBodyBytes: 100,
+  };
+
+  it("preserves a custody failure without classifying it as a retriable network error", async () => {
+    const failure = new AtlassianCredentialCustodyError("invalid-input", [
+      "synthetic custody refusal",
+    ]);
+    const credentials = {
+      resolveForExecution: (): AtlassianResolvedCredential => {
+        throw failure;
+      },
+    };
+    const { fetchImpl, calls } = fetchFake(200);
+    const http = factory({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+    });
+    await expect(http(request)).rejects.toBe(failure);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects an asynchronous admission rather than treating its Promise as consent", async () => {
+    const credentials = resolver();
+    const { fetchImpl, calls } = fetchFake(200);
+    const beforeDispatch = (() => Promise.resolve(true)) as unknown as () => boolean;
+    const http = factory({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+      beforeDispatch,
+    });
+    await expect(http(request)).rejects.toMatchObject({ code: "invalid-input" });
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("preserves the exact server admission error and never accesses the credential", async () => {
+    const failure = new Error("synthetic authority revoked");
+    const credentials = resolver();
+    const { fetchImpl, calls } = fetchFake(200);
+    const beforeDispatch = (): boolean => {
+      throw failure;
+    };
+    const http = factory({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials,
+      fetchImpl,
+      beforeDispatch,
+    });
+    await expect(http(request)).rejects.toBe(failure);
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("cancels the unread body and propagates a response observation failure", async () => {
+    const failure = new Error("synthetic observation failure");
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(new ReadableStream({ cancel }), { status: 200 })),
+    );
+    const onResponse = (): boolean => {
+      throw failure;
+    };
+    const http = factory({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      onResponse,
+    });
+    await expect(http(request)).rejects.toBe(failure);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("rejects asynchronous response observation and releases its unread body", async () => {
+    const cancel = vi.fn();
+    const fetchImpl = vi.fn<typeof fetch>(() =>
+      Promise.resolve(new Response(new ReadableStream({ cancel }), { status: 200 })),
+    );
+    const onResponse = (() => Promise.resolve(true)) as unknown as () => boolean;
+    const http = factory({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials: resolver(),
+      fetchImpl,
+      onResponse,
+    });
+    await expect(http(request)).rejects.toMatchObject({ code: "invalid-input" });
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+});
+
+it("retains the admitted request snapshot while DNS is pending and resolves no credential on revocation", async () => {
+  let releaseLookup: (() => void) | undefined;
+  let markLookupReady: (() => void) | undefined;
+  const lookupReady = new Promise<void>((resolve) => {
+    markLookupReady = resolve;
+  });
+  const held = new Promise<void>((resolve) => {
+    releaseLookup = resolve;
+  });
+  const lookup = vi.fn(() => {
+    markLookupReady?.();
+    return held.then(() => [{ address: "203.0.113.10", family: 4 }]);
+  });
+  const credentials = resolver();
+  const original = {
+    method: "PUT" as const,
+    url: "https://acme.example/rest/api/2/issue/SYN-1",
+    bodyJson: "{}",
+    timeoutMs: 1000,
+    maxBodyBytes: 100,
+  };
+  const initial = { ...original };
+  let enabled = true;
+  const beforeDispatch = vi.fn(
+    (snapshot: AtlassianHttpRequest | AtlassianHttpBodyRequest): boolean => {
+      expect(snapshot).toEqual(initial);
+      expect(Object.isFrozen(snapshot)).toBe(true);
+      return enabled;
+    },
+  );
+  try {
+    vi.resetModules();
+    vi.doMock("node:dns/promises", () => ({ lookup }));
+    const { createGatewayAtlassianHttpBodyPort: freshPort } = await import("./httpPort.js");
+    const pending = freshPort({
+      baseUrl: "https://acme.example",
+      authRef: AUTH_REF,
+      credentials,
+      beforeDispatch,
+    })(original);
+    await lookupReady;
+    expect(credentials.resolvedRefs).toHaveLength(0);
+    original.bodyJson = '{"changed":true}';
+    original.url = "https://acme.example/rest/api/2/issue/SYN-2";
+    enabled = false;
+    releaseLookup?.();
+    await expect(pending).rejects.toMatchObject({ code: "invalid-input" });
+    expect(beforeDispatch).toHaveBeenCalledOnce();
+    expect(credentials.resolvedRefs).toHaveLength(0);
+  } finally {
+    releaseLookup?.();
+    vi.doUnmock("node:dns/promises");
+    vi.resetModules();
+  }
 });

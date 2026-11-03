@@ -56,13 +56,6 @@ export function connectedScopeLabel(scope: ChatConnectedScope, t: I18nTranslate)
     : t("scope.pill.folder", { name: rootName });
 }
 
-export function connectedScopeBoundary(scope: ChatConnectedScope, t: I18nTranslate): string {
-  const pathNoun =
-    scope.kind === "directory" ? "scope.boundary.noun.folder" : "scope.boundary.noun.fileScope";
-  const noun = t(scope.kind === "workspace-root" ? "scope.boundary.noun.repository" : pathNoun);
-  return t("scope.boundary.description", { noun });
-}
-
 export function connectedScopeSignature(scopes: readonly ChatConnectedScope[]): string {
   return JSON.stringify(scopes.map((scope) => [scope.kind, scope.root, scope.relativePaths]));
 }

@@ -8,9 +8,14 @@ import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/
 import { updateChat } from "@/lib/api";
 import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
 
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
+import {
+  chatCreationModelChoiceOf,
+  type ChatCreationModelChoice,
+} from "../hooks/chatCreationModelChoice";
 
 import { ChatSessionProvider } from "../context/ChatSessionContext";
 import { ErrorNoticeFromError } from "../ErrorNotice";
@@ -45,7 +50,7 @@ import {
 import styles from "./ChatChoiceNotice.module.css";
 import { NATIVE_FIELDSET_RESET_STYLE } from "../native-element-styles";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
-import { effectiveScopes, KEEP_FILES_FOLDER_CFG_KEY } from "../hooks/workspaceActions";
+import { effectiveScopes } from "../hooks/workspaceActions";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
 import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
@@ -113,6 +118,8 @@ type ChatCreationNoticeKey = Extract<
 interface ChatCreationOwner {
   readonly kind: "window";
   readonly id: string;
+  readonly requestId?: string | undefined;
+  readonly modelChoice?: ChatCreationModelChoice | undefined;
 }
 
 interface ChatCreationCoordinator {
@@ -149,6 +156,7 @@ const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
 const CHAT_PROJECT_LOOKUP_DIAGNOSTIC = "Chat project lookup failed.";
 const CHAT_TARGET_MISSING_DIAGNOSTIC = "[keiko] chat window restore target not found";
 const CHAT_BINDING_RESOLVED_DIAGNOSTIC = "[keiko] chat window binding resolved";
+const CHAT_PROJECT_OPEN_EXHAUSTED_DIAGNOSTIC = "[keiko] chat window project open exhausted";
 
 class ChatCreationRequestFailure extends Error {
   public constructor(readonly correlationId: string) {
@@ -245,6 +253,20 @@ function releaseSettledCreation(
   void result.then(releaseIfCurrent, releaseIfCurrent);
 }
 
+function requestOwnedChatCreation(
+  openNewChat: ChatSessionApi["openNewChat"],
+  owner: ChatCreationOwner,
+  project: ProjectWithAvailability | undefined,
+  title: string | undefined,
+): Promise<Chat | undefined> {
+  if (owner.modelChoice !== undefined) {
+    return openNewChat(project, title, owner.requestId, owner.modelChoice);
+  }
+  return owner.requestId === undefined
+    ? openNewChat(project, title)
+    : openNewChat(project, title, owner.requestId);
+}
+
 export function useChatCreationCoordinator(
   openNewChat: ChatSessionApi["openNewChat"],
   replaceChat: ChatSessionApi["replaceChat"],
@@ -256,7 +278,7 @@ export function useChatCreationCoordinator(
       const ownerKey = chatCreationOwnerKey(owner);
       let active = activeByOwnerRef.current.get(ownerKey);
       if (active === undefined) {
-        const promise = openNewChat(project, title);
+        const promise = requestOwnedChatCreation(openNewChat, owner, project, title);
         const created: ActiveChatCreation = {
           correlationId: newClientCorrelationId(),
           desiredTitle: normalizedChatTitle(title),
@@ -292,6 +314,9 @@ interface ChatCreationControlArgs {
   readonly coordinator: ChatCreationCoordinator;
   readonly loading: boolean;
   readonly newChatRequestId: string | undefined;
+  readonly creationRequestId: string;
+  readonly modelChoice: ChatCreationModelChoice | undefined;
+  readonly retryRevision: number;
   readonly title: string | undefined;
   readonly updateCfg: WindowRenderContext["updateCfg"];
 }
@@ -299,6 +324,10 @@ interface ChatCreationControlArgs {
 interface ChatCreationControl {
   readonly errorKey: ChatCreationNoticeKey | null;
   readonly pending: boolean;
+}
+
+function chatCreationFailed(creating: ChatCreationControl): boolean {
+  return creating.pending && creating.errorKey === "chat.creation.openFailed";
 }
 
 interface ChatCreationError {
@@ -328,12 +357,62 @@ interface ChatCreationAttemptState {
   sequence: number;
 }
 
+function initialChatCreationAttemptState(): ChatCreationAttemptState {
+  return { active: null, attemptedRequestKey: undefined, latestAttempt: 0, sequence: 0 };
+}
+
+interface ChatCreationAttemptExecution extends Omit<
+  ChatCreationRequestExecution,
+  "isCurrent" | "owner" | "requestKey"
+> {
+  readonly creationRequestId: string;
+  readonly modelChoice: ChatCreationModelChoice | undefined;
+  readonly isCurrent: (attempt: number) => boolean;
+  readonly loading: boolean;
+  readonly requestKey: string | undefined;
+  readonly retryRevision: number;
+  readonly state: ChatCreationAttemptState;
+}
+
 function invalidateChatCreationAttempt(state: ChatCreationAttemptState): void {
   state.sequence += 1;
   state.latestAttempt = state.sequence;
   state.attemptedRequestKey = undefined;
   state.active?.coordinator.release(state.active.owner);
   state.active = null;
+}
+
+function executeChatCreationAttempt(execution: ChatCreationAttemptExecution): void {
+  const { requestKey, state } = execution;
+  if (requestKey === undefined) {
+    invalidateChatCreationAttempt(state);
+    return;
+  }
+  const attemptKey = `${requestKey}\u0000${String(execution.retryRevision)}`;
+  if (execution.loading || state.attemptedRequestKey === attemptKey) return;
+  const attempt = state.sequence + 1;
+  // Request identity and project own the operation; the attempt guards its render generation.
+  const owner = {
+    kind: "window",
+    id: requestKey,
+    requestId: execution.creationRequestId,
+    modelChoice: execution.modelChoice,
+  } as const;
+  state.sequence = attempt;
+  state.latestAttempt = attempt;
+  state.attemptedRequestKey = attemptKey;
+  state.active = { coordinator: execution.coordinator, owner };
+  execution.setError(null);
+  void executeChatCreationRequest({
+    activeProject: execution.activeProject,
+    coordinator: execution.coordinator,
+    isCurrent: (): boolean => execution.isCurrent(attempt),
+    owner,
+    requestKey,
+    setError: execution.setError,
+    title: execution.title,
+    updateCfg: execution.updateCfg,
+  });
 }
 
 function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttemptState }): {
@@ -357,10 +436,13 @@ function useChatCreationLifetime(stateRef: { readonly current: ChatCreationAttem
   return mountedRef;
 }
 
-function useIdentityRevision(identity: object): number {
+function useIdentityRevision(identity: object, retryFailedCreation: boolean): number {
   const stateRef = useRef({ identity, revision: 0 });
   if (stateRef.current.identity !== identity) {
-    stateRef.current = { identity, revision: stateRef.current.revision + 1 };
+    // Catalog refreshes replace callbacks while a slow creation is still pending. Only a
+    // settled failure may start a new attempt; callback identity is not a new user request.
+    const revision = stateRef.current.revision + (retryFailedCreation ? 1 : 0);
+    stateRef.current = { identity, revision };
   }
   return stateRef.current.revision;
 }
@@ -389,6 +471,9 @@ function applyChatCreationResult(
     projectPath: result.chat.projectPath,
     title: result.chat.title,
     newChatRequestId: undefined,
+    ...(execution.owner.modelChoice === undefined
+      ? {}
+      : { newChatModelSelection: undefined, newChatModelId: undefined }),
   });
 }
 
@@ -427,54 +512,51 @@ function visibleChatCreationError(
 
 function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationControl {
   const { activeProject, chatId, coordinator, loading, newChatRequestId, title, updateCfg } = args;
+  const { creationRequestId, modelChoice, retryRevision } = args;
   const [error, setError] = useState<ChatCreationError | null>(null);
   const pending = chatId === undefined;
-  const coordinatorRevision = useIdentityRevision(coordinator);
+  const retryFailedCreation = error?.messageKey === "chat.creation.openFailed";
+  const coordinatorRevision = useIdentityRevision(coordinator, retryFailedCreation);
   const requestId = pending
     ? (newChatRequestId ?? `initial-unbound-chat-${String(coordinatorRevision)}`)
     : undefined;
   const projectPath = activeProject?.path ?? null;
   const requestKey = requestId === undefined ? undefined : `${requestId}\u0000${projectPath ?? ""}`;
-  const attemptStateRef = useRef<ChatCreationAttemptState>({
-    active: null,
-    attemptedRequestKey: undefined,
-    latestAttempt: 0,
-    sequence: 0,
-  });
+  const attemptStateRef = useRef(initialChatCreationAttemptState());
   const currentRequestKeyRef = useRef(requestKey);
   currentRequestKeyRef.current = requestKey;
   const mountedRef = useChatCreationLifetime(attemptStateRef);
 
   useEffect((): void => {
-    if (requestKey === undefined) {
-      invalidateChatCreationAttempt(attemptStateRef.current);
-      return;
-    }
-    if (loading || attemptStateRef.current.attemptedRequestKey === requestKey) return;
-    const attempt = attemptStateRef.current.sequence + 1;
-    // A request identity and project are the ownership boundary. The attempt only guards a
-    // particular render generation; including it here would make navigating away and back to the
-    // same still-pending request start a duplicate creation.
-    const owner = { kind: "window", id: requestKey } as const;
-    attemptStateRef.current.sequence = attempt;
-    attemptStateRef.current.latestAttempt = attempt;
-    attemptStateRef.current.attemptedRequestKey = requestKey;
-    attemptStateRef.current.active = { coordinator, owner };
-    setError(null);
-    void executeChatCreationRequest({
+    executeChatCreationAttempt({
       activeProject,
       coordinator,
-      isCurrent: (): boolean =>
+      creationRequestId,
+      modelChoice,
+      isCurrent: (attempt): boolean =>
         mountedRef.current &&
         currentRequestKeyRef.current === requestKey &&
         attemptStateRef.current.latestAttempt === attempt,
-      owner,
+      loading,
       requestKey,
+      retryRevision,
       setError,
+      state: attemptStateRef.current,
       title,
       updateCfg,
     });
-  }, [activeProject, coordinator, loading, mountedRef, requestKey, title, updateCfg]);
+  }, [
+    activeProject,
+    coordinator,
+    creationRequestId,
+    modelChoice,
+    loading,
+    mountedRef,
+    requestKey,
+    retryRevision,
+    title,
+    updateCfg,
+  ]);
   return { errorKey: visibleChatCreationError(error, chatId, requestKey), pending };
 }
 
@@ -486,6 +568,11 @@ interface BoundChatRouting {
   readonly targetMissing: boolean;
   // The chat list loads a legacy binding's scan read before it judged the chat missing.
   readonly legacyScanCorrelationIds: readonly string[] | undefined;
+  // How many times the window opened the chat's project; more than one when an attempt was
+  // overtaken and repeated (#4123).
+  readonly projectOpenAttemptCount: number;
+  // Every bounded attempt was overtaken: the window stopped waiting for its project (#4126 review).
+  readonly projectOpenExhausted: boolean;
 }
 
 // A missing verdict keeps the correlation id of every list the scan read: each of those answers
@@ -727,13 +814,102 @@ function projectToOpen(
   return session.projects.find((project): boolean => project.path === projectPath);
 }
 
-function useProjectRouting(
-  targetProject: ProjectWithAvailability | undefined,
-  session: ChatSessionApi,
-): boolean {
-  const attemptedPath = useRef<string | undefined>(undefined);
+// #4123: `openProject` gives way silently when another update makes a different project active
+// while it loads. The window then still needs its project, so an attempt that settled without
+// activating it is repeated, a bounded number of times, instead of waiting for it forever.
+const PROJECT_OPEN_ATTEMPTS_MAX = 3;
+
+interface ProjectRouting {
+  readonly switching: boolean;
+  readonly attemptCount: number;
+  readonly exhausted: boolean;
+}
+
+interface ProjectOpenAttempts {
+  path: string | undefined;
+  count: number;
+}
+
+function countProjectOpenAttempt(attempts: ProjectOpenAttempts, path: string): number {
+  if (attempts.path !== path) {
+    attempts.path = path;
+    attempts.count = 0;
+  }
+  attempts.count += 1;
+  return attempts.count;
+}
+
+// Repeats an open that settled while the window's project is still not the active one, and gives
+// up once the bounded attempts are spent; returns the epoch the open effect keys on.
+function useOvertakenOpenRetry(args: {
+  readonly settledPath: string | undefined;
+  readonly clearSettled: () => void;
+  readonly pendingPath: string | undefined;
+  readonly targetPath: string | undefined;
+  readonly failed: boolean;
+  readonly attempts: { readonly current: ProjectOpenAttempts };
+  readonly attemptedPath: { current: string | undefined };
+  readonly exhaust: (path: string) => void;
+}): number {
+  const [retryEpoch, setRetryEpoch] = useState(0);
+  const { settledPath, clearSettled, pendingPath, targetPath, failed, attempts } = args;
+  const { attemptedPath, exhaust } = args;
+  useEffect((): void => {
+    if (settledPath === undefined || pendingPath !== undefined) return;
+    clearSettled();
+    if (targetPath !== settledPath || failed) return;
+    if (attempts.current.count >= PROJECT_OPEN_ATTEMPTS_MAX) {
+      exhaust(settledPath);
+      return;
+    }
+    attemptedPath.current = undefined;
+    setRetryEpoch((epoch) => epoch + 1);
+  }, [
+    attemptedPath,
+    attempts,
+    clearSettled,
+    exhaust,
+    failed,
+    pendingPath,
+    settledPath,
+    targetPath,
+  ]);
+  return retryEpoch;
+}
+
+// The routing episode ends when the window no longer needs a project or its open failed: the next
+// one starts with a fresh attempt budget, while retries of a live episode keep counting (#4126
+// review).
+function useRoutingEpisodeEnd(args: {
+  readonly ended: boolean;
+  readonly attempts: { current: ProjectOpenAttempts };
+  readonly attemptedPath: { current: string | undefined };
+  readonly clearExhausted: (path: undefined) => void;
+}): void {
+  const { ended, attempts, attemptedPath, clearExhausted } = args;
+  useEffect((): void => {
+    if (!ended) return;
+    attemptedPath.current = undefined;
+    attempts.current = { path: undefined, count: 0 };
+    clearExhausted(undefined);
+  }, [attemptedPath, attempts, clearExhausted, ended]);
+}
+
+// Opens the window's project once per attempt; a settle that a newer attempt or an unmount
+// superseded changes nothing.
+function useProjectOpen(args: {
+  readonly targetProject: ProjectWithAvailability | undefined;
+  readonly session: ChatSessionApi;
+  readonly retryEpoch: number;
+  readonly attempts: { readonly current: ProjectOpenAttempts };
+  readonly attemptedPath: { current: string | undefined };
+  readonly setAttemptCount: (count: number) => void;
+  readonly setPendingPath: (path: string | undefined) => void;
+  readonly setSettledPath: (path: string | undefined) => void;
+}): void {
+  const { targetProject, session, retryEpoch, attempts, attemptedPath } = args;
+  const { setAttemptCount, setPendingPath, setSettledPath } = args;
   const attemptGeneration = useRef(0);
-  const [pendingPath, setPendingPath] = useState<string | undefined>();
   useEffect(
     () => (): void => {
       attemptGeneration.current += 1;
@@ -743,44 +919,117 @@ function useProjectRouting(
   useEffect((): void => {
     if (session.loading || session.error !== undefined || targetProject === undefined) return;
     if (attemptedPath.current === targetProject.path) return;
-    attemptedPath.current = targetProject.path;
+    const path = targetProject.path;
+    attemptedPath.current = path;
+    setAttemptCount(countProjectOpenAttempt(attempts.current, path));
     const generation = ++attemptGeneration.current;
-    setPendingPath(targetProject.path);
+    setPendingPath(path);
     const settle = (): void => {
-      if (attemptGeneration.current === generation) setPendingPath(undefined);
+      if (attemptGeneration.current !== generation) return;
+      setPendingPath(undefined);
+      setSettledPath(path);
     };
     void session.openProject(targetProject).then(settle, settle);
-  }, [session, targetProject]);
-  useEffect((): void => {
-    if (pendingPath === undefined && (targetProject === undefined || session.error !== undefined)) {
-      attemptedPath.current = undefined;
-    }
-  }, [pendingPath, session.error, targetProject]);
-  return (targetProject !== undefined && session.error === undefined) || pendingPath !== undefined;
+  }, [
+    attemptedPath,
+    attempts,
+    retryEpoch,
+    session,
+    setAttemptCount,
+    setPendingPath,
+    setSettledPath,
+    targetProject,
+  ]);
+}
+
+function useProjectRouting(
+  targetProject: ProjectWithAvailability | undefined,
+  session: ChatSessionApi,
+): ProjectRouting {
+  const attemptedPath = useRef<string | undefined>(undefined);
+  const attempts = useRef<ProjectOpenAttempts>({ path: undefined, count: 0 });
+  const [pendingPath, setPendingPath] = useState<string | undefined>();
+  const [settledPath, setSettledPath] = useState<string | undefined>();
+  const [attemptCount, setAttemptCount] = useState(0);
+  const [exhaustedPath, setExhaustedPath] = useState<string | undefined>();
+  const clearSettled = useCallback((): void => setSettledPath(undefined), []);
+  const retryEpoch = useOvertakenOpenRetry({
+    settledPath,
+    clearSettled,
+    pendingPath,
+    targetPath: targetProject?.path,
+    failed: session.error !== undefined,
+    attempts,
+    attemptedPath,
+    exhaust: setExhaustedPath,
+  });
+  useProjectOpen({
+    targetProject,
+    session,
+    retryEpoch,
+    attempts,
+    attemptedPath,
+    setAttemptCount,
+    setPendingPath,
+    setSettledPath,
+  });
+  useRoutingEpisodeEnd({
+    ended:
+      pendingPath === undefined && (targetProject === undefined || session.error !== undefined),
+    attempts,
+    attemptedPath,
+    clearExhausted: setExhaustedPath,
+  });
+  return projectRoutingState({
+    targetPath: targetProject?.path,
+    failed: session.error !== undefined,
+    pendingPath,
+    exhaustedPath,
+    attemptCount,
+  });
+}
+
+// An exhausted window no longer switches: it waits for nothing and reports the closed outcome.
+function projectRoutingState(args: {
+  readonly targetPath: string | undefined;
+  readonly failed: boolean;
+  readonly pendingPath: string | undefined;
+  readonly exhaustedPath: string | undefined;
+  readonly attemptCount: number;
+}): ProjectRouting {
+  const { targetPath, failed, pendingPath, exhaustedPath, attemptCount } = args;
+  const exhausted =
+    pendingPath === undefined && exhaustedPath !== undefined && exhaustedPath === targetPath;
+  const switching =
+    !exhausted && ((targetPath !== undefined && !failed) || pendingPath !== undefined);
+  return { switching, attemptCount, exhausted };
 }
 
 function projectRestoreFailed(
   session: ChatSessionApi,
-  switchingProject: boolean,
+  projectRouting: ProjectRouting,
   liveTargetPresent: boolean,
 ): boolean {
-  return !switchingProject && session.error !== undefined && !liveTargetPresent;
+  const failed = session.error !== undefined || projectRouting.exhausted;
+  return !projectRouting.switching && failed && !liveTargetPresent;
 }
 
 function routingResult(
   activeTarget: Chat | undefined,
   legacyProject: ReturnType<typeof useLegacyChatProjectPath>,
   lookupFailed: boolean,
-  switchingProject: boolean,
+  projectRouting: ProjectRouting,
   targetMissing: boolean,
 ): BoundChatRouting {
   return {
     activeTarget,
     lookupFailed,
     resolvingLegacyProject: legacyProject.pending,
-    switchingProject,
+    switchingProject: projectRouting.switching,
     targetMissing,
     legacyScanCorrelationIds: legacyProject.scanCorrelationIds,
+    projectOpenAttemptCount: projectRouting.attemptCount,
+    projectOpenExhausted: projectRouting.exhausted && lookupFailed,
   };
 }
 
@@ -804,12 +1053,13 @@ function useBoundChatRouting(args: {
     updateCfg: args.updateCfg,
   });
   const targetProject = projectToOpen(legacyProject.path, session);
-  const switchingProject = useProjectRouting(targetProject, session);
+  const projectRouting = useProjectRouting(targetProject, session);
+  const switchingProject = projectRouting.switching;
   const liveTargetPresent = session.chats.some(
     (chat): boolean => chat.id === chatId && chat.status !== "closed",
   );
   const lookupFailed =
-    legacyProject.failed || projectRestoreFailed(session, switchingProject, liveTargetPresent);
+    legacyProject.failed || projectRestoreFailed(session, projectRouting, liveTargetPresent);
   const { chats, loading, openChat } = session;
   useEffect((): void => {
     if (loading || chatId === undefined) return;
@@ -826,7 +1076,7 @@ function useBoundChatRouting(args: {
     loading: session.loading,
     switchingProject,
   });
-  return routingResult(activeTarget, legacyProject, lookupFailed, switchingProject, targetMissing);
+  return routingResult(activeTarget, legacyProject, lookupFailed, projectRouting, targetMissing);
 }
 
 interface MemoryPreference {
@@ -906,7 +1156,7 @@ function useBoundChatTitle(args: {
   }, [args]);
 }
 
-type ChatBindingOutcome = "resolved" | "target-missing";
+type ChatBindingOutcome = "resolved" | "target-missing" | "project-open-exhausted";
 
 function chatBindingOutcome(
   routing: BoundChatRouting,
@@ -914,6 +1164,7 @@ function chatBindingOutcome(
 ): ChatBindingOutcome | undefined {
   if (chatId === undefined) return undefined;
   if (routing.targetMissing) return "target-missing";
+  if (routing.projectOpenExhausted) return "project-open-exhausted";
   return routing.activeTarget?.id === chatId ? "resolved" : undefined;
 }
 
@@ -947,12 +1198,17 @@ function chatBindingReferenceEvidence(
   };
 }
 
+const CHAT_BINDING_DIAGNOSTICS: Readonly<Record<ChatBindingOutcome, string>> = {
+  resolved: CHAT_BINDING_RESOLVED_DIAGNOSTIC,
+  "target-missing": CHAT_TARGET_MISSING_DIAGNOSTIC,
+  "project-open-exhausted": CHAT_PROJECT_OPEN_EXHAUSTED_DIAGNOSTIC,
+};
+
 function chatBindingMessage(
   outcome: ChatBindingOutcome,
   evidence: ChatBindingReferenceEvidence,
 ): string {
-  const head =
-    outcome === "resolved" ? CHAT_BINDING_RESOLVED_DIAGNOSTIC : CHAT_TARGET_MISSING_DIAGNOSTIC;
+  const head = CHAT_BINDING_DIAGNOSTICS[outcome];
   const flagged = evidence.heuristicFlagged ? ", heuristic-flagged" : "";
   return `${head} (reference=${evidence.referenceShape}${flagged})`;
 }
@@ -1001,6 +1257,8 @@ function chatBindingDecidingLoads(
   session: ChatSessionApi,
   { restoration, missing }: ChatRebindEvidence,
 ): ChatBindingDecidingLoads {
+  // No list load decided an exhausted project open: the attempts did.
+  if (outcome === "project-open-exhausted") return { correlationIds: [], count: 0 };
   if (outcome === "resolved" && restoration !== undefined) {
     return { correlationIds: [restoration.correlationId], count: 1 };
   }
@@ -1046,6 +1304,7 @@ function useChatBindingEvidence({
   const idsKey = loads.correlationIds.join("\u0000");
   const { count } = loads;
   const { restoration, missing } = rebound;
+  const openAttempts = routing.projectOpenAttemptCount;
   useEffect((): void => {
     if (outcome === undefined || chatId === undefined) return;
     if (!claimBindingReport(reportedRef.current, outcome, chatId, restoration)) return;
@@ -1060,9 +1319,10 @@ function useChatBindingEvidence({
         windowRef: windowId,
         ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
         ...(count === 0 ? {} : { decidingLoadCount: count }),
+        ...(openAttempts > 1 ? { projectOpenAttemptCount: openAttempts } : {}),
       },
     });
-  }, [chatId, count, idsKey, missing, outcome, restoration, windowId]);
+  }, [chatId, count, idsKey, missing, openAttempts, outcome, restoration, windowId]);
 }
 
 interface ReportedBindings {
@@ -1223,18 +1483,12 @@ function BoundChatBody({
     },
     [activeProjectPath, ctx],
   );
-  const updateCfg = ctx.updateCfg;
-  const keepFolderChange = useCallback(
-    (keep: boolean): void => updateCfg({ [KEEP_FILES_FOLDER_CFG_KEY]: keep }),
-    [updateCfg],
-  );
   if (targetLookupFailed) return null;
   if (targetMissing) return <ChatNotFound choice={choice} />;
   if (waiting) return <ChatBindPending />;
   return (
     <ChatWindow
       windowId={ctx.windowId}
-      onKeepFolderChange={keepFolderChange}
       suspended={ctx.suspended === true}
       mini={ctx.mini === true}
       minimalChat={ctx.minimalChat === true}
@@ -1257,6 +1511,7 @@ interface BoundChatConfig {
   readonly chatIdFingerprint: string | undefined;
   readonly memoryEnabled: boolean | undefined;
   readonly newChatRequestId: string | undefined;
+  readonly modelChoice: ChatCreationModelChoice | undefined;
   readonly projectPath: string | undefined;
   readonly projectPathPrivacy: "omit" | undefined;
   readonly title: string | undefined;
@@ -1269,6 +1524,7 @@ function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
     chatIdFingerprint: str(cfg, CHAT_ID_FINGERPRINT_CFG_KEY),
     memoryEnabled: bool(cfg, "memoryEnabled"),
     newChatRequestId: str(cfg, "newChatRequestId"),
+    modelChoice: chatCreationModelChoiceOf(cfg) ?? undefined,
     projectPath: str(cfg, "projectPath"),
     projectPathPrivacy,
     title: str(cfg, "title"),
@@ -1295,8 +1551,10 @@ function useBoundChatControls(
 ): {
   readonly configuredProjectMissing: boolean;
   readonly creating: ChatCreationControl;
+  readonly retryCreation: () => void;
 } {
   const coordinator = useChatCreationCoordinator(session.openNewChat, session.replaceChat);
+  const [retryRevision, setRetryRevision] = useState(0);
   const configuredProject =
     configuration.projectPath === undefined
       ? session.activeProject
@@ -1309,10 +1567,19 @@ function useBoundChatControls(
     coordinator,
     loading: session.loading || configuredProjectMissing,
     newChatRequestId: configuration.newChatRequestId,
+    creationRequestId: configuration.newChatRequestId ?? `window:${ctx.windowId}`,
+    modelChoice: configuration.modelChoice,
+    retryRevision,
     title: configuration.title,
     updateCfg: ctx.updateCfg,
   });
-  return { configuredProjectMissing, creating };
+  const retryCreation = (): void => {
+    if (!chatCreationFailed(creating)) return;
+    session.clearError?.();
+    // Retry delivery of the same accepted creation; a new intent could duplicate a lost response.
+    setRetryRevision((revision) => revision + 1);
+  };
+  return { configuredProjectMissing, creating, retryCreation };
 }
 
 function boundChatWaiting(args: {
@@ -1332,6 +1599,22 @@ function boundChatWaiting(args: {
   );
 }
 
+function useChatCreationModelValidation(cfg: Record<string, unknown>): boolean {
+  const invalid = chatCreationModelChoiceOf(cfg) === null;
+  useEffect((): void => {
+    if (invalid) {
+      const error = new TypeError("Chat creation model selection failed.");
+      reportClientDiagnostic(error.message, {
+        correlationId: newClientCorrelationId(),
+        kind: "other",
+        errorKind: "unavailable",
+        errorEvidence: clientErrorEvidence(error),
+      });
+    }
+  }, [invalid]);
+  return !invalid;
+}
+
 export function ChatWindowSessionHost({
   cfg,
   ctx,
@@ -1340,6 +1623,7 @@ export function ChatWindowSessionHost({
   readonly ctx: WindowRenderContext;
 }): ReactNode {
   const session = useChatSession({ autoCreate: false });
+  const validModelChoice = useChatCreationModelValidation(cfg);
   const configuration = boundChatConfig(cfg);
   // A chat id the heuristic flags records its fingerprint in the commit that shows it, so
   // persistence never stores the redacted id alone.
@@ -1350,6 +1634,7 @@ export function ChatWindowSessionHost({
   const redacted = useRedactedChatChoice(cfg, session, ctx);
   const restoration = rebind.restored ?? redacted.restored;
   const decision = useChatChoiceDecision(cfg, { restoration, missing: rebind.missing }, ctx);
+  if (!validModelChoice) return <ChatHostAlert messageKey="chat.creation.openFailed" />;
   if (rebind.pending) return <ChatBindPending />;
   return (
     <BoundChatWindowSessionHost
@@ -1405,6 +1690,20 @@ function BoundChatAlerts({
   return <ChatHostAlert messageKey={lookupMessage} />;
 }
 
+function ChatCreationRetry({
+  controls,
+}: {
+  readonly controls: ReturnType<typeof useBoundChatControls>;
+}): ReactNode {
+  const t = useTranslate();
+  if (!chatCreationFailed(controls.creating)) return null;
+  return (
+    <button type="button" className="lk-btn" onClick={controls.retryCreation}>
+      {t("common.retry")}
+    </button>
+  );
+}
+
 function useBoundChatWindowRuntime(
   configuration: BoundChatConfig,
   ctx: WindowRenderContext,
@@ -1437,7 +1736,12 @@ function useBoundChatWindowRuntime(
     routing.lookupFailed,
     routing.targetMissing,
   ]);
-  usePublishChatWindowRuntime(windowId, runtimeTarget);
+  usePublishChatWindowRuntime(
+    windowId,
+    runtimeTarget,
+    session.draftPersistence?.prepareClose,
+    session.draftPersistence?.isCloseReady,
+  );
 }
 
 function useBoundChatTitleSync(
@@ -1492,12 +1796,13 @@ function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): Rea
         lookupFailed={targetLookupFailed}
         sessionError={session.error}
       />
+      <ChatCreationRetry controls={controls} />
       <ChatChoiceNotice decision={props.decision} state={noticeState} />
       <BoundChatBody
         activeProjectPath={session.activeProject?.path}
         choice={props.choice}
         ctx={ctx}
-        targetLookupFailed={targetLookupFailed}
+        targetLookupFailed={targetLookupFailed || chatCreationFailed(controls.creating)}
         targetMissing={routing.targetMissing}
         waiting={waitingForTarget}
       />

@@ -2,9 +2,10 @@
 
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { redact } from "@oscharko-dev/keiko-security";
 import type {
   KnowledgePodRetrievalActivity,
   StoredPdfCitationPreviewCitation,
@@ -422,6 +423,53 @@ describe("createMessage", () => {
         }),
       ),
     ).toThrow("Grounded answer retrieval activity is invalid.");
+  });
+
+  it.each([
+    'String token = "fixture-value";\nString quoted = "\\\\";',
+    'const password = "fixture-value";\r\nconst quoted = "\\\\";',
+    'A quoted assignment: token="fixture-value" and a closing brace }.',
+  ])("preserves grounded answer JSON around quoted assignments: %s", (content) => {
+    const dbPath = join(tmp, "structured-answer.db");
+    const subject = createNodeUiStore(dbPath, { redactString: redact });
+    let persistedChatId: string;
+    try {
+      subject.createProject(proj);
+      const chat = subject.createChat(proj, "Code redaction", "example-chat-model");
+      persistedChatId = chat.id;
+      const answer = groundedAnswer({ content });
+      const assistant = subject.createMessage({
+        chatId: chat.id,
+        role: "assistant",
+        content: redact(content),
+        timestamp: 215,
+        groundedAnswer: answer,
+        runId: undefined,
+        workflowId: undefined,
+        workflowStatus: undefined,
+        shortResult: undefined,
+        taskType: undefined,
+      });
+      expect(assistant.groundedAnswer?.content).toBe(redact(content));
+      expect(subject.listMessages(chat.id)[0]?.groundedAnswer?.content).toBe(redact(content));
+      expect(answer.content).toBe(content);
+      expect(assistant.groundedAnswer?.citations).toEqual(answer.citations);
+      expect(assistant.groundedAnswer?.contextPack).toEqual(answer.contextPack);
+      expect(subject.attachGroundedAnswer(assistant.id, answer).groundedAnswer?.content).toBe(
+        redact(content),
+      );
+    } finally {
+      subject.close();
+    }
+    const reopened = createNodeUiStore(dbPath, { redactString: redact });
+    try {
+      expect(reopened.listMessages(persistedChatId)[0]?.groundedAnswer?.content).toBe(
+        redact(content),
+      );
+      expect(readFileSync(dbPath).includes(Buffer.from("fixture-value"))).toBe(false);
+    } finally {
+      reopened.close();
+    }
   });
 
   it("refuses malformed stored grounded answer metadata on read", () => {

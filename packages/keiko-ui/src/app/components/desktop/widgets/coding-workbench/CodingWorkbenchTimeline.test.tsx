@@ -1,12 +1,15 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import type { ReactElement } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AvailableCodingSafeActivityFeed,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
 
+import { I18nProvider, I18N_STORAGE_KEY, loadLocaleMessages, type Locale } from "@/lib/i18n";
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
 import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
@@ -240,6 +243,54 @@ function feedWithPresentedTools(): AvailableCodingSafeActivityFeed {
   return { ...feed, turns: [{ turnId: "turn-tools", messages: [], tools, truncated: false }] };
 }
 
+// The two failed calls of a real run (#3897): a command that exited non-zero and a Code Mode
+// program that reported an error to the model. Neither carries any other presentation fact.
+function feedWithFailedNativeCalls(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const tools = [
+    {
+      callId: "execute-1",
+      tool: "execute",
+      state: "failed" as const,
+      occurredAt: AT,
+    },
+    {
+      callId: "shell-1",
+      tool: "shell",
+      state: "failed" as const,
+      occurredAt: AT,
+      presentation: { exitCode: 1 },
+    },
+  ];
+  return { ...feed, turns: [{ turnId: "turn-failed", messages: [], tools, truncated: false }] };
+}
+
+// One governed verification of every closed outcome (#3579). The two "did not run" refusals and the
+// skipped run are failed tool states; only the server knows they never checked anything.
+function feedWithVerificationOutcomes(): AvailableCodingSafeActivityFeed {
+  const feed = feedWithRepeatedTools();
+  const call = (
+    callId: string,
+    state: "failed" | "succeeded",
+    verificationOutcome:
+      "passed" | "failed-check" | "waiting-for-trust" | "no-runnable-steps" | "not-run",
+  ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
+    callId,
+    tool: "keiko_verification",
+    state,
+    occurredAt: AT,
+    presentation: { verificationOutcome, bridgeDurationMs: 9 },
+  });
+  const tools = [
+    call("verify-trust", "failed", "waiting-for-trust"),
+    call("verify-empty", "failed", "no-runnable-steps"),
+    call("verify-skipped", "failed", "not-run"),
+    call("verify-red", "failed", "failed-check"),
+    call("verify-green", "succeeded", "passed"),
+  ];
+  return { ...feed, turns: [{ turnId: "turn-verify", messages: [], tools, truncated: false }] };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -283,6 +334,164 @@ function paintRowHeights(container: HTMLElement, heightFor: (li: HTMLLIElement) 
 }
 
 describe("CodingWorkbenchTimeline", () => {
+  it("says why a failed call failed instead of opening to its tool name alone", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithFailedNativeCalls())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const failed = [
+      ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
+    ];
+    expect(failed).toHaveLength(1);
+    const [execute] = failed;
+    expect(execute?.open).toBe(true);
+    expect(execute).toHaveTextContent("Failed");
+    expect(execute).toHaveTextContent("The tool reported an error to the model.");
+    expect(execute).not.toHaveTextContent("exited with code");
+    // A command that ran and returned non-zero shows its exit code, as OpenCode reports it, not a
+    // red "Failed"; it still opens to the reason (#4098 acceptance).
+    const shell = container.querySelector<HTMLDetailsElement>('[data-tool-state="exited"]');
+    expect(shell?.open).toBe(true);
+    expect(shell?.querySelector('[data-state="exited"]')).toHaveTextContent("Exit code 1");
+    expect(shell).toHaveTextContent("The command exited with code 1.");
+    expect(shell).not.toHaveTextContent("Failed");
+    expect(shell).not.toHaveTextContent("reported an error");
+  });
+
+  // #3579: a verification waiting on the operator's package-script decision, a repository with
+  // nothing for the verifier to run and a run whose steps never executed are not failed checks. The
+  // card says so in words and in its badge; only a check that ran and went red keeps "Failed".
+  it("shows why a verification did not run instead of a red failed badge", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithVerificationOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const card = (state: string): HTMLDetailsElement => {
+      const found = container.querySelector<HTMLDetailsElement>(`[data-tool-state="${state}"]`);
+      if (found === null) throw new Error(`Expected a ${state} tool card`);
+      return found;
+    };
+
+    const trust = card("waiting-for-trust");
+    expect(trust.open).toBe(true);
+    expect(trust.querySelector('[data-state="waiting-for-trust"]')).toHaveTextContent(
+      "Waiting for approval",
+    );
+    expect(trust).toHaveTextContent("this workspace's package scripts are not allowed yet");
+    expect(trust).toHaveTextContent("Allow package scripts for verification");
+
+    const empty = card("no-runnable-steps");
+    expect(empty.open).toBe(true);
+    expect(empty.querySelector('[data-state="no-runnable-steps"]')).toHaveTextContent(
+      "Nothing to run",
+    );
+    expect(empty).toHaveTextContent("defines no script the verifier can run");
+
+    const skipped = card("not-run");
+    expect(skipped.open).toBe(true);
+    expect(skipped.querySelector('[data-state="not-run"]')).toHaveTextContent("Not run");
+    expect(skipped).toHaveTextContent("a step was skipped, denied or cancelled");
+
+    for (const unrun of [trust, empty, skipped]) {
+      expect(unrun).not.toHaveTextContent("Failed");
+      expect(unrun).not.toHaveTextContent("reported an error");
+      expect(unrun.querySelector('[data-state="failed"]')).toBeNull();
+    }
+  });
+
+  it("keeps the failed badge for a check that ran and went red, with its own line", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithVerificationOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const failed = [
+      ...container.querySelectorAll<HTMLDetailsElement>('[data-tool-state="failed"]'),
+    ];
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.open).toBe(true);
+    expect(failed[0]).toHaveTextContent("Failed");
+    expect(failed[0]).toHaveTextContent("A verification check ran and failed.");
+    expect(failed[0]).not.toHaveTextContent("reported an error");
+  });
+
+  it("says that a passing verification passed", () => {
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWithVerificationOutcomes())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const passed = container.querySelector<HTMLDetailsElement>('[data-tool-state="succeeded"]');
+    expect(passed).toHaveTextContent("Succeeded");
+    expect(passed).toHaveTextContent("Every requested verification check passed.");
+  });
+
+  it("does not let a verification outcome change a call that did not fail", () => {
+    const feed = feedWithVerificationOutcomes();
+    const tool = feed.turns[0]?.tools[0];
+    if (tool === undefined) throw new Error("expected tool fixture");
+    const cancelled = { ...tool, callId: "verify-cancelled", state: "cancelled" as const };
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike({
+          ...feed,
+          turns: [{ turnId: "turn-cancelled", messages: [], tools: [cancelled], truncated: false }],
+        })}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container.querySelector('[data-tool-state="cancelled"]')).not.toBeNull();
+    expect(container.querySelector('[data-tool-state="waiting-for-trust"]')).toBeNull();
+  });
+
+  it("explains the verification outcomes in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            active={false}
+            events={[]}
+            activity={activityLike(feedWithVerificationOutcomes())}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+      const text = (state: string): string =>
+        container.querySelector(`[data-tool-state="${state}"]`)?.textContent ?? "";
+      expect(text("waiting-for-trust")).toContain("Wartet auf Freigabe");
+      expect(text("waiting-for-trust")).toContain("noch nicht zugelassen");
+      expect(text("no-runnable-steps")).toContain("Nichts auszuführen");
+      expect(text("no-runnable-steps")).toContain("kein Skript");
+      expect(text("not-run")).toContain("Nicht ausgeführt");
+      expect(text("not-run")).toContain("übersprungen, abgelehnt oder abgebrochen");
+      expect(text("failed")).toContain("Fehlgeschlagen");
+      expect(text("succeeded")).toContain("bestanden");
+      for (const state of ["waiting-for-trust", "no-runnable-steps", "not-run"]) {
+        expect(text(state)).not.toContain("Fehlgeschlagen");
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+
   it("keeps each presented call visible with precise canonical facts", () => {
     const { container } = render(
       <Timeline
@@ -299,7 +508,7 @@ describe("CodingWorkbenchTimeline", () => {
     expect(screen.getByText("packages/ui/deep/Second.tsx")).toBeInTheDocument();
     expect(screen.getByText("Read: 120 bytes · Whole file: 800 lines")).toBeInTheDocument();
     expect(screen.getByText("Returned paths: 2")).toBeInTheDocument();
-    expect(screen.getByText("Tool service: 15 ms")).toBeInTheDocument();
+    expect(screen.getByText("Duration: 15 ms")).toBeInTheDocument();
     expect(screen.getByText("Edit refusal: CONTENT_HASH_MISMATCH")).toBeInTheDocument();
     expect(screen.getByText("Affected file: packages/ui/deep/Conflict.tsx")).toBeInTheDocument();
     expect(container.querySelectorAll('[data-timeline-kind="tool"]')).toHaveLength(4);
@@ -374,7 +583,8 @@ describe("CodingWorkbenchTimeline", () => {
     );
     const list = view.container.querySelector<HTMLElement>(`.${styles.timeline}`);
     if (list === null) throw new Error("timeline list not found");
-    Object.defineProperty(list, "scrollTop", { configurable: true, value: 50_000 });
+    // Writable: the list follows its newest rows and may assign its own scrollTop.
+    Object.defineProperty(list, "scrollTop", { configurable: true, writable: true, value: 50_000 });
     act(() => {
       list.dispatchEvent(new UIEvent("scroll", { bubbles: true }));
     });
@@ -758,6 +968,43 @@ describe("CodingWorkbenchTimeline", () => {
     expect(detail).toHaveTextContent("keiko_workspace_discover");
   });
 
+  it("reports a tool disclosure only when the reader activates its summary", () => {
+    // #3897 review: a failed card opens itself, and the browser announces that as a `toggle` too.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: { interaction: "details-toggled", section: "tool", expanded },
+        correlationId: undefined,
+      },
+    ];
+    const summaryOf = (details: Element | undefined): HTMLElement => {
+      const summary = details?.querySelector("summary");
+      if (summary === null || summary === undefined) throw new Error("disclosure without summary");
+      return summary;
+    };
+    const writer = vi.fn();
+    setClientDiagnosticWriter(writer);
+    try {
+      const { container } = render(
+        <Timeline
+          events={[]}
+          activity={activityLike(feedWithRepeatedTools())}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const [routine, failed] = container.querySelectorAll('[data-timeline-kind="tool"] details');
+      if (failed === undefined) throw new Error("failed tool card missing");
+      fireEvent(failed, new Event("toggle"));
+      expect(writer).not.toHaveBeenCalled();
+
+      fireEvent.click(summaryOf(failed));
+      fireEvent.click(summaryOf(routine));
+      expect(writer.mock.calls).toEqual([toggled(false), toggled(true)]);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
   // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly
   // through CodingWorkbenchWindow.test.tsx's full-window axe pass; this pins the Timeline's own
   // rendering of both directly, matching the per-component axe suites of its siblings.
@@ -915,7 +1162,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
 
   const THOUGHT = { text: "The quoted field splits on its comma.", truncated: false };
 
-  it("labels the reasoning as unverified model reasoning apart from the answer", () => {
+  it("shows the model's reasoning under a plain Thinking summary, apart from the answer", () => {
     const { container } = render(
       <Timeline
         active
@@ -925,10 +1172,13 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
       />,
     );
     const block = reasoningBlock(container);
-    expect(block.querySelector("summary")).toHaveTextContent("Model reasoning");
-    expect(block.querySelector("summary")).toHaveTextContent("Unverified");
-    expect(block).toHaveTextContent("Unverified model reasoning");
-    expect(block).toHaveTextContent(THOUGHT.text);
+    // The summary sits among tool rows whose badges are statuses; a warning-coloured "Unverified"
+    // there read as a failed check on every step (#3897, owner). #3907 (owner: less is more): the
+    // block holds the model's own text and nothing Keiko adds to it; the timeline's boundary
+    // sentence states that reasoning is unverified.
+    expect(block.querySelector("summary")?.textContent).toBe("Thinking");
+    expect(block.textContent).toBe(`Thinking${THOUGHT.text}`);
+    expect(container).toHaveTextContent(/reasoning, which is unverified/u);
     const answer = container.querySelector(
       `[data-message-role="assistant"] .${styles.messageText}`,
     );
@@ -1074,7 +1324,19 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
     expect(reasoningBlock(container)).toHaveTextContent("Output truncated");
   });
 
-  it("reports every toggle, which is always the reader's, and nothing else", () => {
+  it("reports each summary activation, which is always the reader's, and nothing else", () => {
+    // #3897: a toggle is routine evidence on its own closed report, never a free-text note.
+    const toggled = (expanded: boolean): readonly unknown[] => [
+      "[keiko] coding workbench interaction: details-toggled",
+      {
+        codingWorkbenchInteraction: {
+          interaction: "details-toggled",
+          section: "model-reasoning",
+          expanded,
+        },
+        correlationId: undefined,
+      },
+    ];
     const writer = vi.fn();
     setClientDiagnosticWriter(writer);
     try {
@@ -1086,17 +1348,16 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
       const block = reasoningBlock(container);
       block.open = true;
       fireEvent(block, new Event("toggle"));
-      expect(writer).toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
+      block.open = false;
+      const summary = block.querySelector("summary");
+      if (summary === null) throw new Error("reasoning block without summary");
+      fireEvent.click(summary);
+      expect(writer).toHaveBeenCalledExactlyOnceWith(...toggled(true));
       writer.mockClear();
       rerender(
         <Timeline
@@ -1106,10 +1367,7 @@ describe("CodingWorkbenchTimeline model reasoning", () => {
           questions={IDLE_QUESTIONS}
         />,
       );
-      expect(writer).not.toHaveBeenCalledWith(
-        "[keiko] coding workbench model reasoning toggled",
-        undefined,
-      );
+      expect(writer).not.toHaveBeenCalled();
     } finally {
       resetClientDiagnosticWriter();
     }
@@ -1288,7 +1546,7 @@ describe("verification detail and active turn failures", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run details" }));
     expect(container).toHaveTextContent("Targeted tests: Failed");
     expect(container).toHaveTextContent("Checks: 0 passed, 1 unsuccessful, 0 skipped");
-    expect(container).toHaveTextContent("Duration: 1,240 ms");
+    expect(container).toHaveTextContent("Duration: 1.2 s");
     expect(container).not.toHaveTextContent("1 test failed");
   });
 
@@ -1493,5 +1751,766 @@ describe("timeline facts remain scoped to their run", () => {
     expect(container).toHaveTextContent("Type check: Passed");
     expect(container).toHaveTextContent("Checks: 1 passed, 0 unsuccessful, 0 skipped");
     expect(container.querySelector('[data-event-tone="success"]')).not.toBeNull();
+  });
+
+  // #3897 UI review: a verifier that never ran a check (no passed, no unsuccessful count) used to
+  // read "Failed" with an attention card although nothing had failed. It now reads "Not run" and
+  // stays with the routine run details; a real failure keeps its attention tone.
+  it.each([
+    ["failed" as const, "Targeted tests: Not run"],
+    ["partial" as const, "Targeted tests: Not run"],
+  ])("reports a %s verifier without any check as not run, never as failed", (status, label) => {
+    const verified = {
+      ...event(1),
+      eventKind: "verification-summarized" as const,
+      verificationSummary: {
+        verifierId: "targeted-test" as const,
+        status,
+        passedCount: 0,
+        failedCount: 0,
+        skippedCount: 0,
+        durationMs: 3,
+      },
+    };
+    const { container } = render(
+      <Timeline
+        events={[verified]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(container).not.toHaveTextContent("Targeted tests");
+    expect(container.querySelector('[data-event-tone="attention"]')).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Run details" }));
+    expect(container).toHaveTextContent(label);
+    expect(container).not.toHaveTextContent("Targeted tests: Failed");
+    expect(container).toHaveTextContent("Duration: 3 ms");
+  });
+});
+
+// #3897 review: the native OpenCode tools (read, glob, edit, shell, webfetch, ...) used to show the
+// capitalised raw id ("Webfetch", "Glob") in English even in a German session. Each now resolves
+// through the localized catalog; an unknown or MCP tool keeps the humanized fallback.
+describe("CodingWorkbenchTimeline native tool labels", () => {
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+  });
+
+  function feedWithTools(tools: readonly string[]): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-native",
+          messages: [],
+          // `running` rows are never grouped or merged, so every tool keeps its own title.
+          tools: tools.map((tool, index) => ({
+            callId: `call-${String(index)}`,
+            tool,
+            state: "running" as const,
+            occurredAt: AT,
+          })),
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  async function renderIn(locale: Locale, tools: readonly string[]): Promise<HTMLElement> {
+    await loadLocaleMessages(locale);
+    window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+    return render(
+      <I18nProvider>
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithTools(tools))}
+          questions={IDLE_QUESTIONS}
+        />
+      </I18nProvider>,
+    ).container;
+  }
+
+  function titles(container: HTMLElement): readonly string[] {
+    return [...container.querySelectorAll('[data-timeline-kind="tool"] summary p')].map(
+      (node) => node.textContent ?? "",
+    );
+  }
+
+  const NATIVE_TOOLS = [
+    "read",
+    "glob",
+    "grep",
+    "list",
+    "edit",
+    "write",
+    "patch",
+    "shell",
+    "webfetch",
+    "websearch",
+    "skill",
+    "subagent",
+    "todo",
+    "question",
+  ] as const;
+
+  it("names every native tool in English", async () => {
+    const container = await renderIn("en", NATIVE_TOOLS);
+
+    expect(titles(container)).toEqual([
+      "Read file",
+      "Find files",
+      "Search in files",
+      "List folder",
+      "Edit file",
+      "Write file",
+      "Apply patch",
+      "Shell command",
+      "Web fetch",
+      "Web search",
+      "Skill",
+      "Subagent",
+      "Task list",
+      "Question",
+    ]);
+  });
+
+  it("names every native tool in German instead of capitalising its raw id", async () => {
+    const container = await renderIn("de", NATIVE_TOOLS);
+
+    expect(titles(container)).toEqual([
+      "Datei lesen",
+      "Dateien suchen",
+      "In Dateien suchen",
+      "Ordner auflisten",
+      "Datei bearbeiten",
+      "Datei schreiben",
+      "Patch anwenden",
+      "Shell-Befehl",
+      "Webabruf",
+      "Websuche",
+      "Skill",
+      "Subagent",
+      "Aufgabenliste",
+      "Rückfrage",
+    ]);
+    // "Skill" and "Subagent" are the same word in both languages; every other raw id is gone.
+    for (const tool of NATIVE_TOOLS.filter((id) => id !== "skill" && id !== "subagent")) {
+      expect(titles(container)).not.toContain(`${tool.slice(0, 1).toUpperCase()}${tool.slice(1)}`);
+    }
+  });
+
+  // The ids are read from the server's registration list as text (the UI never imports the
+  // server), so a tool added there without a catalog entry fails this test instead of rendering
+  // title-cased English in the German UI.
+  function shippedKeikoToolIds(): readonly string[] {
+    const source = readFileSync(
+      join(
+        import.meta.dirname,
+        "../../../../../../../keiko-server/src/coding-runtime/opencodeToolSchemas.ts",
+      ),
+      "utf8",
+    );
+    const block =
+      /OPENCODE_MODEL_VISIBLE_TOOLS = \[([\s\S]*?)\] as const;/u.exec(source)?.[1] ?? "";
+    return [...block.matchAll(/name: "(keiko_[a-z_]+)"/gu)].map((match) => match[1] ?? "");
+  }
+
+  it("localizes every shipped keiko_* tool id in German instead of title-casing the raw id", async () => {
+    const ids = shippedKeikoToolIds();
+    expect(ids.length).toBeGreaterThanOrEqual(18);
+    const container = await renderIn("de", ids);
+    const shown = titles(container);
+
+    expect(shown).toHaveLength(ids.length);
+    ids.forEach((id, index) => {
+      const fallback = id
+        .replace(/^keiko_/u, "")
+        .split("_")
+        .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+        .join(" ");
+      // "Skill" and "Pull Request" are the same words in both languages.
+      if (id !== "keiko_skill" && id !== "keiko_pull_request") {
+        expect(shown[index]).not.toBe(fallback);
+      }
+    });
+    expect(shown).toContain("Dateien ändern");
+    expect(shown).toContain("Git-Commit");
+  });
+
+  it("keeps the existing Keiko tool labels", async () => {
+    const container = await renderIn("en", ["keiko_git_status", "keiko_workspace_read"]);
+
+    expect(titles(container)).toEqual(["Git status", "Workspace read"]);
+  });
+
+  // #3907: the governed task-branch tool reads as what it does, in both languages.
+  it("labels the governed task-branch tool in English and German", async () => {
+    expect(titles(await renderIn("en", ["keiko_git_branch"]))).toEqual(["Create task branch"]);
+    expect(titles(await renderIn("de", ["keiko_git_branch"]))).toEqual(["Aufgaben-Branch anlegen"]);
+  });
+
+  it("humanizes an unknown or MCP tool id instead of inventing a localized label", async () => {
+    const container = await renderIn("de", ["linear.create_issue", "keiko_run_command"]);
+
+    expect(titles(container)).toEqual(["Linear Create Issue", "Run Command"]);
+  });
+
+  // The lookup used a plain object: a tool called `constructor` resolved to Object's constructor
+  // function and `t(function)` rendered nonsense instead of falling back to the humanized id.
+  it.each([
+    ["constructor", "Constructor"],
+    ["toString", "ToString"],
+    ["hasOwnProperty", "HasOwnProperty"],
+  ])("never resolves the inherited name %s to a prototype member", async (tool, humanized) => {
+    const container = await renderIn("en", [tool]);
+
+    expect(titles(container)).toEqual([humanized]);
+  });
+});
+
+// #3897 review: the plan card was a <details> keyed by the plan REVISION, so every todo update
+// remounted it (losing the reader's place and its open state) and its closed summary said nothing
+// about progress.
+describe("CodingWorkbenchTimeline plan card", () => {
+  function planFeed(
+    revision: number,
+    states: readonly ("pending" | "active" | "completed" | "cancelled")[],
+    anchorMessageId = "message-1",
+  ): AvailableCodingSafeActivityFeed {
+    const feed = feedWithPlan(0);
+    return {
+      ...feed,
+      turns: feed.turns.map((turn) => ({
+        ...turn,
+        messages: turn.messages.map((message) => ({ ...message, messageId: anchorMessageId })),
+      })),
+      plan: {
+        revision,
+        anchorMessageId,
+        updatedAt: AT,
+        steps: states.map((state, index) => ({
+          text: `Step ${String(index + 1)}`,
+          state,
+          truncated: false,
+        })),
+        truncated: false,
+      },
+    };
+  }
+
+  function renderPlan(
+    feed: AvailableCodingSafeActivityFeed,
+    active: boolean,
+  ): ReturnType<typeof render> {
+    return render(
+      <Timeline
+        active={active}
+        events={[]}
+        activity={activityLike(feed)}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+  }
+
+  function planDetails(container: HTMLElement): HTMLDetailsElement {
+    const details = container.querySelector<HTMLDetailsElement>(
+      '[data-timeline-kind="plan"] details',
+    );
+    if (details === null) throw new Error("expected the plan card");
+    return details;
+  }
+
+  it("keeps the same card element across plan revisions of one anchor message", () => {
+    const view = renderPlan(planFeed(1, ["active", "pending", "pending"]), false);
+    const before = planDetails(view.container);
+    before.open = true;
+
+    view.rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(planFeed(2, ["completed", "active", "pending"]))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const after = planDetails(view.container);
+    expect(after).toBe(before);
+    expect(after.open).toBe(true);
+    expect(within(after).getByText("Completed", { selector: "span" })).toBeInTheDocument();
+  });
+
+  it("shows how many steps are completed in the closed summary", () => {
+    const { container } = renderPlan(
+      planFeed(3, ["completed", "completed", "active", "pending", "cancelled"]),
+      false,
+    );
+
+    const summary = planDetails(container).querySelector("summary");
+    expect(summary).toHaveTextContent("Current plan");
+    expect(summary).toHaveTextContent("2/5 completed");
+  });
+
+  it("localizes the progress in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      const { container } = render(
+        <I18nProvider>
+          <Timeline
+            events={[]}
+            activity={activityLike(planFeed(1, ["completed", "pending"]))}
+            questions={IDLE_QUESTIONS}
+          />
+        </I18nProvider>,
+      );
+
+      expect(planDetails(container).querySelector("summary")).toHaveTextContent(
+        "1/2 abgeschlossen",
+      );
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    }
+  });
+
+  it("omits the progress for a plan without steps", () => {
+    const { container } = renderPlan(planFeed(1, []), false);
+
+    expect(planDetails(container).querySelector("summary")).not.toHaveTextContent("completed");
+  });
+
+  it("keeps the plan open while the run is active and closed once it is settled", () => {
+    const feed = planFeed(1, ["active", "pending"]);
+    const active = renderPlan(feed, true);
+    expect(planDetails(active.container).open).toBe(true);
+    active.unmount();
+
+    const settled = renderPlan(feed, false);
+    expect(planDetails(settled.container).open).toBe(false);
+  });
+
+  it("starts a new card when the plan moves to another anchor message", () => {
+    const view = renderPlan(planFeed(1, ["active"], "message-1"), false);
+    const before = planDetails(view.container);
+
+    view.rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(planFeed(2, ["active"], "message-2"))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(planDetails(view.container)).not.toBe(before);
+  });
+
+  it("has no axe violations with the progress summary", async () => {
+    const { container } = renderPlan(planFeed(1, ["completed", "pending"]), true);
+
+    expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+// Stability audit items 2, 8, 11 and 13.
+function feedWithMessages(count: number): AvailableCodingSafeActivityFeed {
+  return {
+    schemaVersion: "1",
+    availability: "available",
+    runId: "run-1",
+    updatedAt: AT,
+    turns: [
+      {
+        turnId: "turn-1",
+        messages: Array.from({ length: count }, (_, index) => ({
+          messageId: `message-${String(index + 1)}`,
+          role: "assistant" as const,
+          occurredAt: new Date(Date.UTC(2026, 6, 19, 12, 0, 0, index)).toISOString(),
+          segments: [
+            { kind: "text" as const, text: `Answer ${String(index + 1)}`, truncated: false },
+          ],
+          truncated: false,
+        })),
+        tools: [],
+        truncated: false,
+      },
+    ],
+    truncated: false,
+    droppedEventCount: 0,
+  };
+}
+
+const PENDING_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
+  ...IDLE_QUESTIONS,
+  status: "ready",
+  questions: [
+    {
+      id: "que_1",
+      questions: [
+        { header: "Pick", question: "Continue?", options: [{ label: "Yes", description: "Go" }] },
+      ],
+    },
+  ] as unknown as UseCodingWorkbenchQuestionsResult["questions"],
+};
+
+// jsdom has no layout, so the list's scroll geometry is supplied: a tall scroll height and a
+// scrollTop that records every assignment the component makes.
+function installListGeometry(): {
+  readonly assigned: number[];
+  readonly set: (value: number) => void;
+  readonly restore: () => void;
+} {
+  const assigned: number[] = [];
+  const offsets = new WeakMap<object, number>();
+  const heightDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight");
+  const topDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTop");
+  Object.defineProperty(Element.prototype, "scrollHeight", {
+    configurable: true,
+    get: () => 100_000,
+  });
+  Object.defineProperty(Element.prototype, "scrollTop", {
+    configurable: true,
+    get(this: Element) {
+      return offsets.get(this) ?? 0;
+    },
+    set(this: Element, value: number) {
+      assigned.push(value);
+      offsets.set(this, value);
+    },
+  });
+  return {
+    assigned,
+    set: (value): void => {
+      for (const list of document.querySelectorAll("ol[data-virtual]")) offsets.set(list, value);
+    },
+    restore: (): void => {
+      if (heightDescriptor)
+        Object.defineProperty(Element.prototype, "scrollHeight", heightDescriptor);
+      if (topDescriptor) Object.defineProperty(Element.prototype, "scrollTop", topDescriptor);
+    },
+  };
+}
+
+describe("CodingWorkbenchTimeline long runs", () => {
+  afterEach(() => cleanup());
+
+  it("keeps the virtualized list at its newest rows instead of stranding it at the oldest", () => {
+    const geometry = installListGeometry();
+    try {
+      const { container } = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const list = container.querySelector<HTMLOListElement>("ol[data-virtual='true']");
+      if (list === null) throw new TypeError("expected the virtualized list");
+      act(() => {
+        fireEvent.scroll(list);
+      });
+
+      expect(screen.getByText("Answer 150")).toBeInTheDocument();
+      expect(screen.queryByText("Answer 1")).not.toBeInTheDocument();
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  it("does not yank a reader who scrolled up, but follows again once they return to the end", () => {
+    const geometry = installListGeometry();
+    try {
+      const view = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const list = view.container.querySelector<HTMLOListElement>("ol[data-virtual='true']");
+      if (list === null) throw new TypeError("expected the virtualized list");
+      geometry.set(0);
+      act(() => {
+        fireEvent.scroll(list);
+      });
+      const before = geometry.assigned.length;
+
+      view.rerender(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(151))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(geometry.assigned).toHaveLength(before);
+
+      geometry.set(99_950);
+      act(() => {
+        fireEvent.scroll(list);
+      });
+      view.rerender(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(152))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      expect(geometry.assigned.length).toBeGreaterThan(before);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  it("brings a newly raised question into view even when the reader had scrolled up", () => {
+    const geometry = installListGeometry();
+    try {
+      const view = render(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={IDLE_QUESTIONS}
+        />,
+      );
+      const list = view.container.querySelector<HTMLOListElement>("ol[data-virtual='true']");
+      if (list === null) throw new TypeError("expected the virtualized list");
+      geometry.set(0);
+      act(() => {
+        fireEvent.scroll(list);
+      });
+      const before = geometry.assigned.length;
+
+      view.rerender(
+        <Timeline
+          active
+          events={[]}
+          activity={activityLike(feedWithMessages(150))}
+          questions={PENDING_QUESTIONS}
+        />,
+      );
+
+      expect(geometry.assigned.length).toBeGreaterThan(before);
+      expect(geometry.assigned.at(-1)).toBe(100_000);
+    } finally {
+      geometry.restore();
+    }
+  });
+
+  // Audit item 5: the feed kept across a reconnect is captioned, not presented as live.
+  it("captions a feed that is kept on screen while its connection is re-read", () => {
+    const loading = { ...activityLike(feedWithMessages(2)), status: "loading" as const };
+    const view = render(
+      <Timeline active events={[]} activity={loading} questions={IDLE_QUESTIONS} />,
+    );
+    expect(screen.getByText("Connecting activity…")).toBeInTheDocument();
+    expect(screen.getByText("Answer 2")).toBeInTheDocument();
+    view.unmount();
+
+    render(
+      <Timeline
+        active
+        events={[]}
+        activity={{ ...loading, feed: null }}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    expect(screen.queryByText("Connecting activity…")).not.toBeInTheDocument();
+  });
+
+  // The activity status sits inside the session stream's role="log", which already announces what
+  // is added; a second live region around it announced the same sentence twice (audit item 11).
+  it("does not nest a live region for the activity status inside the log", () => {
+    const activity = { ...activityLike(bareFeed()), status: "disconnected" as const };
+    const { container } = render(
+      <div role="log" aria-label="Session stream">
+        <Timeline active={false} events={[]} activity={activity} questions={IDLE_QUESTIONS} />
+      </div>,
+    );
+
+    const status = container.querySelector("[data-activity-state]");
+    expect(status).not.toBeNull();
+    expect(status?.querySelector("[role='status'], [aria-live]")).toBeNull();
+    expect(status).toHaveTextContent("Disconnected.");
+  });
+
+  // Audit item 13: the row id is the React key and the `<details>` is uncontrolled, so an id that
+  // changed when the next same-kind call settled collapsed a row the reader had just opened.
+  it("keeps an expanded merged tool row mounted as further calls of its kind settle", () => {
+    const readCall = (
+      id: string,
+      at: number,
+    ): AvailableCodingSafeActivityFeed["turns"][number]["tools"][number] => ({
+      callId: id,
+      tool: "grep",
+      state: "succeeded" as const,
+      occurredAt: new Date(Date.UTC(2026, 6, 19, 12, 0, at)).toISOString(),
+    });
+    const feedWith = (calls: number): AvailableCodingSafeActivityFeed => ({
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [],
+          tools: [
+            { callId: "edit-1", tool: "edit", state: "failed", occurredAt: AT },
+            ...Array.from({ length: calls }, (_, index) =>
+              readCall(`g${String(index)}`, index + 1),
+            ),
+          ],
+          truncated: false,
+        },
+      ],
+    });
+    const view = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWith(1))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const row = view.container.querySelector<HTMLElement>('[data-timeline-kind="tool"]:last-child');
+    if (row === null) throw new TypeError("expected the search row");
+    const details = row.querySelector("details");
+    if (details === null) throw new TypeError("expected the row details");
+    details.open = true;
+
+    view.rerender(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedWith(2))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    const after = view.container.querySelector<HTMLElement>(
+      '[data-timeline-kind="tool"]:last-child',
+    );
+    expect(after).toBe(row);
+    expect(after?.querySelector("details")?.open).toBe(true);
+    expect(after).toHaveTextContent("2 calls");
+  });
+});
+
+// Audit item 8: a height measurement re-renders the list; it must not re-render every row, must not
+// run at all for a list that is not virtualized, and the sort must not collate per comparison.
+describe("CodingWorkbenchTimeline render cost", () => {
+  class RecordingResizeObserver {
+    public static readonly instances: RecordingResizeObserver[] = [];
+    public readonly observed: Element[] = [];
+    public constructor(public readonly callback: () => void) {
+      RecordingResizeObserver.instances.push(this);
+    }
+    public observe(element: Element): void {
+      this.observed.push(element);
+    }
+    public disconnect(): void {
+      this.observed.length = 0;
+    }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    RecordingResizeObserver.instances.length = 0;
+    cleanup();
+  });
+
+  function failedTools(count: number, onRead: () => void): readonly Record<string, unknown>[] {
+    return Array.from({ length: count }, (_, index) => ({
+      callId: `call-${String(index)}`,
+      tool: "edit",
+      state: "failed",
+      occurredAt: new Date(Date.UTC(2026, 6, 19, 12, 0, 0, index)).toISOString(),
+      presentation: {
+        get relativePath(): string {
+          onRead();
+          return `src/file-${String(index)}.ts`;
+        },
+      },
+    }));
+  }
+
+  function feedOf(tools: readonly Record<string, unknown>[]): AvailableCodingSafeActivityFeed {
+    return {
+      ...bareFeed(),
+      turns: [
+        {
+          turnId: "turn-1",
+          messages: [],
+          tools: tools as unknown as AvailableCodingSafeActivityFeed["turns"][number]["tools"],
+          truncated: false,
+        },
+      ],
+    };
+  }
+
+  it("does not observe row heights for a list that is not virtualized", () => {
+    vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+    render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedOf(failedTools(20, () => undefined)))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(RecordingResizeObserver.instances.flatMap((observer) => observer.observed)).toEqual([]);
+  });
+
+  it("re-renders no unchanged row when a height is measured", () => {
+    vi.stubGlobal("ResizeObserver", RecordingResizeObserver);
+    let reads = 0;
+    const { container } = render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(
+          feedOf(
+            failedTools(110, () => {
+              reads += 1;
+            }),
+          ),
+        )}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+    const observer = RecordingResizeObserver.instances[0];
+    const row = observer?.observed[0];
+    if (observer === undefined || !(row instanceof HTMLElement)) {
+      throw new TypeError("expected a virtualized row to be observed");
+    }
+    const before = reads;
+    expect(before).toBeGreaterThan(0);
+
+    overrideOffsetHeight(row, 321);
+    act(() => {
+      observer.callback();
+    });
+
+    expect(container.querySelectorAll("[data-timeline-kind='tool']").length).toBeGreaterThan(0);
+    expect(reads).toBe(before);
+  });
+
+  it("orders ISO timestamps without a locale-aware collation per comparison", () => {
+    const collate = vi.spyOn(String.prototype, "localeCompare");
+    render(
+      <Timeline
+        active={false}
+        events={[]}
+        activity={activityLike(feedOf(failedTools(30, () => undefined)))}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(collate).not.toHaveBeenCalled();
   });
 });

@@ -33,7 +33,8 @@ function parts(overrides: Partial<ReportParts> = {}): ReportParts {
     durationMs: 42,
     patchFiles: [patchFile()],
     dryRunPreview: "PATCH OK — 1 file(s), 3 changed line(s)",
-    proposedDiff: "--- /dev/null\n+++ b/tests/add.test.ts\n",
+    proposedDiff:
+      "--- /dev/null\n+++ b/tests/add.test.ts\n@@ -0,0 +1,3 @@\n+import { add } from '../src/add';\n+test('adds', () => {});\n+it('zero', () => {});\n",
     coveredBehavior: "happy path",
     knownGaps: "negatives",
     nextActions: ["Review the generated tests in tests/add.test.ts"],

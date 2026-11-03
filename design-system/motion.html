@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -34,10 +34,6 @@
         place-items: center;
         color: var(--fg-muted);
         font-size: 12.5px;
-        transition:
-          transform 0.15s,
-          box-shadow 0.15s,
-          border-color 0.15s;
       }
       .lift-demo:hover {
         transform: translateY(-3px);
@@ -52,8 +48,16 @@
         font-size: 13px;
         color: var(--fg);
       }
-      .fade-go {
-        animation: fadeUp 0.18s ease both;
+      @media (prefers-reduced-motion: no-preference) {
+        .lift-demo {
+          transition:
+            transform 0.15s,
+            box-shadow 0.15s,
+            border-color 0.15s;
+        }
+        .fade-go {
+          animation: fadeUp 0.18s ease both;
+        }
       }
       @keyframes fadeUp {
         from {
@@ -255,7 +259,13 @@
           </p>
         </div>
         <div class="card" style="padding: 26px 28px">
-          <svg class="flowline" viewBox="0 0 600 60" preserveAspectRatio="none">
+          <svg
+            role="img"
+            aria-label="Data-flow connector example"
+            class="flowline"
+            viewBox="0 0 600 60"
+            preserveAspectRatio="none"
+          >
             <path class="f" d="M10 30 H590" />
           </svg>
           <p class="muted-cap" style="margin-top: 14px">

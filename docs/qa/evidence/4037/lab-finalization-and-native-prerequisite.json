@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "classification": "Public lab caller/evidence retention and native gate setup only; no complete acceptance disposition",
+  "sourceParent": "0faa5db9d54a5c3551f81cf5ed52f13e56e50210",
+  "sourceFreeze": {
+    "artifact": "checkpoint49-source-freeze-v1.json",
+    "sha256": "404ea1758cd17aa66c8afc2fa2cd70b907f70c112990aec8d3d3a693c22d1625"
+  },
+  "implementation": {
+    "finalization": "Existing CLI sequentially settles drain/close, always attempts its existing private save and retains original operation/save failures. Failed cleanup sets exitCode1 before saving a body-free finalization disposition.",
+    "constructor": "Caller owns the physical recorder before construction and the existing save reads it even when construction never returns. Invalid recorders fail before setup.",
+    "prerequisite": "The existing native Linux npm entry runs build:packages before the native command. Direct read-only Bash qualification consumes an explicitly prebuilt checkout. The actual compiled server encoder oracle remains unchanged."
+  },
+  "verification": {
+    "actualCallerCausality": {
+      "beforeFailed": 2,
+      "beforeHealthy": 2,
+      "before": {
+        "artifact": "checkpoint49-finalizer-before.log",
+        "sha256": "747e9b9972215c3b72b5330670ef15760f22433c42d7004bcc27b784c48dd429"
+      },
+      "independentBefore": {
+        "artifact": "lab-finalizer-retention-before-independent.json",
+        "sha256": "87d6b9f0ae492b6f24e98a66133c7dc44e1f8684063a31aa38291b2788c95603"
+      }
+    },
+    "physicalConstructorCausality": {
+      "sameActualContainedHttpBeforeFailed": 2,
+      "before": {
+        "artifact": "checkpoint49-recorder-before.log",
+        "sha256": "b068024406c6b7b13bbdebb4f7774cc042f0467fd6baee80f26cbd4713e2ff96"
+      },
+      "afterRetained": 2,
+      "scope": "Fixture-owned actual HTTP provider/proxy exchange, exact observer and constructor; child/session ports controlled. No real model forwarding."
+    },
+    "nativePrerequisiteCausality": {
+      "beforeFailed": 2,
+      "before": {
+        "artifact": "checkpoint49-native-prerequisite-before.log",
+        "sha256": "02c38e7797e8fddaba5ba43514be65b0f09e181fed358c8cbc1e9a9a88cbd3e3"
+      },
+      "afterPassed": 2,
+      "scope": "Actual package script through nonexecuting build/native command ports: ordering, failure propagation and kernel-scope forwarding. Separate actual compiler/kernel run is retained.",
+      "freshMissingModule": {
+        "artifact": "linux-native-fresh-module-link-independent.json",
+        "sha256": "05aedd1789692a217d1f3563f06c9ae3faefb1fb7fd98870e9626331951b84e7"
+      },
+      "actualBuildAndStrictCheck": {
+        "artifact": "checkpoint49-typecheck.log",
+        "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+      },
+      "actualNativeAfterBuild": {
+        "artifact": "checkpoint49-native-after-build.log",
+        "sha256": "023b22e47c7151df164d39a597f31e722bafa59c7a6fa9a90820368dbaceef58"
+      }
+    },
+    "affectedSuites": 7,
+    "affectedTestsPassed": 82,
+    "after": {
+      "artifact": "checkpoint49-all-lab-and-native-v3.log",
+      "sha256": "eefeaac3c21fb603aa15fc7def420fee5c57ff9868d0bf9dd405200056b6a176"
+    },
+    "source48ReadinessOnlyCommission": {
+      "artifact": "commission-shared-readiness-v5-receipt.json",
+      "sha256": "105bf6bad2735783b4533dce750b839c8c597bade8da4547ba6ed11940a2ed0f"
+    },
+    "independentAfter": [
+      {
+        "artifact": "lab-finalizer-shared-retention-before-independent.json",
+        "sha256": "65f73d9b4103c6adb84c558493bdaa7f0a4e6b21090f22869ad55174326a36d6"
+      },
+      {
+        "artifact": "lab-finalizer-shared-retention-after-v1-independent.json",
+        "sha256": "328fd13b4bb9326f1b27e35babff681c6a0b01d8faa1cd40a52ce10c8154ad08"
+      },
+      {
+        "artifact": "public-lab-constructor-recording-independent.json",
+        "sha256": "aec48c0a0585c017962429ba166f980d19200423551d8278e8a9c7eb5d41c580"
+      }
+    ]
+  },
+  "limits": [
+    "No customer skill, model, prompt, task/scoring or grant change. No test-generation task dispatched in this checkpoint.",
+    "Readiness-only success does not establish skill benefit or held-out acceptance.",
+    "Native generation shipping integration, successive installed updates, broader browser/search/source acceptance and exact-head integration remain open."
+  ]
+}

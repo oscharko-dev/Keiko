@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "classification": "Runtime-test ownership-stage isolation and bounded development readiness requests. Not a reconstruction of either original CI failure, full CI shard, native updater or feature acceptance.",
+  "parentHead": "b75aa5a40dd833a636c5b5c3790e31e279260298",
+  "sources": [
+    {
+      "path": "packages/keiko-server/src/coding-runtime/codingRuntimeManager.test.ts",
+      "sha256": "b336fbfc500650f93c57fde0a5a1282d1290b3357bea32e9002015a5117f9e7e"
+    },
+    {
+      "path": "scripts/dev-runner.mjs",
+      "sha256": "69de9d0deb469c9f419f3657c6c67da58e45b6d3d2ba4d942e2057ad506ebb25"
+    },
+    {
+      "path": "scripts/__tests__/dev-runner.test.mjs",
+      "sha256": "a39b60214f09e74ee041b3e5326cfa5753cc4fc04a5e369b409a5f89361ad1bf"
+    }
+  ],
+  "runtimeStage": {
+    "originalFailure": {
+      "runId": 39185765986,
+      "jobId": 117848158821,
+      "logSha256": "46d2620bec07680da877b47cb6f339198adc048475b6ff953264a35b82dbf681",
+      "observed": "Expected runtime-reap-unproven but received start-timeout. The test did not establish whether an owned child or packet write existed."
+    },
+    "repair": "Forward the existing manager clock port through the test harness. Keep the 20 ms packet timeout and require one actual owned spawn plus writer entry before recovery-required. The separate exact pre-spawn deadline refuses without spawn, bytes, readiness or retained child authority. Product runtime, authority checks and deadlines are unchanged.",
+    "causal": {
+      "classification": "Identical paired pre-spawn/post-spawn test controls with the original real-clock harness versus forwarding its existing owner clock port. Test-stage isolation only; product runtime unchanged. Original CI failure retained separately.",
+      "testSha256": "b336fbfc500650f93c57fde0a5a1282d1290b3357bea32e9002015a5117f9e7e",
+      "runs": [
+        {
+          "phase": "before",
+          "exitCode": 1,
+          "log": "ci35-writer-stage-causal-before.log",
+          "logSha256": "5c43a99aefae672a7051e6f94e303a2041ab80e0707125f0e6490776d6e4c736"
+        },
+        {
+          "phase": "after",
+          "exitCode": 0,
+          "log": "ci35-writer-stage-causal-after.log",
+          "logSha256": "28a6d7d1417e0024ed012410c651f977ecadaa0af31562be891040a64fe460ae"
+        }
+      ],
+      "restored": true
+    },
+    "causalCounts": {
+      "beforeFailed": 1,
+      "beforeHealthy": 1,
+      "afterPassed": 2
+    },
+    "localMacNode26": {
+      "version": "26.8.1",
+      "passed": 165,
+      "failed": 0
+    },
+    "localLinuxNode26": {
+      "version": "26.8.1",
+      "architecture": "arm64",
+      "passed": 165,
+      "failed": 0,
+      "network": "none",
+      "uid": 1000,
+      "capDrop": "ALL",
+      "noNewPrivileges": true,
+      "sourceReadOnly": true,
+      "image": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+      "runtimeArchiveSha256": "23c1b4d19e2f12a7d06fe8aa3d6e0e4923cf77a47e13c5ccdf32fadaa33960f2"
+    }
+  },
+  "readiness": {
+    "originalFailure": {
+      "runId": 39185765986,
+      "jobId": 117848143762,
+      "logSha256": "5482eae1725bb36bac809e2be059a3ece0f8500529821333ecedb7445a600cff",
+      "observed": "The replacement child port was selected, but the public proxy did not recover. Original fixture ignored child output; its exact cause remains unproven."
+    },
+    "failure": "The existing readiness observer has no finite header/body request lifetime. A stalled old endpoint can keep its readiness loop in flight after a target changes.",
+    "repair": "The existing API/UI readiness request owner attaches one 5 s AbortSignal spanning response headers and body consumption. Later loop iterations can observe the current target. Existing whole-journey readiness and restart bounds are unchanged.",
+    "realHttpCausal": {
+      "beforeFailed": 2,
+      "afterPassed": 2,
+      "scope": "Actual existing API observer against real stalled-header and stalled-body fixture servers. All owned sockets and timers are cleaned up."
+    },
+    "portChangeCausal": {
+      "classification": "Actual extracted readiness owner declarations and real HTTP fixtures. Controlled old child endpoint accepts a request without responding; target changes while its probe is in flight. Not a reconstruction of original CI attempt or a full Next/BFF packaged journey.",
+      "parentHead": "b75aa5a40dd833a636c5b5c3790e31e279260298",
+      "results": [
+        {
+          "phase": "before",
+          "sourceSha256": "840249e30a3a5500a632fed58cc41766c147b15e077554d2a67ca5b61872ff25",
+          "declarationSha256": "fb44f2a46dba94270d2b4b06cac754fc3afebd29a5bedcb2f847c30f504b0263",
+          "oldProbeObserved": true,
+          "publicReady": false,
+          "elapsedMs": 7020,
+          "readyObservations": 0
+        },
+        {
+          "phase": "after",
+          "sourceSha256": "69de9d0deb469c9f419f3657c6c67da58e45b6d3d2ba4d942e2057ad506ebb25",
+          "declarationSha256": "c03edc9c26553260239dfaf5044285c107978576bef4ddd4b1dd17e5d069cfec",
+          "oldProbeObserved": true,
+          "publicReady": true,
+          "elapsedMs": 6023,
+          "readyObservations": 1
+        }
+      ]
+    },
+    "independent": {
+      "receiptSha256": "ef605e88b6cb06a6d6f735c69f28ca031aa8861cbd1cd402df16008a72cb7b67",
+      "classification": "Independent actual published34/current candidate API and UI readiness owner functions, AST-selected without importing/executing runner. Inert fetch, actual AbortController and manually delivered timeout signal only; no HTTP/service/process/native/container/provider/model/shared execution. Identical stalled header/body and healthy/nonready controls; proves per-request bound only, not cause or reconstruction of original CI proxy-recovery failure.",
+      "beforeFailed": 4,
+      "beforeHealthy": 4,
+      "afterPassed": 8,
+      "sourceSha256": "69de9d0deb469c9f419f3657c6c67da58e45b6d3d2ba4d942e2057ad506ebb25"
+    },
+    "actualOwners": {
+      "suites": 2,
+      "passed": 125,
+      "failed": 0,
+      "platforms": ["darwin-arm64", "linux-arm64"],
+      "scope": "Includes actual Next/BFF warmup and actual child-port reselection/public proxy recovery. Not full original coverage shard."
+    }
+  },
+  "logs": [
+    {
+      "name": "dev-readiness35-before.log",
+      "sha256": "3642e5dc739bfda4d0c498356ddfd82752d436586fae27a125490bbd9dc0bd01",
+      "summary": [
+        "⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯",
+        " Test Files  1 failed (1)",
+        "      Tests  2 failed | 121 skipped (123)"
+      ]
+    },
+    {
+      "name": "dev-readiness35-after.log",
+      "sha256": "6a39fd018f776f141a3746ed783b4edd45e62ce88f724006c011e82266fa8ecf",
+      "summary": [" Test Files  1 passed (1)", "      Tests  2 passed | 121 skipped (123)"]
+    },
+    {
+      "name": "dev-readiness35-final-owners.log",
+      "sha256": "e2958e9abe15d077ee2f5944a192afdac198376dd0e2f76d8948e5bc37b077af",
+      "summary": [" Test Files  2 passed (2)", "      Tests  125 passed (125)"]
+    },
+    {
+      "name": "dev-readiness35-linux-final-owners.log",
+      "sha256": "73d30e27b322347c881ddb7ff297bac9d8aec95d7535264b558889acc439aa75",
+      "summary": [" Test Files  2 passed (2)", "      Tests  125 passed (125)"]
+    },
+    {
+      "name": "ci35-runtime-node26.log",
+      "sha256": "847b91c67b595da7676aab1ceef5caa2c413fa9471171827a50d2d448dfa4684",
+      "summary": [" Test Files  1 passed (1)", "      Tests  165 passed (165)"]
+    },
+    {
+      "name": "ci35-runtime-node26-linux.log",
+      "sha256": "b23fec0c91635bb85377deff8e5945953775372723d49aee994acfcfa6729804",
+      "summary": [" Test Files  1 passed (1)", "      Tests  165 passed (165)"]
+    },
+    {
+      "name": "checkpoint35-lint-final.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "summary": []
+    },
+    {
+      "name": "checkpoint35-types.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29",
+      "summary": [
+        "package-graph: PASS — workspace references, package emits, and root package build graph are aligned."
+      ]
+    }
+  ],
+  "retainedFailures": [
+    "Initial Linux readiness run kept source read-only, but the existing fixture unconditionally restores UI tsconfig in cleanup: 123 tests passed and two cleanup failures were EROFS. Exact 1231 tracked UI files were copied to a writable isolated tmpfs; both suites then pass 125. Main UI source remains unchanged.",
+    "The first scoped lint run rejected missing explicit timer/global lookups. Existing Node timer imports and globalThis.AbortSignal qualification repair those references; no rule was suppressed.",
+    "The first private extracted-owner commissioning omitted its actual microphone-policy producer. That harness failure remains retained; final before/after runs invoke the same complete actual producer set."
+  ],
+  "limitations": [
+    "No causal claim that the synthetic stall reproduces the historical CI proxy failure. A repeated exact-head CI failure must be read and reproduced before further changes.",
+    "Linux ARM64 is actual developer-container evidence, not hosted x64 or complete Node 26/coverage-shard acceptance.",
+    "Actual corrected Windows required CI, native generation ownership and packaged update/restart/recovery/state/SSD remain open.",
+    "Browser UI/native journeys, both skill matrices, full Chat/search/source 96, final exact-head required checks/reviews and authorized integration remain open."
+  ]
+}

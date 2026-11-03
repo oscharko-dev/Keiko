@@ -97,8 +97,37 @@ This shapes the product _and_ how you work on it:
   Shared runtime contracts remain only where active consumers need them (ADR-0061).
 - **Never** weaken a trust boundary, evidence redaction, or a governance gate to make something
   pass. Fail closed. If a gate blocks you, the gate is usually right.
+- Portable updates must not require an Apple Developer subscription (ADR-0121 D7). Verify macOS
+  handoff copies against the exact current artifact digests in the validated plan after managed
+  registration admission; preserve candidate authenticity, containment and process ownership.
+  Optional Apple signing evidence must remain truthful and cannot become a hidden update gate.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- **Authorized content preservation (owner decision, 2026-10-27, #4098):** the deployment operator
+  may set `KEIKO_CONTENT_REDACTION=off` before starting Keiko so Chat keeps authorized document
+  context, answers and private chat history. The server resolves it once at startup into the deps
+  graph (`chat.content-policy.resolved`; an unrecognized value warns and keeps redaction); no
+  package reads it per request. Only Chat model ports and the Chat connected-context workspace
+  carry the preserving policy from this switch. Independently of it, the OpenCode runtime is its own
+  producer and uses the gateway as infrastructure only: the Coding Workbench sidecar route always
+  hands it the model's answer, reasoning and structured output under the preserving policy (owner
+  decision, 2026-10-27). Coding repository search and semantic refresh, Coding History exports and
+  imports, evidence, audit, logs, support exports and tool arguments keep their default or
+  unconditional redaction.
+  Preserved content still loses the credential floor: configured secret literals, private keys,
+  URL credentials, `Authorization` header values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known
+  token shapes; memory proposals keep the default projection. Workspace
+  authority, containment, deny-lists and budgets are unchanged. See ADR-0003 D7 and ADR-0022 D4.
+- Source redaction preserves TypeScript/JavaScript and Java syntax at the shared security boundary;
+  syntax metadata never exempts credential literal data or configured secrets. JSON/JSONC and YAML
+  use parsed value boundaries. Ordinary unified diffs reuse the canonical parser at the contracts
+  leaf and separate native old/new images; unsupported fragments fail closed. Plain prose is not
+  inferred as source: error recovery counts a declaration only at a statement boundary with a header
+  its grammar allows, and a Markdown list item is judged on its own text (ADR-0022, #3900). Only the
+  raw Git diff view of the user's own repository keeps syntax-refused hunks readable under the
+  credential floor (owner decision 2026-10-28, #4114; ADR-0022). Streaming retains unresolved credential/source context until it can
+  publish safely; cancellation discards pending text. Failed source projection is unavailable evidence,
+  not a complete source. Keep diagnostics body-free and regenerate the existing operation registry.
 - Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
   body-free logging on the existing activity log, and when you debug, that log is the source you
   read first (§8).
@@ -110,6 +139,7 @@ This shapes the product _and_ how you work on it:
 ```bash
 npm install               # installs all workspaces from the single root lockfile
 npm run provision:usearch # ONCE per checkout — see below; without it `npm test` is red
+npm run provision:ripgrep # ONCE per checkout for the OpenCode coding runtime's search tools — see below
 npm run build             # build:packages (tsc -b) then the root build
 npm run dev:start         # Node BFF + Next.js UI on ONE loopback URL (http://127.0.0.1:1983)
 npm run dev:stop
@@ -126,6 +156,22 @@ runs it as a setup step before every test lane. `npm test` does **not** run it f
 fresh checkout the two Knowledge-M2 proof suites — `knowledge-m2-closeout` (its `ann-active` proof)
 and `knowledge-m2-clean-checkout-demo` — fail until you have run it once. They fail rather than skip
 on purpose: a missing runtime must never quietly mask a real ANN regression.
+
+**`provision:ripgrep` is the same pattern for the OpenCode coding runtime (#3897).** OpenCode's
+`glob` and `grep` tools and its file finder run ripgrep. Left alone, the runtime downloads it from
+GitHub on first use, which a firewalled customer and the loopback-only runtime lane forbid, and
+search then fails silently. Keiko ships the identical upstream release (15.1.0) pinned and
+SHA-256-verified in `packages/keiko-server/src/coding-runtime/ripgrepRuntime.ts`: the script fetches
+the one approved archive for the host, extracts only `rg` and `LICENSE-MIT` into the gitignored
+`.ripgrep/<version>/<target>/`, and verifies both again. Portable staging copies those verified files
+to `runtime/native/rg` (`rg.exe` on Windows). The npm runtime package builder
+(`scripts/build-coding-runtime-npm-package.mjs`) stages the same verified `rg`, its `LICENSE-MIT` and a
+component SBOM into `@oscharko-dev/keiko-coding-runtime-<target>` at the same paths, provisioning the
+TARGET's release, so a clean `npm install -g` finds search normally and the server verifies
+`<package>/runtime/native/rg` against the pinned digest at every run launch; `KEIKO_RIPGREP_BINARY_PATH`
+remains a developer and qualification override only. Unit tests are hermetic and do not need it; the
+customer-shape qualification, the nightly real-binary journey, the portable stage jobs and the npm runtime
+package build do, and CI runs it as a setup step there.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.
@@ -236,7 +282,7 @@ evidence.
 
 | You changed…                                                    | Also run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9), and `npm run check:update-ui-evidence` when the change touches one of the eight sources the updater UI evidence binds (`src/lib/i18n-messages.de.ts` and `.en.ts`, `src/lib/api.ts`, `globals.css`, the `desktop/update/` components): a stale digest fails the `ui` and `Core quality` jobs, and the regeneration procedure is in `docs/design-system/evidence/3405/README.md`                                                                                                                                                                      |
+| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9), and `npm run check:update-ui-evidence` when the change touches one of the sources declared in `scripts/check-update-ui-evidence.mjs` (including the core/optional message catalogs, optional translation owner, API, styles, and updater components): a stale digest fails the `ui` and `Core quality` jobs, and the regeneration procedure is in `docs/design-system/evidence/3405/README.md`                                                                                                                                                       |
 | A package's **public exports** / a new package                  | `npm run check:package-surface:assembled`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -273,6 +319,12 @@ The shape (ADR-0019):
 - **`keiko-activity-log`** owns the writer, segmented store, and reader engine. It depends only on
   contracts + security; server and CLI compose it, while domain packages keep injected log ports
   and UI never imports it (ADR-0179).
+- **`keiko-mcp`** owns the shared managed MCP protocol host (ADR-0181). Its only internal
+  dependencies are contracts and security; official MCP SDK imports are confined to this package.
+  Server composition supplies provider/log ports and retains catalog/binder admission. Central
+  Settings/connection ownership includes external OAuth for Chat and Workbench. Native production
+  runs receive scoped relay capabilities, never external OAuth tokens. Keep credential epochs,
+  app-session-bound one-use callbacks, scope binding and effect-safe no-replay behavior intact.
 - **`keiko-model-gateway`** is the _only_ place provider SDKs (`openai`, `@anthropic-ai/*`,
   `*-ai-sdk`) may be imported. This isolation is a hard gate — do not import a model SDK anywhere
   else (ADR-0019 trust-1).
@@ -333,14 +385,6 @@ The bar is strict and **machine-enforced** — match it or the build is red.
 
     This is a temporary bridge, not a carve-out — decomposing the oversized files is tracked
     separately (audit KEIKO-0118, #2891).
-- **Noncosmetic syntax policy:** root `npm run lint` runs the pinned
-  `check:code-quality-policy` command before existing root/UI ESLint. Its initial production guards
-  reject widening followed by assertion, reflective invocation and non-spread accumulator copies.
-  All 22 rule dispositions remain in the census; later scope activation follows the accepted
-  migration owners. Naming/spacing additions are excluded. Unknown or empty scope, incomplete
-  parser visitation, plugin/configuration failure, source escape and activation shrink fail closed.
-  A local `--scope` result is partial; required CI accepts only whole-repository enforcement.
-  See [`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md).
 - **Prettier (the formatter is law):** 2-space indent, **double quotes**, semicolons,
   `printWidth: 100`, trailing commas everywhere, LF endings. Run `npm run format` before you
   finish; `format:check` is a CI gate.
@@ -450,13 +494,22 @@ system that exists, never beside it:
   Connected-context explicit path admission emits anchor/admitted/rejected/line-hint and bounded
   basename discovery counts, a closed rejection-reason list, and selected atom counts on the existing
   `search.connected-context.source-details` operation; the shared correlation joins its completed
-  read-window and budget evidence without exceeding the operation field cap. Diagnostic-reference
-  selection uses the final six available source-detail fields. Additional selection observations
+  read-window and budget evidence without exceeding the operation field cap. Extensionless document
+  admission uses a shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist, separate
+  from overview ranking. Ordinary prose cannot gain explicit-file authority from its ranking bucket;
+  explicit filenames, selected scope and the existing discovery/read grants remain authoritative.
+  Existing source-details counts distinguish actual explicit admission from ordinary ranking.
+  Diagnostic-reference selection uses the final six available source-detail fields. Additional
+  selection observations
   use the typed `search.connected-context.selection-details` sibling on the same Activity Log and
   correlation; existing completed fields and the contextual-field cap remain unchanged.
-  Contextual keep-one fallback logs its closed ranking source and remains low confidence. Its
+  Contextual below-floor fallback logs its closed ranking source and remains low confidence. Its
   lexical producer order requires matching live content identities and excludes semantic or
-  successfully reranked selections. Short ordinary documents may use the existing canonical
+  successfully reranked selections. At most two additional eligible content peers may share the
+  first retained source's same-query matched-group key; equal numeric scores alone do not
+  qualify. Existing read/byte grants remain binding. `keepOneFallbackApplied` describes exactly
+  one retained fallback source, and the existing completion count records the actual size.
+  Short ordinary documents may use the existing canonical
   reader's complete current redacted source only within both existing byte grants; explicit
   selections and certified/source-code ranges retain their geometry (ADR-0022).
   The six-reference intake preserves the primary local trace frame and explicitly named question
@@ -472,6 +525,13 @@ system that exists, never beside it:
   continuity remain untrusted context inside that unchanged task block. Existing final-prompt
   selection and gateway admission record fitted counts and costs; citation validation and
   original input/output grants remain authoritative.
+  Marker repair requests at most 32 unique-prose insertion annotations instead of regenerating
+  the answer. The existing repair owner constructs the candidate locally, then applies the
+  unchanged verbatim-content, code, assessment, sent-range and cumulative-budget guards.
+  Literal marker-only responses remain subject to those same guards.
+  Symbol discovery batches the existing bounded excerpt ranges per source and observation wave.
+  Each definition retains current-source, call/parent and range certificates; no persistent source
+  cache, read grant, synthesis attempt or source authority is added by batching.
   Endpoint definition traversal binds a registration's observed handler reference to its current
   lexical AST target. Further calls retain their exact callable owner and complete observed spans;
   same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -818,11 +878,35 @@ system that exists, never beside it:
   `memoryContextDisposition` is closed to included/excluded/not-requested. The assistant identity
   and originating request retain the existing causal link. Candidate counts and model-authored
   marker prose cannot stand in for actual memory inclusion; no memory or answer body enters logs.
-  `client.scope.notice` records scope narrowing, widening, folder pinning and adding missing
+  `client.scope.notice` records scope narrowing, widening and adding missing
   evidence under the notice's client correlation. Its closed `reason` is `narrowed-to-file`,
   `narrowed-to-directory`, `widened`, `pinned-folder` or `missing-evidence-added`. `scopeKind` is
   `workspace-root`, `directory` or `files`; `pathCount` counts selected scope-relative entries.
-  The existing timeline carries these dispositions and counts without scope paths or notice text.
+  `pinned-folder` is retained only for historical evidence; current Files navigation never pins a
+  folder or asks for confirmation. The existing timeline carries these dispositions and counts
+  without scope paths or notice text.
+  Files directory responses identify the guarded canonical root, including for symbolic aliases.
+  Every directory response retains its canonical identity and latest per-path read ownership;
+  child-discovered replacements and unmounted windows cannot publish older roots or listings.
+  Root normalization/replacement and superseded child reads use the existing Files scope-decision
+  Activity Log under their directory-read correlation, without paths or contents.
+  Explicitly forgetting a failed Files edge releases only its own failed admission hold;
+  pending work and independent source holds remain protected.
+  An unchanged privacy-elided Files edge may restore its local representation from the same
+  conversation/connection's canonical acknowledgement only when its persisted fingerprint and
+  visible scope both match. This does not start a new source intent or cancel a response. Missing
+  or changed proof and failed transitions retain normal recovery; other source holds remain intact.
+  The existing `automatic-suppressed` scope decision joins the original acknowledgement.
+  A mounted Chat may establish its conversation through the existing runtime before its id is
+  persisted in window cfg; refresh admission and failed-edge recovery use that same live identity.
+  Initial Files bindings hold admission before an edge exists, using stable window ownership.
+  Returning to an acknowledged root after failure requires fresh canonical reconciliation.
+  Retired owners release settled failed holds only; timeout-blocked work and failed compensation
+  retain their holds until the existing recovery path proves settlement.
+  Connected Files intent cancels its bound Chat before acknowledgement. The existing Chat runtime
+  retains per-source pending/failed admission holds and releases only the current accepted token;
+  drafts survive refused sends. Intent lifecycle and send refusals use that same scope-decision
+  operation and the serialized mutation correlation.
   `client.evidence.inspected` records `summary-expanded`, `file-table-opened` or
   `manifest-fetch-failed` under the inspection's client correlation. Optional `readFileCount` and
   `omittedFileCount` describe manifest records and do not certify model-sent files. A manifest fetch
@@ -863,6 +947,14 @@ system that exists, never beside it:
   flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
   events. Refused prompts retain measured bounds, and generated/reused drafts share a body-free key digest. Browser delivery-loss counts are recorded once after rate admission and before routine diversion. Refused loss-bearing reports return 429 so the browser retains the counts for later delivery; the server alone counts that dropped report, avoiding a second client-post-failed count. Final pagehide loss reports use an independent bounded admission budget, so ordinary report storms cannot discard the closing tab's counters. Stream resources, circuit admissions, spend reservations and completion evidence settle before the terminal done packet reaches a consumer. Neither path records customer diffs or generated text.
 
+- **SSE streams are flow-controlled, never size-limited (2026-10-28).** Every server SSE write goes
+  through `writeSseFrame` (`sse-write.ts`). A `false` from `res.write()` is Node's buffer accounting
+  (Node 24 answers it for any single write of 64 KiB or more, even to an idle reader): the frame
+  stays queued and the stream waits for `drain`. Only a reader that drains nothing within
+  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is torn down as `backpressure-killed`; producers that pull
+  from a model await `whenSseWritable` so a slow reader slows the provider instead of growing a
+  backlog. `sse.stream.closed` records the `drainWaitCount`. Never reintroduce a destroy-on-false
+  write or a frame-size limit on a stream.
 - **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
   log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
   closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
@@ -959,7 +1051,78 @@ run's messages from the newest end and only as far as the feed can still hold th
 older is named for the transcript by position and never examined. `cutCount` counts timeline
 messages cut to the per-message bound and `historyTruncated` says Coding History itself cut the
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
-truncated.". Counts only — never a message, path or run name.
+truncated.". Counts only — never a message, path or run name. An explicit Stop or takeover keeps the
+run's live tool rows, as OpenCode does: `coding-runtime.safe-activity` records `event=interrupted`
+with the closed `reason` and the number of open calls it settled as `cancelled` (#3907).
+
+`coding-runtime.history.export` records the human's local export of a Coding History task (Export
+JSON or Export Markdown; the browser saves the file, nothing is uploaded): `requested`, then
+`completed` or `refused` under the request's correlation. A refusal carries one closed reason
+(`unauthenticated`, `unavailable`, `invalid-format`, `too-large`, `failed`; a failure also its error
+class, frames and cause chain), a completion the format, message, omitted and redacted-message
+counts and the byte size. Message text is stored as the runtime produced it, so the export redacts
+every string again with the evidence redactor and masks absolute host paths; no text, title, branch
+or path ever enters the line (ADR-0137 D4).
+
+`coding-runtime.history.import` records the human's local import of a saved task (Import task: a
+Keiko task export or an OpenCode session transcript the person picks; nothing is fetched or
+uploaded): `requested`, then `completed` or `refused` under the request's correlation. A refusal
+carries one closed reason (`unauthenticated`, `unavailable`, `no-workspace`, `invalid-document`,
+`unsupported-version`, `too-large`, `empty`, `failed`; a failure also its error class, frames and
+cause chain), a completion the source, message, omitted, skipped and redacted-message counts and the
+byte size. The file's text is untrusted, so it is redacted again before it is stored; no text,
+title or path ever enters the line (ADR-0137 D4).
+
+`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
+did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
+progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
+agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). It also records a history task of another
+repository or workspace that was not activated (`history-repository-switched`,
+`history-workspace-switched`; #4118) and a refused editor bridge registration
+(`bridge-registration-refused` with the closed `refusal` `root-boundary` or `lease`, under the
+refused request's correlation and the run as parent; #4117) and a diff that switched to the
+windowed review (`diff-windowed` with the closed `surface` `changeset-review`, `run-changes` or
+`answer-diff`, and `fileCount`, `totalLineCount`, `totalByteCount`; once per diff, not per page turn;
+never a path or diff text; #4108). An unpaired window names the missing pairing once, in the
+run status sentence, and holds its secondary notices until it is paired; each hold is recorded as
+`notice-held` with the closed `notice` (`task-session`, `skills`, `mcp`, `activity`, `questions`,
+`editor-bridge`; #3880). These were warn/unknown
+`client.diagnostic` notes before and buried the rare real browser failures. The server side of
+that bridge records each registration on `editor.agent.bridge-registration` (`registered`,
+`refreshed`, `rotated`, or `refused` at warn with the closed root-boundary reason or
+`capability-held`). A root-boundary refusal holds until the run or its root changes; only a held
+lease is retried with backoff. The editor action queue is bounded by count, by serialized bytes per
+session (64 MiB) and by serialized bytes for the process (256 MiB); every `QUEUE_FULL` refusal is
+recorded on `editor.agent.action-queue` with the closed `reason` (`queue-count`, `session-bytes`,
+`process-bytes`) and the action, session and process counts and bytes (#4107). `gateway.setup.target.accepted` records,
+at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
+and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
+`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
+request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
+(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
+`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
+`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
+Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
+status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
+every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
+while another mutation is pending. Closed values and one duration only.
+
+`client.editor.line-ending.adopted` records, at info and on the routine budget, that the Editor's
+Monaco model adopted the line ending of text Keiko wrote into it (#4123): `lineEnding` (`lf`,
+`crlf`) and `source` (`buffer-sync` for a controlled sync such as a reload from disk, `host-edit`).
+Monaco gives a model created without a line break the platform default, so a Windows browser would
+otherwise normalize a reloaded LF file to CRLF and report the unchanged buffer as an unsaved human
+edit. The adoption shares the write's undo step. `client.binding.resolved` carries the optional
+`projectOpenAttemptCount` when a Chat's project open had to be repeated because a competing
+workspace update overtook it; the repeat is bounded to three attempts per routing episode, and an
+episode that ends (the project held, the window no longer needs one, or the open failed) frees the
+budget for the next one. When every attempt was overtaken, the window stops waiting, shows that the
+Chat could not be opened and records `client.binding.project-open-exhausted` at warn (`conflict`,
+failure budget) with the required `projectOpenAttemptCount`. Closed values and counts only, never
+text or paths.
 
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
@@ -968,7 +1131,19 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. A chat probe that only times out or meets a transient overload status keeps and renews
+a same-generation positive observation (`gateway.readiness.busy-retained`, a `provider-busy` warning
+diagnostic), so a busy single-slot model stays selectable (#4115). An accepted coding-sidecar answer
+that finished serving renews that same-generation success too (`readinessRenewal` on
+`coding-sidecar.gateway.outcome`; #3907). Each chat model is checked once per connection
+at startup; nothing renews or recovers a model on a timer. A conversation request, a
+coding run start, a Workbench model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not
+ready now; only an observed failure waits out the 30 s not-ready cooldown. Other Workbench reads
+never start a check. The Workbench profile describes the model chosen in its picker (`modelId`):
+`model-verification-pending` only while a check of that model runs, an expired or unknown answer
+usable with `verification: "unverified"`, and its `verification` is that model's own observation,
+not the gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See
+[ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -985,9 +1160,10 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 
@@ -1073,11 +1249,19 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
+caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
+are carried over unchanged. The runtime completes a streamed part in place, so every message from the
+anchor on is projected again; a complete read replaces the tail when the anchor is gone (a revert or
+compaction), every 256 tail reads, after a pass cut at the event cap, and while an older message still
+holds live text. The same line records how: `readMode` (`tail`, `full`, `verify`, `anchor-lost`),
+`readMessageCount` (messages handed to the projection) and `retainedMessageCount` (older messages
+carried over). The continuation's complete read stays strict (`history-oversized`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
-only the configured provider literals from them, never a heuristic secret shape; every other
-tool's arguments keep the full redaction. When a literal was removed,
+Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
+#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
+from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
@@ -1095,11 +1279,26 @@ allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemp
 sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
 upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
 assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The gateway hands reasoning only to a
-call that asks for it with the explicit `reasoningDelivery: "forward"` (the coding sidecar route
-alone); the `coding-workbench` latency profile selects timeout floors only.
+records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
+calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
+text goes upstream as `content: null`, and the same line counts the others as
+`toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the
+explicit `reasoningDelivery: "forward"` (the coding sidecar route alone); the `coding-workbench`
+latency profile selects timeout floors only.
 
 ### Rule 2 — when you debug, the log is your primary source
+
+For dictation, `speech.stt.request.dispatch` records the sent container class and byte count,
+and `speech.stt.request.completed` records a received provider HTTP status. An absent status
+means no response was observed. When a provider's `text` is exactly its verbose segments joined
+by line breaks (whisper.cpp), the adapter joins the segments as they are and the same line counts
+the removed separators (`segmentSeparatorsRemoved`); any other line break is the provider's own
+and stays. Browser clips are normalized in memory to mono PCM16 WAV;
+normalization failures use the existing body-free client diagnostic sink (ADR-0100 D8).
+
+Chat draft persistence uses `chat.draft.operation` for read/save lifecycle and status only.
+Draft text belongs to the authenticated, chat-bound private UiStore and never enters logs or
+browser persistence; stale revisions fail closed (ADR-0114 D1).
 
 Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
 already recorded:
@@ -1143,61 +1342,15 @@ missing evidence under Rule 1, then fix the behaviour.
 
 ## 9. Traps specific to this repo (learn these once)
 
-These cost real time when rediscovered. They are all real and current.
+Repository lessons now live in [EXPERIENCE.md](EXPERIENCE.md). Before changing UI styling,
+performance evidence, package exports, workflow branch lists or coverage gates, read the matching
+entry there. In particular, the assembled package-surface check prunes the live dependency tree:
+read its ordering warning before running it. The applicable constraints are unchanged.
 
-- **`packages/keiko-ui/**/globals.css` is behind a SHA-pinned visual-proof gate (#1300).** Editing
-  it to add component or state styling trips a byte-exact hash check and a cross-mode axe/visual
-  proof, turning CI red. Style components with **component-scoped classes** (e.g. `.cmp-*`), not
-  by extending global CSS. See [`docs/design-system/`](docs/design-system/).
-- **Editor perf evidence does not need an in-flight regeneration — except for toolchain edits.**
-  The pull-request gate validates evidence integrity + budgets only (ADR-0139 D10), and since
-  ADR-0156 D2 it asks the toolchain-freshness question only of a diff that actually touches
-  `D12_MEASUREMENT_TOOLCHAIN_PATHS`. Regenerate in-flight (`npm run perf:evidence:regen`) only when
-  your change edits that list — changing the ruler requires re-measuring with it. Real per-PR perf
-  protection lives in the deterministic bundle gates (`check:editor-release-evidence`,
-  `check:editor-bundle-size`).
-- **The D12 reference environment is a developer machine, not CI (ADR-0156 D6).** The budgets are
-  absolute numbers calibrated on the pinned container at linux/arm64 with >=14 logical cores, which
-  is where every committed evidence document was measured. A hosted runner has 4 cores and measures
-  the same scenario at roughly twice the cost, so it cannot produce a passing document — the
-  scheduled `nightly-perf-evidence` lane therefore **detects drift and does not measure**, and files
-  a tracking issue when the committed evidence stops binding `dev`. If you see a 2x "regression",
-  check the provenance hardware in the document before believing it: comparing a local document
-  against a hosted run is comparing two machine classes. See
-  [`docs/qa/perf-evidence.md`](docs/qa/perf-evidence.md).
-- **New package exports drift `check:package-surface`.** Adding a public export changes the
-  packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
-  surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes
-  build-only and host-native artifacts, and then runs the fail-closed surface checker.
-- **`check:package-surface:assembled` prunes the LIVE `node_modules`, not a staged copy.** Its
-  `prune:package-build-artifacts` and `prune:package-native-optionals` steps run against the real
-  checkout: they delete `node_modules/@napi-rs/canvas` and `canvas-*` (root, and the same under
-  every `packages/*/node_modules`), and remove `packages/<name>/node_modules` entirely for every one
-  of the ~23 workspaces listed in the root `package.json`'s `bundleDependencies`. Nothing later in
-  the aggregate restores them. Run `npm test` afterward in the same checkout and
-  `scripts/__tests__/registry-install-smoke-security.test.mjs`'s dependency-closure test fails —
-  `@napi-rs/canvas` missing from the tree it walks — a false regression with nothing to do with your
-  change. Run the assembled surface check LAST, after `npm test`, or restore first with
-  `npm install`.
-- **A new long-lived integration branch (`feat/…`) must be added in THREE places in
-  `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
-  the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
-  miss the third and CI runs but the gate still rejects the merge. Add the same branch to CodeQL's
-  `push:` and `pull_request:` lists and Dependency Review's `pull_request:` list. Verify the
-  three-workflow branch-list comparison with `npm run check:workflow-branch-parity`; it is the
-  repository-owned replacement for the audit's `awk`/`diff` check and fails on any missing or
-  extra branch.
-- **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
-  with per-file floors across all four metrics. Lowering coverage fails the gate; if you add code,
-  add tests. There is exactly ONE per-file floor store and ONE evaluation
-  (`npm run check:coverage:quality`) — do not add a `coverage.thresholds` block to a vitest config
-  to gate a file, and do not write the literal `85` into a coverage gate (import
-  `KEIKO_REPOSITORY_GATE_CONTRACT.newCodeCoverageMinimum`). Which ruler answers which question is
-  the one table in [`docs/qa/coverage-truth-model.md`](docs/qa/coverage-truth-model.md); the
-  reasoning is [ADR-0158](docs/adr/ADR-0158-one-coverage-ruler-per-question.md).
-- **Some agent harnesses run sub-agents in an isolated worktree at clean `HEAD`.** If you delegate
-  edits, confirm they landed on _this_ working tree and not a throwaway checkout before you report
-  the change as made.
+Keep new lessons evidence-backed and scoped; prefer executable regression protection to growing
+this always-loaded contract. Reviewers use the existing
+[review standards](docs/qa/review-standards.md), already consumed by CodeRabbit, rather than a
+second root review-policy file.
 
 ---
 

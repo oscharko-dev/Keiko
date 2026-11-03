@@ -36,7 +36,7 @@ export type { OutboundHttpEgressConfig } from "./types.js";
 // string alone, with no DNS resolution and no dependency on any `OutboundHttpEgressConfig` flag —
 // safe to use unconditionally, proxied or not (see keiko-server's Atlassian httpPort.ts for why
 // that distinction matters: `denyLoopback` cannot be pinned on a proxied request there).
-export { classifyOutboundHost } from "./egress-policy.js";
+export { classifyOutboundHost, outboundTargetBlockedReason } from "./egress-policy.js";
 
 // Captured once at module load, before any test can monkey-patch `globalThis.fetch`. Used to
 // detect a caller-substituted global fetch (the established test convention in this codebase,
@@ -232,6 +232,10 @@ function logEndpointClass(url: string | URL | undefined): LogEndpointClass | und
 }
 
 export interface GatewayFetchOptions extends RequestInit {
+  /** Trusted synchronous admission/header factory, run immediately before each physical request. */
+  readonly prepareHeaders?: (() => Headers) | undefined;
+  /** Use configured native TLS trust initially and never perform an automatic fallback attempt. */
+  readonly singleAttempt?: boolean | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly useCaFallback?: boolean | undefined;
   readonly egress?: OutboundHttpEgressConfig | undefined;
@@ -248,6 +252,24 @@ export interface GatewayFetchOptions extends RequestInit {
   // what makes one of N concurrent in-flight requests identifiable as the stuck one. Stripped
   // from the options before they reach the transport — it never becomes a RequestInit field.
   readonly logContext?: ModelGatewayLogContext | undefined;
+}
+
+type PreparedRequestInit = RequestInit & Pick<GatewayFetchOptions, "prepareHeaders">;
+
+function dispatchHeaderRecord(init: PreparedRequestInit): Record<string, string> {
+  init.signal?.throwIfAborted();
+  if (init.prepareHeaders === undefined) return headersToRecord(init.headers);
+  const headers = init.prepareHeaders();
+  if (!(headers instanceof Headers))
+    throw new TypeError("Request preparation must return Headers synchronously.");
+  init.signal?.throwIfAborted();
+  return headersToRecord(headers);
+}
+
+function preparedFetchInit(init: PreparedRequestInit): RequestInit {
+  const { prepareHeaders: _prepareHeaders, ...rest } = init;
+  if (_prepareHeaders === undefined) return rest;
+  return { ...rest, headers: dispatchHeaderRecord(init) };
 }
 
 export type OutboundHttpEgressErrorCode =
@@ -464,6 +486,52 @@ export function streamingResponseFromNode(
   maxBytes: number = MAX_RESPONSE_BYTES,
   onDone?: () => void,
 ): Response {
+  const init = {
+    status: res.statusCode ?? 500,
+    statusText: res.statusMessage ?? "",
+    headers: headersFromNode(res.headers),
+  };
+  if (init.status === 204 || init.status === 205 || init.status === 304) {
+    consumeBodylessNodeResponse(res, onCancel, onDone);
+    return new Response(null, init);
+  }
+  return new Response(nodeResponseBody(res, onCancel, maxBytes, onDone), init);
+}
+
+function consumeBodylessNodeResponse(
+  res: IncomingMessage,
+  onCancel: () => void,
+  onDone: (() => void) | undefined,
+): void {
+  let done = false;
+  const finish = (complete: boolean): void => {
+    if (done) return;
+    done = true;
+    if (complete) onDone?.();
+    else onCancel();
+  };
+  res.once("end", () => {
+    finish(true);
+  });
+  res.once("error", () => {
+    finish(false);
+  });
+  res.once("aborted", () => {
+    finish(false);
+  });
+  // These statuses cannot carry payload bytes. Retire a violating peer instead of draining it.
+  res.once("data", () => {
+    finish(false);
+  });
+  res.resume();
+}
+
+function nodeResponseBody(
+  res: IncomingMessage,
+  onCancel: () => void,
+  maxBytes: number,
+  onDone: (() => void) | undefined,
+): ReadableStream<Uint8Array> {
   let total = 0;
   let done = false;
   const finish = (): void => {
@@ -471,7 +539,7 @@ export function streamingResponseFromNode(
     done = true;
     onDone?.();
   };
-  const body = new ReadableStream<Uint8Array>({
+  return new ReadableStream<Uint8Array>({
     start(controller): void {
       res.on("data", (chunk: Buffer) => {
         if (done) return;
@@ -501,11 +569,22 @@ export function streamingResponseFromNode(
       onCancel();
     },
   });
-  return new Response(body, {
-    status: res.statusCode ?? 500,
-    statusText: res.statusMessage ?? "",
-    headers: headersFromNode(res.headers),
-  });
+}
+
+function resolveNodeResponse(
+  res: IncomingMessage,
+  resolve: (response: Response) => void,
+  reject: Parameters<ConstructorParameters<PromiseConstructor>[0]>[1],
+  onCancel: () => void,
+  maxBytes: number,
+  onDone?: () => void,
+): void {
+  try {
+    resolve(streamingResponseFromNode(res, onCancel, maxBytes, onDone));
+  } catch (error) {
+    onCancel();
+    reject(error);
+  }
 }
 
 // Composes a caller-supplied AbortSignal with an AbortSignal.timeout so both
@@ -551,13 +630,13 @@ function pinnedLookup(addresses: readonly LookupAddress[]): LookupFunction {
 
 async function fetchWithCaBundle(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   egress?: OutboundHttpEgressConfig,
   maxResponseBytes?: number,
   lookup?: LookupFunction,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+  const headers = dispatchHeaderRecord(init);
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
     const req = httpsRequest(
@@ -570,7 +649,7 @@ async function fetchWithCaBundle(
         lookup,
       },
       (res) => {
-        resolve(streamingResponseFromNode(res, () => req.destroy(), cap));
+        resolveNodeResponse(res, resolve, reject, () => req.destroy(), cap);
       },
     );
     req.on("error", reject);
@@ -586,12 +665,12 @@ async function fetchWithCaBundle(
 // would otherwise have used.
 async function fetchDirectPinned(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   addresses: readonly LookupAddress[],
   maxResponseBytes?: number,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+  const headers = dispatchHeaderRecord(init);
   const request = usesHttps(url) ? httpsRequest : httpRequest;
   const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
   return new Promise<Response>((resolve, reject) => {
@@ -604,7 +683,7 @@ async function fetchDirectPinned(
         signal: init.signal ?? undefined,
       },
       (res) => {
-        resolve(streamingResponseFromNode(res, () => req.destroy(), cap));
+        resolveNodeResponse(res, resolve, reject, () => req.destroy(), cap);
       },
     );
     req.on("error", reject);
@@ -742,17 +821,92 @@ function refuseUndelegatedProxiedHostnameEgress(
 async function enforceOutboundTargetPolicy(
   target: URL,
   egress: OutboundHttpEgressConfig | undefined,
-  options: { readonly resolveDns: boolean },
+  options: { readonly resolveDns: boolean; readonly signal: AbortSignal | undefined },
 ): Promise<readonly LookupAddress[] | undefined> {
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
   if (!options.resolveDns) return undefined;
-  const addresses = await dnsLookup(target.hostname, { all: true, verbatim: true });
+  const addresses = await boundedDnsLookup(target.hostname, options.signal);
   for (const address of addresses) {
-    const reason = outboundAddressBlockedReason(address.address, egress);
+    const reason = outboundAddressBlockedReason(
+      address.address,
+      egress,
+      Number(target.port || (target.protocol === "https:" ? 443 : 80)),
+    );
     if (reason !== undefined) throw blockedTargetError(`DNS resolved to ${reason}`);
   }
   return addresses;
+}
+
+// The resolver takes no signal, so a lookup that never answers (no network, a resolver that drops
+// the query) would outlive the request's own deadline: the timeout composed into the request ends
+// the fetch, not this wait (#3907 AC10). The wait therefore ends with the request signal, with the
+// same reason a fetch reports when that signal fires, and an already cancelled request starts no
+// lookup at all. getaddrinfo cannot be cancelled and holds a libuv threadpool thread until the
+// resolver answers, so the work behind abandoned waits is bounded too: requests for one host share
+// the lookup in flight, and while ABANDONED_DNS_LOOKUP_LIMIT lookups nobody waits for are still
+// pending, a lookup for another host fails at once as a temporary resolver failure.
+const ABANDONED_DNS_LOOKUP_LIMIT = 2;
+
+interface PendingDnsLookup {
+  readonly result: Promise<LookupAddress[]>;
+  waiters: number;
+}
+
+const pendingDnsLookups = new Map<string, PendingDnsLookup>();
+
+function abandonedDnsLookupCount(): number {
+  let count = 0;
+  for (const pending of pendingDnsLookups.values()) if (pending.waiters === 0) count += 1;
+  return count;
+}
+
+function dnsSaturatedError(): Error {
+  return Object.assign(new Error("DNS resolution is saturated by unanswered lookups"), {
+    code: "EAI_AGAIN",
+  });
+}
+
+function joinDnsLookup(hostname: string): PendingDnsLookup {
+  const existing = pendingDnsLookups.get(hostname);
+  if (existing !== undefined) {
+    existing.waiters += 1;
+    return existing;
+  }
+  if (abandonedDnsLookupCount() >= ABANDONED_DNS_LOOKUP_LIMIT) throw dnsSaturatedError();
+  const pending: PendingDnsLookup = {
+    result: dnsLookup(hostname, { all: true, verbatim: true }),
+    waiters: 1,
+  };
+  pendingDnsLookups.set(hostname, pending);
+  const forget = (): void => {
+    if (pendingDnsLookups.get(hostname) === pending) pendingDnsLookups.delete(hostname);
+  };
+  pending.result.then(forget, forget);
+  return pending;
+}
+
+async function boundedDnsLookup(
+  hostname: string,
+  signal: AbortSignal | undefined,
+): Promise<LookupAddress[]> {
+  if (signal?.aborted === true) throw abortReason(signal);
+  const pending = joinDnsLookup(hostname);
+  let removeAbort = (): void => undefined;
+  const aborted =
+    signal === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          removeAbort = attachAbortGuard(signal, () => {
+            reject(abortReason(signal));
+          });
+        });
+  try {
+    return await (aborted === undefined ? pending.result : Promise.race([pending.result, aborted]));
+  } finally {
+    removeAbort();
+    pending.waiters -= 1;
+  }
 }
 
 function proxyPort(proxy: URL): number {
@@ -1188,14 +1342,14 @@ function proxyRequestTarget(target: URL, pinnedAddress: LookupAddress | undefine
 
 async function fetchHttpViaProxy(
   target: URL,
-  init: RequestInit,
+  init: PreparedRequestInit,
   proxy: URL,
   ca: readonly string[],
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
+  const headers = dispatchHeaderRecord(init);
   assertNoForwardedCredentialHeader(headers);
   // Ensure Host header omits the default port (fixes SigV4 pre-signed S3 URLs). Read from the
   // ORIGINAL target even when pinned, so the origin server's virtual-hosting still sees the real
@@ -1219,15 +1373,7 @@ async function fetchHttpViaProxy(
         signal: init.signal ?? undefined,
       },
       (res: IncomingMessage) => {
-        resolve(
-          streamingResponseFromNode(
-            res,
-            () => {
-              req.destroy();
-            },
-            cap,
-          ),
-        );
+        resolveNodeResponse(res, resolve, reject, () => req.destroy(), cap);
       },
     );
     req.on("error", (error) => {
@@ -1240,22 +1386,15 @@ async function fetchHttpViaProxy(
 // eslint-disable-next-line max-lines-per-function
 async function fetchHttpsViaProxy(
   target: URL,
-  init: RequestInit,
+  init: PreparedRequestInit,
   proxy: URL,
   ca: readonly string[],
   maxResponseBytes: number | undefined,
   pinnedAddress: LookupAddress | undefined,
 ): Promise<Response> {
   const body = await bodyToWire(init.body);
-  const headers = headersToRecord(init.headers);
-  if (!Object.hasOwn(headers, "connection")) {
-    headers.connection = "keep-alive";
-  }
-  // Ensure Host header omits :443 so it matches what undici sends directly and
-  // satisfies SigV4 pre-signed S3 URLs behind a proxy.
-  if (!Object.hasOwn(headers, "host")) {
-    headers.host = hostHeader(target);
-  }
+  const originalHeaders =
+    init.prepareHeaders === undefined ? dispatchHeaderRecord(init) : undefined;
   const tunnelKey = httpsProxyTunnelKey(target, proxy, ca, pinnedAddress);
   // The key now carries this call's pinning posture (see httpsProxyTunnelKey above), so an idle
   // pooled entry is only ever a cache hit here when it was established under the IDENTICAL
@@ -1264,24 +1403,36 @@ async function fetchHttpsViaProxy(
   const socket =
     takeIdleHttpsProxyTunnel(tunnelKey) ??
     (await createTlsTunnel(target, proxy, ca, init.signal ?? undefined, pinnedAddress));
-  socket.setKeepAlive(true);
-  const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
-  return responseFromClientRequest((resolve, reject) => {
-    const req = httpRequest(
-      {
-        method: init.method ?? "GET",
-        hostname: target.hostname,
-        port: Number(targetPort(target)),
-        path: `${target.pathname}${target.search}`,
-        headers,
-        signal: init.signal ?? undefined,
-        createConnection: () => socket,
-      },
-      (res) => {
-        const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
-        resolve(
-          streamingResponseFromNode(
+  try {
+    init.signal?.throwIfAborted();
+    const headers = originalHeaders ?? dispatchHeaderRecord(init);
+    if (!Object.hasOwn(headers, "connection")) {
+      headers.connection = "keep-alive";
+    }
+    // Ensure Host header omits :443 so it matches what undici sends directly and
+    // satisfies SigV4 pre-signed S3 URLs behind a proxy.
+    if (!Object.hasOwn(headers, "host")) {
+      headers.host = hostHeader(target);
+    }
+    socket.setKeepAlive(true);
+    const cap = maxResponseBytes ?? MAX_RESPONSE_BYTES;
+    return await responseFromClientRequest((resolve, reject) => {
+      const req = httpRequest(
+        {
+          method: init.method ?? "GET",
+          hostname: target.hostname,
+          port: Number(targetPort(target)),
+          path: `${target.pathname}${target.search}`,
+          headers,
+          signal: init.signal ?? undefined,
+          createConnection: () => socket,
+        },
+        (res) => {
+          const responseAllowsReuse = (res.headers.connection ?? "").toLowerCase() !== "close";
+          resolveNodeResponse(
             res,
+            resolve,
+            reject,
             () => {
               socket.destroy();
               req.destroy();
@@ -1291,21 +1442,24 @@ async function fetchHttpsViaProxy(
               if (responseAllowsReuse) releaseIdleHttpsProxyTunnel(tunnelKey, socket);
               else socket.destroy();
             },
-          ),
-        );
-      },
-    );
-    req.on("error", (error) => {
-      socket.destroy();
-      reject(mapProxyError(error));
+          );
+        },
+      );
+      req.on("error", (error) => {
+        socket.destroy();
+        reject(mapProxyError(error));
+      });
+      req.end(body);
     });
-    req.end(body);
-  });
+  } catch (error) {
+    socket.destroy();
+    throw error;
+  }
 }
 
 function fetchViaProxy(
   target: URL,
-  init: RequestInit,
+  init: PreparedRequestInit,
   proxy: URL,
   egress: OutboundHttpEgressConfig | undefined,
   maxResponseBytes: number | undefined,
@@ -1322,14 +1476,14 @@ function fetchViaProxy(
 // instead of letting the transport re-resolve DNS independently (AUDIT-SEC-001).
 function attemptPrimaryFetch(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   doFetch: typeof fetch,
   maxResponseBytes: number | undefined,
   pinnedAddresses: readonly LookupAddress[] | undefined,
 ): Promise<Response> {
   return pinnedAddresses !== undefined
     ? fetchDirectPinned(url, init, pinnedAddresses, maxResponseBytes)
-    : doFetch(url, init);
+    : doFetch(url, preparedFetchInit(init));
 }
 
 // Everything the direct (non-proxied) transport needs for one call, grouped so the two helpers
@@ -1338,6 +1492,7 @@ function attemptPrimaryFetch(
 interface DirectFetchPlan {
   readonly doFetch: typeof fetch;
   readonly useCaFallback: boolean;
+  readonly singleAttempt: boolean;
   readonly egress: OutboundHttpEgressConfig | undefined;
   readonly maxResponseBytes: number | undefined;
   readonly pinnedAddresses: readonly LookupAddress[] | undefined;
@@ -1384,22 +1539,57 @@ function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): v
   );
 }
 
+// Origins (scheme+host+port) whose default-trust-store handshake was rejected while Keiko's
+// assembled CA set accepted them. The outcome is stable for the life of the process, so later
+// direct calls skip the doomed first handshake and the per-request fallback warning. Insertion
+// ordered and bounded: the oldest origin is evicted first.
+const MAX_REMEMBERED_CA_BUNDLE_ORIGINS = 64;
+const rememberedCaBundleOrigins = new Set<string>();
+
+// Exposed for tests to reset the remembered-origin memo between runs.
+export function _resetRememberedCaBundleOriginsForTests(): void {
+  rememberedCaBundleOrigins.clear();
+}
+
+function rememberCaBundleOrigin(origin: string): void {
+  rememberedCaBundleOrigins.delete(origin);
+  rememberedCaBundleOrigins.add(origin);
+  for (const oldest of rememberedCaBundleOrigins) {
+    if (rememberedCaBundleOrigins.size <= MAX_REMEMBERED_CA_BUNDLE_ORIGINS) break;
+    rememberedCaBundleOrigins.delete(oldest);
+  }
+}
+
+// The memo applies only to the native direct HTTPS path that already owns the CA fallback: an
+// injected fetch implementation, a single attempt, or a proxied call keeps its own behaviour.
+function caBundleMemoOrigin(url: string, plan: DirectFetchPlan): string | undefined {
+  const eligible =
+    plan.useCaFallback && !plan.singleAttempt && plan.doFetch === NATIVE_FETCH && usesHttps(url);
+  return eligible ? new URL(url).origin : undefined;
+}
+
 // Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
+// A success remembers `memoOrigin`; a recoverable TLS trust failure forgets the call's origin so a
+// changed trust situation falls back to the full default-then-bundle sequence.
 async function attemptCaBundleFallback(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   plan: DirectFetchPlan,
+  memoOrigin: string | undefined,
 ): Promise<Response> {
   try {
-    return await fetchWithCaBundle(
+    const response = await fetchWithCaBundle(
       url,
       init,
       plan.egress,
       plan.maxResponseBytes,
       plan.pinnedAddresses !== undefined ? pinnedLookup(plan.pinnedAddresses) : undefined,
     );
+    if (memoOrigin !== undefined) rememberCaBundleOrigin(memoOrigin);
+    return response;
   } catch (fallbackError) {
     if (isRecoverableTlsTrustError(fallbackError)) {
+      rememberedCaBundleOrigins.delete(new URL(url).origin);
       logTlsTrustFailure(url, plan, fallbackError, true);
       throw tlsCaFailureError();
     }
@@ -1410,10 +1600,32 @@ async function attemptCaBundleFallback(
 // Extracted from gatewayFetch to keep its cyclomatic complexity within the limit.
 async function fetchDirectWithCaFallback(
   url: string,
-  init: RequestInit,
+  init: PreparedRequestInit,
   plan: DirectFetchPlan,
 ): Promise<Response> {
+  const memoOrigin = caBundleMemoOrigin(url, plan);
+  if (memoOrigin !== undefined && rememberedCaBundleOrigins.has(memoOrigin)) {
+    return attemptCaBundleFallback(url, init, plan, memoOrigin);
+  }
+  return fetchDirectDefaultThenCaBundle(url, init, plan, memoOrigin);
+}
+
+async function fetchDirectDefaultThenCaBundle(
+  url: string,
+  init: PreparedRequestInit,
+  plan: DirectFetchPlan,
+  memoOrigin: string | undefined,
+): Promise<Response> {
   try {
+    if (plan.singleAttempt && plan.pinnedAddresses !== undefined && usesHttps(url)) {
+      return await fetchWithCaBundle(
+        url,
+        init,
+        plan.egress,
+        plan.maxResponseBytes,
+        pinnedLookup(plan.pinnedAddresses),
+      );
+    }
     return await attemptPrimaryFetch(
       url,
       init,
@@ -1423,11 +1635,12 @@ async function fetchDirectWithCaFallback(
     );
   } catch (error) {
     const recoverable = usesHttps(url) && isRecoverableTlsTrustError(error);
-    if (plan.useCaFallback && recoverable) {
+    if (plan.useCaFallback && !plan.singleAttempt && recoverable) {
       // Degradation: the default trust store rejected the peer, so the call is retried against
-      // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
+      // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency; the
+      // origin is remembered after a success so this line is written once per origin, not per call.
       logTlsCaFallback(url, plan, error);
-      return attemptCaBundleFallback(url, init, plan);
+      return attemptCaBundleFallback(url, init, plan, memoOrigin);
     }
     if (recoverable) {
       logTlsTrustFailure(url, plan, error, false);
@@ -1512,10 +1725,14 @@ interface GatewayDnsResolution {
 async function resolveGatewayDns(
   plan: GatewayProxyPlan,
   egress: OutboundHttpEgressConfig | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<GatewayDnsResolution> {
   const dns = planGatewayDns(plan.usesRealTransport, plan.proxy, plan.doFetch, egress);
   const resolveDns = dns.pinForConnect || dns.pinForProxyConnect;
-  const vettedAddresses = await enforceOutboundTargetPolicy(plan.target, egress, { resolveDns });
+  const vettedAddresses = await enforceOutboundTargetPolicy(plan.target, egress, {
+    resolveDns,
+    signal,
+  });
   return {
     pinnedAddresses: dns.pinForConnect ? vettedAddresses : undefined,
     proxyPinnedAddress: dns.pinForProxyConnect ? requirePinnedAddress(vettedAddresses) : undefined,
@@ -1582,11 +1799,18 @@ function planGatewayProxy(
 // for each hop, so the target is re-vetted by the full DNS/address-pinning egress policy on the hop
 // that actually connects to it. Following a Location with a raw fetch would bypass that boundary
 // entirely (#3348 audit).
-function gatewayRequestInit(rest: RequestInit, timeoutMs: number | undefined): RequestInit {
+function gatewayRequestInit(
+  rest: RequestInit,
+  timeoutMs: number | undefined,
+  prepareHeaders: GatewayFetchOptions["prepareHeaders"],
+): PreparedRequestInit {
   const composedSignal = composeSignal(rest.signal, timeoutMs);
-  return composedSignal !== undefined
-    ? { ...rest, redirect: "manual", signal: composedSignal }
-    : { ...rest, redirect: "manual" };
+  return {
+    ...rest,
+    redirect: "manual",
+    ...(composedSignal === undefined ? {} : { signal: composedSignal }),
+    ...(prepareHeaders === undefined ? {} : { prepareHeaders }),
+  };
 }
 
 // The fetch itself. Split out of `gatewayFetch` so the outcome line can wrap it without pushing
@@ -1595,6 +1819,8 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   const {
     fetchImpl,
     useCaFallback = fetchImpl === undefined,
+    singleAttempt = false,
+    prepareHeaders,
     egress,
     timeoutMs,
     maxResponseBytes,
@@ -1602,11 +1828,11 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
     ...rest
   } = options;
   const log = resolveLogSink(logOption);
-  const init = gatewayRequestInit(rest, timeoutMs);
+  const init = gatewayRequestInit(rest, timeoutMs, prepareHeaders);
   const plan = planGatewayProxy(url, fetchImpl, egress, log);
   refuseUndelegatedProxiedHostnameEgress(plan.target, plan.proxy, egress);
   refuseUnpinnableResearchEgress(plan.proxy, egress);
-  const dns = await resolveGatewayDns(plan, egress);
+  const dns = await resolveGatewayDns(plan, egress, init.signal ?? undefined);
   if (plan.proxy !== undefined) {
     const response = await fetchViaProxy(
       plan.target,
@@ -1621,6 +1847,7 @@ async function performGatewayFetch(url: string, options: GatewayFetchOptions): P
   const response = await fetchDirectWithCaFallback(url, init, {
     doFetch: plan.doFetch,
     useCaFallback,
+    singleAttempt,
     egress,
     maxResponseBytes,
     pinnedAddresses: dns.pinnedAddresses,
@@ -1895,6 +2122,17 @@ function parseSseLine(rawLine: string): SseLineResult {
   return { kind: "value", value: JSON.parse(payload) as unknown };
 }
 
+function parseSseLineOf(line: string, complete: boolean): SseLineResult {
+  try {
+    return parseSseLine(line);
+  } catch (error) {
+    if (complete && error instanceof SyntaxError) {
+      throw new GatewayResponseBodyValidationError("json-invalid");
+    }
+    throw error;
+  }
+}
+
 // Raised when an SSE stream produces no data event within its silence bound. Deliberately a plain
 // transport-layer error: the provider adapter maps it onto the typed, secret-redacting TimeoutError
 // of the gateway error taxonomy.
@@ -1985,13 +2223,19 @@ async function nextRead(
 }
 
 // The data payloads of complete SSE lines, up to `data: [DONE]`, which sets `ended.done`.
+//
+// `complete` marks lines the provider terminated with a newline. A complete line that is not JSON is
+// a deterministic fault of the provider's frame (GatewayResponseBodyValidationError, not retried as a
+// transport cut). The unterminated remainder at the end of the body can be a connection cut mid-frame,
+// so its SyntaxError stays a plain transport-class fault.
 function* dataPayloads(
   lines: readonly string[],
   ended: { done: boolean },
   onDone?: () => void,
+  complete = true,
 ): Generator {
   for (const line of lines) {
-    const result = parseSseLine(line);
+    const result = parseSseLineOf(line, complete);
     if (result.kind === "done") {
       ended.done = true;
       onDone?.();
@@ -2030,7 +2274,7 @@ async function* ssePayloads(
     total += value.byteLength;
     if (total > maxBytes) {
       await reader.cancel();
-      throw new Error("response body exceeded the size limit");
+      throw new GatewayResponseBodyValidationError("size-exceeded");
     }
     buffer += decoder.decode(value, { stream: true });
     const { lines, rest } = splitSseBuffer(buffer);
@@ -2041,7 +2285,7 @@ async function* ssePayloads(
     }
     if (ended.done) return;
   }
-  yield* dataPayloads([buffer + decoder.decode()], ended, onDone);
+  yield* dataPayloads([buffer + decoder.decode()], ended, onDone, false);
 }
 
 // Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads. Incomplete lines

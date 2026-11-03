@@ -19,11 +19,13 @@ import {
   isValidScopePath,
   validateRetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import {
   readWorkspaceFileForEditing,
   readWorkspaceFileBytesPrefixForInternalUse,
   type WorkspaceContentLane,
+  workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
 import {
   FileTooLargeError,
@@ -212,6 +214,8 @@ export interface ReadExcerptRequest {
 }
 
 interface ReadExcerptWindowResult {
+  /** Original direct-range position, retained even when another requested range is omitted. */
+  readonly requestedRangeIndex?: number | undefined;
   readonly anchoredWindowApplied?: boolean | undefined;
   readonly atom: EvidenceAtom;
   readonly content: string;
@@ -635,6 +639,7 @@ function buildSearchTextRunner(
     ...(deps.deadlineAtMs === undefined ? {} : { deadlineAtMs: deps.deadlineAtMs }),
     signal: deps.signal,
     matcher,
+    cachedLexicalQuery: prepareCachedLexicalQuery(query),
     ...(deps.queryInterpretation?.terms === undefined
       ? {}
       : { literalTerms: deps.queryInterpretation.terms }),
@@ -1303,7 +1308,7 @@ function needsLiveWorkspaceIndexCandidates(
   // rank those queries soundly. Re-run content prescoring; the request-local context reuses its
   // descriptor-validated preview cache, so repeated grounded anchors still perform no byte reads.
   if (!queryRequiresContentRanking(query, runner)) return false;
-  const cachedQuery = prepareCachedLexicalQuery(query);
+  const cachedQuery = runner.cachedLexicalQuery;
   if (prepared === undefined || cachedQuery === undefined) return true;
   return prepared.entries.some((entry) => {
     const lexical = entry.record?.lexical;
@@ -3977,13 +3982,14 @@ function excerptFileLines(
     { maxBytes: MAX_EXCERPT_FILE_BYTES },
     fs,
   ).rawText;
-  return excerptTextLines(raw, request.scopePath, lane);
+  return excerptTextLines(raw, request.scopePath, lane, scope.workspace);
 }
 
 function excerptTextLines(
   raw: string,
   scopePath: string,
   lane: WorkspaceContentLane,
+  workspace: WorkspaceInfo,
 ): readonly string[] {
   if (raw.includes("\0")) {
     throw new RepoSearchUnsupportedFileError(
@@ -3991,9 +3997,14 @@ function excerptTextLines(
       "binary",
     );
   }
-  return (lane === "editor" ? raw : redact(raw, [], { preserveSourceLineBreaks: true })).split(
-    "\n",
-  );
+  if (lane === "editor") return raw.split("\n");
+  return redactWorkspaceSource(
+    raw,
+    scopePath,
+    true,
+    workspaceContentPolicy(workspace),
+    workspaceContentSecrets(workspace),
+  ).split("\n");
 }
 
 async function readExcerptLines(
@@ -4029,7 +4040,7 @@ async function readExcerptLines(
         "binary",
       );
     }
-    return excerptTextLines(decoded.text, request.scopePath, lane);
+    return excerptTextLines(decoded.text, request.scopePath, lane, scope.workspace);
   } catch (error) {
     if (error instanceof WorkspaceReadError) throw excerptUnreadable(request.scopePath);
     throw error;
@@ -4600,8 +4611,11 @@ async function batchedExcerptResults(
   const ranges = request.ranges ?? [];
   const batch = createExcerptBatch(scope, request, lines, nowMs, control, ranges.length);
   const results: ReadExcerptWindowResult[] = [];
-  for await (const windows of excerptBatchRanges(batch, ranges))
-    for (const window of windows) results.push(window);
+  let requestedRangeIndex = 0;
+  for await (const windows of excerptBatchRanges(batch, ranges)) {
+    for (const window of windows) results.push({ ...window, requestedRangeIndex });
+    requestedRangeIndex += 1;
+  }
   return {
     results,
     omittedRangeCount: ranges.length - batch.processed + batch.emptyRanges,

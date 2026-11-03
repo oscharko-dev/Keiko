@@ -651,6 +651,29 @@ describe("matchRoute", () => {
 });
 
 describe("health handler", () => {
+  it.each([
+    { value: undefined, expected: undefined },
+    { value: "a".repeat(32), expected: "a".repeat(32) },
+    { value: "A".repeat(32), expected: undefined },
+    { value: "a".repeat(31), expected: undefined },
+    { value: "a".repeat(33), expected: undefined },
+    { value: `${"a".repeat(32)}\n`, expected: undefined },
+  ])(
+    "only projects the exact server-owned launch identity: $value",
+    async ({ value, expected }) => {
+      const route = API_ROUTES.find((entry) => entry.pattern === "/api/health");
+      if (route === undefined) throw new Error("Missing health route");
+      const ctx = {
+        ...emptyCtx,
+        url: new URL(`http://127.0.0.1/api/health?launchId=${"b".repeat(32)}`),
+      };
+      const result = await route.handler(ctx, { ...stubDeps, env: { KEIKO_UI_LAUNCH_ID: value } });
+      if (result === STREAMING) throw new Error("Unexpected streaming response");
+      expect(Reflect.get(result.body as object, "launchId")).toBe(expected);
+      expect(result.body).toMatchObject({ status: "ok", version: SDK_VERSION });
+    },
+  );
+
   // The body gained a closed, body-free `diagnostics` block (#3532): the readiness snapshot this
   // process evaluated, taken from the production function rather than restated here.
   it("returns ok with the SDK version and the diagnostic readiness snapshot", async () => {

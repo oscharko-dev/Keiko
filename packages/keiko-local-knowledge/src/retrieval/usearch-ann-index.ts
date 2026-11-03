@@ -10,6 +10,11 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  createProcessScopeWorkerBridge,
+  type ProcessScopeWorkerBridge,
+} from "@oscharko-dev/keiko-security/process-scope-worker";
+
 import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
 
 import {
@@ -49,6 +54,12 @@ const SEARCH_NATIVE_RUNTIME_RESOLVED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["resolved", "unavailable", "invalid"],
     },
+    workerState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["ready", "runtime-invalid", "build-failed", "unavailable"],
+    },
     version: {
       type: "string",
       dataClass: "safe-version",
@@ -60,7 +71,7 @@ const SEARCH_NATIVE_RUNTIME_RESOLVED_OPERATION = defineActivityLogOperation({
   lifecycle: "state",
   analyzerProjection: "capability",
   failureClasses: ["native-runtime-unavailable", "native-runtime-invalid"],
-  proofIds: ["search.native-runtime-resolved.state"],
+  proofIds: ["search.native-runtime-resolved.state", "search.native-runtime-resolved.worker"],
   releaseImpact: "patch",
 });
 
@@ -157,6 +168,7 @@ interface AnnIndex {
   readonly mode: "ann";
   readonly vectors: SharedVectors;
   readonly worker: Worker;
+  readonly scope: ProcessScopeWorkerBridge | undefined;
   readonly buffers: AnnWorkerBuffers;
   readonly byteSize: number;
   available: boolean;
@@ -392,12 +404,13 @@ function cacheEntryStillMatches(
 
 // Content-free: `targetKey` is a closed platform:arch label this package owns
 // (`usearchRuntimeTargetKey`), never the resolved filesystem path or the raw SHA-256 digest.
-// Emitted only on the COLD path below — a warm cache hit never re-logs, matching the reasoning
-// that already justifies not re-hashing on every request (KEIKO-0409).
+// Digest resolution is emitted on the cold path. Worker settlement adds one closed state per
+// build; a warm index-cache query emits neither. No per-file owner observation is logged.
 function logNativeRuntimeResolved(
   logSink: KnowledgeLogSink | undefined,
   targetKey: UsearchRuntimeTargetKey,
   result: TargetRuntimeResult,
+  workerState?: AnnWorkerState,
 ): void {
   const resolutionState = typeof result === "string" ? result : "resolved";
   emitKnowledgeLogEvent(
@@ -413,6 +426,7 @@ function logNativeRuntimeResolved(
       {
         targetKey,
         resolutionState,
+        ...(workerState === undefined ? {} : { workerState }),
         ...(typeof result === "string" ? {} : { version: result.expectedVersion }),
       },
     ),
@@ -575,34 +589,84 @@ function workerDataFor(
   };
 }
 
+function createAnnWorker(
+  data: UsearchWorkerData,
+  runtime: TargetRuntimeResult,
+  logSink: KnowledgeLogSink | undefined,
+): {
+  readonly worker: Worker;
+  readonly scope: ProcessScopeWorkerBridge | undefined;
+} {
+  const scope = createProcessScopeWorkerBridge();
+  const workerUrl = import.meta.url.endsWith(".ts")
+    ? new URL("../../dist/retrieval/usearch-index-worker.js", import.meta.url)
+    : new URL("./usearch-index-worker.js", import.meta.url);
+  try {
+    const worker = new Worker(workerUrl, {
+      execArgv: process.execArgv.filter((argument) => !argument.startsWith("--input-type")),
+      workerData: { ...data, ...(scope === undefined ? {} : { processScope: scope.data }) },
+      ...(scope === undefined ? {} : { transferList: [scope.data.port] }),
+    });
+    if (scope !== undefined) {
+      worker.once("error", scope.dispose);
+      worker.once("exit", scope.dispose);
+    }
+    return { worker, scope };
+  } catch (error) {
+    scope?.dispose();
+    logAnnWorkerState(logSink, runtime, "unavailable");
+    throw error;
+  }
+}
+
+type AnnWorkerState = "ready" | "runtime-invalid" | "build-failed" | "unavailable";
+
+function settledWorkerState(completed: boolean, control: Int32Array): AnnWorkerState {
+  if (!completed) return "unavailable";
+  if (
+    Atomics.load(control, USEARCH_CONTROL.state) === USEARCH_STATE.ready &&
+    Atomics.load(control, USEARCH_CONTROL.error) === USEARCH_ERROR.none
+  )
+    return "ready";
+  return Atomics.load(control, USEARCH_CONTROL.error) === USEARCH_ERROR.runtimeInvalid
+    ? "runtime-invalid"
+    : "build-failed";
+}
+
+function logAnnWorkerState(
+  sink: KnowledgeLogSink | undefined,
+  runtime: TargetRuntimeResult,
+  state: AnnWorkerState,
+): void {
+  const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
+  if (targetKey === undefined) return;
+  let result: TargetRuntimeResult = "unavailable";
+  if (state === "ready") result = runtime;
+  else if (state === "runtime-invalid") result = "invalid";
+  logNativeRuntimeResolved(sink, targetKey, result, state);
+}
+
 async function startWorker(
   partition: UsearchAnnPartition,
   vectors: SharedVectors,
   runtime: { readonly path: string; readonly sha256: string; readonly expectedVersion: string },
   resultCapacity: number,
+  logSink: KnowledgeLogSink | undefined,
 ): Promise<AnnIndex | undefined> {
   const allocation = allocateAnnWorkerBuffers(partition, resultCapacity);
   const data = workerDataFor(partition, vectors, runtime, allocation);
-  const workerUrl = import.meta.url.endsWith(".ts")
-    ? new URL("../../dist/retrieval/usearch-index-worker.js", import.meta.url)
-    : new URL("./usearch-index-worker.js", import.meta.url);
-  const worker = new Worker(workerUrl, {
-    execArgv: process.execArgv.filter((argument) => !argument.startsWith("--input-type")),
-    workerData: data,
-  });
+  const { worker, scope } = createAnnWorker(data, runtime, logSink);
   worker.unref();
   const { buffers } = allocation;
-  if (
-    !(await waitForWorkerMessage(
-      worker,
-      (message) => message.kind === "build-complete",
-      BUILD_TIMEOUT_MS,
-    ))
-  ) {
-    void worker.terminate();
-    return undefined;
-  }
-  if (Atomics.load(buffers.control, USEARCH_CONTROL.state) !== USEARCH_STATE.ready) {
+  const completed = await waitForWorkerMessage(
+    worker,
+    (message) => message.kind === "build-complete",
+    BUILD_TIMEOUT_MS,
+  );
+  const state = settledWorkerState(completed, buffers.control);
+  logAnnWorkerState(logSink, runtime, state);
+  if (state !== "ready") {
+    scope?.dispose();
     void worker.terminate();
     return undefined;
   }
@@ -610,6 +674,7 @@ async function startWorker(
     mode: "ann",
     vectors,
     worker,
+    scope,
     buffers,
     byteSize: estimatedIndexBytes(partition.rowCount, partition.identity.vectorDimensions, true),
     available: true,
@@ -624,6 +689,7 @@ function stopIndex(index: SearchIndex): void {
   index.available = false;
   Atomics.store(index.buffers.control, USEARCH_CONTROL.command, USEARCH_COMMAND.close);
   Atomics.notify(index.buffers.control, USEARCH_CONTROL.command);
+  index.scope?.dispose();
   void index.worker.terminate();
 }
 
@@ -714,7 +780,13 @@ async function buildSearchIndex(
   const runtime = targetRuntime(request.binaryPath, request.logSink);
   if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
   if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
-  const worker = await startWorker(request.partition, vectors, runtime, HNSW_MAX_RESULTS);
+  const worker = await startWorker(
+    request.partition,
+    vectors,
+    runtime,
+    HNSW_MAX_RESULTS,
+    request.logSink,
+  );
   return worker === undefined
     ? { ok: false, reason: "index-build-failed" }
     : cacheIndex(request.partition, worker);
@@ -808,6 +880,7 @@ function discardAnnIndex(index: AnnIndex): UsearchAnnSearchResult {
     cachedIndexBytes -= cached.index.byteSize;
     break;
   }
+  index.scope?.dispose();
   void index.worker.terminate();
   return { ok: false, reason: "index-query-failed" };
 }

@@ -10,7 +10,7 @@
         document.documentElement.dataset.theme = t === "light" || t === "dark" ? t : "dark";
         var c = localStorage.getItem("keiko-ds-contrast");
         if (c === "more") document.documentElement.dataset.hc = "more";
-      } catch (e) {
+      } catch {
         // localStorage can throw when storage is disabled or restricted (private browsing,
         // blocked cookies); the hardcoded fallback below is the complete, correct handling —
         // there is no logging sink on a static doc page to report to.
@@ -58,6 +58,7 @@
           <div>
             <button class="c-back">
               <svg
+                aria-hidden="true"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -110,6 +111,7 @@
           <div class="c-pager" id="pager">
             <button disabled aria-label="Previous">
               <svg
+                aria-hidden="true"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -129,6 +131,7 @@
             <button>12</button>
             <button aria-label="Next">
               <svg
+                aria-hidden="true"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -167,6 +170,7 @@
           >
             <button class="c-ctx-item" role="menuitem" tabindex="0">
               <svg
+                aria-hidden="true"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -182,6 +186,7 @@
             </button>
             <button class="c-ctx-item" role="menuitem" tabindex="-1">
               <svg
+                aria-hidden="true"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -202,6 +207,7 @@
             <hr class="c-ctx-sep" style="border: 0" />
             <button class="c-ctx-item danger" role="menuitem" tabindex="-1">
               <svg
+                aria-hidden="true"
                 width="15"
                 height="15"
                 viewBox="0 0 24 24"
@@ -219,6 +225,8 @@
             <div class="c-step done">
               <span class="dot"
                 ><svg
+                  role="img"
+                  aria-label="Completed"
                   width="12"
                   height="12"
                   viewBox="0 0 24 24"

@@ -66,12 +66,23 @@ export function probeVerifiedGatewayConfig(config: GatewayConfig): RuntimeGatewa
       verification = state;
     },
     verifiedCapability: (modelId) => observations.get(modelId),
-    recordVerifiedCapability: (modelId, fields, checkedAt, observedGeneration): void => {
+    // Mirrors the production recorder (deps.ts): a conversation observation carries the time of
+    // its latest chat evidence, which a renewal moves without restamping the feature proofs.
+    recordVerifiedCapability: (
+      modelId,
+      fields,
+      checkedAt,
+      observedGeneration,
+      conversationCheckedAt,
+    ): void => {
       if (observedGeneration !== undefined && observedGeneration !== generation) return;
       observations.set(modelId, {
         modelId,
         generation,
         checkedAt,
+        ...(fields.conversationReady === undefined
+          ? {}
+          : { conversationCheckedAt: conversationCheckedAt ?? checkedAt }),
         fields: { ...fields },
       });
     },

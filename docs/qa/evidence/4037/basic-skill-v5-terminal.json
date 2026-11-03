@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "classification": "Frozen known-calibration campaign stopped at its eighth case; no skill acceptance or full-cohort efficacy result",
+  "sourceHead": "0faa5db9d54a5c3551f81cf5ed52f13e56e50210",
+  "inputs": {
+    "artifact": "skill-basic-v5-input-freeze-receipt.json",
+    "sha256": "1bfca7310b022be630f08164dcfbe8ae94f4b583efac1f453f4f57d104857ad3"
+  },
+  "terminal": {
+    "artifact": "skill-basic-v5-terminal-receipt.json",
+    "sha256": "f52288dc2bf69e7d671bbd45063c2aec6a8c1b79d3a8f841288ea35f129cd0a6"
+  },
+  "plannedCases": 24,
+  "dispatchedCases": 8,
+  "completedWorkflows": 7,
+  "failedCase": "react-basic-v5-gwt-control-1",
+  "undispatchedCases": 16,
+  "returnedPhases": 12,
+  "physicalRequests": 39,
+  "physicalTaskRequests": 14,
+  "physicalReadinessRequests": 25,
+  "originalGrant": {
+    "contextWindow": 131072,
+    "cumulativeInputTokens": 118784,
+    "cumulativeOutputTokens": 8192,
+    "maximumCompilerOrCorrectSubjectFeedbackPhases": 1
+  },
+  "failedCaseBudget": {
+    "initialCompletions": [1295, 5025],
+    "remainingFeedbackOutput": 1872,
+    "actualFeedbackCompletion": 1872,
+    "feedbackReasoningTokens": 1634,
+    "feedbackTextTokens": 238,
+    "activityLogOutputExhausted": true,
+    "correlationId": "f6f992f0-9387-4e93-b57c-d1ca47d9067c"
+  },
+  "failedCaseTerminalPhysicalAdmission": {
+    "allowed": true,
+    "canonicalRequests": 7,
+    "failedRequests": 0,
+    "unjoinedDiagnostics": 0,
+    "incompleteRecords": 0,
+    "invalidClassifications": 0
+  },
+  "limits": [
+    "The refused feedback remains a failed workflow. Its provider output is retained as an observed physical request, not a returned/persisted answer or compiler-qualified output.",
+    "The original stop rule was followed. No case was repeated, budget increased, failed attempt removed or remaining task silently marked completed.",
+    "The independently joined twelve returned-phase charges do not qualify the refused feedback or the complete campaign. An initial partial auditor receipt miscounted the failed case as completed; it remains retained and corrected separately.",
+    "No full balanced comparison, compact-skill benefit, held-out acceptance, higher capability level or global Gemma limit is established.",
+    "The customer assets are unchanged. The prospective candidates change one generic identifier-placement rule; no fixture/domain-specific or model-specific instruction is added."
+  ]
+}

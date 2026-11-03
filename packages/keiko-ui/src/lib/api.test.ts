@@ -4368,6 +4368,8 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     { gitChangeScopes: [] },
     { gitChangeScopes: [{ ...gitChangeScopeFixture(), snapshotDigest: "b".repeat(64) }] },
     { updatedAt: "not-a-timestamp" },
+    { status: "closed" },
+    { status: "archived" },
   ])("refuses an incoherent committed Git chat %j", async (patch) => {
     vi.stubGlobal(
       "fetch",
@@ -4382,6 +4384,31 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
     await expect(
       connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
     ).rejects.toMatchObject({ code: "CONTRACT_VALIDATION_FAILED" });
+  });
+
+  // The server serialises `status` only for a closed chat (store/chats.ts maps a null column to an
+  // absent field), so the wire shape of an open chat carries no `status` at all. The fixture above
+  // spells "open", which the real server never sends; this pins the shape it does send.
+  it.each([
+    {
+      name: "connect",
+      status: "connected",
+      call: (): Promise<unknown> =>
+        connectGitChangeToChat({ chatId: "chat-1", mode: "pull-request", headRef: "feature/x" }),
+    },
+    {
+      name: "refresh",
+      status: "current",
+      call: (): Promise<unknown> => refreshGitChangeScope("chat-1", "rel-1"),
+    },
+  ])("accepts an open chat whose wire shape omits status on $name", async ({ call, status }) => {
+    const { status: _omitted, ...wireChat } = committedGitChatFixture();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonOk({ status, scope: gitChangeScopeFixture(), chat: wireChat })),
+    );
+    const result = await call();
+    expect(result).toMatchObject({ status, chat: { id: "chat-1" } });
   });
 
   it("shares the supplied attempt correlation across Git connect and refresh without putting it in the body", async () => {
@@ -5453,4 +5480,69 @@ describe("streamAssistantSpeech correlation", () => {
       correlationId: "speech-request-0001",
     });
   });
+});
+
+it("delivers Jira read-consent frames before terminal completion", async () => {
+  const grant = {
+    kind: "jira-chat-read",
+    grantId: "grant-1",
+    chatId: "c1",
+    podId: "pod-1",
+    bindingGeneration: 1,
+    authenticationGeneration: 1,
+    state: "pending",
+    disclosureVersion: "jira-chat-read-v1",
+    requestedAt: 1000,
+    expiresAt: 2000,
+  };
+  const payload = { messageId: "message-1", grant };
+  const stream = makeSseStream([
+    `event: tool-read-consent\ndata: ${JSON.stringify(payload)}\n\nevent: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+  ]);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+  const handlers = { ...makeStreamHandlers(), onReadConsent: vi.fn() };
+  await sendDesktopChatStream(
+    { chatId: "c1", projectPath: "/repo", content: "Read Jira" },
+    new AbortController().signal,
+    handlers,
+  );
+  expect(handlers.onReadConsent).toHaveBeenCalledExactlyOnceWith(payload);
+  expect(handlers.onDone).toHaveBeenCalledOnce();
+});
+
+it("delivers the canonical Jira write preview before terminal completion", async () => {
+  const payload = {
+    messageId: "message-1",
+    call: {
+      id: "call-1",
+      name: "jira_edit",
+      arguments: { issueKey: "LAB-1", fields: { summary: "Reviewed change" } },
+    },
+    approval: {
+      kind: "jira-chat-write",
+      approvalId: "approval-1",
+      chatId: "c1",
+      podId: "11111111-1111-4111-8111-111111111111",
+      bindingGeneration: 1,
+      authenticationGeneration: 1,
+      invocationId: "action-1",
+      operation: "jira.edit",
+      actionDigest: "a".repeat(64),
+      requestedAt: 1000,
+      expiresAt: 2000,
+      state: "pending",
+    },
+  };
+  const stream = makeSseStream([
+    `event: tool-write-approval\ndata: ${JSON.stringify(payload)}\n\nevent: done\ndata: ${JSON.stringify({ chat: { id: "c1" }, messages: [] })}\n\n`,
+  ]);
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(makeSseResponse(stream)));
+  const handlers = { ...makeStreamHandlers(), onWriteApproval: vi.fn() };
+  await sendDesktopChatStream(
+    { chatId: "c1", projectPath: "/repo", content: "Edit Jira" },
+    new AbortController().signal,
+    handlers,
+  );
+  expect(handlers.onWriteApproval).toHaveBeenCalledExactlyOnceWith(payload);
+  expect(handlers.onDone).toHaveBeenCalledOnce();
 });

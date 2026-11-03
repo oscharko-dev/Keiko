@@ -680,6 +680,57 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     });
   });
 
+  // #3897 S14: the native runtime's provider binding and the sidecar gateway's content-part
+  // admission both read the admitted model's declared image input from this one projection.
+  describe("image input", () => {
+    function imageProfile(
+      supportsImageInput: boolean,
+    ): ReturnType<typeof resolveCodingSafeSidecarGatewayProfile> {
+      return resolveCodingSafeSidecarGatewayProfile(
+        config(["vision-coder"], [codingSidecarCapability("vision-coder", { supportsImageInput })]),
+      );
+    }
+
+    it("publishes declared image input in the run metadata", () => {
+      const result = imageProfile(true);
+      if (result.status !== "available") throw new Error("expected an available profile");
+      expect(result.runMetadata.supportsImageInput).toBe(true);
+    });
+
+    it("leaves the run metadata text-only for a model that declares no image input", () => {
+      const result = imageProfile(false);
+      if (result.status !== "available") throw new Error("expected an available profile");
+      expect(result.runMetadata).not.toHaveProperty("supportsImageInput");
+    });
+  });
+
+  // #3906 AC1: PDF documents reach the model only when its verified capability declares document
+  // input; the native provider binding and the sidecar gateway both read this one projection.
+  describe("document input", () => {
+    function documentProfile(
+      supportsDocumentInput: boolean,
+    ): ReturnType<typeof resolveCodingSafeSidecarGatewayProfile> {
+      return resolveCodingSafeSidecarGatewayProfile(
+        config(
+          ["document-coder"],
+          [codingSidecarCapability("document-coder", { supportsDocumentInput })],
+        ),
+      );
+    }
+
+    it("publishes declared document input in the run metadata", () => {
+      const result = documentProfile(true);
+      if (result.status !== "available") throw new Error("expected an available profile");
+      expect(result.runMetadata.supportsDocumentInput).toBe(true);
+    });
+
+    it("leaves the run metadata without document input for a model that declares none", () => {
+      const result = documentProfile(false);
+      if (result.status !== "available") throw new Error("expected an available profile");
+      expect(result.runMetadata).not.toHaveProperty("supportsDocumentInput");
+    });
+  });
+
   it("preserves the independent input ceiling in the coding sidecar projection", () => {
     const result = resolveCodingSafeSidecarGatewayProfile(
       config(
@@ -733,7 +784,7 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
         maxPromptTokens: 128_000,
         maxOutputTokens: 4_096,
         maxInputMessages: 512,
-        maxRequestBytes: 1_048_576,
+        maxRequestBytes: 4_194_304,
       },
     });
     expect(JSON.stringify(result)).not.toContain("baseUrl");

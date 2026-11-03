@@ -59,6 +59,8 @@ export default defineConfig({
         "**/test-fixtures.ts",
         "**/testing.ts",
         "**/*.config.ts",
+        // Ambient declarations contain no executable lines and Sonar excludes them from analysis.
+        "**/*.d.ts",
         // Sonar excludes generated assets from source analysis. Keep them out of its LCOV input
         // too, otherwise a newly generated TypeScript asset creates an unresolvable source path.
         "**/*.generated.*",

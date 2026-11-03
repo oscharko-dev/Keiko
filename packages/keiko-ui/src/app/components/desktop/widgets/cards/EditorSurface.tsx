@@ -81,6 +81,7 @@ export interface EditorSurfaceProps {
   readonly revealRequest?: KeikoCodeEditorProps["revealRequest"] | undefined;
   readonly hostEditRequest?: EditorHostEditRequest | undefined;
   readonly onRuntimeError?: ((message: string) => void) | undefined;
+  readonly onLineEndingAdopted?: KeikoCodeEditorProps["onLineEndingAdopted"] | undefined;
   /**
    * Host completion resolver (Issue #1199). When present, the editor registers a Monaco completion
    * provider that bridges to it; the host (EditorWidget) owns the BFF call. Absent for non-source
@@ -221,6 +222,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
         revealRequest={props.revealRequest}
         hostEditRequest={props.hostEditRequest}
         onRuntimeError={onRuntimeError}
+        onLineEndingAdopted={props.onLineEndingAdopted}
         provideCompletions={props.provideCompletions}
         completionTriggerCharacters={props.completionTriggerCharacters}
         provideInlineCompletions={props.provideInlineCompletions}

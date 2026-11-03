@@ -25,6 +25,14 @@ any audio is read or processed.
 
 ## 2. Request
 
+The browser recorder normalizes completed clips locally with native `OfflineAudioContext` to
+16 kHz, mono, signed 16-bit PCM WAV before base64 upload. Browser-selected WebM/Opus, Ogg and
+MP4 containers are capture formats, not requirements imposed on a self-hosted STT decoder.
+Normalization stays in memory and fails visibly if decoding or the existing byte bound fails;
+it never retries with the incompatible original container. A full two-minute normalized clip
+occupies 3,840,044 bytes, within the existing 4 MB limit. The route retains its other accepted
+formats for explicit API callers; their decoder support remains the provider's responsibility.
+
 ```
 POST /api/voice/transcribe
 Content-Type: application/json
@@ -93,6 +101,15 @@ URL, credential, and model id never appear in any response (AC4); the payload is
 live audit redactor defensively (AC5).
 
 ## 4. Error semantics
+
+The existing `speech.stt.request.dispatch` Activity Log line records `audioFormat` (a closed
+container class) and `audioBytes`. `speech.stt.request.completed` records `httpStatus` whenever
+an HTTP response was received, including rejected requests and malformed successful responses.
+Transport failures and timeouts without a response omit that field. These facts distinguish a
+codec or request rejection from a network failure without retaining audio or provider bodies.
+Browser normalization failures use the existing body-free client diagnostic sink.
+
+See [LiteLLM dictation troubleshooting](../troubleshooting/voice-dictation-litellm.md).
 
 Every failure is a deterministic `{ "error": { "code", "message" } }` envelope with a static,
 operator-safe message — no provider body, URL, path, IP, or credential is ever interpolated (AC5).

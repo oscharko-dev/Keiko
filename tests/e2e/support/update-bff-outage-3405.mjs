@@ -86,7 +86,7 @@ function metadataFetch(targetVersion) {
   return (input) => {
     const url = requestUrl(input);
     if (url.startsWith("https://registry.npmjs.org/")) {
-      return Promise.resolve(jsonResponse({ "dist-tags": { latest: targetVersion } }));
+      return Promise.resolve(jsonResponse({ latest: targetVersion }));
     }
     if (url === `https://api.github.com/repos/oscharko-dev/keiko/releases/tags/v${targetVersion}`) {
       return Promise.resolve(

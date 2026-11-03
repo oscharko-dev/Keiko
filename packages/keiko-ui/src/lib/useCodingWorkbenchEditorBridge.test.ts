@@ -191,6 +191,38 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     expect(postResultSpy).not.toHaveBeenCalled();
   });
 
+  // Owner decision 2026-10-28: a governed changeset may carry 8 MiB. The operator is deciding about
+  // the whole of it, so the review parses all of it: the shared parser's 512 KB display cut would
+  // silently hide most of a large changeset the operator is about to approve.
+  it("reviews a changeset larger than the 512 KB display cut in full, never truncated", async () => {
+    const added = 20_000;
+    const patch = [
+      "--- /dev/null",
+      "+++ b/data/rows.csv",
+      `@@ -0,0 +1,${String(added)} @@`,
+      ...Array.from(
+        { length: added },
+        (_, index) => `+${String(index).padStart(8, "0")},${"x".repeat(60)}`,
+      ),
+    ].join("\n");
+    expect(patch.length).toBeGreaterThan(1_000_000);
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId = new URL(source.url, "https://example.test").searchParams.get("sessionId");
+    act(() => {
+      emitApplyChangeset(source, sessionId ?? "", { patch });
+    });
+    await flushMicrotasks();
+    const diff = result.current.pendingReview?.diff;
+    expect(diff?.truncated).toBe(false);
+    expect(diff?.files).toHaveLength(1);
+    expect(diff?.files[0]?.addedLines).toBe(added);
+    expect(diff?.files[0]?.truncated).toBe(false);
+  });
+
   it("approve() posts a succeeded result and clears pendingReview", async () => {
     const { result } = renderHook(() =>
       useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
@@ -817,20 +849,55 @@ describe("useCodingWorkbenchEditorBridge — registration backoff", () => {
     });
     // One line per streak of failures, not one per attempt. PR #3625 review: it names the closed
     // kind of the refusal, the refused request's own id and the run, so a lease held by another tab
-    // reads apart from a lost connection.
-    const failures = reportDiagnosticSpy.mock.calls.filter(
-      ([message]) =>
-        message === "[keiko] coding workbench bridge registration failed; retrying with backoff",
-    );
-    expect(failures).toEqual([
+    // reads apart from a lost connection. #4117: a held lease is a closed outcome, so it is the
+    // `lease` refusal on the info interaction line, not a warn browser failure.
+    expect(reportDiagnosticSpy.mock.calls).toEqual([
       [
-        expect.any(String),
-        expect.objectContaining({
-          errorKind: "authority-denied",
+        "[keiko] coding workbench interaction: bridge-registration-refused",
+        {
+          codingWorkbenchInteraction: {
+            interaction: "bridge-registration-refused",
+            refusal: "lease",
+          },
           correlationId: "corr-lease-refused",
           parentCorrelationId: "run-1",
-          errorEvidence: expect.objectContaining({ errorClass: "ApiError" }) as unknown,
-        }),
+        },
+      ],
+    ]);
+  });
+
+  it("stops re-registering a root the server's boundary refuses (#4117)", async () => {
+    vi.useFakeTimers();
+    const refused = new ApiError(
+      "EDITOR_AGENT_ROOT_BINDING_INVALID",
+      "The editor agent request is not authorized for this workspace root.",
+      403,
+    );
+    refused.correlationId = "corr-root-refused";
+    postSnapshotSpy.mockRejectedValue(refused);
+    const { result } = renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    for (let elapsedMs = 0; elapsedMs < 110_000; elapsedMs += 50) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    // The registration on subscribe and the debounced one, then nothing until the run or its root
+    // changes: the lab showed 52 refused posts in one session before this.
+    expect(postSnapshotSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(result.current.bridgeUnavailable).toBe(true);
+    expect(reportDiagnosticSpy.mock.calls).toEqual([
+      [
+        "[keiko] coding workbench interaction: bridge-registration-refused",
+        {
+          codingWorkbenchInteraction: {
+            interaction: "bridge-registration-refused",
+            refusal: "root-boundary",
+          },
+          correlationId: "corr-root-refused",
+          parentCorrelationId: "run-1",
+        },
       ],
     ]);
   });

@@ -231,6 +231,66 @@ describe("GET /api/models", () => {
     }
   });
 
+  // #3905 AC2: an expired successful observation used to collapse into the same absent
+  // `conversationReady` as a model nobody probed. It still projects no readiness (unknown for
+  // admission), but the wire now says it was ready once and needs a fresh check.
+  it("projects an expired successful observation as stale, distinct from never probed", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-08T12:00:00.000Z"));
+    try {
+      const gatewayConfig = probeVerifiedGatewayConfig(SAMPLE_CONFIG);
+      gatewayConfig.clearVerifiedCapability("example-chat-model");
+      const deps = depsWith({ gatewayConfig });
+      const projected = (): Record<string, unknown> => {
+        const body = handleModels(ctx("/api/models"), deps).body as {
+          models: Record<string, unknown>[];
+        };
+        return body.models[0] ?? {};
+      };
+
+      // Never probed: unknown, and not stale either.
+      expect(projected()).not.toHaveProperty("conversationReady");
+      expect(projected()).not.toHaveProperty("conversationReadinessStale");
+
+      gatewayConfig.recordVerifiedCapability(
+        "example-chat-model",
+        { conversationReady: true },
+        new Date().toISOString(),
+        gatewayConfig.generation(),
+      );
+      expect(projected()).toMatchObject({ conversationReady: true });
+      expect(projected()).not.toHaveProperty("conversationReadinessStale");
+
+      // The success ages out: still no readiness, now explicitly stale.
+      vi.setSystemTime(new Date("2026-10-08T12:05:00.000Z"));
+      expect(projected()).not.toHaveProperty("conversationReady");
+      expect(projected()).toHaveProperty("conversationReadinessStale", true);
+
+      // An observed failure is a statement, not staleness, however old it is.
+      gatewayConfig.recordVerifiedCapability(
+        "example-chat-model",
+        { conversationReady: false },
+        "2026-08-16T00:00:01.000Z",
+        gatewayConfig.generation(),
+      );
+      expect(projected()).toMatchObject({ conversationReady: false });
+      expect(projected()).not.toHaveProperty("conversationReadinessStale");
+
+      // A configuration replacement invalidates the observation outright: unknown again.
+      gatewayConfig.recordVerifiedCapability(
+        "example-chat-model",
+        { conversationReady: true },
+        "2026-10-08T11:00:00.000Z",
+        gatewayConfig.generation(),
+      );
+      expect(projected()).toHaveProperty("conversationReadinessStale", true);
+      gatewayConfig.set(SAMPLE_CONFIG, true);
+      expect(projected()).not.toHaveProperty("conversationReadinessStale");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("starts a requested background refresh and returns the existing catalog synchronously", () => {
     const refreshGatewayCatalog = vi.fn();
     const deps = depsWith({ config: SAMPLE_CONFIG, refreshGatewayCatalog });

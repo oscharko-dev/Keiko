@@ -35,6 +35,7 @@ export function createProductionDraftDeliveryService(
   if (deps === undefined || verified === undefined) return undefined;
   return new DraftDeliveryController({
     ...deps,
+    runId: binding.runId,
     context: (): DraftDeliveryRunContext | undefined =>
       resolveDraftDeliveryContext(verified, binding),
     onChanged: (record): void => {
@@ -48,15 +49,16 @@ export function resolveDraftDeliveryContext(
   binding: VerifiedCommitRuntimeBinding,
 ): DraftDeliveryRunContext | undefined {
   const context = resolveVerifiedCommitContext(verified, binding);
+  if (context === undefined) return undefined;
   const issueBinding = binding.context.issueBinding;
-  return context === undefined || issueBinding === undefined
-    ? undefined
-    : {
-        ...context,
-        taskId: binding.context.taskId,
-        workspaceId: binding.context.workspaceId,
-        issueBinding,
-      };
+  // A run with no accepted issue is a normal run: it delivers by pushing its own task branch
+  // (ADR-0085 D1b), so the missing issue is no longer a reason to resolve no context at all.
+  return {
+    ...context,
+    taskId: binding.context.taskId,
+    workspaceId: binding.context.workspaceId,
+    ...(issueBinding === undefined ? {} : { issueBinding }),
+  };
 }
 function emit(
   event: CodingWorkbenchRuntimeEvent,

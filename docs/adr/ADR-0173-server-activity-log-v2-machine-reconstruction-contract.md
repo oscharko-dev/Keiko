@@ -92,6 +92,13 @@ process/request/model-call boundaries, read a Keiko-code stack frame without a h
 directory layout, and scaffold a red-then-green regression test — all without any customer content
 ever appearing in the artifact.
 
+Source projection adds optional, typed counts on the existing `chat.response.streamed` operation:
+projection revision, source regions, depth/size/syntax refusals, and pending/published character-block
+observations. `search.connected-context.evidence-details` identifies the projection revision within its existing field grant. Parser
+errors containing source text never become diagnostics; unavailable source follows existing read
+failure and uncertainty evidence. These fields do not prove compilation, model quality, UI copying,
+or durable persistence: each claim still requires its own actual execution evidence.
+
 **Non-goals.** This epic does not log prompts, responses, document text, secrets, absolute
 filesystem paths, or any other customer content — content-shape and counts only, never bodies. It
 does not introduce runtime source maps, OpenTelemetry, or a second logging/tracing subsystem; every
@@ -413,6 +420,19 @@ module contains the complete safe operation schemas and failure-class coverage a
 registry/schema/catalog identity constants; it is not a digest-only index. The drift check requires
 both byte equality and an empty authoritative violation set.
 
+The public generated registry preserves its exports through separate identity and metadata modules.
+The compact identity module carries the digests and closed surface vocabulary; the metadata loader
+imports independent failure-class coverage and operation-to-surface JSON assets. This keeps the
+large metadata off consumers that require only identity, including the initial UI load, while
+separating declarative data from executable code. The metadata public types use stable
+readonly schemas, including the existing closed classifications and lifecycle enums, rather than
+literal counts and fixed list positions (owner decision, 2026-10-24). Canonical source operation
+registrations retain their exact inferred field types, and generation preserves every runtime
+contract value. JSON metadata is covered by the same byte-exact regeneration and runtime checks.
+The support-code inventory likewise stores its three existing readonly string lists as generated
+JSON data; their exported types, values and order remain intact. Its retained module-history tuple
+keeps its exact literal types and archived values.
+
 The predecessor bracket scanner remains temporarily in the same generated file as a visibly
 non-authoritative migration input. Its `<dynamic>` and `unknown` records authorize nothing and must
 disappear as producers migrate; no second catalog or parallel runtime vocabulary exists. Runtime
@@ -421,6 +441,26 @@ the event, and the physical sink repeats validation immediately before serializa
 check closes post-construction mutation and protects JavaScript callers that did not pass through
 the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
 echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
+
+Client update presentation uses the existing `client.update-notice.presented` operation with
+closed `noticeKind` and `presentation` (`shown`, `dismissed`, `suppressed`), the actual
+`updateAvailable` flag and `blockerCount`, and the existing request correlation. Availability kinds
+must agree with the flag; a no-signal result may only be suppressed. Immediate user dismissals,
+including opening Updates and dismissing a local load-failure fallback, record their own bounded
+presentation transition; restoring a stored dismissal remains a separate observation. No release
+report, message body, path, version guess or private warning is admitted as presentation evidence.
+
+Files source intents use the existing `client.files-scope.decision` operation's closed
+`intent-send-cancelled` decision and the admitted intent correlation. This records cancellation
+against the controller that actually owns the conversation, including an unpublished root fallback
+and regeneration. Navigation alone does not cancel captured canonical Voice work, and this client
+observation is not a substitute for server persistence acknowledgement or terminal settlement.
+Portable preflight and status record `update.install-mode.detected` with closed mode/reason/target
+and measured duration, never roots or package bodies. Browser secret rotation records the actual
+remaining `cookieMaxAgeSeconds` on the existing `coding-app-session.rotated` operation; changing a
+secret does not extend approved absolute authority. The generated registry remains authoritative
+for exact enums, obligations and executable proofs; these producers retain the existing writer,
+segmented store and reader ownership under ADR-0179.
 
 Every generated operation schema includes required `completeness` and `loss` contracts. The event
 constructor supplies the safe defaults `complete` and `none`, while a producer that observed
@@ -1083,9 +1123,12 @@ only through that line's parent edge; when it is not retained, the analysis is i
 (`evidence-not-retained`). A child declared without its root, which no producer emits, is refused.
 Another request's failure of the same operation, the root's own included, neither completes the
 incident nor refuses it. A contradiction is `unsafe-report`. Every closure member, each incident
-correlation and every parent a retained line names, needs a directly recorded line: a timeline
+correlation and every parent named by registered causal evidence needs a directly recorded line: a timeline
 derived only through a child never proves its parent (`parent-correlation-missing`,
-`evidence-not-retained`). The selection accounts for exactly the process lifetimes the evidence
+`evidence-not-retained`). The report uses its trusted recorded registry's causal declarations, like
+the query's registered closure (D20): optional non-causal context may borrow a parent identifier
+without requiring that unrelated correlation to be retained. Incident members remain mandatory.
+The selection accounts for exactly the process lifetimes the evidence
 shows, and the evidence must carry that account: a `selected` start missing from it, a start beside
 a `lost` or `absent` one, or a heartbeat (written only after a start) beside an `absent` one is
 `unsafe-report`, so dropping a start never reads as a lifetime that had none; a `lost` start, or an
@@ -1271,9 +1314,10 @@ bounded conversation lane, not the whole model input; unused source capacity rem
 identified. Checkpoint validity uses that same lane profile. These fields are counts only and
 retain the existing timeline, causal correlation and sufficiency contract.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 
@@ -1327,8 +1371,17 @@ request":
   `bytesStreamed`, `durationMs`, `reason`) is emitted once per response on its `close` event by the
   shared frame recorder every SSE writer already funnels through; `reason` is the closed
   vocabulary `completed | client-disconnected | backpressure-killed | server-error`, and a write path
-  that destroys the socket because a write was rejected marks the stream first so a backpressure
-  kill is never reported as a client disconnect. `http.request.body.received` records the media
+  that destroys the socket for a stalled reader marks the stream first so that kill is never
+  reported as a client disconnect. Amended 2026-10-28: a write that returns `false` is flow control,
+  never a kill — Node answers `false` for any single frame of 64 KiB or more, even to an idle local
+  reader, and the old writer destroyed healthy streams carrying a large tool call or answer. Every
+  SSE writer (`writeSseFrame` in `sse-write.ts`, which the framing helpers in `sse.ts` call) queues
+  the frame and waits for `drain`; only a reader that drains nothing within
+  `SSE_STALLED_READER_TIMEOUT_MS` (30 s) is `backpressure-killed`, including an ended stream whose
+  queued tail the reader never takes. Frame size never ends a stream. Producers that pull from a
+  model (the coding sidecar) await `whenSseWritable` before the next chunk, so a slow reader slows
+  the provider instead of growing an in-memory backlog. The optional `drainWaitCount` counts the
+  writes that waited for `drain`. `http.request.body.received` records the media
   type and byte count of an accepted request body; the six ad hoc body readers that predated
   `readBoundedRequestBody` were consolidated onto it so the line — and the 413 path — have one
   owner.
@@ -1534,22 +1587,37 @@ The Coding Workbench model selector stays a passive catalog reader (ADR-0124 D5)
 profile read, `GET /api/coding-sidecar/gateway/profile`, is not passive any more (owner decision
 for 1.1.1, reversing #3561): what Keiko can determine itself it determines itself, so a customer
 is never sent to Gateway Settings to click a check or copy a value. On that read the server
-verifies, for every chat model that claims tool calling, what the Workbench needs and the stored
-configuration does not prove: an expired or missing forced tool-call proof (`tool_calling`), and a
-context window below the 32,000-token minimum (`long_context`), which is what a gateway that
-declares no token limits leaves behind as the 4,096 setup placeholder. Expect
+verifies, for every chat model whose tool calling nobody has refuted, what the Workbench needs and
+the stored configuration does not prove: an expired, withdrawn or missing forced tool-call proof
+(`tool_calling`), and a context window below the 32,000-token minimum (`long_context`), which is
+what a gateway that declares no token limits leaves behind as the 4,096 setup placeholder. Expect
 `gateway.readiness.automatic.started` / `.completed` under the profile read's correlation id;
 `.completed` carries `verifiedContextTokens` when the long-context probe passed, and the same run
-persists the renewed proof and raises the stored window (raise-only). A model whose proof the
-config loader demoted to `toolCalling: false` after it aged out still claims tool calling (ADR-0124
-D5): after a restart the day after setup its read starts that automatic run, and a read that
-answers while the run is still open logs `coding-sidecar.gateway.readiness-insufficient` with
-`reason: "model-verification-pending"`. For such a model, `reason: "no-tool-calling"` follows only
-a run whose probe refuted tool calling. The work is bounded: one
-attempt per deployment identity within a six-hour cooldown, never for a model that does not
-claim tool calling, never while a subscription source is selected, and only the model the
-Workbench would elect is awaited. A profile read that
-finds nothing to prove writes no automatic record, and its absence is then not a lost call.
+persists the renewed proof and raises the stored window (raise-only). The `.started` line of such a
+run names why and who asked in two closed, optional fields: `probeBasis` (`never-proven`,
+`proof-renewal`, `context-window`) and `probeTrigger` (`profile-read`, or `startup` for the
+recognised-LiteLLM readiness at process start); an on-demand conversation probe carries neither.
+Both entries resolve their targets through one rule (`workbenchProbesNeeded`), so a model behind a
+plain OpenAI-compatible or Azure endpoint that nobody has proven (`probeBasis: never-proven`) is
+probed on its first profile read exactly as a LiteLLM model is at startup (#3578), and the verdict
+follows on `gateway.tool-calling.verification` under the same correlation id. A model whose proof
+the config loader demoted to `toolCalling: false` after it aged out still claims tool calling
+(ADR-0124 D5): after a restart the day after setup its read starts that automatic run, and a read
+that answers while the run is still open logs `coding-sidecar.gateway.readiness-insufficient` with
+`reason: "model-verification-pending"`, with the stored reason (`no-tool-calling` for a model
+nobody proved yet) in `storedReason`. `reason: "no-tool-calling"` then follows a run whose probe
+refuted tool calling, or answered with a failure that proves nothing: that model stays unproven
+until its cooldown ends.
+The work is bounded: one attempt per deployment identity within a six-hour cooldown, never for a
+model that is no chat model or whose proof the probe refuted, never while a subscription source is
+selected, and only the model the Workbench would elect is awaited. A probe the gateway never
+answered (a timeout, a busy or unreachable gateway) is no verdict and no running check: a passive
+read never retries it and no timer does. Startup, a page load, and a profile read that asks
+(`check=1`, sent when the Workbench opens or a model is chosen) retry it after a one-minute quiet,
+and the projection then reports `tool-calling-unverified`, never `no-tool-calling`. A proof that
+succeeded while the configuration changed under it (`stale`) runs again at once and once
+(customer 1.3.4). A profile read that finds nothing to prove writes no automatic
+record, and its absence is then not a lost call.
 
 For received reports, first analyze the artifact without a correlation selector. New exports
 replace local labels with artifact-local ordinal references. Select the exported root from
@@ -1606,7 +1674,9 @@ and a turn that ended empty after reasoning from `gateway.retry.scheduled reason
 upstream (#3873, F23): `coding-sidecar.gateway.request-validated` records
 `droppedReasoningMessageCount`, the number of prior assistant messages that carried nothing but
 reasoning and were dropped before the gateway request was built (the line's prompt estimate and
-`inputMessageCount` describe what is sent), a count and never the reasoning.
+`inputMessageCount` describe what is sent), a count and never the reasoning. The same line's
+optional `toolCallTextMessageCount` counts the assistant messages whose text beside their tool calls
+is resent upstream as written (#3907), never the text.
 A refused turn is answered to the runtime as a final 400 — an HTTP 400 before the stream opened, an
 error chunk with `code: 400` and `type: invalid_request_error` after it — which OpenCode 2.0.10
 reads as final; `finish_reason: "error"` or a 503, which it retries, stays the answer to everything
@@ -1713,6 +1783,10 @@ segment is orphaned when:
 - its owner has exited, or its pid now belongs to this process;
 - it is older than two segment windows and unwritten for one (pid reuse);
 - it is this instance's own abandoned segment.
+
+The `same-process` recovery reason requires both the process id and instance id to match.
+A matching instance id alone does not establish ownership: an active segment held by another
+live process remains foreign and prevents replacement of the shared store policy.
 
 Recovery seals the file as it is: a partial final line is kept and reported (`tailState:
 "truncated"`, `truncatedBytes`), and valid lines are never rewritten. An interrupted seal whose seal

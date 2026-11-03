@@ -1,0 +1,193 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "a0c66743d441d0931c0f924c3394c2874537913e",
+  "classification": "Separate conventional bare document references from ordinary overview ranking at the shared discovery owner",
+  "repair": "Planner and explicit-path admission share one case-insensitive README/CONTRIBUTING shorthand allowlist. Architecture/agents/overview prose does not gain explicit-file authority. Explicit filenames and general overview ranking remain eligible; scope and all existing discovery/read grants are unchanged.",
+  "allowlist": ["readme", "contributing"],
+  "failureFirst": [
+    {
+      "artifact": "checkpoint76-shorthand-prose-red-v1.tests.json",
+      "sha256": "9350bdb7a683b7ae79c4df3d5d22f0494524813b3ed59f07e2cad6b7cfefa065",
+      "passed": 25,
+      "failed": 3,
+      "unselected": 0
+    },
+    {
+      "artifact": "checkpoint76-shorthand-server-red-v1.tests.json",
+      "sha256": "06f3eb5d200388f9f80aee58eff2b7d990d6e66e22217f41df00b69c7feada5d",
+      "passed": 0,
+      "failed": 1,
+      "unselected": 38
+    }
+  ],
+  "finalFocused": {
+    "passed": 208,
+    "failed": 0,
+    "skipped": 0,
+    "files": 5,
+    "artifact": "checkpoint76-focused-green-v1.tests.json",
+    "sha256": "4d9b40106cc0e343676793126d6ba897c603b34d107dab2d5fc9feaa1fd67aaa"
+  },
+  "finalBroad": {
+    "passed": 3571,
+    "failed": 0,
+    "existingSkipped": 1,
+    "files": 188,
+    "artifact": "checkpoint76-grounded-final-v1.tests.json",
+    "sha256": "f98c50a4b5fef5c958d8b893d5f4d1f21e8a76e2099da746337adeef13d96c7f"
+  },
+  "sources": [
+    {
+      "path": "packages/keiko-workspace/src/workspacePathDiscovery.ts",
+      "sha256": "f66c559161a19901ddfd6363c41d941bbc27c2f4af293116959d757ec3cef783"
+    },
+    {
+      "path": "packages/keiko-workspace/src/index.ts",
+      "sha256": "fce573e377b4c21406e0ab5b57c49cfa8e0468f2c0dd9930f6bb4429b7a5747f"
+    },
+    {
+      "path": "packages/keiko-workflows/src/planner/references.ts",
+      "sha256": "91e7ec281420a0bdd3802bee64753d4fcb44481a8f23663b88ccf2fe410390c4"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-explicit-paths.ts",
+      "sha256": "106f16196961b25c981381a85e9b05d8ebba97c3b93fa8ecadcb7b97246ae147"
+    },
+    {
+      "path": "scripts/root-package-surface.contract.json",
+      "sha256": "ae673423b8a2d23c86ce0343b4c700b1879e6666713d639811d64c9a66616d72"
+    },
+    {
+      "path": "AGENTS.md",
+      "sha256": "25ce4aa5bdb15af7eb1dbe3fd5d38fad63cbdc096f259e854a49055285dc698f"
+    },
+    {
+      "path": "CONTRIBUTING.md",
+      "sha256": "5209c6b3142ebfdf301076edb7d863038217ad5ed7e7ba9cfe0882a013526f96"
+    },
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "a8baeaff91385e624d7641ed60db50455872429678d8d9595a3df1080e4725d4"
+    }
+  ],
+  "sourceFreezeSha256": "5436ca4925e033ff76c9457e1bd429a1c13bae8390b8f291eb8404606699bf94",
+  "compiledFreezeSha256": "062603a121c859ff77f96f8e11cbd0b5c99083997008696091e3da47a0bfa958",
+  "checks": [
+    {
+      "artifact": "checkpoint76-typecheck-v1.json",
+      "sha256": "c762bbd8a55fd6b0df7e9d8e3e032af7c7839fe79406711c480167cc6f64a86c",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-activity-log-v1.json",
+      "sha256": "4e479b99dfbefe6a8730f77585821dd06f37554f19fe8209d8586d7524efd5f4",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-grounded-final-v1.json",
+      "sha256": "e6cf1a31e405af2662554fbf6da371b0b72a2d9c58cf2a45ca169d26358193fc",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-lint-v1.json",
+      "sha256": "d03327345d598aa7b0cbf325d86fe20792304228661ff80575bfe54f331ab83c",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-context-quality-v1.json",
+      "sha256": "f0b066659c4cc6549edc3657b7a02500d1f76bcecc31f4e08f7d8c7a6dfa58a0",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-retrieval-quality-v1.json",
+      "sha256": "3be91f13edee852c07bfe0b5edb7c168d848f67f9a109e85e92127521e13e27b",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-grounded-quality-v1.json",
+      "sha256": "642837cd75c7be3f5a03069b1fc0fa6545082c6db15045b2b231a3e57c981add",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-grounded-faithfulness-v1.json",
+      "sha256": "bdb7d35c9b08d8e8087c1a35f1574df186d46e03436c692dc7be4726738898af",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-adr-v1.json",
+      "sha256": "c9dd4a8820f26cf974dd312a80644e382a37d2ed260bbd1a7ca6052f14044483",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-sonar-v1.json",
+      "sha256": "468c1a428d0450241d4f911115f953fe565c224784413ed484d6bc55a238ae5d",
+      "exitCode": 0
+    },
+    {
+      "artifact": "checkpoint76-assembled-surface-v1.json",
+      "sha256": "36aa2310d40e509b7b60829615f77be96e0e50ff987b3904373b24033ff533bf",
+      "exitCode": 0
+    }
+  ],
+  "logging": "The existing registered source-details explicit anchor/admission counts distinguish ordinary ranking from named-file admission. The public-handler regression asserts zero explicit counts while retaining the ranked architecture document; no source body enters the Activity Log.",
+  "registryGeneration": [
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "4490cc175c54319d2ae46f219fc0496322323b0d83efe2d66b1e2c0f9a42d7a7",
+      "unchangedAfterGeneration": true
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "2b0cb23e6b0040c81de353c8eaced95c6fa8bfa3fb774b1b158910df0de17950",
+      "unchangedAfterGeneration": true
+    }
+  ],
+  "publicSurface": "Generated runtime/type contract adds only isDocumentBasenameShorthand. Final complete assembled surface passes with 6414 files and the unchanged 78174-byte editor result.",
+  "retainedPreparationAttempts": [
+    {
+      "artifact": "checkpoint76-surface-regenerate-v1.json",
+      "classification": "The first generation attempt refuses unpruned incremental build metadata; no package acceptance credit."
+    },
+    {
+      "artifact": "checkpoint76-surface-regenerate-v2.json",
+      "classification": "After both repository-owned pruning steps the generator exits zero and intentionally updates the tracked surface contract. The generic immutable-source wrapper reports that expected write; the later unchanged assembled aggregate passes."
+    }
+  ],
+  "nextProductDefect": {
+    "classification": "Live React campaign stopped after seven of twelve declared first drafts on demonstrated code corruption by the shared secret redactor. The matching run is incomplete and receives no skill benefit or model ceiling claim.",
+    "causalArtifact": "redaction-code-corruption-repro-v1.json",
+    "causalSha256": "45946fc2c07d68dc2b72603db66b99af137d0459514e8858df00ff7ca8a582f8",
+    "modelCallsInCausalReproduction": 0,
+    "rawFailedProviderAnswerAvailable": false,
+    "scope": "Valid synthetic TypeScript becomes syntactically invalid through the unchanged production redactor. A typed assigned synthetic value is also retained, so both syntax preservation and literal secrecy require a separate correction.",
+    "fixedByThisIncrement": false,
+    "interruptedCampaign": {
+      "sourceHead": "6123b9be91c7e52dc1f266bf40a1421efb66d827",
+      "declaredRuns": 12,
+      "completedRuns": 7,
+      "actualTaskCalls": 7,
+      "readmeWitnessesPresentPerTask": 11,
+      "wholeSourceExactSubstringObserved": false,
+      "sourceCompletenessClaim": false,
+      "displayCopyCanonicalProjectionMatches": 7,
+      "correctSubjectPassed": 0,
+      "mutationCredit": false,
+      "outputModified": false,
+      "driverFinalization": {
+        "status": "completed",
+        "drain": "fulfilled",
+        "close": "fulfilled"
+      },
+      "observationsSha256": "e9abbcf91953dded48c406789fa54a4e73bf7067e1a7a894a83c0ad28903ebf5",
+      "interruptionSha256": "522655577aaa76c1f3eb998a81c3c8a20a8eb647a5fe2d49fb5e2aefbe934a35",
+      "finalizationSha256": "bcbced8fb103f5c0624f8b635b8b3b8bbf1831f8f7c3794df3e0f0db69e86fd7",
+      "unexecutedRepairPlanSha256": "2e2021c64491ec616f92cf8add175d4bb4ec5ccb67904a3935d6ccc423637ec3"
+    }
+  },
+  "promptsChanged": false,
+  "skillsChanged": false,
+  "modelOutputsRegraded": false,
+  "overallAcceptance": false,
+  "skillAcceptance": false,
+  "mergeAcceptance": false
+}

@@ -5,6 +5,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   realpathSync,
   rmSync,
   utimesSync,
@@ -41,6 +42,28 @@ function makeQuarantineFile(dir: string, base: string, isoStamp: string, ageMs: 
 }
 
 describe("pruneCorruptLockQuarantine (KEIKO-0812)", () => {
+  it("never mistakes a foreign outer owner for the same numeric inner process", () => {
+    const root = temporary(),
+      lockPath = join(root, "update-session.lock");
+    const record = {
+      sessionId: "foreign",
+      targetVersion: "1.2.4",
+      startedAt: new Date(0).toISOString(),
+      pid: process.pid,
+      processIdentity: "foreign-instance",
+    };
+    const bytes = JSON.stringify(record);
+    writeFileSync(lockPath, bytes);
+    const options = {
+      currentPid: process.pid + 100000,
+      processIdentity: "current-instance",
+      staleMs: 1,
+      pidAlive: (): boolean => true,
+    };
+    const lock = createFileUpdateSessionLock(lockPath, options);
+    expect(lock.acquire({ ...record, sessionId: "next", pid: options.currentPid })).toBe(false);
+    expect(readFileSync(lockPath, "utf8")).toBe(bytes);
+  });
   it("removes corrupt-lock quarantine files older than the retention window and keeps recent ones", () => {
     const root = temporary();
     const lockPath = join(root, "update-session.lock");

@@ -124,6 +124,8 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   // keeps the dependency-cruiser layer live: drop the includeOnly widening or the fixture path
   // from either rule's from.path and the expected count falls to 0 and this gate goes red.
   "adr-0019-trust-1-provider-sdk-isolation": 1,
+  "adr-0181-mcp-sdk-isolation": 1,
+  "adr-0181-mcp-only-contracts-security": 1,
   "adr-0019-trust-2-ui-no-provider-config": 1,
   "adr-0019-trust-3-ui-no-gateway-internals": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
@@ -171,11 +173,9 @@ function assertProductionIncludeOnlyIsCovered() {
 }
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
-  // Two distinct violations: bad-import.ts (a Node core-module import) and
-  // forbidden-package-dependency.ts (a third-party provider SDK import) — the #3415
-  // negative-fixture matrix's "forbidden package dependency" attack class, added alongside the
-  // existing Node-builtin fixture rather than replacing it.
-  "adr-0175-tool-catalog-pure-imports": 2,
+  // Independent denials: Node I/O, provider SDK, an arbitrary Ajv internal subpath inside the
+  // external-schema owner, and an approved validator imported outside that owner.
+  "adr-0175-tool-catalog-pure-imports": 4,
   "adr-0165-raw-coordinate-owner": 1,
   "adr-0005-owned-root-authority-implementation-private": 1,
   "adr-0005-owned-root-containment-allowed-callers": 1,
@@ -184,6 +184,7 @@ const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
   "adr-0005-owned-root-preserve-allowed-callers": 1,
   "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
   "adr-0019-trust-1-provider-sdk-isolation": 1,
+  "adr-0181-mcp-sdk-isolation": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-9-local-knowledge-no-egress": 1,

@@ -1,0 +1,194 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded qualification-lab shutdown and durable failed finalization; not product-native updater, UI or skill-quality acceptance.",
+  "sourceParent": "a28df5767f3213de818e81fd552d76ff047f9e5c",
+  "sourceFiles": [
+    {
+      "path": "scripts/testing/chat-skills-lab/runtime.mjs",
+      "sha256": "3fadcb56b5a75e2a4fd1ea83c6f073c7001d178266f3adeda849455144c130c5"
+    },
+    {
+      "path": "scripts/__tests__/chat-skills-runtime-lifecycle.test.mjs",
+      "sha256": "4f5b8fa4b34032f629a309e6e769598190a36113e182605b578e8e1b8247e324"
+    }
+  ],
+  "plan": {
+    "failure": "An owned BFF child ignoring SIGTERM leaves close, finalization and ledger save pending indefinitely.",
+    "success": "Healthy owned termination succeeds. Expired graceful termination forces only that ChildProcess and remains a failed outcome. Missing forced-exit confirmation settles as an explicit failure; finalization still saves."
+  },
+  "implementation": {
+    "gracefulStopMs": 5000,
+    "forcedExitConfirmationMs": 5000,
+    "monotonicExitRecheck": true,
+    "numericPidSignalling": false,
+    "providerOrModelBudgetsChanged": false,
+    "frozenCampaignsChanged": false
+  },
+  "check": {
+    "failureFirst": {
+      "tests": 22,
+      "passed": 20,
+      "failed": 2,
+      "cause": "Both new bounded-stop assertions observe only SIGTERM before the repair."
+    },
+    "finalAffectedSuites": {
+      "files": 7,
+      "tests": 92,
+      "passed": 92,
+      "failed": 0
+    },
+    "realOwnedProcesses": [
+      {
+        "label": "before",
+        "stubborn": false,
+        "elapsedMs": 2,
+        "outcome": {
+          "status": "fulfilled"
+        },
+        "finalization": {
+          "status": "completed",
+          "drain": "fulfilled",
+          "close": "fulfilled"
+        },
+        "exit": {
+          "code": null,
+          "signal": "SIGTERM"
+        }
+      },
+      {
+        "label": "before",
+        "stubborn": true,
+        "observationMs": 1000,
+        "termObserved": true,
+        "pending": true,
+        "saveCalled": false,
+        "exitObserved": false
+      },
+      {
+        "label": "after",
+        "stubborn": false,
+        "elapsedMs": 2,
+        "outcome": {
+          "status": "fulfilled"
+        },
+        "finalization": {
+          "status": "completed",
+          "drain": "fulfilled",
+          "close": "fulfilled"
+        },
+        "exit": {
+          "code": null,
+          "signal": "SIGTERM"
+        }
+      },
+      {
+        "label": "after",
+        "stubborn": true,
+        "elapsedMs": 5006,
+        "outcome": {
+          "status": "rejected",
+          "error": "bff-stop-timeout"
+        },
+        "finalization": {
+          "status": "failed",
+          "drain": "fulfilled",
+          "close": "rejected"
+        },
+        "exit": {
+          "code": null,
+          "signal": "SIGKILL"
+        }
+      }
+    ],
+    "independentBeforeReport": {
+      "artifact": "skill-lab-stop-bound-independent.json",
+      "sha256": "014a9df4d35051232617099316b12b6dfac021746e11b91ab8b9ddaf7537ce88",
+      "scope": "Previously retained independent exact-function real-child baseline; final replay is developer-owned."
+    }
+  },
+  "artifacts": [
+    {
+      "artifact": "checkpoint68-stop-red.json",
+      "sha256": "a9c652d65a749b9e41b72642232884c26bd16057255ce5ab9c864903e7b6f020"
+    },
+    {
+      "artifact": "checkpoint68-formatted-tests.json",
+      "sha256": "10014bede003c484a6329e787143f4a26ed846c3fa6c360d1eab85217db9563e"
+    },
+    {
+      "artifact": "checkpoint68-owned-process-before-after-v2.json",
+      "sha256": "4072724a27d46454309fe26387915718b03b2dc617253e053441bd246acbd14d"
+    },
+    {
+      "artifact": "checkpoint68-stop-owned-process-v2.mjs",
+      "sha256": "90f67beb4e3263ea5fda795204324d3738edcca86ddaa4d228fa74a0349eefc6"
+    },
+    {
+      "artifact": "checkpoint68-runtime-before-v2.mjs",
+      "sha256": "ec912ed3dd117fb48c736b826cc4ea7185d0cfc9300733ab3238af28d2ceced5"
+    },
+    {
+      "artifact": "checkpoint68-runtime-after-v2.mjs",
+      "sha256": "3fadcb56b5a75e2a4fd1ea83c6f073c7001d178266f3adeda849455144c130c5"
+    },
+    {
+      "artifact": "checkpoint68-typecheck.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "artifact": "checkpoint68-lint.json",
+      "sha256": "d38c5bf5386a251e7be72a8d5bae631e08f3e3ce006a1026fdf00f76f2941983"
+    },
+    {
+      "artifact": "checkpoint68-final-scoped-lint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "checkpoint68b-format.json",
+      "sha256": "3bb07624ee0474d18b6ab3af9d58f46c04238cb24b66d846f8f5dceb60cab56c"
+    },
+    {
+      "artifact": "checkpoint68b-architecture.json",
+      "sha256": "ac439fad27825cc19a342c880b465f107c8935349c8fc52870773b1aff3d87ec"
+    },
+    {
+      "artifact": "checkpoint68b-architecture-negative.json",
+      "sha256": "d1ff7f3c3da4cc54089b517b6df49a7874bc1dc1cf990befaf6b9e3d22725b07"
+    },
+    {
+      "artifact": "checkpoint68b-sonar.json",
+      "sha256": "870d016817ef9617eacd15addec1e0467806871f93453838b4d688a34d0cbee5"
+    }
+  ],
+  "act": {
+    "boundedLabShutdownRepaired": true,
+    "allAcceptanceCriteriaComplete": false,
+    "fullInstalledUpdaterAcceptance": false,
+    "bothSkillAcceptances": false,
+    "finalHeadCiAndReviewSettlement": false
+  },
+  "retainedDevelopmentFailures": [
+    {
+      "artifact": "checkpoint68-format.json",
+      "classification": "One formatting-only failure after the globalThis clock qualification; repaired by Prettier and followed by a fresh real-child replay and tests. No behavioral result regraded."
+    },
+    {
+      "artifact": "checkpoint68-scoped-lint.log",
+      "classification": "Initial unqualified global names rejected by ESLint. Changed to existing globalThis APIs; fresh scoped and full lint pass."
+    }
+  ],
+  "verification": {
+    "typecheck": "passed",
+    "wholeRootAndUiLint": "passed before formatting-only change; final changed-owner lint passed afterward",
+    "affectedLabTests": {
+      "passed": 92,
+      "failed": 0,
+      "suites": 7
+    },
+    "wholeFormatCheck": "passed; final evidence formatting is rechecked before commit",
+    "architecture": "passed",
+    "negativeArchitecture": "passed",
+    "realLocalSonar": "passed with zero issues",
+    "scope": "Scripts-only runtime shutdown change; product package behavior and exports unchanged."
+  }
+}

@@ -273,7 +273,10 @@ describe("ensureAnyConversationReadyChatModel budget", () => {
     const walk = ensureAnyConversationReadyChatModel(deps, "m1").then(() => {
       settled = true;
     });
-    await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS + 1_000);
+    await vi.advanceTimersByTimeAsync(CHAT_MODEL_WALK_BUDGET_MS - 1);
+    expect(settled).toBe(false);
+    expect(probed).toEqual(["m1", "m2"]);
+    await vi.advanceTimersByTimeAsync(1);
     await walk;
     expect(settled).toBe(true);
     // The requested model and the FIRST walk candidate were probed; the budget expired while
@@ -418,12 +421,13 @@ describe("on-demand readiness correlation", () => {
   });
 });
 
-describe("configuration-owned conversation recovery", () => {
+// A model starts with no observation; its one startup check fails, and a later request heals it.
+describe("startup check and request-time recovery", () => {
   it.each([429, 500, 503])(
     "heals a startup HTTP %i through the conversation guard without per-question probes",
     async (status) => {
       vi.useFakeTimers();
-      const { deps, readyRecords } = probeableDeps("invalid");
+      const { deps, readyRecords } = probeableDeps("invalid", {});
       const fetch = vi
         .fn()
         .mockResolvedValueOnce(new Response("", { status }))
@@ -456,7 +460,7 @@ describe("configuration-owned conversation recovery", () => {
   );
 
   it("bounds startup fan-out and skips queued probes after replacement", async () => {
-    const { deps } = probeableDeps("invalid");
+    const { deps } = probeableDeps("invalid", {});
     const originalHolder = deps.gatewayConfig;
     const base = originalHolder?.current();
     const provider = base?.providers[0];

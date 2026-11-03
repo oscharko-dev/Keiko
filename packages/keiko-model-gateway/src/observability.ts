@@ -30,6 +30,10 @@ import {
   withActivityLogCorrelation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  ProviderEmptyAnswerError,
+  ProviderOutputExhaustedError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
@@ -351,6 +355,13 @@ const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
 ];
 
 export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
+  // Both inherit the generic provider error code, so only the class tells a healthy provider whose
+  // model produced nothing usable (an empty answer, an exhausted output budget) from a provider
+  // fault. The closed vocabulary's model-output value is `validation-failed`, as for a tool call
+  // that did not match its schema; `internal` would send support analysis to a Keiko defect.
+  if (error instanceof ProviderEmptyAnswerError || error instanceof ProviderOutputExhaustedError) {
+    return "validation-failed";
+  }
   const kind = logErrorKind(error).toLowerCase();
   if (kind === "gateway_attempt_admission_denied") return "authority-denied";
   const matched = ACTIVITY_LOG_ERROR_KIND_RULES.find(({ pattern }) => pattern.test(kind));

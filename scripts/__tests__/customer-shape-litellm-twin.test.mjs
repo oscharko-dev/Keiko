@@ -97,6 +97,71 @@ describe("customer-shape LiteLLM twin", () => {
     }
   });
 
+  // #3897: the shipped Workbench offers OpenCode's own tools; the twin then asks for README.md
+  // through the native `glob` tool and recognizes the runtime's plain-text result.
+  it("streams a native glob call when the run offers OpenCode's own tools", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin();
+    try {
+      twin.planSingleWorkspaceDiscovery();
+      const headers = {
+        "content-type": "application/json",
+        "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+      };
+      const url = `${twin.baseUrl}/chat/completions`;
+      const request = {
+        model: "gemma-4-31b-it",
+        stream: true,
+        messages: [{ role: "user", content: "Discover README.md" }],
+        tools: ["read", "glob", "grep", "edit", "shell"].map((name) => ({
+          type: "function",
+          function: { name },
+        })),
+      };
+      const first = await globalThis.fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+      });
+      const firstBody = await first.text();
+      expect(firstBody).toContain('"name":"glob"');
+      expect(firstBody).toContain('{\\"pattern\\":\\"README.md\\"}');
+      expect(firstBody).not.toContain("keiko_workspace_discover");
+      const second = await globalThis.fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...request,
+          messages: [
+            ...request.messages,
+            {
+              role: "tool",
+              tool_call_id: "call-twin",
+              content: "/workspace/README.md\n",
+            },
+          ],
+        }),
+      });
+      expect(await second.text()).toContain("Synthetic Workbench reply.");
+      expect(twin.requests[0]).toMatchObject({ deliveredToolCall: true });
+      expect(twin.requests[1]).toMatchObject({ completedDiscoveryResult: true });
+      const unrelated = await globalThis.fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...request,
+          messages: [
+            ...request.messages,
+            { role: "tool", tool_call_id: "call-twin", content: "/workspace/other.md\n" },
+          ],
+        }),
+      });
+      await unrelated.text();
+      expect(twin.requests[2]).toMatchObject({ completedDiscoveryResult: false });
+    } finally {
+      await twin.close();
+    }
+  });
+
   it("binds the streamed discovery call through the actual OpenAI adapter and canonical catalog", async () => {
     const twin = await startCustomerShapeLiteLlmTwin();
     const events = [];

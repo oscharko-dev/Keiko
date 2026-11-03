@@ -1,0 +1,246 @@
+{
+  "schemaVersion": 1,
+  "classification": "CLI lifecycle control-state location and sanitized failure diagnostics; four reviewed defects repaired, not complete updater or model-quality acceptance.",
+  "sourceParent": "cbcae753cf37fd0a666cc77b05f88bf4243e3b6f",
+  "sourceFiles": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "b28ca5e1fa62d72db7ec1c18334998b3bb9ebd4b0f552007e6ab0944c01f24fc"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "9e6f45fd7cf6ea062239923321d006347574cc014390d3dec31c46ef0e68542f"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "544c1ca991d742753ad302d91d8a5877b271f148bccacdd40ee7c3f6f0aabad2"
+    },
+    {
+      "path": "docs/qa/evidence/4037/native-app-ownership.json",
+      "sha256": "4285c165379652ea4a207537a1ac21ea444b6591fb58a753619d25588ab5d31a"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-diagnostics.test.ts",
+      "sha256": "23e904e5c158b3b35409f8dcd27f53723e7a058bb18e321599363300001397df"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-native-activity.ts",
+      "sha256": "68ed5fc7e9e3229aded8d83e5777585ac1d3c81abee619fb8bbc2fb99f169459"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle.ts",
+      "sha256": "33d9db1303cb5e537e0c0c05610905315f458c1ea91ebbe7ad4e5c7a8268e2fc"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-layout-diagnostics.test.ts",
+      "sha256": "6bfb93fce81f566e428251712acf8813492820f1bc3f9c060dd8f577bbb242da"
+    },
+    {
+      "path": "packages/keiko-cli/src/native-ui-runtime.ts",
+      "sha256": "8c0b63318954d80af38e6a5df04600ef2ccb1ed98a53c6bdda9dd87e84c6822e"
+    },
+    {
+      "path": "packages/keiko-cli/src/portable.ts",
+      "sha256": "144b5aa6b1d84352de60a619abab964ba40cbad80cfeeead5d1214335dbd216c"
+    },
+    {
+      "path": "packages/keiko-cli/src/repair.ts",
+      "sha256": "bdc1575aad4f76e3f5b9249c6f649c9fc43dc0c5ac0016271aa6baa2bde113f3"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui-lifecycle-guard.test.ts",
+      "sha256": "bf250522eccc40f6b6cefc0442888ea26a2914bdd53f6b6498243e66422aa183"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui-lifecycle-guard.ts",
+      "sha256": "ebcd15f84fdcc95b3323df5f32e2f2df0adc8c3694fdfd18debfb47c5d79c4a0"
+    },
+    {
+      "path": "packages/keiko-cli/src/uninstall.ts",
+      "sha256": "f9665c3d12332e6734c869e5c39a4e8f03448a449293bf9b89c7caf2b30b35bd"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "618a42d9669f31e4b97dad0225314643d9c014e418f34fb12ba4622073765467"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "b50677acda32c9f7b59464c2247251f1a49a283930ccbf308bf0ea46913742b3"
+    }
+  ],
+  "plan": {
+    "failures": [
+      "A lifecycle command leaves its stable exclusion file beside the selected project.",
+      "Guard and command exceptions all claim ownership uncertainty and omit their sanitized failure class.",
+      "Portable native verification can fail before lifecycle admission with raw exception text and no admission event.",
+      "Four evidence strings merge counts and prose."
+    ],
+    "success": "Use the existing host CLI control-state root while preserving canonical selected-state exclusion and denied nested guard paths; distinguish tracking uncertainty from other failures and retain a sanitized class on the existing Activity Log. Preserve portable thrown-error recovery and all original ownership denials."
+  },
+  "implementation": {
+    "guardRoot": "Existing resolveCliControlStateDir using host platform and home, never selected-target or runtime-state overrides. Same selected-state digest, persistent inode and nested .keiko/guards/ui.pid.",
+    "sameRootAcrossLifecycleRepairUninstall": true,
+    "guardSurvivesSelectedStateRemoval": true,
+    "canonicalAliasesRetainExclusion": true,
+    "guardBodiesNeverReadOrUnlinked": true,
+    "diagnostics": "Existing cli.lifecycle.native-owner registration gains optional sanitized failureKind; canonical errorKind remains unavailable. Tracking-state read errors retain the ownership-uncertain diagnosis through a specific error class. Other guard/command failures name only their sanitized class.",
+    "portableVerification": "Existing native layout reader logs admission/refused through the passed sink, then throws a stable redacted error with its original cause. Portable launch passes its existing sink; upgrade restoration still receives a thrown error.",
+    "evidenceProse": "Four whitespace-only prose corrections; no counts, gates, model outputs or historical outcomes changed.",
+    "authorityOrPromptChanges": false
+  },
+  "check": {
+    "failureFirst": {
+      "guardFailureClassification": {
+        "passed": 0,
+        "failed": 2
+      },
+      "nativeLayoutClassification": {
+        "passed": 0,
+        "failed": 2
+      },
+      "projectGuardLocation": {
+        "passed": 2,
+        "failed": 1
+      }
+    },
+    "fullCli": {
+      "passed": 1490,
+      "failed": 0,
+      "existingSkips": 1
+    },
+    "finalAffectedTests": {
+      "passed": 74,
+      "failed": 0
+    },
+    "linuxNativeCli": [
+      {
+        "uid": 1000,
+        "architecture": "arm64",
+        "passed": 15,
+        "failed": 0,
+        "sourceDrift": 0,
+        "compiledDrift": 0,
+        "scope": "Existing actual CLI/native app-owner lifecycle, including launching CLI exit with healthy BFF, independent second CLI, whole stop twice, admission cutpoints and environment continuity. No assembled-package or macOS Endpoint Security acceptance.",
+        "profile": "Pinned existing Linux qualification image; non-root, cap-drop ALL, no-new-privileges, network none, read-only repository, private executable tmpfs; declared seccomp=unconfined qualification constraint."
+      },
+      {
+        "uid": 65534,
+        "architecture": "arm64",
+        "passed": 15,
+        "failed": 0,
+        "sourceDrift": 0,
+        "compiledDrift": 0,
+        "scope": "Existing actual CLI/native app-owner lifecycle, including launching CLI exit with healthy BFF, independent second CLI, whole stop twice, admission cutpoints and environment continuity. No assembled-package or macOS Endpoint Security acceptance.",
+        "profile": "Pinned existing Linux qualification image; non-root, cap-drop ALL, no-new-privileges, network none, read-only repository, private executable tmpfs; declared seccomp=unconfined qualification constraint."
+      }
+    ],
+    "wholeTyping": "Passed; final package build retains final runtime emissions.",
+    "changedOwnerLint": "Passed with zero warnings; unrelated root/UI owners remain byte-identical to checkpoint69.",
+    "format": "Whole repository check passed; final new publication evidence rechecked before commit.",
+    "actualLocalSonar": "PASS, no unresolved finding on changed files.",
+    "errorObservability": "Passed without catch-register exemptions.",
+    "architectureAndRegisteredActivity": "All seven final full-inventory checks passed on frozen final source/runtime, including normal and negative architecture and release impact; zero source or compiled drift.",
+    "adrIndex": "Passed."
+  },
+  "retainedFailures": [
+    {
+      "artifact": "checkpoint70-diagnostics-green-v1.json",
+      "classification": "Intermediate diagnostic used an unsupported base errorKind and failed two assertions. Corrected to the existing sanitized extra failureKind; canonical base vocabulary remains unchanged."
+    },
+    {
+      "artifact": "checkpoint70-cli-green-v1.json",
+      "classification": "Initial full run omitted Docker from PATH, causing twelve command-execution failures, plus one real tracking-message regression. The original symlink/no-foreign-signal pin was preserved; tracking reads now retain their specific uncertainty diagnosis. Restoring the declared toolchain PATH makes all 45 isolated command tests pass before the full 1490-pass repeat."
+    },
+    {
+      "artifact": "checkpoint70-command-failures-repro-v1.json",
+      "classification": "Twelve command failures reproduced locally before correcting the missing Docker toolchain path; no test, enforcement or timeout weakened."
+    },
+    {
+      "artifact": "checkpoint70-changed-lint-v1.log",
+      "classification": "Two nested untyped assertion matchers rejected. Replaced with stronger exact extra-field expectations."
+    }
+  ],
+  "artifacts": [
+    {
+      "artifact": "checkpoint70-source-freeze-v1.json",
+      "sha256": "bb356fa21e44b150100ba3c478e74006a5887331162a8c21880e499f5a3dffa8"
+    },
+    {
+      "artifact": "checkpoint70-compiled-freeze-v1.json",
+      "sha256": "50bd297ae262c748eea210dbe4a7315dae8290e980df446f0ae6866e6bd84c92"
+    },
+    {
+      "artifact": "checkpoint70-lifecycle-diagnostics-red.json",
+      "sha256": "83b832a99766d9c9365a3f1eb5a1190a1bb276ee53cbf949e78b188c96a8ddb2"
+    },
+    {
+      "artifact": "checkpoint70-guard-location-red.json",
+      "sha256": "5e5563bad9a8fd1523fbca29b3f0027094aafcc0bd3c7902ce15a15baf91af34"
+    },
+    {
+      "artifact": "checkpoint70-layout-diagnostics-red.json",
+      "sha256": "da11bd300bebbf4937007252733208f4560c2e260cdae358b540004fbd20b7ff"
+    },
+    {
+      "artifact": "checkpoint70-cli-green-v2.json",
+      "sha256": "2ea9112e5acd1f47f00812bf53bd973c5a90b3d6e4cd24d7a90c88056ea55bea"
+    },
+    {
+      "artifact": "checkpoint70-final-scoped-tests-v1.json",
+      "sha256": "5db3ec3a4f9d30141bc80e514fe290920c1a1540c3e98117ca8b0c7bb32d64f8"
+    },
+    {
+      "artifact": "checkpoint70-command-failures-correct-path-v1.json",
+      "sha256": "062f72dd86c24b92bf9ffc16f5c2a4e4c09233d9c533bc6bf5d9b3cc870e124a"
+    },
+    {
+      "artifact": "checkpoint70-native-cli-uid1000-v1.json",
+      "sha256": "5fb1a05ecf84abcc21a737dc464b88107cd01b18de55d1afe492bd7db74986da"
+    },
+    {
+      "artifact": "checkpoint70-native-cli-uid65534-v1.json",
+      "sha256": "4e75ace3376a1bd7284858103054a484b54b078c46fa3e717e22b4e4f1631718"
+    },
+    {
+      "artifact": "checkpoint70-final-typecheck-v2.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "artifact": "checkpoint70-final-build-v3.log",
+      "sha256": "3b804ea9bb2a88af24e3185b35b38b48b72142a11f62131070fb50f415d312cf"
+    },
+    {
+      "artifact": "checkpoint70-changed-lint-v2.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "artifact": "checkpoint70-error-observability-v1.log",
+      "sha256": "098043d3017c53b1af2ac6327a2eb03c183fbb2b28acadc08885acd9befd0c9d"
+    },
+    {
+      "artifact": "checkpoint70-adr-index-v1.log",
+      "sha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "artifact": "checkpoint70-format-v1.log",
+      "sha256": "90bda2270ac468296e07c2acba78b48faa4917ee74eaed88b14927c08e159a93"
+    },
+    {
+      "artifact": "checkpoint70-sonar-v1.log",
+      "sha256": "06dc3ae7277e99bcb09c081ef7c6ba1cb250aa534c97aa1a2d2f2dfa3b72cc60"
+    },
+    {
+      "artifact": "checkpoint70-final-activity-log-v2.json",
+      "sha256": "d10e95b2ef27c52d3756c0a5bdcb9a971ae5839815e78e60fa77a545d8fba29d"
+    }
+  ],
+  "act": {
+    "fourReviewedDefectsRepaired": true,
+    "ownerSpecificDeadGenerationRecoveryComplete": false,
+    "allAcceptanceCriteriaComplete": false,
+    "fullInstalledUpdaterAcceptance": false,
+    "bothSkillAcceptances": false,
+    "finalExactHeadCiAndReviewSettlement": false,
+    "mergedToDev": false
+  }
+}

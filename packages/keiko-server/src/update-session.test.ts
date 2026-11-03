@@ -431,6 +431,33 @@ describe("UpdateSessionManager", () => {
     });
   });
 
+  it("persists streaming download progress through the real closed runtime-state codec", async () => {
+    const stateDir = await mkdtemp(join(tmpdir(), "keiko-streaming-progress-"));
+    try {
+      const localState = createUpdateLocalStateManager({ stateDir });
+      const manager = createTestUpdateSessionManager({
+        detector: () => portableMode(),
+        localState,
+        facts: () => facts({ packageRoot: "/Users/alice/Applications/Keiko/app" }),
+        portableStager: {
+          stage: (input) => {
+            for (const completedBytes of [0, 128, 789])
+              input.onProgress?.({ phase: "downloading", completedBytes, totalBytes: 789 });
+            return Promise.resolve(portableStageSummary());
+          },
+        },
+        portableActivator: { activate: () => Promise.resolve(portableActivationSummary()) },
+      });
+      manager.start(claim("0.2.12"));
+      await waitForPhase(manager, "succeeded");
+      const stored = localState.readRuntimeState().lastSession;
+      expect(stored?.phase).toBe("succeeded");
+      expect(stored?.lifecycle.progress).toEqual({ completedBytes: 789, totalBytes: 789 });
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("requests identity-bound orderly shutdown only after native handoff acceptance is durable", async () => {
     const requestShutdown = vi.fn().mockResolvedValue(undefined);
     const activationId = "c".repeat(32);

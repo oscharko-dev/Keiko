@@ -26,6 +26,7 @@ import {
 import {
   ACTIVITY_LOG_POLICY_SETTINGS,
   applyActivityLogRetention,
+  activityLogOrphanOwner,
   isSoleActivityLogWriter,
   readActivityLogPolicyRecord,
   resolveActivityLogStorageConfig,
@@ -348,6 +349,54 @@ describe("isSoleActivityLogWriter (#3554)", () => {
         identity(self.pid, self.instanceId, () => true),
       ),
     ).toBe(false);
+  });
+});
+
+describe("Activity Log colliding writer instance ids", () => {
+  it.each([
+    { pid: 11, instanceId: "10101010", alive: true, expected: undefined, sole: false },
+    { pid: 11, instanceId: "10101010", alive: false, expected: "exited", sole: true },
+    { pid: 11, instanceId: "11111111", alive: true, expected: undefined, sole: false },
+    { pid: 10, instanceId: "10101010", alive: true, expected: "same-process", sole: true },
+    { pid: 10, instanceId: "11111111", alive: true, expected: "exited", sole: true },
+  ])("retains PID ownership for $pid/$instanceId (alive: $alive)", (peer) => {
+    const entry = segmentEntry("active", peer.pid, peer.instanceId);
+    if (entry.file.kind !== "active") throw new Error("expected an active segment");
+    const context = {
+      pid: 10,
+      instanceId: "10101010",
+      currentName: undefined,
+      nowMs: entry.file.startMs + 1000,
+      segmentSeconds: 3600,
+      isAlive: (): boolean => peer.alive,
+    };
+    expect(activityLogOrphanOwner({ ...entry, file: entry.file }, context)).toBe(peer.expected);
+    expect(isSoleActivityLogWriter([entry], context)).toBe(peer.sole);
+  });
+
+  it("preserves shared policy for a live peer with a colliding instance id", () => {
+    const directory = makeLogsDir();
+    writeActivityLogPolicyRecord(directory, directory, { schemaVersion: 1, ...VALUES_A });
+    seedActiveSegment(directory, 11, "10101010");
+    const outcome = resolveActivityLogStorePolicy(
+      directory,
+      directory,
+      VALUES_B,
+      identity(10, "10101010", () => true),
+    );
+    expect(outcome).toStrictEqual({
+      ...VALUES_A,
+      conflict: {
+        resolution: "adopted",
+        conflictingSettings: [...ACTIVITY_LOG_POLICY_SETTINGS],
+        stored: VALUES_A,
+        requested: VALUES_B,
+      },
+    });
+    expect(readActivityLogPolicyRecord(directory, directory)).toStrictEqual({
+      schemaVersion: 1,
+      ...VALUES_A,
+    });
   });
 });
 

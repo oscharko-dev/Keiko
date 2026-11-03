@@ -68,6 +68,12 @@ export interface WorkspaceDescriptorUtf8Read {
   readonly rawText: string;
   readonly sizeBytes: number;
   readonly stat: WorkspaceStat;
+  /**
+   * The exact bytes the descriptor read returned, of which `rawText` is the UTF-8 decoding. A
+   * reader of a binary file (an image the human attached, #3906) needs them undecoded; absent on a
+   * port that only serves text.
+   */
+  readonly bytes?: Buffer | undefined;
 }
 
 /** The owning read lane must declare whether a stable hard link is within its authority. */
@@ -670,7 +676,12 @@ function readFileUtf8WithinRootSameDescriptor(
       }
     },
   );
-  return { rawText: read.bytes.toString("utf8"), sizeBytes: read.bytes.length, stat: read.stat };
+  return {
+    rawText: read.bytes.toString("utf8"),
+    sizeBytes: read.bytes.length,
+    stat: read.stat,
+    bytes: read.bytes,
+  };
 }
 
 async function readFileBytesSameDescriptorAsync(

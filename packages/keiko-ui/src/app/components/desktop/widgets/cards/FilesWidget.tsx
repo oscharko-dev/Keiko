@@ -5,7 +5,7 @@ import {
   type OptionalWidgetTranslate as I18nTranslate,
 } from "@/lib/optional-widget-i18n";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type {
   Dispatch,
   KeyboardEvent as ReactKeyboardEvent,
@@ -50,6 +50,8 @@ import {
 import { FilesRootBar } from "./FilesRootBar";
 import { SupportReportButton } from "../../SupportReportButton";
 import { correlationIdOf } from "@/lib/client-error-summary";
+import { newClientCorrelationId } from "@/lib/bff-correlation";
+import { reportFilesScopeDecision } from "@/lib/client-diagnostics";
 import { useFilesNavigation } from "./useFilesNavigation";
 import {
   GIT_REPOSITORY_STATE_INVALIDATED_EVENT,
@@ -184,6 +186,20 @@ interface DirectoryState {
   // Non-error empty state ("no folder is open"): rendered as a plain note WITHOUT the Retry
   // button — retrying cannot change anything when no root is configured (audit C021).
   readonly notice: "no-root" | null;
+}
+
+function directoryReadState(
+  previous: DirectoryState | undefined,
+  patch: Partial<DirectoryState>,
+): DirectoryState {
+  return {
+    entries: previous?.entries ?? [],
+    truncated: previous?.truncated ?? false,
+    loading: false,
+    error: null,
+    notice: null,
+    ...patch,
+  };
 }
 
 interface GitStatusState {
@@ -598,23 +614,67 @@ function gitDirectoryLabel(aggregate: GitDirectoryAggregate, t: FilesWidgetTrans
   return t(gitDirectoryLabelKey(aggregate), { count: aggregate.count });
 }
 
-const filesTreeRequests = new Map<string, Promise<FilesTreeResponse>>();
+interface FilesTreeRead {
+  readonly response: FilesTreeResponse;
+  readonly correlationId: string;
+}
+const filesTreeRequests = new Map<string, Promise<FilesTreeRead>>();
 const gitStatusRequests = new Map<string, Promise<GitRepositoryStatusResponse>>();
+
+function reportRootResolution(correlationId: string, replaced: boolean): void {
+  reportFilesScopeDecision(correlationId, {
+    decision: replaced ? "root-replaced" : "root-normalized",
+  });
+}
+
+function childRootChanged(
+  path: string,
+  resolved: string,
+  observed: { readonly resolved: string } | null,
+): boolean {
+  return path !== "" && observed?.resolved !== resolved;
+}
+
+function readRootSuperseded(
+  requested: string | undefined,
+  observed: string | undefined,
+  response: string,
+): boolean {
+  return requested !== observed && response !== observed;
+}
+
+function claimDirectoryRead(
+  owners: Map<string, symbol>,
+  path: string,
+): { readonly isCurrent: () => boolean; readonly release: () => void } {
+  const token = Symbol();
+  owners.set(path, token);
+  return {
+    isCurrent: (): boolean => owners.get(path) === token,
+    release: (): void => {
+      if (owners.get(path) === token) owners.delete(path);
+    },
+  };
+}
 
 function readSharedFilesTree(
   root: string,
   path: string,
   navigation?: FilesNavigationRead,
-): Promise<FilesTreeResponse> {
-  const key = `${root}\u0000${path}\u0000${navigation?.correlationId ?? ""}`;
+  fresh = false,
+): Promise<FilesTreeRead> {
+  const correlationId = navigation?.correlationId ?? newClientCorrelationId();
+  const key = `${root}\u0000${path}\u0000${fresh ? correlationId : (navigation?.correlationId ?? "")}`;
   const existing = filesTreeRequests.get(key);
   if (existing !== undefined) return existing;
   const request = observeFilesDirectoryRead(
-    (correlationId) => fetchFilesTree(root, path, correlationId),
-    navigation,
-  ).finally(() => {
-    filesTreeRequests.delete(key);
-  });
+    (readCorrelation) => fetchFilesTree(root, path, readCorrelation),
+    navigation ?? { correlationId, settle: (): void => undefined },
+  )
+    .then((response): FilesTreeRead => ({ response, correlationId }))
+    .finally(() => {
+      filesTreeRequests.delete(key);
+    });
   filesTreeRequests.set(key, request);
   return request;
 }
@@ -790,6 +850,10 @@ export function FilesWidget({
   // (real) root whenever the widget loads a folder, so it always shows where we are.
   const [rootDraft, setRootDraft] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const selectedPathRef = useRef(selectedPath);
+  useLayoutEffect((): void => {
+    selectedPathRef.current = selectedPath;
+  }, [selectedPath]);
   const navigation = useFilesNavigation(
     apiRoot,
     onRootChange,
@@ -819,6 +883,14 @@ export function FilesWidget({
   const treeTooltipTimerRef = useRef<number | null>(null);
   const treeTooltipPointerRef = useRef({ x: 0, y: 0 });
   const directoryLoadSeqRef = useRef(0);
+  const directoryReadOwnersRef = useRef(new Map<string, symbol>());
+  useEffect(() => {
+    const owners = directoryReadOwnersRef.current;
+    return (): void => {
+      directoryLoadSeqRef.current += 1;
+      owners.clear();
+    };
+  }, []);
   // GEN-PERF-MEMORY-005 — LRU access order (oldest-first) for the directories cache, and a
   // live mirror of `expanded` so the pruning step (run inside loadDirectory) can pin the
   // visible chain without adding `expanded` to loadDirectory's dependency list.
@@ -966,82 +1038,157 @@ export function FilesWidget({
     };
   }, [configuredRoot]);
 
-  const loadDirectory = useCallback(
-    async (path: string): Promise<void> => {
-      const requestSeq = directoryLoadSeqRef.current;
-      const requestRoot = apiRoot;
-      const isStale = (): boolean =>
-        requestSeq !== directoryLoadSeqRef.current || requestRoot !== apiRootRef.current;
-      if (apiRoot.length === 0) {
-        setDirectories((current) => ({
-          ...current,
-          [path]: {
-            entries: [],
-            truncated: false,
-            loading: false,
-            error: null,
-            notice: "no-root",
-          },
-        }));
-        return;
+  const resetVisibleFiles = useCallback((): void => {
+    setSelectedPath(null);
+    setGitDiffState(null);
+    previousDirectoryRef.current = null;
+    setExpanded(new Set([""]));
+    setDirectories({});
+    setDirectoryRenderLimits({});
+    directoryAccessOrderRef.current = [];
+  }, []);
+
+  const observeRoot = useCallback(
+    (requestRoot: string, resolved: string, correlationId: string): boolean => {
+      const observed = observedRootRef.current;
+      const previousRoot = observed?.resolved ?? requestRoot;
+      const sameRoot = previousRoot === resolved;
+      const changedRoot = observed !== null && !sameRoot;
+      const selected = sameRoot ? selectedPathRef.current : null;
+      if (!sameRoot) {
+        reportRootResolution(correlationId, changedRoot);
+        setSelectedPath(null);
       }
-      setDirectories((current) => ({
-        ...current,
-        [path]: {
-          entries: current[path]?.entries ?? [],
-          truncated: current[path]?.truncated ?? false,
-          loading: true,
-          error: null,
-          notice: null,
-        },
-      }));
-      try {
-        const response = await readSharedFilesTree(apiRoot, path, takeNavigationRead(path));
-        if (isStale()) return;
-        if (path === "") {
-          observedRootRef.current = { requested: requestRoot, resolved: response.root };
-          setResolvedRootValue(response.root);
-          activeFileChangeRef.current?.(null, response.root, currentDirectoryRef.current);
-        }
-        touchDirectoryAccess(path);
-        setDirectories((current) => {
-          const next = {
+      if (changedRoot) {
+        directoryLoadSeqRef.current += 1;
+        resetVisibleFiles();
+        visitDirectory(null);
+      }
+      observedRootRef.current = { requested: requestRoot, resolved };
+      setResolvedRootValue(resolved);
+      activeFileChangeRef.current?.(
+        selected,
+        resolved,
+        changedRoot ? null : currentDirectoryRef.current,
+      );
+      return changedRoot;
+    },
+    [resetVisibleFiles, visitDirectory],
+  );
+
+  const observeDirectoryRoot = useCallback(
+    (
+      path: string,
+      requestRoot: string,
+      resolved: string,
+      correlationId: string,
+      refreshRoot: () => void,
+    ): boolean => {
+      if (path === "") {
+        observeRoot(requestRoot, resolved, correlationId);
+        return true;
+      }
+      if (!childRootChanged(path, resolved, observedRootRef.current)) return true;
+      const replaced = observeRoot(requestRoot, resolved, correlationId);
+      refreshRoot();
+      return !replaced;
+    },
+    [observeRoot],
+  );
+
+  const patchDirectory = useCallback((path: string, patch: Partial<DirectoryState>): void => {
+    setDirectories((current) => ({
+      ...current,
+      [path]: directoryReadState(current[path], patch),
+    }));
+  }, []);
+  const publishDirectoryRead = useCallback(
+    (path: string, response: FilesTreeResponse): void => {
+      touchDirectoryAccess(path);
+      setDirectories((current) =>
+        pruneDirectoryCache(
+          {
             ...current,
-            [path]: {
+            [path]: directoryReadState(undefined, {
               entries: response.entries,
               truncated: response.truncated,
-              loading: false,
-              error: null,
-              notice: null,
-            },
-          };
-          // GEN-PERF-MEMORY-005 — bound the cache, pinning the visible expanded chain.
-          return pruneDirectoryCache(
-            next,
-            directoryAccessOrderRef.current,
-            pinnedDirectoryPaths(
-              new Set([...expandedRef.current, currentDirectoryRef.current ?? ""]),
-            ),
-          );
-        });
+            }),
+          },
+          directoryAccessOrderRef.current,
+          pinnedDirectoryPaths(
+            new Set([...expandedRef.current, currentDirectoryRef.current ?? ""]),
+          ),
+        ),
+      );
+    },
+    [touchDirectoryAccess],
+  );
+  const failDirectoryRead = useCallback(
+    (path: string, error: unknown): void => {
+      const refusal = directoryRefusalMessage(error, tGit);
+      patchDirectory(path, {
+        error: refusal ?? t("filesWidget.error.unableToReadFolder"),
+        expectedRefusal: refusal !== null,
+        correlationId: correlationIdOf(error),
+      });
+    },
+    [patchDirectory, t, tGit],
+  );
+
+  const loadDirectory = useCallback(
+    async function readDirectory(path: string, fresh = false): Promise<void> {
+      const requestSeq = directoryLoadSeqRef.current;
+      const requestRoot = apiRoot;
+      const requestResolvedRoot = observedRootRef.current?.resolved;
+      if (apiRoot.length === 0) {
+        patchDirectory(path, { entries: [], truncated: false, notice: "no-root" });
+        return;
+      }
+      const owner = claimDirectoryRead(directoryReadOwnersRef.current, path);
+      const isStale = (): boolean =>
+        requestSeq !== directoryLoadSeqRef.current ||
+        requestRoot !== apiRootRef.current ||
+        !owner.isCurrent();
+      patchDirectory(path, { loading: true });
+      try {
+        const { response, correlationId } = await readSharedFilesTree(
+          apiRoot,
+          path,
+          takeNavigationRead(path),
+          fresh,
+        );
+        if (
+          isStale() ||
+          readRootSuperseded(requestResolvedRoot, observedRootRef.current?.resolved, response.root)
+        ) {
+          reportFilesScopeDecision(correlationId, {
+            decision: "request-superseded",
+            mutationSurface: "files",
+          });
+          return;
+        }
+        if (
+          !observeDirectoryRoot(path, requestRoot, response.root, correlationId, (): void => {
+            void readDirectory("", true);
+          })
+        )
+          return;
+        publishDirectoryRead(path, response);
       } catch (error: unknown) {
         if (isStale()) return;
-        const refusal = directoryRefusalMessage(error, tGit);
-        setDirectories((current) => ({
-          ...current,
-          [path]: {
-            entries: current[path]?.entries ?? [],
-            truncated: current[path]?.truncated ?? false,
-            loading: false,
-            error: refusal ?? t("filesWidget.error.unableToReadFolder"),
-            expectedRefusal: refusal !== null,
-            correlationId: correlationIdOf(error),
-            notice: null,
-          },
-        }));
+        failDirectoryRead(path, error);
+      } finally {
+        owner.release();
       }
     },
-    [apiRoot, takeNavigationRead, t, tGit, touchDirectoryAccess],
+    [
+      apiRoot,
+      observeDirectoryRoot,
+      takeNavigationRead,
+      patchDirectory,
+      publishDirectoryRead,
+      failDirectoryRead,
+    ],
   );
 
   useEffect(() => {
@@ -1063,17 +1210,11 @@ export function FilesWidget({
     }
     observedRootRef.current = null;
     setDirectoryRoot(apiRoot);
-    setSelectedPath(null);
-    setGitDiffState(null);
-    previousDirectoryRef.current = null;
+    resetVisibleFiles();
     activeFileChangeRef.current?.(null, null, currentDirectoryRef.current);
     setResolvedRootValue(null);
-    setExpanded(new Set([""]));
-    setDirectories({});
-    setDirectoryRenderLimits({});
-    directoryAccessOrderRef.current = [];
     void loadDirectory("");
-  }, [apiRoot, hostResolvedRoot, loadDirectory]);
+  }, [apiRoot, hostResolvedRoot, loadDirectory, resetVisibleFiles]);
 
   const visibleBaseRoot = effectiveRoot;
   const visibleRootPath = displayPath(visibleBaseRoot, currentDirectoryPath);
@@ -2079,7 +2220,9 @@ export function FilesWidget({
   ): ReactNode => {
     return (
       <>
-        {state?.loading === true ? (
+        {/* A refresh retains its rows. Inserting a loading line above them moves a pressed row
+            before mouseup and loses the click; aria-busy reports refreshes without that reflow. */}
+        {state?.loading === true && state.entries.length === 0 ? (
           <output
             className="files-note"
             style={{ ...NATIVE_BLOCK_STYLE, paddingLeft: treeIndent(depth) + 18 }}
@@ -2199,6 +2342,7 @@ export function FilesWidget({
       <div // NOSONAR typescript:S6819 — required ARIA tree level, see the note above.
         className="tr-dir"
         role="group"
+        aria-busy={state?.loading === true}
       >
         {notices}
         {rows}
@@ -2325,13 +2469,33 @@ export function FilesWidget({
   );
 
   const renderGitSummary = (): ReactNode => {
-    if (gitSummary === null) return null;
     const state =
       gitStatusState.status?.state ?? (gitStatusState.error === null ? "loading" : "error");
     return (
-      <output className="files-git-status" data-state={state}>
+      // A non-repository result removes the message, while retaining its line prevents an
+      // asynchronous status response from moving the folder under an in-flight pointer press.
+      <output
+        className="files-git-status"
+        data-state={state}
+        aria-hidden={gitSummary === null ? true : undefined}
+        style={{
+          height: 33,
+          flexShrink: 0,
+          visibility: gitSummary === null ? "hidden" : undefined,
+        }}
+      >
         <GitIcon size={13} />
-        <span>{gitSummary}</span>
+        <span
+          style={{
+            minWidth: 0,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+          title={gitSummary ?? undefined}
+        >
+          {gitSummary ?? "\u00a0"}
+        </span>
         {canOpenGitDelivery ? (
           <button
             className="files-root-up"
@@ -2401,6 +2565,7 @@ export function FilesWidget({
         <div
           role="tree"
           aria-label={t("filesWidget.tree.label")}
+          aria-busy={directories[currentDirectoryPath ?? ""]?.loading === true}
           tabIndex={-1}
           onKeyDown={onTreeKeyDown}
         >

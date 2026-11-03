@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimeSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { isNativeActionPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { validateCodingWorkbenchRuntimeSnapshot } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type { UseCodingWorkbenchApprovalReviewResult } from "@/lib/useCodingWorkbenchApprovalReview";
@@ -25,18 +26,28 @@ export function StageReviewDiagnostic({
   readonly fileCount: number;
 }): null {
   useEffect(() => {
-    if (kind !== "git-stage") return;
-    reportClientDiagnostic(`[keiko] git stage review ${status}: files ${String(fileCount)}`);
+    if (kind !== "git-stage" && kind !== "git-unstage") return;
+    const action = kind === "git-stage" ? "stage" : "unstage";
+    reportClientDiagnostic(`[keiko] git ${action} review ${status}: files ${String(fileCount)}`);
   }, [kind, status, fileCount]);
   return null;
+}
+
+/** A native OpenCode policy ask (#3897) carries the action it waits on in the review channel. */
+export function isNativeActionPermission(
+  request: CodingWorkbenchRuntimePendingPermission | undefined,
+): boolean {
+  return isNativeActionPermissionRequest(request);
 }
 
 export function approvalReviewRequestId(
   request: CodingWorkbenchRuntimePendingPermission | undefined,
 ): string | undefined {
+  if (isNativeActionPermission(request)) return request?.requestId;
   switch (request?.actionKind) {
     case "file-edit":
     case "git-stage":
+    case "git-unstage":
     case "commit":
     case "push":
     case "pull-request":

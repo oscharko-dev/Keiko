@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded deterministic metadata intake repair; no skill, full search, browser, updater or epic acceptance",
+  "sourceParent": "72b9e5149f5e2d9e1b612dc4b07930cee6c11025",
+  "sourceFreeze": {
+    "artifact": "checkpoint43-source-freeze-v4.json",
+    "sha256": "ff7fa0be34a63c1b0b8a57856cf15139ed99c42d84b00ca811bf84dbf77d3e94"
+  },
+  "repair": {
+    "owner": "Existing question-channel dependency predicate and canonical metadata discovery/retention owner",
+    "primaryDiagnosticRoutingUnchanged": true,
+    "promptModelSkillAndGrantsUnchanged": true,
+    "metadataSources": "Existing admitted query selections plus canonical metadata already observed by lexical-search/repo.searchText. Each source anchor and ancestor remains scope-admitted and current canonical regular-file guarded.",
+    "excludedSources": [
+      "arbitrary JSON matches",
+      "unselected filename-discovery atoms",
+      "structural-only references",
+      "diagnostic references",
+      "assistant references",
+      "missing new output files"
+    ],
+    "logging": "Existing typed source-details metadata-injection reason and selected/omitted/read/byte counts; no new op or source-body logging."
+  },
+  "controls": {
+    "rootDemandBefore": {
+      "failed": 2,
+      "healthy": 5,
+      "log": {
+        "artifact": "checkpoint43-metadata-before-final.log",
+        "sha256": "5b552528259aabb7c6db797502884f5ded42218b26b2dfff22861314fe4dbee2"
+      }
+    },
+    "rootDemandAfter": {
+      "passed": 7,
+      "log": {
+        "artifact": "checkpoint43-metadata-after.log",
+        "sha256": "ca7686979d033258c991ab4c970c3f8b804e5c450aed715485ee1c95d3b8f7b9"
+      }
+    },
+    "nestedBeforePartialRepair": {
+      "failed": 2,
+      "healthy": 8,
+      "log": {
+        "artifact": "checkpoint43-nested-before.log",
+        "sha256": "145c69790add7f964e9f0e4c35bcea5304be9d7e7f67df2e5d4ba66fc5515670"
+      }
+    },
+    "nestedAfter": {
+      "passed": 10,
+      "log": {
+        "artifact": "checkpoint43-nested-after.log",
+        "sha256": "86ac4c9b545218dc3eda2890cec7c8a38c705c5b8943bb2aad5506e418ed659f"
+      }
+    },
+    "fullAffected": {
+      "suitesPassed": 6,
+      "testsPassed": 161,
+      "log": {
+        "artifact": "checkpoint43-v3-functional.log",
+        "sha256": "f5ddb32d33e31293f7f90ef66c7be0930c969b230e3a16e097ac00bf8acd9a41"
+      }
+    },
+    "finalCausal": {
+      "artifact": {
+        "artifact": "checkpoint43-causal-final.json",
+        "sha256": "4d292092e4fae7e0e61b822685b14bccedf8639cd1060138515de6fc092e43e0"
+      },
+      "parentFailed": 4,
+      "parentHealthy": 6,
+      "candidatePassed": 10,
+      "before": {
+        "artifact": "checkpoint43-causal-final-before.log",
+        "sha256": "e438069287b6651d9dd77dace2ed65a6aa6252f0620ddddbbfffc20764eedf79"
+      },
+      "after": {
+        "artifact": "checkpoint43-causal-final-after.log",
+        "sha256": "0256a4fa2ab4fab2f5ae568e356f6611cb2ea375fc5dcfd7338ef3585ca27267"
+      },
+      "testSha256": "561ff47a822693a81fb4e7dea63171c86ba6f1811f61ab68a2dfdad876e5e854"
+    }
+  },
+  "actualRetainedQuery": {
+    "classification": "Noninstrumented compiled production retriever, private exact-source mirror, original retained initial/feedback query hashes and original exploration grants; not a new native/model campaign",
+    "before": {
+      "artifact": "metadata43-private-before-allowed.log",
+      "sha256": "7363d0d3e4c7d24580dbc266a64ac46669a3c8c857bc0fca8579027d68b12d82"
+    },
+    "incompleteIntermediate": {
+      "artifact": "metadata43-private-after.log",
+      "sha256": "ee41ac10b762c2c138e748b1b71b4a3feff7f9d48a84974e497058b5000ac0c6"
+    },
+    "after": {
+      "artifact": "metadata43-private-after-complete-v2.log",
+      "sha256": "1100f31fdbb904267861ee8e99cc6826083d4440b1027311f4f54e1deda3ebe6"
+    },
+    "sourceSha256": "bd86aaddad352571ce4238cb047da126f2e66a2d93d98f7777fd322a1dbef659",
+    "emittedSha256": "64ec208d9a65a4529a625b82877ac0b5cd366d191ac6420e34519a81389031a9",
+    "modelCalls": 0,
+    "networkCalls": 0,
+    "phases": [
+      {
+        "phase": "initial",
+        "selectedFiles": 5,
+        "omissions": 0,
+        "usage": {
+          "searchCalls": 12,
+          "filesRead": 5,
+          "excerptBytes": 1807,
+          "modelInputTokens": 0,
+          "modelOutputTokens": 0,
+          "elapsedMs": 0,
+          "rerankCalls": 0
+        },
+        "buildManifestMaterialLines": 26,
+        "observedBuildManifestMaterialLines": 26
+      },
+      {
+        "phase": "feedback",
+        "selectedFiles": 5,
+        "omissions": 0,
+        "usage": {
+          "searchCalls": 16,
+          "filesRead": 5,
+          "excerptBytes": 1807,
+          "modelInputTokens": 0,
+          "modelOutputTokens": 0,
+          "elapsedMs": 0,
+          "rerankCalls": 0
+        },
+        "buildManifestMaterialLines": 26,
+        "observedBuildManifestMaterialLines": 26
+      }
+    ],
+    "beforeFeedback": {
+      "selectedFiles": 3,
+      "lowRelevanceOmissions": 2,
+      "excerptBytes": 832
+    },
+    "afterFeedback": {
+      "selectedFiles": 5,
+      "omissions": 0,
+      "excerptBytes": 1807
+    },
+    "commissioningFailures": "An initial private mirror under denied cache storage was refused without guard changes. A private coverage probe used the wrong range property and was corrected against the contract before any dependent claim; both observations remain retained."
+  },
+  "limits": [
+    "Private instrumented owner snapshots diagnose root intake only; they are not product/native or model qualification.",
+    "The initial one-line demand repair passed generic root controls but did not fix the actual nested query; that incomplete result remains retained.",
+    "No original failed model attempt is regraded; no new model call or acceptance checkbox change.",
+    "Both skills and all broader original criteria, native installed updates, final required checks/reviews and authorized dev merge remain open."
+  ],
+  "activityLog": {
+    "checksPassed": 7,
+    "log": {
+      "artifact": "checkpoint43-v3-activity.log",
+      "sha256": "03d7f39450a26ce9fa642f260e3ea3c01aae15bca531420d32e182c35310d960"
+    }
+  }
+}

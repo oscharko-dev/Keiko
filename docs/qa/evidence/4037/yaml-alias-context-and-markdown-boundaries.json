@@ -1,0 +1,490 @@
+{
+  "schemaVersion": 1,
+  "sourceParent": "284f877162be7f98b8ba7dbc931c41f473329c26",
+  "classification": "Bounded YAML alias/privacy and Markdown-boundary repair. Scoped source-bound evidence, not full redaction, skill, issue or release acceptance.",
+  "repair": [
+    "Index alias targets once per parsed document in canonical traversal order; use the nearest preceding anchor and reject unresolved aliases without expansion.",
+    "Resolve alias keys before existing sensitive-field classification; retain monotonic private propagation and cycle handling.",
+    "Recognize anchored first keys while preserving certified public scalar prose before later canonical Markdown code. Consume declined plain spans once.",
+    "Reject projected index snapshots older than version 12; existing body-free redaction diagnostics record revision 4."
+  ],
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0022-connected-context-privacy.md",
+      "sha256": "5599b4b5f791a096b63bdbcf36c32b95a15f8141879e0f47edfc055207344ce9"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-code.ts",
+      "sha256": "4211f45b3e72e27dc96561994a2981cbffeb06d66263796b0d783b2bb062f325"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.aliases.test.ts",
+      "sha256": "413878aee1a7d4b51146ef46ded38aab2ba356cf33a08dd0523eecf01df8c301"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.inference-work.test.ts",
+      "sha256": "516fadb88ab423a894f641fe2d8c9ab16897a90c5925fee8bc427c3896e501bc"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-yaml.ts",
+      "sha256": "ceafab0368a9b412984c319492c6b29e37e46be3439c1c45957d0efbe22d9491"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction.ts",
+      "sha256": "fd2e200a06cbbb6c04399346ca6395e6f2b38ec7761c23b03919d01161db3859"
+    },
+    {
+      "path": "packages/keiko-workspace/src/discovery.code-redaction.test.ts",
+      "sha256": "34808fcb0a3842ee81b12ec18ffe698961430411ab2131c8193b4b6b4c35877f"
+    },
+    {
+      "path": "packages/keiko-workspace/src/workspaceIndex.ts",
+      "sha256": "9d77303724be7c61c69baaa5ab10543be22b394d168ff8e80459a9899db44115"
+    }
+  ],
+  "freeze": {
+    "sourceSha256": "7dae7a856104a36b73fc53cbc5c36cf8f0d9311862ab528b50fb4fd72fa1218d",
+    "compiledSha256": "11b43f4c602f4336f22f367ac95aca0c3fd3bfbd60b21da7a0631507140b9846"
+  },
+  "focusedTestsPassed": 399,
+  "affectedBroad": {
+    "passed": 9024,
+    "failed": 0,
+    "existingSkipped": 4,
+    "reportSha256": "b54deb7b948379749a65d957e65b95495b953918ef204f0ff0c25021c5284d8a"
+  },
+  "affectedCoverage": {
+    "classification": "Affected code only, not repository-wide coverage.",
+    "linesPercent": 94.45,
+    "branchesPercent": 86.95,
+    "reportSha256": "6a6f535315c30b3b9f685bc84ffa83a885b2fe12335447b04db09a7177b788c1"
+  },
+  "independent": {
+    "packetSha256": "306ed200c2c83074d389b23cf5906b8602b5ca3c34338e992d47ceffc147c776",
+    "sourceAndCompiledIntegrityAfterTests": true,
+    "tests": {
+      "scopedPassed": 419,
+      "scopedFailed": 0,
+      "scopedSkipped": 0,
+      "aliasSurfaceRows": 52,
+      "aliasPartitions": 2234,
+      "workspaceOwnerRows": 9,
+      "rootAnchorRows": 9,
+      "declaredUnresolvedAliasRefusals": 3,
+      "actualMarkdownIntegrityRows": 12,
+      "yamlStreamPartitions": 848,
+      "strictParserEquivalence": 584,
+      "inferenceBoundaries": 16,
+      "crosslineBindings": 8,
+      "prefixFenceControls": 48,
+      "actualOldSnapshotVersionRejected": 11,
+      "actualRebuiltVersionAccepted": 12
+    },
+    "performance": [
+      {
+        "name": "yaml-alias-scaling-candidate81b.json",
+        "rows": 8,
+        "maximumDurationMs": 173.090084
+      },
+      {
+        "name": "anchor-prose-scaling-candidate81b.json",
+        "rows": 24,
+        "maximumDurationMs": 103.25120799999999
+      }
+    ],
+    "inheritedReplayExecutions": 25,
+    "evidence": [
+      {
+        "label": "redaction-candidate-81b-independent/capture.json",
+        "sha256": "50a4cf176477a002cdf136ad49ed0c27528df2d922853a1cbea652dc808247fa"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/checkpoint81b-source-freeze-v1.json",
+        "sha256": "7dae7a856104a36b73fc53cbc5c36cf8f0d9311862ab528b50fb4fd72fa1218d"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/checkpoint81b-compiled-freeze-v1.json",
+        "sha256": "11b43f4c602f4336f22f367ac95aca0c3fd3bfbd60b21da7a0631507140b9846"
+      },
+      {
+        "label": "candidate81b-own-scoped-tests.json",
+        "sha256": "9d463f2d90cb8403586fa3ace26c63fd52f98abcd5635d955616f2d49ccaa955"
+      },
+      {
+        "label": "yaml-alias-semantics-candidate81b.json",
+        "sha256": "63493ebf941505eaa0c1550bf51ad4da23986fcfad27c18e563fe6acfd0b8ffc"
+      },
+      {
+        "label": "yaml-alias-workspace-candidate81b.json",
+        "sha256": "b063679470456b65e5b9a787ed776c02a91943a598f4ad2e8f46ccba44580e14"
+      },
+      {
+        "label": "yaml-anchor-boundaries-candidate81b.json",
+        "sha256": "552aa5461b493e6b00fb5a9dc40eb388a3fd64d36480d3c94eb7303422d6fab9"
+      },
+      {
+        "label": "anchor-markdown-integrity-candidate81b.json",
+        "sha256": "3b12088a8255ff76fc65644e5e11091c710d80d5f5da42f3d36045d394640e59"
+      },
+      {
+        "label": "yaml-stream-binding-candidate81b.json",
+        "sha256": "f27e6c768d263c6cd2c7d673ffb826e228d0e52c3b65c531902ff63ce767b42a"
+      },
+      {
+        "label": "yaml-strict-duplicate-equivalence-candidate81b.json",
+        "sha256": "0eb7bb1ae0f2f260ccfbad8300147380f7dfc85c8f385fa75949d4bb0b730d5e"
+      },
+      {
+        "label": "yaml-inference-boundaries-candidate81b.json",
+        "sha256": "dcf89e38c68fed7064d69a780b0256b27b4e550d3d51ecdc27ad56e0d048006f"
+      },
+      {
+        "label": "yaml-crossline-binding-candidate81b.json",
+        "sha256": "21e5d1ee501980cea3481fbcd17f18d4e871cfc5e630d5e87f7696acc87cdcc6"
+      },
+      {
+        "label": "plain-prefix-fences-candidate81b.json",
+        "sha256": "465f0119c13b6e5b6999a1d856bd16d083b932393e7f2cd18586790c4287aae3"
+      },
+      {
+        "label": "alias-index-invalidation-candidate81b.json",
+        "sha256": "c435c7bb8cd6150b7bbb7f63458d85b8b7257530c1cf49f255395edbd20bce1e"
+      },
+      {
+        "label": "yaml-alias-scaling-candidate81b.json",
+        "sha256": "056b39ec08b97cdf049a969f5701a47c4bf5aab2a5eca16f3ff9984d7afc885d"
+      },
+      {
+        "label": "anchor-prose-scaling-candidate81b.json",
+        "sha256": "e0a714c1306ae27660ad1968bd70227ae35818ce035e02d66c121014b3bb1b5b"
+      },
+      {
+        "label": "yaml-alias-visits-v2-candidate81b.json",
+        "sha256": "150987c15a4be5033533ec829886faabff3c3a4242c304f9491bcf366d4b1ad9"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/independent-replay-execution.json",
+        "sha256": "b073c8b64d8fcd538d324d4cd43bea502978f45474a795df21f9fb02f9dfcd56"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-original-v3-independent.json",
+        "sha256": "d14e29c91701860a4741b58f24406715c10a5a703b4c4c4299ae7ae9eaea94c5"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-lexical-v2-independent.json",
+        "sha256": "b986e668d8c72e863e51d86ae14c13aae14b75f5465ccc0a11e7d17423116601"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-data-values-v3-independent.json",
+        "sha256": "1fb3428ac2bd6957a3cc86e6835debb0d6d789480a3ab6d4872bd9caae8650f4"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-assignment-v1-independent.json",
+        "sha256": "46951fad936b6f35b94db5c299a72dc41e8d2dbccad71c9eaa78b5631b2041a6"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-private-identifiers-v1-independent.json",
+        "sha256": "9658d32d731b6e3e92384c42efbe1538b2aa29ca3be1c21fda574c87fbd0c3fe"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-binding-alias-v1-independent.json",
+        "sha256": "e0b6c08058db8e2db3cfaf10fa97b46072d7921a710fb8193bca01f84203c7ac"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-json-lexical-v1-independent.json",
+        "sha256": "5971faecd04ffa4d15db7a6b3f777c1993cc9ab9f9360e097cf2cb85927af15b"
+      },
+      {
+        "label": "redaction-independent-matrix-v1/candidate-81b-bare-v2-independent.json",
+        "sha256": "a927dac8c47985524efff7e570b90ce92e4d82a6c849283808bd30b42ea92c41"
+      },
+      {
+        "label": "redaction-stream-partitions-v1/candidate-81b-format-v3-independent.json",
+        "sha256": "9a9bb42ba97d18640cad26cf08ddbf669540f7be6c0701f3267e8cd1d6c1beb2"
+      },
+      {
+        "label": "redaction-private-pending-cancellation-v1/candidate-81b.json",
+        "sha256": "72dca0844921aa72c3556bb2aead4c737639bc1ab639dc8421fa364b40f5c0b3"
+      },
+      {
+        "label": "redaction-activity-roundtrip-v1/candidate-81b.json",
+        "sha256": "e6d7e46496cb645cdb7c5906af978972410754f16231a6b3ee0248bb22543de3"
+      },
+      {
+        "label": "redaction-ambiguous-plain-v1/candidate-81b.json",
+        "sha256": "46e181c3c59c18d3f2a2f0631b480e1538ee636a6b21fd5f40d0d5efba075f09"
+      },
+      {
+        "label": "redaction-ambiguous-gateway-v1/candidate-81b.json",
+        "sha256": "f63634e18fafb8d252efc198b172134410034c0b2eb7b2da57144151d3519a9e"
+      },
+      {
+        "label": "redaction-pem-reentry-v1/candidate-81b.json",
+        "sha256": "1be7e3178bd57f5984ac3d07430ede61332365f8bb94354694211e5e4a2fec9e"
+      },
+      {
+        "label": "redaction-nested-yaml-v1/candidate-81b-independent.json",
+        "sha256": "63a366176ca279508d93ed56e5157598153e84d6961b4fa55c1d685459fb13b0"
+      },
+      {
+        "label": "redaction-source-boundaries-v1/candidate-81b-independent.json",
+        "sha256": "8df65bdf4b725771dae4691e0a14d2c49530836ecdc3ce1a7b4bb8ca796aaf4d"
+      },
+      {
+        "label": "redaction-http-independent-v1/candidate-81b-independent.json",
+        "sha256": "8a5a15f2ed6ca411809ee6df7e1fd9eb7e5c7072b3d89256f3e4d8f69e673758"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/gateway-14-rows.json",
+        "sha256": "649e8b93cdaf73442226cda7ef625b31246af8b2ee2310d2d5f99e7df8d55dca"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/chat-publication-6-rows.json",
+        "sha256": "5a7d8dab06f102c7024ae10b38ce42f1205a0d5f2cb0da7340f9956eaac79507"
+      },
+      {
+        "label": "redaction-source-edges-v1/overlapping-literals-candidate-81b.json",
+        "sha256": "09742d91f191bbe3f31874e729e6fb91fe4693a1bae546fbc5e41688e3b3a9cd"
+      },
+      {
+        "label": "redaction-pem-lexical-v1/candidate-81b-paired-parser-compatibility.json",
+        "sha256": "d93eb4be1adc3b00cb19e4795e69190d87c56f0c2b7cc5dcefa1b330195b8639"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/private-scalar-paired.json",
+        "sha256": "32759c86ad8dadcb77c86e2de131588b24768b229c1d0322c91de13b7198a32e"
+      },
+      {
+        "label": "redaction-stream-partitions-v1/candidate-81b-quoted-details.json",
+        "sha256": "8d32ca36817138b9a0a5873dec12a9c3c970911f4e6cc5d58db334aca0fdcfc8"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/extra-controls.json",
+        "sha256": "c20dc3bd4b7f9502f814154cea6f4f91a7ea3ceb48a56edf1fd1cee3b7629d4c"
+      },
+      {
+        "label": "redaction-candidate-81b-independent/private-repetition-compiled-pair.json",
+        "sha256": "59dfff1a21e767bd3e410780728344cdfe6a253b1e5fb0ba81424fc1f4fae99f"
+      },
+      {
+        "label": "candidate80-stream-oracle-reconciliation.json",
+        "sha256": "6299d90ddd941d65255bc17a387c79f716cbcf696b429f43f4e68e923b637267"
+      },
+      {
+        "label": "inline-source-boundary-candidate81b.json",
+        "sha256": "4a47435cb3e41c1e4a1b2f5b27043a8334b23edf1739e5d4e408dabc60d59219"
+      }
+    ]
+  },
+  "checks": [
+    {
+      "label": "checkpoint81b-typecheck-v3",
+      "receiptSha256": "c2b3f228d22ca63dffa871d3b262905d99d627350a1a9c9390b912b8b61cc608",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "label": "checkpoint81b-lint-v3",
+      "receiptSha256": "1d2b6c451943e2d2754fb4b6a22cd638df068e9df6930150883d8e7cadc42ee2",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "checkpoint81b-focused-green-v3",
+      "receiptSha256": "0447d66b66eff32785d00aaf1f5c6423b70293285f147bac17288e6ad781000b",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "5f1d00267ecd17379c5960683cda821acc642302e193be3862f9e9772ebf5db1"
+    },
+    {
+      "label": "checkpoint81b-affected-coverage-v1",
+      "receiptSha256": "3ce8e05d4a75638cc51c084e5a5873604a8fbcbbc5c8763f20bcea16b6b91616",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "865441c17b8a6830b663933d3a39356cd775d8a1de4e7095a2abdd9deefc8568"
+    },
+    {
+      "label": "checkpoint81b-format-v1",
+      "receiptSha256": "15852ee76de0f5d38fd1c48a612190bd4369ced1fb958c976a4458c067b33da8",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20"
+    },
+    {
+      "label": "checkpoint81b-sonar-v1",
+      "receiptSha256": "540d2710fe8dc86bb79a15b9c935401d1e6da1e1b9159ed24ccb14c79e5d62d6",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "f78767e45ba1665cdc5f82ac7d204212228dc47ed9a78aa103be54b1e21eaec2"
+    },
+    {
+      "label": "checkpoint81b-arch-v1",
+      "receiptSha256": "55977c7729505e4508c5130e05f5916d949794d5515eb72ad534ce5c94f71424",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "81983ecfb7665c1741e9068984a7b29aa855ac17ecf87a37e1671f0886302230"
+    },
+    {
+      "label": "checkpoint81b-arch-negative-v1",
+      "receiptSha256": "96a0a90594d7f282e44660c79b79b6f9aa1236707384fa4c3635d34b7a7025e0",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "3e024386847be2d39bc4cdb0b5829c7b2243a9bfc5887d6ec1f86e72abcff6df"
+    },
+    {
+      "label": "checkpoint81b-activity-v1",
+      "receiptSha256": "4d51b5e5a74c0e58110ab65bc110ff3da09bcbd51dcf86fe71baaf30f6afd63e",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "ffd3a3192d3a8636e470b6748e645e22362939d572d77e6a932c7afbd550f00e"
+    },
+    {
+      "label": "checkpoint81b-retrieval-v1",
+      "receiptSha256": "176b1ba6b5b37eaaa7e1a920514e3ed9b737c2eae38eaeac905185875ba5a554",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "445e6b8f0bbe8000a835aeb9638b2e825cefa7fa72f2e299d50a63e77d457540"
+    },
+    {
+      "label": "checkpoint81b-grounded-retrieval-v1",
+      "receiptSha256": "71fae7e05209cc1da51e2c693e584b1d9a3ad1d3b4dd3fed38bf0662c887ae05",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e67d8c1c0dd1eb7195e6135d7e761636176e7b6f8cdaeda7b24b75670f26db8f"
+    },
+    {
+      "label": "checkpoint81b-faithfulness-v1",
+      "receiptSha256": "489f64c8fb28b9789b6ec113bca59d20654467c1d9688defb7f5a51d822959fd",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "fdd38052b4664f551a607833d9165fcf7aeb9f337195541781bf2d7f2c63c5e2"
+    },
+    {
+      "label": "checkpoint81b-context-v1",
+      "receiptSha256": "d5bc1074e9433483655444a36475c10d9a1635c8d2f378c6805a4f3f043c3729",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "1f71b61fc7531dec7c1fcb9356534b503999cdbfabc4b22b00b06c4a98c1d902"
+    },
+    {
+      "label": "checkpoint81b-observability-v1",
+      "receiptSha256": "a1dee35d5be6734af99d94ed5543e18f0a3909e5c2abd49af38b1485387d5d1c",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "098043d3017c53b1af2ac6327a2eb03c183fbb2b28acadc08885acd9befd0c9d"
+    },
+    {
+      "label": "checkpoint81b-adr-v1",
+      "receiptSha256": "17a6c3a4b672ce7df0c720c93ee8bb3f4ded2f9fbaecd9c9a16e1b8705ec51df",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    {
+      "label": "checkpoint81b-final-integrity-v1",
+      "receiptSha256": "bfd13e6ebda433af9d2594db3f7c65311860ba5f639d3d1ccfd2b6f3747b3ad4",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "retainedFailures": [
+    {
+      "label": "checkpoint81-alias-red-v1",
+      "receiptSha256": "bb5a8b245a51b4ebde77be01fe5ff0f63fa91cf578fa4839dfcb565de315cd57",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint81-workspace-alias-red-v1",
+      "receiptSha256": "486effcb53003901bc176263c239e0f8a16dcdbdbb07f402425a6b7b8c8db51f",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint81-alias-sonar-v1",
+      "receiptSha256": "61b082e003799e3e1d7866fb5e758ca0d34d733582e42e880391cfb92ced6e24",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint81-anchor-markdown-red-v1",
+      "receiptSha256": "fdc8e16fda62e13739592b99fe73a7b54a5e7ca1b09af0986f0e9d6f8dc0192b",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint81b-focused-green-v1",
+      "receiptSha256": "de1a9f55e336af2aa9eab52afb06d147a2046c0def79c7fb390e877395840890",
+      "exitCode": 1
+    },
+    {
+      "label": "checkpoint81b-lint-v2",
+      "receiptSha256": "2258e8073d7db35e7418e578dd0f789c3d412f48257de2b40a6ec79e86395097",
+      "exitCode": 1
+    }
+  ],
+  "retainedLegacyFailure": {
+    "classification": "Immediate PUBLIC: mapping publication is incompatible with later private bindings. Original row remains red and byte-identical to80c; separate prose-progress/cancellation controls and prior reconciliation retained.",
+    "rows": [
+      {
+        "label": "extra-controls",
+        "violations": 1
+      }
+    ]
+  },
+  "additionalUnscopedRun": {
+    "classification": "An additional full-root run was intentionally stopped to return to scoped acceptance work. It earns no acceptance credit; the final full matrix remains open.",
+    "exitCode": 130,
+    "receiptSha256": "79ee554006d0c09d446fe6a04bcbc4759f5cca0a7a24cdb4854dada38a916e47",
+    "stopReasonSha256": "9182a73ad98a22b676d4d02c8a07294ea1486646ebf72a87cb3760883bd2fbf8",
+    "sourceAndCompiledUnchanged": true
+  },
+  "liveJavaFirstDraft": {
+    "classification": "Complete same-case frozen77 UI matrix, unchanged questions, skills, grants and generated files. Correctness and conventions are separate; not unused-task acceptance or a statistically established skill benefit.",
+    "runs": 12,
+    "skillCorrectApplicationsPassed": 6,
+    "skillCorrectApplicationsTotal": 6,
+    "controlCorrectApplicationsPassed": 5,
+    "controlCorrectApplicationsTotal": 6,
+    "validBaselines": 11,
+    "mutationsDetectedPerValidBaseline": 6,
+    "mutationsPerBaseline": 6,
+    "skillOutputsPassingNaming": 5,
+    "skillOutputsTotal": 6,
+    "controlOutputsPassingNaming": 6,
+    "controlOutputsTotal": 6,
+    "commonEvaluationSha256": "c11fc571e99ea4c08076be2d2ae4d8fc79df1845b37a7213db8dc250abcfcc3c",
+    "conventionObservationSha256": "9c504ad5b176fa29979eb87cb00493f5af7ad8398d6e4b4c27722125948640db",
+    "independentCommonEvaluationSha256": "fcebbc4c9ff7e3cba72a2e8d055689d33e4555a5c4358555edb9c3957223cee7",
+    "independentConventionsSha256": "925adafacf655b1c3f11ed9b9ec897eeea45f14a496e015e1809513cd8b82745"
+  },
+  "serializedSkillAndThinkingObservation": {
+    "classification": "All 24 original Java/React calls contain the full skill exactly once when selected, absent for controls; all 24 report positive reasoning tokens. This checks the passive serialized-provider boundary, not backend rendering, model attention, contiguous complete-source delivery or quality benefit. Thinking remains at its existing enabled default; no Composer change.",
+    "receiptSha256": "7115c5d4518581a2fc3c9bb61479a486d779f4d9eb1b87071410bbfc737667f9",
+    "independentReceiptSha256": "1552f600e0bba93e4679d3ea0cfea3383d52eaba663daad5a324b53f333ee005"
+  },
+  "boundedDiagnosticRepair": {
+    "classification": "Separate live UI phase, maximum two actual diagnostic feedback turns per failed original output; original first drafts remain unchanged. First skill naming repair passes locally with 14 generated tests, all eight method names and six mutations after one feedback; independent repaired-output reconciliation and the remaining control/React repairs are pending.",
+    "planSha256": "5f5eefa0659149205d4315f57ce5f16aa5c1e662de29b49e2f0d0a20a993bd6b",
+    "firstRepairCommonSha256": "656b7013950adc3770c256019856cb6fb38b08ae470ff4b51f86e6ebc90198fe"
+  },
+  "knownOpen": [
+    "Inline-source P1: typed sensitive assignments and escaped JSON keys inside inline Markdown can leak, and public declarations can be damaged. Independent 20-row/1111-partition reproduction retains four leaking rows, 264 leaking partitions and four damaged public-code rows. Separate owning repair is next.",
+    "Two separately reproduced consumer assertions for public workflow diff preservation and fenced JSON hint extraction require causal diagnosis and repair; no full consumer regression acceptance.",
+    "React first drafts remain 0/6 skill and 0/6 control correct-subject passes. Bounded repair, genuinely unused tasks, convention compliance and skill benefit remain unaccepted.",
+    "Vendor dependency override resolution, installed/native updates and SSD continuity, cross-browser trust/drafts, broad search/chat/context and original historical acceptance remain open.",
+    "Final exact-head complete local/CI matrix, all review settlements and owner-authorized dev integration remain open. Auto-merge remains disabled."
+  ],
+  "promptsSkillsAndGrantsChanged": false,
+  "overallAcceptance": false,
+  "independentConsumerRegressions": {
+    "classification": "Separately reproduced existing consumer assertions, pending causal repair; the scoped alias repair does not clear these failures. Linux-specific FS results remain separate.",
+    "passed": 136,
+    "failed": 2,
+    "skipped": 0,
+    "receiptSha256": "136345b529b6443f5aaeb6318abb21f637d8b542d849f07d83541441064e1bac",
+    "observations": [
+      "A workflow proposedDiff loses expected public arithmetic source.",
+      "Figma fenced top-level JSON hint array becomes empty."
+    ]
+  }
+}

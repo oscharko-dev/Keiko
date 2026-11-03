@@ -1,0 +1,195 @@
+/* The `@` file picker, the `/` command menu, the referenced-file chips and the delivery notice of the
+   Coding Workbench composer (ADR-0137 D10). Component-scoped on purpose: globals.css is behind a
+   visual-proof gate. */
+
+.cmpPicker {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-2);
+  min-inline-size: 0;
+  margin: 0 0 var(--space-2);
+  padding: 8px;
+  border: 1px solid var(--popover-border, var(--border-subtle));
+  border-radius: var(--radius-surface);
+  background: var(--popover-surface, var(--card-surface));
+  color: var(--text-primary);
+}
+
+.cmpPickerStatus {
+  display: block;
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.cmpPickerStatus[data-state="error"] {
+  color: var(--feedback-danger);
+}
+
+.cmpPickerList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.cmpOption {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cmpOption:hover,
+.cmpOption:focus-visible,
+.cmpOption[data-highlighted="true"] {
+  border-color: var(--accent-line);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.cmpOptionIcon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+}
+
+.cmpOptionText {
+  display: grid;
+  min-width: 0;
+}
+
+.cmpOptionName,
+.cmpOptionDirectory {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpOptionName {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cmpOptionDirectory {
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+}
+
+/* A command option has no icon: its name and one line of description fill the row. */
+.cmpCommandOption {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cmpOptionDescription {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-tertiary);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpPickerAction {
+  justify-self: start;
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: var(--text-caption);
+  cursor: pointer;
+}
+
+.cmpPickerAction:hover {
+  border-color: var(--accent-line);
+  background: color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.cmpPickerAction:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmpChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 var(--space-2);
+  padding: 4px 2px;
+  list-style: none;
+}
+
+.cmpChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: min(340px, 100%);
+  min-height: 30px;
+  padding: 3px 4px 3px 7px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--accent) 7%, var(--card-surface));
+  color: var(--text-primary);
+}
+
+.cmpChipPath {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cmpChipRemove {
+  display: grid;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.cmpChipRemove:hover {
+  background: var(--button-secondary-surface-hover);
+  color: var(--button-secondary-text);
+}
+
+.cmpChipRemove:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.cmpNotice {
+  display: block;
+  margin: var(--space-2) 0 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+  overflow-wrap: anywhere;
+}
+
+.cmpNotice[data-state="failed"] {
+  color: var(--feedback-warning);
+}

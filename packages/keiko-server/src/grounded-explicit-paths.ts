@@ -21,6 +21,8 @@ import {
 } from "@oscharko-dev/keiko-workflows";
 import {
   DEFAULT_SEARCH_LIMITS,
+  isDocumentBasenameShorthand,
+  matchesDocumentBasenameStem,
   FileTooLargeError,
   PathDeniedError,
   discoverWorkspacePaths,
@@ -451,12 +453,20 @@ async function classifyHumanSelectedFile(
   }
 }
 
+function isDocumentStem(reference: ExplicitPathReference): boolean {
+  return isDocumentBasenameShorthand(reference.path);
+}
+
 async function basenamePaths(
   reference: ExplicitPathReference,
   inputs: AdmissionInputs,
 ): Promise<readonly string[]> {
   if (inputs.scope.kind === "files")
-    return inputs.scope.relativePaths.filter((path) => path.split("/").at(-1) === reference.path);
+    return inputs.scope.relativePaths.filter((path) =>
+      isDocumentStem(reference)
+        ? matchesDocumentBasenameStem(path, reference.path)
+        : path.split("/").at(-1) === reference.path,
+    );
   const directories = inputs.scope.kind === "directory" ? inputs.scope.relativePaths : [""];
   const paths = new Set<string>();
   for (const [index, directory] of directories.entries()) {
@@ -475,7 +485,9 @@ async function basenamePaths(
         nowMs: inputs.nowMs,
         deadlineAtMs: inputs.deadlineAtMs,
         signal: inputs.signal,
-        exactBasename: reference.path,
+        ...(isDocumentStem(reference)
+          ? { documentStem: reference.path }
+          : { exactBasename: reference.path }),
       },
       inputs.fs,
     );

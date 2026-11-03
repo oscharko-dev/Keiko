@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deriveContextProfile } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { DEFAULT_EXPLORATION_BUDGET } from "@oscharko-dev/keiko-contracts/connected-context";
 import { runConnectedRetrievalEval } from "./grounded-eval-support.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
 import { observedFailureQuery } from "../../../tests/support/observed-failure-query.js";
@@ -44,6 +45,22 @@ describe("actual follow-up completion evidence capacity", () => {
     );
     expect(completed).toHaveLength(2);
     expect(completed.every((event) => event.extra?.usageElapsedMs !== undefined)).toBe(true);
+  });
+
+  it("retains supported budget-skip evidence after actually exhausting admission", async () => {
+    const log = createBufferedServerLogSink();
+    const result = await runConnectedRetrievalEval({
+      files: { "src/Feature.ts": "export const Feature = 1;\n" },
+      query: "Explain src/Feature.ts",
+      budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 1 },
+      activityLog: log,
+      answerer: {
+        answer: (): Promise<string> => Promise.resolve("Feature is 1 [src/Feature.ts:1]."),
+      },
+    });
+    expect(result.pack.usage.searchCalls).toBe(1);
+    expect(observedFailureQuery(log.events).integrity.corruptLineCount).toBe(0);
+    expect(log.lines().join("\n")).not.toContain("_truncatedFieldCount");
     expect(
       log.events
         .filter((event) => event.op === "search.connected-context.completion-details")

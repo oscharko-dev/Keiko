@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   containsNumberedCompoundQueryTerm,
+  expandedQueryTermGroups,
   expandedQueryTerms,
   naturalLanguageSubjectText,
 } from "./repoSearchQueryTerms.js";
@@ -33,6 +34,13 @@ describe("complete numbered compound spelling", () => {
 });
 
 describe("expandedQueryTerms", () => {
+  it("bounds expanded groups even when a word compound has thousands of parts", () => {
+    const groups = expandedQueryTermGroups("Maple-Account-".repeat(20_000) + "Partner", false);
+    expect(groups.flat().length).toBeLessThanOrEqual(48);
+    expect(groups[0]).toContain("maple");
+    expect(groups[1]).toContain("account");
+  });
+
   it("derives source identifiers from test-style names", () => {
     const terms = expandedQueryTerms("Where is PaymentServiceTest implemented?", false);
     expect(terms).toContain("paymentservicetest");

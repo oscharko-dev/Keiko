@@ -10,6 +10,38 @@ import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
   it.each(["en", "de"] as const)(
+    "explains unavailable Chat capabilities and Jira remedies in %s",
+    async (locale) => {
+      await loadLocaleMessages(locale);
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      try {
+        const error = new ApiError(
+          "CONVERSATION_UNAVAILABLE_MODEL",
+          "Jira access requires verified tool calling.",
+          400,
+        );
+        error.correlationId = "tool-capability-proof";
+        const notice = toUserErrorNotice(error, "Could not send message.");
+        expect(notice.title).toBe(
+          locale === "de" ? "Modellfunktion nicht verfügbar" : "Model capability unavailable",
+        );
+        expect(notice.remediation).toBe(
+          locale === "de"
+            ? "Wähle ein einsatzbereites Chat-Modell. Prüfe für den Jira-Zugriff Tool-Calling unter Einstellungen > Modelle oder trenne den Jira-Pod."
+            : "Select a ready Chat model. For Jira access, run the tool-calling check in Settings > Models or disconnect the Jira Pod.",
+        );
+        expect(notice.correlationId).toBe("tool-capability-proof");
+        expect(notice.code).toBe("CONVERSATION_UNAVAILABLE_MODEL");
+        expect(formatUserError(error, "Could not send message.")).toContain(
+          "CONVERSATION_UNAVAILABLE_MODEL",
+        );
+      } finally {
+        window.localStorage.removeItem(I18N_STORAGE_KEY);
+        resetLoadedMessageCatalogs();
+      }
+    },
+  );
+  it.each(["en", "de"] as const)(
     "localizes caller admission without claiming context overflow (%s)",
     async (locale) => {
       await loadLocaleMessages(locale);

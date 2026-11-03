@@ -1,3 +1,4 @@
+import { currentProcessId } from "@oscharko-dev/keiko-security/process-scope";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { UpdateActivationWalState, UpdateSession } from "@oscharko-dev/keiko-contracts";
@@ -96,7 +97,7 @@ export function createPortableHandoffCurrentProcessResolver(input: {
     if (!validCurrentProcessInput(input, launchId, portText, port)) {
       fail("portable handoff current process identity is unavailable");
     }
-    const pid = input.pid ?? process.pid;
+    const pid = input.pid ?? currentProcessId();
     if (!Number.isSafeInteger(pid) || pid < 1 || pid > 2_147_483_647) {
       fail("portable handoff current process identity is unavailable");
     }
@@ -246,11 +247,17 @@ function createRecoveryReadActivation(
   };
 }
 
-function releaseRecoveredOwnership(options: ProductionPortableHandoffRuntimeOptions): void {
-  if (options.recoveryOwnership === undefined) return;
-  if (!releaseStateDirUpdateSessionLockForRecovery(options.stateDir, options.recoveryOwnership)) {
+function releaseRecoveredOwnership(
+  options: ProductionPortableHandoffRuntimeOptions,
+  sessionId: string,
+): void {
+  if (
+    options.recoveryOwnership !== undefined &&
+    !releaseStateDirUpdateSessionLockForRecovery(options.stateDir, options.recoveryOwnership)
+  ) {
     fail("portable recovery ownership changed before release");
   }
+  options.sessionLock.release(sessionId);
 }
 
 function persistTerminalRecovery(input: {
@@ -273,7 +280,7 @@ function persistTerminalRecovery(input: {
     activationWal: settled ? undefined : input.activationWal,
     recovery: recoveryState(input.now, input.sessionId, settled ? "settled" : "reconciling"),
   });
-  if (settled) releaseRecoveredOwnership(input.options);
+  if (settled) releaseRecoveredOwnership(input.options, input.sessionId);
 }
 
 function persistActiveRecovery(input: {
@@ -300,7 +307,7 @@ function persistActiveRecovery(input: {
     activationWal: settled ? undefined : input.activationWal,
     recovery: recoveryState(input.now, input.sessionId, settled ? "settled" : "reconciling"),
   });
-  if (settled) releaseRecoveredOwnership(input.options);
+  if (settled) releaseRecoveredOwnership(input.options, input.sessionId);
 }
 
 function persistRecoveredActivation(
@@ -358,7 +365,7 @@ function settleRestoredActivation(
         portableActivationId: activationWal.activationId,
         status: "failed",
       });
-      releaseRecoveredOwnership(options);
+      releaseRecoveredOwnership(options, sessionId);
     });
 }
 
@@ -480,6 +487,8 @@ export function createProductionPortableHandoffRuntime(
     });
   const coordinator = createPortableHandoffCoordinator({
     stateDir: options.stateDir,
+    runtimeEnvironment: { ...options.env, KEIKO_UI_WORKING_DIRECTORY: process.cwd() },
+    securityLogSink: options.securityLogSink,
     persistPrepared: ({ sessionId, activationWal }) =>
       persistWal({ sessionId, activationWal, prepared: true }),
     persistAccepted: ({ sessionId, activationWal }) =>

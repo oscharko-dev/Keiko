@@ -62,6 +62,11 @@ export interface KeikoSelectProps {
   readonly leadingVisual?: ReactNode;
   readonly mono?: boolean;
   readonly showChevron?: boolean;
+  /**
+   * Whether the trigger repeats the selected option's description under its label (default). A
+   * compact control whose menu already explains each option passes `false` to keep one line.
+   */
+  readonly showTriggerDescription?: boolean;
   readonly menuMinWidth?: number;
   /** Minimum width for a detached menu when its compact trigger is narrower than the options. */
   readonly menuPopoverMinWidth?: number;
@@ -599,6 +604,7 @@ export default function KeikoSelect({
   leadingVisual,
   mono = false,
   showChevron = true,
+  showTriggerDescription = true,
   menuMinWidth,
   menuPopoverMinWidth,
   menuPopoverMaxHeight,
@@ -644,7 +650,7 @@ export default function KeikoSelect({
     .find((option) => option.value === value);
   const resolvedPlaceholder = placeholder ?? t("select.placeholder");
   const visibleLabel = selectedOption?.label ?? resolvedPlaceholder;
-  const visibleDescription = selectedOption?.description ?? null;
+  const visibleDescription = showTriggerDescription ? (selectedOption?.description ?? null) : null;
   const menuLabel = menuTitle ?? ariaLabel ?? resolvedPlaceholder;
 
   // Stable, so it doubles as the listener that closes this menu when another select opens.

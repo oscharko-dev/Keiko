@@ -29,14 +29,14 @@ function fixture() {
   const stageRoot = mkdtempSync(join(tmpdir(), "keiko-linux-runtime-qualification-"));
   roots.push(stageRoot);
   const resourceRoot = join(stageRoot, "payload", "Keiko");
-  const supervisor = Buffer.from("compiled sandbox runtime\n");
+  const supervisor = Buffer.from("compiled native lifetime owner\n");
   const secureRead = Buffer.from("secure workspace read\n");
   const usearch = Buffer.from("native usearch addon\n");
   const nativeHelpers = [
     {
       name: "keiko-runtime-supervisor",
       platformTarget: TARGET,
-      executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
+      executablePath: "runtime/native/keiko-runtime-supervisor",
       sizeBytes: supervisor.length,
       shippedSha256: sha256(supervisor),
     },

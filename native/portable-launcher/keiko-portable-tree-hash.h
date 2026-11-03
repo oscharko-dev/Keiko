@@ -138,7 +138,12 @@ static int keiko_tree_same_names(const keiko_tree_names *left,
 
 static uint64_t keiko_tree_now_ms(void) {
   struct timespec value;
+#if defined(__APPLE__)
+  /* Node/libuv uses mach_continuous_time; CLOCK_MONOTONIC is frequency-adjusted on Darwin. */
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &value) != 0) return UINT64_MAX;
+#else
   if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return UINT64_MAX;
+#endif
   return (uint64_t)value.tv_sec * UINT64_C(1000) + (uint64_t)value.tv_nsec / UINT64_C(1000000);
 }
 

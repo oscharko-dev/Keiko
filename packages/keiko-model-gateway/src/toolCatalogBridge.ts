@@ -1,17 +1,27 @@
-import type {
-  GatewayToolCatalogAdvertisement,
-  ToolInvocationBinding,
+import {
+  GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES,
+  GATEWAY_NATIVE_EXACT_CONTENT_TOOLS,
+  isGatewayNativeToolAdvertisement,
+  toolArgumentLimitsByToolName,
+  type GatewayNativeToolAdvertisement,
+  type GatewayToolAdvertisement,
+  type GatewayToolCatalogAdvertisement,
+  type ToolInvocationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
+  GENERIC_TOOL_ARGUMENT_LIMITS,
   TOOL_CATALOG_LIMITS,
+  toolArgumentLimits,
+  type ToolArgumentLimits,
   type ToolResultReason,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   captureCatalogJson,
+  captureCatalogEnvelope,
   createToolInvocationNormalizer,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   ToolCatalogError,
@@ -72,6 +82,7 @@ const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
         "cursor-expired",
         "cursor-replayed",
         "workspace-stale",
+        "consumer-stale",
         "replay-conflict",
         "recovery-required",
       ],
@@ -141,6 +152,8 @@ const TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION = defineActivityLogOperation({
   fields: {
     projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 128 },
     toolCount: { type: "integer", dataClass: "count", required: true },
+    // A native call naming a tool the request did not offer (#3897): the producer answers it.
+    unofferedCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "none",
   lifecycle: "state",
@@ -183,7 +196,7 @@ const TOOL_CATALOG_PROJECTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["bound"],
+      values: ["bound", "native"],
     },
     offerRemainingMs: { type: "number", dataClass: "duration", required: true },
   },
@@ -282,13 +295,23 @@ function dataField(source: object, key: string): unknown {
   requireBridge("value" in descriptor && descriptor.enumerable === true, "projection-mismatch");
   return descriptor.value as unknown;
 }
-function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement {
-  const value = captureCatalogJson(input);
+function capturedAdvertisement(input: unknown): GatewayToolAdvertisement {
+  // A native advertisement carries the runtime's whole tool set under its own byte contract; a
+  // bound catalog keeps the per-call budget (#3897 review).
+  const native =
+    typeof input === "object" && input !== null && dataField(input, "kind") === "native";
+  const value = native
+    ? captureCatalogJson(input, GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES)
+    : captureCatalogEnvelope(input);
   requireBridge(
     typeof value === "object" && value !== null && !Array.isArray(value),
     "projection-mismatch",
   );
   const object = value as Readonly<Record<string, unknown>>;
+  if (object.kind === "native") {
+    requireBridge(isGatewayNativeToolAdvertisement(object), "projection-mismatch");
+    return object;
+  }
   const keys = ["kind", "catalog", "projection", "offered"];
   requireBridge(
     object.kind === "bound" &&
@@ -298,6 +321,40 @@ function capturedAdvertisement(input: unknown): GatewayToolCatalogAdvertisement 
   );
   return object as unknown as GatewayToolCatalogAdvertisement;
 }
+
+/**
+ * The native OpenCode advertisement (#3897) is transport data end to end: its definitions go to
+ * the provider verbatim and every returned call is handed back by name, bounded and unexpired,
+ * never bound to a Keiko handler. OpenCode executes it under the server-owned permission policy.
+ */
+function nativeBridge(
+  advertisement: GatewayNativeToolAdvertisement,
+  now: () => number,
+  log: ModelGatewayLogSink,
+): GatewayToolCatalogBridge {
+  const tools: readonly ToolDefinition[] = Object.freeze(
+    advertisement.tools.map((tool) =>
+      Object.freeze({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }),
+    ),
+  );
+  const exactContent = new Set(GATEWAY_NATIVE_EXACT_CONTENT_TOOLS);
+  return Object.freeze({
+    tools,
+    assertNativeTransport: (response: NormalizedResponse): void => {
+      assertNativeTransport(response, tools, log);
+    },
+    bind: (call: NormalizedToolCall): NormalizedToolCall =>
+      bindCall(undefined, call, now, log, advertisement),
+    bindCalls: (calls: readonly NormalizedToolCall[]): readonly NormalizedToolCall[] =>
+      bindCalls(undefined, calls, now, log, advertisement),
+    isExactContentTool: (alias: string): boolean => exactContent.has(alias),
+  });
+}
+
 /** Native extensions retain their exact pinned schemas and never become managed handlers. */
 function nativeExtensionTools(normalizer: ToolInvocationNormalizer): readonly ToolDefinition[] {
   return normalizer.binding.projection.nativeExtensions.map((extension) => {
@@ -349,8 +406,37 @@ function normalizerFor(advertisement: GatewayToolCatalogAdvertisement): ToolInvo
   };
   return createToolInvocationNormalizer(binding);
 }
-function captureCall(input: NormalizedToolCall): NormalizedToolCall {
-  const object = captureCatalogJson(input) as Readonly<Record<string, unknown>>;
+/**
+ * The argument ceilings the call is captured under: the changeset ceilings for the governed
+ * changeset edit and for the native file-content tools, the generic ones for everything else. The
+ * name is read without running an accessor; anything unreadable is captured (and rejected) under the
+ * generic ceilings.
+ */
+function callArgumentLimits(
+  input: NormalizedToolCall,
+  normalizer: ToolInvocationNormalizer | undefined,
+  native: GatewayNativeToolAdvertisement | undefined,
+): ToolArgumentLimits {
+  const descriptor =
+    typeof input === "object" ? Object.getOwnPropertyDescriptor(input, "name") : undefined;
+  const name: unknown = descriptor !== undefined && "value" in descriptor ? descriptor.value : null;
+  if (typeof name !== "string") return GENERIC_TOOL_ARGUMENT_LIMITS;
+  if (native !== undefined) return toolArgumentLimitsByToolName(name);
+  const tool = normalizer?.binding.projection.tools.find((entry) => entry.alias === name);
+  return tool === undefined
+    ? GENERIC_TOOL_ARGUMENT_LIMITS
+    : toolArgumentLimits(tool.toolRef.canonicalId);
+}
+function captureCall(
+  input: NormalizedToolCall,
+  normalizer: ToolInvocationNormalizer | undefined,
+  native: GatewayNativeToolAdvertisement | undefined,
+): NormalizedToolCall {
+  const object = captureCatalogJson(
+    input,
+    undefined,
+    callArgumentLimits(input, normalizer, native),
+  ) as Readonly<Record<string, unknown>>;
   requireBridge(
     Object.keys(object).length === 3 &&
       ["id", "name", "arguments"].every((key) => Object.hasOwn(object, key)),
@@ -460,16 +546,44 @@ function rejectionDetails(
       : {}),
   };
 }
+/**
+ * A native advertisement's call (#3897) is handed back by name only: captured, unexpired and one
+ * of the advertised tools. OpenCode executes it; no Keiko handler is bound.
+ */
+function bindNativeCall(
+  advertisement: GatewayNativeToolAdvertisement,
+  call: NormalizedToolCall,
+  now: () => number,
+  log: ModelGatewayLogSink,
+): NormalizedToolCall {
+  if (Date.parse(advertisement.offered.expiresAt) <= now())
+    throw new ToolCatalogError("expired-compatibility");
+  // Binding is by name only and grants nothing (ADR-0175 D2): the producer owns its tools. A name
+  // the request did not offer goes to it as in standalone OpenCode, which answers the model with
+  // its own unavailable-tool result and continues the turn; refusing it here ended the whole turn.
+  const offered = advertisement.tools.some((tool) => tool.name === call.name);
+  log.write(
+    activityLogEvent(TOOL_CATALOG_NATIVE_PASSTHROUGH_OPERATION, toolCatalogEnvelope(log, "info"), {
+      projectionDigest: advertisement.toolSetDigest,
+      toolCount: 1,
+      ...(offered ? {} : { unofferedCount: 1 }),
+    }),
+  );
+  return call;
+}
+
 function bindCall(
   normalizer: ToolInvocationNormalizer | undefined,
   input: NormalizedToolCall,
   now: () => number,
   log: ModelGatewayLogSink,
+  native?: GatewayNativeToolAdvertisement,
 ): NormalizedToolCall {
   let captured: NormalizedToolCall | undefined;
   try {
-    const call = captureCall(input);
+    const call = captureCall(input, normalizer, native);
     captured = call;
+    if (native !== undefined) return bindNativeCall(native, call, now, log);
     requireBridge(normalizer !== undefined, "unoffered-tool");
     if (isNativeExtensionAlias(normalizer, call.name)) {
       normalizer.tools(now());
@@ -546,11 +660,12 @@ function bindCalls(
   calls: readonly NormalizedToolCall[],
   now: () => number,
   log: ModelGatewayLogSink,
+  native?: GatewayNativeToolAdvertisement,
 ): readonly NormalizedToolCall[] {
   let entries: readonly NormalizedToolCall[];
   try {
     requireGenuineCallArray(calls);
-    entries = calls.map(captureCall);
+    entries = calls.map((call) => captureCall(call, normalizer, native));
     requireBridge(
       new Set(entries.map((call) => call.id)).size === entries.length,
       "invalid-arguments",
@@ -558,7 +673,7 @@ function bindCalls(
   } catch (cause) {
     return reject(log, "response", cause);
   }
-  return Object.freeze(entries.map((call) => bindCall(normalizer, call, now, log)));
+  return Object.freeze(entries.map((call) => bindCall(normalizer, call, now, log, native)));
 }
 
 // Reserved model transport markers outside Markdown code are a failed tool invocation, never
@@ -637,9 +752,21 @@ function prepare(
     return bridge(undefined, Object.freeze([]), now, log);
   }
   const advertisement = capturedAdvertisement(input);
+  requireBridge(oldTools === undefined, "projection-mismatch");
+  if (advertisement.kind === "native") {
+    if (recordProjection)
+      log.write(
+        activityLogEvent(TOOL_CATALOG_PROJECTED_OPERATION, toolCatalogEnvelope(log, "info"), {
+          projectionDigest: advertisement.toolSetDigest,
+          toolCount: advertisement.tools.length,
+          compatibility: advertisement.kind,
+          offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
+        }),
+      );
+    return nativeBridge(advertisement, now, log);
+  }
   const normalizer = normalizerFor(advertisement);
   const tools = definitions(normalizer, now());
-  requireBridge(oldTools === undefined, "projection-mismatch");
   if (recordProjection)
     log.write(
       activityLogEvent(TOOL_CATALOG_PROJECTED_OPERATION, toolCatalogEnvelope(log, "info"), {

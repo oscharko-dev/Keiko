@@ -499,6 +499,32 @@ describe("local-knowledge preview handlers", () => {
     expect(auditKinds(fixture.capsuleId)).toEqual([]);
   });
 
+  it("does not offer PDF recovery for a Markdown citation without page provenance", async () => {
+    const fixture = await seedPreviewFixture();
+    const citation = { ...fixture.previewCitation, documentMediaType: "text/markdown" };
+    delete citation.pageNumber;
+    delete citation.pageLabel;
+    const answer = must(store.findMessageById(fixture.assistantMessageId)?.groundedAnswer);
+    store.attachGroundedAnswer(fixture.assistantMessageId, answer, [citation]);
+    const input = {
+      chatId: fixture.chatId,
+      assistantMessageId: fixture.assistantMessageId,
+      marker: "[1]",
+      stableId: citation.stableId,
+    };
+    const status = await handleGetPdfCitationPreviewStatus(
+      ctx("/api/local-knowledge/citation-preview/status", input),
+      deps(),
+    );
+    expect(status.body).toMatchObject({ citations: [{ state: "not-applicable" }] });
+    const result = await handleAuthorizePdfCitationPreview(
+      ctx("/api/local-knowledge/citation-preview/authorize", input),
+      deps(),
+    );
+    expect(result.body).toMatchObject({ outcome: "rejected", reason: "document-not-pdf" });
+    expect(auditKinds(fixture.capsuleId)).toEqual(["citation-preview-blocked"]);
+  });
+
   it("keeps status available when a legacy stored chunk id re-anchors by span", async () => {
     const fixture = await seedPreviewFixture();
     const message = store.findMessageById(fixture.assistantMessageId);

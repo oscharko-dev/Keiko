@@ -1,19 +1,19 @@
 import { WORKSPACE_PATH_DISCOVERY_MODES } from "@oscharko-dev/keiko-contracts/runtime/workspace";
 import { WORKSPACE_PORTABLE_PATH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Canonical managed OpenCode descriptors, their profile and pinned native extension schemas.
-// The default profile exposes seventeen governed tools plus `question`. The explicit Code Mode
+// The default profile exposes eighteen governed tools plus `question`. The explicit Code Mode
 // profile retains those same governed capabilities and describes original native question/execute
 // transport. It is an inactive advertisement prerequisite, not a runtime or network activation.
 // Native extensions are never managed descriptors and retain their exact pinned wire schemas.
 // The server's incoming contract matcher and the provider bridge consume this one declaration.
 // Managed source schemas still belong to opencodeToolSchemas.ts; the catalog dialect losslessly
 // projects their canonical descriptors and does not control the native engine or its tool loop.
-import {
-  OPENCODE_TOOL_PROFILES,
-  type OpenCodeToolProfile,
-} from "@oscharko-dev/keiko-contracts/runtime/opencode-service-host";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
-import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+  toolArgumentLimits,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
@@ -39,10 +39,18 @@ const OPENCODE_DISCOVER_MAX_RESULTS = 100;
 const OPENCODE_READ_MAX_START_LINE = 1_000_000;
 const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
+/**
+ * Server-selected fixed tool contract only; this value is never a model or module selector.
+ * `native` is the standalone-equivalent profile (#3897): the pinned OpenCode service runs its own
+ * tools, agents and commands, and Keiko binds the autonomy mode through the supported permission
+ * and tool hooks instead of substituting mapped tools.
+ */
+export const OPENCODE_TOOL_PROFILES = Object.freeze(["native", "direct", "code-mode"] as const);
+export type OpenCodeToolProfile = (typeof OPENCODE_TOOL_PROFILES)[number];
 const OPEN_CODE_TOOL_PROFILES: ReadonlySet<unknown> = new Set(OPENCODE_TOOL_PROFILES);
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "2.0.10" } as const;
+const OPENCODE_RUNTIME = { id: "opencode", version: "2.1.4" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
   readonly alias: "question" | "execute";
@@ -203,7 +211,7 @@ function entryFor(
       policyReferences: spec.effects,
       handlerRequirement: { id: spec.handlerId, contractVersion: 1 },
       bounds: {
-        maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
+        maxArgumentBytes: toolArgumentLimits(spec.canonicalId).maxArgumentBytes,
         maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
         maxResultCount: 1,
         maxDurationMs: spec.maxDurationMs ?? DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
@@ -357,8 +365,10 @@ const CHANGESET_FILE_ENTRY_SCHEMA = managedObjectSchema(
 const REPLACEMENT_EDIT_SCHEMA = managedObjectSchema(
   {
     file: CHANGESET_PATH_SCHEMA,
-    oldString: { type: "string", maxLength: 65_536 },
-    newString: { type: "string", maxLength: 65_536 },
+    // One edit string may carry the changeset cap (owner decision 2026-10-28); characters never
+    // exceed bytes, and the byte bound is enforced when the call is captured.
+    oldString: { type: "string", maxLength: CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes },
+    newString: { type: "string", maxLength: CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes },
     replaceAll: { type: "boolean" },
   },
   ["file", "newString", "oldString", "replaceAll"],
@@ -425,7 +435,10 @@ function verificationSpec(): OpenCodeToolSpec {
       "confirm which checks ran successfully. The optional verification.commit describes " +
       "commit eligibility separately: candidate-not-staged never means checks did not run. " +
       "Only when the accepted task requests a commit, stage the intended changes and rerun " +
-      'verification until verification.commit.commitProof is "recorded". For that workflow, ' +
+      'verification until verification.commit.commitProof is "recorded", or, in Full access ' +
+      "only, until its checks ran and failed: that also admits the commit, recorded as " +
+      'failing. In Full access, commitProof "admitted" admits the staged commit while the ' +
+      "untracked paths under commit.blocking stay outside it. For that workflow, " +
       "candidate-not-staged names unstaged and untracked paths under commit.blocking; stage " +
       "the intended paths or ignore generated output deliberately before verifying again.",
     inputSchema: managedObjectSchema(
@@ -589,9 +602,10 @@ function gitStageSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.stage",
     alias: "keiko_git_stage",
     description:
-      "Create a non-mutating proposal to stage one or more workspace-relative paths. This call " +
-      "does not mutate the Git index. Execute staging before rerunning verification for commit " +
-      "proof." +
+      "Create a non-mutating proposal to stage one or more workspace-relative paths, or with " +
+      "unstage: true to give their staged changes back to the worktree, which keeps its bytes " +
+      "(request only paths keiko_git_status lists as staged). This call does not mutate the Git " +
+      "index. Execute staging before rerunning verification for commit proof." +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       {
@@ -601,8 +615,10 @@ function gitStageSpec(): OpenCodeToolSpec {
           maxItems: CODING_RUNTIME_GIT_MAX_PATHS,
           items: { type: "string", minLength: 1, maxLength: 512 },
         },
+        // #3902 AC2: unstaging is staging's inverse under the same proposal and approval.
+        unstage: { type: "boolean" },
       },
-      ["paths"],
+      ["paths", "unstage"],
     ),
     effects: ["workspace-write"],
     idempotency: "server-key-required",
@@ -618,8 +634,10 @@ function gitCommitSpec(): OpenCodeToolSpec {
     alias: "keiko_git_commit",
     description:
       "Create a commit proposal over the staged changes. This call does not " +
-      "create a commit. First complete staging and rerun verification until it reports " +
-      'verification: { status: "passed", commit: { commitProof: "recorded" } }.' +
+      "create a commit. First complete staging, then verify until it reports " +
+      'verification: { status: "passed", commit: { commitProof: "recorded" } }, or, in Full ' +
+      "access only, until its checks ran and failed or it reports commitProof " +
+      '"admitted": that also admits the commit, recorded as failing or unproven.' +
       PROPOSAL_EXECUTION_GUIDANCE,
     inputSchema: managedObjectSchema(
       { message: { type: "string", minLength: 1, maxLength: 8_192 } },
@@ -670,14 +688,15 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     canonicalId: "keiko.git.execute",
     alias: "keiko_git_execute",
     description:
-      "Execute a stage, commit, push or pull-request proposal using its matching kind and returned " +
+      "Execute a stage, unstage, commit, push or pull-request proposal using its matching kind and " +
+      "returned " +
       'proposalId when its status is ready or approvalDisposition: "ready" is present. The fresh ' +
       "disposition means approval has already been granted even if an immutable receipt still " +
       "says approval-required. Stage execution mutates the Git index and must complete before commit-grade " +
       "verification; proposal tools alone perform no Git mutation.",
     inputSchema: managedObjectSchema(
       {
-        kind: { type: "string", enum: ["stage", "commit", "push", "pull-request"] },
+        kind: { type: "string", enum: ["stage", "unstage", "commit", "push", "pull-request"] },
         proposalId: { type: "string", minLength: 1, maxLength: 64 },
       },
       ["kind", "proposalId"],
@@ -685,6 +704,53 @@ function gitExecuteSpec(): OpenCodeToolSpec {
     effects: ["workspace-write", "delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-execute-port",
+  };
+}
+
+// #3902 AC2: one fetch, or one fast-forward pull, through the Git sync owner. A pull moves the
+// worktree, a fetch only remote-tracking refs; both reach the remote.
+function gitSyncSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.sync",
+    alias: "keiko_git_sync",
+    description:
+      "Fetch the upstream remote's branches (pull: false), or fast-forward the current branch to " +
+      "its upstream (pull: true). It never merges, rebases or overwrites local changes; a branch " +
+      "that has diverged, has no upstream or has uncommitted changes is reported, not changed. " +
+      "This call waits for any required operator decision.",
+    inputSchema: managedObjectSchema({ pull: { type: "boolean" } }, ["pull"]),
+    effects: ["workspace-write", "delivery-substrate", "network-egress"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-sync-port",
+    // It waits in place for the operator's approval of the call below Full access.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  };
+}
+
+// #3907 (owner decision 2026-10-31): the one governed way a run gets a task branch. Keiko's Git
+// kernel creates the branch at the current commit and switches the run to it. The shell keeps
+// refusing `git checkout -b`. It prepares delivery (a commit on a protected branch is blocked until
+// the run has a task branch of its own), so it carries the delivery-substrate effect beside the
+// local ref write.
+function gitBranchSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.git.branch",
+    alias: "keiko_git_branch",
+    description:
+      "Create a new local task branch at the current commit and switch this run to it; " +
+      "uncommitted changes carry over. Use it when keiko_git_commit is blocked because the run " +
+      "works on a protected branch such as main or dev. It refuses a protected name, an invalid " +
+      "name, an existing branch, a run that is not on its base branch and a run that is not in a " +
+      "Local checkout. It never deletes, renames or resets anything. This call waits for any " +
+      "required operator decision.",
+    inputSchema: managedObjectSchema({ name: { type: "string", minLength: 1, maxLength: 255 } }, [
+      "name",
+    ]),
+    effects: ["workspace-write", "delivery-substrate"],
+    idempotency: "server-key-required",
+    handlerId: "opencode-git-branch-port",
+    // It waits in place for the operator's approval of the call below Full access.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -734,6 +800,8 @@ export function opencodeRegistrationSet(
       gitPushSpec(),
       gitPullRequestSpec(),
       gitExecuteSpec(),
+      gitSyncSpec(),
+      gitBranchSpec(),
       ciStatusSpec(),
     ].map((spec) => entryFor(spec)),
   };

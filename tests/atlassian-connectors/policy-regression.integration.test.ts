@@ -2,8 +2,8 @@
 //
 // The per-child suites verify the D4 matrix per family (writeActionRoutes.test.ts for the 7 writes,
 // syncRoutes.policy.test.ts for the 2 syncs, writeActionRoutes.liveSearch.test.ts for live search).
-// This suite consolidates all TEN governed action types into ONE uniform grid asserted at the
-// route level against a LITERAL copy of the ADR-0128 D4 dispositions (never re-derived through the
+// This suite consolidates legacy routes and managed-tool admission into one grid against
+// the real authority registry and a LITERAL copy of the ADR-0128 D4 dispositions (never re-derived through the
 // contract helper), driving both route entry points (sync-start and the action route), and then
 // re-verifies the mode-independent authority failures (expiry / digest mismatch / budget
 // exhaustion) hold on a representative of each family through its own route.
@@ -46,6 +46,8 @@ import {
   type ConnectorServerHarness,
 } from "./harness.js";
 
+import { decideGovernedAtlassianAction } from "../../packages/keiko-server/src/atlassian/actionPolicy.js";
+
 const JIRA_AUTH_REF = `atlassian-cred:${"A".repeat(22)}`;
 const CONFLUENCE_AUTH_REF = `atlassian-cred:${"B".repeat(22)}`;
 const ALL_SCOPES: readonly CodingWorkbenchConnectorScope[] = [
@@ -68,6 +70,16 @@ const D4: Readonly<
   >
 > = {
   "governed-assist": {
+    "jira.projects": "review-required",
+    "jira.issue-types": "review-required",
+    "jira.create-fields": "review-required",
+    "jira.edit-fields": "review-required",
+    "jira.search": "review-required",
+    "jira.issue": "review-required",
+    "jira.comments": "review-required",
+    "jira.transitions": "review-required",
+    "jira.assignable-users": "review-required",
+    "assign-issue": "review-required",
     "sync-space": "review-required",
     "sync-project": "review-required",
     "search-issues-live": "review-required",
@@ -81,6 +93,16 @@ const D4: Readonly<
   },
   // ADR-0138: supervised-coding internet-scope operations require approval at every risk.
   "supervised-coding": {
+    "jira.projects": "review-required",
+    "jira.issue-types": "review-required",
+    "jira.create-fields": "review-required",
+    "jira.edit-fields": "review-required",
+    "jira.search": "review-required",
+    "jira.issue": "review-required",
+    "jira.comments": "review-required",
+    "jira.transitions": "review-required",
+    "jira.assignable-users": "review-required",
+    "assign-issue": "review-required",
     "sync-space": "review-required",
     "sync-project": "review-required",
     "search-issues-live": "review-required",
@@ -93,6 +115,16 @@ const D4: Readonly<
     "add-page-comment": "review-required",
   },
   "autonomous-delivery": {
+    "jira.projects": "allowed",
+    "jira.issue-types": "allowed",
+    "jira.create-fields": "allowed",
+    "jira.edit-fields": "allowed",
+    "jira.search": "allowed",
+    "jira.issue": "allowed",
+    "jira.comments": "allowed",
+    "jira.transitions": "allowed",
+    "jira.assignable-users": "allowed",
+    "assign-issue": "allowed",
     "sync-space": "allowed",
     "sync-project": "allowed",
     "search-issues-live": "allowed",
@@ -108,6 +140,16 @@ const D4: Readonly<
 
 // Literal deny reason per action (reads → connector-access-denied, writes → connector-write-denied).
 const MISSING_SCOPE_REASON: Readonly<Record<AtlassianConnectorActionType, string>> = {
+  "jira.projects": "connector-access-denied",
+  "jira.issue-types": "connector-access-denied",
+  "jira.create-fields": "connector-access-denied",
+  "jira.edit-fields": "connector-access-denied",
+  "jira.search": "connector-access-denied",
+  "jira.issue": "connector-access-denied",
+  "jira.comments": "connector-access-denied",
+  "jira.transitions": "connector-access-denied",
+  "jira.assignable-users": "connector-access-denied",
+  "assign-issue": "connector-write-denied",
   "sync-space": "connector-access-denied",
   "sync-project": "connector-access-denied",
   "search-issues-live": "connector-access-denied",
@@ -193,6 +235,12 @@ function guard(): AtlassianConnectorCredentialDeps {
   const jira = credentialMeta("jira");
   const confluence = credentialMeta("confluence");
   const custody = {
+    updateLivePod: (): never => {
+      throw new Error("Unexpected Live Pod update");
+    },
+    beginVerification: (): undefined => undefined,
+    finishVerification: (): boolean => false,
+    observeAuthenticationFailure: (): boolean => false,
     create: (): never => {
       throw new Error("create is not exercised");
     },
@@ -292,6 +340,16 @@ function admit(
   authority: { runId: string; envelopeDigest: string; workspaceRoot: string },
   deps: UiHandlerDeps,
 ): Promise<Admission> {
+  if (actionType.startsWith("jira.") || actionType === "assign-issue") {
+    const outcome = decideGovernedAtlassianAction(actionType, authority, deps);
+    if (outcome.kind === "allowed" || outcome.kind === "review-required")
+      return Promise.resolve({ disposition: outcome.kind });
+    return Promise.resolve({
+      disposition: "denied",
+      reasonCode:
+        outcome.kind === "authority-denied" ? outcome.reason : outcome.decision.denyReason,
+    });
+  }
   if (actionType === "sync-space" || actionType === "sync-project") {
     return admitSync(actionType, authority, deps);
   }
@@ -327,7 +385,7 @@ const PRESENT_MATRIX: readonly Cell[] = MODES.flatMap((mode) =>
   })),
 );
 
-describe("route-level policy regression — D4 matrix, scope present (Scope 6)", () => {
+describe("legacy routes and managed admission — D4 matrix, scope present (Scope 6)", () => {
   it.each(PRESENT_MATRIX)(
     "$mode / $actionType → $expected",
     async ({ mode, actionType, expected }) => {
@@ -337,9 +395,9 @@ describe("route-level policy regression — D4 matrix, scope present (Scope 6)",
     },
   );
 
-  it("covers all ten action types in every mode", () => {
+  it("covers all twenty action types in every mode", () => {
     expect(PRESENT_MATRIX).toHaveLength(MODES.length * ATLASSIAN_CONNECTOR_ACTION_TYPES.length);
-    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toHaveLength(10);
+    expect(ATLASSIAN_CONNECTOR_ACTION_TYPES).toHaveLength(20);
   });
 });
 

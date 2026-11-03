@@ -175,10 +175,9 @@ function withinBranchEnvelope(
 }
 
 function hasRequiredScopes(
-  active: ActiveGitDeliveryRunAuthority,
+  authority: CodingWorkbenchAuthorityEnvelope,
   requirement: GitOperationRequirement,
 ): boolean {
-  const authority = active.authority;
   if (
     !requirement.actionClasses.every((actionClass) => authority.actionClasses.includes(actionClass))
   ) {
@@ -221,11 +220,11 @@ function gitDeliveryPolicyScope(
 // not already decide. `autonomous-delivery` itself keeps the scope/network gate as a genuine,
 // stricter-wins check: an envelope that reaches this admission under-scoped is still refused there.
 function deliveryScopeCheckDeferredToModeDecision(
-  active: ActiveGitDeliveryRunAuthority,
+  authority: CodingWorkbenchAuthorityEnvelope,
   requirement: GitOperationRequirement,
 ): boolean {
   return (
-    active.authority.effectiveMode !== "autonomous-delivery" &&
+    authority.effectiveMode !== "autonomous-delivery" &&
     gitDeliveryPolicyScope(requirement) === "delivery"
   );
 }
@@ -246,15 +245,38 @@ type GitDeliveryModeDecision =
 // pack decides per command). Both redeem via the SAME non-consuming-peek mechanism instead
 // (`approval`/`approvalStore`/`approvalBinding` below), final-audit F1/F2 (#3390).
 function modeDecision(
-  active: ActiveGitDeliveryRunAuthority,
+  authority: CodingWorkbenchAuthorityEnvelope,
   requirement: GitOperationRequirement,
 ): GitDeliveryModeDecision {
-  if (active.authority.effectiveMode === "autonomous-delivery") return { ok: true };
+  if (authority.effectiveMode === "autonomous-delivery") return { ok: true };
   const scope = gitDeliveryPolicyScope(requirement);
-  const effect = codingWorkbenchPolicyEffectFor(active.authority.effectiveMode, scope, "medium");
+  const effect = codingWorkbenchPolicyEffectFor(authority.effectiveMode, scope, "medium");
   if (effect === "allowed") return { ok: true };
   if (effect === "denied") return { ok: false, reason: "mode-denied" };
   return { ok: false, reason: "approval-required" };
+}
+
+export type GitOperationEnvelopeDecision =
+  GitDeliveryModeDecision | { readonly ok: false; readonly reason: "permission-scope-missing" };
+
+/**
+ * The run envelope's own decision for one Git operation, before any branch check or approval: the
+ * scope and network gate (deferred to the mode matrix for a lower mode's delivery effect, as
+ * above), then the mode matrix itself. `authorizeGitDelivery` decides every Git Client request
+ * through it, and the coding runtime's governed fetch and pull ask the same owner (#3902 AC2), so
+ * neither can drift from the other.
+ */
+export function gitOperationEnvelopeDecision(
+  authority: CodingWorkbenchAuthorityEnvelope,
+  operation: GitRepositoryAgentOperationKind,
+): GitOperationEnvelopeDecision {
+  const requirement = gitOperationRequirement(operation);
+  if (
+    !deliveryScopeCheckDeferredToModeDecision(authority, requirement) &&
+    !hasRequiredScopes(authority, requirement)
+  )
+    return { ok: false, reason: "permission-scope-missing" };
+  return modeDecision(authority, requirement);
 }
 
 // Resolves the mode/resource-scope/risk matrix outcome into the final decision, consulting
@@ -264,10 +286,9 @@ function modeDecision(
 function resolveModeDecision(
   active: ActiveGitDeliveryRunAuthority,
   request: GitDeliveryAuthorityRequest,
-  requirement: GitOperationRequirement,
+  decision: GitDeliveryModeDecision,
   redeemApproval: GitDeliveryApprovalRedemption | undefined,
 ): GitDeliveryAuthorityDecision {
-  const decision = modeDecision(active, requirement);
   if (decision.ok) {
     return { allowed: true, runId: active.runId, envelopeDigest: active.envelopeDigest };
   }
@@ -439,15 +460,12 @@ export function authorizeGitDelivery(
   if (active.projectId !== request.projectId || active.workspaceRoot !== request.workspaceRoot) {
     return { allowed: false, reason: "workspace-out-of-envelope" };
   }
-  const requirement = gitOperationRequirement(request.operation);
-  if (
-    !deliveryScopeCheckDeferredToModeDecision(active, requirement) &&
-    !hasRequiredScopes(active, requirement)
-  )
+  const decision = gitOperationEnvelopeDecision(active.authority, request.operation);
+  if (!decision.ok && decision.reason === "permission-scope-missing")
     return { allowed: false, reason: "permission-scope-missing" };
   if (!withinBranchEnvelope(request, active))
     return { allowed: false, reason: "branch-out-of-envelope" };
-  return resolveModeDecision(active, request, requirement, redeemApproval);
+  return resolveModeDecision(active, request, decision, redeemApproval);
 }
 
 // #3400/#3401 final-audit F1: the closed reason `authorizeGitDeliveryModelEgress` reports when no

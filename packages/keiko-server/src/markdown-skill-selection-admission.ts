@@ -2,6 +2,17 @@ import type { UiHandlerDeps } from "./deps.js";
 import { logMarkdownSkillOperation } from "./markdown-skill-log.js";
 import { errorBody } from "./route-error.js";
 import type { RouteResult } from "./routes.js";
+import type { MarkdownSkillReference } from "@oscharko-dev/keiko-contracts/bff-wire";
+
+function selectedReferenceAvailable(
+  deps: Pick<UiHandlerDeps, "store">,
+  reference: MarkdownSkillReference | null,
+): boolean {
+  if (reference === null) return true;
+  return (
+    deps.store.markdownSkills.get(reference.id, reference.revision)?.digest === reference.digest
+  );
+}
 
 /** The separate PR-description workflow does not yet own protected skill assembly (#4025). */
 export function gitDescriptionSkillRefusal(
@@ -41,9 +52,12 @@ export function markdownSkillSelectionRefusal(
     logMarkdownSkillOperation(correlationId, "selection-read", "rejected", 404);
     return { status: 404, body: errorBody("NOT_FOUND", "Skill not found.", correlationId) };
   }
-  if (expectedRevision === undefined) return undefined;
   if (
-    expectedRevision === null ? selection.skill === null : selection.revision === expectedRevision
+    selectedReferenceAvailable(deps, selection.skill) &&
+    (expectedRevision === undefined ||
+      (expectedRevision === null
+        ? selection.skill === null
+        : selection.revision === expectedRevision))
   )
     return undefined;
   logMarkdownSkillOperation(correlationId, "selection-read", "rejected", 409);

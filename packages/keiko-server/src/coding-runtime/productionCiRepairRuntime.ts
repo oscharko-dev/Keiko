@@ -11,6 +11,7 @@ import type {
   VerifiedCommitRuntimeBinding,
   VerifiedCommitRuntimeDependencies,
 } from "./productionVerifiedCommitRuntime.js";
+import { isIssueBoundDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { resolveDraftDeliveryContext } from "./productionDraftDeliveryRuntime.js";
 import {
   CodingRuntimeCiRepairController,
@@ -151,7 +152,10 @@ function budgetContext(
     snapshot === undefined
       ? undefined
       : draftDeliveryLineageRecord(snapshot, (runId) => deps.snapshots.get(runId))?.record;
-  if (draft?.pullRequest === undefined) return undefined;
+  // CI repair accounting belongs to issue-bound delivery, as CI readiness does: an issue-free run's
+  // pull request has no repair ledger, so its later prompts and tools are not charged against one
+  // (#3907 AC3: the run was refused every prompt after its PR as `invalid-binding`).
+  if (draft?.pullRequest === undefined || !isIssueBoundDraftDeliveryRecord(draft)) return undefined;
   const budget = binding.context.budget;
   return {
     runId: binding.runId,

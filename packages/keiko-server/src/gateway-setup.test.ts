@@ -1863,7 +1863,42 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("emits a body-free operator diagnostic when a loopback candidate is accepted (KEIKO-0884, #3333)", async () => {
+  // KEIKO-0884 pins, relocated (#3897): the acceptance record moved from an error-level
+  // `server.diagnostic.failure` to its own registered info line, because a successful local setup
+  // is not a failure. Each pin keeps its invariant — every accepted loopback target leaves exactly
+  // one body-free record on the request's correlation, or the sanctioned unknown id — and now also
+  // proves that no failure diagnostic is left behind.
+  async function loopbackAcceptance(
+    run: () => Promise<{ readonly status: number; readonly body: unknown }>,
+    diagnostics: readonly ServerDiagnosticRecord[],
+  ): Promise<ReturnType<typeof createBufferedServerLogSink>["events"][number]> {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await run();
+      expect(result.status, JSON.stringify(result.body)).toBe(200);
+    } finally {
+      resetServerLogger();
+    }
+    const accepted = sink.events.filter((event) => event.op === "gateway.setup.target.accepted");
+    expect(accepted).toHaveLength(1);
+    const event = accepted[0];
+    if (event === undefined) throw new Error("Expected a loopback acceptance line.");
+    expect(event.level).toBe("info");
+    expect(event.errorKind).toBeUndefined();
+    expect(
+      expectActivityLogProof(
+        "gateway.setup.target.accepted.line",
+        formatActivityLogProofLine(event),
+      ),
+    ).toMatchObject({ targetClass: "loopback", completeness: "complete", loss: "none" });
+    expect(diagnostics.map((record) => record.code)).not.toContain(
+      "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
+    );
+    return event;
+  }
+
+  it("records a body-free activity line when a loopback candidate is accepted (KEIKO-0884, #3333)", async () => {
     // Loopback is the only egress class Gateway Setup accepts with no configuration signal, no log
     // line, and no opt-in trail (a deliberate product choice, not a defect). The gap is purely
     // observability: an operator investigating an unexpected acceptance has no record that a
@@ -1882,26 +1917,20 @@ describe("handleGatewaySetup", () => {
       diagnostics: { record: (record): void => void diagnostics.push(record) },
     });
 
-    const result = await handleGatewaySetup(
-      ctx(
-        { baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" },
-        "corr-gw-loopback-diagnostic",
-      ),
-      deps,
+    const accepted = await loopbackAcceptance(
+      () =>
+        handleGatewaySetup(
+          ctx(
+            { baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" },
+            "corr-gw-loopback-diagnostic",
+          ),
+          deps,
+        ),
+      diagnostics,
     );
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-
-    expect(diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          correlationId: "corr-gw-loopback-diagnostic",
-          operation: "POST /api/gateway/setup",
-          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-        }),
-      ]),
-    );
-    // Body-free by construction: a count/code only, never the raw baseUrl/host/port.
-    const serialized = JSON.stringify(diagnostics);
+    expect(accepted.correlationId).toBe("corr-gw-loopback-diagnostic");
+    // Body-free by construction: a closed class only, never the raw baseUrl/host/port.
+    const serialized = JSON.stringify([accepted, diagnostics]);
     expect(serialized).not.toContain("127.0.0.1");
     expect(serialized).not.toContain("11434");
     expect(serialized).not.toContain("local-token");
@@ -1928,18 +1957,17 @@ describe("handleGatewaySetup", () => {
     });
 
     // No correlation id argument: ctx() omits the field entirely, so RouteContext carries none.
-    const result = await handleGatewaySetup(
-      ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }),
-      deps,
+    const loopbackLine = await loopbackAcceptance(
+      () =>
+        handleGatewaySetup(
+          ctx({ baseUrl: "http://127.0.0.1:11434/v1", apiKey: "local-token" }),
+          deps,
+        ),
+      diagnostics,
     );
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-
-    const loopbackDiag = diagnostics.find(
-      (record) => record.code === "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-    );
-    expect(loopbackDiag?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(loopbackLine.correlationId).toBe(UNKNOWN_CORRELATION_ID);
     // Guards against a future re-mint: a UUID never satisfies this shape.
-    expect(loopbackDiag?.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+    expect(loopbackLine.correlationId).not.toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
 
     // The PERSISTED audit record must key to the same identity as the diagnostics above. A minted
     // UUID here would split one request across two correlation identities, so the audit evidence
@@ -1954,7 +1982,7 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
-  it("emits the loopback diagnostic for a trailing-dot localhost target over https (Codex, #3348)", async () => {
+  it("records the loopback acceptance for a trailing-dot localhost target over https (Codex, #3348)", async () => {
     // classifyOutboundHost does exact string equality against "localhost" with no trailing-dot
     // normalization; gatewaySetupTargetClass (used by the success audit) already strips it, but
     // reportLoopbackTargetAccepted used to call classifyOutboundHost directly, so an accepted
@@ -1974,30 +2002,24 @@ describe("handleGatewaySetup", () => {
       diagnostics: { record: (record): void => void diagnostics.push(record) },
     });
 
-    const result = await handleGatewaySetup(
-      ctx(
-        { baseUrl: "https://localhost.:8443/v1", apiKey: "local-token" },
-        "corr-gw-dotted-loopback",
-      ),
-      deps,
+    const accepted = await loopbackAcceptance(
+      () =>
+        handleGatewaySetup(
+          ctx(
+            { baseUrl: "https://localhost.:8443/v1", apiKey: "local-token" },
+            "corr-gw-dotted-loopback",
+          ),
+          deps,
+        ),
+      diagnostics,
     );
-    expect(result.status, JSON.stringify(result.body)).toBe(200);
-
-    expect(diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          correlationId: "corr-gw-dotted-loopback",
-          operation: "POST /api/gateway/setup",
-          code: "GATEWAY_SETUP_LOOPBACK_TARGET_ACCEPTED",
-        }),
-      ]),
-    );
+    expect(accepted.correlationId).toBe("corr-gw-dotted-loopback");
     const auditFiles = readdirSync(evidenceDir).filter((name) => name.startsWith("gateway-setup-"));
     expect(auditFiles).toHaveLength(1);
     const record = JSON.parse(
       readFileSync(join(evidenceDir, auditFiles[0] ?? ""), "utf8"),
     ) as Record<string, unknown>;
-    // The diagnostic and the success audit must agree on the same request's classification.
+    // The activity line and the success audit must agree on the same request's classification.
     expect(record.targetClass).toBe("loopback");
     deps.store.close();
   });
@@ -5782,6 +5804,71 @@ describe("handleGatewaySetup", () => {
     expect(reverse).toEqual(forward);
   });
 
+  // #3905: the tool-calling proof is bound to the deployment the gateway reports behind an alias.
+  describe("deployment identity behind an alias", () => {
+    const deployment = (
+      model: string,
+      extra: { readonly id?: string; readonly apiBase?: string } = {},
+    ): Record<string, unknown> => ({
+      model_name: "shared-chat",
+      litellm_params: {
+        model,
+        ...(extra.apiBase === undefined ? {} : { api_base: extra.apiBase }),
+      },
+      model_info: { mode: "chat", ...(extra.id === undefined ? {} : { id: extra.id }) },
+    });
+    const identityOf = (data: readonly Record<string, unknown>[]): string | undefined =>
+      parseModelDiscovery({ data }).modelMetadata?.["shared-chat"]?.deploymentIdentitySha256;
+
+    it("derives one digest of the reported deployment and never echoes the raw values", () => {
+      const parsed = parseModelDiscovery({
+        data: [
+          deployment("ollama/private-model-name", {
+            id: "private-deployment-id",
+            apiBase: "http://private-backend.invalid:11434",
+          }),
+        ],
+      });
+      expect(parsed.modelMetadata?.["shared-chat"]?.deploymentIdentitySha256).toMatch(
+        /^[a-f0-9]{64}$/u,
+      );
+      const encoded = JSON.stringify(parsed);
+      for (const raw of ["private-model-name", "private-deployment-id", "private-backend"])
+        expect(encoded).not.toContain(raw);
+    });
+
+    it("changes when the gateway re-points the same alias to another deployment", () => {
+      const before = identityOf([deployment("ollama/gemma-3", { id: "dep-1" })]);
+      expect(identityOf([deployment("ollama/gemma-3", { id: "dep-1" })])).toBe(before);
+      expect(identityOf([deployment("ollama/qwen-3", { id: "dep-1" })])).not.toBe(before);
+      expect(identityOf([deployment("ollama/gemma-3", { id: "dep-2" })])).not.toBe(before);
+      expect(
+        identityOf([
+          deployment("ollama/gemma-3", { id: "dep-1", apiBase: "http://other.invalid" }),
+        ]),
+      ).not.toBe(before);
+    });
+
+    it("is independent of the order the gateway lists the replicas of one alias", () => {
+      const first = deployment("ollama/gemma-3", { id: "dep-1" });
+      const second = deployment("ollama/gemma-3", { id: "dep-2" });
+      const third = deployment("ollama/gemma-3", { id: "dep-3" });
+      const forward = identityOf([first, second, third]);
+      expect(forward).toMatch(/^[a-f0-9]{64}$/u);
+      expect(identityOf([third, second, first])).toBe(forward);
+      expect(identityOf([second, third, first])).toBe(forward);
+      expect(identityOf([first, second])).not.toBe(forward);
+    });
+
+    it("states no identity when the gateway reports no deployment", () => {
+      const parsed = parseModelDiscovery({
+        data: [{ model_name: "shared-chat", model_info: { mode: "chat" } }, { id: "listed-only" }],
+      });
+      expect(parsed.modelMetadata?.["shared-chat"]).not.toHaveProperty("deploymentIdentitySha256");
+      expect(parsed.modelMetadata?.["listed-only"]).not.toHaveProperty("deploymentIdentitySha256");
+    });
+  });
+
   it("uses conservative context geometry if one alias deployment omits its limit", () => {
     const result = parseModelDiscovery({
       data: [
@@ -6558,6 +6645,11 @@ describe("handleGatewaySetup", () => {
           ],
           circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
           codingOutageWindowMs,
+          atlassian: {
+            privateTargets: [
+              { baseUrl: "https://jira.operator.test/context", addressClass: "private" },
+            ],
+          },
           groundedAnswers: { ownAssessment: "disabled" },
           branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
         }),
@@ -6565,11 +6657,22 @@ describe("handleGatewaySetup", () => {
       );
 
       const result = await handleGatewaySetup(
-        ctx({ preserveExisting: true, imageInputModelIds: [] }),
+        ctx({
+          preserveExisting: true,
+          imageInputModelIds: [],
+          atlassian: {
+            privateTargets: [{ baseUrl: "https://attacker.test", addressClass: "loopback" }],
+          },
+        }),
         deps,
       );
 
       expect(result.status).toBe(200);
+      expect(currentGatewayConfig(deps)?.atlassian).toEqual({
+        privateTargets: [
+          { baseUrl: "https://jira.operator.test/context", addressClass: "private" },
+        ],
+      });
       expect(currentGatewayConfig(deps)?.groundedAnswers).toEqual({ ownAssessment: "disabled" });
       expect(currentGatewayConfig(deps)?.branding).toEqual({
         logoUrl: "https://assets.example.invalid/keiko.svg",
@@ -8482,6 +8585,111 @@ describe("handleGatewaySetup", () => {
     expect(preserved.knownLimitations).not.toContain(
       "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it",
     );
+    deps.store.close();
+  });
+
+  // #3905 AC2: a management declaration (`supports_function_calling: true`) is the gateway's claim,
+  // not evidence that this deployment accepted Keiko's forced tool call. Only the live probe grants
+  // `toolCalling`; the positive control proves the same declaration does reach the capability once
+  // the probe verified it.
+  it.each([
+    { observation: "none", expected: false, verification: undefined },
+    { observation: "unverified", expected: false, verification: "unverified" },
+    { observation: "unsupported", expected: false, verification: "unsupported" },
+    { observation: "verified", expected: true, verification: "verified" },
+  ] as const)(
+    "grants tool calling from the live probe, never from a declaration ($observation)",
+    async ({ observation, expected, verification }) => {
+      const uiDir = await tempDir("keiko-gw-ui-declared-tools-");
+      const discovered = parseModelDiscovery({
+        data: [
+          {
+            model_name: "declared-tools",
+            model_info: { mode: "chat", supports_function_calling: true, max_input_tokens: 64_000 },
+          },
+        ],
+      });
+      expect(discovered.modelMetadata?.["declared-tools"]?.toolCalling).toBe(true);
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: await tempDir("keiko-gw-ev-declared-tools-"),
+        env: { ...VAULT_ENV },
+        uiDbPath: join(uiDir, "keiko-ui.db"),
+        gatewayModelDiscovery: () => Promise.resolve(discovered),
+        gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+        gatewaySetupTester: (_config, modelIds) =>
+          Promise.resolve({
+            testedModelIds: modelIds,
+            responseFormatModelIds: [],
+            toolCallingObservations:
+              observation === "none"
+                ? []
+                : modelIds.map((modelId) => ({
+                    modelId,
+                    status: observation,
+                    checkedAt: new Date().toISOString(),
+                  })),
+          }),
+      });
+      const result = await handleGatewaySetup(
+        ctx({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const capability = requiredCapability(requiredGatewayConfig(deps), "declared-tools");
+      expect(capability.toolCalling).toBe(expected);
+      expect(capability.toolCallingVerification?.status).toBe(verification);
+      deps.store.close();
+    },
+  );
+
+  // #3905: Settings builds providers from the same discovery, so the observed deployment must reach
+  // the stored provider there too, survive a save whose discovery states none, and follow a re-point.
+  it("keeps the observed deployment identity on the provider across saves", async () => {
+    const uiDir = await tempDir("keiko-gw-ui-deployment-identity-");
+    const alias = (model: string | undefined): ReturnType<typeof parseModelDiscovery> =>
+      parseModelDiscovery({
+        data: [
+          {
+            model_name: "identity-chat",
+            ...(model === undefined ? {} : { litellm_params: { model } }),
+            model_info: { mode: "chat" },
+          },
+        ],
+      });
+    let discovery = alias("ollama/gemma-3");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-ev-deployment-identity-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(discovery),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) => Promise.resolve(modelIds),
+    });
+    const identity = (): string | undefined =>
+      requiredGatewayConfig(deps).providers.find((provider) => provider.modelId === "identity-chat")
+        ?.deploymentIdentitySha256;
+    const save = async (body: Record<string, unknown>): Promise<void> => {
+      expect((await handleGatewaySetup(ctx(body), deps)).status).toBe(200);
+    };
+
+    await save({ baseUrl: "https://llm-gateway.example.com", apiKey: "example-secret-token" });
+    const first = identity();
+    expect(first).toMatch(/^[a-f0-9]{64}$/u);
+    expect(first).toBe(
+      alias("ollama/gemma-3").modelMetadata?.["identity-chat"]?.deploymentIdentitySha256,
+    );
+
+    // A discovery that states no deployment is silence, not a change: the identity is kept.
+    discovery = alias(undefined);
+    await save({ preserveExisting: true, apiKey: "rotated-secret-token" });
+    expect(identity()).toBe(first);
+
+    discovery = alias("ollama/qwen-3");
+    await save({ preserveExisting: true, apiKey: "rotated-secret-token" });
+    expect(identity()).toMatch(/^[a-f0-9]{64}$/u);
+    expect(identity()).not.toBe(first);
     deps.store.close();
   });
 
@@ -11192,12 +11400,18 @@ describe("rawConfigFromCurrent — voice persona persistence round-trip", () => 
   it("preserves the grounded-answer policy and the PR branding on reload", () => {
     const config = parseGatewayConfig({
       ...voiceRaw,
+      atlassian: {
+        privateTargets: [
+          { baseUrl: "https://jira.operator.test/context", addressClass: "private" },
+        ],
+      },
       groundedAnswers: { ownAssessment: "disabled" },
       branding: { logoUrl: "https://assets.example.invalid/keiko.svg" },
     });
 
     const reloaded = parseGatewayConfig(rawConfigFromCurrent(config, undefined));
 
+    expect(reloaded.atlassian).toEqual(config.atlassian);
     expect(reloaded.groundedAnswers).toEqual({ ownAssessment: "disabled" });
     expect(reloaded.branding).toEqual({ logoUrl: "https://assets.example.invalid/keiko.svg" });
   });
@@ -11349,6 +11563,99 @@ describe("gateway setup writes the process activity log", () => {
       expect(sink.events.map((event) => event.op)).toContain("gateway.chat.completed");
       // …and the probe's own request carries the sink independently of the Gateway's.
       expect(sink.events.find((event) => event.category === "embedding")).toBeDefined();
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  // Discovery used to call `gatewayFetch` without a sink: a refused `/model/info` or `/models`
+  // request wrote `http.gateway.fetch.failed` into the null sink and only bumped `portUnwired`.
+  it("records a failed discovery request on the Activity Log under the setup correlation id", async () => {
+    const uiDir = await tempDir("keiko-gw-discovery-log-ui-");
+    const evidenceDir = await tempDir("keiko-gw-discovery-log-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      const href = fetchInputUrl(url);
+      if (href.endsWith("/model/info") || href.endsWith("/model/group/info")) {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      if (href.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "fallback-chat" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return answerSetupCall(url);
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          { baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" },
+          "corr-discovery-log",
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-discovery-log")).toBe(true);
+      expect(JSON.stringify(sink.events)).not.toContain("example-secret-token");
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("records a failed Figma credential smoke request instead of counting it port-unwired", async () => {
+    const uiDir = await tempDir("keiko-gw-figma-log-ui-");
+    const evidenceDir = await tempDir("keiko-gw-figma-log-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      if (new URL(fetchInputUrl(url)).hostname === "api.figma.com") {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      return answerSetupCall(url);
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com",
+            apiKey: "example-secret-token",
+            figmaAccessToken: "figd_log-smoke-token",
+          },
+          "corr-figma-log",
+        ),
+        deps,
+      );
+
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-figma-log")).toBe(true);
+      expect(failures.every((event) => event.errorKind !== undefined)).toBe(true);
+      expect(JSON.stringify(sink.events)).not.toContain("figd_log-smoke-token");
     } finally {
       deps.store.close();
     }
@@ -12272,12 +12579,18 @@ describe("selected metadata responsiveness", () => {
     setServerLogger(createServerLogger({ sink, level: "info" }));
     vi.useFakeTimers();
     metadataAbortTimers();
-    const fetcher = vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) =>
-      fetchInputUrl(url).endsWith("/model/info")
-        ? slowMetadataResponse(init?.signal)
-        : Promise.resolve(new Response(null, { status: 404 })),
-    );
+    // Setup reads the management route before it saves the configuration. The save starts the
+    // background catalog refresh on the same handler graph, which reads the route again under the
+    // next configuration generation, so each request is attributed to the generation it ran under.
+    const metadataGenerations: number[] = [];
+    const fetcher = vi.fn((url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+      if (!fetchInputUrl(url).endsWith("/model/info"))
+        return Promise.resolve(new Response(null, { status: 404 }));
+      metadataGenerations.push(deps.gatewayConfig?.generation() ?? -1);
+      return slowMetadataResponse(init?.signal);
+    });
     vi.stubGlobal("fetch", fetcher);
+    const setupGeneration = deps.gatewayConfig?.generation() ?? -1;
     const setup = handleGatewaySetup(selectedMetadataContext(), deps);
     await vi.advanceTimersByTimeAsync(14_000);
     expect((await setup).status).toBe(200);
@@ -12285,10 +12598,12 @@ describe("selected metadata responsiveness", () => {
       contextWindow: 32_768,
       maxOutputTokens: 4_096,
     });
-    const metadataCalls = fetcher.mock.calls.filter(([url]) =>
-      fetchInputUrl(url).endsWith("/model/info"),
-    );
-    expect(metadataCalls).toHaveLength(1);
+    // Exactly one request belongs to setup; any other is the refresh the save started.
+    const savedGeneration = deps.gatewayConfig?.generation() ?? -1;
+    expect(savedGeneration).toBeGreaterThan(setupGeneration);
+    const [setupRequest, ...refreshRequests] = metadataGenerations;
+    expect(setupRequest).toBe(setupGeneration);
+    expect(refreshRequests).toEqual(refreshRequests.map(() => savedGeneration));
     const event = sink.events.find((entry) => entry.op === "gateway.setup.metadata.resolved");
     expect(event?.extra).toMatchObject({
       outcome: "available",

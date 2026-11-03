@@ -4,6 +4,7 @@
 // ADR-0003 types.ts precedent.
 
 import type { CodingContextPack } from "./coding-context.js";
+import { GOVERNED_PATCH_MAX_BYTES } from "./patch-limits.js";
 
 // ─── State machine ────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ export const DEFAULT_LIMITS: HarnessLimits = Object.freeze({
   maxToolCalls: 30,
   maxCommandExecutions: 10,
   maxContextBytes: 512_000,
-  maxPatchBytes: 65_536,
+  maxPatchBytes: GOVERNED_PATCH_MAX_BYTES,
   maxWallTimeMs: 300_000,
   maxFailureAttempts: 3,
 } as const);

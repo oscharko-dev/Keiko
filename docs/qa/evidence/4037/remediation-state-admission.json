@@ -1,0 +1,258 @@
+{
+  "schemaVersion": 1,
+  "classification": "Updater remediation admission, aggregate publication and stale restart preservation; actual public-manager mechanics, not installed updater acceptance",
+  "sourceParent": "22d9fb314e9a8b365c39b1cd7368652c5f676e9a",
+  "sourceFreeze": {
+    "artifact": "checkpoint65-source-freeze-v1.json",
+    "sha256": "e01f29974220a13ad42e987bb6b4b614bddba7230b891a2f01c8cce80000e624"
+  },
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "06fbfca3425b6be85e54c381ceeffcf58c1309b920a80ee4805ab39d6233af60"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "87994be6a9b893f959f1db2d63aab761890cbd940ceda498177bfb6f8cedf3a9"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "2374f2721907364ea84a13d8da765b5fcd2a8927c0a03a9ffe414c81d6e4f278"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "2881f5cb48fa988d36afd78a0013c47b6005dc0adff7c06454c67f430ee404af"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "0fb0d947a06aad2fef1dbd935098aacba161aa5a917789448a17a27d3bdc19ff"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "cb959baa73e135acae4531b89db14afb6342d3405718ec83f364f5d1e0838cf2"
+    },
+    {
+      "path": "packages/keiko-server/src/update-local-state.test.ts",
+      "sha256": "e7627113c13d6957556c331d0b8fd5c5b15adb9bf30b3fa4226950fe531457a3"
+    },
+    {
+      "path": "packages/keiko-server/src/update-local-state.ts",
+      "sha256": "f6500928f5b8c59dce7d23332bab8cb1d28d3735e1194edb4f82f8063f286dee"
+    },
+    {
+      "path": "packages/keiko-server/src/update-remediation-drafts.ts",
+      "sha256": "4ba1767be232dc118bb86cb62b099a542a10c47cbf00340540f55ad7b0eb475c"
+    },
+    {
+      "path": "packages/keiko-server/src/update-remediation.test.ts",
+      "sha256": "5c555ef959e8fd48c825adb4ced85f35b77c76dbafe4936691ef10955206d088"
+    },
+    {
+      "path": "packages/keiko-server/src/update-remediation.ts",
+      "sha256": "35ea36b27a7eff60e5e72982e52257ee7241c3f790bec0edae741d28b2e8bd39"
+    },
+    {
+      "path": "packages/keiko-server/src/update-runtime-activity.test.ts",
+      "sha256": "010805aabf8f4684b49e7a68237b7d2aae3845ff201d8ed3891c47f8ee6b2052"
+    },
+    {
+      "path": "packages/keiko-server/src/update-runtime-activity.ts",
+      "sha256": "658038a1147956f5b9e8026f3fd75780f63ec3b501e3b572a21493695fcf9fd3"
+    },
+    {
+      "path": "packages/keiko-server/src/update-runtime-state-exclusion.test.ts",
+      "sha256": "e1e8136f55289fe4cfcc792bf452c66e3d7c7da38d9af6dd8ff0d0f9c9d18ea7"
+    }
+  ],
+  "retainedRuntime": {
+    "artifact": "checkpoint65-final-retention-v1.json",
+    "sha256": "2d3556cb4416d8591c47f21da0b1eaf601d33257ca8ce859c3c55aa03c5a2daa"
+  },
+  "fixture": {
+    "artifact": "checkpoint65-fixture-retention-v1.json",
+    "sha256": "f00948aecdea18f0af81e9198f983b86f42615fb2996a717c36fb14ba25e23d9"
+  },
+  "pdca": {
+    "plan": {
+      "requirements": [
+        "A delayed admission must not clear newly authoritative outcome uncertainty or execute again.",
+        "A defer decision cannot complete an unsettled owned action.",
+        "Distinct-action aggregate writers cannot successfully publish the same revision and lose a committed transition.",
+        "Automatic missing-status initialization preserves a later authoritative row.",
+        "Restart completion preserves a newer/different target, uncertain rows and unrelated remediations."
+      ],
+      "originalIndependentCounterexamples": [
+        {
+          "artifact": "independent-checkpoint65/lease64-uncertainty-window-independent.json",
+          "sha256": "17c0df0e047094af7a70734ea24e9d5e631ea1e6ec75a14883f0767dc095ca68"
+        },
+        {
+          "artifact": "independent-checkpoint65/lease64-state-revision-window-independent.json",
+          "sha256": "3a5df94f5674377ddd7f5f11cc8492e546980f419418ef2285fec787c85b2c2f"
+        },
+        {
+          "artifact": "independent-checkpoint65/lease64-active-defer-independent.json",
+          "sha256": "20a668efe4a982489152760f2df191cc8b18715cdd070be5fe33bc4df393de00"
+        }
+      ],
+      "failureFirstSourceRuns": [
+        {
+          "artifact": "checkpoint65-admission-red-v1.log",
+          "sha256": "6c3bf31540328f009816d3eb5b9c4ac57df90aa420d6704d6ba5453d7eecf7d0"
+        },
+        {
+          "artifact": "checkpoint65-state-revision-red-v2.log",
+          "sha256": "cf85bfa2dbb506b386d557c15aac028c037468494608944fd5c8bd1f99eee131"
+        },
+        {
+          "artifact": "checkpoint65-adjacent-admission-red-v1.log",
+          "sha256": "33e1dbd09662d4dbf30a6d874216f67b278d77e346930a6c0d10d7c140f2ef1d"
+        }
+      ],
+      "retained64SamePolicy": {
+        "artifact": "checkpoint65-v1-linux-uid1000-retained64-red.json",
+        "sha256": "120cb1ae97f958c749bc5c413ba9640d9d6758ba0fed6c48a9915c2951c161b1"
+      },
+      "exactOriginalDraftDependency": {
+        "artifact": "checkpoint65-baseline-drafts-retention-v1.json",
+        "sha256": "10142c7ff04c3e64340e1f6c8720eba0f075ace965f527d37948022565b30f93"
+      }
+    },
+    "do": [
+      "Share exact action admission for run/defer and recheck uncertainty under the real owner.",
+      "Serialize persisted revision inspection, transition validation, durable publication and flush with the existing private zero-data SQLite guard mechanism.",
+      "Refuse busy and stale aggregate publication without implicit merge or retry.",
+      "Recheck automatic absent-status initialization under its action owner.",
+      "Complete restart in one matching-target snapshot/CAS transition, preserving uncertain and unrelated rows.",
+      "Emit closed body-free written/busy/failed observations through the existing Activity Log; remove the unused restart-draft constructor."
+    ],
+    "check": {
+      "updaterTests": {
+        "passed": 812,
+        "existingSkipped": 2,
+        "suites": 47
+      },
+      "safeBehaviorActualManagerRuns": [
+        {
+          "artifact": "checkpoint65-v1-macos-admission.json",
+          "sha256": "61bf997c2bed99a443960f18c6f3acccf86603ef1393097cbfcb2f333713c7e0"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid1000-admission.json",
+          "sha256": "0f81ed5f88f98b444ab5dcf272e34ea0de4355e6043e5cc99106356d8220f53f"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid65534-admission.json",
+          "sha256": "987ee59f177a8fe917b0a3cf71a166cc96baf1d9e7f44a1e102733b7735573c6"
+        }
+      ],
+      "priorGuardContinuity": [
+        {
+          "artifact": "checkpoint65-v1-linux-uid1000-guard-contention.json",
+          "sha256": "8cf25085770fc2404781296f47c7c344c84ee0fc190b6ac72e3f9a84821e5076"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid1000-guard-lifetime.json",
+          "sha256": "55be2caf32ecbbf0bfdefd99a7f68acfa0e66f46896e0b14d6cc1180495ce86e"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid1000-guard-release.json",
+          "sha256": "c43ac58adeb9ad29a2b8e1935d12acc6eaff33fd52372f9db4fb906e5614952b"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid1000-guard-legacy.json",
+          "sha256": "c327a7887313597d5bde0bd77d574ac013a1f14e2273afbeed178e2b7faf888d"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid65534-guard-contention.json",
+          "sha256": "34b03a20ee6be4ea43079f575b5bb85d82a578df18e392a1a06dbfe706e8f98e"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid65534-guard-lifetime.json",
+          "sha256": "5347b341609d3b0712e7e7715b650e9f68aa79d749212c6c1151edf30ca966b2"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid65534-guard-release.json",
+          "sha256": "bfcef74f28f19e4648a2f93a54e734e1c1fc783bd55d16726139dcd6da9403ac"
+        },
+        {
+          "artifact": "checkpoint65-v1-linux-uid65534-guard-legacy.json",
+          "sha256": "7fb96b12a45af0c59289032ae55a4c1052d3d458b933fe81705782beff81aae8"
+        }
+      ],
+      "independentFinal": [
+        {
+          "artifact": "independent-checkpoint65/checkpoint65-own-signed-fixture-independent.json",
+          "sha256": "379b539d21cf54024d4843d200d51d3206edea961eebde2762e70387eb8a6c3e"
+        },
+        {
+          "artifact": "independent-checkpoint65/checkpoint65-adjacent-manager-independent.json",
+          "sha256": "3ce6f90a1e5d5caa4690b5ed2273c7bdabd183db245bbf0e149e4891ff9d688d"
+        },
+        {
+          "artifact": "independent-checkpoint65/checkpoint65-state-registered-formatter-independent.json",
+          "sha256": "f6cdd054b8ccdb7bc9393fb58a43b010aa9efd05b18f7935f901720bf6858ac4"
+        },
+        {
+          "artifact": "independent-checkpoint65/checkpoint65-prepublication-matrix-join-independent.json",
+          "sha256": "89fdf7512a604407102c9d3a9a67efc8caf1b3df458d55c517416d7c94a11049"
+        },
+        {
+          "artifact": "independent-checkpoint65/checkpoint65-guard-continuity-independent.json",
+          "sha256": "4aa134f40fbf1d1db353cac994bdb68ab4c2c6a2b6a4559c8fbe501a2cbc8620"
+        }
+      ],
+      "scopedGates": [
+        {
+          "gate": "typecheck",
+          "artifact": "checkpoint65-v1-typecheck.json",
+          "sha256": "afba1f96a267303fe56b686a26651b5324c21d7e06b2efb4f0b26d44398a65f4"
+        },
+        {
+          "gate": "lint",
+          "artifact": "checkpoint65-v1-lint.json",
+          "sha256": "5f83d434fb1aa0da50233c1743ff013a5df6bc33d79b3fd320c8e12da4dc9281"
+        },
+        {
+          "gate": "sonar",
+          "artifact": "checkpoint65-v1-sonar.json",
+          "sha256": "36f1f923e8d6e0ac099ab8c42be34a3fa01a9719c19f58ee14a65195cefc2079"
+        },
+        {
+          "gate": "updater-tests",
+          "artifact": "checkpoint65-v1-updater-tests.json",
+          "sha256": "de2889d286b4195ff748aba72637e8a9b99bb93191de3cd1117b69c3b3fe61ec"
+        },
+        {
+          "gate": "error-observability",
+          "artifact": "checkpoint65-v1-error-observability.json",
+          "sha256": "e723e867aee0ff1a615e5e4d3d4478e6ea9177e629900cd72a6293fea1600ca7"
+        },
+        {
+          "gate": "activity-log",
+          "artifact": "checkpoint65-v1-activity-log.json",
+          "sha256": "7d2566d727e43f3f85a9df3c19b570031b9dfc4be05eee97521e6965dc68c9ee"
+        }
+      ]
+    },
+    "act": "Retain exact failure receipts and fixture policy. Continue actual initial/detached/successor ownership and installed update/recovery qualification; do not infer full issue acceptance from these mechanical controls."
+  },
+  "intermediateDispositions": {
+    "artifact": "checkpoint65-run-dispositions-v1.json",
+    "sha256": "955deb0ba2fca4c01c7c87dc90cdc07c3dec36ebbdebf04edfd2778613424631"
+  },
+  "limits": [
+    "Actual public managers, private owned filesystem/processes and real SQLite guards; remediation work and one terminal-write failure are controlled ports.",
+    "The retained64 replay overlays the original source/compiled owners plus the exact original draft dependency on compatible current dependencies; it is not an exact historical complete packaged build.",
+    "Independent formatter checks are not a durable file sink or transport proof.",
+    "No installed-generation transfer, actual packaged activation/rollback/SSD, Windows execution, browser journey, Gemma or skill-benefit acceptance is inferred.",
+    "The original frozen model inputs/outcomes and acceptance ledgers remain unchanged."
+  ],
+  "acceptance": {
+    "allCriteriaSatisfied": false,
+    "issuesClosed": false,
+    "exactHeadCiGreen": false,
+    "merged": false,
+    "autoMergeEnabled": false
+  }
+}

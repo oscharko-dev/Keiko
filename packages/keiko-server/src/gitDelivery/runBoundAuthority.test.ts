@@ -15,6 +15,7 @@ import { gitDeliveryAuthorityDenial, gitDeliveryAuthorityGate } from "./requestP
 import {
   authorizeGitDelivery,
   authorizeGitDeliveryModelEgress,
+  gitOperationEnvelopeDecision,
   type GitDeliveryDeliveredPullRequestAdmission,
 } from "./runBoundAuthority.js";
 import {
@@ -402,6 +403,50 @@ describe("authorizeGitDelivery per operation", () => {
     );
     expect(decision).toEqual({ allowed: false, reason: "permission-scope-missing" });
     expect(calls).toBe(0);
+  });
+});
+
+// #3902 AC2: the coding runtime's governed fetch and pull ask this owner for the envelope's decision.
+// It is the decision authorizeGitDelivery reaches for the Git Client's own Fetch and Pull, before
+// the branch check and any approval, for the envelope production mints in each mode.
+describe("gitOperationEnvelopeDecision (#3902 AC2)", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "decides fetch and pull as authorizeGitDelivery does for the production envelope in %s",
+    (mode) => {
+      const port = productionScopedGitDeliveryAuthority(
+        () => PROJECT_ID,
+        () => WORKSPACE_ROOT,
+        mode,
+      );
+      const active = port.current(NOW);
+      if (active === undefined) throw new Error("test authority was not available");
+      for (const operation of ["fetch", "pull"] as const) {
+        const decision = gitOperationEnvelopeDecision(active.authority, operation);
+        expect(decision).toEqual(
+          mode === "autonomous-delivery"
+            ? { ok: true }
+            : { ok: false, reason: "approval-required" },
+        );
+        const admitted = authorizeGitDelivery(port, { ...REQUEST, operation }, NOW);
+        expect(admitted.allowed).toBe(decision.ok);
+      }
+    },
+  );
+
+  it("refuses Full access a fetch or pull its envelope has no network scope for", () => {
+    const active = authorityPort((current) => ({
+      ...current,
+      authority: {
+        ...current.authority,
+        networkPolicy: { mode: "deny-all", allowLoopback: false, connectorScopes: [] },
+      },
+    })).current(NOW);
+    if (active === undefined) throw new Error("test authority was not available");
+    for (const operation of ["fetch", "pull"] as const)
+      expect(gitOperationEnvelopeDecision(active.authority, operation)).toEqual({
+        ok: false,
+        reason: "permission-scope-missing",
+      });
   });
 });
 

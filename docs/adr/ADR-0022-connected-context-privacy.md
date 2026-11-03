@@ -73,6 +73,61 @@ and bind final source-warning decisions to canonical scope/query digests. Unknow
 observations cannot dismiss a retrieval miss. Explicit unavailable source targets remain closed
 observations even when a separate labelled assessment is allowed.
 
+Answer copying and repository-reference cleanup share the existing Markdown code-range owner.
+Only prose is normalized: fenced and inline code retains literal bytes, whitespace, punctuation
+and source-label-shaped text. Grounded citation removal uses those same code boundaries. The
+existing answer-copy Activity Log event records success/failure and removed/retained marker-group
+counts without the copied body; it applies to this projection without a second clipboard or log path.
+
+### D1.1 — Changing sources cancels the current answer
+
+A validated change to the canonical grounding identity cancels the current generation and any
+already queued generation for that chat. This includes adding, removing, narrowing or widening
+Files or Knowledge sources, and successfully connecting or refreshing a Git comparison. Identity
+comparison excludes source timestamps, list order, duplicates and Git description metadata.
+Malformed, inaccessible, conflicting, over-budget or effectively unchanged patches do not cancel
+an answer. PATCH revalidates its precondition and access at the serialized write boundary.
+
+Cancellation belongs to the existing per-chat turn serializer. It reaches grounded, buffered,
+streaming and regeneration requests, including requests waiting for shared gateway readiness.
+Cancelling one readiness waiter must not cancel the configuration-owned probe used by other chats.
+The underlying turn retains its gate until it actually settles; an uncooperative provider cannot
+publish a late assistant answer or admit a stale queued generation. A pending PATCH is not an
+acknowledged source update. Successful Git comparison mutations keep their existing transactional
+relationship compensation and notify the same cancellation owner only after success.
+
+Completed messages and learned findings remain in the conversation and follow normal history
+compaction. Connected Files excerpts are assembled separately for each question, not inserted as
+a persistent document lane into history compaction. Historical answers, including quoted code,
+remain historical conversation; they do not grant current filesystem authority. Existing
+`chat.scope.update` evidence records cancellation requests with canonical identity digests and
+counts only, never source bodies, user text or paths.
+
+Connected Files windows follow their resolved visible selection independently: the displayed root,
+subdirectory or open file. Existing acknowledgement ownership still determines the canonical
+source label. Opening a file never preserves a former folder through a saved pin; retired
+`keepFilesFolder` preferences are discarded on workspace restoration. Navigation requires neither
+confirmation nor a folder-restoration action. Same-root background tree reads preserve the
+currently displayed file; a delayed refresh cannot restore a closed preview or cross a root
+change. A different resolved root clears the old preview and directory before either can supply
+source authority. The header retains compact source labels,
+disambiguating paths, disconnect controls and actual pending/error feedback. Generic explanation
+is available only on demand in the missing-evidence action. The existing `client.scope.notice`
+observer records body-free transitions without a duplicate live-region announcement.
+
+An abandoned Files write whose compensation fails retains its admission hold. A subsequent
+explicit, successfully acknowledged bind may retire detached failed edges only for the same chat,
+mounted source window and canonical scope. Attribution uses the actual canonical PATCH reply,
+including its submitted timestamp and selection geometry, before compensation runs. A requested
+alias alone cannot identify the source: retargeting that alias to another canonical root must retain
+the prior hold. Missing acknowledgement attribution, live edges, pending writes, other mounted
+owners and other chats remain ineligible. This extends the existing intent registry and serialized
+PATCH owner; it introduces neither a source cache nor a second persistence path. Retiring a failed
+edge emits the existing correlated, body-free `client.files-scope.decision` release disposition.
+Failed unbind holds use the same mounted edge/conversation ownership boundary. Removing an obsolete
+edge may release its settled failed hold; an unfinished or blocked serialized write still retains
+admission protection.
+
 ### D2 — Per-answer summary is wire-only
 
 The wire response carries `contextPack: GroundedAnswerContextPackSummary` on every
@@ -229,6 +284,14 @@ promote that context to source evidence. System authority, citation validation a
 input/output grants remain unchanged. Existing final-prompt selection and gateway admission
 events describe the actual fitted source counts and token costs; ordering is not proof that a
 model answered correctly.
+Marker repair asks for a bounded JSON insertion plan rather than a regenerated answer. Each of
+at most 32 entries identifies unique original prose (at most 512 UTF-16 units) and a supported
+citation marker. The existing repair owner inserts markers at original coordinates, then runs
+the unchanged verbatim-content, code, assessment, token-boundary, sent-evidence and size guards.
+Ambiguous anchors, duplicate coordinates, extra schema fields and unsupported ranges fail
+closed. Existing literal marker-only responses remain compatible under those guards. This
+changes neither the turn's physical-attempt ceiling nor its remaining input/output/time grants;
+existing answer-details and reconciliation events record the actual disposition without bodies.
 When that budget requires shrinking a located excerpt, a complete matching line that fits the
 remaining UTF-8 byte grant takes priority over an unrelated leading prefix. Adjacent complete
 lines may fill the remaining grant. The fitted excerpt retains its physical source offsets and
@@ -371,6 +434,11 @@ The unchanged admission contract rejects relative paths over 4096 UTF-8 bytes, b
 absolute or drive-prefixed paths, an initial `~`, and empty, `.` or `..` segments. The initial-tilde
 rule is positional: root `~notes.md` is excluded, while `src/~notes.md` is eligible.
 Optional structural and Git-history enrichment are separate from lexical coverage. Their planner
+requests Git history for explicit history/relationship questions and repository-wide diagnostics,
+including diagnostic follow-ups. A workspace-root selection alone does not request history: current
+policy and other factual questions must not acquire unrelated commit recency/churn evidence merely
+because the same files live in Git. Existing source-details/completion events retain the planned,
+executed and skipped-ring observations; diagnostic candidate scoping remains in force. Their planner
 slices retain finite scan counts (currently 614 and 307 files respectively) and finite returned
 matches; they do not cap the recursive lexical scan. An explicitly finite elapsed budget is sliced
 across rings, while the default `null` deadline remains uncapped. Retained lexical matches are
@@ -465,8 +533,9 @@ matching, including technical aliases and ordinary context.
 The existing persistent natural-language matching revision invalidates older scores. After actual
 excerpt assembly and final prompt fitting, an unobserved compound hint lowers selection confidence
 without removing evidence or claiming a keep-one fallback; fresh and cached packs share this rule.
-Ordinary natural-language document excerpts include the complete decoded, redacted document when
-it fits both the existing window grant and remaining total bytes. This uses the canonical reader's
+Ordinary natural-language document excerpts and canonical build manifests recognized by the existing
+ecosystem registry include the complete decoded, redacted source when it fits both the existing
+window grant and remaining total bytes. This uses the canonical reader's
 current snapshot and actual full-file range. Explicit selected-file or line-range requests,
 coverage-certified windows and source-code excerpts retain their requested geometry; a larger
 document retains the existing bounded anchor windows.
@@ -661,6 +730,14 @@ guards. Current callable ownership and actual code matches precede root selectio
 use the existing query and certified-definition capacity. Explicit selected lines, non-addressed
 discovery and route tracing keep their own rules.
 Lexical query-group coverage alone never certifies the requested implementation or an answer.
+Direct batched reads retain the original requested-range index on every returned window before
+flattening. An omitted range leaves that index absent; duplicate and overlapping requests retain
+their distinct indices. Discovery joins observations by that producer index, keeping current
+witnesses when another old lexical range is unavailable and recording the unavailable atom through
+the existing uncertainty owner. All-unavailable contextual batches remain incomplete. Actual
+snapshot changes retain their fail-closed I/O error. Lazy asynchronous iteration schedules each
+next discovery or frontier read only after the prior result has settled and updated its remaining
+capacity; no concurrent promise batch bypasses deadline, cancellation or currentness checks.
 
 The governed request's existing document collector checks the original remaining file and
 excerpt-byte grant before each extraction. It bounds the redacted logical projection, including
@@ -732,13 +809,119 @@ the next file. Expected read failures retain healthy sibling evidence and emit
 `search.symbol-line.unavailable` through the existing Activity Log, with a path digest, closed
 failure reason and cause metadata. Unexpected programming failures retain their original exception
 and reach the terminal retrieval diagnostic. Secret redaction uses
-one private-key boundary scan and scheme-start guards, including conservative redaction of an
+linear private-key boundary scans and scheme-start guards, including conservative redaction of an
 unterminated private-key body, so eligible large text does not trigger repeated suffix scans.
 Workspace search and excerpt projection preserve each masked secret span's original LF/CRLF
 delimiters without retaining its body or columns. Facts between separate secret blocks therefore
 keep their physical source lines in lexical matches, numbered model context, and source navigation.
-The general-purpose redactor's default output remains unchanged. Persisted lexical snapshots from
-before this coordinate policy are invalidated by the existing index version fence.
+Source redaction now uses the shared security projection for TypeScript/JavaScript, Java, JSON/JSONC,
+YAML and the existing ordinary two-sided unified-diff subset. Credential assignments mask literal values while preserving syntax metadata and physical
+line delimiters. Java ownership follows its CST after JLS Unicode translation; parsed YAML aliases
+receive their final monotonic sensitivity before one scalar span is emitted. Known issuer patterns,
+private keys and configured secret literals remain unconditional. Malformed inferred code, parser
+stack exhaustion and the existing source-size ceiling produce body-free refusals; a connected source
+with an unavailable projection is omitted through the existing read-failure/uncertainty path.
+Completed standalone private-key intervals are opaque whitespace only in the parser input, with
+unchanged UTF-16 offsets and CR/LF delimiters. Unconditional masking consumes their original bytes;
+public code after a closed interval remains readable. Unclosed intervals receive no parser exemption.
+Declared JSON prefixes retain their observed values only when missing syntax is at EOF; earlier
+lexical errors remain unavailable. Unsupported source languages keep strict text protection without
+being interpreted as TypeScript or Java; ambiguous C# literal forms remain unavailable. A failed Java
+parse can retain only an unquoted, unescaped fragment with no canonical sensitive-name or strict
+redaction candidate. A malformed TypeScript fragment remains unavailable when it contains an
+escape, unsupported quoting, a sensitive-name plus literal candidate or a strict-redaction change.
+A sensitive word alone, or a public literal without a secret candidate, is not a private value.
+These are source observations, not compilation certificates.
+Plain prose is not standalone source (2026-10-29, #3900). A candidate line is judged together with
+everything that follows it, and a tolerant parse shapes English words into declarations (`function
+was fully read`, `using the request`), so a repository's own AGENTS.md and CONTRIBUTING.md were
+refused whole and a Coding run received no instructions. A declaration found by error recovery now
+counts as source only where a statement can begin (after a line break, `;`, `{`, `}` or modifier
+words such as `final`, never the middle of a sentence) and when the token after its declared name is
+one its grammar allows there (`(` or `<` for a function, `{`, `<`, `extends` or `implements` for a
+class, `=` or `<` for a type alias, and so on; the end of the text is allowed, so a truncated header
+is still source). A Markdown list marker, `-` or `+` with exactly one space and an optional task
+checkbox, is skipped before diff classification so the item's own text is judged on its own; a
+marker with no space or several keeps the unowned-diff-fragment rule, and the text after a marker
+still reaches the source parser. Malformed source that begins a statement, a real fence and an
+unparsable diff fragment fail closed exactly as before.
+Inferred YAML privacy projection keeps the complete parsed mapping, including duplicate entries,
+so a later private binding also masks earlier decoded copies. Privacy parsing is not configuration
+validation: explicitly selected YAML still rejects duplicate keys, using a linear check with the
+pinned parser's scalar-value and node-identity equality. The source scanner consumes public mapping
+contexts and blank prefixes once instead of reclassifying every remaining suffix. Malformed public
+text receives no code exemption and remains subject to ordinary strict redaction. Incomplete private
+bindings fail closed. Inferred all-plain fields retain the established plain-text placeholder style;
+explicit YAML and structured literals retain syntax-safe scalar replacements. Failed parsing cannot
+turn multiline prose into a quoted literal: only observed quoting, anchors or collection syntax
+requires structured refusal. Canonical placeholders remain stable on repeated redaction. A later
+standalone source candidate still receives its own language parser. Streaming retains mapping-shaped
+context until successful completion; ordinary prose can still progress immediately.
+One canonical parser-order traversal binds aliases to their nearest preceding anchors. The same
+per-document index owns value-alias lookup and sensitivity for scalar alias keys. Anchored first
+keys retain the complete parsed context; the leading-anchor check is only a candidate hint.
+An ambiguous scalar prefix is ordinary text, not a code exemption; its cursor stops before the
+opening line of the next canonical Markdown code range. This preserves code fences and quote
+context without repeatedly reparsing remaining public suffixes.
+Parsed aliases without an earlier target fail closed through the existing syntax-refusal path.
+Sensitivity remains monotonic across shared nodes and cycles; no alias graph is expanded to plain
+objects and no per-alias whole-document scan or global cache is introduced.
+Canonical Markdown inline bodies use the same complete source owners as unlabelled fences,
+including every successive inferred source region. The shared renderer scanner also reports
+unresolved backtick runs as advisory hints only; citation ranges remain unchanged. A source-shaped
+unresolved hint retains streaming context until successful completion. Cancellation discards it.
+Ambiguous nested private source fails closed; an unassigned sensitive word is not itself a value.
+Consumers advance monotonically through retained hint contexts rather than reparsing overlapping
+suffixes. Arbitrary inline text receives no source metadata exemption.
+Language-owned privacy projections may overlap. Strict text processing covers only the complement
+of their interval union and advances monotonically; it cannot append an earlier raw suffix again.
+All private literal spans survive for the existing conservative overlap merge.
+JSON/JSONC validation uses the compiler's JSON syntax diagnostics, not its configuration-object
+conversion. Complete top-level arrays and scalar values are supported; earlier lexical errors
+remain unavailable and only EOF-incomplete prefixes keep the existing bounded projection rule.
+Every JSON-hinted root reaches JSON grammar validation. A filename does not impose format validity:
+after failed validation, strictly public unparsed metadata retains the existing safe-text guard,
+and a complete recognized TypeScript/Java body may use its existing validated source owner.
+Other malformed bodies refuse projection; a scalar prefix cannot detach an escaped private key
+through unconditional unstructured fallback. Configured secrets and strict patterns remain binding.
+Malformed YAML-shaped public prose is not private merely because it discusses safety. Its actual
+scalar/alias key graph and unresolved escapes retain the refusal decision; unresolved alias and
+explicit complex-key starts enter that same parser. Ordinary public instructions remain under strict
+text redaction without a source exemption, including configured secrets and recognized patterns.
+Unified-diff privacy reuses the tools parser's accepted source ranges at the contracts leaf. Native
+source owners inspect separate old/new images; only coordinate-contiguous hunks share source syntax.
+Known private literal identities propagate within the complete patch using a temporary set and one
+bounded second projection, without inventing bindings across gaps. Replacements map back per physical
+line, preserving diff prefixes, LF/CRLF, UTF-16 positions and no-final-newline annotations. Headers,
+function context, preamble and tails retain strict protection. Unsupported or incomplete private
+fragments, parser exhaustion and the existing size ceiling fail closed. Public supported patches
+remain byte-exact; this adds neither combined-diff support nor execution authority.
+Owner decision 2026-10-28 (#4114): the raw Git diff view of the local user's own repository
+(`GET /api/git/diff`) keeps a file whose hunks fail only the syntax check readable under the
+credential floor, as standalone OpenCode shows it. Each old/new image is floored as a whole, so a
+private key spanning lines, token shapes, configured secrets and private literals known from other
+files of the same patch stay masked; a value that is secret only by its key name (for example a
+`password` field) stays readable in such a hunk, as in standalone OpenCode. Depth and size refusals
+and a floor that changes the line count keep whole-file masking. Every other redaction caller keeps the fail-closed default. A view cut at
+its byte cap (#4113) drops its partial last line and restates the cut hunk's shown line counts before
+redaction; body lines are never rewritten, and output that is not a patch is unchanged. The registered
+`git.diff.view-bounded` Activity Log operation records truncation, shown and maximum bytes and the
+floored-file count, never diff content or paths.
+Markdown credential labels use the same emphasis-aware field grammar for terminal value spans and
+pending streaming context, including nested emphasis. Completed public prose labels pass the same
+strict check in whole-text inference and publication; YAML anchor/alias grammar remains unchanged.
+Native JSON lexical boundaries retain malformed scalar continuations with structured values, while
+ordinary numbered/quoted prose receives no JSON exemption or refusal solely for naming a field.
+Index snapshot version 16 invalidates previously projected text even when source bytes and stat
+metadata are unchanged. The existing body-free projection revision 8 records this change without
+logging source content. Earlier versions, including 15, remain ineligible after the privacy repair.
+Malformed YAML block-header classification scans line boundaries and disjoint header prefixes
+once. A comment with a near-miss terminator cannot make earlier candidates rescan the remaining
+body. Classification, privacy and source-size grants stay unchanged. This scan first shipped in
+revision 2; later revisions retain it on the existing redaction Activity Log fields.
+All discovery, search, import-graph and persisted-index inputs use this owner after the existing
+admission checks. The current snapshot schema invalidates earlier redacted records. The connected
+evidence-details Activity Log records the projection revision without source bodies or paths.
 Auxiliary symbol and document filename discovery follows the same complete streaming traversal
 policy. Each requested filename pattern retains a bounded independent result bucket within one
 shared traversal for the symbol and document batches together. Each logical query keeps its own
@@ -818,6 +1001,28 @@ reported when that grant is spent; cancellation or a changed source prevents pub
 retained-result and model-context budgets remain authoritative.
 Successful primary literal-content matches survive incidental filename/output-count relevance
 boosts; vague, diagnostic, relational, and semantic evidence retains ordinary relevance filtering.
+Positive user-requested source descriptions can also supply primary lexical relevance when all
+descriptor words occur in order on one completely observed coherent source span. Bounded ordinary
+modifiers may intervene; whole-word matching, explicit negation, case sensitivity and physical read
+completeness remain binding. HTML uses the existing quote-aware tag and entity owners: inline
+formatting preserves text, while block boundaries separate descriptor spans without changing
+physical source-line coordinates. A file containing raw text, comments or ambiguous/multiline tags
+conservatively declines this optional witness and its score boost; ordinary HTML source matching
+remains available. The body-free
+`sourceDescriptorMatch` observation is bound to the actual lexical atom and query identity; it
+never verifies organizational approval or gives repository text instruction or permission authority.
+The typed `search.connected-context.evidence-details` sibling records the certified descriptor-path
+count on the existing Activity Log and correlation, separately from aggregate primary content.
+The source-details event already occupies its 48 contextual fields; its existing fields and
+single-row semantics remain unchanged. The small evidence sibling preserves the same field cap
+without recording descriptor words or paths.
+The existing source admission, freshness, excerpt reads, selection floors and cumulative grants
+still apply. Same-query validated match records may preserve the observation; token-hash inventories
+alone cannot manufacture it. The existing runner prepares that pure query derivation once per scan.
+Source-subject normalization and the planner share the existing presentation and complete-path
+grammar. Formatting numbers and path components cannot become unrelated content terms; complete
+path identity remains a separate bounded ranking signal. Changed matching semantics invalidate
+prior query-match identities, including prior positive formatting-only matches.
 Query-named paths (relative, contained absolute, or local file URLs) are case-preserving explicit
 selections. A single admission seam applies selected-scope membership, canonical containment, deny
 and ignore rules, safe regular-file checks, and the existing binary/size classifier before injection.
@@ -853,6 +1058,15 @@ bounded failure parser and an independent six-reference channel, leaving eight u
 available. Within that unchanged cap, the primary local diagnostic frame precedes explicit
 question paths and supplied query references; secondary frames and conversation referents follow.
 A long trace therefore cannot consume every slot before the user's separately named file.
+The six-reference planning channel is not a cap on explicit source admission. Admission retains
+the primary diagnostic frame first, then every unique path explicitly named in the independent
+question, followed by the remaining planned references. It uses the existing extraction metadata
+bound, selected-scope policy, classification/search reservations, deadline and file/byte/token
+grants. It does not admit additional diagnostic frames or conversation referents beyond the planned
+channel. A seventh requested file must not silently lose explicit-file priority merely because
+the planning preview is full. The existing source-detail counters distinguish the bounded
+`referenceChannelCount` from actual admitted/rejected paths; exhausted grants remain visible as
+budget omissions/uncertainty rather than an assertion that the requested source is absent.
 External runtime/generated frames are removed before the reference cap. Original path
 casing and numeric source locations survive admission; the primary frame and its existing
 structural test/source pair receive the same eligibility and read-budget checks. Ordinary lexical
@@ -896,6 +1110,10 @@ error, preserving its cause. The registered retrieval line remains WARN/cancelle
 create a registered-failure support incident; actual read failures and timeouts remain distinct.
 Only final sent packs and excerpt ranges authorize citations. Assembled reads retain their physical
 read/byte accounting and audit meaning even when prompt fitting removes their evidence.
+Prompt rendering omits zero-length metadata-alias bodies instead of emitting empty evidence fences.
+Nonempty whitespace source lines, document labels, positive body bytes and ranges remain unchanged.
+The retained packs preserve alias identities, provenance, usage, confidence and citation authority;
+existing final-prompt token and sent-reference observations measure the serialized result.
 An explicitly empty sent-pack inventory grants no source support; only absent legacy metadata may
 fall back to assembled evidence. Zero sent files retain physical read usage without producing a
 grounded source manifest.
@@ -909,6 +1127,20 @@ The observation carries no memory content or answer text.
 Citation repair is decided from the current answer: a substantive source answer without markers
 may use the single bounded repair even if earlier answers from the same model cited reliably.
 Historical citation observations remain descriptive and cannot waive current source validation.
+The repair dispatcher and validator share the same 131,072 UTF-16-code-unit text limit. An
+original answer above that supported size skips the extra model call as `skipped-capability`;
+it retains its original content, usage and uncited uncertainty. File and numeric citation paths
+use the same eligibility check, and the bound is not an additional token grant.
+The prose-annotation dispatcher also skips a source projection containing only rendered Markdown
+code and whitespace. It reuses the canonical fenced/inline code ranges and leaves the original
+answer, spend and uncited uncertainty unchanged as `skipped-capability`; it never invents a marker
+or promotes generated code to a verified source answer. Mixed prose and code retain the existing
+bounded repair. The existing citation-reconciliation Activity Log records whether original prose
+was available, without recording that prose or code.
+Both literal repair and locally constructed annotations preserve complete substantive tokens:
+markers cannot split contractions, contiguous symbolic operators or existing guarded graphemes,
+identifiers, decimal values and paths. Refusal preserves the original answer and uncited warning,
+while charging the actual completed repair attempt within the unchanged shared grants.
 The existing Activity Log records the actual repair disposition and final citation behaviour;
 clarifications and already cited answers do not acquire an extra model call.
 Initial synthesis and either marker-only repair or an admitted insufficiency follow-up share a
@@ -970,6 +1202,24 @@ topic, even without a quoted or typed identifier, retains recursive discovery. A
 file cannot stop discovery for that independent topic. Sole named-file requests retain
 focused excerpts, unchanged source eligibility, and the existing budgets. Explicit relationship,
 caller, import, test, integration, history, and diagnostic questions retain their structural routing.
+Structural import suffix resolution indexes each immutable, admitted source-path inventory once.
+Reversed, case-folded paths support binary prefix lookup while preserving the existing shortest-path
+and original-case lexical tie break, including partial-segment suffixes. Results and misses stay
+inside a weakly held inventory cache; another workspace or rebuild receives its own inventory.
+No source eligibility, retained-file budget, or resolved/heuristic classification changes. Existing
+retrieval completion timing and structural-build counters remain the body-free operational evidence.
+DTO contract pairing excludes same-language candidates before pair traversal, with one candidate
+projection per encountered language. It preserves original source/target order, same-scope exclusion,
+name/field confidence rules and shared execution-control checks for eligible pairs.
+Import and re-export binding projection groups resolved edges once per immutable edge inventory,
+then visits only the current source file's edges. Original edge order, kind filtering and final
+specifier precedence remain unchanged; a new inventory cannot inherit targets or misses.
+The request-local code index retains one shared promise and drains the same build steps as the
+synchronous compatibility entry point, yielding to the event loop after at most 32 source visits
+and between graph stages. Descriptor reads, root containment, source admission, shared cancellation
+and the absolute deadline remain the owners. Expiration after the final stage is checked before
+reporting coverage or caching an index. Existing completion/truncation diagnostics describe the
+actual outcome; yielding does not widen intake or claim complete corpus coverage.
 Advisory project metadata also streams every admitted directory entry and supported workspace
 pattern; unrelated file or service counts cannot hide manifests. Retained manifest evidence follows
 the accepted file-read budget or retained query-result allowance, preserving primary root manifests
@@ -1118,12 +1368,30 @@ recorded as failed, rather than applied. Attempted calls still consume the call 
 deadline stops subsequent reads, including when a late reranker result would otherwise arrive;
 identity fallback is pinned on the preselection producer, and orchestration pins enforce no
 post-deadline work. For contextual natural-language requests without semantic evidence or an
-applied reranker, the ordinary keep-one fallback preserves the first lexical producer's ordering
+applied reranker, the ordinary below-floor fallback preserves the first lexical producer's ordering
 among eligible content candidates. Each retained position must still match the actual atom's
 stable identity, path and query fingerprint. This changes neither relevance scores nor floors,
 exclusions, read grants or source authority. Successful reranking retains its own score order.
-The existing selection-details event records the closed fallback ranking source. Ordinary keep-one
-fallback records low selection confidence and the
+The first eligible fallback may retain at most two additional eligible sources whose current
+same-query content atoms carry the same matched-query-group key. This optional, body-free
+peer identity is captured from retained lexical content even when a peer falls outside the
+25-entry ranking diagnostic preview. Reported seeds retain their producer priority; supplemental
+peers retain their search-result order. Missing/malformed group keys, a different captured query,
+absent/replaced atoms and semantic results cannot extend that preview. The diagnostic display
+limit is not an evidence-admission limit, and the existing final peer/file/byte grants still apply.
+The canonical hexadecimal bitset identifies at least two query groups observed in the admitted lexical range; it does not
+certify source authority, factual agreement or answer completeness. Equal numeric scores alone do
+not establish group identity. The validated captured atoms must share one query fingerprint before
+their positional group keys can grant peers; mixed-query captures retain only the ordinary fallback.
+Missing/invalid metadata, a changed atom/query identity, semantic
+evidence or successful reranking cannot grant peers. The persistent match identity advances, and
+both live and cached lexical producers preserve the bounded key. Exclusions, the absolute and
+relative scoring floors, and read/byte/time grants remain unchanged; peers share the existing
+below-floor fallback and remain low confidence. A higher-confidence ordinary selection does not
+admit them. The existing selected-file count records actual retained size, while
+`keepOneFallbackApplied` is true only for a single retained fallback source.
+The existing selection-details event records the closed fallback ranking source. Ordinary fallback
+records low selection confidence and the
 `low-confidence-selection` prompt caveat; high/low is the same closed vocabulary on pack, wire,
 and log. Selection-details carries the calibrated floor, confidence, disposition, failed-call,
 and safe platform failure evidence. Wire semantic/scope dispositions are actual observations,
@@ -1141,6 +1409,21 @@ definitions, relationships, and history retain their existing retrieval and unce
 The existing connected-context completion event partitions planned rings into executed, deliberately
 skipped, and stopped-before-execution kinds, including an initially blocked budget. Closed skip
 reasons explain policy decisions; augmentation separately records `not-reached`, `used`, or `skipped`.
+Structural clipping describes actual generated initial or follow-up queries excluded by admission,
+not unused capacity in a conservative reservation. Later governor exhaustion remains independent;
+this distinction neither refunds reservations nor increases the grant.
+Structural batches reserve at most the remaining search-call grant. Initial anchor queries, then
+bounded follow-up queries, consume only that admitted batch prefix. An oversized optional batch
+cannot charge an unexecuted over-budget request and prevent all structural work. Truncation retains
+a budget uncertainty marker. Search usage retains the existing conservative reservation semantics;
+the separate index and structural counters record observed work. Existing ring, budget and source
+observations expose the admitted execution without recording queries or content. Scope, cancellation,
+absolute deadlines and all search/read/byte/model ceilings remain binding.
+Already admitted current-source evidence remains reusable when no new search reservation fits.
+Queued excerpt reads preserve an admitted stale line hint's priority while reading current bytes;
+a valid sibling range can recover in the same read. The owning reader retains its outside-range
+retry when the stale hint has no admitted current sibling. Integration evidence binds the previous
+hint, current returned ranges, content, citations and scope; facade call count alone is not freshness.
 An overview's additional file listing records `used`, `not-needed`, `skipped-budget`, or
 `skipped-stopped` on the same request's source-details event (`not-evaluated` before lexical search).
 It reserves and charges its own search call. A refused reservation retains a budget marker; a
@@ -1149,8 +1432,8 @@ not prevent listing readable siblings. Combined diagnostics preserve both operat
 coverage reasons and search-work counts, so an earlier read failure cannot become complete coverage.
 These counts describe work across the two searches, not unique files: a path examined by each is
 counted twice. Planned rings are never presented as executed work in the diagnostic audit.
-Git-history discovery is not attempted for a folder without Git unless the question requests
-history or relationships. Requested definition, relationship, and history evidence retains its
+Git-history discovery is not dispatched for a folder without Git. Requested definition,
+relationship, and history evidence retains its
 existing retrieval path and reports genuine unavailability.
 Existing path denials, explicit ignore policy, output/model budgets and redaction remain enforced.
 Filesystem resource exhaustion remains a technical failure: for example, an installation's
@@ -1179,6 +1462,40 @@ Metadata-only siblings keep their original scores.
 Different view identities merge only when their overlapping source lines agree;
 non-overlapping partial views never establish continuity by themselves.
 
+When relevant ordinary sources are available, final context selection omits incidental dependency
+lockfiles with the existing `low-relevance` reason instead of appending their bodies after source
+files. A shared directory name is not explicit lockfile intent. Named or selected lockfiles,
+dependency/version questions, and a relevant lockfile-only fallback remain eligible within their
+existing policy and budgets. When concrete sources are addressed, incidental lockfiles must belong
+to an ancestor module; explicitly selected lockfiles remain eligible. Dependency/version intent
+reuses canonical planner terms, including German. Validated query-origin source selections and
+canonical metadata already observed by the current lexical text search can seed ancestor metadata
+roots through the existing discovery path, but each added root must pass the
+selected-scope and denial predicate before directory IO. All roots share the existing traversal,
+deadline and retention controls. Assistant or diagnostic references do not seed those roots.
+Filename-discovery atoms, arbitrary JSON bodies and unrelated structural references do not establish
+a metadata root. Already observed canonical metadata therefore works in arbitrary nested modules
+without a directory-name convention or a missing output test file becoming a source authority.
+Classification reuses the workspace ecosystem registry. This selection
+rule applies to Git repositories and ordinary folders without applying Git-specific directory
+exclusions to ordinary documents. The existing connected-context completion records actual selected
+and omitted counts and charged usage; no path or body enters that evidence.
+
+Dependency intent excludes preservation constraints and source data in quoted text, code, paths or
+diagnostic frames. A separate affirmative dependency question remains eligible alongside a
+constraint, while a negated reporting request does not promote metadata. The planner owns this
+predicate and reuses its existing request-command grammar. Explicit canonical dotted metadata and
+lockfile basenames are references through the ecosystem registry, not a general JSON-file rule;
+existing extensionless selectors retain their meaning. Basename discovery still obeys selected
+scope, exclusions, its finite match grant and the shared search/read budgets before source IO.
+
+An affirmative dependency request also remains eligible when the same question primarily routes
+as diagnostic search. The existing planner predicate independently signals metadata demand after
+question-channel extraction; diagnostic routing keeps its priority. Preservation constraints and
+quoted/source data still cannot establish that demand. This reuses the same metadata discovery,
+scope, currentness and byte/read grants, with the existing source-details event reporting the
+closed metadata-injection reason. It adds no prompt instruction, source hint or model-specific rule.
+
 Canonical omission order and cache identity are independent of caller ordering. A successful
 selected-file read replaces an earlier omission for that exact file; invalid parent/child overlaps
 still fail validation. Read refusals retain their existing closed policy or budget reason.
@@ -1193,6 +1510,29 @@ remains opt-in; connected-folder production uses surrounding windows. Empty-evid
 retains a single `no-evidence` marker, and budget clipping remains `budget-clipped`.
 
 ### D4 — The summary is structurally redaction-free, and we prove it
+
+**Authorized content amendment (owner decision, 2026-10-27, #4098).** A user permitted to read
+connected documents must be able to receive their contents under the deployment's processing
+policy. `KEIKO_CONTENT_REDACTION=off`, resolved once at server startup, gives Chat a preserving
+content policy for connected-folder reads and extracted documents, single-source, multi-source and
+hybrid prompt content, Chat semantic refresh, history rehydration and private chat answers. The
+policy travels explicitly (`WorkspaceInfo.contentRedaction`, `GatewayCallRequest.contentRedaction`
+and the deps graph); no lower layer reads the environment. Missing, empty or `on` values retain the
+original content redaction; any other value also retains it and records a `warn`-level
+`chat.content-policy.resolved` line. Preserved content still loses the credential floor (configured
+secret literals, private keys, URL credentials, `Authorization` header values, encoded-looking
+Bearer/Basic values, JWT-shaped bearer tokens and known token shapes). A removed multi-line span keeps its line count, so
+source coordinates and line hints stay physical. Memory proposals derived from a preserved answer
+use the default projection again. The existing `redacted` atom state means the guarded content policy has been
+applied; it is not a claim that all personal data was anonymized. `raw-internal` packs remain
+rejected. The conversation and grounded system prompts in this mode request source fidelity, tell
+the model never to reconstruct `[REDACTED]` text, and keep the instruction not to expose API keys,
+tokens, private keys or URL credentials; the default prompts are byte-identical to the previous
+ones. This does not widen source authorization or any read/output budget. Coding repository
+search, counts-only summaries and audit manifests retain their existing redaction and body-free
+contracts, and conversation-history compaction summaries keep the default projection. The Coding
+Workbench agent's answers follow ADR-0003 D7 independently of this switch. Already masked historic chat text
+cannot be recovered: re-read sources and generate a new answer.
 
 The wire boundary is asserted by `grounded-qa.redaction.test.ts`: an attacker-controlled
 pack with secret-shaped strings (`sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, `Bearer …`, PEM
@@ -1304,3 +1644,36 @@ preflight rejects cyclic schemas before acquisition. Log-sink exceptions remain 
 existing observability port and do not interrupt healthy dispatch. Durable spend-settlement failure
 remains fatal, while a `finally` settles caller usage and output exposure exactly once and releases
 transport timers. A dispatched attempt never restores its grants merely because accounting failed.
+
+
+### Symbol discovery read waves
+
+Current callable discovery, seed observation and target certification reuse the workspace's
+existing multi-range excerpt read. A wave groups ranges by source, retains each original
+4,096-byte window grant and the same aggregate sum, then revalidates every definition's current
+snapshot and existing call/parent certificates before promotion. Range order and evidence bytes
+remain unchanged for stable sources. Mutation/cancellation and unavailable sources fail closed.
+There is no cross-wave or persistent content cache and no added synthesis attempt or authority.
+Physical read-port diagnostics remain separate from unique-file, excerpt-byte and model-token
+accounting. Discovery completeness does not establish necessary implementation-window recall.
+
+
+### Conventional document-name shorthand
+
+A bare `README` or `CONTRIBUTING`, case-insensitively, is a query file reference through one
+shared document-shorthand allowlist. Overview ranking is separate: ordinary words such as
+`architecture` and `agents` are not shorthand references, while their explicit `.md` filenames
+remain eligible for normal reference admission and overview ranking. Existing bounded basename discovery
+matches its whole basename stem, case-insensitively, with an optional already supported text or web
+document extension. It filters matches before retention. Extra basename suffixes and source-code
+extensions do not match this shorthand; an explicitly supplied extension keeps exact basename
+semantics. Explicit file selections match only their selected paths without enumerating siblings.
+The existing canonical containment, denied-path, ignore, generated-file, classification, search,
+read, byte and cancellation gates remain authoritative. Existing source-details Activity Log
+counts describe actual discovery and admission without recording names or contents. This changes
+source intake only; it grants no source fact, model authority, prompt instruction or larger budget.
+
+Validated inherited budget omissions retain a `budget-clipped` uncertainty marker at the existing
+context-pack assembly boundary, including when ranking already removed the unread file. Existing
+markers are retained without another marker; non-budget omissions do not acquire a budget claim.
+The stable pack identity includes this uncertainty before publication and caching.

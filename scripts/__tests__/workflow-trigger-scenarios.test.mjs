@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { conditionAllowsEvent } from "../check-e2e-suite-wiring.mjs";
 
 import {
   cancellationImmuneJobIds,
@@ -11,6 +12,8 @@ import {
   impliedSuccessTraps,
   needsOf,
   skippableJobIds,
+  pullRequestJobNames,
+  workflowJobNameForEvent,
 } from "../lib/workflow-trigger-scenarios.mjs";
 
 const repoRoot = new URL("../../", import.meta.url);
@@ -19,6 +22,71 @@ const workflowsDir = fileURLToPath(new URL(".github/workflows/", repoRoot));
 function loadWorkflow(name) {
   return parse(readFileSync(join(workflowsDir, name), "utf8"));
 }
+
+describe("CI pull-request lifecycle admission", () => {
+  const workflow = loadWorkflow("ci.yml");
+  it.each(Object.entries(workflow.jobs))(
+    "%s excludes closed metadata events before executing candidate work",
+    (_id, job) => {
+      expect(conditionAllowsEvent(job.if, "pull_request", "closed")).toBe(false);
+      expect(conditionAllowsEvent(job.if, "pull_request", "")).toBe(false);
+    },
+  );
+
+  it.each([
+    "protected-branch-gate",
+    "change-scope",
+    "verified-tree",
+    "secret-scan",
+    "semantic-duplication",
+    "core-quality",
+    "ui",
+    "ci",
+  ])("%s still admits an open pull request", (id) => {
+    expect(conditionAllowsEvent(workflow.jobs[id].if, "pull_request", "open")).toBe(true);
+  });
+
+  it.each(["push", "merge_group", "workflow_dispatch"])(
+    "keeps the lifecycle entry gates available for %s",
+    (event) => {
+      for (const id of [
+        "protected-branch-gate",
+        "change-scope",
+        "verified-tree",
+        "secret-scan",
+        "ci",
+      ])
+        expect(conditionAllowsEvent(workflow.jobs[id].if, event)).toBe(true);
+    },
+  );
+
+  it.each([
+    ["ci", "ci"],
+    ["ui", "ui"],
+    ["build-scan-sbom-smoke", "Build, scan, SBOM, smoke"],
+  ])("%s never publishes its required name on inactive PR events", (id, requiredName) => {
+    const expected =
+      "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && '" +
+      requiredName +
+      "' || 'inactive PR - " +
+      requiredName +
+      "' }}";
+    expect(workflow.jobs[id].name).toBe(expected);
+  });
+
+  it("retains every live metadata and candidate trigger", () => {
+    expect(workflow.on.pull_request.types).toEqual([
+      "opened",
+      "reopened",
+      "synchronize",
+      "ready_for_review",
+      "edited",
+    ]);
+    expect(workflow.on.merge_group.branches).toContain("dev");
+    expect(workflow.on.push.branches).toContain("dev");
+    expect(workflow.on).toHaveProperty("workflow_dispatch");
+  });
+});
 
 describe("carriesExplicitStatusFunction", () => {
   it.each([
@@ -215,4 +283,42 @@ describe("release workflow trigger scenarios (regression pin)", () => {
       }
     },
   );
+});
+
+describe("required context lifecycle namespace", () => {
+  const workflow = loadWorkflow("ci.yml");
+  const required = [
+    ["ci", "ci"],
+    ["ui", "ui"],
+    ["build-scan-sbom-smoke", "Build, scan, SBOM, smoke"],
+  ];
+  it.each([
+    ["pull_request", "open", true],
+    ["pull_request", "closed", false],
+    ["pull_request", "", false],
+    ["pull_request", undefined, false],
+    ["pull_request", "unknown", false],
+    ["push", undefined, true],
+    ["merge_group", undefined, true],
+    ["workflow_dispatch", undefined, true],
+  ])("keeps required names exclusive to admitted %s/%s events", (event, state, admitted) => {
+    for (const [id, name] of required) {
+      expect(workflowJobNameForEvent(workflow.jobs[id].name, event, state)).toBe(
+        admitted ? name : `inactive PR - ${name}`,
+      );
+    }
+  });
+  it.each([
+    "${{ true && 'ci' || 'inactive PR - ci' }}",
+    "${{ github.event_name == 'pull_request' && 'ci' || 'inactive PR - ci' }}",
+    "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'closed') && 'ci' || 'inactive PR - ci' }}",
+    "${{ (github.event_name != 'pull_request' || github.event.pull_request.state == 'open') && 'ci' || 'ci' }}",
+  ])("does not recognize an unreviewed conditional %s", (expression) => {
+    expect(pullRequestJobNames(expression)).toBeUndefined();
+    expect(workflowJobNameForEvent(expression, "pull_request", "open")).toBeUndefined();
+  });
+  it("retains literal names and rejects nonstring names", () => {
+    expect(workflowJobNameForEvent("actionlint", "pull_request", "closed")).toBe("actionlint");
+    expect(workflowJobNameForEvent(undefined, "pull_request", "open")).toBeUndefined();
+  });
 });

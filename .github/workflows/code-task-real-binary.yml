@@ -15,10 +15,10 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24.18.0"
           cache: "npm"
@@ -33,15 +33,25 @@ jobs:
         run: npm run build:packages
       - name: Stage approved OpenCode dev-lane payload
         run: npm run dev:coding-runtime:stage
+      - name: Provision the pinned ripgrep runtime
+        # The OpenCode 2 child searches with its own `grep` and `glob`, which run ripgrep. The run
+        # launch verifies the pinned copy in `.ripgrep/` and the sandboxed child has no route to
+        # download one, so without this step every search fails "ripgrep execution failed" and the
+        # journey's search-to-read handoff cannot complete.
+        run: npm run provision:ripgrep
       - name: Install Playwright Chromium
         run: node node_modules/playwright/cli.js install chromium
       - name: Run the production-discovery Milestone-1 journey
         run: npm run test:e2e:code-task:real-binary
       - name: Upload content-free functional evidence
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: code-task-real-binary-evidence
-          path: test-results/code-task-real-binary-evidence.json
+          # The retained Activity Log is the body-free artifact a red run is diagnosed from; the
+          # evidence report alone only says which observation is missing.
+          path: |
+            test-results/code-task-real-binary-evidence.json
+            test-results/code-task-real-binary-evidence.json.activity.jsonl
           if-no-files-found: error
           retention-days: 30

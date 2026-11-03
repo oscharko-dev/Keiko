@@ -36,3 +36,24 @@ describe("Coding Workbench composer model chip styles", () => {
     expect(css).not.toMatch(/\.modelControl \{\s*flex: 0 0 9rem;/u);
   });
 });
+
+describe("Coding Workbench native approval styles", () => {
+  // #3897 review: a native ask names model-selected text — a multi-line command or up to 64 long
+  // paths. It keeps its line breaks and scrolls inside one bounded block, so Approve and Deny stay
+  // on screen; the native list reuses that block instead of growing a second one.
+  it("bounds and wraps the commit-message block the native resource list reuses", () => {
+    const block = cssBlock(".cmp-approval-commit-message");
+
+    expect(block).toContain("white-space: pre-wrap;");
+    expect(block).toMatch(/max-block-size: \d+rem;/u);
+    expect(block).toContain("overflow: auto;");
+    expect(block).toContain("overflow-wrap: anywhere;");
+    expect(css).toContain(".cmp-approval-commit-message:focus-visible");
+  });
+
+  it("separates the resource entries of one native ask", () => {
+    const block = cssBlock(".cmp-approval-native-resource + .cmp-approval-native-resource");
+
+    expect(block).toContain("border-block-start:");
+  });
+});

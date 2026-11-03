@@ -19,12 +19,14 @@ vi.mock("node:fs", async (importOriginal) => {
   return { ...original, readFileSync: readFileSyncMock };
 });
 
+import { openCodeNativeVerificationKind } from "../opencodeNativePolicy.js";
 import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
 import {
   FUNCTIONAL_PLAN_STEP_READ,
   FUNCTIONAL_PLAN_STEP_VERIFY,
   functionalWorkspaceRead,
+  NATIVE_VERIFICATION_COMMAND,
   resolveFunctionalChildModelInput,
   scriptedResponse,
   type ScriptState,
@@ -110,6 +112,14 @@ describe("functional browser cancellation hold", () => {
       "question",
       "question",
     ]);
+  });
+});
+
+describe("native journey verification (#3901)", () => {
+  it("runs a project check the native policy reads as verification evidence", () => {
+    // The real-binary journey verifies through the runtime's own `shell`; the run is evidenced only
+    // when the production classifier reads the scripted line as a project check.
+    expect(openCodeNativeVerificationKind([NATIVE_VERIFICATION_COMMAND])).toBe("typecheck");
   });
 });
 

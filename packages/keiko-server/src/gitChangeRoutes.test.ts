@@ -43,6 +43,8 @@ import {
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
 
+import { runSerializedChatTurn } from "./chat-turn-serializer.js";
+
 const connectHandler = handleGitChangeConnect;
 const refreshHandler = handleGitChangeRefresh;
 
@@ -436,6 +438,65 @@ function connectRequestBody(chatId: string): Record<string, unknown> {
     baseRef: "main",
   };
 }
+
+function pendingSignal(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((yes) => {
+    resolve = yes;
+  });
+  return { promise, resolve };
+}
+
+describe("Git source changes cancel existing generations", () => {
+  it.each(["connect", "refresh", "unchanged"] as const)(
+    "handles %s without interrupting an unchanged comparison",
+    async (kind) => {
+      const original = fixtureSnapshot();
+      const moved = fixtureSnapshot({ headSha: "f".repeat(40), snapshotDigest: "9".repeat(64) });
+      const { deps, chatStore } = buildHarness({
+        runnerScript: {},
+        snapshots: [original, kind === "unchanged" ? original : moved],
+      });
+      const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+      const connected =
+        kind === "connect"
+          ? undefined
+          : asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+      const controller = new AbortController();
+      const started = pendingSignal();
+      const release = pendingSignal();
+      const pending = runSerializedChatTurn(
+        deps,
+        chat.id,
+        controller.signal,
+        () => {
+          started.resolve();
+          return release.promise;
+        },
+        controller,
+      );
+      await started.promise;
+      try {
+        const result =
+          kind === "connect"
+            ? await connectHandler(makeCtx(connectRequestBody(chat.id)), deps)
+            : await refreshHandler(
+                makeCtx({
+                  schemaVersion: "1",
+                  chatId: chat.id,
+                  relationshipId: (connected?.body as GitChangeScopeBody).scope?.relationshipId,
+                }),
+                deps,
+              );
+        expect(result.status).toBe(200);
+        expect(controller.signal.aborted).toBe(kind !== "unchanged");
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    },
+  );
+});
 
 describe("POST /api/git-change/connect (Issue #3400)", () => {
   it("returns the actual committed chat and its server-owned grounding identity", async () => {

@@ -248,7 +248,9 @@ describe("UpdateStartupNotice", () => {
       />,
     );
 
-    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(await screen.findByText("Portable setup required")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
     expect(
       screen.getByText("Portable setup is required before Keiko can use in-app updates."),
     ).toBeInTheDocument();
@@ -287,7 +289,9 @@ describe("UpdateStartupNotice", () => {
       />,
     );
 
-    expect(await screen.findByText("Update available")).toBeInTheDocument();
+    expect(await screen.findByText("Updates managed by your organization")).toBeInTheDocument();
+    expect(screen.queryByText("Update available")).toBeNull();
+    expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
     expect(
       screen.getByText("This Keiko install is managed outside the app. Open updates for details."),
     ).toBeInTheDocument();
@@ -353,4 +357,77 @@ describe("UpdateStartupNotice", () => {
       await screen.findByRole("alert", { name: "Keiko update notification" }),
     ).toHaveTextContent("Critical update available");
   });
+  it.each(["normal", "critical"] as const)(
+    "does not claim an available update for an action-only %s result",
+    async (severity) => {
+      const diagnostics = vi.fn();
+      setClientDiagnosticWriter(diagnostics);
+      render(
+        <UpdateStartupNotice
+          ready
+          openUpdates={vi.fn()}
+          fetchReport={vi.fn(async () =>
+            report({
+              currentVersion: "1.2.4",
+              targetVersion: "1.2.4",
+              updateAvailable: false,
+              userActionRequired: true,
+              severity,
+              status: "current",
+              availabilityState: "current",
+              warnings: ["private customer content must never enter presentation evidence"],
+            }),
+          )}
+        />,
+      );
+      expect(await screen.findByText("Update settings need attention")).toBeInTheDocument();
+      expect(screen.queryByText(/(?:Critical update available|Update available)/u)).toBeNull();
+      expect(screen.getByRole("button", { name: "Review details" })).toBeInTheDocument();
+      expect(diagnostics).toHaveBeenCalledWith("Keiko startup update notice classified.", {
+        correlationId: expect.any(String),
+        updateNotice: {
+          blockerCount: 0,
+          noticeKind: "action-required",
+          presentation: "shown",
+          updateAvailable: false,
+        },
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private customer content");
+    },
+  );
+  it.each([
+    { button: "Not now", available: true, noticeKind: "update-available" },
+    { button: "Review update", available: true, noticeKind: "update-available" },
+    { button: "Review details", available: false, noticeKind: "action-required" },
+  ] as const)(
+    "records immediate body-free dismissal from $button",
+    async ({ button, available, noticeKind }) => {
+      const diagnostics = vi.fn<Parameters<typeof setClientDiagnosticWriter>[0]>();
+      setClientDiagnosticWriter(diagnostics);
+      render(
+        <UpdateStartupNotice
+          ready
+          openUpdates={vi.fn()}
+          fetchReport={async () =>
+            report({
+              updateAvailable: available,
+              userActionRequired: true,
+              warnings: ["private dismissal canary"],
+            })
+          }
+        />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: button }));
+      const presentations = diagnostics.mock.calls.flatMap(([, meta]) =>
+        meta?.updateNotice === undefined ? [] : [meta.updateNotice],
+      );
+      expect(presentations.map((event) => event.presentation)).toEqual(["shown", "dismissed"]);
+      expect(presentations.at(-1)).toMatchObject({
+        noticeKind,
+        updateAvailable: available,
+        blockerCount: 0,
+      });
+      expect(JSON.stringify(diagnostics.mock.calls)).not.toContain("private dismissal canary");
+    },
+  );
 });

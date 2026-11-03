@@ -4,7 +4,10 @@ import {
   LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import {
+  isDocumentBasenameShorthand,
   isDenied,
+  isCanonicalMetadataFile,
+  isEcosystemLockfile,
   isEcosystemSourceFile,
   isGeneratedArtifactPath,
 } from "@oscharko-dev/keiko-workspace";
@@ -46,7 +49,12 @@ function filenameReference(path: string): boolean {
   const basename = path.slice(path.lastIndexOf("/") + 1);
   const dot = basename.lastIndexOf(".");
   const extension = basename.slice(dot + 1).toLowerCase();
-  return (dot > 0 && KNOWN_EXTENSIONS.has(extension)) || isEcosystemSourceFile(path);
+  return (
+    (dot < 0 && isDocumentBasenameShorthand(basename)) ||
+    (dot > 0 && KNOWN_EXTENSIONS.has(extension)) ||
+    isEcosystemSourceFile(path) ||
+    (dot > 0 && (isCanonicalMetadataFile(path) || isEcosystemLockfile(path)))
+  );
 }
 
 function parsePathReference(term: string): SearchReference {

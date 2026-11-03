@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 
 import { parseCodingSidecarEventLine } from "./codingSidecarEventParser.js";
 
@@ -239,6 +240,73 @@ describe("parseCodingSidecarEventLine approvalToken three-way distinction", () =
     if (result.status === "parsed" && result.event.type === "permission-request") {
       expect(result.event.approvalTokenMalformed).toBe(true);
       expect(result.event.approvalToken).toBeUndefined();
+    }
+  });
+});
+
+describe("parseCodingSidecarEventLine native action (#3897)", () => {
+  const NATIVE_ASK = {
+    type: "permission-request",
+    expiresAt: "2026-10-23T12:05:00.000Z",
+    requestId: "permission-1",
+    kind: "command-execution",
+    actionClass: "command-execution",
+    reasonCode: "approval-required",
+    scopeLabel: "workspace-scope",
+    risk: "high",
+    policyReason: "approval-required",
+    commandLabel: "native-shell",
+  };
+
+  it("preserves the bounded native action and omits it when absent", () => {
+    const parsed = parseCodingSidecarEventLine(
+      JSON.stringify({
+        ...NATIVE_ASK,
+        nativeAction: { permission: "shell", resources: ["rm -rf build"] },
+      }),
+    );
+    expect(parsed).toMatchObject({
+      status: "parsed",
+      event: { nativeAction: { permission: "shell", resources: ["rm -rf build"] } },
+    });
+    const absent = parseCodingSidecarEventLine(JSON.stringify(NATIVE_ASK));
+    expect(absent.status).toBe("parsed");
+    if (absent.status !== "parsed" || absent.event.type !== "permission-request") throw new Error();
+    expect(absent.event).not.toHaveProperty("nativeAction");
+  });
+
+  it("retains a complete MCP identity across the private sidecar event boundary", () => {
+    const permission = mcpToolAction("s".repeat(64), "t".repeat(128));
+    const event = { ...NATIVE_ASK, nativeAction: { permission, resources: ["*"] } };
+    expect(parseCodingSidecarEventLine(JSON.stringify(event))).toMatchObject({
+      status: "parsed",
+      event: { nativeAction: { permission } },
+    });
+    for (const invalid of ["x".repeat(65), `${permission}x`, `${"s".repeat(65)}_tool`])
+      expect(
+        parseCodingSidecarEventLine(
+          JSON.stringify({
+            ...event,
+            nativeAction: { permission: invalid, resources: ["*"] },
+          }),
+        ),
+      ).toEqual({ status: "invalid" });
+  });
+
+  it("rejects a malformed native action instead of dropping it silently", () => {
+    for (const nativeAction of [
+      "shell",
+      { permission: "shell" },
+      { permission: "shell", resources: ["x"], extra: true },
+      { permission: "not a permission", resources: [] },
+      { permission: "shell", resources: [1] },
+      { permission: "shell", resources: ["a\u0000b"] },
+      { permission: "shell", resources: Array.from({ length: 65 }, () => "x") },
+      { permission: "shell", resources: ["x".repeat(2049)] },
+    ]) {
+      expect(parseCodingSidecarEventLine(JSON.stringify({ ...NATIVE_ASK, nativeAction }))).toEqual({
+        status: "invalid",
+      });
     }
   });
 });

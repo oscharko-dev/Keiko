@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "classification": "Actual complete POSIX launcher/engine with real private KHP/files/FD5 and controlled clock/readiness/read timing; actual Windows resume/deadline/read functions with inert OS/identity/filesystem/load ports. No actual Windows APIs, signed ES, full containment or packaged-update acceptance.",
+  "parentHead": "803955702ec934411951dbf350af8d31f676bd33",
+  "sourceFiles": [
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "e66a508a72dc715e861025ae396e70cdf58b7fbb2611a639a8bb64431389ce60"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator-windows.h",
+      "sha256": "1ce5a17d22c028621b81f073166f5c1340cd6ccd3cad7c8dd95fbd8f98ed61e2"
+    },
+    {
+      "path": "packages/keiko-server/src/update-portable-resume-deadline.test.ts",
+      "sha256": "4b975f58e5853c28f71d4e6df514fa2a9bf3c94e4b327d843230b32dce729f76"
+    },
+    {
+      "path": "scripts/__tests__/windows-resume-deadline.test.mjs",
+      "sha256": "9732490fbe51916b43ba04c640bd07fd77bc069ce3a95e69f7f9f74f92b16d68"
+    },
+    {
+      "path": "tests/fixtures/portable-resume-deadline.c",
+      "sha256": "b881b9f03cdc95837b921f40598ed16a7ab4e74d535ef1ee66a81dc26092a471"
+    },
+    {
+      "path": "tests/fixtures/windows-resume-deadline.c",
+      "sha256": "bca69a6e5ce9b481b93d2c5846f01a7be3ffb59742cfb609bcb30e695ecb58bd"
+    }
+  ],
+  "beforeRuntimeFiles": [
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "sha256": "2b6777683bea40224666387871d32da708919502549e2aa6d8895d218286411d"
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator-windows.h",
+      "sha256": "b5e26eafb2097b8351f7b10adece2986fe12c78994f841b66dca9aa9932efeaf"
+    }
+  ],
+  "sameFinalFixtureBytesBeforeAndAfter": true,
+  "before": {
+    "failed": 40,
+    "passed": 82,
+    "logSha256": "72a5ce48c2326465b9f45b6f74cfcd13d16c94e2db93dde19b9a5905199124f2"
+  },
+  "afterMacosArm64": {
+    "failed": 0,
+    "passed": 122,
+    "posixControls": 78,
+    "windowsPolicyControls": 44,
+    "logSha256": "2c3ded9f405ae20cb6eedfadeeb8822097cd8a6832c9e6b7268b56f2057dfb41"
+  },
+  "linux": {
+    "exitCode": 0,
+    "durationSeconds": 11.81,
+    "image": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+    "platform": "linux/arm64",
+    "network": "none",
+    "capabilities": "none",
+    "rootSourceReadOnly": true,
+    "classification": "Actual POSIX owners/real KHP/files/FD5 with controlled clock/poll/read timing and actual Windows policy with inert platform ports; not actual Win32, signed ES or packaged-update proof."
+  },
+  "linuxLogSha256": "5826743cd4b7195396b54fb3d0c5ac431895e5d1c8f833bfb9784dcd133d0ae3",
+  "nativeMacosGate": {
+    "exitCode": 0,
+    "logSha256": "326820db340222b3609508751d143bbb406fc3d1703d0fba3379baa5dcddf0f8"
+  },
+  "retainedIntermediateFixtureFailure": {
+    "failed": 2,
+    "passed": 118,
+    "cause": "Two new Windows partial-frame tests were outside the restoring parameter scope. Scope corrected before final comparison.",
+    "logSha256": "ba694d51131bf0a1549531e0a399f643cb0d1143a99c715f33378a891a5103c2"
+  },
+  "sharedConsumers": [
+    "parent-control",
+    "supervisor-launch",
+    "supervisor-reap",
+    "supervisor-reconcile",
+    "resume-start-gate"
+  ],
+  "deadlineValuesAndFrameLayoutsChanged": false,
+  "productionEvidence": "Existing native receipt chain and server recovery Activity Log remain authoritative; no new logging vocabulary or parallel stream.",
+  "unqualified": [
+    "native-Windows",
+    "signed-Endpoint-Security",
+    "ownership-generation-transfer",
+    "two-successive-packaged-updates",
+    "real-BFF-rollback",
+    "SSD-state-continuity"
+  ]
+}

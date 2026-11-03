@@ -3,18 +3,29 @@
 ## Evidence posture
 
 The `Code task real binary` workflow is the Wave-1 anti-false-green lane. It runs nightly and on
-demand on `macos-14`, stages the review-approved OpenCode 1.17.17 payload with
-`npm run dev:coding-runtime:stage`, and drives the existing Milestone-1 browser journey through
-production discovery and production composition. The server entry supplies no runtime resolver,
+demand on `macos-14`, stages the review-approved OpenCode payload (the version pinned as
+`OPENCODE_PINNED_VERSION`, 2.1.4 today) with `npm run dev:coding-runtime:stage`, provisions the
+pinned ripgrep runtime with `npm run provision:ripgrep`, and drives the existing Milestone-1 browser
+journey through production discovery and production composition. The server entry supplies no runtime resolver,
 runtime ports, supervisor, or `KEIKO_OPENCODE_REAL_*` environment seam. The lane carries the
 evidence class `functional-not-platform-qualified`; ADR-0140's forgone platform-signature and
 complete process-tree qualification guarantees still apply.
 
 The journey covers the real UI sequence: bind and reconcile a local repository, start a Code task,
-observe the live plan/conversation/tool projection, answer the inline runtime question, apply and
-verify the governed edit through the Editor changeset review, and confirm the applied managed-
-worktree content. A second boot temporarily removes the staged payload directory and requires
-production readiness to fail closed with `payload-missing`.
+observe the live plan/conversation/tool projection, answer the inline runtime question, and confirm
+the applied managed-worktree content. On macOS the product always runs the pinned runtime with its
+own native tools (ADR-0137 D10, #3897), so the scripted model uses what that child offers: its
+`grep` finds the original text and its `read` takes the path and line from that result, the model
+invokes by id the repository skill the runtime lists in its own prompt (a fixture
+`.opencode/skills/` file that only Keiko's sanitized repository-item admission can have put there),
+its `edit` applies the contained edit under the supervised-coding permission policy without a
+per-action approval, and Keiko's own `keiko_verification` verifies it. The mapped `keiko_*` read,
+search, changeset and skill tools do not exist in a native run; calling one is answered "No tool
+named ...". The `grep` tool runs ripgrep, which the sandboxed child cannot download, so the lane
+needs the pinned copy that `npm run provision:ripgrep` places under `.ripgrep/` (the run launch
+verifies it; without it every search fails "ripgrep execution failed"). A second boot temporarily
+removes the staged payload directory and requires production readiness to fail closed with
+`payload-missing`.
 
 ## Content-free egress observation
 
@@ -65,16 +76,34 @@ payload pin). A green run on an earlier epic SHA is not evidence for a later one
 
 Every real-binary run records two independent, content-free observations while the child is live:
 
-1. The OpenCode run's materialized `opencode.json` declared the child model limits as context
-   `32,768` and output `4,096` tokens.
+1. The OpenCode run's materialized `opencode.json` declared the child model limits (the context,
+   input and output triple under `providers["keiko-runtime"].models.coding.limit`) that the
+   production owners derive for the fixture provider.
 2. Every observed deterministic-provider boundary request carried the gateway's effective
-   `maxOutputTokens` value `4,096`; the gateway request count was non-zero.
+   `maxOutputTokens` value; the gateway request count was non-zero.
 
-This validates that the pinned child consumed the hardcoded launch profile during a real session and
-that the Keiko gateway applied its output bound at the provider boundary. The runner fails unless it
-observes the exact `32,768`/`4,096` child pair, at least one gateway request, gateway output limit
-`4,096`, a successful UI journey, and the `payload-missing` negative result. Existing deterministic
-gateway tests remain the enforcement for prompt and streamed/buffered output overflow behavior.
+This validates that the pinned child consumed the launch profile during a real session and that the
+Keiko gateway applied its output bound at the provider boundary. The runner fails unless it observes
+exactly the declared child triple, at least one gateway request, the declared gateway output limit, a
+successful UI journey, and the `payload-missing` negative result. Existing deterministic gateway
+tests remain the enforcement for prompt and streamed/buffered output overflow behavior.
+
+## Native tool-set and governance evidence
+
+A native run has no bound tool catalog to observe: the gateway forwards the child's own tool
+definitions as a native advertisement, pinned by a tool-set digest. The runner therefore requires,
+instead of the catalog binding of the mapped profiles:
+
+- every gateway request carried one and the same native advertisement (runtime `opencode`, the
+  pinned version, one tool-set digest); and
+- one run whose Activity Log holds an allowed `coding-runtime.native-policy.decided` decision for
+  `grep` followed by an allowed decision for `read`, beside the scripted model's proof that the read
+  target came from the search result. The runtime executes both itself, so Keiko's decision before
+  each call is the governed record, and no catalog handler settles them.
+
+The closed `#3390` scenario artifact and the tool-catalog consumer observation project the mapped
+catalog proof (a bound offer and its handler settlements); they refuse a native report rather than
+invent one.
 
 ## Server consolidation and pre-PR disposition
 

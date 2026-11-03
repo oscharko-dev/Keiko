@@ -45,14 +45,14 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
+const PROTOCOL_SCHEMA_SHA256 = "4a01890f5810d71dca59ee39d9fb101c95f3bdf46332986a0bab0fa3885b68b9";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
-/** Captured OpenCode 2.0.10 protocol projection served by the scripted V2 child. */
+/** Captured OpenCode 2.1.4 protocol projection served by the scripted V2 child. */
 const protocolFixtureUrl = new URL(
-  "../opencodeProtocolSurface.opencode-2.0.10.fixture.json",
+  "../opencodeProtocolSurface.opencode-2.1.4.fixture.json",
   import.meta.url,
 );
 // The e2e server compiles this harness under tests/e2e/servers/dist without copying JSON assets.
@@ -61,7 +61,7 @@ const protocolFixturePath = existsSync(protocolFixtureUrl)
   ? protocolFixtureUrl
   : resolve(
       process.cwd(),
-      "packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.0.10.fixture.json",
+      "packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.1.4.fixture.json",
     );
 const FUNCTIONAL_OPENCODE_OPENAPI: unknown = JSON.parse(readFileSync(protocolFixturePath, "utf8"));
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(
@@ -570,11 +570,34 @@ class FakeOpenCodeChild {
       json(response, { data: [...this.questions.values()].map((pending) => pending.row) });
     } else if (method === "GET" && path === `/api/session/${FAKE_SESSION_ID}/message`) {
       json(response, { data: this.v2Messages().slice().reverse() });
+    } else if (this.routeTurnLists(method, path, response)) {
+      return;
     } else if (this.routePermission(method, path, body, response)) {
       return;
     } else {
       this.routeDynamic(method, path, body, response);
     }
+  }
+
+  // OpenCode 2.1.4 lists a location's background shell jobs and the prompts a session holds in its
+  // inbox; the runtime's interrupt reads both before it settles a turn. This child starts no shell
+  // job and takes every accepted prompt onto its own turn chain, so both lists are empty.
+  private routeTurnLists(method: string, path: string, response: ServerResponse): boolean {
+    if (method !== "GET") return false;
+    if (path === "/api/shell") {
+      json(response, {
+        ...(this.sessionDirectory === undefined
+          ? {}
+          : { location: { directory: this.sessionDirectory } }),
+        data: [],
+      });
+      return true;
+    }
+    if (path === `/api/session/${FAKE_SESSION_ID}/inbox`) {
+      json(response, { data: [] });
+      return true;
+    }
+    return false;
   }
 
   private routePermission(

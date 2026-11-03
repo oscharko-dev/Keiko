@@ -12,7 +12,7 @@ import type { UiHandlerDeps } from "../../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../../files.js";
 import { errorBody, STREAMING, type RouteContext, type RouteResult } from "../../routes.js";
 import { SSE_HEADERS, startSseHeartbeat } from "../../sse.js";
-import { writeOrDestroy } from "../../sse-write.js";
+import { writeSseFrame } from "../../sse-write.js";
 import type { WorkspaceSnippetsChangeEvent } from "./workspaceSnippetsService.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -231,7 +231,7 @@ export function handleWorkspaceSnippetsEvents(
   // subscription must still be answerable as a plain 429, not an SSE stream that opens then closes.
   const controller = new AbortController();
   const subscription = deps.workspaceSnippets.subscribe((event) => {
-    writeOrDestroy(ctx.res, snippetsChangedFrame(event), controller);
+    writeSseFrame(ctx.res, snippetsChangedFrame(event), controller);
   });
   if (subscription.kind === "subscriberLimit") {
     return { status: 429, body: errorBody("SUBSCRIBER_LIMIT", "Too many snippet subscribers.") };
@@ -247,6 +247,6 @@ export function handleWorkspaceSnippetsEvents(
   };
   controller.signal.addEventListener("abort", stop, { once: true });
   ctx.res.on("close", stop);
-  writeOrDestroy(ctx.res, `event: ready\ndata: {"ok":true}\n\n`, controller);
+  writeSseFrame(ctx.res, `event: ready\ndata: {"ok":true}\n\n`, controller);
   return STREAMING;
 }

@@ -21,7 +21,13 @@ import {
   type BugModelLoopResult,
   type BugRunState,
 } from "./internal.js";
-import type { BugReportInput, FailureEvidence, Hypothesis, ParsedBugOutput } from "./types.js";
+import type {
+  BugReportInput,
+  FailureEvidence,
+  Hypothesis,
+  ParsedBugOutput,
+  ReviewedBugPatch,
+} from "./types.js";
 
 // The sensitive-path scope guard (D6 bound 2): every changed path must NOT be sensitive. Returns
 // "out-of-scope" when any path is traversal/.github/.husky/lockfile, else undefined. The change
@@ -288,6 +294,35 @@ async function attemptOnce(
 // retryable rejection is the only non-terminal case.
 function isTerminal(result: AttemptResult): boolean {
   return result.accepted !== undefined || result.investigationOnly !== undefined;
+}
+
+/**
+ * The reviewed dry-run fix (#4025 AC4): the apply writes exactly what the human confirmed. It passes
+ * the same validation and guards as a model answer, and no model is called; a fix that no longer
+ * validates (a changed workspace, say) is rejected and nothing is written.
+ */
+export function reviewedBugPatchLoop(
+  state: BugRunState,
+  workspace: WorkspaceInfo,
+  report: BugReportInput,
+  evidence: FailureEvidence,
+  reviewed: ReviewedBugPatch,
+): BugModelLoopResult {
+  const requiresSourcePatch = sourceBugRequiresSourcePatch(workspace, report, evidence);
+  const next = validateCandidate(
+    state,
+    workspace,
+    { ...emptyParsedOutput(), ...reviewed.hypothesis, diff: reviewed.diff },
+    requiresSourcePatch,
+  );
+  emitValidation(state, next.validation, next.result.rejectionCode);
+  return {
+    accepted: next.result.accepted,
+    investigationOnly: undefined,
+    modelCallCount: 0,
+    patchRetryCount: 0,
+    lastRejectionCode: next.result.rejectionCode,
+  };
 }
 
 export async function runBugModelLoop(

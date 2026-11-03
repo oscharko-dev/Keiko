@@ -45,13 +45,35 @@ const PRODUCTION_SOURCE_PATH_NOT = "\\.(test|spec)\\.[cm]?[jt]sx?$";
 module.exports = {
   forbidden: [
     {
+      name: "adr-0181-mcp-sdk-isolation",
+      severity: "error",
+      comment: "Official MCP SDK imports belong exclusively to the shared managed host.",
+      from: {
+        path: "^(packages/keiko-|src/|tests/architecture/fixtures/mcp-sdk-isolation/)",
+        pathNot: "^packages/keiko-mcp/",
+      },
+      to: { path: "^(node_modules/)?@modelcontextprotocol/" },
+    },
+    {
+      name: "adr-0181-mcp-only-contracts-security",
+      severity: "error",
+      comment: "The shared MCP host receives provider and logging ports from server composition.",
+      from: {
+        path: "^(packages/keiko-mcp/src/|tests/architecture/fixtures/mcp-host/)",
+        pathNot: PRODUCTION_SOURCE_PATH_NOT,
+      },
+      to: {
+        path: "^((\\.\\./)*packages/keiko-(?!mcp|contracts|security)|node_modules/@oscharko-dev/keiko-(?!mcp|contracts|security)|@oscharko-dev/keiko-(?!mcp|contracts|security))",
+      },
+    },
+    {
       name: "adr-0179-domain-not-activity-log",
       comment:
         "ADR-0179: only server and CLI compose keiko-activity-log; domain packages retain " +
         "injected log ports and may not import its implementation.",
       severity: "error",
       from: {
-        path: "^(packages/keiko-(contracts|git|security|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors|local-knowledge|memory-vault|memory-capture|memory-consolidation|memory-governance|memory-retrieval|sandbox|sdk|tool-catalog|editor)/src/|tests/architecture/fixtures/(activity-log-domain|editor-browser)/)",
+        path: "^(packages/keiko-(contracts|git|security|mcp|model-gateway|workspace|tools|harness|workflows|verification|evaluations|evidence|quality-intelligence|connectors|local-knowledge|memory-vault|memory-capture|memory-consolidation|memory-governance|memory-retrieval|sandbox|sdk|tool-catalog|editor)/src/|tests/architecture/fixtures/(activity-log-domain|editor-browser)/)",
         pathNot: PRODUCTION_SOURCE_PATH_NOT,
       },
       to: {
@@ -720,7 +742,7 @@ module.exports = {
       name: "adr-0019-direction-6a-server-only-contracts-security-model-gateway-workspace-tools-harness-workflows-evidence",
       comment:
         "ADR-0019 direction rule 6 (server boundary): keiko-server may depend on " +
-        "keiko-activity-log, keiko-contracts, keiko-git, keiko-security, keiko-model-gateway, " +
+        "keiko-activity-log, keiko-contracts, keiko-git, keiko-security, keiko-mcp (ADR-0181), keiko-model-gateway, " +
         "keiko-workspace, keiko-sandbox, keiko-tools, keiko-harness, keiko-workflows, " +
         "keiko-verification, keiko-evidence, " +
         "keiko-sdk, keiko-local-knowledge, keiko-memory-vault, keiko-memory-governance, " +
@@ -754,9 +776,9 @@ module.exports = {
       },
       to: {
         path:
-          "^((\\.\\./)*packages/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
-          "node_modules/@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
-          "@oscharko-dev/keiko-(?!activity-log|contracts|security|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "^((\\.\\./)*packages/keiko-(?!activity-log|contracts|security|mcp|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "node_modules/@oscharko-dev/keiko-(?!activity-log|contracts|security|mcp|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
+          "@oscharko-dev/keiko-(?!activity-log|contracts|security|mcp|model-gateway|workspace|sandbox|tools|harness|workflows|verification|evidence|sdk|local-knowledge|memory-vault|memory-governance|memory-retrieval|memory-capture|memory-consolidation|quality-intelligence|server|git|connectors|tool-catalog)|" +
           "src/(ui|cli|evaluations|gateway|workspace|tools|harness|workflows|audit|verification))",
       },
     },
@@ -1136,7 +1158,7 @@ module.exports = {
     // scripts/check-import-policy.mjs keeps its independent AST enforcement of the same three
     // boundaries — this restores the dependency-cruiser layer alongside it, it does not replace it.
     includeOnly:
-      "^(src|packages/[^/]+/(src|dist)|" +
+      "^(src|packages/[^/]+/(src|dist)|(node_modules/)?@modelcontextprotocol/|" +
       "(node_modules/)?(openai($|/)|@anthropic-ai/|[^/]+-ai-sdk($|/))|" +
       "(node:)?fs(/promises)?$)",
   },

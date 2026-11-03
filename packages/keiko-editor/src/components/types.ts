@@ -147,6 +147,13 @@ export interface KeikoCodeEditorProps {
    */
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
+   * The model adopted the line ending of text the host wrote into it (#4123): Monaco gives a model
+   * created without a line break the platform default, so LF text written into a CRLF model would
+   * otherwise come back normalized. Body-free: the adopted sequence and which write caused it.
+   */
+  readonly onLineEndingAdopted?:
+    ((lineEnding: "lf" | "crlf", source: "buffer-sync" | "host-edit") => void) | undefined;
+  /**
    * Host-injected completion resolver (Issue #1199). When present, the editor registers a Monaco
    * completion provider for the governed languages that bridges to this resolver; the host owns the
    * BFF call, retrieval, and model routing (ADR-0042 D5). When absent, no provider is registered.

@@ -1,3 +1,12 @@
+import { catalogScopeDigest } from "./catalogToolRequest.js";
+import type {
+  CatalogConsumer,
+  CodingCatalogConsumer,
+  CatalogActionIdentity,
+  CatalogHandlerResult,
+  CatalogToolBudgetReservation,
+  CatalogToolDispatchOutcome,
+} from "./catalogToolPorts.js";
 import {
   catalogJsonBytes,
   captureCatalogJson,
@@ -5,6 +14,7 @@ import {
 } from "@oscharko-dev/keiko-tool-catalog";
 import type {
   CatalogJsonValue,
+  CatalogDigest,
   ToolResultEnvelope,
   ToolResultMetrics,
   ToolResultReason,
@@ -15,7 +25,6 @@ import {
   type ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
-import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
@@ -31,22 +40,16 @@ import {
   catalogBudgetOperation,
   requireDispatch,
 } from "./catalogToolRuntimeAuthority.js";
-import type {
-  CatalogActionIdentity,
-  CatalogHandlerResult,
-  CatalogToolBudgetReservation,
-  CatalogToolDispatchOutcome,
-  CatalogTrustedContext,
-} from "./catalogToolPorts.js";
 
 type Settlement = Extract<CatalogToolDispatchOutcome, { kind: "settled" }>;
-export class CatalogInvocation {
+export class CatalogInvocation<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
   public readonly invocationId: string;
+  public readonly scopeDigest: CatalogDigest;
   public readonly promise: Promise<Settlement>;
   public readonly controller = new AbortController();
-  public handler: CatalogBoundHandler | undefined;
+  public handler: CatalogBoundHandler<Consumer> | undefined;
   public inputBytes = 0;
-  public continuation: CatalogContinuation | undefined;
+  public continuation: CatalogContinuation<Consumer> | undefined;
   private readonly startedAt: number;
   private readonly settlementId: string;
   private resolve!: (outcome: Settlement) => void;
@@ -62,12 +65,13 @@ export class CatalogInvocation {
   private discarded = false;
 
   public constructor(
-    public readonly state: CatalogBindingState,
-    public readonly context: CatalogTrustedContext,
+    public readonly state: CatalogBindingState<Consumer>,
+    public readonly context: Consumer["context"],
     public readonly identity: CatalogActionIdentity,
   ) {
-    this.invocationId = mintCatalogId(state);
-    this.settlementId = mintCatalogId(state);
+    this.scopeDigest = catalogScopeDigest(state.input.consumerPort.scope(context));
+    this.invocationId = mintCatalogId<Consumer>(state);
+    this.settlementId = mintCatalogId<Consumer>(state);
     this.startedAt = state.options.now();
     this.promise = new Promise((resolve) => {
       this.resolve = resolve;
@@ -163,7 +167,7 @@ export class CatalogInvocation {
       "handler-mismatch",
     );
     emitToolLifecycleEvent(this.state.input.logPort, {
-      ...lifecycleIdentity(this.state, this.context),
+      ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.invocation-started",
       invocationId: this.invocationId,
       toolRef: this.handler.descriptor.toolRef,
@@ -172,7 +176,7 @@ export class CatalogInvocation {
       reservationId: this.reservation.reservationId,
     });
   }
-  public beforeEffect(guard: CodingToolMutationGuard, revalidate: () => void): boolean {
+  public beforeEffect(guard: Consumer["guard"], revalidate: () => void): boolean {
     if (this.checkStopped()) return false;
     try {
       revalidate();
@@ -223,9 +227,35 @@ export class CatalogInvocation {
       this.discardCompletion();
       return;
     }
-    if (error instanceof CatalogDispatchFault)
-      this.finish(error.status, error.reason, undefined, error);
-    else this.finish("failed", "handler-failed", undefined, error);
+    if (!(error instanceof CatalogDispatchFault)) {
+      this.finish("failed", "handler-failed", undefined, error);
+      return;
+    }
+    let candidate: ToolResultEnvelope;
+    try {
+      const data =
+        error.providerResult === undefined
+          ? null
+          : captureCatalogJson(
+              error.providerResult,
+              this.handler?.descriptor.bounds.maxResultBytes,
+            );
+      candidate = this.envelope(error.status, error.reason, data);
+    } catch (error_) {
+      emitServerDiagnostic(
+        this.state.input.logPort.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: correlationIdOrUnknown(this.context.correlationId),
+          operation: "tool-catalog.provider-result-invalid",
+          source: "tool-catalog-settlement",
+          error: error_,
+          redact: () => "server-operation-failed",
+        }),
+      );
+      this.finish("failed", "result-contract-failed", undefined, error_);
+      return;
+    }
+    this.finish(error.status, error.reason, candidate, error);
   }
   private envelope(
     status: ToolResultStatus,
@@ -258,7 +288,7 @@ export class CatalogInvocation {
   ): ToolResultMetrics {
     return {
       inputBytes: this.inputBytes,
-      outputBytes: source === undefined ? 0 : catalogJsonBytes(data),
+      outputBytes: source === undefined && data === null ? 0 : catalogJsonBytes(data),
       resultCount: source?.resultCount ?? 0,
       durationMs: Math.max(0, this.state.options.now() - this.startedAt),
     };
@@ -331,7 +361,7 @@ export class CatalogInvocation {
     error: unknown,
   ): void {
     emitToolLifecycleEvent(this.state.input.logPort, {
-      ...lifecycleIdentity(this.state, this.context),
+      ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.invocation-settled",
       ...receipt,
       toolRef: result.toolRef,
@@ -340,7 +370,7 @@ export class CatalogInvocation {
       truncated: result.page?.truncated ?? false,
       ...(result.status === "failed"
         ? {
-            errorKind: "internal",
+            errorKind: result.reason === "provider-reported-error" ? "unknown" : "internal",
             frames: keikoStackFrames(error),
             causeChain: causeChain(error),
           }
@@ -368,7 +398,7 @@ export class CatalogInvocation {
     if (this.discarded || this.outcome === undefined || this.handler === undefined) return;
     this.discarded = true;
     emitToolLifecycleEvent(this.state.input.logPort, {
-      ...lifecycleIdentity(this.state, this.context),
+      ...lifecycleIdentity<Consumer>(this.state, this.context),
       op: "tool-catalog.completion-discarded",
       invocationId: this.invocationId,
       toolRef: this.handler.descriptor.toolRef,
@@ -377,7 +407,9 @@ export class CatalogInvocation {
     });
   }
 }
-export function mintCatalogId(state: CatalogBindingState): string {
+export function mintCatalogId<Consumer extends CatalogConsumer = CodingCatalogConsumer>(
+  state: CatalogBindingState<Consumer>,
+): string {
   const id = state.options.mintId();
   requireDispatch(/^[A-Za-z0-9_-]{1,128}$/u.test(id), "invalid", "recovery-required");
   return id;

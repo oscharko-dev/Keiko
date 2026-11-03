@@ -290,6 +290,27 @@ describe("GEN-PERF-CHAT-014 — composer render insulation from streaming flushe
     expect(onComposerRender).toHaveBeenCalledTimes(2);
   });
 
+  it("publishes a new draft revision even when the rendered text is unchanged", () => {
+    const onComposerRender = vi.fn();
+    const onFullRender = vi.fn();
+    const initial = session({ draft: "", draftRevision: 0 });
+    const rendered = render(
+      <ComposerHarness
+        value={initial}
+        onComposerRender={onComposerRender}
+        onFullRender={onFullRender}
+      />,
+    );
+    rendered.rerender(
+      <ComposerHarness
+        value={{ ...initial, draftRevision: 2 }}
+        onComposerRender={onComposerRender}
+        onFullRender={onFullRender}
+      />,
+    );
+    expect(onComposerRender).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps delivering the streaming delta through the full-context hook", () => {
     const seen: (string | undefined)[] = [];
     function StreamReader(): ReactNode {

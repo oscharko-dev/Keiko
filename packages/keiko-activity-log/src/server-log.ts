@@ -1,3 +1,7 @@
+import {
+  currentProcessId,
+  fileDescriptorOwnerUid,
+} from "@oscharko-dev/keiko-security/process-scope";
 // Server activity log — one JSON line per operation into the one logical Activity Log under
 // `<stateDir>/logs/`. Written unconditionally, no env-var opt-in: operators facing a stuck run must
 // not have to know a magic switch to see what the process is doing. Redaction stays strict —
@@ -42,6 +46,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import {
+  type BigIntStats,
   closeSync,
   constants,
   fchmodSync,
@@ -1057,7 +1062,7 @@ export function serverLogProcessIdentity(
     productVersion: KEIKO_PRODUCT_VERSION,
     compatibilityState: "supported",
     writerCapability,
-    pid: process.pid,
+    pid: currentProcessId(),
     instanceId: INSTANCE_ID,
   };
 }
@@ -1751,7 +1756,7 @@ function ensureGovernedPolicy(active: ActiveLog, correlationId: string | undefin
       retentionDays: active.config.retentionDays,
       pinQuotaBytes: active.config.pinQuotaBytes,
     },
-    { pid: process.pid, instanceId: INSTANCE_ID, isAlive: processIsAlive },
+    { pid: currentProcessId(), instanceId: INSTANCE_ID, isAlive: processIsAlive },
   );
   active.governed = governedValues(outcome);
   active.config = applyGovernedPolicy(active.envConfig, outcome);
@@ -2491,7 +2496,7 @@ function recoverOrphanedSegments(
   nowMs: number,
 ): boolean {
   const context = {
-    pid: process.pid,
+    pid: currentProcessId(),
     instanceId: INSTANCE_ID,
     currentName: active.segment?.activeName,
     nowMs,
@@ -2777,7 +2782,7 @@ function nextSegmentIdentity(active: ActiveLog): ActivityLogSegmentIdentity {
   active.lastStartMs = startMs;
   const index = active.nextIndex;
   active.nextIndex += 1;
-  return { startMs, pid: process.pid, instanceId: INSTANCE_ID, index };
+  return { startMs, pid: currentProcessId(), instanceId: INSTANCE_ID, index };
 }
 
 function installSegment(
@@ -3689,14 +3694,35 @@ const PRESSURE_SEVERITY: Readonly<Record<ActivityLogPressureState, ActivityLogPr
 
 function ownedDirectory(path: string, requireOwnerOnly: boolean): boolean {
   try {
-    const stat = lstatSync(path);
+    const stat = lstatSync(path, { bigint: true });
     if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
     if (process.platform === "win32") return true;
     const owner = process.geteuid?.();
-    if (owner === undefined || stat.uid !== owner) return false;
-    return !requireOwnerOnly || (stat.mode & 0o777) === 0o700;
+    if (owner === undefined) return false;
+    return heldDirectoryIsOwned(path, stat, owner, requireOwnerOnly);
   } catch {
     return false;
+  }
+}
+
+function heldDirectoryIsOwned(
+  path: string,
+  expected: BigIntStats,
+  owner: number,
+  requireOwnerOnly: boolean,
+): boolean {
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const held = fstatSync(descriptor, { bigint: true });
+    if (held.dev !== expected.dev || held.ino !== expected.ino || held.mode !== expected.mode)
+      return false;
+    if (fileDescriptorOwnerUid(descriptor, held) !== BigInt(owner)) return false;
+    return !requireOwnerOnly || (held.mode & 0o777n) === 0o700n;
+  } finally {
+    closeSync(descriptor);
   }
 }
 
@@ -3710,7 +3736,7 @@ function orphanedSegmentCount(
   currentName: string | undefined,
 ): number {
   const context = {
-    pid: process.pid,
+    pid: currentProcessId(),
     instanceId: INSTANCE_ID,
     currentName,
     nowMs: Date.now(),

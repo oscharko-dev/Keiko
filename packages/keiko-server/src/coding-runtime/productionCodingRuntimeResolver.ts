@@ -1,4 +1,12 @@
-import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import {
+  CodingRuntimeAgentUnsupportedError,
+  CodingRuntimeInputsUnsupportedError,
+  CodingRuntimeJiraPodRefusedError,
+  CodingRuntimeLaunchRejectedError,
+} from "./launchFailure.js";
+import type { CodingJiraPods } from "./codingJiraPodMcp.js";
+import { isAgentAdmitted, openCodeSelectableAgents } from "./opencodeAgents.js";
+import { openCodePromptInputs } from "./opencodePromptInputs.js";
 import { openCodeVisibleToolNames, type OpenCodeToolProfile } from "./opencodeToolSchemas.js";
 import {
   createProductionDraftDeliveryService,
@@ -9,6 +17,9 @@ import type {
   DraftDeliveryService,
 } from "../gitDelivery/draftDeliveryTypes.js";
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { RuntimeGitTaskBranchPort } from "../gitDelivery/runtimeGitBranch.js";
+import type { GovernedTaskBranches } from "./governedTaskBranches.js";
+import { createProductionTaskBranchPort } from "./productionTaskBranchPort.js";
 import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
 import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
 import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
@@ -30,6 +41,7 @@ import { createRuntimeGitPreparation } from "./productionRuntimeGitPreparation.j
 import { isAbsolute } from "node:path";
 
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeEvent,
@@ -107,6 +119,7 @@ import {
   createProductionRuntimeOperationGuard,
   createProductionRuntimeManager,
   createProductionRuntimeTaskDispatcher,
+  revertMembers,
   type ProductionRuntimeRunRecord,
   type ProductionRuntimeTurnPort,
 } from "./productionCodingRuntimePorts.js";
@@ -120,6 +133,7 @@ import {
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import {
   productionRuntimeAuthorityFacts,
+  productionWorkspaceMatches,
   resolveProductionRuntimeContext,
   trustedManagedWorkspaceRoot,
   type ProductionWorkspaceAuthorityInput,
@@ -201,12 +215,28 @@ export interface ProductionRuntimeBackendResolver {
   readonly toolProfile?: OpenCodeToolProfile | undefined;
   readonly createRun: (input: ProductionRuntimeBackendInput) => QualifiedProductionRuntimeRun;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  /**
+   * Removes the per-run state directories of runs that are neither live nor recoverable, given the
+   * server's own answer to which runs are. Called once at startup (audit 2026-10, finding 8).
+   */
+  readonly sweepOrphanedRunState?: ((isRetained: (runId: string) => boolean) => void) | undefined;
 }
 
 export interface ProductionCodingRuntimeResolverInput {
+  /**
+   * The Jira Pods a Coding run may be started with (owner decision 2026-10-30). Absent, a start that
+   * names a Pod is refused before the confirmation is consumed.
+   */
+  readonly jiraPods?: CodingJiraPods | undefined;
   readonly verifiedCommit?: VerifiedCommitRuntimeDependencies;
   readonly draftDelivery?: DraftDeliveryDependencies;
   readonly workspaceAuthority: ProductionWorkspaceAuthorityInput;
+  /**
+   * The task branches Keiko's own `keiko_git_branch` moved runs onto (governedTaskBranches.ts,
+   * #3907). The same instance backs `workspaceAuthority.governedTaskBranch` and
+   * `verifiedCommit.governedTaskBranch`; absent, a run cannot be given a task branch.
+   */
+  readonly governedTaskBranches?: GovernedTaskBranches | undefined;
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
@@ -479,8 +509,19 @@ function composeRuntime(
     runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs, shared),
     ...deliveryAuthorityPorts(authority, input),
     ...lateBoundAttachers(verifiedHeadNotifier, shared),
-    ...(input.backend.safeActivityProjection
-      ? { safeActivityProjection: input.backend.safeActivityProjection }
+    ...backendOptionalPorts(input.backend),
+  };
+}
+
+function backendOptionalPorts(
+  backend: ProductionRuntimeBackendResolver,
+): Pick<QualifiedProductionCodingRuntime, "safeActivityProjection" | "sweepOrphanedRunState"> {
+  return {
+    ...(backend.safeActivityProjection
+      ? { safeActivityProjection: backend.safeActivityProjection }
+      : {}),
+    ...(backend.sweepOrphanedRunState
+      ? { sweepOrphanedRunState: backend.sweepOrphanedRunState }
       : {}),
   };
 }
@@ -628,6 +669,22 @@ function repositoryPreparationFor(
       });
 }
 
+// A managed start checks its model before the repository is prepared: a model that is not ready
+// now is checked first, as a Chat request does, so a start after an idle while is not refused.
+function launchPreparation(
+  input: ProductionCodingRuntimeResolverInput,
+  preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
+): QualifiedProductionCodingRuntime["mintLaunch"]["prepare"] {
+  const prepareModel = input.workspaceAuthority.prepareManagedModel;
+  if (prepareModel === undefined) return preparation?.prepare;
+  return async (request): Promise<void> => {
+    if (request.runtimePreference !== "codex-subscription") {
+      await prepareModel(request.modelId, request.correlationId);
+    }
+    await preparation?.prepare(request);
+  };
+}
+
 function launchContext(
   input: ProductionCodingRuntimeResolverInput,
   preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
@@ -648,10 +705,17 @@ function launchResolver(
   toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
   const preparation = repositoryPreparationFor(input);
+  const prepare = launchPreparation(input, preparation);
   return {
-    ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
-    resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
-      const context = launchContext(input, preparation, request);
+    ...(prepare === undefined ? {} : { prepare }),
+    resolve: (requested): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
+      const context = launchContext(input, preparation, requested);
+      // Before the one-use confirmation is consumed or authority minted: a refused agent leaves
+      // nothing to undo, and the operator's confirmation stays valid for the corrected request.
+      refuseUnsupportedAgent(requested.agent, context.runtimeSource, shared.toolProfile);
+      refuseUnsupportedPromptInputs(requested, context.runtimeSource, shared.toolProfile);
+      // The Pod the human chose is checked here too, and its identity joins the confirmation claim.
+      const request = withBoundJiraPod(input, requested, context, shared.toolProfile);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -682,6 +746,70 @@ function launchResolver(
       }
     },
   };
+}
+
+/**
+ * `plan` is OpenCode's own read-only agent and exists only on the native service. Another profile,
+ * or a Codex subscription run that has no agent concept, cannot honour it, and running the request
+ * as the default editing agent would break the read-only expectation it carries (#3897).
+ */
+function refuseUnsupportedAgent(
+  agent: CodingWorkbenchAgent | undefined,
+  runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
+  toolProfile: OpenCodeToolProfile,
+): void {
+  if (agent === undefined) return;
+  const selectable = runtimeSource === "keiko-sidecar" ? openCodeSelectableAgents(toolProfile) : [];
+  if (!isAgentAdmitted(selectable, agent)) throw new CodingRuntimeAgentUnsupportedError(agent);
+}
+
+/**
+ * The first prompt's `@` references and slash command exist on the native service only (ADR-0137
+ * D10). Another profile, or a Codex subscription run, has neither; starting without them would
+ * answer another request than the one written, so the start is refused before the confirmation is
+ * consumed or any run is minted. Where the files are resolved, and whether the command is listed,
+ * waits for the first turn's dispatch.
+ */
+function refuseUnsupportedPromptInputs(
+  request: Pick<ProductionRuntimeBackendInput["request"], "references" | "command" | "mentions">,
+  runtimeSource: CodingRuntimeTrustedContext["runtimeSource"],
+  toolProfile: OpenCodeToolProfile,
+): void {
+  const offered = runtimeSource === "keiko-sidecar" ? openCodePromptInputs(toolProfile) : undefined;
+  const asked: readonly (readonly [boolean, boolean | undefined])[] = [
+    [request.references !== undefined, offered?.references],
+    [request.command !== undefined, offered?.commands],
+    [request.mentions !== undefined, offered?.mentions],
+  ];
+  if (asked.some(([wanted, honoured]) => wanted && honoured !== true)) {
+    throw new CodingRuntimeInputsUnsupportedError();
+  }
+}
+
+/**
+ * The Jira Pod the human picked (owner decision 2026-10-30), checked before the confirmation is
+ * consumed: only the caller's own, ready Pod of a native keiko-sidecar run can be bound. The bound
+ * identity (Pod, credential generation, verification revision) travels with the request, joins the
+ * confirmation claim so it cannot be swapped, and is the identity every later Jira call must match.
+ */
+function withBoundJiraPod(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  toolProfile: OpenCodeToolProfile,
+): ProductionRuntimeBackendInput["request"] {
+  if (request.jiraPodId === undefined) return request;
+  const resolution =
+    context.runtimeSource !== "keiko-sidecar" || toolProfile !== "native"
+      ? ({ ok: false, reason: "unsupported-runtime" } as const)
+      : (input.jiraPods?.resolve(request.jiraPodId) ??
+        ({ ok: false, reason: "unavailable" } as const));
+  input.jiraPods?.recordBind(
+    request.runId,
+    resolution.ok ? { outcome: "bound" } : { outcome: "refused", reason: resolution.reason },
+  );
+  if (!resolution.ok) throw new CodingRuntimeJiraPodRefusedError(resolution.reason);
+  return { ...request, jiraPod: resolution.binding };
 }
 
 function consumeStartConfirmation(
@@ -728,6 +856,7 @@ function confirmationFacts(
     ...(context.issueBinding === undefined
       ? {}
       : { issueBindingDigest: context.issueBinding.bindingDigest }),
+    ...(request.jiraPod === undefined ? {} : { jiraPod: request.jiraPod }),
   };
 }
 
@@ -778,6 +907,17 @@ function commitServiceFor(
   });
 }
 
+function folderRuntimeServices(): RuntimeGitServices {
+  return {
+    ciRepairBudget: undefined,
+    draftDeliveryService: undefined,
+    ciObservationService: undefined,
+    verifiedCommitService: undefined,
+    runtimeGitService: undefined,
+    codingToolApprovals: createCodingToolApprovalBridge(),
+  };
+}
+
 interface RuntimeGitServices {
   readonly ciRepairBudget: CiRepairExecutionBudget | undefined;
   readonly draftDeliveryService: DraftDeliveryService | undefined;
@@ -786,7 +926,18 @@ interface RuntimeGitServices {
   readonly runtimeGitService: RuntimeGitService | undefined;
   readonly codingToolApprovals: CodingToolApprovalBridge;
 }
+// A folder has no repository: no commit, stage, push, pull-request or CI service exists for it.
+// The tool surface answers those calls with the closed `repository-required` reason instead
+// (owner decision 2026-10-30), so nothing here can run a Git command against a plain directory.
 function runtimeGitServices(
+  ...args: Parameters<typeof repositoryRuntimeServices>
+): RuntimeGitServices {
+  return args[1].workspaceKind === "folder"
+    ? folderRuntimeServices()
+    : repositoryRuntimeServices(...args);
+}
+
+function repositoryRuntimeServices(
   input: ProductionCodingRuntimeResolverInput,
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
@@ -810,18 +961,16 @@ function runtimeGitServices(
     onRuntimeEvent,
     notifyVerifiedHeadAdvanced,
   );
-  const runtimeGitService = createProductionRuntimeGitService(
-    input.verifiedCommit,
-    binding,
-    () => authority.effectiveMode(),
-    () => verifiedCommitService?.invalidate(),
-  );
   const draftDeliveryService = createProductionDraftDeliveryService(
     input.draftDelivery,
     input.verifiedCommit,
     binding,
     onRuntimeEvent,
   );
+  const runtimeGitService = runtimeGitServiceFor(input, binding, authority, {
+    verifiedCommitService,
+    draftDeliveryService,
+  });
   const codingToolApprovals = createCodingToolApprovalBridge(
     verifiedCommitService,
     runtimeGitService,
@@ -835,6 +984,48 @@ function runtimeGitServices(
     ciObservationService,
     codingToolApprovals,
   };
+}
+
+// The runtime Git service of one run. What a branch change makes stale, open commit proposals and
+// their verification, and push and pull-request proposals, is invalidated through the two services
+// that hold them (#3907).
+function runtimeGitServiceFor(
+  input: ProductionCodingRuntimeResolverInput,
+  binding: VerifiedCommitRuntimeBinding,
+  authority: CodingRuntimeAuthorityService,
+  held: {
+    readonly verifiedCommitService: VerifiedCommitService | undefined;
+    readonly draftDeliveryService: DraftDeliveryService | undefined;
+  },
+): RuntimeGitService | undefined {
+  return createProductionRuntimeGitService(
+    input.verifiedCommit,
+    binding,
+    () => authority.effectiveMode(),
+    () => held.verifiedCommitService?.invalidate(),
+    {
+      port: taskBranchPortFor(input, binding.context, authority),
+      invalidateDelivery: () => held.draftDeliveryService?.invalidate(),
+    },
+  );
+}
+
+// The workspace side of a governed task branch for this run (productionTaskBranchPort.ts); absent
+// when the deployment composes no branch record or no lifecycle that can adopt one, in which case
+// `keiko_git_branch` refuses with `not-local-checkout`.
+function taskBranchPortFor(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  authority: CodingRuntimeAuthorityService,
+): RuntimeGitTaskBranchPort | undefined {
+  return input.governedTaskBranches === undefined
+    ? undefined
+    : createProductionTaskBranchPort({
+        workspaceId: context.workspaceId,
+        lifecycle: input.workspaceAuthority.workspaceLifecycle,
+        branches: input.governedTaskBranches,
+        authority,
+      });
 }
 
 function runtimeCiServices(
@@ -1026,6 +1217,9 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
+    // #3904 AC3: an undo of a settled, held run is admitted while the workspace is still the one the
+    // run was bound to; its own authority ended with the run.
+    heldAdmission: () => productionWorkspaceMatches(input.workspaceAuthority, context),
     waitForPendingMutations: (signal) => surface.leases.waitForIdle(signal),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
@@ -1096,16 +1290,42 @@ export function bindExplicitSkillTurns(
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text, initialContext): Promise<boolean> => {
-      explicitSkills.observeTurn(text);
-      const accepted = await turnPort.submitTurn(runId, text, initialContext);
+    // Handed on with exactly the arguments it came with, so a plain turn stays a plain call.
+    submitTurn: async (...turn): Promise<boolean> => {
+      explicitSkills.observeTurn(turn[1]);
+      const accepted = await turnPort.submitTurn(...turn);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },
+    selectableAgents: turnPort.selectableAgents,
+    // A delivered message joins the turn that is running and starts none, so it neither replaces
+    // that turn's explicit-skill request nor clears it: only a turn's own submission observes text.
+    ...(turnPort.admitPromptInputs === undefined || turnPort.deliverPrompt === undefined
+      ? {}
+      : {
+          admitPromptInputs: turnPort.admitPromptInputs,
+          deliverPrompt: turnPort.deliverPrompt,
+        }),
+    // Listing a run's commands and confirming one starts and settles nothing, so the explicit-skill
+    // request of the turn that follows is neither replaced nor cleared by it.
+    ...(turnPort.listCommands === undefined || turnPort.admitCommand === undefined
+      ? {}
+      : { listCommands: turnPort.listCommands, admitCommand: turnPort.admitCommand }),
+    ...(turnPort.listMentions === undefined ? {} : { listMentions: turnPort.listMentions }),
+    // Authorizing an MCP server starts and settles no turn either.
+    ...(turnPort.mcpAuthorization === undefined
+      ? {}
+      : { mcpAuthorization: turnPort.mcpAuthorization }),
     abortTurn: async (runId): Promise<boolean> => {
       explicitSkills.clear();
       return turnPort.abortTurn(runId);
     },
+    ...revertMembers(turnPort),
+    // Reading or withdrawing a pending message starts and settles no turn, so the explicit-skill
+    // request of the turn in flight is neither replaced nor cleared by it.
+    ...(turnPort.listInbox === undefined || turnPort.actOnInbox === undefined
+      ? {}
+      : { listInbox: turnPort.listInbox, actOnInbox: turnPort.actOnInbox }),
     waitForTerminal: async (runId, signal): Promise<CodingRuntimeTaskOutcome> => {
       try {
         return await turnPort.waitForTerminal(runId, signal);
@@ -1364,6 +1584,16 @@ function runtimeGitFacadeOptions({
   };
 }
 
+// The run's adapter and, for a plain folder, the workspace kind that makes repository tools refuse.
+function runIdentityOptions(
+  context: CodingRuntimeTrustedContext,
+): Pick<ProductionManagedWorktreeToolInput, "adapterKind" | "workspaceKind"> {
+  return {
+    adapterKind: adapterKind(context),
+    ...(context.workspaceKind === "folder" ? { workspaceKind: "folder" as const } : {}),
+  };
+}
+
 function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFacade {
   const {
     input,
@@ -1388,7 +1618,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
     // never the run's launch-profile identifier, which the gateway cannot resolve.
     ...childModel,
-    adapterKind: adapterKind(context),
+    ...runIdentityOptions(context),
     workspaceRoot: context.workspaceRoot,
     resolveWorkspaceRootAccess,
     ...(options.researchOptions ??

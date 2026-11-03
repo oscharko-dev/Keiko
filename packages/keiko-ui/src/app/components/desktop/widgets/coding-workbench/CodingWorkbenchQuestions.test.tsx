@@ -1,6 +1,7 @@
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
@@ -131,6 +132,30 @@ describe("CodingWorkbenchQuestions", () => {
     renderQuestions(hookResult({ status: "submitting" }));
     expect(screen.getByRole("button", { name: "Send answer" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject question" })).toBeDisabled();
+  });
+
+  // Audit item 6: a failed re-list keeps the question on screen (the hook retains it), so the form
+  // and the answer typed into it survive, beside the failure sentence and the retry action.
+  it("keeps the typed answer when a failed re-list leaves the same question on screen", async () => {
+    const user = userEvent.setup();
+    questionsHookMock.mockReturnValue(hookResult());
+    const surface = (): ReactElement => (
+      <CodingWorkbenchQuestions
+        runId="run-1"
+        revision={3}
+        runState="paused"
+        runtimeEventSignal={0}
+        refreshSnapshot={() => Promise.resolve()}
+      />
+    );
+    const mounted = render(surface());
+    await user.type(screen.getByLabelText("Custom answer for Custom response"), "half an answ");
+
+    questionsHookMock.mockReturnValue(hookResult({ status: "offline", errorCode: "X" }));
+    mounted.rerender(surface());
+
+    expect(screen.getByLabelText("Custom answer for Custom response")).toHaveValue("half an answ");
+    expect(screen.getByRole("button", { name: "Check again" })).toBeInTheDocument();
   });
 
   // F-09a regression: a refused answer/reject rendered the LISTING sentence ("Questions could not

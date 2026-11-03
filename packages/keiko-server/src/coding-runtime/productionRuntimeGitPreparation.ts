@@ -55,7 +55,8 @@ const GIT_RUNTIME_IDENTITY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 interface PreparedContext {
-  readonly repositoryIdentity: VerifiedRepositoryIdentity;
+  /** Absent for a folder workspace, which has no repository to identify. */
+  readonly repositoryIdentity?: VerifiedRepositoryIdentity | undefined;
   readonly requestDigest: string;
   readonly contextDigest: string;
   readonly expiresAtMs: number;
@@ -85,7 +86,10 @@ class GitPreparation implements RuntimeGitPreparation {
     const before = this.input.context(request);
     const expiresAtMs = this.input.now() + PREPARATION_TTL_MS;
     try {
-      const repositoryIdentity = await readIdentity(this.input.deps, before, request.runId);
+      const repositoryIdentity =
+        before.workspaceKind === "folder"
+          ? undefined
+          : await readIdentity(this.input.deps, before, request.runId);
       if (
         this.input.now() >= expiresAtMs ||
         contextDigest(this.input.context(request)) !== contextDigest(before)
@@ -126,7 +130,9 @@ class GitPreparation implements RuntimeGitPreparation {
       );
     }
     logPreparation(this.input.deps, request.runId, "consumed");
-    return { ...current, repositoryIdentity: record.repositoryIdentity };
+    return record.repositoryIdentity === undefined
+      ? current
+      : { ...current, repositoryIdentity: record.repositoryIdentity };
   }
 }
 

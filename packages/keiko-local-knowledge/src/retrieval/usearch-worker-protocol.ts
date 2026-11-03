@@ -1,3 +1,5 @@
+import type { ProcessScopeWorkerData } from "@oscharko-dev/keiko-security/process-scope-worker";
+
 export const USEARCH_CONTROL = Object.freeze({
   state: 0,
   command: 1,
@@ -34,6 +36,7 @@ export type UsearchWorkerMessage =
   | { readonly kind: "search-complete"; readonly sequence: number };
 
 export interface UsearchWorkerData {
+  readonly processScope?: ProcessScopeWorkerData;
   readonly binaryPath: string;
   readonly binarySha256: string;
   readonly expectedVersion: string;

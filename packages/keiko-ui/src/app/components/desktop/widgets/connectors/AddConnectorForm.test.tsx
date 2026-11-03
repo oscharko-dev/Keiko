@@ -2,7 +2,7 @@
 // masked token field, and the HARD token contract: after save the token is absent from the DOM,
 // from every mocked network call except the single create hop, and from any re-queried state.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -140,4 +140,104 @@ describe("AddConnectorForm — inline verify after save", () => {
       unmount();
     }
   });
+});
+
+describe("Jira Live Pod creation", () => {
+  it("accepts an HTTPS target without an email and submits one private PAT request", async () => {
+    const user = userEvent.setup();
+    let complete: ((value: AtlassianConnectorMetadata) => void) | undefined;
+    const client = makeClient({
+      createConnector: vi.fn(
+        () =>
+          new Promise<AtlassianConnectorMetadata>((resolve) => {
+            complete = resolve;
+          }),
+      ),
+    });
+    const created = vi.fn();
+    const close = vi.fn();
+    render(<AddConnectorForm client={client} onCreated={created} onClose={close} jiraLive />);
+    expect(screen.queryByLabelText("Account email")).toBeNull();
+    expect(screen.queryByLabelText("Provider")).toBeNull();
+    await user.type(screen.getByLabelText("Label"), "Lab Jira");
+    await user.type(screen.getByLabelText("Base URL"), "https://127.0.0.1:18443/jira");
+    await user.type(screen.getByLabelText("API token"), TOKEN);
+    fireEvent.submit(screen.getByTestId("acx-add-form"));
+    fireEvent.submit(screen.getByTestId("acx-add-form"));
+    expect(client.createConnector).toHaveBeenCalledTimes(1);
+    const input = vi.mocked(client.createConnector).mock.calls[0]?.[0];
+    expect(input).toMatchObject({
+      provider: "jira",
+      deployment: "data-center",
+      authScheme: "bearer-pat",
+      displayName: "Lab Jira",
+      apiToken: TOKEN,
+    });
+    expect(input).not.toHaveProperty("accountEmail");
+    expect(input).toHaveProperty("livePodCreationRequestId", expect.any(String));
+    if (complete === undefined) throw new Error("Missing create completion");
+    complete(METADATA);
+    await waitFor(() => expect(close).toHaveBeenCalledOnce());
+    expect(screen.queryByTestId("acx-add-verify")).toBeNull();
+    expect(screen.queryByDisplayValue(TOKEN)).toBeNull();
+    expect(created).toHaveBeenCalledOnce();
+  });
+});
+
+it("retains the Jira creation identity when an uncertain response is retried", async () => {
+  const user = userEvent.setup();
+  const create = vi
+    .fn<AddConnectorClient["createConnector"]>()
+    .mockRejectedValueOnce(new Error("network"))
+    .mockResolvedValueOnce(METADATA);
+  const close = vi.fn();
+  render(
+    <AddConnectorForm
+      client={makeClient({ createConnector: create })}
+      onCreated={vi.fn()}
+      onClose={close}
+      jiraLive
+    />,
+  );
+  await user.type(screen.getByLabelText("Label"), "Lab Jira");
+  await user.type(screen.getByLabelText("Base URL"), "https://jira.example.invalid");
+  await user.type(screen.getByLabelText("API token"), TOKEN);
+  await user.click(screen.getByRole("button", { name: "Save connector" }));
+  await screen.findByRole("alert");
+  expect(screen.getByLabelText("API token")).toHaveValue("");
+  await user.type(screen.getByLabelText("API token"), TOKEN);
+  await user.click(screen.getByRole("button", { name: "Save connector" }));
+  await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  expect(create).toHaveBeenCalledTimes(2);
+  expect(create.mock.calls[1]?.[0]).toEqual(create.mock.calls[0]?.[0]);
+});
+
+it("drops a late create response after unmount and never retains the submitted PAT", async () => {
+  const user = userEvent.setup();
+  const releases: Array<(metadata: AtlassianConnectorMetadata) => void> = [];
+  const created = vi.fn();
+  const client = makeClient({
+    createConnector: vi.fn(
+      () => new Promise<AtlassianConnectorMetadata>((resolve) => releases.push(resolve)),
+    ),
+  });
+  const { unmount } = render(
+    <AddConnectorForm client={client} onCreated={created} onClose={vi.fn()} />,
+  );
+  await fillValid(user);
+  await user.click(screen.getByRole("button", { name: "Save connector" }));
+  expect(screen.getByLabelText("API token")).toHaveValue("");
+  unmount();
+  releases[0]?.(METADATA);
+  await Promise.resolve();
+  expect(created).not.toHaveBeenCalled();
+});
+
+it("clears a typed PAT when the form is cancelled", async () => {
+  const close = vi.fn();
+  render(<AddConnectorForm client={makeClient()} onCreated={vi.fn()} onClose={close} />);
+  await userEvent.type(screen.getByLabelText("API token"), TOKEN);
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(screen.getByLabelText("API token")).toHaveValue("");
+  expect(close).toHaveBeenCalledOnce();
 });

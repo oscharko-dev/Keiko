@@ -21,6 +21,14 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeSource,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { causeChain, keikoStackFrames, type ServerLogSink } from "@oscharko-dev/keiko-activity-log";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { RUNTIME_CONFINEMENT_FAILED_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 export type RuntimeConfinementPlatform = LongLivedRuntimePlatform;
 export type RuntimeConfinementArchitecture = LongLivedRuntimeArchitecture;
@@ -146,6 +154,8 @@ export interface RuntimeProcessSupervisorDeps {
   readonly qualifications?: readonly RuntimeQualificationIdentity[] | undefined;
   readonly planSandbox?:
     ((request: LongLivedRuntimeSandboxRequest) => LongLivedRuntimeSandboxDecision) | undefined;
+  /** Where a failed spawn leaves its cause; the process-wide sink when absent. */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export function createRuntimeProcessSupervisor(
@@ -155,6 +165,7 @@ export function createRuntimeProcessSupervisor(
     deps.backend,
     deps.qualifications ?? [],
     deps.planSandbox ?? defaultSandboxPlanner,
+    deps.activityLog,
   );
 }
 
@@ -170,6 +181,7 @@ class RuntimeProcessSupervisorImpl implements RuntimeProcessSupervisor {
     private readonly planSandbox: (
       request: LongLivedRuntimeSandboxRequest,
     ) => LongLivedRuntimeSandboxDecision,
+    private readonly activityLog: ServerLogSink | undefined,
   ) {}
 
   public get supportsStdinLifetime(): true | undefined {
@@ -212,7 +224,10 @@ class RuntimeProcessSupervisorImpl implements RuntimeProcessSupervisor {
       this.ownedRunIds.set(tree, request.runId);
       this.ownedTreeBindingIds.set(tree, request.treeBindingId);
       return { ok: true, tree, sandboxAttestation: preflight.sandbox.attestation };
-    } catch {
+    } catch (error) {
+      // The closed `spawn-failed` code is all the caller gets; the cause stays on the log: the error
+      // class and Keiko frames, never its message (audit 2026-10, finding 12).
+      recordSpawnFailure(this.activityLog ?? processServerLogSink(), request.runId, error);
       return { ok: false, failureCode: "spawn-failed" };
     }
   }
@@ -256,6 +271,22 @@ class RuntimeProcessSupervisorImpl implements RuntimeProcessSupervisor {
     }
     return { status: "recovery-required" };
   }
+}
+
+function recordSpawnFailure(sink: ServerLogSink, runId: string, error: unknown): void {
+  const errorKind: ActivityLogErrorKind =
+    error instanceof TypeError ? "validation-failed" : "internal";
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_FAILED_OPERATION,
+      { level: "error", correlationId: correlationIdOrUnknown(runId), errorKind },
+      {
+        launchPhase: "process-spawn",
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
 }
 
 function runtimeSandboxRequest(

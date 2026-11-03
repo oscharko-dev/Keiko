@@ -159,6 +159,7 @@ export interface ConnectedRetrievalEvalInput {
   readonly activityLog?: ServerLogSink;
   readonly answer?: string;
   readonly detectWorkspace?: OrchestratorDeps["detectWorkspace"];
+  readonly contentRedaction?: OrchestratorDeps["contentRedaction"];
 }
 
 function connectedEvalRuntime(): UiHandlerDeps {
@@ -273,6 +274,9 @@ function connectedEvalRetrievalDeps(fixture: ConnectedRetrievalEvalInput): Orche
     correlationId: fixture.correlationId,
     activityLog: fixture.activityLog,
     ...(fixture.detectWorkspace === undefined ? {} : { detectWorkspace: fixture.detectWorkspace }),
+    ...(fixture.contentRedaction === undefined
+      ? {}
+      : { contentRedaction: fixture.contentRedaction }),
     answerer: fixture.answerer ?? {
       answer: (): Promise<string> => Promise.resolve(fixture.answer ?? ""),
     },

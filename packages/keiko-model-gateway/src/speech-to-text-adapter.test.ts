@@ -43,6 +43,24 @@ async function bodyToText(init: RequestInit): Promise<string> {
 }
 
 describe("requestSpeechToText", () => {
+  it("records provider HTTP status and sent audio format without provider error bodies", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "whisper-large-v3",
+      audio: AUDIO,
+      mimeType: "audio/wav",
+      correlationId: "corr-stt-http-status",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => new Response("private provider rejection", { status: 422 })),
+    });
+    expect(events[0]?.extra).toMatchObject({ audioFormat: "wav", audioBytes: AUDIO.byteLength });
+    expect(events.at(-1)?.extra).toMatchObject({ httpStatus: 422, failureKind: "transport" });
+    expect(formatActivityLogProofLine(events.at(-1) ?? {})).toContain('"httpStatus":422');
+    expect(JSON.stringify(events)).not.toContain("private provider rejection");
+  });
+
   it("POSTs multipart/form-data to /audio/transcriptions with the audio, model, and auth header", async () => {
     let seenUrl = "";
     let seenMethod = "";
@@ -352,6 +370,63 @@ describe("requestSpeechToText", () => {
     expect(outcome).toEqual({ ok: true, value: { transcript: "" } });
   });
 
+  // #3907: whisper.cpp (served through LiteLLM) joins its verbose segments with line breaks, and a
+  // segment may end inside a word, so "Tests" reached the composer as "T\nests". The segments
+  // already carry their own spacing; joined as they are, the transcript reads as spoken.
+  it("joins whisper segments a provider separated with line breaks, and records how many it removed", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "whisper-large-v3-turbo",
+      audio: AUDIO,
+      mimeType: "audio/wav",
+      correlationId: "corr-stt-segments",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() =>
+        ok({
+          text: " Füge eine Option hinzu und führe die T\nests aus.\n",
+          segments: [{ text: " Füge eine Option hinzu und führe die T" }, { text: "ests aus." }],
+        }),
+      ),
+    });
+    expect(outcome).toEqual({
+      ok: true,
+      value: { transcript: " Füge eine Option hinzu und führe die Tests aus." },
+    });
+    expect(events.at(-1)).toMatchObject({
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-segments",
+      extra: { outcome: "succeeded", segmentSeparatorsRemoved: 2 },
+    });
+    expect(JSON.stringify(events)).not.toContain("Option");
+  });
+
+  it.each([
+    ["a transcript without segments", { text: "first line\nsecond line" }],
+    [
+      "segments the text does not consist of",
+      { text: "first line\nsecond line", segments: [{ text: "first line" }, { text: "other" }] },
+    ],
+    [
+      "a malformed segment list",
+      { text: "first line\nsecond line", segments: [{ text: "first line" }, { start: 1 }] },
+    ],
+  ])("keeps the provider's own line breaks for %s", async (_name, body) => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/webm",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => ok(body)),
+    });
+    expect(outcome).toEqual({ ok: true, value: { transcript: "first line\nsecond line" } });
+    expect(events.at(-1)?.extra).toMatchObject({ segmentSeparatorsRemoved: 0 });
+  });
+
   it("surfaces content-free confidence, language, and duration when the provider reports them", async () => {
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
@@ -592,6 +667,7 @@ describe("requestSpeechToText", () => {
         timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
       },
     });
+    expect(completed?.extra).not.toHaveProperty("httpStatus");
   });
 
   // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate

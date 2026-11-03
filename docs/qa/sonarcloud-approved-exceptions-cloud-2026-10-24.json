@@ -1,0 +1,231 @@
+{
+  "project": "oscharko-dev_Keiko",
+  "reviewDate": "2026-10-24",
+  "scope": "Only the 20 explicitly owner-approved CSS/async-generator exceptions. No source-repair issue is manually resolved.",
+  "sourceRevision": "a34e60bda61ec0cf82e2dda28b3d511861a8b426",
+  "sourceEvidence": "docs/qa/sonarcloud-blocker-medium-2026-10-24.json",
+  "globalRulesOrGatesChanged": false,
+  "results": [
+    {
+      "issueId": "AaDwTGl-da_cdHSoS7Uk",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/agent-run-governance.ts",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "77e0410da55e4f5bbaeebcb26c20c7d4b96eec0f46ece62b60c9a7799efa9957",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L34"
+    },
+    {
+      "issueId": "AaDwTGQKda_cdHSoS7T-",
+      "rule": "typescript:S7503",
+      "file": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "4b02262c44858d31a10a353c273ca444ec43a7bf8e6b0f9a22f48b88de78392f",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L47"
+    },
+    {
+      "issueId": "AaE92lTNud5JuSxb0cpD",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/MultiRootFilesWidget.module.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "67ef0bcc78e8e33bb5f7fa62bf6e32ad32de636ab001dfa95956206ee9c90544",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L60"
+    },
+    {
+      "issueId": "AaE92lIpud5JuSxb0cpB",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "4f2ec2d27e233e49d9b2b2004834bad94cd93efbee71632950ba6f8101a2ea11",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L73"
+    },
+    {
+      "issueId": "AaE92lIpud5JuSxb0cpC",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/components/desktop/widgets/cards/EditorGitHunkPeek.module.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "b0707659a9b2c1b85f30d825723e4596e66a1eb5be457759b719dfa52962085f",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L86"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpb",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "09180396d6e991953ee77368b92bd2a95902bf3a8c6149793a17c26f667fb3cd",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L99"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpc",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "0f236157f7a26212b6f86861baeec9a558b7dc3d61e7bdc234a30ca56abaccac",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L112"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpj",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "d7369e9e84a7ef10291120f62dbb469dd455c43aadee5060bd8144a2176f40e6",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L125"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cpv",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "c97e4f695a0d043e33646cc33d4a154e1a676db5ca7378e80dd2b38df0baf1c7",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L138"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cp2",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "9a402646bbda05441a4444a16f80b91c6f2f2e88178850dc94aae4c0c7dd21bc",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L151"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpJ",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "53d910d90ca4c6963a0c451d668686768bb668225a3bada88089e342f81074da",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L164"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpK",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "ca59c0400044e6ad2b452201919b64929d81398b32f675c693adf8873e67bcb9",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L177"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpR",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "fd777a1c7eb23c1cb6165ad9b47e490374dd8e873c6a563d0fb4ebe1981ffde4",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L190"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqY",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "77bb1b8cce032494b52dd7a553cab9087e1d92f7a36a41f5964c3cc62b8672d4",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L203"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqZ",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "09a837d121a9beda10c1957c138b78502bcbba1bf18b4c81ec62fcfe5a8292aa",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L216"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqa",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "b23973784e8bef4e920d1d28eab181ad983e98f4702c8173662e2857d20771b5",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L229"
+    },
+    {
+      "issueId": "AaE92rXJud5JuSxb0cqb",
+      "rule": "css:S9423",
+      "file": "design-system/keiko-tokens.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "3702c8db999b64389bdc5a1edfa205d50538833e6cc279048991e75dc5112ac3",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L242"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpS",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "efee3a938e86106d550b7ab1a14ea9ee17ef90db5f8f10632950028a9979ece6",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L255"
+    },
+    {
+      "issueId": "AaE92l8Uud5JuSxb0cpU",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "078cd89a45f17f44cd37c7df69fbec48f98496aa16ad92691dd4469f87627e9b",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L268"
+    },
+    {
+      "issueId": "AaE92l8Vud5JuSxb0cqG",
+      "rule": "css:S9423",
+      "file": "packages/keiko-ui/src/app/globals.css",
+      "httpStatus": 200,
+      "status": "FALSE_POSITIVE",
+      "resolution": "FALSE-POSITIVE",
+      "applied": true,
+      "commentSha256": "b4b940a36bf82124f7c5b7d6ef2a3fcaea1ce31d0e18288863e1fa4626ed78ba",
+      "evidence": "https://github.com/oscharko-dev/Keiko/blob/a34e60bda61ec0cf82e2dda28b3d511861a8b426/docs/qa/sonarcloud-blocker-medium-2026-10-24.json#L281"
+    }
+  ],
+  "schemaVersion": 2
+}

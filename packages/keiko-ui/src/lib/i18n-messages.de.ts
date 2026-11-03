@@ -515,6 +515,11 @@ export const DE_MESSAGES = {
   // ist kein defektes Gateway, und keiner der Texte macht die Größe der Anfrage verantwortlich.
   "chat.modelSelectionUnavailable":
     "Das ausgewählte Modell ist vorübergehend nicht verfügbar. Wähle ein anderes verfügbares Modell oder warte auf seine Wiederherstellung.",
+  "chat.error.capabilityUnavailable.title": "Modellfunktion nicht verfügbar",
+  "chat.error.capabilityUnavailable.message":
+    "Das ausgewählte Modell kann die benötigten Chat-Funktionen derzeit nicht ausführen.",
+  "chat.error.capabilityUnavailable.remediation":
+    "Wähle ein einsatzbereites Chat-Modell. Prüfe für den Jira-Zugriff Tool-Calling unter Einstellungen > Modelle oder trenne den Jira-Pod.",
   "chat.error.scopeChanged.title": "Verbundene Quellen wurden geändert",
   "chat.error.scopeChanged.message":
     "Die verbundenen Quellen haben sich zwischenzeitlich geändert. Die Anfrage wurde nicht mit einer veralteten Quellenliste ausgeführt.",
@@ -606,6 +611,10 @@ export const DE_MESSAGES = {
     "Das Chat-Grounding ist nach einer Zeitüberschreitung blockiert. Lade den Chat neu, bevor du es erneut versuchst.",
   "chat.grounding.connectSourceFailed":
     "Keiko konnte diese Quelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
+  "chat.grounding.sourceUpdatePending":
+    "Verbundene Quellen werden aktualisiert. Dein Entwurf bleibt erhalten.",
+  "chat.grounding.sourceUpdateFailed":
+    "Die Quellen konnten nicht aktualisiert werden. Verbinde die Quelle vor dem Senden erneut; dein Entwurf bleibt erhalten.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.grounding.gitChangeSavedRefreshUnavailable":
@@ -644,22 +653,8 @@ export const DE_MESSAGES = {
   "footer.windowAction": "{action} {title}-Fenster{suffix}",
   "settings.title": "Einstellungen",
   "settings.language.compactLabel": "Sprache",
-  "updates.notice.aria": "Keiko-Update-Hinweis",
-  "updates.notice.title": "Update verfügbar",
-  "updates.notice.criticalTitle": "Kritisches Update verfügbar",
-  "updates.notice.releaseUnavailableTitle": "Update-Prüfung nicht verfügbar",
-  "updates.notice.body":
-    "Version {version} kann geprüft werden. Keiko installiert sie nicht automatisch.",
-  "updates.notice.releaseUnavailableBody":
-    "Keiko konnte die Update-Download-Informationen gerade nicht prüfen. Es wird nichts installiert.",
-  "updates.notice.portableBody":
-    "Version {version} ist bereit. Öffne Updates und klicke auf Update, wenn du bereit bist.",
-  "updates.notice.portableSetupBody":
-    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
-  "updates.notice.portableExternallyManagedBody":
-    "Diese Keiko-Installation wird außerhalb der App verwaltet. Öffne Updates für Details.",
-  "updates.notice.review": "Update prüfen",
-  "updates.notice.notNow": "Nicht jetzt",
+  "updates.notice.loadFailed":
+    "Der Update-Hinweis konnte nicht geladen werden. Öffne Updates zum Prüfen.",
   "updates.versionUnknown": "unbekannt",
 
   "updates.status.current": "Keiko ist aktuell",
@@ -749,11 +744,6 @@ export const DE_MESSAGES = {
   "connection.armTitle": "Einmal klicken, um das Entfernen vorzubereiten.",
   "connection.removeQuestion": "Entfernen?",
   "connection.cancelled": "Entfernen abgebrochen — die Verbindung wurde nicht entfernt.",
-  "scope.notice.narrowed": "Der verbundene Bereich wurde zu {scope} geändert.",
-  "scope.notice.widened": "Der verbundene Bereich wurde auf {scope} erweitert.",
-  "scope.notice.keepFolder": "Ordner behalten",
-  "scope.notice.ok": "OK",
-  "scope.notice.failed": "Der Ordner konnte nicht beibehalten werden.",
   "chat.grounding.help":
     "Keiko sucht für quellenbezogene Antworten in den verbundenen Quellen und kennzeichnet allgemeines Wissen als eigene Einschätzung. Das Modell hat keine Datei-Werkzeuge. Öffne eine Datei in Dateien oder erwähne sie mit @, um sie in den Bereich aufzunehmen.",
   "scope.missing.add": "Datei in den Bereich aufnehmen",
@@ -767,11 +757,6 @@ export const DE_MESSAGES = {
   "scope.missing.failed": "Die Datei konnte nicht in den Bereich aufgenommen werden.",
   "scope.pill.filesInFolder": "{count} Dateien in {name}",
   "scope.pill.accessibleWithPath": "{label} ({path})",
-  "scope.boundary.noun.repository": "den verbundenen Stammordner",
-  "scope.boundary.noun.folder": "den verbundenen Ordner",
-  "scope.boundary.noun.fileScope": "den verbundenen Datei-Scope",
-  "scope.boundary.description":
-    "Keiko darf nur {noun} auswerten; Safe-Read-Ausschlüsse und Kontextbudgets greifen vor jeder Antwort.",
   "scope.disconnect.error": "Scope konnte nicht getrennt werden.",
   "scope.disconnect.aria": "{label} vom Chat trennen",
   "scope.disconnect.title": "{label} vom Chat trennen",

@@ -1,3 +1,6 @@
+import type { ChatToolTranscriptUpdate } from "./chatToolTranscript.js";
+import type { ChatToolMutationStore } from "./chatToolMutationTypes.js";
+import type { ChatReadGrantStore } from "../atlassian/chatReadGrantState.js";
 // ADR-0013 D4 — UiStore port and entity types. The port is the seam for testing; the concrete
 // `createNodeUiStore` adapter and the `createInMemoryUiStore` test adapter both implement it.
 //
@@ -11,9 +14,12 @@
 // the literal specifier so the extension must match exactly.
 import type { CodingHistoryStore } from "./codingHistory.js";
 import type { MarkdownSkillStore } from "./markdownSkills.js";
+import type { BrowserApprovalStore } from "./browserApprovals.js";
 import type {
   Project,
   Chat,
+  ChatDraft,
+  ChatDraftUpdate,
   ChatMessage,
   ChatTurnState,
   CreateChatOptions,
@@ -25,6 +31,7 @@ import type {
   ChatGitChangeScope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
+  ContextCompactionRecord,
   CodingWorkbenchMode,
   StoredPdfCitationPreviewCitation,
   WorkspaceManifest,
@@ -34,6 +41,17 @@ import type {
 // id, which the evidence of the chat's reference id joins (#3557 review). Never on the wire.
 export interface StoreCreateChatOptions extends CreateChatOptions {
   readonly correlationId?: string | undefined;
+  readonly creationRequestId?: string | undefined;
+  readonly automaticModelSelection?: boolean | undefined;
+}
+
+export interface ChatCreationIntent {
+  readonly requestId: string;
+  readonly projectPath: string;
+  readonly title: string;
+  readonly requestedModelId: string | undefined;
+  readonly branchLabel: string | undefined;
+  readonly correlationId: string | undefined;
 }
 export type {
   Project,
@@ -107,17 +125,51 @@ export type ChatTurnCompletion =
     }
   | { readonly kind: "conflict" };
 
+export interface ChatContinuityCheckpoint {
+  readonly generation: number;
+  /** Undefined means a damaged payload; its generation still permits an explicit rebuild. */
+  readonly record: ContextCompactionRecord | undefined;
+}
+
+export interface GatewayHistoryOrder {
+  readonly timestamp: number;
+  readonly rowid: number;
+}
+
+export interface GatewayHistorySearchTerm {
+  readonly value: string;
+  readonly kind: "word-prefix" | "identifier";
+}
+
+export interface GatewayHistorySearchResult {
+  readonly candidateRows: number;
+  readonly eligibleUnits: number;
+  readonly indexLimitReached: boolean;
+  readonly visitStopped: boolean;
+}
+
+export type GatewayHistoryVisitor = (
+  messages: readonly ChatMessage[],
+  order?: GatewayHistoryOrder,
+) => boolean | undefined;
+
 export interface UiStore {
+  readonly chatToolReadGrants?: ChatReadGrantStore;
+  readonly chatToolMutations?: ChatToolMutationStore;
   readonly markdownSkills: MarkdownSkillStore;
+  readonly browserApprovals?: BrowserApprovalStore | undefined;
   readonly codingHistory?: CodingHistoryStore | undefined;
   readonly listProjects: () => readonly Project[];
-  readonly createProject: (path: string, name?: string) => Project;
+  readonly createProject: (path: string, name?: string, correlationId?: string) => Project;
   readonly reconnectProject: (path: string) => Project;
   readonly updateProject: (path: string, patch: UpdateProjectPatch) => Project;
   readonly deleteProject: (path: string) => void;
 
   readonly listChats: (projectPath: string, limit?: number) => readonly Chat[];
   readonly findChatById: (id: string) => Chat | undefined;
+  readonly replayChatCreation: (intent: ChatCreationIntent) => Chat | undefined;
+  readonly readChatDraft: (id: string) => ChatDraft;
+  readonly updateChatDraft: (id: string, update: ChatDraftUpdate) => ChatDraft;
   readonly createChat: (
     projectPath: string,
     title: string,
@@ -125,6 +177,11 @@ export interface UiStore {
     opts?: StoreCreateChatOptions,
   ) => Chat;
   readonly updateChat: (id: string, patch: UpdateChatPatch, options?: UpdateChatOptions) => Chat;
+  readonly invalidateJiraPod: (
+    podId: string,
+    authenticationGeneration: number | null,
+    correlationId?: string,
+  ) => readonly { readonly previous: Chat; readonly current: Chat }[];
   /**
    * Atomic git-change scope mutation: the callback receives the CURRENT list, read inside the same
    * transaction as the write. The only safe way to append or replace an entry across an await
@@ -147,11 +204,29 @@ export interface UiStore {
   readonly visitGatewayMessageUnits: (
     chatId: string,
     currentUserMessageId: string,
-    visit: (messages: readonly ChatMessage[]) => boolean | undefined,
+    visit: GatewayHistoryVisitor,
   ) => void;
+  /** Indexed preselection never admits a turn that the canonical history visitor would exclude. */
+  readonly searchGatewayMessageUnits: (
+    chatId: string,
+    terms: readonly GatewayHistorySearchTerm[],
+    visit: GatewayHistoryVisitor,
+  ) => GatewayHistorySearchResult;
   readonly chatHistoryRevision: (chatId: string) => number;
+  readonly readChatContinuityCheckpoint: (chatId: string) => ChatContinuityCheckpoint | undefined;
+  /** Compare and swap inside the private database; undefined expects no existing checkpoint. */
+  readonly writeChatContinuityCheckpoint: (
+    chatId: string,
+    record: ContextCompactionRecord,
+    expectedGeneration: number | undefined,
+  ) => boolean;
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
+  readonly updateChatToolTranscript: (
+    messageId: string,
+    update: ChatToolTranscriptUpdate,
+    correlationId: string,
+  ) => void;
   readonly createMessage: (msg: NewChatMessage) => ChatMessage;
   readonly createMessages: (messages: readonly NewChatMessage[]) => readonly ChatMessage[];
   readonly createTurnAssistant: (
@@ -295,6 +370,12 @@ export interface WorkspaceManifestRootProject {
 }
 
 export interface UpdateChatOptions {
+  readonly correlationId?: string | undefined;
+  /** Trusted, freshly resolved target; never copied from the PATCH body. */
+  readonly verifiedJiraPod?: {
+    readonly podId: string;
+    readonly authenticationGeneration: number;
+  };
   readonly maxConnectedSources?: number;
   readonly maxLocalKnowledgeSources?: number;
 }
@@ -305,4 +386,5 @@ export interface UiStoreFactoryOptions {
   readonly now?: () => number;
   readonly newId?: () => string;
   readonly redactString?: (input: string) => string;
+  readonly redactContentString?: (input: string) => string;
 }

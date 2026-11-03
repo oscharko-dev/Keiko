@@ -1,0 +1,183 @@
+{
+  "schemaVersion": 1,
+  "classification": "Native Linux package build/identity closure only; not portable updater generation admission",
+  "sourceParent": "e41122be5ed8f8d1f3f2c11ae2cd39e6d0a6dbb8",
+  "sourceFreeze": {
+    "artifact": "checkpoint50-source-freeze-v2.json",
+    "sha256": "22da61d5b8e1d21b8a59cfdb62387821aff9729cb89d61d9d32ed7432ac7811e"
+  },
+  "implementation": {
+    "build": "Existing builder compiles a hardened x64 ELF supervisor with a closed compiler environment and retained compiler failures.",
+    "package": "Existing stager, helper metadata, SBOM, qualification receipt and runtime discovery bind runtime/native/keiko-runtime-supervisor. The source tree covers Linux code and its shared POSIX header.",
+    "compatibility": "Exact historical JavaScript/none-protocol tuples remain readable. Newly produced artifacts must bind the native tuple; mixed path/protocol/source tuples refuse.",
+    "confinement": "Linux Coding still selects the existing namespace/egress gateway. A gateway receipt binds helper identity without qualifying updater lifetime ownership.",
+    "activityLog": {
+      "op": "portable.runtime.native-helper-bound",
+      "fields": ["target", "helperSha256"],
+      "proofId": "portable.runtime.native-helper-bound.emitted-line"
+    }
+  },
+  "verification": {
+    "builder": {
+      "beforeFailed": 3,
+      "beforeHealthy": 5,
+      "afterPassed": 8,
+      "before": {
+        "artifact": "checkpoint50-linux-builder-before.log",
+        "sha256": "04c29906a2674a41a1e27c7b744cfb0eda30d85fcf5c66867242a04477cd30b3"
+      }
+    },
+    "sameFinalControls": {
+      "bindingsBeforeFailed": 2,
+      "bindingsBefore": {
+        "artifact": "checkpoint50-final-binding-before.log",
+        "sha256": "82da11a02f532aa11183f771d0806f7b7dcf1735056cfb90a107686e58e4f43f"
+      },
+      "manifestAndActualStageBeforeFailed": 3,
+      "manifestAndActualStageBefore": {
+        "artifact": "checkpoint50-final-manifest-stage-before.log",
+        "sha256": "20b34cd4d6a6a69a226372877f9062c5203d70ab93b503db6d5c982d85ff8b7a"
+      },
+      "after": {
+        "artifact": "checkpoint50-all-affected-v1.log",
+        "sha256": "0c521b623bee4f23d69cb0943f5f58547ab8981adfff464a70bd1dcecab10bf7"
+      },
+      "affectedSuites": 8,
+      "testsPassed": 818,
+      "classification": "Full818-suite run on v1. The only finalv2 source change extracts source-path selection after Sonar S3358; separate unchanged final controls and complete tuple replay below pass."
+    },
+    "independentTuples": {
+      "beforePassed": 53,
+      "beforeFailed": 4,
+      "afterPassed": 57,
+      "evidence": {
+        "artifact": "checkpoint50-helper-tuples-independent.json",
+        "sha256": "36c7f33232203b8b823cf13404e7b169cc2eb5cdcf9079d5ca946116b09ac343"
+      },
+      "scope": "Actual transitive pure helper declarations and closed supervisor-set validation, not whole-manifest/signature/kernel admission."
+    },
+    "actualElf": {
+      "image": "node@sha256:4e9cb555d708e0829c9d93e5eeae9dfab0617b832ca436a690680e0fca735ef5",
+      "result": {
+        "artifact": "checkpoint50-native-build-output-v2/result.json",
+        "sha256": "20cd33ca4e4c4ee6192becebe9bc28f692cb3f151bd68ea356807c25ea1ef173"
+      },
+      "driver": {
+        "artifact": "checkpoint50-linux-elf-controls-v2.mjs",
+        "sha256": "ffc69dd927bcf21d2648c6f1211be06f2c52e54cd767c0867362daf911319b56"
+      },
+      "log": {
+        "artifact": "checkpoint50-linux-builder-actual-v2.log",
+        "sha256": "3f4dde4711943a14c6de99d3fd20b6bc87f9047fc823fc77f474d7005497e01c"
+      },
+      "independent": {
+        "artifact": "checkpoint50-retained-elf-independent.json",
+        "sha256": "18fef560360904d5cf705db18b00bb87e1cab43aa1b9bec482788c4de8056168"
+      },
+      "scope": "Actual x64 compiler and retained binary ELF-table checks in translated x64 userland; no x64 kernel generation execution."
+    },
+    "strictTypecheck": {
+      "artifact": "checkpoint50-typecheck-v1.log",
+      "sha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    "lint": {
+      "artifact": "checkpoint50-lint-v3.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "activityLog": {
+      "checksPassed": 7,
+      "log": {
+        "artifact": "checkpoint50-activity-log-v1.log",
+        "sha256": "b17b4c64ae5c5cdc7914a4c78a96640c71c3316108131fbe1f9fc58d0367cf9b"
+      },
+      "scheduling": "Coordinator paused to keep package builds separate from architecture-negative source probes; elapsed duration is not a performance measurement."
+    },
+    "assembledPackageSurface": {
+      "artifact": "checkpoint50-package-surface.log",
+      "sha256": "ba333e93cc43881c737617879d712b37b9a412a39cbe4bac553264c8a8a3afab"
+    },
+    "adrIndex": {
+      "artifact": "checkpoint50-adr.log",
+      "sha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    },
+    "finalExtraction": {
+      "previousFreeze": {
+        "artifact": "checkpoint50-source-freeze-v1.json",
+        "sha256": "385059545dd573cba8cc3c7503a86a5a1ae76c39eb18a05c9e8e718a414fd893"
+      },
+      "sonarFindingRetained": {
+        "artifact": "checkpoint50-sonar-v1.log",
+        "sha256": "2eef22ac085f91d2f36e88d1b5630dcf8d14faa34260a9b3133d0c2f1e010d18"
+      },
+      "changedSource": "scripts/portable-runtime.mjs",
+      "unchangedOtherInputs": 19,
+      "actualManifestAndStagePassed": 3,
+      "actualManifestAndStage": {
+        "artifact": "checkpoint50-final-manifest-stage-after-v2.log",
+        "sha256": "633939821a749face3261a96556508defb76bf1333ae4c7717182217a3b192c9"
+      },
+      "unchangedIndependentlyAuthoredTupleCasesPassed": 57,
+      "developerReplay": {
+        "artifact": "checkpoint50-developer-replay-v2/checkpoint50-helper-tuples-independent.json",
+        "sha256": "e3689ac1d39d99b96001fd4b850a2856ac2005529db324787b429eca7f68192b"
+      },
+      "replayDriver": {
+        "artifact": "checkpoint50-helper-tuples-replay-v2.mjs",
+        "sha256": "3caa1e7c09d0bd5f2a335f7eb5b4409805e4c13198f3adb0fe49e8d81113a0b6"
+      },
+      "scope": "Source-path helper extraction only; original cases, classifications, assertions and grants retained.",
+      "independentFinalTuples": {
+        "artifact": "checkpoint50-helper-tuples-independent-v2.json",
+        "sha256": "198978450b3d9d714c949233c4bd113af7cf538e751e029c771be24ee49abb8b"
+      },
+      "independentSourceClosure": {
+        "artifact": "checkpoint50-v2-source-closure-independent.json",
+        "sha256": "642c73d80c60c5d26c8df7dfafeea82061086470b35f6ec680df61a9376ca46a"
+      }
+    },
+    "finalSonar": {
+      "artifact": "checkpoint50-sonar-final.log",
+      "sha256": "25c9c81ce62aea5b29334431221000ad9679577abea541787e8d478162415c93"
+    }
+  },
+  "retainedCommissioningFailures": [
+    {
+      "artifact": "checkpoint50-linux-manifest-before.log",
+      "sha256": "7e12189af2b1c99f554d71ca46b299febae17e27fdbc852ab27eb59f2f2228cf"
+    },
+    {
+      "artifact": "checkpoint50-linux-binding-after-v1.log",
+      "sha256": "a4a90154c30b48166077d31733173340960ca897b8700eb6926d9b13c67f53de"
+    },
+    {
+      "artifact": "checkpoint50-linux-stage-after-v1.log",
+      "sha256": "845816aa099b23a438a87cb67e9af29a6ce1407b80297152f07cfe14b88cce74"
+    },
+    {
+      "artifact": "checkpoint50-linux-stage-after-v2.log",
+      "sha256": "6670171c5ea1f9f82cd8d129fe6fbbcd96e69f0931edd9b2f02ed479d1a9699a"
+    },
+    {
+      "artifact": "checkpoint50-linux-stage-after-v3.log",
+      "sha256": "14e37abd29261a36b0dc5fec1d51b2d620938b285d92428632844b138b9ad472"
+    },
+    {
+      "artifact": "checkpoint50-lint-v1.log",
+      "sha256": "6b169daa998df24a01d29feb6b86381c503e6ccad9fdec785207068302cfea1f"
+    },
+    {
+      "artifact": "checkpoint50-op-catalog-generate.log",
+      "sha256": "3fe1ca38e0c2bd5e6b62ec4168a909c4dd37284cd346c52fbe2275c625cc0036"
+    },
+    {
+      "artifact": "checkpoint50-op-catalog-generate-v2.log",
+      "sha256": "3fe1ca38e0c2bd5e6b62ec4168a909c4dd37284cd346c52fbe2275c625cc0036"
+    }
+  ],
+  "limits": [
+    "No initial or successor outer launcher owner, Linux native-copy admission, bootstrap authority or installed-version update is enabled by this checkpoint. Both original native P1 conversations remain open.",
+    "The fresh 24-case skill campaign uses its separate frozen source48 assembly and inputs; this package repair changes none of them. No new skill-benefit or held-out acceptance is claimed.",
+    "The asynchronous proxy-listen error finding remains open; active frozen measurement inputs are preserved.",
+    "Browser/search/source acceptance, final exact-head gates and successful dev integration remain open. No issue checkbox or complete acceptance disposition changes."
+  ]
+}

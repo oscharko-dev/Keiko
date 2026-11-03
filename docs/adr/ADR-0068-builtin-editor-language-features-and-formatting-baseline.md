@@ -185,11 +185,12 @@ readonly formatting?: { readonly available: boolean; readonly source: EditorBuil
 
 `deriveEditorStatusBar` emits a content-free `formatting` field (id `"formatting"`, non-live,
 non-assertive) reading "Format ready" / "Format unavailable". The widget feeds it the **same**
-`formattingAvailable` value that gates the button and the same dynamic `aria-disabled`/`aria-label` on
-the Format button in `EditorRuntimeWidget.tsx`. One derivation drives the button-enabled state, the
-button's aria, and the status field — there is no second source that can drift. This is the concrete
-AC5 fix: the command is never shown as enabled while status says unavailable, and never silently does
-nothing.
+`formattingAvailable` value that decides whether `EditorRuntimeWidget.tsx` offers the Format command.
+Since #3685 Format is a secondary document action in the pane's "More file actions" menu
+(`EditorDocumentActions`), and the widget **omits** it from that menu while formatting is unavailable
+instead of rendering a disabled button. One derivation drives the action's presence and the status
+field — there is no second source that can drift. This is the concrete AC5 fix: the command is never
+offered while status says unavailable, and never silently does nothing.
 
 ### D5 — Runtime bootstrap imports the `basic-languages` contributions every `syntaxHighlighting`/`monaco-builtin` language needs
 
@@ -241,13 +242,14 @@ none). We add explicit tests rather than new code:
 2. **Editor (jsdom/node)** — `formattingAvailable` derivation (D3) per language; status `formatting`
    field wording + non-live (D4); the bridge still returns `EMPTY_EDITS` on the failure modes (AC3/AC4
    regression pins).
-3. **UI (jsdom)** — Format button `aria-disabled`/`aria-label` and the status field agree for a
-   `monaco-builtin`, a `keiko-language-service`, and a `"none"` language (AC5).
+3. **UI (jsdom)** — the Format action's presence in the "More file actions" menu and the status field
+   agree for a `monaco-builtin`, a `keiko-language-service`, and a `"none"` language (AC5).
 4. **Browser e2e (D4 deliverable)** — packaged-app Playwright spec: open a representative file per
    formatting source, assert (a) correct language mode on open (AC1) and stable tokenization/theme
    after reload (AC2), (b) Format applies deterministic edits for a `monaco-builtin` and the
-   `keiko-language-service` set and the button is **disabled** for a `"none"` language with status
-   reading unavailable (AC5), (c) a forced formatting failure leaves content byte-identical (AC4).
+   `keiko-language-service` set and the opened "More file actions" menu **omits** Format for a
+   `"none"` language with status reading unavailable (AC5), (c) a forced formatting failure leaves
+   content byte-identical (AC4).
    Mirrors the editor-baseline e2e harness (separate playwright config, coordinator evidence; not a
    gating `@smoke` test unless promoted).
 
@@ -265,8 +267,8 @@ must not be resolved by a non-additive contract edit.
 
 ### Positive
 
-- AC5 is fixed at its root: one registry-derived `formattingAvailable` value drives the button-enabled
-  state, the button aria, and the new status field, so the command and status can never disagree and
+- AC5 is fixed at its root: one registry-derived `formattingAvailable` value drives whether the Format
+  action is offered and the new status field, so the command and status can never disagree and
   Format never silently no-ops (D3, D4).
 - Browser formatting reachability gets one editor-tier source of truth, distinct from server
   capability — ending the "server can format yaml, browser can't" confusion (D1, D2).
@@ -336,7 +338,7 @@ must not be resolved by a non-additive contract edit.
 | Contracts tests          | `keiko-contracts/src/editor-builtin-capabilities.test.ts` (new)                                                                                                                                      | D1, D6, D7 coherence             |
 | Editor status model      | `keiko-editor/src/components/status-bar.ts` (+ `.test.ts`)                                                                                                                                           | D4 status `formatting` field     |
 | Editor formatting wiring | `keiko-editor/src/components/formatting-bridge.ts` (`FORMATTING_ELIGIBLE_LANGUAGES` ↔ registry coherence only) (+ `.test.ts`)                                                                        | D7 (no double-registration)      |
-| UI gating + bootstrap    | `keiko-ui/.../cards/editorMonacoRuntime.ts` (basic-languages imports); `keiko-ui/.../cards/EditorRuntimeWidget.tsx` (`formattingAvailable` derivation, Format button aria, status `formatting` feed) | D3, D4, D5                       |
+| UI gating + bootstrap    | `keiko-ui/.../cards/editorMonacoRuntime.ts` (basic-languages imports); `keiko-ui/.../cards/EditorRuntimeWidget.tsx` (`formattingAvailable` derivation, Format action presence, status `formatting` feed) | D3, D4, D5                       |
 | UI tests                 | `keiko-ui/.../cards/EditorRuntimeWidget.*.test.tsx` (+ a bootstrap-registration test)                                                                                                                | D3, D4, D5 (jsdom)               |
 | Browser e2e              | `tests/e2e/editor-formatting-1380.spec.ts` + `playwright.issue-1380-*.config.ts` (new)                                                                                                               | D8 item 4 (AC1/AC2/AC4/AC5)      |
 

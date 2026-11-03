@@ -8,9 +8,22 @@
 // metacharacter reaches the regex engine. This keeps the CodeQL js/polynomial-redos required
 // gate green (ADR-0002).
 
+import { privateKeyRegions } from "./redaction-private-key.js";
 import type { AuditRedactionConfig } from "@oscharko-dev/keiko-contracts";
+import {
+  createStreamingRedactor as createBlockRedactor,
+  type StreamingRedactor,
+} from "./redaction-stream.js";
+import {
+  projectCodeRedaction,
+  type CodeRedactionReport,
+  type ProjectionPorts,
+  type RedactionSpan,
+  type SourceRedactionLanguage,
+} from "./redaction-code.js";
 
-const REDACTED = "[REDACTED]";
+import { REDACTION_PLACEHOLDER as REDACTED } from "./redaction-source-map.js";
+export const CODE_REDACTION_REVISION = 8;
 /** The exact text `redact` substitutes for a secret. Exported so a consumer that must recognise a
  * scrubbed value in otherwise structured output (a host path in a test runner's stack frame,
  * #3390) matches this one constant instead of restating it. */
@@ -31,15 +44,19 @@ const AWS_ACCESS_KEY_PATTERN = /\bAKIA[0-9A-Z]{16}\b/g;
 const SLACK_TOKEN_PATTERN = /\bxox[baprs]-[A-Za-z0-9-]{10,}/g;
 const GOOGLE_API_KEY_PATTERN = /\bAIza[0-9A-Za-z_-]{20,}/g;
 const STRIPE_KEY_PATTERN = /\b[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g;
-const PRIVATE_KEY_BOUNDARY_PATTERN = /-----(BEGIN|END) [A-Z ]*PRIVATE KEY-----/g;
+// A JSON Web Token is a bearer credential: three base64url segments whose header and payload are
+// base64url JSON objects, so both start with `eyJ` (`{"`). The signature may be empty (`alg: none`).
+// Requiring both `eyJ` segments and a realistic minimum length keeps dotted identifiers, version
+// strings, hashes, UUIDs and base64 blobs out of reach. Linear classes around literal dots, no
+// nesting: ReDoS-safe.
+const JWT_PATTERN =
+  /(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*(?![A-Za-z0-9_-])/g;
 const PEM_PRIVATE_KEY_HEADER_PATTERN = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
 const GERMAN_IBAN_PATTERN = /\bDE\d{2}(?: ?\d{4}){4} ?\d{2}\b/gi;
 const INTERNATIONAL_GERMAN_PHONE_PATTERN =
   /(?<![0-9A-F-])(?:\+49|0049)(?:[ ./-]?\d){7,13}\b(?!-[0-9A-F])/gi;
 const DOMESTIC_GERMAN_PHONE_PATTERN =
   /(?<![0-9A-F-])0\d{1,4}[ ./-]\d(?:[ ./-]?\d){4,11}\b(?!-[0-9A-F])/gi;
-const GENERIC_API_KEY_HEADER_PATTERN = /\b(x-api-key\s*:\s*)[^\s"'`,;]+/gi;
-const GENERIC_API_KEY_ASSIGNMENT_PATTERN = /\b(api[_-]?key\s*[=:]\s*)[^\s"'`,;&]+/gi;
 
 // Key-name-based value redaction (Epic #532 security audit H1). Connected-folder browsing and
 // grounded answers can now surface arbitrary files whose secrets do not match a known token SHAPE
@@ -69,10 +86,31 @@ const NORMALIZED_SECRET_KEY_NAMES: ReadonlySet<string> = new Set([
   "connectionstring",
   "credential",
 ]);
+const SECRET_FIELD_LABEL = String.raw`(?:${SECRET_KEY_NAMES}|x-api-key|api[_-]?key)["']?[*_]*\s*`;
 const SECRET_KEY_VALUE_PATTERN = new RegExp(
-  `(?<![A-Za-z0-9])(${SECRET_KEY_NAMES})(["']?\\s*[:=]\\s*["']?)[^\\s"'\`,;&]+`,
+  String.raw`(?<![A-Za-z0-9])${SECRET_FIELD_LABEL}[:=][*_]*\s*`,
   "gi",
 );
+const PENDING_CREDENTIAL_CONTEXT = new RegExp(
+  String.raw`(?<![A-Za-z0-9])(?:(?:Bearer|Basic)\s*|${SECRET_FIELD_LABEL}(?:[:=][*_]*\s*["']?)?)$`,
+  "iu",
+);
+
+/** Stream publication uses the same secret grammar and whole-code projection as terminal text. */
+export function createStreamingRedactor(
+  redactText: (text: string) => string,
+  literals: readonly string[] = [],
+): StreamingRedactor {
+  return createBlockRedactor(redactText, literals, (text, before) => {
+    const prefix = text.slice(0, before);
+    const match = PENDING_CREDENTIAL_CONTEXT.exec(prefix);
+    const ambiguous = ambiguousCredentialStart(prefix);
+    return {
+      start: Math.min(match?.index ?? before, ambiguous ?? before),
+      retainUntilTerminal: ambiguous !== undefined,
+    };
+  });
+}
 
 // scheme://user:password@host — strip the userinfo credentials from any URL or DSN. One linear
 // Leading diff punctuation/digits are consumed once before the first scheme letter, so a valid
@@ -99,6 +137,7 @@ const BUILTIN_PATTERNS: readonly RegExp[] = [
   SLACK_TOKEN_PATTERN,
   GOOGLE_API_KEY_PATTERN,
   STRIPE_KEY_PATTERN,
+  JWT_PATTERN,
 ];
 
 function escapeRegExp(value: string): string {
@@ -170,6 +209,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
   ...[
     GOOGLE_API_KEY_PATTERN,
     STRIPE_KEY_PATTERN,
+    JWT_PATTERN,
     PEM_PRIVATE_KEY_HEADER_PATTERN,
     API_KEY_PATTERN,
     URL_CREDENTIALS_PATTERN,
@@ -178,7 +218,7 @@ const CREDENTIAL_SHAPE_PATTERNS: readonly RegExp[] = Object.freeze([
 
 /**
  * True when `value` contains something shaped like an actual credential: an issuer-prefixed token,
- * a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
+ * a JWT-shaped bearer token, a private-key header, URL userinfo credentials, or an auth/api-key/cookie/secret-key context
  * followed by a credential-length value. Pure, no IO. Intended for scanning free text a human wrote;
  * structured payloads that may not carry headers at all keep their stricter substring guard.
  */
@@ -210,36 +250,246 @@ export function objectContainsCredentialKey(value: unknown, seen = new WeakSet()
 // so even non-standard key formats are scrubbed.
 // Source projections may preserve each masked span's LF/CRLF delimiters so cited line numbers
 // remain physical file coordinates. The default diagnostic/provider projection is unchanged.
+/** #4114: the credential floor a diff view applies to hunks that do not parse on their own. */
+function unparsedDiffHunkFloorPorts(
+  options: {
+    readonly unparsedDiffHunks?: "mask" | "credential-floor";
+    readonly onUnparsedDiffHunkFloor?: () => void;
+  },
+  additionalSecrets: readonly string[],
+): Pick<ProjectionPorts, "unparsedDiffHunkFloor" | "onUnparsedDiffHunkFloor"> {
+  if (options.unparsedDiffHunks !== "credential-floor") return {};
+  return {
+    unparsedDiffHunkFloor: (value: string): string =>
+      redactCredentialShapes(value, additionalSecrets, true),
+    ...(options.onUnparsedDiffHunkFloor === undefined
+      ? {}
+      : { onUnparsedDiffHunkFloor: options.onUnparsedDiffHunkFloor }),
+  };
+}
+
 export function redact(
   input: string,
   additionalSecrets: readonly string[] = [],
-  options: { readonly preserveSourceLineBreaks?: boolean } = {},
+  options: {
+    readonly preserveSourceLineBreaks?: boolean;
+    readonly sourceLanguage?: SourceRedactionLanguage;
+    readonly inferSourceLanguage?: boolean;
+    readonly onCodeProjection?: (report: CodeRedactionReport) => void;
+    /**
+     * Diff views of the local user's own repository (#4114): a file whose hunks do not parse on
+     * their own keeps them readable under the credential floor instead of being masked whole.
+     */
+    readonly unparsedDiffHunks?: "mask" | "credential-floor";
+    readonly onUnparsedDiffHunkFloor?: () => void;
+  } = {},
 ): string {
-  const preserveSourceLineBreaks = options.preserveSourceLineBreaks === true;
-  let output = redactPrivateKeyBlocks(input, preserveSourceLineBreaks)
-    .replace(BEARER_PATTERN, (span) =>
-      redactedSourceSpan(span, `Bearer ${REDACTED}`, preserveSourceLineBreaks),
-    )
-    .replace(BASIC_AUTH_PATTERN, (span) =>
-      redactedSourceSpan(span, `Basic ${REDACTED}`, preserveSourceLineBreaks),
-    )
-    .replace(GENERIC_API_KEY_HEADER_PATTERN, `$1${REDACTED}`)
-    .replace(GENERIC_API_KEY_ASSIGNMENT_PATTERN, `$1${REDACTED}`)
-    .replace(SECRET_KEY_VALUE_PATTERN, `$1$2${REDACTED}`)
+  const preserve = options.preserveSourceLineBreaks === true;
+  const floor = unparsedDiffHunkFloorPorts(options, additionalSecrets);
+  const projection = projectCodeRedaction(
+    input,
+    options.sourceLanguage,
+    {
+      sensitiveName: sensitiveSourceName,
+      mayContainSensitiveName,
+      redactPlain: (value): string => redactPlain(value, additionalSecrets, true),
+      publicPrefix: (value): boolean => /^(?:Bearer|Basic)[ \t]+$/iu.test(value),
+      ...floor,
+    },
+    options.inferSourceLanguage,
+  );
+  if (projection.report.regions > 0) options.onCodeProjection?.(projection.report);
+  if (projection.regions.length === 0) return redactPlain(input, additionalSecrets, preserve);
+  const spans: RedactionSpan[] = [
+    ...projection.literals,
+    ...literalSecretSpans(input, additionalSecrets, preserve),
+  ];
+  let from = 0;
+  for (const region of projection.regions) {
+    if (region.start > from) {
+      spans.push({
+        start: from,
+        end: region.start,
+        replacement: redactPlain(input.slice(from, region.start), additionalSecrets, preserve),
+      });
+    }
+    from = Math.max(from, region.end);
+  }
+  spans.push({
+    start: from,
+    end: input.length,
+    replacement: redactPlain(input.slice(from), additionalSecrets, preserve),
+  });
+  return redactIdentifiedPatterns(replaceCodeSpans(input, spans), additionalSecrets, preserve);
+}
+
+function replaceCodeSpans(
+  input: string,
+  spans: readonly RedactionSpan[],
+  preserveSourceLineBreaks = true,
+): string {
+  const sorted = [...spans].sort((a, b) => a.start - b.start || b.end - a.end);
+  const merged: RedactionSpan[] = [];
+  for (const span of sorted) {
+    const previous = merged.at(-1);
+    if (previous !== undefined && span.start < previous.end) {
+      if (span.end <= previous.end) continue;
+      merged[merged.length - 1] = {
+        start: previous.start,
+        end: span.end,
+        replacement: redactedSourceSpan(
+          input.slice(previous.start, span.end),
+          REDACTED,
+          preserveSourceLineBreaks,
+        ),
+      };
+    } else merged.push(span);
+  }
+  const chunks: string[] = [];
+  let from = 0;
+  for (const span of merged) {
+    chunks.push(input.slice(from, span.start), span.replacement);
+    from = span.end;
+  }
+  chunks.push(input.slice(from));
+  return chunks.join("");
+}
+
+function quotedValueEnd(input: string, start: number, quote: string): number {
+  for (let end = start + 1; end < input.length; end += 1) {
+    if (input[end] === "\\") end += 1;
+    else if (input[end] === quote) {
+      if (quote === "'" && input[end + 1] === quote) end += 1;
+      else return end;
+    }
+  }
+  return input.length;
+}
+
+function unsupportedQuotedValue(input: string, start: number): boolean {
+  return /^(?:[@$]{1,2}"|"{3}|'{3})/u.test(input.slice(start, start + 3));
+}
+
+function ambiguousCredentialStart(input: string): number | undefined {
+  for (const match of input.matchAll(SECRET_KEY_VALUE_PATTERN)) {
+    if (unsupportedQuotedValue(input, match.index + match[0].length)) return match.index;
+  }
+  return undefined;
+}
+
+function contextualValueSpans(input: string, preserve: boolean): readonly RedactionSpan[] {
+  const spans: RedactionSpan[] = [];
+  let through = 0;
+  for (const match of input.matchAll(SECRET_KEY_VALUE_PATTERN)) {
+    if (match.index < through) continue;
+    const value = match.index + match[0].length;
+    if (unsupportedQuotedValue(input, value)) {
+      spans.push({
+        start: value,
+        end: input.length,
+        replacement: redactedSourceSpan(input.slice(value), REDACTED, preserve),
+      });
+      break;
+    }
+    const quote = input.charAt(value);
+    const quoted = quote === '"' || quote === "'";
+    const start = value + (quoted ? 1 : 0);
+    const end = quoted
+      ? quotedValueEnd(input, value, quote)
+      : start + (/^[^\s"'`,;&]+/u.exec(input.slice(start))?.[0].length ?? 0);
+    if (end <= start) continue;
+    spans.push({
+      start,
+      end,
+      replacement: redactedSourceSpan(input.slice(start, end), REDACTED, preserve),
+    });
+    through = end;
+  }
+  return spans;
+}
+
+function redactPlain(input: string, secrets: readonly string[], preserve: boolean): string {
+  const contextual = redactPrivateKeyBlocks(redactLiteralSpans(input, secrets, preserve), preserve)
+    .replace(BEARER_PATTERN, (span) => redactedSourceSpan(span, `Bearer ${REDACTED}`, preserve))
+    .replace(BASIC_AUTH_PATTERN, (span) => redactedSourceSpan(span, `Basic ${REDACTED}`, preserve));
+  return redactIdentifiedPatterns(
+    replaceCodeSpans(contextual, contextualValueSpans(contextual, preserve)),
+    secrets,
+    preserve,
+  );
+}
+
+function redactIdentifiedPatterns(
+  input: string,
+  additionalSecrets: readonly string[],
+  preserveSourceLineBreaks: boolean,
+): string {
+  const output = redactUrlCredentials(
+    redactPrivateKeyBlocks(
+      redactLiteralSpans(input, additionalSecrets, preserveSourceLineBreaks),
+      preserveSourceLineBreaks,
+    ),
+  )
+    .replace(GERMAN_IBAN_PATTERN, REDACTED)
+    .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
+    .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED);
+  return redactLiteralSpans(
+    redactIssuerTokens(output),
+    additionalSecrets,
+    preserveSourceLineBreaks,
+  );
+}
+
+function redactUrlCredentials(input: string): string {
+  return input
     .replace(URL_CREDENTIALS_PATTERN, `$1${REDACTED}@`)
     .replace(URL_USERINFO_PATTERN, (match, scheme: string) =>
       SSH_USERINFO_SCHEME.test(scheme.slice(scheme.search(/[a-z]/i)))
         ? match
         : `${scheme}${REDACTED}@`,
-    )
-    .replace(GERMAN_IBAN_PATTERN, REDACTED)
-    .replace(INTERNATIONAL_GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(DOMESTIC_GERMAN_PHONE_PATTERN, REDACTED)
-    .replace(API_KEY_PATTERN, REDACTED);
-  for (const pattern of BUILTIN_PATTERNS) {
-    output = output.replace(pattern, REDACTED);
-  }
-  return redactLiteralSpans(output, additionalSecrets, preserveSourceLineBreaks);
+    );
+}
+
+function redactIssuerTokens(input: string): string {
+  let output = input.replace(API_KEY_PATTERN, REDACTED);
+  for (const pattern of BUILTIN_PATTERNS) output = output.replace(pattern, REDACTED);
+  return output;
+}
+
+// The value of an `Authorization` header is always a credential. Elsewhere a Bearer or Basic value
+// counts as one when it looks encoded (a digit, `+`, `/` or `=`), so prose such as "Bearer
+// authentication" or "Basic configuration" stays readable under the content opt-out.
+const AUTHORIZATION_HEADER_PATTERN =
+  /\b((?:proxy-)?authorization["']?[ \t]*[:=][ \t]*["']?(?:(?:Bearer|Basic|Token)[ \t]+)?)([^\s"',;]{4,})/gi;
+const AUTHORIZATION_VALUE_PATTERN = /\b(Bearer|Basic)([ \t]+)([\w.\-+/=~]{8,})/gi;
+
+function redactAuthorizationValues(input: string): string {
+  return input
+    .replace(AUTHORIZATION_HEADER_PATTERN, (_match, prefix: string) => `${prefix}${REDACTED}`)
+    .replace(AUTHORIZATION_VALUE_PATTERN, (match, scheme: string, gap: string, value: string) =>
+      /[\d+/=]/u.test(value) ? `${scheme}${gap}${REDACTED}` : match,
+    );
+}
+
+/**
+ * The credential floor of authorized content (#4098, `KEIKO_CONTENT_REDACTION=off`): configured
+ * secret literals, private key blocks, URL credentials, credential-shaped authorization values and
+ * issuer-format tokens (`sk-`, `ghp_`, `AKIA`, Slack, Google, Stripe) and JWT-shaped bearer
+ * tokens (three base64url segments, header and payload starting `eyJ`). It never masks personal
+ * data, account numbers, configuration values or code, and it is not a diagnostic redactor:
+ * logs, evidence and support artifacts keep `redact()`.
+ */
+export function redactCredentialShapes(
+  input: string,
+  secrets: readonly string[] = [],
+  preserveSourceLineBreaks = false,
+): string {
+  const literals = keepLongEnough(secrets);
+  const lines = preserveSourceLineBreaks;
+  const output = redactAuthorizationValues(
+    redactUrlCredentials(redactPrivateKeyBlocks(redactLiteralSpans(input, literals, lines), lines)),
+  );
+  return redactLiteralSpans(redactIssuerTokens(output), literals, lines);
 }
 
 /**
@@ -259,16 +509,11 @@ function redactLiteralSpans(
   secrets: readonly string[],
   preserveSourceLineBreaks: boolean,
 ): string {
-  let output = input;
-  for (const secret of secrets) {
-    if (secret.length === 0) {
-      continue;
-    }
-    output = output.replace(new RegExp(escapeRegExp(secret), "g"), (span) =>
-      redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks),
-    );
-  }
-  return output;
+  return replaceCodeSpans(
+    input,
+    literalSecretSpans(input, secrets, preserveSourceLineBreaks),
+    preserveSourceLineBreaks,
+  );
 }
 
 // Scan each boundary once. Repeated unterminated BEGIN headers must not re-scan the remaining
@@ -287,26 +532,14 @@ function redactedSourceSpan(
 function redactPrivateKeyBlocks(input: string, preserveSourceLineBreaks: boolean): string {
   const chunks: string[] = [];
   let copiedThrough = 0;
-  let openBlockStart: number | undefined;
-  for (const boundary of input.matchAll(PRIVATE_KEY_BOUNDARY_PATTERN)) {
-    if (boundary[1] === "BEGIN" && openBlockStart === undefined) {
-      chunks.push(input.slice(copiedThrough, boundary.index));
-      openBlockStart = boundary.index;
-    } else if (boundary[1] === "END") {
-      const span = input.slice(
-        openBlockStart ?? copiedThrough,
-        boundary.index + boundary[0].length,
-      );
-      chunks.push(redactedSourceSpan(span, REDACTED, preserveSourceLineBreaks));
-      copiedThrough = boundary.index + boundary[0].length;
-      openBlockStart = undefined;
-    }
+  for (const region of privateKeyRegions(input)) {
+    chunks.push(
+      input.slice(copiedThrough, region.start),
+      redactedSourceSpan(input.slice(region.start, region.end), REDACTED, preserveSourceLineBreaks),
+    );
+    copiedThrough = region.end;
   }
-  chunks.push(
-    openBlockStart === undefined
-      ? input.slice(copiedThrough)
-      : redactedSourceSpan(input.slice(openBlockStart), REDACTED, preserveSourceLineBreaks),
-  );
+  chunks.push(input.slice(copiedThrough));
   return chunks.join("");
 }
 
@@ -336,17 +569,22 @@ function keepLongEnough(literals: readonly string[]): readonly string[] {
 
 // Returns a function string -> string applying redact() with the union of all literal secrets
 // (additionalSecrets ∪ resolved env values ∪ sensitiveLiterals). Idempotent: redact() over already-
-// redacted text is a no-op on the redacted tokens (ADR-0010 D3 audit-redaction layer).
+// redacted text is a no-op on the redacted tokens (ADR-0010 D3 audit-redaction layer). Only a diff
+// view of the local user's own repository passes `diffView` (#4114); every other caller keeps the
+// default whole-file masking of an unparsed diff hunk.
 export function createAuditRedactor(
   config: AuditRedactionConfig,
   env: Readonly<Record<string, string | undefined>>,
+  diffView?: { readonly onUnparsedDiffHunkFloor?: () => void },
 ): (input: string) => string {
   const literals = [
     ...keepLongEnough(config.additionalSecrets ?? []),
     ...resolveEnvValues(config.redactEnvValues ?? [], env),
     ...keepLongEnough(config.sensitiveLiterals ?? []),
   ];
-  return (input: string): string => redact(input, literals);
+  if (diffView === undefined) return (input: string): string => redact(input, literals);
+  const options = { ...diffView, unparsedDiffHunks: "credential-floor" as const };
+  return (input: string): string => redact(input, literals, options);
 }
 
 // Recursively re-applies a redactor to EVERY STRING LEAF of a plain-JSON value, rebuilding
@@ -379,4 +617,35 @@ export function deepRedactStrings(
     return out;
   }
   return value;
+}
+
+function sensitiveSourceName(name: string): boolean {
+  const last = name.slice(name.lastIndexOf(".") + 1);
+  return (
+    isCredentialKeyName(name) || isCredentialKeyName(last) || /^(?:x-)?api[_-]?key$/iu.test(last)
+  );
+}
+
+function mayContainSensitiveName(text: string): boolean {
+  const normalized = text.toLowerCase().replace(/[^a-z0-9]/gu, "");
+  for (const name of NORMALIZED_SECRET_KEY_NAMES) {
+    if (normalized.includes(name)) return true;
+  }
+  return false;
+}
+
+function literalSecretSpans(
+  input: string,
+  secrets: readonly string[],
+  preserve: boolean,
+): readonly RedactionSpan[] {
+  return secrets
+    .filter((secret) => secret.length > 0)
+    .flatMap((secret) =>
+      [...input.matchAll(new RegExp(escapeRegExp(secret), "g"))].map((match) => ({
+        start: match.index,
+        end: match.index + match[0].length,
+        replacement: redactedSourceSpan(match[0], REDACTED, preserve),
+      })),
+    );
 }

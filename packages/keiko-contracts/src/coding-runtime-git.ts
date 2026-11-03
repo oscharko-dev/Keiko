@@ -1,6 +1,7 @@
 import { isRootRelativeFileIdentifier } from "./editor-workspace-path.js";
 import { parseGitEditorDiffResponse, type GitEditorDiffResponse } from "./git-editor.js";
 import { GIT_STATUS_CODES, isSafeGitRefName, type GitChangedFile } from "./git-repository.js";
+import { isGitSyncOutcome, type GitSyncOutcome } from "./git-sync.js";
 
 export const CODING_RUNTIME_GIT_MAX_PATHS = 50;
 export const CODING_RUNTIME_GIT_MAX_BYTES = 65_536;
@@ -51,8 +52,67 @@ export interface CodingRuntimeGitStage {
   readonly reason: (typeof STAGE_STATUS_REASONS)[keyof typeof STAGE_STATUS_REASONS][number];
   readonly pathCount: number;
 }
+/**
+ * An unstage proposal's result (#3902 AC2): the same lifecycle as a stage proposal, for paths whose
+ * staged change the index gives back to the worktree. Its id carries its own prefix.
+ */
+export interface CodingRuntimeGitUnstage {
+  readonly kind: "unstage";
+  readonly proposalId: string;
+  readonly status: CodingRuntimeGitStage["status"];
+  readonly reason: CodingRuntimeGitStage["reason"];
+  readonly pathCount: number;
+}
+/**
+ * A fetch, or a fast-forward pull of the current branch from its upstream, that the Git sync owner
+ * ran for the run (#3902 AC2): its closed outcome, and the branch and its distance from the
+ * upstream afterwards when Git could still read them.
+ */
+export type CodingRuntimeGitSync =
+  | (CodingRuntimeGitSyncFacts & { readonly kind: "fetch" })
+  | (CodingRuntimeGitSyncFacts & { readonly kind: "pull" });
+interface CodingRuntimeGitSyncFacts {
+  readonly status: GitSyncOutcome;
+  readonly branch?: string;
+  readonly ahead?: number;
+  readonly behind?: number;
+  readonly truncated: boolean;
+}
+/**
+ * The closed outcome of `keiko_git_branch` (#3907, owner decision 2026-10-31): the run created a
+ * task branch at its current commit and switched to it (`succeeded`), or Keiko refused or could not
+ * (`blocked`, `failed`, `recovery-required`) and says why in one closed word. The branch name is
+ * the model's own argument echoed back, and only when it is a safe Git ref name.
+ */
+export const CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS = {
+  succeeded: ["none"],
+  blocked: [
+    "invalid-name",
+    "protected-name",
+    "branch-exists",
+    "not-on-base",
+    "not-local-checkout",
+    "executable-filters",
+    "authority-denied",
+    "policy-block",
+    "preflight-block",
+  ],
+  failed: ["execution-failed", "rebind-failed"],
+  "recovery-required": ["execution-uncertain"],
+} as const;
+export interface CodingRuntimeGitBranch {
+  readonly kind: "branch";
+  readonly status: keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS;
+  readonly reason: (typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS)[keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS][number];
+  readonly branch?: string;
+}
 export type CodingRuntimeGitResult =
-  CodingRuntimeGitStatus | CodingRuntimeGitDiff | CodingRuntimeGitStage;
+  | CodingRuntimeGitStatus
+  | CodingRuntimeGitDiff
+  | CodingRuntimeGitStage
+  | CodingRuntimeGitUnstage
+  | CodingRuntimeGitSync
+  | CodingRuntimeGitBranch;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -114,16 +174,56 @@ function status(value: Record<string, unknown>): boolean {
     changes(value.changes)
   );
 }
-function stage(value: Record<string, unknown>): boolean {
+const PROPOSAL_ID: Readonly<Record<"stage" | "unstage", RegExp>> = {
+  stage: /^stage-\d{1,39}$/u,
+  unstage: /^unstage-\d{1,39}$/u,
+};
+function proposal(value: Record<string, unknown>, kind: "stage" | "unstage"): boolean {
   return (
     keys(value, ["kind", "proposalId", "status", "reason", "pathCount"]) &&
     typeof value.proposalId === "string" &&
-    /^stage-\d{1,39}$/u.test(value.proposalId) &&
+    PROPOSAL_ID[kind].test(value.proposalId) &&
     stageStatusReason(value.status, value.reason) &&
     typeof value.pathCount === "number" &&
     Number.isSafeInteger(value.pathCount) &&
     value.pathCount > 0 &&
     value.pathCount <= CODING_RUNTIME_GIT_MAX_PATHS
+  );
+}
+function count(value: unknown): boolean {
+  return (
+    value === undefined || (typeof value === "number" && Number.isSafeInteger(value) && value >= 0)
+  );
+}
+function sync(value: Record<string, unknown>): boolean {
+  return (
+    keys(value, ["kind", "status", "branch", "ahead", "behind", "truncated"]) &&
+    isGitSyncOutcome(value.status) &&
+    (value.branch === undefined ||
+      (typeof value.branch === "string" && isSafeGitRefName(value.branch))) &&
+    count(value.ahead) &&
+    count(value.behind) &&
+    typeof value.truncated === "boolean"
+  );
+}
+/**
+ * A task-branch name `keiko_git_branch` may create and echo back (#3907): a safe Git ref name that
+ * cannot be read as an option. The one check its producer and this result validator share.
+ */
+export function isSafeTaskBranchName(value: unknown): value is string {
+  return typeof value === "string" && isSafeGitRefName(value) && !value.startsWith("-");
+}
+function branch(value: Record<string, unknown>): boolean {
+  return (
+    keys(value, ["kind", "status", "reason", "branch"]) &&
+    typeof value.status === "string" &&
+    Object.hasOwn(CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS, value.status) &&
+    (
+      CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS[
+        value.status as keyof typeof CODING_RUNTIME_GIT_BRANCH_STATUS_REASONS
+      ] as readonly unknown[]
+    ).includes(value.reason) &&
+    (value.branch === undefined || isSafeTaskBranchName(value.branch))
   );
 }
 function stageStatusReason(status: unknown, reason: unknown): boolean {
@@ -132,6 +232,17 @@ function stageStatusReason(status: unknown, reason: unknown): boolean {
     STAGE_STATUS_REASONS[status as CodingRuntimeGitStage["status"]];
   return allowed.includes(reason);
 }
+function resultOfKind(value: Record<string, unknown>): boolean {
+  if (value.kind === "status") return status(value);
+  if (value.kind === "stage" || value.kind === "unstage") return proposal(value, value.kind);
+  if (value.kind === "fetch" || value.kind === "pull") return sync(value);
+  if (value.kind === "branch") return branch(value);
+  return (
+    value.kind === "diff" &&
+    keys(value, ["kind", "diff"]) &&
+    parseGitEditorDiffResponse(value.diff).ok
+  );
+}
 export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntimeGitResult {
   try {
     if (
@@ -139,13 +250,7 @@ export function isCodingRuntimeGitResult(value: unknown): value is CodingRuntime
       new TextEncoder().encode(JSON.stringify(value)).length > CODING_RUNTIME_GIT_MAX_BYTES
     )
       return false;
-    if (value.kind === "status") return status(value);
-    if (value.kind === "stage") return stage(value);
-    return (
-      value.kind === "diff" &&
-      keys(value, ["kind", "diff"]) &&
-      parseGitEditorDiffResponse(value.diff).ok
-    );
+    return resultOfKind(value);
   } catch {
     return false;
   }

@@ -5,6 +5,7 @@
 // `verbatimModuleSyntax` is on, so type-only names use `export type`.
 
 import type {
+  AtlassianNetworkConfig,
   ModelCapability,
   NormalizedResponse,
   GatewayRequest,
@@ -30,6 +31,7 @@ export type {
   CompletionModelSelection,
   ChatMessage,
   ChatMessageContentPart,
+  ChatMessageFileContentPart,
   ChatMessageImageUrlContentPart,
   ChatMessageTextContentPart,
   ToolDefinition,
@@ -107,6 +109,15 @@ export interface ModelProviderConfig {
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
   /** Use the configured LiteLLM proxy's authenticated token-counting endpoint. */
   readonly tokenCounter?: "litellm" | undefined;
+  /**
+   * SHA-256 digest of the deployment the gateway reported behind this alias when it was last
+   * discovered (the underlying model identity of every replica, never the raw values). Present
+   * only once a discovery observed one. It joins `toolCallingConfigurationFingerprint`, so an
+   * alias the gateway re-points to another deployment can no longer carry the tool-calling proof
+   * of the previous one (#3905). Absent means no deployment was ever observed, which leaves the
+   * fingerprint exactly as it was before this field existed.
+   */
+  readonly deploymentIdentitySha256?: string | undefined;
   // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
   // (resilience.ts) derives from this and `maxRetries`.
   readonly timeoutMs: number;
@@ -136,6 +147,9 @@ export interface RerankerConfig {
 }
 
 export interface OutboundHttpEgressConfig {
+  /** Internal narrowing constraints; never parsed from environment or generic egress config. */
+  readonly requiredTargetClass?: "public" | "private" | "loopback";
+  readonly deniedLoopbackPorts?: readonly number[];
   readonly httpProxy?: string | undefined;
   readonly httpsProxy?: string | undefined;
   readonly noProxy?: readonly string[] | undefined;
@@ -210,6 +224,8 @@ export interface GroundedAnswersConfig {
 export type GatewayFeatureSwitch = "on" | "off";
 
 export interface GatewayConfig {
+  /** File-owned exact connector targets; setup requests cannot create or widen this block. */
+  readonly atlassian?: AtlassianNetworkConfig;
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
   // #3873: how long a coding-workbench call keeps retrying a transiently unavailable provider and

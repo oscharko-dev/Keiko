@@ -117,12 +117,24 @@ const RETRY_POLICY_FIELD = {
   values: ["attempts", "outage-window"],
 } as const;
 
-const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
+const RESILIENCE_MODEL_ID_FIELD = {
+  type: "string",
+  dataClass: "opaque-id",
+  required: true,
+  maxLength: 256,
+} as const;
+
+const RESILIENCE_OPERATION_BASE = {
   contractKind: "activity-log-operation",
   schemaVersion: 1,
-  op: "gateway.retry.budget-exhausted",
   category: "gateway",
   owner: "keiko-model-gateway",
+  releaseImpact: "patch",
+} as const;
+
+const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
+  ...RESILIENCE_OPERATION_BASE,
+  op: "gateway.retry.budget-exhausted",
   emitter: "resilience.budgetExhaustedError",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
@@ -146,15 +158,11 @@ const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-retry"],
   proofIds: ["gateway.retry.budget-exhausted.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.retry.exhausted",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.executeWithRetry",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
@@ -183,15 +191,11 @@ const GATEWAY_RETRY_EXHAUSTED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-retry"],
   proofIds: ["gateway.retry.exhausted.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.retry.scheduled",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.executeWithRetry",
   fields: {
     modelId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
@@ -230,7 +234,6 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-retry"],
   proofIds: ["gateway.retry.scheduled.emitted-line"],
-  releaseImpact: "patch",
 });
 
 // #3873 review: a call's retry observer is the caller's code, run inside the retry loop and the
@@ -239,11 +242,8 @@ const GATEWAY_RETRY_SCHEDULED_OPERATION = defineActivityLogOperation({
 // the observer was told and carries the Keiko-code frames and cause classes of the throw, never the
 // notice's content, the observer's message or its identity.
 const GATEWAY_RETRY_OBSERVER_FAILED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.retry.observer-failed",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.reportObserverFailure",
   fields: {
     ...GATEWAY_FAILURE_EVIDENCE_FIELDS,
@@ -260,18 +260,14 @@ const GATEWAY_RETRY_OBSERVER_FAILED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-retry"],
   proofIds: ["gateway.retry.observer-failed.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_CIRCUIT_REJECTED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.circuit.rejected",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.CircuitBreaker.noteRejection",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    modelId: RESILIENCE_MODEL_ID_FIELD,
     state: {
       type: "string",
       dataClass: "closed-enum",
@@ -292,18 +288,14 @@ const GATEWAY_CIRCUIT_REJECTED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-circuit-breaker"],
   proofIds: ["gateway.circuit.rejected.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_CIRCUIT_HALF_OPEN_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.circuit.half-open",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.CircuitBreaker.enterHalfOpenOrReject",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    modelId: RESILIENCE_MODEL_ID_FIELD,
     probes: { type: "integer", dataClass: "count", required: true },
     rejectedWhileOpen: { type: "integer", dataClass: "count", required: true },
   },
@@ -312,18 +304,14 @@ const GATEWAY_CIRCUIT_HALF_OPEN_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-circuit-breaker"],
   proofIds: ["gateway.circuit.half-open.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_CIRCUIT_OPENED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.circuit.opened",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.CircuitBreaker.open",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    modelId: RESILIENCE_MODEL_ID_FIELD,
     previousState: {
       type: "string",
       dataClass: "closed-enum",
@@ -339,18 +327,14 @@ const GATEWAY_CIRCUIT_OPENED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "failure-cluster",
   failureClasses: ["gateway-circuit-breaker"],
   proofIds: ["gateway.circuit.opened.emitted-line"],
-  releaseImpact: "patch",
 });
 
 const GATEWAY_CIRCUIT_CLOSED_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.circuit.closed",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.CircuitBreaker.close",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    modelId: RESILIENCE_MODEL_ID_FIELD,
     previousState: {
       type: "string",
       dataClass: "closed-enum",
@@ -364,27 +348,32 @@ const GATEWAY_CIRCUIT_CLOSED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-circuit-breaker"],
   proofIds: ["gateway.circuit.closed.emitted-line"],
-  releaseImpact: "patch",
 });
+
+export function cancellableDelay(
+  ms: number,
+  signal?: AbortSignal,
+  abortMessage: "aborted" | "cancelled" = "cancelled",
+): Promise<void> {
+  if (signal?.aborted === true) {
+    return Promise.reject(new DOMException(abortMessage, "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort(): void {
+      clearTimeout(timeout);
+      reject(new DOMException(abortMessage, "AbortError"));
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 export const systemClock: Clock = {
   now: (): number => Date.now(),
-  sleep: (ms: number, signal?: AbortSignal): Promise<void> => {
-    if (signal?.aborted === true) {
-      return Promise.reject(new DOMException("cancelled", "AbortError"));
-    }
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, ms);
-      function onAbort(): void {
-        clearTimeout(timeout);
-        reject(new DOMException("cancelled", "AbortError"));
-      }
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  },
+  sleep: (ms: number, signal?: AbortSignal): Promise<void> => cancellableDelay(ms, signal),
 };
 
 export interface RetryConfig {
@@ -1305,14 +1294,11 @@ interface CircuitAdmissionWait {
 type CircuitWaitReason = "provider-cooldown" | "circuit-cooldown" | "probe-saturated";
 
 const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
-  contractKind: "activity-log-operation",
-  schemaVersion: 1,
+  ...RESILIENCE_OPERATION_BASE,
   op: "gateway.circuit.wait",
-  category: "gateway",
-  owner: "keiko-model-gateway",
   emitter: "resilience.CircuitBreaker.logWait",
   fields: {
-    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    modelId: RESILIENCE_MODEL_ID_FIELD,
     reason: {
       type: "string",
       dataClass: "closed-enum",
@@ -1335,7 +1321,6 @@ const GATEWAY_CIRCUIT_WAIT_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["gateway-circuit-breaker"],
   proofIds: ["gateway.circuit.wait.emitted-line"],
-  releaseImpact: "patch",
 });
 
 export class CircuitBreaker {

@@ -2,3 +2,17 @@
   color: var(--accent);
   background: var(--surface-accent-subtle);
 }
+
+.cmpNoticeSlot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+}
+
+.cmpNoticeSlot + .cmpWindowTools {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+}

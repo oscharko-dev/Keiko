@@ -1,10 +1,17 @@
 import type {
+  ToolAuthorityAvailability,
+  ToolConsumerActionIdentity,
+  ToolConsumerContext,
+  ToolEffectGuard,
   ToolInvocationBudgetPort,
   ToolInvocationBudgetReservation,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import type {
   CatalogDigest,
+  CatalogProfile,
+  ToolDescriptor,
   CatalogJsonValue,
+  CatalogJsonObject,
   CompiledToolProjection,
   ToolRef,
   ToolResultPage,
@@ -16,50 +23,46 @@ import type {
   CatalogToolDispatchOutcome,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import type { ToolCatalog } from "@oscharko-dev/keiko-tool-catalog";
-import type {
-  CodingToolAuthorityAvailability,
-  CodingToolAuthorityPreview,
-} from "../coding-runtime/codingToolAuthorityPort.js";
-import type {
-  CodingToolAuthorityPort,
-  CodingToolMutationGuard,
-} from "../coding-runtime/codingToolFacadePorts.js";
+import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import type { CodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { CatalogLifecycleLogPort } from "./catalogToolLifecycle.js";
 
-export interface CatalogActionIdentity {
-  readonly actionId: string;
-  readonly idempotencyKey: string;
-}
-/** Server composition supplies this context. It is never accepted as model/browser arguments. */
-export interface CatalogTrustedContext {
-  readonly runId: string;
-  readonly correlationId: string;
-  readonly parentCorrelationId?: string;
+export type CatalogActionIdentity = ToolConsumerActionIdentity;
+/** Legacy Coding scope; a non-Coding consumer supplies its own context without these fields. */
+export interface CatalogTrustedContext extends ToolConsumerContext {
   readonly workspaceRoot: string;
   readonly workspaceIdentity: string;
   readonly workspaceRevision: string;
-  readonly authority: string;
-  readonly authorityExpiresAt: string;
-  readonly deadlineAt: string;
-  readonly signal: AbortSignal;
 }
-export interface CatalogHandlerContext extends CatalogTrustedContext {
-  readonly invocationId: string;
-  readonly signal: AbortSignal;
-  readonly mutationGuard: CodingToolMutationGuard;
-  /** Existing handler ports must check this at the final effect boundary and honor false. */
-  readonly beforeEffect: () => boolean;
-  readonly pageSequence: number;
-  readonly createCursor: () => string;
+export interface CatalogConsumer {
+  readonly context: ToolConsumerContext;
+  readonly action: ToolConsumerActionIdentity;
+  readonly guard: ToolEffectGuard;
 }
+export interface CodingCatalogConsumer extends CatalogConsumer {
+  readonly context: CatalogTrustedContext;
+  readonly action: CodingToolActionRequest;
+  readonly guard: CodingToolMutationGuard;
+}
+export type CatalogHandlerContext<Consumer extends CatalogConsumer = CodingCatalogConsumer> =
+  Consumer["context"] & {
+    readonly invocationId: string;
+    readonly signal: AbortSignal;
+    readonly mutationGuard: Consumer["guard"];
+    /** Existing handler ports must check this at the final effect boundary and honor false. */
+    readonly beforeEffect: () => boolean;
+    readonly pageSequence: number;
+    readonly createCursor: () => string;
+  };
 export interface CatalogHandlerResult {
   readonly data: unknown;
   readonly page: ToolResultPage;
   readonly resultCount: number;
 }
-export interface CatalogToolHandlerBinding {
+export interface CatalogToolHandlerBinding<
+  Consumer extends CatalogConsumer = CodingCatalogConsumer,
+> {
   readonly toolRef: ToolRef;
   readonly descriptorDigest: CatalogDigest;
   readonly handlerId: string;
@@ -67,49 +70,82 @@ export interface CatalogToolHandlerBinding {
   readonly catalogAction: string;
   readonly readiness: () => ToolHandlerReadiness;
   /** Trusted representative action for availability; dispatch resolves the actual arguments. */
-  readonly previewAction: (identity: CatalogActionIdentity) => CodingToolActionRequest;
+  readonly previewAction: (identity: CatalogActionIdentity) => Consumer["action"];
   readonly actionFor: (
     argumentsValue: CatalogJsonValue,
     identity: CatalogActionIdentity,
-  ) => CodingToolActionRequest;
+  ) => Consumer["action"];
   readonly execute: (
     argumentsValue: CatalogJsonValue,
-    context: CatalogHandlerContext,
+    context: CatalogHandlerContext<Consumer>,
   ) => Promise<CatalogHandlerResult>;
 }
 /** Invocation-local behavior for a statically verified production handler identity. */
-export interface CatalogToolExecutionOverride {
+export interface CatalogToolExecutionOverride<
+  Consumer extends CatalogConsumer = CodingCatalogConsumer,
+> {
   readonly toolRef: ToolRef;
   /** Server-only codec for the exact private original-Read descriptor and actual bound profile. */
   readonly captureNativeReadAction?:
-    ((value: CatalogJsonValue) => CodingToolActionRequest | undefined) | undefined;
-  readonly actionFor: CatalogToolHandlerBinding["actionFor"];
-  readonly execute: CatalogToolHandlerBinding["execute"];
+    ((value: CatalogJsonValue) => Consumer["action"] | undefined) | undefined;
+  readonly actionFor: CatalogToolHandlerBinding<Consumer>["actionFor"];
+  readonly execute: CatalogToolHandlerBinding<Consumer>["execute"];
 }
 export type CatalogToolBudgetReservation = ToolInvocationBudgetReservation;
-export type CatalogToolBudgetPort = ToolInvocationBudgetPort<CatalogTrustedContext>;
-export interface CatalogToolApprovalPort {
-  readonly available: (request: CodingToolActionRequest, context: CatalogTrustedContext) => boolean;
+export type CatalogToolBudgetPort<Consumer extends CatalogConsumer = CodingCatalogConsumer> =
+  ToolInvocationBudgetPort<Consumer["context"]>;
+export interface CatalogToolApprovalPort<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
+  readonly available: (request: Consumer["action"], context: Consumer["context"]) => boolean;
   readonly request: (
-    request: CodingToolActionRequest,
-    context: CatalogTrustedContext,
-  ) => Promise<CodingToolActionRequest | undefined>;
+    request: Consumer["action"],
+    context: Consumer["context"],
+  ) => Promise<Consumer["action"] | undefined>;
 }
-export interface CatalogBoundAuthorityPort {
-  readonly preview: CodingToolAuthorityPreview;
-  readonly admit: CodingToolAuthorityPort["admit"];
+export interface CatalogBoundAuthorityPort<
+  Consumer extends CatalogConsumer = CodingCatalogConsumer,
+> {
+  readonly preview: (
+    capability: string | undefined,
+    request: Consumer["action"],
+  ) => ToolAuthorityAvailability;
+  readonly admit: (
+    capability: string | undefined,
+    request: Consumer["action"],
+  ) =>
+    | { readonly ok: true; readonly mutationGuard: Consumer["guard"] }
+    | { readonly ok: false; readonly reason?: string | undefined };
 }
-export interface CatalogToolBinderInput {
+/** The consumer owns action decoding; catalog admission, budgets and settlement stay shared. */
+export interface CatalogConsumerPort<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
+  readonly scope: (context: Consumer["context"]) => CatalogJsonObject;
+  readonly staleReason: "workspace-stale" | "consumer-stale";
+  readonly requiredEffects: (request: Consumer["action"]) => ToolDescriptor["effects"];
+  readonly captureAction: (
+    handler: CatalogBoundHandler<Consumer>,
+    captured: CatalogJsonValue,
+    executionOverride: CatalogToolExecutionOverride<Consumer> | undefined,
+    profile: CatalogProfile | undefined,
+  ) => Consumer["action"] | undefined;
+  readonly captureApprovedAction: (captured: CatalogJsonValue) => Consumer["action"] | undefined;
+}
+export interface CatalogBoundHandler<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
+  readonly descriptor: ToolDescriptor;
+  readonly binding: CatalogToolHandlerBinding<Consumer> | undefined;
+}
+export interface CatalogToolBinderInput<Consumer extends CatalogConsumer = CodingCatalogConsumer> {
+  readonly consumerPort: CatalogConsumerPort<Consumer>;
   readonly projection: CompiledToolProjection;
-  readonly handlerBindings: readonly CatalogToolHandlerBinding[];
-  readonly authorityPort: CatalogBoundAuthorityPort;
-  readonly budgetPort: CatalogToolBudgetPort;
-  readonly approvalPort: CatalogToolApprovalPort;
+  readonly handlerBindings: readonly CatalogToolHandlerBinding<Consumer>[];
+  readonly authorityPort: CatalogBoundAuthorityPort<Consumer>;
+  readonly budgetPort: CatalogToolBudgetPort<Consumer>;
+  readonly approvalPort: CatalogToolApprovalPort<Consumer>;
   readonly logPort: CatalogLifecycleLogPort;
 }
-export interface CatalogToolBinderOptions {
+export interface CatalogToolBinderOptions<
+  Consumer extends CatalogConsumer = CodingCatalogConsumer,
+> {
   readonly catalog: ToolCatalog;
-  readonly context: () => CatalogTrustedContext;
+  readonly context: () => Consumer["context"];
   readonly now: () => number;
   /** Production composition supplies unpredictable IDs with at least 128 bits of entropy. */
   readonly mintId: () => string;
@@ -132,7 +168,7 @@ export interface CatalogToolBinder {
 }
 export interface CatalogHandlerAvailability {
   readonly readiness: ToolHandlerReadiness;
-  readonly authority: CodingToolAuthorityAvailability;
+  readonly authority: ToolAuthorityAvailability;
 }
 
 export type {

@@ -69,7 +69,7 @@ export function CodingWorkbenchDeliveryReview({
             {...deliveryRetry(state, t)}
           />
         ) : (
-          <DeliveryBindingFacts delivery={review.record} t={t} />
+          <DeliveryBindingFacts delivery={review.record} t={t} includeRecord={false} />
         )}
       </section>
       <PullRequestText review={review} t={t} />

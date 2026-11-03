@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded private test-runner diagnostic preservation and offline prospective feedback commissioning; no skill acceptance",
+  "parentHead": "fd8bb789927a4fb1a533698225520197e840a369",
+  "modelAgnostic": true,
+  "customerPromptsAndSkillsChanged": false,
+  "sourceDigests": {
+    "scripts/testing/chat-skills-lab/qualification-reporter.mjs": "f8b64331cc179da2f305aa94fd6feb59072926ab95016680ec0793bb08609e21",
+    "scripts/__tests__/chat-skills-qualification-reporter.test.mjs": "348b91b8a397fa2c78a1f782e999069aea111cf7af77e3e86949d05c2680f8ab",
+    "scripts/__tests__/chat-skills-verification.test.mjs": "89be4fb19dd932d16aec0e2337296be7c6f0171b7b607164bdf6439c393c22c6"
+  },
+  "scoringUnchanged": {
+    "source": "scripts/testing/chat-skills-lab/verification-result.mjs",
+    "sha256": "1eeb26cef5843a4dd2da98eb82d328a2bd3b9fb89d86caa8758c9950a88d4148",
+    "oldFailedCampaignsRemainFailed": true
+  },
+  "failureFirst": {
+    "actualSuperclassReporter": true,
+    "failed": 1,
+    "healthy": 6,
+    "logSha256": "071d227ffe349f350514541d90054245a3bc5097fcf1077096b9cc567ecba44f"
+  },
+  "unitTests": {
+    "passed": 31,
+    "suites": 2,
+    "logSha256": "ff38b0b2314c5bbd6f19eca0ad965ddf09c0f370cd1668a6e44018cd07abe3bf"
+  },
+  "actualFramework": {
+    "runtime": {
+      "node": "v24.18.0",
+      "vitest": "4.1.11",
+      "platform": "linux"
+    },
+    "image": "node@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059",
+    "network": "none",
+    "runs": 12,
+    "identicalQualificationPairs": 6,
+    "eligibleHealthyRuns": 2,
+    "ineligibleFaultRuns": 10,
+    "diagnosticPositivesAdded": 5,
+    "byteLimit": 8192,
+    "actualUtf8PrefixBytes": 8191,
+    "replacementCharactersObserved": false,
+    "resultSha256": "0e7f5266486183edea62fc911323bf35a9298aa808bcc43c837ea4cf55fff455",
+    "predeclaredSha256": "da10a08cf5de15a35848856689d64b1a45357db2ca623ff9ccb62cdbdf7eb800",
+    "rows": [
+      {
+        "case": "healthy",
+        "version": "before",
+        "exitCode": 0,
+        "eligible": true,
+        "diagnosticBytes": 0,
+        "truncated": null,
+        "complete": null,
+        "reportSha256": "ef78bc051ebf2e7526b9794ad155298a87dbbc147d08e23be4b43ee8c843a82d"
+      },
+      {
+        "case": "healthy",
+        "version": "after",
+        "exitCode": 0,
+        "eligible": true,
+        "diagnosticBytes": 0,
+        "truncated": false,
+        "complete": true,
+        "reportSha256": "346e43a83cf348cfc7b25bf5a77d57651cd26819bdbce0a4d8d951ea5c76e8fa"
+      },
+      {
+        "case": "global",
+        "version": "before",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 0,
+        "truncated": null,
+        "complete": null,
+        "reportSha256": "74ab30f9149fdd523fa2c4dd90ce796f8a2e94adb5197040701e3852b4238d09"
+      },
+      {
+        "case": "global",
+        "version": "after",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 839,
+        "truncated": false,
+        "complete": true,
+        "reportSha256": "89c2654b7530fc104abe57f3ac936df2806570eb1a2d14672a9de2ced559a320"
+      },
+      {
+        "case": "collection",
+        "version": "before",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 0,
+        "truncated": null,
+        "complete": null,
+        "reportSha256": "47cf9107fc19c00f1483a350c42fd1df35bbd40722910f272a0d6a643c33767a"
+      },
+      {
+        "case": "collection",
+        "version": "after",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 911,
+        "truncated": false,
+        "complete": true,
+        "reportSha256": "322da0a9f4065f48e1a0a05208b2510810e8d55d76953586a03d619d5d37e153"
+      },
+      {
+        "case": "suite",
+        "version": "before",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 0,
+        "truncated": null,
+        "complete": null,
+        "reportSha256": "fcc7c26938e8ea32b45c406dd22760143ac80b701016828fdeaf7e8377ce59f6"
+      },
+      {
+        "case": "suite",
+        "version": "after",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 894,
+        "truncated": false,
+        "complete": true,
+        "reportSha256": "59cedaf8cc4845e2e294207155e3240be5601731b6f887f9e136ed832a625545"
+      },
+      {
+        "case": "mixed",
+        "version": "before",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 0,
+        "truncated": null,
+        "complete": null,
+        "reportSha256": "d1050707acc5c948ddd3f5d4411ab5f841f08348cfe73d9b1d1f21a231cf40be"
+      },
+      {
+        "case": "mixed",
+        "version": "after",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 1738,
+        "truncated": false,
+        "complete": true,
+        "reportSha256": "dc912b6cf207f6172939469769dd911f6db226019c85db8e9fd7fc4874b100ca"
+      },
+      {
+        "case": "utf8",
+        "version": "before",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 0,
+        "truncated": null,
+        "complete": null,
+        "reportSha256": "2518355e6aebac86dc161065daeffba4cf3ba63711ee3d93c2e2fb163112cf13"
+      },
+      {
+        "case": "utf8",
+        "version": "after",
+        "exitCode": 1,
+        "eligible": false,
+        "diagnosticBytes": 8191,
+        "truncated": true,
+        "complete": false,
+        "reportSha256": "114899234fefb842bfba070bec3da3ef7db566d9a1081ce388dafb77138f7b23"
+      }
+    ]
+  },
+  "prospectivePrivateFeedbackSelector": {
+    "controlsPassed": 30,
+    "physicalModelCalls": 0,
+    "sourceSha256": "607e88f4cbbaa0e5a19aa2c3ff6882576105428ff5d28b7e9b4bde15e4773baf",
+    "driverSha256": "056e06b7a1e95da8d811212cae4d867802a4533bce3a8f541dbd20873ffd4749",
+    "resultSha256": "3c45a6a80e92f21454e75f7debd20b37f8f1a0e48613e3f2309eeb8e5ab49c9c",
+    "properties": [
+      "Only actual strict compiler or correct-subject diagnostics are admitted.",
+      "Global and collection errors precede failed assertion details.",
+      "Missing, interrupted and inconsistent observations refuse feedback.",
+      "The original 8192-byte grant and UTF-8 validity remain binding.",
+      "Producer truncation is preserved and original size remains unknown when unavailable.",
+      "Clean baselines and unobserved verification do not open a diagnostic archive.",
+      "The actual raw archived report must match its canonical verification result hash.",
+      "Schema and error counts require actual integer scalars; booleans are refused."
+    ],
+    "scope": "Offline selection only; a fresh model campaign has not used this selector.",
+    "additionalActualFrameworkControls": {
+      "runs": 4,
+      "qualificationPairsUnchanged": 2,
+      "eligibleRuns": 0,
+      "cases": ["ordinary-assertion-failure", "assertion-plus-global-error"],
+      "resultSha256": "4ccae930c5938c4126c3e4b91c50aeff5d5c7b7fa45e1df4d533a1d3439bb5c2",
+      "scope": "The reused driver summary incorrectly counts the ordinary assertion case as a new non-test diagnostic positive. Actual rows establish exactly one additional positive; no such credit is assigned to the ordinary assertion case."
+    }
+  },
+  "physicalModelCalls": 0,
+  "privacy": "Raw errors remain in private execution reports; public verifier results and evidence retain counts and digests.",
+  "limits": [
+    "The old V7 control error detail is absent from both its original report and its original execution log; no cause was invented or historical result recredited.",
+    "This does not qualify either customer skill or complete any epic.",
+    "Initial private selector commissioning failures and the auditor's four failing negative controls remain retained. Thirty corrected final controls pass; the earlier26-control record is insufficient."
+  ],
+  "freshDiagnosticOnlyReexecution": {
+    "classification": "Fresh offline execution of exact retained generated bytes; no historical rerating or skill acceptance",
+    "predeclaredSha256": "d9658ee834777c156f64a6654d7fd499c1cbd36711fdbd3ca275cd14f7bfe22c",
+    "bridgeFreezeSha256": "182b3a0bcdd1b74d1cb6f637143ab9a72e6627ab6d3a608d82e08ca2c89fd721",
+    "generatedSha256": "d93c83cf125a4ec537c3097ece644aca2c81c73d6aa1529a60a13950df89ddd0",
+    "correctApplication": {
+      "typechecks": true,
+      "tests": 7,
+      "passed": 7,
+      "runtimeErrors": 1,
+      "baselineEligible": false
+    },
+    "mutationTrialsDispatched": 0,
+    "diagnosticAvailable": true,
+    "diagnosticDeliveredBytes": 1166,
+    "diagnosticTruncated": false,
+    "diagnosticSha256": "21b42cbe31f9e5c59551a4813ed58cdf3ca1b0ca50b623451c14313fd11ee814",
+    "reportSha256": "e4f283a1cabdfc812704a69fae6db658220e2a265e906eeac0ebb3cb1e6230da",
+    "summarySha256": "74a75e40db58626dfe02741c8ca7db086a40c4f8b0992ce38f8fb9948f1dd635",
+    "physicalModelCalls": 0,
+    "oldCampaignCreditUnchanged": true
+  }
+}

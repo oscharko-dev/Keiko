@@ -71,18 +71,40 @@ function truncatedStream(response) {
   response.end();
 }
 
-function plannedWorkspaceDiscovery(body, behavior) {
-  if (!behavior.workspaceDiscoveryPending || forcedToolName(body) !== undefined) return undefined;
-  if (!Array.isArray(body.tools)) return undefined;
-  const offered = body.tools.some((tool) => tool?.function?.name === "keiko_workspace_discover");
-  if (!offered) return undefined;
-  behavior.workspaceDiscoveryPending = false;
-  return {
-    name: "keiko_workspace_discover",
-    arguments: '{"mode":"keywords","directory":"","query":"README.md","maxResults":5}',
-  };
+// The shipped Workbench runs OpenCode's own tools (#3897), so the twin's discovery call names the
+// native `glob` tool when a run offers it; the mapped `keiko_workspace_discover` call stays for
+// the governed profiles. Either way the model asks for README.md and the next request must carry
+// the completed result of that one call.
+const NATIVE_DISCOVERY_TOOL = "glob";
+const MAPPED_DISCOVERY_TOOL = "keiko_workspace_discover";
+
+function offeredToolNames(body) {
+  return Array.isArray(body.tools)
+    ? new Set(
+        body.tools.map((tool) => tool?.function?.name).filter((name) => typeof name === "string"),
+      )
+    : new Set();
 }
 
+function plannedWorkspaceDiscovery(body, behavior) {
+  if (!behavior.workspaceDiscoveryPending || forcedToolName(body) !== undefined) return undefined;
+  const offered = offeredToolNames(body);
+  if (offered.has(MAPPED_DISCOVERY_TOOL)) {
+    behavior.workspaceDiscoveryPending = false;
+    return {
+      name: MAPPED_DISCOVERY_TOOL,
+      arguments: '{"mode":"keywords","directory":"","query":"README.md","maxResults":5}',
+    };
+  }
+  if (offered.has(NATIVE_DISCOVERY_TOOL)) {
+    behavior.workspaceDiscoveryPending = false;
+    return { name: NATIVE_DISCOVERY_TOOL, arguments: '{"pattern":"README.md"}' };
+  }
+  return undefined;
+}
+
+// A native tool result is the runtime's own text; it names the matched file. A governed result
+// is the decoded completed read of the same file.
 function completedDiscoveryResult(content) {
   if (typeof content !== "string") return false;
   try {
@@ -93,7 +115,7 @@ function completedDiscoveryResult(content) {
       result.read.text.split("\n").includes("README.md")
     );
   } catch {
-    return false;
+    return content.split("\n").some((line) => line.trim().endsWith("README.md"));
   }
 }
 

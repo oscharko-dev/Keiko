@@ -8,6 +8,7 @@ import {
   connectedInspectionManifest,
 } from "./connectedEvidenceInspection.test-fixtures";
 import { useState, type ComponentProps, type Dispatch, type SetStateAction } from "react";
+import { flushSync } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CapsuleSetId,
@@ -72,6 +73,7 @@ import { fetchCapsules, fetchCapsuleSets } from "@/lib/local-knowledge-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  gatewayModelCatalogCheckRequested,
 } from "./widgets/shared/gatewaySetupBus";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -1091,6 +1093,87 @@ describe("ChatWindow cancel button", () => {
     await user.click(screen.getByRole("button", { name: "Cancel grounded request" }));
     expect(cancelGrounded).toHaveBeenCalledOnce();
   });
+
+  it("does not submit a waiting draft when cancellation changes the button into Send", async () => {
+    const user = userEvent.setup();
+    const cancelSend = vi.fn();
+    const sendMessage = vi.fn();
+    function CancellingWindow(): React.JSX.Element {
+      const [sending, setSending] = useState(true);
+      const session = makeSession({
+        activeChat: makeChat(),
+        draft: "Keep this draft unsent",
+        sending,
+        sendStatus: sending ? "streaming" : "cancelled",
+        sendMessage,
+        cancelSend: () => {
+          cancelSend();
+          // Match the native browser's discrete-event commit before click default activation.
+          flushSync(() => setSending(false));
+        },
+      });
+      return (
+        <ChatSessionProvider value={session}>
+          <ChatWindow />
+        </ChatSessionProvider>
+      );
+    }
+    render(<CancellingWindow />);
+    const reports: { message: string; meta: ClientDiagnosticMeta | undefined }[] = [];
+    setClientDiagnosticWriter((message, meta) => reports.push({ message, meta }));
+    try {
+      await user.click(screen.getByRole("button", { name: "Cancel response" }));
+
+      expect(cancelSend).toHaveBeenCalledOnce();
+      expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+        "Keep this draft unsent",
+      );
+      const cancellations = reports.filter(
+        (report) => report.meta?.composerActivity === "send-cancel-requested",
+      );
+      expect(cancellations).toEqual([
+        {
+          message: "Keiko composer cancellation requested.",
+          meta: { composerActivity: "send-cancel-requested" },
+        },
+      ]);
+      await expectDiagnosticWireAccepted(cancellations);
+    } finally {
+      resetClientDiagnosticWriter();
+    }
+  });
+
+  it.each(["pending", "failed"] as const)(
+    "keeps the draft visible and Send inert while a source update is %s",
+    async (groundingScopeTransition) => {
+      const sendMessage = vi.fn();
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          draft: "Preserve this question",
+          groundingScopeTransition,
+          sendMessage,
+        }),
+      );
+      const send = screen.getByRole("button", { name: "Send message" });
+      expect(send).toHaveAttribute("aria-disabled", "true");
+      expect(send).toHaveAttribute("type", "button");
+      expect(
+        screen.getByText(
+          groundingScopeTransition === "pending"
+            ? /Updating connected sources/u
+            : /Could not update connected sources/u,
+        ),
+      ).toHaveAttribute("role", "status");
+      await userEvent.click(send);
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(screen.getByRole("textbox", { name: "Chat message" })).toHaveTextContent(
+        "Preserve this question",
+      );
+    },
+  );
 });
 
 describe("ChatWindow memory disclosure", () => {
@@ -1941,6 +2024,76 @@ describe("ChatWindow local knowledge scope disclosure", () => {
     expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
   });
 
+  it.each([
+    {
+      locale: "en",
+      label: "Data sources",
+      none: "No Data sources",
+      mode: "Grounding mode",
+      empty: "No ready Data Pods or Pod Sets are available.",
+    },
+    {
+      locale: "de",
+      label: "Datenquellen",
+      none: "Keine Datenquellen",
+      mode: "Grounding-Modus",
+      empty: "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
+    },
+  ])(
+    "distinguishes bound Jira tools from empty and mixed grounding in $locale",
+    async ({ locale, label, none, mode, empty }) => {
+      window.localStorage.setItem(I18N_STORAGE_KEY, locale);
+      const user = userEvent.setup();
+      const binding = {
+        podId: "jira-one",
+        bindingGeneration: 1,
+        authenticationGeneration: 1,
+        connectedAtMs: 1,
+      };
+      const scopeIdentity = "gsi-v1:" + "b".repeat(64);
+      const live = makeChat({ jiraPodBinding: binding, groundingScopeIdentity: scopeIdentity });
+      const replaceChat = vi.fn();
+      const mounted = render(
+        <I18nProvider>
+          <ChatSessionProvider value={makeSession({ activeChat: live, replaceChat })}>
+            <ChatWindow />
+          </ChatSessionProvider>
+        </I18nProvider>,
+      );
+      expect(await screen.findByText(empty)).toBeVisible();
+      expect(screen.getByText(label)).toBeVisible();
+      expect(screen.getByRole("combobox", { name: mode })).toHaveTextContent(none);
+      const mixed = {
+        ...live,
+        localKnowledgeScopes: [
+          { kind: "capsule" as const, capsuleId: makeCapsuleId("data-one"), connectedAtMs: 1 },
+        ],
+      };
+      mounted.rerender(
+        <I18nProvider>
+          <ChatSessionProvider value={makeSession({ activeChat: mixed, replaceChat })}>
+            <ChatWindow />
+          </ChatSessionProvider>
+        </I18nProvider>,
+      );
+      expect(screen.queryByText(empty)).toBeNull();
+      expect(screen.getByText(label)).toBeVisible();
+      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      updateChatMock.mockResolvedValueOnce({ chat: live });
+      await chooseComboboxOption(user, mode, none);
+      await waitFor(() =>
+        expect(updateChatMock).toHaveBeenCalledWith(live.id, {
+          expectedGroundingScopeIdentity: scopeIdentity,
+          connectedScopes: null,
+          localKnowledgeScopes: null,
+        }),
+      );
+      expect(replaceChat).toHaveBeenCalledWith(live);
+      confirm.mockRestore();
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+    },
+  );
+
   it("says no ready pods only after a successful load", async () => {
     fetchCapsulesMock.mockResolvedValueOnce({ capsules: [] });
     renderWindow(makeSession({ activeChat: makeChat() }));
@@ -2770,6 +2923,9 @@ describe("ChatWindow conversation model dropdown (Issue #144)", () => {
       await openCombobox(user, "Models");
 
       expect(onCatalogRefresh).toHaveBeenCalledTimes(2);
+      for (const [event] of onCatalogRefresh.mock.calls as [Event][]) {
+        expect(gatewayModelCatalogCheckRequested(event)).toBe(true);
+      }
       expect(onConfigUpdated).not.toHaveBeenCalled();
     } finally {
       window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
@@ -4157,7 +4313,8 @@ describe("ChatWindow message copy", () => {
       .mockRejectedValueOnce(new Error("clipboard denied"));
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
-    const content = "Paris [1] is the capital [80, 443].";
+    const code = '```ts\n  const text = "left  right ,";\n```';
+    const content = `Paris [1] is the capital [80, 443].\n${code}`;
     renderWindow(
       makeSession({
         activeChat: makeChat(),
@@ -4201,6 +4358,8 @@ describe("ChatWindow message copy", () => {
         errorKind: "unavailable",
       }),
     ]);
+    expect(writeText).toHaveBeenNthCalledWith(1, `Paris is the capital [80, 443].\n${code}`);
+    expect(JSON.stringify(copyReports)).not.toContain("left  right");
     expect(JSON.stringify(copyReports)).not.toContain("Paris");
     await expectDiagnosticWireAccepted(copyReports);
     resetClientDiagnosticWriter();
@@ -4415,6 +4574,35 @@ describe("ChatWindow message copy", () => {
     expect(copyableMessageText(content, 3)).toBe(
       "Set it:\n```ts\nconst a = [1, 2, 3];\n```\nor `b = [2]`.",
     );
+  });
+
+  it.each(["```", "````", "~~~"])(
+    "preserves code literals and indentation when copying a %s fenced answer",
+    (fence) => {
+      const code = '  const text = "left  right ,";\n  const values = [1, 2];\n';
+      const content = `See [src/a.ts:1-4] [source: api] src/a.ts:1-4 【1】.\n${fence}ts\n${code}${fence}\nEnd 【1】.`;
+      expect(copyableMessageText(content, 1)).toBe(
+        `See src/a.ts:1-4.\n${fence}ts\n${code}${fence}\nEnd.`,
+      );
+    },
+  );
+
+  it.each(["[source: api]", "[src/example.ts]", "src/example.ts src/example.ts"])(
+    "keeps evidence-shaped string values unchanged in copied code: %s",
+    (value) => {
+      const content = "```js\nconst value = " + JSON.stringify(value) + ";\n```";
+      expect(copyableMessageText(content)).toBe(content);
+    },
+  );
+
+  it("preserves indentation in a copied Python block", () => {
+    const content = '```python\ndef example():\n    return "left  right"\n```';
+    expect(copyableMessageText(content)).toBe(content);
+  });
+
+  it("preserves inline code values while cleaning adjacent citation prose", () => {
+    const content = 'Keep `const text = "left  right ,"` [1].';
+    expect(copyableMessageText(content, 1)).toBe('Keep `const text = "left  right ,"`.');
   });
 
   it("removes standalone source labels without corrupting answer spacing", () => {
@@ -5201,23 +5389,6 @@ function copyTestGroundedAnswer(content: string, sentReferenceCount: number): Gr
   };
 }
 
-it("explains repository grounding whenever a folder scope is connected", () => {
-  renderWindow(
-    makeSession({
-      activeChat: makeChat({
-        connectedScopes: [
-          { kind: "directory", root: "/proj", relativePaths: ["src"], connectedAtMs: 1 },
-        ],
-      }),
-    }),
-  );
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent(
-    "Keiko searches connected sources for source-specific answers and labels general knowledge as its own assessment.",
-  );
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent("The model has no file tools.");
-  expect(screen.getByTestId("grounding-help")).toHaveTextContent("mention it with @");
-});
-
 it("loads answer-bound read metadata before opening evidence and again after reload", async () => {
   const answer = connectedInspectionAnswer();
   vi.mocked(fetchEvidenceManifest).mockResolvedValue({ manifest: connectedInspectionManifest() });
@@ -5436,4 +5607,97 @@ it("acknowledges a missing-file scope before the user explicitly sends the focus
   );
   await user.click(screen.getByRole("button", { name: "Send message" }));
   expect(session.sendMessage).toHaveBeenCalledTimes(1);
+});
+
+describe("ChatWindow private draft and skill recovery", () => {
+  it("explains a blocked skill selection for a populated composer", () => {
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        draft: "A complete message",
+        markdownSkill: {
+          chatId: makeChat().id,
+          view: undefined,
+          busy: false,
+          failed: true,
+          refresh: vi.fn(),
+          select: vi.fn(),
+        },
+      }),
+    );
+    const send = screen.getByRole("button", { name: "Send message" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAccessibleDescription(
+      "Open Skills and select an available skill or remove the current selection before sending.",
+    );
+    expect(screen.queryByText("Type a message to send")).not.toBeInTheDocument();
+  });
+
+  it.each(["", "Saved private draft"])(
+    "shows saved-draft status only for retained text: %s",
+    (draft) => {
+      renderWindow(
+        makeSession({
+          activeChat: makeChat(),
+          draft,
+          draftPersistence: {
+            phase: "saved",
+            pending: false,
+            retry: vi.fn(),
+            prepareClose: vi.fn(),
+            isCloseReady: vi.fn(),
+            keepLocal: vi.fn(),
+            restoreSaved: vi.fn(),
+          },
+        }),
+      );
+      expect(screen.queryByText("Draft saved privately.") !== null).toBe(draft.length > 0);
+    },
+  );
+
+  it("shows explicit draft conflict choices without silently replacing text", async () => {
+    const keepLocal = vi.fn();
+    const restoreSaved = vi.fn();
+    renderWindow(
+      makeSession({
+        activeChat: makeChat(),
+        draft: "Local private text",
+        draftPersistence: {
+          prepareClose: vi.fn(),
+          isCloseReady: vi.fn(),
+          phase: "conflict",
+          pending: false,
+          retry: vi.fn(),
+          keepLocal,
+          restoreSaved,
+        },
+      }),
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent("Another window changed the saved draft");
+    expect(keepLocal).not.toHaveBeenCalled();
+    expect(restoreSaved).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Keep this draft" }));
+    expect(keepLocal).toHaveBeenCalledOnce();
+  });
+});
+
+it("keeps connected Files sources visible without explanatory paragraphs", async () => {
+  const sources = [
+    {
+      kind: "files" as const,
+      root: "/repo-a",
+      relativePaths: ["src/example.ts"],
+      connectedAtMs: 1,
+    },
+    { kind: "workspace-root" as const, root: "/repo-b", relativePaths: [], connectedAtMs: 2 },
+  ];
+  renderWindow(makeSession({ activeChat: makeChat({ connectedScopes: sources }) }));
+  await waitFor(() =>
+    expect(screen.getByRole("combobox", { name: "Grounding mode" })).toBeEnabled(),
+  );
+  expect(screen.getByTitle("/repo-a/src/example.ts")).toBeVisible();
+  expect(screen.getByTitle("/repo-b")).toBeVisible();
+  expect(screen.queryByTestId("grounding-help")).toBeNull();
+  expect(screen.queryByText("No ready Knowledge Pods or Pod Sets are available.")).toBeNull();
+  expect(screen.queryByText(/Keiko may inspect only/)).toBeNull();
 });

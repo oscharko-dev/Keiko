@@ -9,6 +9,13 @@ function clone(value) {
   return structuredClone(value);
 }
 
+// Pinned third-party executables such as ripgrep (Epic #3897). The key exists only when the
+// manifest carries tools, so an activation manifest of an artifact produced before they shipped
+// keeps its exact historical key set.
+function nativeToolsEntry(manifest) {
+  return manifest.nativeTools === undefined ? {} : { nativeTools: clone(manifest.nativeTools) };
+}
+
 export function runtimeActivationManifest(manifest) {
   const security = clone(manifest.security);
   return {
@@ -30,6 +37,7 @@ export function runtimeActivationManifest(manifest) {
     security,
     nativeHelpers: clone(manifest.nativeHelpers),
     nativeAddons: clone(manifest.nativeAddons ?? []),
+    ...nativeToolsEntry(manifest),
     sidecarRuntimes: clone(manifest.sidecarRuntimes ?? []),
     releaseImpact: {
       reviewedBinding: {
@@ -45,6 +53,7 @@ export function runtimeActivationManifest(manifest) {
         verificationChecks: clone(security.verificationChecks),
         nativeHelpers: clone(manifest.nativeHelpers),
         nativeAddons: clone(manifest.nativeAddons ?? []),
+        ...nativeToolsEntry(manifest),
       },
     },
   };

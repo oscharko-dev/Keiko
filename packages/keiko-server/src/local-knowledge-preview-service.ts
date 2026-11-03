@@ -208,11 +208,11 @@ function storedCitationPrecheck(
   stored: StoredPdfCitationPreviewCitation,
   display: PdfCitationPreviewDisplay,
 ): RejectedPreviewOutcome | undefined {
-  if (display.anchorQuality === "unavailable") {
-    return reject("page-provenance-missing", display);
-  }
   if (stored.documentMediaType !== "application/pdf") {
     return reject("document-not-pdf", display);
+  }
+  if (display.anchorQuality === "unavailable") {
+    return reject("page-provenance-missing", display);
   }
   return undefined;
 }

@@ -18,6 +18,22 @@
 // lands in subsequent epic children.
 
 export type { KEIKO_CONTRACTS_VERSION, KEIKO_PRODUCT_VERSION } from "./version.js";
+export type {
+  ChatToolAuthorityEnvelope,
+  ChatToolAuthoritySubject,
+  JiraChatToolAuthoritySubject,
+  McpChatToolAuthoritySubject,
+  McpChatToolReadGrantView,
+  McpChatToolWriteApprovalView,
+  ChatToolReadGrant,
+  ChatToolReadGrantState,
+  ChatToolReadGrantView,
+  ChatToolReadConsentDecision,
+  ChatToolWriteApprovalView,
+  ChatToolWriteApprovalState,
+  ChatToolWriteApprovalDecision,
+} from "./chat-tool-authority.js";
+export type { KEIKO_UI_LAUNCH_ID_ENV, UI_LAUNCH_ID_FLAG, isKeikoUiLaunchId } from "./ui-launch.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
 export type { clampUnit } from "./numeric.js";
@@ -385,6 +401,7 @@ export type {
   WorkspaceSummary,
   AuditEntry,
   AuditSummary,
+  ContentRedactionPolicy,
 } from "./workspace.js";
 export type {
   DEFAULT_DISCOVERY_OPTIONS,
@@ -1229,6 +1246,14 @@ export type {
   AtlassianConnectorActivityReasonCode,
   AtlassianConnectorActivityRecord,
   AtlassianConnectorAuthScheme,
+  AtlassianConnectorDeployment,
+  AtlassianPrivateTarget,
+  AtlassianNetworkConfig,
+  AtlassianCredentialMetadata,
+  AtlassianCredentialPublicMetadata,
+  JiraLivePodView,
+  AtlassianCredentialCreateRequest,
+  AtlassianLivePodUpdateRequest,
   AtlassianConnectorAuthorityFailureReason,
   AtlassianConnectorDescriptor,
   AtlassianConnectorHumanInitiationReason,
@@ -1421,13 +1446,20 @@ export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchContextCompaction,
+  CodingWorkbenchAgent,
+  CodingWorkbenchBuiltInAgent,
   CodingWorkbenchContextUsage,
   CodingWorkbenchContextUsageBreakdown,
   CodingWorkbenchContextUsageSource,
+  CodingWorkbenchPromptDelivery,
+  CodingWorkbenchPromptReference,
   CodingWorkbenchRuntimeEvidenceClass,
+  CodingWorkbenchRuntimeFollowUpRequest,
+  CodingWorkbenchRuntimeForkRequest,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeProjectMemoryRequest,
+  CodingWorkbenchRuntimePromptInputs,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -1443,10 +1475,13 @@ export type {
   CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStatus,
   CodingWorkbenchRuntimeStopRequest,
+  CodingWorkbenchRuntimeOrigin,
   CodingWorkbenchRuntimeTakeoverRequest,
   CodingWorkbenchRuntimeUnavailableReason,
+  CodingWorkbenchRuntimeVersion,
 } from "./coding-workbench-runtime-api.js";
 export type {
+  CODING_WORKBENCH_AGENTS,
   CODING_WORKBENCH_GATEWAY_EVENT_KINDS,
   CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
@@ -1454,9 +1489,13 @@ export type {
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
   CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
+  CODING_WORKBENCH_RUNTIME_ORIGINS,
   CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
   CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS,
+  DEFAULT_CODING_WORKBENCH_AGENT,
+  isCodingWorkbenchAgent,
+  isCodingWorkbenchBuiltInAgent,
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeReadinessRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -1497,6 +1536,7 @@ export type {
   validateCodingWorkbenchRuntimeQuestionsResponse,
 } from "./coding-workbench-runtime-questions.js";
 export type {
+  CodingWorkbenchNativeActionReview,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,
@@ -2076,6 +2116,7 @@ export type {
   CompletionModelSelection,
   ChatMessage,
   ChatMessageContentPart,
+  ChatMessageFileContentPart,
   ChatMessageImageUrlContentPart,
   ChatMessageTextContentPart,
   ToolDefinition,
@@ -2139,6 +2180,7 @@ export type {
   isAsYouTypeCompletionModel,
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  isCodingWorkbenchProofRenewing,
   listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
@@ -2386,6 +2428,7 @@ export type {
   VerificationResult,
   VerificationFailureLocation,
   VerificationReport,
+  VerificationDependencyRefusalReason,
   VerificationDependencyState,
   VerificationDependencySummary,
   VerificationLockfileState,
@@ -4669,6 +4712,7 @@ export type {
   WorkspaceEventType,
   WorkspaceEvent,
   WorkspaceInstance,
+  WorkspaceKind,
   WorkspaceBinding,
   WorkspaceBindingV1,
   WorkspaceBoundRootV2,
@@ -4733,8 +4777,12 @@ export type {
   isWorkspaceCleanupMode,
   isWorkspaceSurface,
   isWorkspaceEventType,
+  taskWorkspaceProvisioningSource,
   validateWorkspaceEvent,
   validateWorkspaceInstance,
+  FOLDER_WORKSPACE_BRANCH,
+  folderWorkspaceHead,
+  isFolderWorkspace,
   validateWorkspaceBinding,
   validateWorkspaceBoundRootV2,
   validateWorkspaceBindingV2,
@@ -5201,6 +5249,9 @@ export type {
   CodingRuntimeGitStatus,
   CodingRuntimeGitDiff,
   CodingRuntimeGitStage,
+  CodingRuntimeGitUnstage,
+  CodingRuntimeGitSync,
+  CodingRuntimeGitBranch,
 } from "./coding-runtime-git.js";
 
 export type {
@@ -5241,3 +5292,32 @@ export type {
   isGitJourneyRemoteFacts,
   isJourneyOutcome,
 } from "./git-journey-validation.js";
+
+export type {
+  CodingWorkbenchMcpAuthorizationRefusal,
+  CodingWorkbenchMcpAuthorizationRequest,
+  CodingWorkbenchMcpAuthorizationStart,
+  CodingWorkbenchMcpAuthorizationState,
+  CodingWorkbenchMcpAuthorizationStatus,
+  CodingWorkbenchMcpServer,
+  CodingWorkbenchMcpServerStatus,
+  CodingWorkbenchRuntimeMcpChannelPayload,
+  McpLocalTransport,
+  McpRemoteOAuth,
+  McpRemoteSecretHeader,
+  McpRemoteTransport,
+  McpServerDefinition,
+  McpServerRegistryParse,
+  McpServerRegistryRefusal,
+  McpToolRisk,
+} from "./mcp-servers.js";
+
+export type {
+  ManagedMcpHost,
+  ManagedMcpInvocationContext,
+  ManagedMcpProvider,
+  ManagedMcpTool,
+  ManagedMcpToolResult,
+  ManagedMcpLogPort,
+  ManagedMcpFailure,
+} from "./managed-mcp.js";

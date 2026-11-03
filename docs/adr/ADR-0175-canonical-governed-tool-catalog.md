@@ -39,8 +39,12 @@ binds it to those owners; it adds no parallel execution, policy, search or evide
 | Adapter projection semantics | catalog compiler | consumers materialize only the compiled result |
 | Approved-skill state and effects | existing server-approved skill catalog and governed skill handler; the catalog owns only the `keiko.skill.discover` descriptor and its projection | #3417 |
 
-The new pure package depends only on contracts and security. It cannot import I/O, providers,
-handlers, credentials, readiness, log sinks or policy evaluators. Server composition alone injects
+The pure package's internal dependencies are only contracts and security. Its external-schema
+compiler alone may import exactly `ajv`, `ajv/dist/2019.js`, `ajv/dist/2020.js` and `ajv-formats`
+for bounded synchronous validation (D3), without a remote schema loader or I/O configuration.
+Every other third-party import, arbitrary validator internal subpath, and validator import outside
+that owner remains denied. It cannot import I/O, providers, handlers, credentials, readiness,
+log sinks or policy evaluators. Server composition alone injects
 live authority, root, action, correlation, idempotency, handler and budget ports. Generic types do
 not reference the server. Browser types remain JSON-safe BFF projections with no handlers,
 Authority Envelopes, approval proofs, environment, credentials, filesystem handles or server roots.
@@ -100,8 +104,10 @@ Initial identity reservations (all version 1):
 | Managed path discovery/ranged read/changeset/verification | `keiko.workspace.discover`, `keiko.workspace.read`, `keiko.changeset.edit`, `keiko.verification.run` | Existing managed aliases in `managed-opencode@1` |
 | Managed research/skill/child | `keiko.research.fetch`, `keiko.skill.invoke`, `keiko.child.run` | Absent from offers unless bound, ready and authorized |
 | Local content search | `keiko.repo.search` | #3414 alone owns `keiko_repository_search`; H1 owns no alias |
-| Managed Git status/diff/stage and delivery proposal (propose-phase only; the model never commits, pushes or opens a pull request directly) | `keiko.git.status`, `keiko.git.diff`, `keiko.git.stage`, `keiko.git.commit`, `keiko.git.push`, `keiko.git.pullrequest` | New `keiko_git_status`/`keiko_git_diff`/`keiko_git_stage`/`keiko_git_commit`/`keiko_git_push`/`keiko_pull_request` aliases in `managed-opencode@1` (#3386/#3387) |
+| Managed Git status/diff/stage (with `unstage: true`, #3902 AC2) and delivery proposal (propose-phase only; the model never commits, pushes or opens a pull request directly) | `keiko.git.status`, `keiko.git.diff`, `keiko.git.stage`, `keiko.git.commit`, `keiko.git.push`, `keiko.git.pullrequest` | New `keiko_git_status`/`keiko_git_diff`/`keiko_git_stage`/`keiko_git_commit`/`keiko_git_push`/`keiko_pull_request` aliases in `managed-opencode@1` (#3386/#3387) |
 | Shared approved-proposal redemption and CI observation | `keiko.git.execute`, `keiko.ci.status` | New `keiko_git_execute`/`keiko_ci_status` aliases in `managed-opencode@1`; execution redemption is gated on the existing VerifiedCommitService/draft-delivery approval channel, never on model authority alone (#3386/#3387/#3388) |
+| Governed fetch and fast-forward pull (#3902 AC2) | `keiko.git.sync` | New `keiko_git_sync` alias in `managed-opencode@1`; the Git sync owner decides and executes it (ADR-0138 D3 item 5), below Full access only after the operator approves the exact call |
+| Governed task branch (#3907) | `keiko.git.branch` | New `keiko_git_branch` alias in `managed-opencode@1` (input `name`); the Git kernel creates the branch at the current commit and switches the run to it, Full access without an ask, below it only after the operator approves the exact name |
 | Read-only child read | `keiko.child.workspace.read` | New `keiko_child_workspace_read`; old `read_file` only in expiring old-digest profile |
 | Editor | `keiko.editor.sessions`, `keiko.editor.snapshot`, `keiko.editor.navigate`, `keiko.editor.symbol`, `keiko.editor.search`, `keiko.editor.git`, `keiko.editor.edit`, `keiko.editor.changeset`, `keiko.editor.verify` | Existing nine aliases in versioned Editor profile; active subset is separately governed |
 
@@ -112,7 +118,12 @@ not a Keiko tool or compatibility exception. The clean-cut V2 integration (#3561
 planning stays in the agent conversation rather than an invented replacement tool. Qualification
 still requires the complete governed read, edit, verification, and delivery inventory and its
 real-model evidence. Arbitrary sidecar tool definitions remain transport data and cannot register
-a descriptor, handler, effect or authority. Codex remains disabled.
+a descriptor, handler, effect or authority. The native OpenCode profile (ADR-0137 D10) registers
+exactly Keiko's delivery tools (the Git, CI and verification entries above) through a generated
+plugin built from the unchanged `managed-opencode@1` tool source: their definitions reach the
+gateway as the same transport data as OpenCode's own, no descriptor, alias or digest changes, and
+authority remains the facade request each call makes against the existing descriptors, handlers and
+approval channel, never the advertisement. Codex remains disabled.
 
 ### D3 — Digest inputs and compatibility
 
@@ -121,11 +132,31 @@ existing security producer over `canonicalise({domain, ...fields})`, then `sha25
 ASCII identity and reject duplicates before hashing; preserve semantically ordered arrays. Reject
 undefined, non-finite numbers, prototypes, accessors, functions, symbols, cycles, unsafe refs,
 unknown keys and inputs exceeding the table's depth/width/byte bounds before canonicalization.
-Schemas are a closed, bounded JSON Schema subset; unsupported dialect semantics are incompatibility,
-never silently omitted keywords. #3406 owns the explicit keyword allowlist and equivalence tests.
+Internal schemas retain their closed, bounded JSON Schema subset; unsupported dialect semantics
+are incompatibility, never silently omitted keywords. #3406 owns that keyword allowlist and its
+equivalence tests. Configured external MCP tools (#4081/#4089, PR #4093) use a separate explicit
+JSON Schema dialect through `compileExternalCatalogSchema`: 2020-12 by MCP default, or an explicit
+2019-09 or draft-07 declaration. Ajv validates the exact admitted schema, including optional fields,
+open objects, schema-valued maps, unions, composition, local references and supported standard
+formats. Defaults remain annotations; validation never inserts defaults, coerces values, removes
+properties or prunes constraints. Gateway projections retain the admitted schema. Existing managed
+OpenCode built-in projections retain their lossless closed/required-field invariant.
 
-Descriptor/projection/catalog digest inputs are trusted local source declarations and **never
-customer content**. Description, transformed input/result schemas, effects/actions/policy references,
+External schemas are untrusted metadata. Before either catalog compilation or the external MCP
+SDK's argument/result validation, the shared contracts guard bounds the schema to 64 KiB, JSON
+depth 16, 128 entries per container, 2,048 JSON nodes, 256 schema nodes and 2,048 expanded reference
+work units. References must resolve locally through JSON Pointers and form an acyclic graph of
+height at most 16; remote references, IDs/anchors, dynamic/recursive references and asynchronous
+schemas are unsupported. Regex admission uses the existing conservative safety check plus an
+explicit linear exception: one completely anchored ASCII character-class or character-escape
+atom with at most one quantifier. Groups, competing repetitions and other unsupported regex
+grammar do not acquire an exception. The `regex` data format is refused. Ajv's format support is
+explicitly limited to date/time/duration, URI/reference/template, email/hostname, IP, UUID and JSON
+Pointer formats; unknown keywords or formats fail closed. The compiler cache is bounded to 64
+entries. These are compatibility limits, not claims to implement every JSON Schema extension.
+
+Descriptor/projection/catalog digest inputs are local source declarations or admitted external
+MCP tool metadata, **never tool arguments or results**. Description, transformed input/result schemas, effects/actions/policy references,
 handler requirement, bounds, alias, profile, catalog revision and exact adapter identity all bind
 the projection. Native extensions and accepted compatibility transforms bind it too. Generated
 manifests expose IDs, versions, digests, bounds and enums; omit descriptions and schemas.
@@ -133,7 +164,13 @@ manifests expose IDs, versions, digests, bounds and enums; omit descriptions and
 The request/cursor domains serve a different, transient binder purpose. Canonical arguments can
 enter an invocation-scoped request digest only inside server memory; include a server nonce chosen once for that server-held idempotency binding, reused only for request comparisons inside the same binding. A new binding receives a fresh nonce. Same-key/same-arguments replay therefore retains the same request identity; low-entropy queries cannot be recovered from a stable public hash. Neither arguments, nonce nor
 request/cursor digest enter the generated catalog or durable evidence. Opaque cursor tokens address
-server-held entries; the catalog compiler never creates cursors or handles customer input.
+server-held entries; the catalog compiler never creates cursors or handles customer input. The request and cursor v2 domains include the captured consumer-scope digest:
+workspace identity/revision for Coding, or the server-owned scope of another consumer.
+An offer, admitted invocation and continuation must still match that scope. A newer
+offer cannot refresh the scope of an invocation already in flight. These transient
+in-memory cursors expire normally and do not migrate across server restarts. Consumer
+scope fields are never accepted from model arguments or written to lifecycle evidence.
+
 
 Compatibility entries are `{from, to, profile, adapter, transformId, ownerIssue, expiresAt,
 removalIssue}` with exact versions/digests, an explicit direction and tested non-widening transforms.
@@ -154,7 +191,7 @@ checks remain unchanged.
 
 `offer = profile intent ∩ representable ∩ bound-and-ready ∩ live-authority-eligible ∩ budgeted`.
 
-An offer minted for one model request lives exactly as long as that request can: its expiry is the
+The native OpenCode offer minted for one model request lives as long as that request can: its expiry is the
 request deadline the gateway enforces for the model (the provider's `timeoutMs`) plus the bridge's
 settlement grace, never a fixed constant. A fixed 30 s offer expired under a legitimately long
 generation (a ~6k-token changeset call took 49 s), the response's calls bound against a dead offer as
@@ -162,6 +199,11 @@ generation (a ~6k-token changeset call took 49 s), the response's calls bound ag
 (2026-09-10). A response later than the deadline has already been aborted, so the deadline-derived
 lifetime refuses nothing legitimate and admits nothing stale; the bridge logs the offer's remaining
 lifetime at projection time so an expiry is reconstructable from the activity log alone.
+For the shared server catalog binder, the existing consumer deadline and authority expiry jointly
+bound the offer: `min(consumer.deadlineAt, authorityExpiresAt)`. This adds no grace or budget to the
+consumer. Its former fixed 30-second offer also refused valid normal-Chat Jira responses when model
+generation outlasted that lease (2026-10-29). The regression admits a response at49 seconds inside
+a90-second turn and refuses arrivals at either admitted bound; no new deadline is created.
 An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
 it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
 revision and its handler's readiness, so an effect that starts after a long step or a human decision
@@ -199,7 +241,18 @@ ports, not loopback HTTP. Missing/wrong handlers fail closed before advertising;
 returns `failed / handler-unavailable` or `handler-mismatch` without effect.
 
 Bounds in the normative table are **maximum safety ceilings, not performance targets**. Each
-handler/profile may tighten them; neither model nor adapter may enlarge them. #2952 measures
+handler/profile may tighten them; neither model nor adapter may enlarge them. The one reviewed
+exception is the governed changeset edit, whose arguments are file content: its call and each of
+its strings are bounded by the changeset cap of ADR-0125 D3 (`CHANGESET_EDIT_ARGUMENT_LIMITS`,
+owner decision 2026-10-28), named by the contract (`toolArgumentLimits`) and honoured by the
+descriptor, the capture and the history gate alike; the native file-content tools `edit`, `write`
+and `patch` are captured under the same ceilings. The legacy patch tools `propose_patch` and
+`apply_patch` (`keiko.patch.propose`, `keiko.patch.apply`) follow the same shared patch ceiling
+(`GOVERNED_PATCH_MAX_BYTES`, owner decision 2026-10-29, #4110): their one `diff` argument and their
+descriptor `maxArgumentBytes` are the changeset ceilings, and their model-facing result stays inside
+the table's string ceiling by carrying the verdict, counts and at most 50 listed files, rejections
+and conflicts, never the hunks or the normalized diff. Every other tool keeps the table verbatim,
+and the table itself is unchanged. #2952 measures
 performance and #3415 calibrates narrower catalog-specific thresholds. JSON object depth is root=1;
 width is keys per object, byte bounds count UTF-8 serialization, and integer metrics are finite,
 nonnegative safe integers. Input and output limits apply before parsing/allocation where possible.
@@ -210,7 +263,8 @@ argument text `state.raw` while pending), and the fail-closed history gate that 
 re-applies `TOOL_CATALOG_LIMITS` to them rather than its 4096-character metadata bound: a body the
 catalog admitted cannot be refused by the record of its own dispatch. The per-pull history response
 budget is derived from the same ceilings (the ordinary metadata rows plus eight catch-up calls of
-three argument-bearing rows each). A 19 KiB `keiko_changeset_edit` patch — inside the 64 KiB patch
+three argument-bearing rows each, one of which may be a changeset-edit call at its own ceiling:
+one whole such call fits a pull, a second per pull is outside the budget and fails closed). A 19 KiB `keiko_changeset_edit` patch — inside the 64 KiB patch
 contract — was refused by the metadata bound on 2026-09-10 and the run ended `runtime-failed` on its
 first edit, with a diagnostic naming only the digest of the event type; the refused part's closed
 labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.
@@ -288,7 +342,16 @@ truncated, recovery-required or running status may enter this envelope.
 | `effectStarted` | Boolean; false for pre-effect rejection, conservative true if an effect may have started |
 | `metrics` | `{inputBytes, outputBytes, resultCount, durationMs}` bounded integers, no content |
 | `page` | Completed only: `{truncated, reason, cursor}`; otherwise `null` |
-| `data` | Completed only: descriptor-schema-validated bounded JSON; otherwise `null` |
+| `data` | Completed: descriptor-schema-validated bounded JSON. `failed` / `provider-reported-error`: descriptor-schema-validated bounded JSON object. Otherwise `null` |
+
+Managed providers may return an explicit structured error under `failed` /
+`provider-reported-error`. It retains `page=null` and `resultCount=0`, requires the current bound
+descriptor, and accounts for the exact serialized data bytes. All other failed, cancelled,
+timed-out and rejected results keep `data=null`. Error data is consumer output, never Activity Log
+evidence. This protocol status does not classify the remote mutation effect: a provider's closed
+domain outcome may report an unknown effect or an acknowledged but unconfirmed result, and its
+consumer must preserve that distinction and the durable dispatch record. The legacy string-returning
+ToolPort adapter cannot emit this structured-error variant.
 
 A completed empty result is valid and distinct from a failed search. `page.reason` is one of
 `none`, `result-cap`, `byte-cap`, `file-cap`, `inventory-cap`, `time-cap`, `cancelled`, `oversized-file`,
@@ -391,8 +454,7 @@ a real, unambiguous production catalog descriptor: `discover`, `search`, `edit`,
 (`propose` -> `keiko.git.stage`, `execute` -> `keiko.git.execute`)/`ci` operations, and `delivery`'s
 `commit`/`push`/`pull-request` intents (`propose` -> their own proposal tool, `execute` -> the one
 shared `keiko.git.execute` redemption tool regardless of which intent is being redeemed). An action
-request this bridge does not cover -- `read` (below), `command` and `connector` (no catalog
-descriptor models either one yet), `git`'s low-level `read`/`write` operations, `delivery`'s
+request this bridge does not cover -- `read` (below), `command` (no catalog descriptor yet) and `connector` (available only after provider descriptors and handler bindings are admitted under ADR-0181), `git`'s low-level `read`/`write` operations, `delivery`'s
 `merge` intent (no proposal tool models it) and a `delivery` request with no `phase` (not
 model-facing) -- keeps its exact prior dispatch behaviour AND now records one body-free
 `tool-catalog.dispatch-unbound` line (the dispatched `action` only) instead of running with zero
@@ -688,6 +750,9 @@ request, as its description states.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.9 | 2026-10-29 | D4: the legacy patch tools `propose_patch` and `apply_patch` follow the shared patch ceiling of ADR-0125 D3 (`GOVERNED_PATCH_MAX_BYTES`, #4110); their descriptors move (argument bound), so the `legacy-native@1` catalog revision, projection digest and the manifest were regenerated. |
+| 1.8 | 2026-10-23 | The native OpenCode profile registers Keiko's Git, CI and verification tools through a generated plugin so a native run delivers through the existing facade, approval channel and verified-commit path (ADR-0137 D10, #3897); D2 holds unchanged, since the tools are the `managed-opencode@1` entries' own source, no descriptor, alias or digest moves, and an advertisement still binds no handler, effect or authority. |
+| 1.7 | 2026-10-23 | The native OpenCode profile (ADR-0137 D10, #3897) advertises the runtime's own tools to the provider as a bounded `native` advertisement forwarded verbatim and bound by name only; D2 holds unchanged, since no runtime-supplied definition registers a handler, effect or authority, and the governed catalog keeps serving the mapped profiles and every other product surface. |
 | 1.6 | 2026-09-12 | Semantic reranking of the governed repository search runs above the handler on the evidence lane's redacted excerpts, moves neither the catalog revision nor the projection digest, and discloses a body-free provenance whose non-lexical rankings must name their index and whose unplaced orders stay lexical; whole-request cancellation is terminal (#3416, PR #3452). |
 | 1.5 | 2026-09-11 | Approved-skill discovery: the catalog owns only the `keiko.skill.discover` descriptor over the server-approved skill catalog, with one readiness decision, atomic invalidation and a closed, body-free projection (#3417, PR #3452). |
 | 1.4 | 2026-09-11 | Lineage entries are owner-issued: receipts carry evidence refs bound to the integration PR at the entry's source commit, which must resolve, precede the checked commit and still hold the producer; the self-issued first entry was withdrawn. |

@@ -1,5 +1,6 @@
 import { withMarkdownSkillInstructions } from "./markdown-skill-prompt.js";
 import type {
+  ContentRedactionPolicy,
   ContextProfile,
   ContextTokenAccounting,
   ConversationDocumentContextWire,
@@ -10,7 +11,7 @@ import type {
   ConversationMemoryContextEntryWire,
   MarkdownSkillDocument,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { CONVERSATION_SYSTEM_PROMPT, composeConversationPrompt } from "./conversation-prompt.js";
+import { composeConversationPrompt, conversationSystemPrompt } from "./conversation-prompt.js";
 import {
   withGatewayConversationImages,
   type GatewayConversationMessage,
@@ -51,6 +52,7 @@ interface TokenSummaryInput {
   };
   readonly finalMessages: readonly GatewayConversationMessage[];
   readonly profile: ContextProfile;
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }
 
 function userProjectionTokens(input: TokenSummaryInput, includeMemory: boolean): number {
@@ -118,7 +120,7 @@ export function buildPromptAssemblyTokenSummary(input: TokenSummaryInput): {
 } {
   const tokenAccounting = input.profile.tokenAccounting;
   const systemTokens = estimateFinalPromptTokens(
-    [{ role: "system", content: CONVERSATION_SYSTEM_PROMPT }],
+    [{ role: "system", content: conversationSystemPrompt(input.contentRedaction) }],
     tokenAccounting,
   );
   return {

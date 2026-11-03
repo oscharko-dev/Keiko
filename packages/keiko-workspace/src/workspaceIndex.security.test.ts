@@ -15,6 +15,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { openString } from "@oscharko-dev/keiko-security";
 
 type OpenFileHandle = Awaited<ReturnType<typeof import("node:fs/promises").open>>;
 
@@ -201,7 +202,16 @@ describe("file workspace index runtime-directory identity", () => {
 
       const raw = readFileSync(path, "utf8");
       const replacement = `${path}.replacement`;
-      const corrupted = `${raw.slice(0, -1)}${raw.endsWith("A") ? "B" : "A"}`;
+      const [prefix, nonce, encodedBody] = raw.split(".");
+      if (prefix === undefined || nonce === undefined || encodedBody === undefined)
+        throw new TypeError("expected a sealed snapshot envelope");
+      const body = Buffer.from(encodedBody, "base64url");
+      const originalBody = Buffer.from(body);
+      body[0] = (body[0] ?? 0) ^ 0xff;
+      const corrupted = `${prefix}.${nonce}.${body.toString("base64url")}`;
+      expect(body.equals(originalBody)).toBe(false);
+      expect(corrupted).toHaveLength(raw.length);
+      expect(() => openString(KEY, corrupted)).toThrow();
       writeFileSync(replacement, corrupted, { encoding: "utf8", mode: 0o600 });
       renameSync(replacement, path);
       utimesSync(path, fixedTimeSeconds, fixedTimeSeconds);

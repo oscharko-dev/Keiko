@@ -1,4 +1,5 @@
 #include <assert.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <stdint.h>
 #include <signal.h>
@@ -6,12 +7,103 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <poll.h>
+#include <sys/wait.h>
+#include <time.h>
 
 static unsigned int coordinator_cleanup_kills;
+static const char *coordinator_pending_ack_link;
+static int coordinator_pending_receipt = -1;
+static unsigned char coordinator_receipt_bytes[4096];
+static size_t coordinator_receipt_length;
+static int coordinator_forbid_receipt_sleep;
+static int coordinator_retry_clock_enabled;
+static uint64_t coordinator_retry_clock_ms;
+static unsigned int coordinator_retry_ticks;
+static int coordinator_test_clock_gettime(clockid_t clock, struct timespec *value) {
+#if defined(__APPLE__)
+  const clockid_t retry_clock = CLOCK_MONOTONIC_RAW;
+#else
+  const clockid_t retry_clock = CLOCK_MONOTONIC;
+#endif
+  if (!coordinator_retry_clock_enabled || clock != retry_clock)
+    return clock_gettime(clock, value);
+  value->tv_sec = (time_t)(coordinator_retry_clock_ms / 1000u);
+  value->tv_nsec = (long)((coordinator_retry_clock_ms % 1000u) * 1000000u);
+  return 0;
+}
+static void coordinator_publish_pending_evidence(void) {
+  if (coordinator_pending_ack_link != NULL) {
+    assert(unlink(coordinator_pending_ack_link) == 0);
+    coordinator_pending_ack_link = NULL;
+  }
+  if (coordinator_pending_receipt >= 0) {
+    assert(write(coordinator_pending_receipt, coordinator_receipt_bytes,
+                 coordinator_receipt_length) == (ssize_t)coordinator_receipt_length);
+    assert(fsync(coordinator_pending_receipt) == 0);
+    assert(close(coordinator_pending_receipt) == 0);
+    coordinator_pending_receipt = -1;
+  }
+}
+static int coordinator_test_usleep(unsigned int microseconds) {
+  assert(!coordinator_forbid_receipt_sleep);
+  if (coordinator_retry_clock_enabled) {
+    coordinator_publish_pending_evidence();
+    coordinator_retry_clock_ms += ((uint64_t)microseconds + 999u) / 1000u;
+    coordinator_retry_ticks += 1u;
+    return 0;
+  }
+  assert(coordinator_pending_ack_link == NULL && coordinator_pending_receipt == -1);
+  return usleep(microseconds);
+}
 static const char *coordinator_cutover_failure;
 static int coordinator_test_kill(pid_t pid, int signal_number) {
   coordinator_cleanup_kills += 1u;
   return kill(pid, signal_number);
+}
+
+static int coordinator_delay_ui_read;
+static int coordinator_delay_ui_compare;
+static int coordinator_stop_poll_test;
+static int coordinator_force_stop_tick;
+static int coordinator_stop_tick_observed;
+static int coordinator_waitid_error;
+static int coordinator_test_waitid(idtype_t type, id_t id, siginfo_t *info, int options) {
+  if (coordinator_waitid_error != 0) {
+    errno = coordinator_waitid_error;
+    coordinator_waitid_error = 0;
+    return -1;
+  }
+  return waitid(type, id, info, options);
+}
+static int coordinator_test_poll(struct pollfd *fds, nfds_t count, int timeout) {
+  if (coordinator_force_stop_tick && timeout == 50) {
+    coordinator_force_stop_tick = 0;
+    coordinator_stop_tick_observed = 1;
+    for (nfds_t i = 0; i < count; ++i) fds[i].revents = 0;
+    return 0;
+  }
+  return poll(fds, count, timeout);
+}
+static ssize_t coordinator_test_read(int descriptor, void *buffer, size_t length) {
+  if (coordinator_delay_ui_read) {
+    coordinator_delay_ui_read = 0;
+    assert(raise(SIGSTOP) == 0);
+  }
+  ssize_t count = read(descriptor, buffer, length);
+  if (coordinator_stop_poll_test && count == 12 &&
+      memcmp(buffer, "KRC1", 4) == 0 && ((unsigned char *)buffer)[6] == 2)
+    coordinator_force_stop_tick = 1;
+  return count;
+}
+
+static int coordinator_test_memcmp(const void *left, const void *right, size_t length) {
+  int result = memcmp(left, right, length);
+  if (coordinator_delay_ui_compare) {
+    coordinator_delay_ui_compare = 0;
+    assert(raise(SIGSTOP) == 0);
+  }
+  return result;
 }
 
 static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
@@ -21,9 +113,21 @@ static int coordinator_test_cutover_checkpoint(const char *checkpoint) {
 
 #define KEIKO_COORDINATOR_KILL coordinator_test_kill
 #define KEIKO_COORDINATOR_CUTOVER_CHECKPOINT coordinator_test_cutover_checkpoint
+#define memcmp coordinator_test_memcmp
+#define read coordinator_test_read
+#define poll coordinator_test_poll
+#define waitid coordinator_test_waitid
+#define usleep coordinator_test_usleep
+#define clock_gettime coordinator_test_clock_gettime
 #define main keiko_portable_launcher_product_main
 #include "keiko-portable-launcher.c"
 #undef main
+#undef read
+#undef poll
+#undef waitid
+#undef usleep
+#undef clock_gettime
+#undef memcmp
 #undef KEIKO_COORDINATOR_CUTOVER_CHECKPOINT
 #undef KEIKO_COORDINATOR_KILL
 
@@ -72,6 +176,17 @@ static int reconcile_fixture(const char *activation_id) {
   return 0;
 }
 
+static int fixture_app_environment(void) {
+#if defined(__APPLE__)
+  struct app_environment_packet packet = {0};
+  int result = read_app_environment(&packet, krp_default_reader, NULL);
+  clear_app_environment(&packet);
+  return result;
+#else
+  return 1;
+#endif
+}
+
 static int supervisor_fixture(void) {
   unsigned char header[12], control[12];
   unsigned char launched[12] = {'K', 'R', 'S', '1', 1, 0, 1, 0, 0, 0, 0, 0};
@@ -87,7 +202,7 @@ static int supervisor_fixture(void) {
   payload_length = keiko_khp_read_u32(header + 8u);
   if (payload_length == 0 || payload_length > KEIKO_COORDINATOR_KRP_MAX_BYTES) return 1;
   payload = (unsigned char *)malloc(payload_length);
-  if (payload == NULL || !read_all(3, payload, payload_length) ||
+  if (payload == NULL || !read_all(3, payload, payload_length) || !fixture_app_environment() ||
       !write_all(4, launched, sizeof(launched)) || !read_all(3, control, sizeof(control)) ||
       memcmp(control, "KRC1", 4u) != 0 || !write_all(4, reaped, sizeof(reaped)))
     goto cleanup;
@@ -251,6 +366,128 @@ static void cutover_fixture_clear(cutover_fixture *fixture) {
     }
   }
   assert(rmdir(fixture->root) == 0);
+}
+
+/* The JS publisher fsyncs a hard-link publication before removing its temporary name.
+ * Only a settled one-link acknowledgement is authority; a two-link observation may be pending. */
+static void test_native_update_retains_only_canonical_working_directory(void) {
+  cutover_fixture fixture;
+  char workspace[PATH_MAX], alias[PATH_MAX], value[PATH_MAX + 40];
+  char *environment[] = {value, NULL};
+  cutover_fixture_init(&fixture);
+  assert(join_path(workspace, sizeof(workspace), fixture.root, "/workspace") == 1);
+  assert(join_path(alias, sizeof(alias), fixture.root, "/workspace-alias") == 1);
+  assert(mkdir(workspace, 0700) == 0);
+  fixture.context.native_handoff = 1;
+  fixture.context.native_environment.count = 1;
+  fixture.context.native_environment.values = environment;
+  assert(snprintf(value, sizeof(value), "KEIKO_UI_WORKING_DIRECTORY=%s", workspace) > 0);
+  assert(strcmp(keiko_coordinator_working_directory(&fixture.context), workspace) == 0);
+  assert(symlink(workspace, alias) == 0);
+  assert(snprintf(value, sizeof(value), "KEIKO_UI_WORKING_DIRECTORY=%s", alias) > 0);
+  assert(keiko_coordinator_working_directory(&fixture.context) == NULL);
+  assert(unlink(alias) == 0);
+  assert(rmdir(workspace) == 0);
+  assert(snprintf(value, sizeof(value), "KEIKO_UI_WORKING_DIRECTORY=%s", workspace) > 0);
+  assert(keiko_coordinator_working_directory(&fixture.context) == NULL);
+  fixture.context.native_environment.count = 0;
+  assert(strcmp(keiko_coordinator_working_directory(&fixture.context), fixture.managed) == 0);
+  cutover_fixture_clear(&fixture);
+}
+
+static void test_verified_ack_waits_for_durable_publication(void) {
+  cutover_fixture fixture;
+  char ack[PATH_MAX], pending[PATH_MAX], content[70];
+  cutover_fixture_init(&fixture);
+  assert(join_path(ack, sizeof(ack), fixture.capsule, "/verified.ack") == 1);
+  assert(join_path(pending, sizeof(pending), fixture.capsule, "/pending.ack") == 1);
+  assert(snprintf(content, sizeof(content), "KHV1%s\n", fixture.context.plan_sha256) == 69);
+  write_fixture_file(pending, content);
+  assert(chmod(pending, 0600) == 0);
+  assert(link(pending, ack) == 0);
+  coordinator_retry_clock_ms = 1000u;
+  coordinator_retry_ticks = 0;
+  coordinator_retry_clock_enabled = 1;
+  coordinator_pending_ack_link = pending;
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 1);
+  assert(coordinator_pending_ack_link == NULL);
+  assert(coordinator_retry_ticks == 1u && coordinator_retry_clock_ms == 1010u);
+  assert(link(ack, pending) == 0);
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, keiko_tree_now_ms() + 20u) == 0);
+  assert(coordinator_retry_ticks == 4u && coordinator_retry_clock_ms == 1040u);
+  assert(unlink(pending) == 0);
+  replace_fixture_file(ack, "KHV1wrong\n");
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
+  assert(unlink(ack) == 0);
+  assert(symlink(fixture.registration, ack) == 0);
+  assert(keiko_coordinator_wait_verified_ack(&fixture.context, fixture_deadline()) == 0);
+  assert(unlink(ack) == 0);
+  coordinator_retry_clock_enabled = 0;
+  cutover_fixture_clear(&fixture);
+}
+
+static void test_receipt_waits_for_complete_publication(void) {
+  cutover_fixture fixture;
+  char path[PATH_MAX];
+  cutover_fixture_init(&fixture);
+  keiko_coordinator_context reader = fixture.context;
+  assert(keiko_coordinator_append_receipt(&fixture.context, "prepared", "completed"));
+  assert(join_path(path, sizeof(path), fixture.receipts, "/000001.khr"));
+  int descriptor = open(path, O_RDONLY | O_NOFOLLOW);
+  assert(descriptor >= 0);
+  ssize_t count = read(descriptor, coordinator_receipt_bytes, sizeof(coordinator_receipt_bytes));
+  assert(count > 0 && close(descriptor) == 0);
+  coordinator_receipt_length = (size_t)count;
+  coordinator_pending_receipt = open(path, O_WRONLY | O_TRUNC | O_NOFOLLOW);
+  assert(coordinator_pending_receipt >= 0);
+  coordinator_retry_clock_ms = 1000u;
+  coordinator_retry_ticks = 0;
+  coordinator_retry_clock_enabled = 1;
+  assert(keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
+                                                 fixture_deadline()));
+  assert(coordinator_pending_receipt == -1 && reader.receipt_sequence == 1u);
+  assert(coordinator_retry_ticks == 1u && coordinator_retry_clock_ms == 1010u);
+  assert(strcmp(reader.receipt_sha256, fixture.context.receipt_sha256) == 0);
+  reader.receipt_sequence = 0;
+  memset(reader.receipt_sha256, 0, sizeof(reader.receipt_sha256));
+  assert(!keiko_coordinator_wait_expected_receipt(&reader, "verify", "completed",
+                                                  keiko_tree_now_ms() + 20u));
+  assert(reader.receipt_sequence == 0u);
+  assert(coordinator_retry_ticks == 4u && coordinator_retry_clock_ms == 1040u);
+  replace_fixture_file(path, "KHR1partial");
+  assert(!keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
+                                                  keiko_tree_now_ms() + 20u));
+  assert(reader.receipt_sequence == 0u);
+  assert(coordinator_retry_ticks == 7u && coordinator_retry_clock_ms == 1070u);
+  assert(unlink(path) == 0 && symlink(fixture.registration, path) == 0);
+  assert(!keiko_coordinator_wait_expected_receipt(&reader, "prepared", "completed",
+                                                  keiko_tree_now_ms() + 20u));
+  assert(reader.receipt_sequence == 0u);
+  assert(coordinator_retry_ticks == 10u && coordinator_retry_clock_ms == 1100u);
+  assert(unlink(path) == 0);
+  coordinator_retry_clock_enabled = 0;
+  cutover_fixture_clear(&fixture);
+}
+
+static void test_receipt_wait_preserves_early_runtime_outcome(void) {
+  cutover_fixture fixture;
+  int channel[2];
+  unsigned char outcome[20] = {'K','R','S','1',1,0,2,0,8,0,0,0,73,0,0,0,0,0,0,0};
+  unsigned char observed[sizeof(outcome)];
+  cutover_fixture_init(&fixture);
+  assert(pipe(channel) == 0);
+  fixture.context.supervisor_response = channel[0];
+  assert(write(channel[1], outcome, sizeof(outcome)) == sizeof(outcome));
+  coordinator_forbid_receipt_sleep = 1;
+  assert(!keiko_coordinator_wait_expected_receipt(&fixture.context, "verify", "intent",
+                                                  fixture_deadline()));
+  coordinator_forbid_receipt_sleep = 0;
+  assert(fixture.context.receipt_sequence == 0u);
+  /* Observation is not a reap proof. The existing stop/reconcile path must consume it. */
+  assert(read(channel[0], observed, sizeof(observed)) == sizeof(observed));
+  assert(memcmp(observed, outcome, sizeof(outcome)) == 0);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+  cutover_fixture_clear(&fixture);
 }
 
 static void test_atomic_promote_survives_each_cutover_boundary(void) {
@@ -539,6 +776,11 @@ static void test_spawn_preserves_fixed_protocol_descriptors(const char *self) {
   context.plan.field[KEIKO_KHP_MANAGED_ROOT] = managed;
   context.plan.field[KEIKO_KHP_CANDIDATE_LAUNCHER] = candidate_launcher;
   context.plan.field[KEIKO_KHP_CANDIDATE_LAUNCHER_SHA256] = launcher_digest;
+#if defined(__APPLE__)
+  char environment[5] = {0};
+  context.native_environment.storage = environment;
+  context.native_environment.storage_length = sizeof(environment);
+#endif
   assert(keiko_coordinator_spawn_supervisor(&context, keiko_tree_now_ms() + 1000u, 0) == 1);
   assert(keiko_coordinator_stop_runtime(&context, keiko_tree_now_ms() + 1000u) == 1);
   assert(context.start_gate >= 0);
@@ -553,6 +795,19 @@ static void test_spawn_preserves_fixed_protocol_descriptors(const char *self) {
 }
 
 static void test_reconcile_requires_zero_live_proof(const char *self) {
+#if defined(__APPLE__)
+  (void)self;
+  keiko_coordinator_context context = {0};
+  context.supervisor_pid = -1;
+  assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+  context.app_tree_reaped = 1;
+  assert(keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+  context.supervisor_pid = 123;
+  assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+  context.supervisor_pid = -1;
+  context.native_handoff = 1;
+  assert(!keiko_coordinator_reconcile_stopped_runtime(&context, keiko_tree_now_ms() + 1000u));
+#else
   char root[] = "/tmp/keiko-coordinator-reconcile.XXXXXX";
   char source[PATH_MAX], supervisor[PATH_MAX], digest[65];
   keiko_coordinator_context context;
@@ -591,12 +846,187 @@ static void test_reconcile_requires_zero_live_proof(const char *self) {
 
   assert(unlink(supervisor) == 0);
   assert(rmdir(root) == 0);
+#endif
+}
+
+static void test_ui_identity_delayed_step(const keiko_coordinator_context *context, int compare) {
+  int status = 0;
+  pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    coordinator_delay_ui_read = !compare;
+    coordinator_delay_ui_compare = compare;
+    _exit(keiko_coordinator_ui_identity(context, keiko_tree_now_ms() + 500u) ? 1 : 0);
+  }
+  assert(waitpid(child, &status, WUNTRACED) == child);
+  assert(WIFSTOPPED(status));
+  struct timespec delay = {0, 600000000};
+  while (nanosleep(&delay, &delay) == -1 && errno == EINTR) {}
+  assert(kill(child, SIGCONT) == 0);
+  assert(waitpid(child, &status, 0) == child);
+  assert(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+
+static void test_ui_identity_deadline(void) {
+  char root[] = "/tmp/keiko-ui-deadline.XXXXXX", path[PATH_MAX];
+  keiko_coordinator_context context = {0};
+  assert(mkdtemp(root) != NULL);
+  assert(join_path(path, sizeof(path), root, "/ui.pid"));
+  memcpy(context.state_dir, root, strlen(root) + 1u);
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  write_fixture_file(path, "12345\n0123456789abcdef0123456789abcdef\n");
+  test_ui_identity_delayed_step(&context, 0);
+  test_ui_identity_delayed_step(&context, 1);
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
+static void test_ui_identity_records(void) {
+  static const struct { const char *content; int expected; } cases[] = {
+    {"12345\n0123456789abcdef0123456789abcdef\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nnative-app-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v1\n", 1},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nnative-app-v2\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nnative-app-v1\nbrowser-open-v1\n", 0},
+    {"native-app-starting-v1\n0123456789abcdef0123456789abcdef\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nother-capability\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\nextra\n", 0},
+    {"12345\n0123456789abcdef0123456789abcdef\nbrowser-open-v1", 0},
+    {"12346\n0123456789abcdef0123456789abcdef\nbrowser-open-v1\n", 0},
+    {"12345\nffffffffffffffffffffffffffffffff\nbrowser-open-v1\n", 0},
+  };
+  char root[] = "/tmp/keiko-ui-identity.XXXXXX", path[PATH_MAX], other[PATH_MAX];
+  keiko_coordinator_context context = {0};
+  assert(mkdtemp(root) != NULL);
+  assert(join_path(path, sizeof(path), root, "/ui.pid"));
+  assert(join_path(other, sizeof(other), root, "/ui.actual"));
+  memcpy(context.state_dir, root, strlen(root) + 1u);
+  context.plan.field[KEIKO_KHP_OLD_PID] = "12345";
+  context.plan.field[KEIKO_KHP_OLD_LAUNCH_ID] = "0123456789abcdef0123456789abcdef";
+  for (size_t i = 0u; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+    write_fixture_file(path, cases[i].content);
+    assert(keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u) == cases[i].expected);
+    assert(unlink(path) == 0);
+  }
+  write_fixture_file(path, cases[1].content);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() - 1u));
+  assert(link(path, other) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(symlink("ui.actual", path) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(unlink(other) == 0);
+  assert(mkfifo(path, 0600) == 0);
+  assert(!keiko_coordinator_ui_identity(&context, keiko_tree_now_ms() + 1000u));
+  assert(unlink(path) == 0);
+  assert(rmdir(root) == 0);
+}
+
+static void test_port_probe_matches_runtime_rebinding(void) {
+  int server = socket(AF_INET, SOCK_STREAM, 0), client = -1, accepted = -1, enabled = 1;
+  struct sockaddr_in address = {.sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+  socklen_t length = sizeof(address);
+  keiko_coordinator_context context = {0};
+  char port[8], eof;
+  assert(server >= 0 && setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) == 0);
+  assert(bind(server, (struct sockaddr *)&address, sizeof(address)) == 0 && listen(server, 1) == 0);
+  assert(getsockname(server, (struct sockaddr *)&address, &length) == 0);
+  assert(snprintf(port, sizeof(port), "%u", (unsigned int)ntohs(address.sin_port)) > 0);
+  context.plan.field[KEIKO_KHP_OLD_PORT] = port;
+  assert(!keiko_coordinator_port_bindable(&context));
+  client = socket(AF_INET, SOCK_STREAM, 0);
+  assert(client >= 0 && connect(client, (struct sockaddr *)&address, sizeof(address)) == 0);
+  accepted = accept(server, NULL, NULL);
+  assert(accepted >= 0 && close(accepted) == 0);
+  assert(read(client, &eof, 1) == 0 && close(client) == 0 && close(server) == 0);
+  assert(keiko_coordinator_port_bindable(&context));
+}
+
+static void test_control_write_deadline(void) {
+  int channel[2], flags, status = 0;
+  unsigned char buffer[4096] = {0};
+  assert(pipe(channel) == 0);
+  flags = fcntl(channel[1], F_GETFL);
+  assert(flags >= 0 && fcntl(channel[1], F_SETFL, flags | O_NONBLOCK) == 0);
+  while (write(channel[1], buffer, sizeof(buffer)) > 0) {}
+  assert(errno == EAGAIN || errno == EWOULDBLOCK);
+  assert(fcntl(channel[1], F_SETFL, flags) == 0);
+  pid_t child = fork();
+  assert(child >= 0);
+  if (child == 0) {
+    int result = keiko_coordinator_write_deadline(channel[1], buffer, 1u,
+                                                  keiko_tree_now_ms() + 25u);
+    _exit(result ? 1 : 0);
+  }
+  int completed = keiko_coordinator_waitpid_deadline(&child, &status, keiko_tree_now_ms() + 1000u);
+  keiko_coordinator_dispose_child(&child);
+  assert(completed && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+  assert(pipe(channel) == 0);
+  assert(!keiko_coordinator_write_deadline(channel[1], buffer, 1u, keiko_tree_now_ms()));
+  struct pollfd available = {channel[0], POLLIN, 0};
+  assert(poll(&available, 1, 0) == 0);
+  assert(keiko_coordinator_write_deadline(channel[1], buffer, 1u, keiko_tree_now_ms() + 1000u));
+  assert(read(channel[0], buffer, 1u) == 1);
+  assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+}
+
+static void test_native_cleanup_grant_is_anchored(void) {
+  keiko_app_handoff handoff = {0};
+  handoff.deadline = 900000u;
+  handoff.cleanup_deadline = 1500000u;
+  assert(keiko_handoff_cleanup_grant(&handoff, 1u));
+  assert(keiko_handoff_cleanup_grant(&handoff, 1499999u));
+  assert(!keiko_handoff_cleanup_grant(&handoff, 1500000u));
+  handoff.cleanup_deadline += 1u;
+  assert(!keiko_handoff_cleanup_grant(&handoff, 100000u));
+  handoff.deadline = UINT64_MAX;
+  assert(!keiko_handoff_cleanup_grant(&handoff, 1u));
+}
+
+static void test_native_production_phase_offsets(void) {
+  keiko_coordinator_context context = {0};
+  char wall[32];
+  uint64_t deadline;
+  const unsigned int fields[] = {KEIKO_KHP_START_AT, KEIKO_KHP_VERIFY_AT, KEIKO_KHP_CLEANUP_AT};
+  for (size_t i = 0; i < sizeof(fields) / sizeof(fields[0]); ++i) {
+    uint64_t maximum = KEIKO_COORDINATOR_MAX_CONTROL_MS + keiko_khp_phase_tail(fields[i]);
+    snprintf(wall, sizeof(wall), "%llu", (unsigned long long)(keiko_coordinator_wall_ms() + maximum));
+    context.plan.field[fields[i]] = wall;
+    assert(keiko_coordinator_deadline(&context, fields[i], &deadline));
+    snprintf(wall, sizeof(wall), "%llu", (unsigned long long)(keiko_coordinator_wall_ms() + maximum + 10000u));
+    assert(!keiko_coordinator_deadline(&context, fields[i], &deadline));
+  }
+}
+
+static void test_native_child_observation_interruption(void) {
+#if defined(__APPLE__)
+  coordinator_waitid_error = EINTR;
+  assert(!keiko_macos_handoff_exited(123));
+#else
+  (void)coordinator_test_waitid;
+#endif
 }
 
 int main(int argc, char **argv) {
   char path[64];
+  if (argc > 2 && strcmp(argv[1], "--test-stop-poll") == 0) {
+    coordinator_stop_poll_test = 1;
+    int result = keiko_portable_launcher_product_main(argc - 1, argv + 1);
+    assert(coordinator_stop_tick_observed);
+    return result;
+  }
+  if (argc == 2 && strcmp(argv[1], "--ui-identity-deadline") == 0) {
+    test_ui_identity_deadline();
+    return 0;
+  }
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile_fixture(argv[2]);
-  if (argc == 1 && strstr(argv[0], "/runtime-supervisor") != NULL) return supervisor_fixture();
+  if ((argc == 1 || (argc == 2 && strcmp(argv[1], "--app-runtime") == 0)) &&
+      strstr(argv[0], "/runtime-supervisor") != NULL) return supervisor_fixture();
   assert(argc == 1);
   assert(dirname_copy(path, sizeof(path), "/tmp/Keiko.app/Contents/MacOS/keiko") == 1);
   assert(strcmp(path, "/tmp/Keiko.app/Contents/MacOS") == 0);
@@ -608,8 +1038,19 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
   assert(current_executable_path(path, 2) == 0);
 #endif
+  test_ui_identity_deadline();
+  test_native_cleanup_grant_is_anchored();
+  test_native_production_phase_offsets();
+  test_native_child_observation_interruption();
+  test_port_probe_matches_runtime_rebinding();
+  test_control_write_deadline();
+  test_ui_identity_records();
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);
+  test_native_update_retains_only_canonical_working_directory();
+  test_verified_ack_waits_for_durable_publication();
+  test_receipt_waits_for_complete_publication();
+  test_receipt_wait_preserves_early_runtime_outcome();
   test_atomic_promote_survives_each_cutover_boundary();
   test_atomic_cutover_rejects_untrusted_states();
   test_registration_and_restore_are_crash_idempotent();

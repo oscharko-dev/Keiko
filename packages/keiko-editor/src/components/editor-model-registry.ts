@@ -49,6 +49,67 @@ export interface UndoPreservingWritableModel {
     cursorStateComputer: () => null,
   ): unknown;
   pushStackElement?(): void;
+  getEOL?(): string;
+  // Monaco's `EndOfLineSequence`: 0 is LF, 1 is CRLF.
+  pushEOL?(eol: 0 | 1): void;
+}
+
+type LineEndingAwareModel = Pick<UndoPreservingWritableModel, "getEOL" | "pushEOL">;
+
+const LINE_BREAK = /\r\n|\r|\n/gu;
+
+function textLineEnding(text: string): "\n" | "\r\n" | null {
+  if (text.includes("\r\n")) return "\r\n";
+  return text.includes("\n") ? "\n" : null;
+}
+
+interface LineEndingTransition {
+  readonly from: string;
+  readonly to: "\n" | "\r\n";
+  readonly pushEOL: (eol: 0 | 1) => void;
+}
+
+// The model's line ending and the one the text carries, when they differ and the model can switch.
+function lineEndingTransition(
+  model: LineEndingAwareModel | null | undefined,
+  text: string,
+): LineEndingTransition | null {
+  const to = textLineEnding(text);
+  const from = model?.getEOL?.();
+  if (to === null || from === undefined || from === to || model?.pushEOL === undefined) {
+    return null;
+  }
+  return { from, to, pushEOL: (eol) => model.pushEOL?.(eol) };
+}
+
+/**
+ * Monaco normalizes every inserted line break to the model's own line ending, and a model created
+ * from text without one takes the platform default (CRLF for a Windows user agent). Writing text
+ * with another line ending would leave a model value that no longer equals the written text: the
+ * change is then misreported as a human edit and a just-reloaded buffer turns dirty (#4123). The
+ * model therefore adopts the text's own line ending inside the caller's undo step. `announce`
+ * receives each model value the write produces, in order, before the change event carrying it;
+ * only the last one (`final`) is the written text.
+ */
+export function writeModelTextWithLineEnding(
+  model: LineEndingAwareModel | null | undefined,
+  text: string,
+  announce: (value: string, final: boolean) => void,
+  write: () => boolean,
+  adopted?: (lineEnding: "lf" | "crlf") => void,
+): boolean {
+  const transition = lineEndingTransition(model, text);
+  if (transition === null) {
+    announce(text, true);
+    return write();
+  }
+  announce(text.replace(LINE_BREAK, transition.from), false);
+  if (!write()) return false;
+  announce(text, true);
+  const lf = transition.to === "\n";
+  transition.pushEOL(lf ? 0 : 1);
+  adopted?.(lf ? "lf" : "crlf");
+  return true;
 }
 
 /**
@@ -60,13 +121,26 @@ export interface UndoPreservingWritableModel {
 export function writeRetainedEditorModelValue(
   model: UndoPreservingWritableModel,
   text: string,
+  announce: (value: string, final: boolean) => void = (): void => undefined,
+  adopted?: (lineEnding: "lf" | "crlf") => void,
 ): void {
   const fullRange = model.getFullModelRange?.();
   if (fullRange !== undefined && model.pushEditOperations !== undefined) {
     model.pushStackElement?.();
-    model.pushEditOperations(null, [{ range: fullRange, text }], () => null);
+    writeModelTextWithLineEnding(
+      model,
+      text,
+      announce,
+      () => {
+        model.pushEditOperations?.(null, [{ range: fullRange, text }], () => null);
+        return true;
+      },
+      adopted,
+    );
     model.pushStackElement?.();
   } else {
+    // `setValue` takes the line ending the text itself carries.
+    announce(text, true);
     model.setValue?.(text);
   }
 }

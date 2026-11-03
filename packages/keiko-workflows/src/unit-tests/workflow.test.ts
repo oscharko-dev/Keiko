@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { DEFAULT_PATCH_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/workflow-handoff";
+import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { createDiffOfBytes } from "../bug-investigation/_patch-fixture.js";
 import { generateUnitTests } from "./workflow.js";
 import type { UnitTestWorkflowDeps, UnitTestWorkflowInput } from "./types.js";
 import { SKIP_UNRESOLVED } from "./verify-stage.js";
@@ -19,7 +24,12 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = "/repo";
+// A strict bubblewrap execution-root run creates its per-run home inside the execution root before
+// spawn (PR #4095), so this suite's root must exist on disk; its contents stay in memFs.
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workflow-verify-")));
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 // A valid create diff that adds a sibling-discoverable test under tests/ (mirrored convention).
 const VALID_TEST_DIFF =
@@ -425,5 +435,34 @@ describe("generateUnitTests — target workspace containment (issue #641)", () =
     const report = await generateUnitTests(input(), deps(model.port));
     expect(report.status).toBe("dry-run");
     expect(report.modelCallCount).toBe(1);
+  });
+});
+
+// #4110: the unit-test workflow validates under the tool host default, the one shared governed
+// patch cap; the boundary is exact and the refusal reason rides the validation event.
+describe("generateUnitTests — the governed patch cap (#4110)", () => {
+  // The fence hands the parser the diff without its final line break, one byte shorter.
+  function answerWithPatchOf(bytes: number): ReturnType<typeof response> {
+    const diff = createDiffOfBytes("tests/generated.test.ts", bytes + 1);
+    return response({ content: ["```diff", diff.trimEnd(), "```"].join("\n") });
+  }
+
+  it("proposes a patch of exactly the cap", async () => {
+    const model = scriptedModel([answerWithPatchOf(GOVERNED_PATCH_MAX_BYTES)]);
+    const report = await generateUnitTests(input(), deps(model.port));
+    expect(report.status).toBe("dry-run");
+  });
+
+  it("refuses a patch one byte over the cap with the size-limit reason", async () => {
+    const model = scriptedModel([answerWithPatchOf(GOVERNED_PATCH_MAX_BYTES + 1)]);
+    const recorder = recordingSink();
+    const report = await generateUnitTests(
+      input({ limits: { maxModelCalls: 1, maxRetries: 0 } }),
+      deps(model.port, { sink: recorder.sink }),
+    );
+    expect(report.status).toBe("rejected");
+    expect(recorder.events()).toContainEqual(
+      expect.objectContaining({ type: "patch:validated", ok: false, rejectionCode: "size-limit" }),
+    );
   });
 });

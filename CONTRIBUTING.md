@@ -8,14 +8,29 @@ memory, not executable truth: if a repair exposes outdated, contradictory, or un
 the code and update the affected ADR sections together. Do not preserve a defect merely because an
 ADR recorded it, and do not create a new ADR merely to correct existing text.
 
+## Small, verifiable changes
+
+Agree on the observable outcome and acceptance evidence before implementation. Keep each PR focused
+on one independently reviewable result; split unrelated changes so a failed experiment can be
+reverted without undoing unrelated work. Use the existing gates to verify the actual changed
+behavior and report command, result, environment and limitations in the PR.
+
+Consult [EXPERIENCE.md](EXPERIENCE.md) for relevant repository traps and maintain a lesson only
+when evidence changes it. Review follows the existing
+[review standards](docs/qa/review-standards.md) and
+[settlement rules](docs/qa/review-settlement.md). Risk determines investigation depth, never
+permission to skip required checks or the owner's integration authorization. Use deeper boundary
+analysis for authorization, persistence, migrations, updater, supply-chain and workflow changes.
+
 ## Local development
 
 ```bash
 npm install                # install all workspaces from the single root lockfile
 npm run provision:usearch  # ONCE per checkout — see AGENTS.md §2
+npm run provision:ripgrep  # coding-runtime search tool; needed by customer-shape, the nightly real-binary journey, portable staging + npm runtime package build — AGENTS.md §2
 npm run build              # compile TypeScript outputs
 npm run typecheck          # strict type-checking for src + tests
-npm run lint               # syntax policy + ESLint, zero warnings
+npm run lint               # ESLint, zero-warning policy
 npm run format:check       # Prettier check
 npm test                   # run the unit test suite
 npm run arch:check         # dependency-cruiser + import-policy + contract-boundaries
@@ -24,13 +39,51 @@ npm run arch:check:negative
 
 See [AGENTS.md §3](AGENTS.md) for the full local gate loop and the touched-area gate table.
 
-Root lint also runs the pinned, repository-wide [code-quality syntax policy](docs/qa/code-quality-policy.md)
-before typed ESLint and UI lint. `npm run check:code-quality-policy -- --mode census --json` reports
-all 22 noncosmetic rule dispositions; the initial three production guards enforce immediately.
-Other scopes activate through their accepted migrations. Local subsets are partial, and CI accepts
-only whole-repository enforcement. Source, parser, plugin, scope and inventory failures fail closed.
+### Portable update trust
+
+Portable updates must work without an Apple Developer subscription (ADR-0121 D7). On macOS,
+native handoff copies from an admitted managed installation are checked against the exact current
+artifact digests in the validated plan. Keep the managed-registration, release-signature,
+candidate, containment and process-ownership checks intact. Optional Apple signature evidence must
+remain truthful and cannot become a hidden prerequisite for an unsigned update.
 
 ### Activity Log runtime changes
+
+The deployment operator can set `KEIKO_CONTENT_REDACTION=off` before startup so Chat preserves
+authorized document context, answers and private chat history (#4098). The server resolves the
+setting once at startup and records `chat.content-policy.resolved` (`policy`, `setting`; `warn` for
+an unrecognized value, which keeps redaction). Only Chat model ports and the Chat connected-context
+workspace receive the preserving policy from it; the gateway, workspace and store never read the
+environment. Independently of the setting, the Coding Workbench sidecar route always gives the
+OpenCode runtime the model's answer under the preserving policy (credential floor only), because
+OpenCode is its own producer and uses the gateway as infrastructure; Coding repository search and
+Coding History exports and imports keep the default projection. Preserved content still loses
+configured infrastructure-secret literals, private keys, URL credentials, `Authorization` header
+values, encoded-looking Bearer/Basic values, JWT-shaped bearer tokens and known token shapes, and memory proposals keep the
+default projection. Diagnostics, audit evidence, support exports and
+tool-argument protections remain unconditional. The setting applies to every configured provider;
+it does not infer trust from a provider hostname. `chat.request.dispatch` records the per-call
+`contentRedactionEnabled` without source text. See
+[the operator procedure](docs/troubleshooting/chat-content-redaction.md).
+
+Source redaction uses the shared security owner to preserve language syntax while masking credential
+values under the default content policy, including escaped JSON/JSONC and YAML scalars. An unsafe or
+ambiguous projection, or an existing source-size limit, produces a body-free refusal; connected retrieval treats that source as
+unavailable. EOF-only JSON prefixes and public, unquoted Java fragments retain their safe text
+projection under the documented guards (ADR-0022). Gateway
+and BFF streaming retain incomplete source/credential context and discard pending text on cancellation.
+The existing Activity Log records projection revision, region/refusal counts and pending-buffer
+counts; it never records source, credentials or parser diagnostics containing source text.
+
+Chat draft recovery reuses the private UiStore and authenticated chat-bound revision checks.
+The `chat.draft.operation` Activity Log records lifecycle and status without draft text;
+concurrent stale writes must preserve the local draft and require explicit conflict resolution.
+
+An unchanged privacy-elided Files connection may reuse its conversation-bound canonical
+acknowledgement only when the persisted fingerprint and visible scope both match. Restore the
+existing local edge without starting another source intent or cancelling its response. Missing or
+changed ownership and genuine navigation retain the normal guards; unrelated source holds remain
+intact. The existing `automatic-suppressed` Files scope decision joins the original acknowledgement.
 
 Production runtime behavior extends the existing Activity Log; it never creates a second logger,
 event store, analyzer, or incident subsystem. Register every operation through the canonical typed
@@ -47,6 +100,10 @@ semantics, analyzer projection, failure classes, proof ids, and release impact. 
 operations, arbitrary metadata, nested objects, missing required fields, unbounded strings, and
 unknown error/loss states fail closed. Persisted v2 records also require the sink-owned version and
 digest dimensions, compatibility/writer state, and complete `(pid, instanceId, seq)` identity.
+STT dispatch evidence includes the sent container class and audio byte count; completion evidence
+includes the provider HTTP status only when a response was received. Browser dictation converts
+completed recordings to PCM16 WAV locally and reports normalization failures through the existing
+client diagnostic sink, without retaining audio or provider error bodies (ADR-0100 D8).
 Tests for changed behavior assert the emitted line and the support-analyzer projection. Regenerate
 the catalog with `npm run generate:op-catalog`, then run `npm run check:activity-log`, the Activity
 Log implementation gate, which required CI runs unchanged. Every run builds the packages and
@@ -75,6 +132,26 @@ messages cut to the per-message bound and `historyTruncated` says Coding History
 task's messages: only those two leave text shown nowhere, so only they make the page say "Activity
 truncated.". Counts only — never a message, path or run name.
 
+`client.coding-workbench.interaction` records, at info and on the routine budget, what the human
+did on the Coding Workbench page (#3897): a disclosure opened or closed (`section`, `expanded`), the
+progress state (`progressState`), the agent picked (`build`, `plan` or `custom`, never a custom
+agent's name), a jump to a pending decision, a repository bound for trust (its two body-free ids)
+and a changeset received for review (`fileCount`). These were warn/unknown `client.diagnostic`
+notes before and buried the rare real browser failures. `gateway.setup.target.accepted` records,
+at info, that Gateway Setup accepted a loopback target (KEIKO-0884), with the request correlation
+and the closed `targetClass`; it is no longer an error-level `server.diagnostic.failure`.
+
+`client.coding-workbench.request-timed-out` records, at warn on the failure budget, a runtime
+request the Coding Workbench gave up on at its own client-side deadline (#4109): the closed `call`
+(`status`, `snapshot`, `start`, `approval`, `stop`, `takeover`, `retry`, `recovery-ack`, `pause`,
+`resume`, `follow-up`, `revert`, `inbox`, `research-revoke`, `question-answer`,
+`question-reject`) and `deadlineMs`, under the failed request's correlation id; a mutation that
+Stop preempted is not a timeout and is not reported. The deadlines come from measurements: 10 s for
+status and snapshot reads, 15 s for Stop, 180 s for start (a cold start is unmeasured) and 60 s for
+every other, unmeasured, mutation. Stop is never queued behind another mutation: it ends the client
+wait of the one in flight (no alert, no failure) and drops those still waiting, and stays enabled
+while another mutation is pending. Closed values and one duration only.
+
 `gateway.conversation.admission` records the closed decision before a conversation model call,
 with admitted and current configuration generations and the request correlation. A fresh probe
 and a turn-local successful-call continuation remain distinct; failed, cancelled or filtered terminal
@@ -82,7 +159,14 @@ responses cannot establish that continuation. Refusals distinguish model or
 generation replacement, absent observations, failed probes, invalid timestamps and expiry without
 recording model names, requests or answers. An uninvoked model port consumes no physical synthesis
 attempt or uncertain output reservation; actual interrupted provider calls retain conservative
-accounting. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
+accounting. Each chat model is checked once per connection at startup; nothing
+renews or recovers a model on a timer. A conversation request, a coding run start, a Workbench
+model choice (`check=1`), opening the Workbench or a model list, or a page load checks a model that is not ready now; only an observed
+failure waits out the 30 s not-ready cooldown. Other Workbench reads never start a check. The
+Workbench profile describes the model chosen in its picker (`modelId`): `model-verification-pending`
+only while a check of that model runs, an expired or unknown answer usable with
+`verification: "unverified"`, and its `verification` is that model's own observation, not the
+gateway-wide state (customer 1.3.4). The Workbench's tool-calling probe that the gateway never answered is no verdict (`tool-calling-unverified`) and is retried only when someone asks: startup, a page load or a `check=1` read when the Workbench opens or a model is chosen; a stale proof runs again once. See [ADR-0171](docs/adr/ADR-0171-gateway-readiness-capability-reconciliation.md).
 
 `chat.scope.update` records a serialized source update as `applied` or `conflict` under the
 request correlation, with optional `expectedScopeDigest`, required `actualScopeDigest` and
@@ -95,11 +179,17 @@ scopes with 409 `NOT_APPLIABLE`. See ADR-0057 for the identity and admission bou
 Connected-folder retrieval joins `search.connected-context.source-details`, `selection-details`,
 `completion-details`, and `answer-details` with the completed operation under the same request
 correlation, process, and source/query digests. These typed siblings retain the existing contextual
-field cap. Source details describe actual path/reference admission and eligibility; selection
+field cap. Source details describe actual path/reference admission and eligibility. Extensionless
+document admission uses one shared case-insensitive `README`/`CONTRIBUTING` shorthand allowlist
+independently of overview ranking. Ordinary prose cannot become an explicit file merely through its ranking bucket;
+explicit filenames and every existing scope/read grant remain authoritative. Selection
 details describe calibrated floors, high/low confidence, addressed-file demotion, reranker
 disposition, continuity counts, and worktree/semantic freshness observations. Assembled reads and
 final sent evidence are distinct: `answer-details.filesInPrompt` describes what reached synthesis.
-Only counts, closed dispositions and digests enter the log, never paths, declarations or answers.
+The correlated `search.connected-context.evidence-details` sibling carries certified descriptor
+counts within the same unchanged contextual-field cap. Existing source-detail rows retain all
+their fields. Only counts, closed dispositions and digests enter the log, never paths, declarations
+or answers.
 The six-reference intake preserves the primary local trace frame and explicitly named question
 paths before secondary frames or conversation referents. Prompt fitting preserves a complete
 matching line when it fits the remaining UTF-8 byte grant, rebinding source ranges and stable
@@ -113,6 +203,13 @@ multi-source marker repair; hybrid repair already appends its task. Governed mem
 continuity remain untrusted context inside that unchanged task block. Existing final-prompt
 selection and gateway admission record fitted counts and costs; citation validation and
 original input/output grants remain authoritative.
+Marker repair requests bounded insertion annotations anchored by unique original prose, so
+models need not copy generated code. The existing owner constructs the candidate and reuses
+all unchanged marker-only, code/assessment, fitted-evidence and cumulative-budget validation.
+Literal marker-only responses remain compatible under the same checks.
+Symbol discovery groups the existing bounded excerpt reads by source within each observation
+wave. Current source snapshots, definition/call/parent certificates and original per-window grants
+remain binding; this introduces no persistent source cache or additional synthesis attempt.
 Endpoint definition traversal binds a registration's observed handler reference to its current
 lexical AST target. Further calls retain their exact callable owner and complete observed spans;
 same-named declarations and uninvoked nested functions do not certify that relationship.
@@ -171,6 +268,9 @@ fitted selection confidence without source bodies.
 Evidence manifest hashes and ranges enumerate final sent excerpts; retrieval candidate counts, usage and omissions
 retain the actual earlier work. Existing prompt sent/available counts distinguish fitting removals
 without inventing retrieval omissions.
+Zero-length deduplicated metadata aliases remain in retained packs but add no empty prompt evidence
+fences. Positive bodies, whitespace source lines, document labels and citation authority remain
+unchanged; existing final-prompt counts and costs describe the serialization.
 Lexical relevance establishes neither an answer fact nor precedence between conflicting sources.
 An observed admitted callable may retain an imported constant declaration only when its current
 TypeScript lexical binding, nearest callable owner, declaration identity and physical identifier
@@ -437,9 +537,10 @@ effective input budget and image reserve. This evidence survives generation time
 cancellation; the successful-turn compaction manifest remains separate. These are local estimates,
 not provider-measured usage, and no conversation or image content is recorded.
 
-Gateway admission additionally records `imageCount`, the selected `imageAccounting` rule,
-`imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and, when present,
-`reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. A positive reported count
+Gateway admission additionally records `imageCount`, optional `documentCount`, the selected
+`imageAccounting` rule, `imageReserveTokens`, `localPromptTokens`, `fallbackPromptTokens`, and,
+when present, `reportedPromptTokens` plus schema-adjusted `providerPromptTokens`. PDF document
+parts take the same per-part media reserve as images. A positive reported count
 replaces the image reserve even when the local text/tool/schema floor determines the final total;
 a zero count retains the reserve. The recorded candidates make those decisions distinguishable.
 
@@ -519,11 +620,19 @@ prepared for the timeline. OpenCode persists a streamed text or reasoning part o
 complete, so the timeline grows from the runtime's delta events: the same line counts, since its
 previous line, the deltas that grew a live part (`liveDeltaCount`), the ones that extended nothing
 (`liveDroppedCount`), the parts whose complete text did not extend what was shown
-(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). The
+(`liveDivergedCount`) and the events folded into earlier history reads (`mergedEventCount`). A sync
+reads and projects only a bounded tail of the newest messages once the earlier pass is committed and
+caught up (#4104): the projection plans an anchor message, the read ends there, and the older messages
+are carried over unchanged. The runtime completes a streamed part in place, so every message from the
+anchor on is projected again; a complete read replaces the tail when the anchor is gone (a revert or
+compaction), every 256 tail reads, after a pass cut at the event cap, and while an older message still
+holds live text. The same line records how: `readMode` (`tail`, `full`, `verify`, `anchor-lost`),
+`readMessageCount` (messages handed to the projection) and `retainedMessageCount` (older messages
+carried over). The continuation's complete read stays strict (`history-oversized`). The
 reasoning text never enters the Activity Log, a support export, run evidence or Coding History.
-Changeset-edit arguments reach the governed edit tool byte for byte (#4009): the gateway removes
-only the configured provider literals from them, never a heuristic secret shape; every other
-tool's arguments keep the full redaction. When a literal was removed,
+Arguments of the governed exact-content tools (`edit`, `write`, `patch`, `execute`, `shell`;
+#4009) reach the tool byte for byte: the gateway removes only the configured provider literals
+from them, never a heuristic secret shape; every other tool's arguments keep the full redaction. When a literal was removed,
 `gateway.tool-arguments.redacted` records the tool-call and changed-string counts at `warn`.
 A model answer that exhausted its output budget, or ended after reasoning, without a tool call or a
 final answer gets one steered repair from the gateway on a call that asks for it with the explicit
@@ -541,9 +650,12 @@ allowance, and `coding-sidecar.gateway.usage-settled` names it (`discardedAttemp
 sentence, and the failed answer's reasoning is never recorded. Prior reasoning is never resent
 upstream: the coding sidecar drops the reasoning fields of prior assistant messages and every
 assistant message that carries nothing but reasoning, and `coding-sidecar.gateway.request-validated`
-records the number dropped as `droppedReasoningMessageCount`. The gateway hands reasoning only to a
-call that asks for it with the explicit `reasoningDelivery: "forward"` (the coding sidecar route
-alone); the `coding-workbench` latency profile selects timeout floors only.
+records the number dropped as `droppedReasoningMessageCount`. The text a model wrote beside its tool
+calls is resent as written, like a standalone OpenCode run (#3907); only a tool-calling turn without
+text goes upstream as `content: null`, and the same line counts the others as
+`toolCallTextMessageCount`. The gateway hands reasoning only to a call that asks for it with the
+explicit `reasoningDelivery: "forward"` (the coding sidecar route alone); the `coding-workbench`
+latency profile selects timeout floors only.
 
 Commit drafts record model-context bounds, compaction, generation count and reuse as counts and
 flags on `git.commit.draft.completed`. The same event carries body-free normalization version/rule and bullet, trailer, continuation and marker counts for generated and reused drafts. Each attempted generation also records its own result and normalization on `git.commit.draft.attempt.completed`, so a later repair cannot erase earlier evidence; stream startup retries use the existing `gateway.retry.*`
@@ -624,6 +736,12 @@ other outcome runs the full matrix, and the `ci` aggregate still fails closed. T
 and the SonarCloud analysis are never reused on `dev`: they run on every push to `dev` so that
 SonarCloud's branch history stays current (ADR-0178 D1, amended 2026-09-25). Editing a workflow
 changes the tree, so CI changes always measure themselves.
+
+The candidate matrix admits PR events only while their payload state is `open`. Open metadata
+edits and base retargets retain fresh strict verdicts. Closed/merged metadata edits are rejected
+before candidate checkout, including by the aggregate; they do not judge the signed squash commit
+using the obsolete PR base/head. Merge groups, protected pushes and manual dispatch retain their
+existing paths (ADR-0139 D4).
 
 Only the repository owner account `oscharko` may authorize and execute a merge into `dev`, including
 enabling GitHub native auto-merge. Agents acting under that account operate within the owner's
@@ -727,6 +845,27 @@ bounded and clears on task-bound root switches. Files titles reflect their resol
 root; an empty Editor names its project. Navigation and directory reads record
 body-free client stage lifecycle evidence on the existing Activity Log.
 
+Files directory responses identify the actual guarded canonical root. Child responses can
+establish that identity before a root response; old root responses cannot reverse it. Per-path
+read ownership also rejects older same-root listings and replies after unmount, while ordinary
+identical reads remain shared. When an unchanged alias
+resolves elsewhere, outstanding child reads cannot restore its previous tree or selection.
+Explicitly forgetting an ambiguous failed connection while retaining canonical Chat sources
+releases that edge's failed admission hold only. Pending source work cannot be forgotten through
+this recovery action; unrelated source holds remain in force.
+A mounted Chat's runtime conversation identity remains valid before its window cfg id persists;
+refresh admission and failed-edge recovery resolve that same identity.
+Initial binds hold admission before edge creation. Failed equal-root navigation reconciles with
+fresh canonical state. Retired owners release settled failed holds only; timeout-blocked work
+and failed compensation retain their existing settlement/recovery boundary.
+
+The existing Files scope-decision Activity Log records `root-normalized`, `root-replaced` and
+`request-superseded`, joined to directory-read correlations without paths or source bodies.
+Connected Files navigation additionally cancels the bound response before a delayed scope ACK.
+Per-source admission holds in the existing Chat runtime preserve drafts and block sends and
+regeneration until the current intent succeeds. Pending, applied, failed and send-refused intent
+decisions share the serialized mutation's body-free Activity Log correlation.
+
 The ordinary Editor is human-operated. The owner decision of 2026-10-03 retires its agent
 presence/history, incoming actions, selection-to-chat handoff and Chat **Apply to editor** command.
 Keep the existing manual edit/save/format/history flow and content-free dirty-buffer protection.
@@ -734,3 +873,18 @@ Safety-state publication does not grant an agent a live bridge or an executable 
 Chat repository search and the separate Coding Workbench keep their own existing behavior; shared
 runtime code still used by those consumers is not part of this retirement. See
 [ADR-0061](docs/adr/ADR-0061-browser-editor-agent-bridge.md).
+
+### Managed MCP provider changes (ADR-0181)
+
+Keep official MCP SDK imports inside `keiko-mcp`, whose internal dependencies are contracts
+and security only. Provider and log ports come from server composition; catalog/binder
+admission remains mandatory. Verify modern protocol metadata, request-local context, schema
+and drift refusal, cancellation, registered Activity Log evidence and the architecture
+negative fixtures. Preserve the operator MCP registry and OpenCode compatibility.
+
+Central external MCP OAuth belongs to the shared Settings/connection owner. Chat and native
+Workbench runs use the same server definition and encrypted custody; the native production
+binding receives only a run-bound relay capability. Preserve issuer/resource/scope binding,
+one-use app-session-bound callbacks, credential-generation revocation and no-replay semantics.
+Changes to tool metadata must be refused before dispatch even without notifications. Include
+real SDK, restart/revocation and browser proofs; legacy native OAuth tests do not replace them.

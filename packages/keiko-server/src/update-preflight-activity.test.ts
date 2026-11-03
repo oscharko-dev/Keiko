@@ -1,5 +1,12 @@
+import { UPDATE_PORTABLE_TARGETS } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import {
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { describe, expect, it } from "vitest";
 import {
+  recordRegistryCheck,
+  recordUpdateInstallMode,
   recordPortableFetchFailure,
   recordPortableRedirectRefusal,
   recordReleaseTrustFailure,
@@ -249,4 +256,94 @@ describe("release trust verification activity", () => {
       recordReleaseTrustSuccess(undefined, "linux-x64", { keyId: "k", metadataVersion: 1 });
     }).not.toThrow();
   });
+});
+
+it("records the update.install-mode.detected Activity Log proof without roots or package bodies", () => {
+  const { events, sink } = capture();
+  recordUpdateInstallMode(
+    sink,
+    {
+      schemaVersion: "1",
+      status: "supported",
+      packageName: "private-package-canary",
+      installRoot: "/private/customer-canary",
+      installKind: "portable-managed",
+      portable: { target: "linux-x64", status: "managed", updateEligible: true },
+    },
+    "preflight",
+    12,
+    "mode-preflight-0001",
+  );
+  const event = events[0];
+  if (event === undefined) throw new TypeError("Expected mode observation");
+  expect(event).toMatchObject({
+    op: "update.install-mode.detected",
+    level: "info",
+    correlationId: "mode-preflight-0001",
+  });
+  const persisted = expectActivityLogProof(
+    "update.install-mode.detected.body-free",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({
+    status: "supported",
+    installKind: "portable-managed",
+    target: "linux-x64",
+    durationMs: 12,
+  });
+  expect(JSON.stringify(event)).not.toContain("canary");
+});
+
+it("records the update.registry.checked Activity Log proof with its closed failure (#3904)", () => {
+  const { events, sink } = capture();
+  recordRegistryCheck(
+    sink,
+    {
+      status: "unavailable",
+      failure: "size-exceeded",
+      warning: "The update registry could not be reached.",
+    },
+    false,
+    521,
+    "registry-check-proof-0001",
+  );
+  const event = events[0];
+  if (event === undefined) throw new TypeError("Expected registry observation");
+  expect(event).toMatchObject({
+    op: "update.registry.checked",
+    level: "warn",
+    errorKind: "validation-failed",
+    correlationId: "registry-check-proof-0001",
+  });
+  const persisted = expectActivityLogProof(
+    "update.registry.checked.failure",
+    formatActivityLogProofLine(event),
+  );
+  expect(persisted).toMatchObject({
+    status: "unavailable",
+    failure: "size-exceeded",
+    updateAvailable: false,
+    durationMs: 521,
+  });
+  expect(JSON.stringify(event)).not.toContain("could not be reached");
+});
+
+it("records a usable registry check at info without a failure", () => {
+  const { events, sink } = capture();
+  recordRegistryCheck(sink, { status: "ok", latestVersion: "9.9.9" }, true, 40, "registry-ok");
+  expect(events[0]).toMatchObject({ op: "update.registry.checked", level: "info" });
+  expect(events[0]?.extra).toMatchObject({ status: "ok", updateAvailable: true });
+  expect(events[0]?.extra).not.toHaveProperty("failure");
+  expect(JSON.stringify(events[0])).not.toContain("9.9.9");
+});
+
+it.each([
+  "update.portable-asset.redirect-refused",
+  "update.portable-fetch.failed",
+  "update.release-trust.verify",
+  "update.install-mode.detected",
+])("binds %s registered target values to the canonical product vocabulary", (op) => {
+  const registry: readonly ActivityLogOperationRegistration[] = ACTIVITY_LOG_OPERATION_REGISTRY;
+  const registration = registry.find((entry) => entry.op === op);
+  expect(registration?.fields.target?.values).toEqual(UPDATE_PORTABLE_TARGETS);
 });

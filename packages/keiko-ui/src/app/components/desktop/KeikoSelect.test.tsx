@@ -905,3 +905,50 @@ describe("select capture Escape ownership", () => {
     expect(diagnostics[0]?.meta?.selectDismissal).toEqual({ reason: "escape", focus: "menu" });
   });
 });
+
+describe("KeikoSelect option descriptions", () => {
+  const sections = [
+    {
+      options: [
+        { value: "ask", label: "Ask", description: "Asks before every change" },
+        { value: "full", label: "Full", description: "Works without asking" },
+      ],
+    },
+  ];
+
+  it("repeats the selected description under the trigger label by default", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect ariaLabel="Mode" value="ask" sections={sections} onValueChange={vi.fn()} />,
+    );
+
+    expect(screen.getByRole("combobox", { name: "Mode" })).toHaveTextContent(
+      "Asks before every change",
+    );
+    await user.click(screen.getByRole("combobox", { name: "Mode" }));
+    expect(screen.getByRole("option", { name: "Full, Works without asking" })).toBeInTheDocument();
+  });
+
+  // A compact control whose menu already explains each option keeps its trigger to one line.
+  it("keeps the trigger to its label when showTriggerDescription is false, the menu unchanged", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Mode"
+        value="ask"
+        sections={sections}
+        showTriggerDescription={false}
+        onValueChange={vi.fn()}
+      />,
+    );
+
+    const trigger = screen.getByRole("combobox", { name: "Mode" });
+    expect(trigger).toHaveTextContent("Ask");
+    expect(trigger).not.toHaveTextContent("Asks before every change");
+    await user.click(trigger);
+    expect(
+      screen.getByRole("option", { name: "Ask, Asks before every change" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Full, Works without asking" })).toBeInTheDocument();
+  });
+});

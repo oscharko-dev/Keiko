@@ -2,22 +2,9 @@ import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { isSystemManagedPortableRoot } from "@oscharko-dev/keiko-security/portable-root-policy";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import type { PortableTarget } from "./portable-shared.js";
-
-const SYSTEM_MANAGED_PREFIXES = [
-  "//",
-  "/applications/",
-  "/library/",
-  "/system/",
-  "/usr/",
-  "/bin/",
-  "/sbin/",
-  "/etc/",
-  "c:/program files/",
-  "c:/programdata/",
-  "c:/windows/",
-] as const;
 
 function normalizedPath(path: string): string {
   return path.replaceAll("\\", "/").toLowerCase();
@@ -30,17 +17,6 @@ function pathTouchesRuntimeState(normalized: string): boolean {
 function pathInsideTemp(normalized: string): boolean {
   const tmp = normalizedPath(resolve(tmpdir()));
   return normalized === tmp || normalized.startsWith(`${tmp}/`);
-}
-
-function pathLooksSystemManaged(normalized: string): boolean {
-  return SYSTEM_MANAGED_PREFIXES.some((prefix) => normalized.startsWith(prefix));
-}
-
-function isCanonicalMacosManagedRoot(path: string, target: PortableTarget): boolean {
-  return (
-    (target === "macos-arm64" || target === "macos-x64") &&
-    normalizedPath(resolve(path)) === normalizedPath("/Applications/Keiko.app")
-  );
 }
 
 function pathInsideRepository(root: string, normalized: string): boolean {
@@ -64,7 +40,7 @@ function assertPathAllowed(path: string, target: PortableTarget): void {
   if (pathInsideTemp(normalized)) {
     throw new Error("managed install root must not be inside a temporary directory");
   }
-  if (pathLooksSystemManaged(normalized) && !isCanonicalMacosManagedRoot(path, target)) {
+  if (isSystemManagedPortableRoot(resolve(path), target)) {
     throw new Error("managed install root must be user-local or the canonical Keiko macOS app");
   }
   if (pathInsideRepository(path, normalized)) {

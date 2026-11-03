@@ -311,6 +311,14 @@ corrupt the JSON structure, so a builder bug that missed a field — or a secret
 secret. This double application is idempotent (`redact` over already-redacted text is a no-op on the
 redacted tokens).
 
+The shared string redactor recognizes source and structured-data value boundaries rather than
+rewriting syntax metadata as a credential. TypeScript/JavaScript ASTs, a Java CST and parsed
+JSON/JSONC/YAML values retain data protection; this is not a code or configured-secret exemption.
+Configured literals, issuer patterns, private keys and URL credentials remain protected. Incomplete
+streaming source or credential context stays private until safe publication or successful terminal
+completion; cancellation discards it. Stored JSON still follows the field-wise-before-serialization
+composition above. These projection changes do not authorize retaining raw source in diagnostics.
+
 ### D4 — Filesystem write boundary (the new persistent artifact surface)
 
 **(i) Default output location.** Evidence is written to `<workspaceRoot>/.keiko/evidence/` by

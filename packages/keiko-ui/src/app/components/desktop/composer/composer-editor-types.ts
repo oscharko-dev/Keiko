@@ -28,6 +28,7 @@ export interface ComposerEditorLabels {
 
 export interface MarkdownComposerProps {
   readonly value: string;
+  readonly valueRevision?: number | undefined;
   readonly placeholder: string;
   readonly ariaLabel: string;
   readonly ariaControls?: string | undefined;
@@ -35,7 +36,7 @@ export interface MarkdownComposerProps {
   readonly documentKey: string;
   readonly inputRef: RefObject<ComposerInputHandle | null>;
   readonly labels: ComposerEditorLabels;
-  readonly onChange: (value: string, cursor: number) => void;
+  readonly onChange: (value: string, cursor: number) => number | void;
   readonly onSelect: (value: string, cursor: number) => void;
   readonly onKeyDown: (event: ComposerKeyEvent, value: string) => void;
 }

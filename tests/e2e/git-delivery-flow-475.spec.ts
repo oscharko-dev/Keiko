@@ -23,6 +23,7 @@ const ARTIFACT_NAMES = ["manifest.json", "governed-commit-block.png"] as const;
 type ArtifactName = (typeof ARTIFACT_NAMES)[number];
 
 const PREVIEW_ROUTE = "**/api/git-delivery/commit/preview**";
+const APPROVE_ROUTE = "**/api/git-delivery/commit/approve**";
 const EXECUTE_ROUTE = "**/api/git-delivery/commit/execute**";
 
 // The conventional-commit type prefix is the policy gate the message-policy block keys off.
@@ -55,6 +56,22 @@ const OK_PREVIEW_BODY = {
   preflightFindingCodes: [],
   signatureRequirement: "not-required",
   policyOutcome: "allowed",
+} as const;
+
+// Epic #3384 correction 5 (#3386): every Commit click now mints a one-use approval at
+// /commit/approve and redeems it at /commit/execute (api.ts `proposeCommit`). The mint is the
+// governed step, so the fixture serves a deterministic claim and the assertions below hold the
+// execute request to exactly that claim.
+const APPROVAL_CLAIM = {
+  schemaVersion: "1",
+  approvalId: "e2e-475-approval",
+  approvalToken: "e2e-475-token",
+} as const;
+
+const OK_APPROVE_BODY = {
+  schemaVersion: "1",
+  approval: APPROVAL_CLAIM,
+  expiresAt: "2099-01-01T00:00:00.000Z",
 } as const;
 
 const OK_EXECUTE_BODY = {
@@ -91,6 +108,8 @@ interface PostedRequest {
   readonly message?: unknown;
   readonly messageDraft?: unknown;
   readonly projectId?: unknown;
+  readonly approval?: unknown;
+  readonly userInitiated?: unknown;
 }
 
 function readPosted(route: Route): PostedRequest {
@@ -230,6 +249,7 @@ async function interceptReadRoutes(page: Page): Promise<void> {
 // the commit path hitting preview and execute, never a local-only success state.
 interface RouteLedger {
   previewBodies: PostedRequest[];
+  approveBodies: PostedRequest[];
   executeBodies: PostedRequest[];
 }
 
@@ -239,6 +259,10 @@ async function interceptGovernedCommitRoutes(page: Page, ledger: RouteLedger): P
     ledger.previewBodies.push(posted);
     const draft = typeof posted.messageDraft === "string" ? posted.messageDraft : "";
     await route.fulfill(jsonBody(isConventional(draft) ? OK_PREVIEW_BODY : BLOCKED_PREVIEW_BODY));
+  });
+  await page.route(APPROVE_ROUTE, async (route) => {
+    ledger.approveBodies.push(readPosted(route));
+    await route.fulfill(jsonBody(OK_APPROVE_BODY));
   });
   await page.route(EXECUTE_ROUTE, async (route) => {
     ledger.executeBodies.push(readPosted(route));
@@ -353,6 +377,9 @@ async function assertNonConventionalIsBlocked(page: Page, ledger: RouteLedger): 
     .poll(() => ledger.previewBodies.length, { message: "governed preview route called" })
     .toBeGreaterThan(0);
   expect(ledger.previewBodies.at(-1)?.messageDraft).toContain(NON_CONVENTIONAL_SUMMARY);
+  // The block is upstream of the approval mint as well: a violating message never obtains a claim
+  // to redeem, so neither governed mutation route is reachable from this state.
+  expect(ledger.approveBodies).toEqual([]);
   expect(ledger.executeBodies).toEqual([]);
 }
 
@@ -368,9 +395,20 @@ async function assertConventionalSucceeds(page: Page, ledger: RouteLedger): Prom
   await expect(outcome).toBeVisible();
   await expect(outcome).toContainText("commit: Succeeded");
   await expect
+    .poll(() => ledger.approveBodies.length, { message: "governed approve route called" })
+    .toBe(1);
+  await expect
     .poll(() => ledger.executeBodies.length, { message: "governed execute route called" })
     .toBe(1);
-  expect(ledger.executeBodies.at(-1)?.message).toContain(CONVENTIONAL_SUMMARY);
+  // The execute request redeems exactly the claim the mint returned, for exactly the message the
+  // mint was asked to approve: there is no path that executes a commit without its own approval.
+  const approved = ledger.approveBodies[0];
+  const executed = ledger.executeBodies[0];
+  expect(approved?.message).toContain(CONVENTIONAL_SUMMARY);
+  expect(executed?.message).toBe(approved?.message);
+  expect(executed?.projectId).toBe(approved?.projectId);
+  expect(executed?.approval).toEqual(APPROVAL_CLAIM);
+  expect(executed?.userInitiated).toBe(true);
 }
 
 function writeEvidenceManifest(ledger: RouteLedger): void {
@@ -382,7 +420,11 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
     route: "/",
     evidencePath: "docs/git-delivery/evidence/475",
     generatedAt: new Date().toISOString(),
-    governedRoutes: ["/api/git-delivery/commit/preview", "/api/git-delivery/commit/execute"],
+    governedRoutes: [
+      "/api/git-delivery/commit/preview",
+      "/api/git-delivery/commit/approve",
+      "/api/git-delivery/commit/execute",
+    ],
     windowRegistration: {
       kind: "governedGit",
       seededVia: "keiko.workspace.v4",
@@ -396,7 +438,9 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
       commitPathSurfacesGovernedBlock: true,
       blockReasonIsMessagePolicy: true,
       blockedMessageNeverReachesExecute: true,
+      blockedMessageNeverMintsApproval: true,
       browserReachedGovernedExecuteRoute: true,
+      executeRedeemsTheMintedApproval: true,
       conventionalCommitReachesSucceeded: true,
     },
     requestLedger: {
@@ -405,13 +449,14 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
       // evidence. What is stable, and what the proof actually rests on, is that preview was
       // reached at all and that execute was reached exactly once, by the conventional message.
       previewReached: ledger.previewBodies.length > 0,
+      approveRequests: ledger.approveBodies.length,
       executeRequests: ledger.executeBodies.length,
     },
     notes: [
       "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
       "Read surface and commit routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/contract suites.",
-      "The UI exposes no force-commit escape: a message-policy violation disables the only commit affordance, and a forced click reaches no execute request.",
-      "browserReachedGovernedExecuteRoute is proven by the conventional-message control, which is the only path on which execute may be called at all.",
+      "The UI exposes no force-commit escape: a message-policy violation disables the only commit affordance, and a forced click reaches neither the approval mint nor the execute request.",
+      "browserReachedGovernedExecuteRoute is proven by the conventional-message control, which is the only path on which execute may be called at all, and only with the approval claim minted for that exact message.",
     ],
     artifacts: ARTIFACT_NAMES,
   };
@@ -421,7 +466,7 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
 test("Issue #475 — browser commit path cannot bypass governed message policy", async ({ page }) => {
   test.setTimeout(120_000);
   ensureEvidenceDir();
-  const ledger: RouteLedger = { previewBodies: [], executeBodies: [] };
+  const ledger: RouteLedger = { previewBodies: [], approveBodies: [], executeBodies: [] };
 
   await openGovernedWindow(page, ledger);
   await assertNonConventionalIsBlocked(page, ledger);

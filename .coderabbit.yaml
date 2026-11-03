@@ -76,7 +76,6 @@ reviews:
     drafts: false
     base_branches:
       - "dev"
-      - "codex/epic-anti-slop-quality"
     ignore_usernames: []
 
   finishing_touches:

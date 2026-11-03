@@ -20,7 +20,6 @@
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
   AtlassianCredentialCustodyError,
-  atlassianAuthorizationHeaderValue,
   type AtlassianCredentialExecutionResolver,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
@@ -29,14 +28,23 @@ import {
   type AtlassianHttpRequest,
   type AtlassianHttpResult,
 } from "@oscharko-dev/keiko-connectors";
-import { isSafeAtlassianConnectorBaseUrl } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { AtlassianPrivateTarget } from "@oscharko-dev/keiko-contracts";
 import {
-  classifyOutboundHost,
+  isSafeAtlassianConnectorBaseUrl,
+  canonicalAtlassianConnectorBaseUrl,
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import {
+  outboundTargetBlockedReason,
   gatewayFetch,
+  isRecoverableTlsTrustError,
   type OutboundHttpEgressConfig,
 } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import {
+  atlassianHttpRequestLifecycle,
+  type AtlassianHttpLifecycleOptions,
+} from "./httpRequestLifecycle.js";
 
 // Hard per-request ceiling: the largest ADR-0128 D3 budget (bulk sync pagination). Requests ask
 // for less (the verify probe asks for 30 000 ms); a hostile or buggy caller can never widen it.
@@ -69,7 +77,9 @@ export function exceedsBodyByteCeiling(bytes: number, ceilingBytes: number): boo
   return !Number.isFinite(ceilingBytes) || bytes > ceilingBytes;
 }
 
-export interface CreateAtlassianHttpPortOptions {
+export interface CreateAtlassianHttpPortOptions extends AtlassianHttpLifecycleOptions {
+  readonly privateTargets?: () => readonly AtlassianPrivateTarget[];
+  readonly deniedLoopbackPorts?: () => readonly number[];
   readonly baseUrl: string;
   readonly authRef: string;
   readonly credentials: AtlassianCredentialExecutionResolver;
@@ -84,41 +94,8 @@ function boundedTimeoutMs(requested: number): number {
   return Math.min(Math.trunc(requested), MAX_TIMEOUT_MS);
 }
 
-// Connector-lane egress posture (KEIKO-0316, hardened #3156). The caller hands us the LIVE
-// model-gateway egress config, whose `allowPrivateNetwork` / `allowLinkLocalAndMetadata` opt-ins
-// exist for an operator's own approved, customer-hosted MODEL provider. An Atlassian base URL is
-// client-supplied through the connector-management routes, so inheriting those opt-ins let a
-// connector be pointed at an RFC1918 service or at 169.254.169.254 and turned the `/verify` probe
-// into an internal-reconnaissance oracle. Only the transport settings (proxy, CA bundle) carry
-// over; neither opt-in is inherited, so private and cloud-metadata targets are blocked for this
-// lane whatever the model gateway allows.
-//
-// `denyLoopback` and `pinProxiedConnectTarget` (ADR-0038 D6) are now BOTH pinned on, together —
-// setting either alone reopens a real gap:
-//
-//  - `denyLoopback` alone, without `pinProxiedConnectTarget`, makes `refuseUnpinnableResearchEgress`
-//    throw for EVERY request that has a proxy configured — this is the exact regression already
-//    tried and reverted once (see the KEIKO-0316 history this comment used to describe): every
-//    Atlassian request failed before transport in any deployment whose proxy covers the connector
-//    host, so `denyLoopback` was previously left off entirely.
-//  - `pinProxiedConnectTarget` alone, without `denyLoopback`, makes `gatewayFetch` resolve and pin
-//    the proxied connect to the vetted address for every OTHER blocked class (private, link-local,
-//    metadata — all blocked by default, no opt-in required) but NOT for loopback specifically,
-//    since `outboundAddressBlockedReason` only treats a resolved loopback address as blocked when
-//    `denyLoopback === true` (egress-policy.ts). Without it, a connector host that DNS-resolves to
-//    loopback through a proxy would still reach the proxy unvetted (#3156, Codex + Keiko for
-//    Quality independently flagged this exact gap).
-//
-// Together, the two flags close the proxied-DNS-rebinding gap `isBlockedLoopbackTarget` below
-// cannot: that check is a plain hostname-STRING classification (safe unconditionally, proxied or
-// not, because it makes no DNS-pinning claim) and only catches a LITERALLY loopback-shaped base
-// URL, never a legitimate-looking hostname that merely resolves there. `pinProxiedConnectTarget`
-// makes `gatewayFetch` resolve that hostname itself and hand the proxy the vetted address instead
-// of a name to re-resolve independently; `denyLoopback` is what makes the loopback CLASS
-// specifically count as blocked once resolved. Neither flag does anything to the wire-level CONNECT
-// authority when there is no proxy configured (`pinProxiedConnectTarget` requires a proxy to have
-// any effect; the direct path already pins via AUDIT-SEC-001), so this is a strict tightening with
-// no effect on unproxied deployments.
+// Inherit transport settings only. Model-provider private/metadata opt-ins never authorize
+// a connector. Exact file-owned target admission is applied below for the current request.
 function forwardedConnectorEgressConfig(
   base: OutboundHttpEgressConfig | undefined,
 ): OutboundHttpEgressConfig {
@@ -139,50 +116,34 @@ function forwardedConnectorEgressConfig(
   };
 }
 
-function connectorEgressConfig(
-  base: OutboundHttpEgressConfig | undefined,
-): OutboundHttpEgressConfig {
+function connectorEgressConfig(options: CreateAtlassianHttpPortOptions): OutboundHttpEgressConfig {
+  const baseUrl = canonicalAtlassianConnectorBaseUrl(options.baseUrl);
+  const admitted =
+    baseUrl === undefined
+      ? undefined
+      : options.privateTargets?.().find((target) => target.baseUrl === baseUrl);
   return {
-    ...forwardedConnectorEgressConfig(base),
-    denyLoopback: true,
+    ...forwardedConnectorEgressConfig(options.egress?.()),
+    denyLoopback: admitted?.addressClass !== "loopback",
     pinProxiedConnectTarget: true,
+    ...(admitted === undefined
+      ? {}
+      : {
+          allowPrivateNetwork: admitted.addressClass === "private",
+          requiredTargetClass: admitted.addressClass,
+        }),
+    deniedLoopbackPorts: options.deniedLoopbackPorts?.() ?? [],
   };
 }
 
-// KEIKO-0316: an Atlassian base URL is client-supplied through the connector-management routes
-// and is not itself checked for address class (isSafeAtlassianConnectorBaseUrl only enforces
-// https/no-credentials/no-query/no-fragment). Classified by hostname string only — no DNS
-// resolution — so this is safe to apply whatever the egress transport (direct or proxied), unlike
-// the gateway's own `denyLoopback` flag. Surfaces as the same closed `network-error` result the
-// private/metadata classes already resolve to via gatewayFetch's own policy check, not a thrown
-// error, so callers see one consistent "this connector is pointed somewhere it should not be"
-// shape regardless of which blocked class tripped.
-//
-// CLOSED (#3156, was an open residual gap under KEIKO-0316): a DNS NAME that resolves to a blocked
-// address (e.g. a connector host pointed at 169.254.169.254, an RFC1918 address, or a loopback
-// alias) is caught on the DIRECT transport path, where gatewayFetch resolves and pins the address
-// before connecting (`enforceOutboundTargetPolicy` with `resolveDns: true`), and — since
-// connectorEgressConfig above now sets `pinProxiedConnectTarget` (ADR-0038 D6) — is caught the same
-// way when a proxy is configured too: gatewayFetch resolves the target itself and hands the proxy
-// the vetted address instead of a hostname to independently re-resolve, so there is nothing left
-// for the proxy to resolve unvetted. `denyLoopback` alongside it is what makes a resolved loopback
-// address specifically count as blocked (private/link-local/metadata are blocked by default with
-// no opt-in needed either way). See connectorEgressConfig's comment for why both flags are required
-// together and neither alone is sufficient.
-//
-// Residual, accepted scope: a corporate proxy that filters its own CONNECT allowlist by hostname
-// rather than by resolved address could reject the IP-literal CONNECT authority this now sends —
-// an operator-visible, diagnosable proxy-rejection error, not a silent gap. Weighed against a
-// confirmed, silent SSRF/internal-reconnaissance path for a DNS name that only resolves internally
-// after configuration (the exact scenario two independent reviewers flagged), fail-closed wins;
-// this is a live-deployment compatibility question for an operator to raise if it ever surfaces,
-// not a reason to leave the vetting off by default.
-function isBlockedLoopbackTarget(target: URL): boolean {
-  return classifyOutboundHost(target.hostname) === "loopback";
+// Both direct and proxied connects use the gateway's vetted address set. An explicit admission
+// narrows DNS to one address class; metadata/link-local targets and active BFF ports stay denied.
+// Request paths must stay inside the configured context path before credentials are resolved.
+function isContainedPath(base: URL, target: URL): boolean {
+  const prefix = base.pathname.replace(/\/$/, "");
+  return target.pathname === prefix || target.pathname.startsWith(`${prefix}/`);
 }
 
-// The single-host allowlist re-check (ADR-0128 D3, "enforced twice"): the request URL must be an
-// https URL on exactly the connector's base host, with no embedded credentials.
 function assertAllowlistedTarget(base: URL, requestUrl: string): URL {
   let target: URL;
   try {
@@ -195,6 +156,10 @@ function assertAllowlistedTarget(base: URL, requestUrl: string): URL {
     );
   }
   const allowed =
+    isContainedPath(base, target) &&
+    target.toString() === requestUrl &&
+    !/%(?:2e|2f|5c|25)/i.test(target.pathname) &&
+    !requestUrl.includes("#") &&
     target.protocol === "https:" &&
     target.host === base.host &&
     target.username.length === 0 &&
@@ -212,11 +177,34 @@ function assertAllowlistedTarget(base: URL, requestUrl: string): URL {
 // error text is deliberately dropped so no upstream detail can ride into diagnostics or wire
 // responses. The narrow return union is assignable to both port result unions (body-less and
 // bounded-body).
-function classifyTransportError(error: unknown): { kind: "timeout" } | { kind: "network-error" } {
+function classifyTransportError(
+  error: unknown,
+): { kind: "timeout" } | { kind: "network-error"; reason?: "tls" } {
   if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
     return { kind: "timeout" };
   }
+  if (isRecoverableTlsTrustError(error) || isTerminalTlsError(error)) {
+    return { kind: "network-error", reason: "tls" };
+  }
   return { kind: "network-error" };
+}
+
+const TERMINAL_TLS_CODES: ReadonlySet<string> = new Set([
+  "TLS_CA_FAILURE",
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+]);
+
+function isTerminalTlsError(error: unknown): boolean {
+  let current = error;
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (typeof current !== "object" || current === null) return false;
+    const record = current as Record<string, unknown>;
+    if (typeof record.code === "string" && TERMINAL_TLS_CODES.has(record.code)) return true;
+    current = record.cause;
+  }
+  return false;
 }
 
 // Best-effort body drain: the custody lane never reads response content, but the stream must be
@@ -229,37 +217,43 @@ async function discardBody(response: Response): Promise<void> {
   }
 }
 
-export function createGatewayAtlassianHttpPort(
-  options: CreateAtlassianHttpPortOptions,
-): AtlassianHttpPort {
-  if (!isSafeAtlassianConnectorBaseUrl(options.baseUrl)) {
+function atlassianPortBaseUrl(baseUrl: string): URL {
+  if (!isSafeAtlassianConnectorBaseUrl(baseUrl)) {
     throw new AtlassianCredentialCustodyError("invalid-input", [
       "baseUrl must be an https URL without credentials, query, or fragment",
     ]);
   }
-  const base = new URL(options.baseUrl);
-  return async (request: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
+  return new URL(baseUrl);
+}
+
+export function createGatewayAtlassianHttpPort(
+  options: CreateAtlassianHttpPortOptions,
+): AtlassianHttpPort {
+  const base = atlassianPortBaseUrl(options.baseUrl);
+  return async (input: AtlassianHttpRequest): Promise<AtlassianHttpResult> => {
+    const request = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, request.url);
-    if (isBlockedLoopbackTarget(target)) return { kind: "network-error" };
-    // Resolved immediately before the outbound call; never stored on the port instance.
-    const credential = options.credentials.resolveForExecution(options.authRef);
-    const egress = connectorEgressConfig(options.egress?.());
+    const egress = connectorEgressConfig(options);
+    if (outboundTargetBlockedReason(target, egress) !== undefined) return { kind: "network-error" };
+    const lifecycle = atlassianHttpRequestLifecycle(
+      { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
+      request,
+    );
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
-        headers: {
-          authorization: atlassianAuthorizationHeaderValue(credential),
-          accept: "application/json",
-        },
+        prepareHeaders: lifecycle.prepareHeaders,
         signal: AbortSignal.timeout(boundedTimeoutMs(request.timeoutMs)),
         egress,
         log: processServerLogSink(),
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
+      await lifecycle.observe(response);
       await discardBody(response);
       return { kind: "response", status: response.status };
     } catch (error) {
+      lifecycle.rethrowFailure();
       return classifyTransportError(error);
     }
   };
@@ -344,27 +338,22 @@ function assertValidRequestBody(request: AtlassianHttpBodyRequest): void {
 export function createGatewayAtlassianHttpBodyPort(
   options: CreateAtlassianHttpPortOptions,
 ): AtlassianHttpBodyPort {
-  if (!isSafeAtlassianConnectorBaseUrl(options.baseUrl)) {
-    throw new AtlassianCredentialCustodyError("invalid-input", [
-      "baseUrl must be an https URL without credentials, query, or fragment",
-    ]);
-  }
-  const base = new URL(options.baseUrl);
-  return async (request: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
+  const base = atlassianPortBaseUrl(options.baseUrl);
+  return async (input: AtlassianHttpBodyRequest): Promise<AtlassianHttpBodyResult> => {
+    const request = Object.freeze({ ...input });
     const target = assertAllowlistedTarget(base, request.url);
-    if (isBlockedLoopbackTarget(target)) return { kind: "network-error" };
+    const egress = connectorEgressConfig(options);
+    if (outboundTargetBlockedReason(target, egress) !== undefined) return { kind: "network-error" };
     assertValidRequestBody(request);
-    // Resolved immediately before the outbound call; never stored on the port instance.
-    const credential = options.credentials.resolveForExecution(options.authRef);
-    const egress = connectorEgressConfig(options.egress?.());
+    const lifecycle = atlassianHttpRequestLifecycle(
+      { ...options, correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
+      request,
+    );
     try {
       const response = await gatewayFetch(target.toString(), {
         method: request.method,
-        headers: {
-          authorization: atlassianAuthorizationHeaderValue(credential),
-          accept: "application/json",
-          ...(request.bodyJson === undefined ? {} : { "content-type": "application/json" }),
-        },
+        prepareHeaders: lifecycle.prepareHeaders,
+        singleAttempt: request.method !== "GET",
         ...(request.bodyJson === undefined ? {} : { body: request.bodyJson }),
         signal: composeBodyRequestSignal(request),
         egress,
@@ -372,6 +361,7 @@ export function createGatewayAtlassianHttpBodyPort(
         logContext: { correlationId: options.correlationId ?? UNKNOWN_CORRELATION_ID },
         ...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
       });
+      await lifecycle.observe(response);
       const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"), Date.now());
       const body = await readBodyBounded(response, request.maxBodyBytes);
       return {
@@ -383,6 +373,7 @@ export function createGatewayAtlassianHttpBodyPort(
         ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
       };
     } catch (error) {
+      lifecycle.rethrowFailure();
       return classifyTransportError(error);
     }
   };

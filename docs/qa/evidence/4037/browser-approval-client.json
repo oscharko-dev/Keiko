@@ -1,0 +1,573 @@
+{
+  "schemaVersion": 1,
+  "classification": "Browser approval client, explicit requester/approver UI and origin-local key storage. Scoped owner and real-engine storage qualification; full protected browser, native Safari, profile/SSD and complete epic acceptance remain open.",
+  "parentHead": "d74ff864574168d822b3e3bf6c1b1e96781efec3",
+  "sources": [
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "b54d151d81dbff432ab3b94a4c7df11e7b030938d9917d63acaafcb2c5613cd4"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "bb28569f9bda24407edd422f75748442cce8037afc91e125773a0fc6e17ee8b1"
+    },
+    {
+      "path": "packages/keiko-contracts/src/browser-approval.test.ts",
+      "sha256": "d59121212ed191ce02eb72cb52536d7a87ec9643bed0a73b73159da062fe7b3f"
+    },
+    {
+      "path": "packages/keiko-contracts/src/browser-approval.ts",
+      "sha256": "3f114b5609e94085826be970b14a385e1210b89e5d9b1b1e62dc1896bbc858ac"
+    },
+    {
+      "path": "packages/keiko-contracts/src/coding-app-session.ts",
+      "sha256": "0073276fd0d8c70d7106dccb040b70bd46d785c77137f11519c2567b6eddb90f"
+    },
+    {
+      "path": "packages/keiko-contracts/src/diagnostics.test.ts",
+      "sha256": "e6ea9b4c27906bc8eefa91f9ffb03bde62fcbbb4006b46a8f4508d233dab498f"
+    },
+    {
+      "path": "packages/keiko-contracts/src/diagnostics.ts",
+      "sha256": "53559e82a5c41cad1110fda414e405e1afb9f1a4d77a1a5bc322457a2bb813fc"
+    },
+    {
+      "path": "packages/keiko-server/src/client-diagnostics-routes.test.ts",
+      "sha256": "168995eebc1a84638571c2328497a80f16ffdc18c1e16134a76a1abb4896362d"
+    },
+    {
+      "path": "packages/keiko-server/src/client-diagnostics-routes.ts",
+      "sha256": "9881c43bbcb48f0291b0cac9659cd637e37c815fb4c609c6bc39a6a6caeae184"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.test.ts",
+      "sha256": "598e728a1b1edaa7a18806eeb70e9c55cc6d2b1452e54ffa81bb304adda54d13"
+    },
+    {
+      "path": "packages/keiko-server/src/observability/route-template.ts",
+      "sha256": "1941e5c0865d69261c54bff46314a35a9afea7ec5c1b2ef622fe0d6f07634ad0"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.grounding.test.tsx",
+      "sha256": "5a1cc2d42dbc6e24988f9cc8505515188bf79ae083c02f938c6aa7463847b06a"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.tsx",
+      "sha256": "cc1eef727430f46fbf1c25748eed691c20ba9e42ece0b66b832f5add0c52d4f3"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/KeikoDesktop.test.tsx",
+      "sha256": "a86e92c9ce88602ccdc0f238848e1970090f94b4e450e11ac9d0f51d2fd5cfde"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApproval.module.css",
+      "sha256": "661486cecb722f1ff301c2766535df19e00371e6a3044293bb08f301f15132d8"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApproval.test.tsx",
+      "sha256": "e5143acb54c2bbdeff79274295b74b296875f3fbee9cc46a1c86cf120c914263"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalDialog.tsx",
+      "sha256": "4b08895cc2293a68ad380f9f16a6b49d67849017e5369727b5f3676a47a7bd37"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx",
+      "sha256": "f84bdf2882c8d3a46cb7945eedc712c0dcb71ca0d6fe29a1f6c4e4022db404cd"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx",
+      "sha256": "d4d4e1d67745ae0cde13fd1ab07eeb26639df393dea881f4357db831579716d3"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalSettings.tsx",
+      "sha256": "d700e36e7666c7e34fe07dbf6a20dd028025bf2ddd726e8b61f39b9afb1c5d35"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/useBrowserApproval.ts",
+      "sha256": "bac5bb44608a58359f681741c1db74721198983b6c10a4d541ba6a7f491a581a"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/useBrowserApprovalInventory.ts",
+      "sha256": "b84f7beefce0016c22787a5fad01bb7f329bc5733c0d2e2cc54b404b05e391cb"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/panels/SettingsPanel.tsx",
+      "sha256": "90463dcbc1400af9412946d12c76297b79297dc0e0831069e77941f68ab7c9da"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-api.test.ts",
+      "sha256": "49b7fca18936c527891a4d3a1db73a2383042086587557d0e7985b2aab336e3d"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-api.ts",
+      "sha256": "740a48ae11cc9b2d8be218975c22f7dd4ba99a743d2ef5cd911d6724bac9ee3c"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-client.test.ts",
+      "sha256": "f38c5ae0e575c0e01882eff2f167eda466b9a050e78ebfabf2d7477a7577ef25"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-client.ts",
+      "sha256": "8ce5ed590a4f1cfadf353ddcebe4ba399fa32f0ba30d807a1dbab6fd74733562"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-crypto.test.ts",
+      "sha256": "6002a1ddc365bcfd278db96ea203edc03456d881be1438fd8133d3fb15e6143a"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-crypto.ts",
+      "sha256": "4fdd0ee027092f9a0f99aa7459754342cf5a36353ae56826a27073c9bcb9965b"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-evidence.ts",
+      "sha256": "b59a0a54fd254b13dde4a497441848513de17885ab685103705cad6a5171ebd7"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-key-store.test.ts",
+      "sha256": "f6db845e329db3d323109230f499d61d79f023abfad104862d823027955d57b1"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/browser-approval-key-store.ts",
+      "sha256": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/client-diagnostics.ts",
+      "sha256": "fa397f4dae8cc04291b2a481f47ddd8ef7343015e69139af1886153d13680722"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-app-session-browser-restore.integration.test.ts",
+      "sha256": "5249f189c91569533947ca7e549666b0902ef6c9786a206515c19e13342585f9"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-app-session-client.pairing.test.ts",
+      "sha256": "b2f3eb43da73bb277651eb0dccc316a3baebdc1fce03dba68aa3b80c08836d35"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-app-session-client.test.ts",
+      "sha256": "deae24ed25fde509f3079391c24e2e81422f91be80ee7d32296b14c8b19b0477"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-app-session-client.ts",
+      "sha256": "158d41ad7a2718324915fcc776659bb5269c48428ea1b8e14753dc32dd4257b2"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-app-session-manifest-boot.integration.test.tsx",
+      "sha256": "ba7b295212f6ec4c43974e9f0c7e1e4eab63e2684e647ce4be38498b34876ebf"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-api.test.ts",
+      "sha256": "c86e1bd320a43e8fa5b1421097267bdd209fbdf09b2d1e99abe9a7b77967f466"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
+      "sha256": "e683f997542eacb998f43faf73e6a4da6a3a964b26301c54732423a2ef649a31"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
+      "sha256": "7c61f1a5be8a3efdf25a103910f5ea7bc82c76bb371d13ca0df172fac32f5b79"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/install-client-diagnostics.test.ts",
+      "sha256": "cd9922ffe043b0c7fb82f15f94fa976caff5643598709a3d73494f084384ee91"
+    },
+    {
+      "path": "packages/keiko-ui/src/lib/install-client-diagnostics.ts",
+      "sha256": "a097c11546bd682bc2d25d4225845b6c62f1500d28d8c3368593786e11c8472c"
+    }
+  ],
+  "behavior": [
+    "The existing server remains the sole session/grant authority. Canonical response validators reject unknown fields, invalid timestamps, impossible lifetimes and inconsistent inventories.",
+    "Private P-256 keys are nonextractable. Session-only keys remain in mounted request-controller memory; an explicitly approved remembered key is saved only in origin-scoped IndexedDB, after protected access is verified.",
+    "The notice opens explicit approval. Both browsers compare a code; remember intent defaults off and requires both decisions. Settings displays session-only and remembered expiry/last use and supports revocation and local forgetting as distinct actions.",
+    "Storage success means transaction completion. Abort, blocked/quota failure and deadlines do not earn saved status or trigger raw-key fallback. Forget confirmation also waits for committed deletion.",
+    "Fresh protected inspection confirms proof usability. A lost response may recover an already active session after the request deadline without another proof or grant. Remembered persistence remains unconfirmed when metadata was lost.",
+    "Confirmation and optional restoration share the existing 15-second signal. Late module, lock, load, signing and proof outcomes cannot publish a cancelled restore or initiate another proof. Session-check notifications trigger protected inventory inspection and cannot grant authentication.",
+    "Requester echo, key identity, remembered intent, origin, installation and renewal grant bindings remain explicit. Invalid response binding emits body-free diagnostics. Browser wall-clock precision does not override server challenge expiry or single use.",
+    "All stage evidence uses the existing client diagnostic transport and registered Activity Log formatter with closed operation/outcome fields. No key material, signatures, comparison codes or approval identifiers enter those diagnostics."
+  ],
+  "realStorageCommissioning": {
+    "bundleSha256": "6c9da86a15bc3683bb99e3e562f7bfea368facc7ff74f85a5ea2edf1f8bac57e",
+    "engines": [
+      {
+        "engine": "chromium",
+        "status": "passed",
+        "actualIndexedDB": true,
+        "browserProcessRestart": true,
+        "nonextractableKeySurvivedRestart": true,
+        "independentPublicSignatureVerified": true,
+        "actualTransactionAbortedAfterPutSuccess": true,
+        "successfulCommitDiagnosticDetected": true,
+        "abortedWriteNeverClaimedStored": true,
+        "nativeSafari": false,
+        "fullProtectedApprovalJourney": false,
+        "platform": "darwin-arm64"
+      },
+      {
+        "engine": "webkit",
+        "status": "passed",
+        "actualIndexedDB": true,
+        "browserProcessRestart": true,
+        "nonextractableKeySurvivedRestart": true,
+        "independentPublicSignatureVerified": true,
+        "actualTransactionAbortedAfterPutSuccess": true,
+        "successfulCommitDiagnosticDetected": true,
+        "abortedWriteNeverClaimedStored": true,
+        "nativeSafari": false,
+        "fullProtectedApprovalJourney": false,
+        "platform": "darwin-arm64"
+      },
+      {
+        "engine": "firefox",
+        "status": "passed",
+        "actualIndexedDB": true,
+        "browserProcessRestart": true,
+        "nonextractableKeySurvivedRestart": true,
+        "independentPublicSignatureVerified": true,
+        "actualTransactionAbortedAfterPutSuccess": true,
+        "successfulCommitDiagnosticDetected": true,
+        "abortedWriteNeverClaimedStored": true,
+        "nativeSafari": false,
+        "fullProtectedApprovalJourney": false,
+        "platform": "linux-arm64"
+      }
+    ],
+    "scope": "Actual product key-store/crypto/evidence modules bundled with production NODE_ENV. Isolated persistent browser profiles are closed/reopened, signatures are independently checked with the public key, and an actual transaction aborts after put success. This is not a protected approval/draft/SSD journey.",
+    "environmentFailures": "Initial fixture bundling omitted production NODE_ENV, and Firefox initially failed profile lookup. Earlier failures remain retained. Linux Firefox uses a private writable existing home path, 512 MiB shared memory and 256 PID limit; no HOME override, host profile or sandbox disablement.",
+    "linuxImage": "mcr.microsoft.com/playwright@sha256:a0f4498920a5dbac63196d9140ed738ef00470f27e2e74029abd8850b7bd5717",
+    "containerConstraints": "Offline, UID 1000, all capabilities dropped, no-new-privileges, read-only product source/root filesystem, private tmpfs/home/profile, repository test seccomp profile, bounded CPU/memory/PIDs.",
+    "telemetryCorrection": "The original private harness inspected meta.browserApproval instead of meta.stageReport.browserApproval, so its no-stored-claim assertion was vacuous. Original harnesses/receipts remain retained. These fresh runs require a genuine successful-commit positive control before testing the actual aborted-put negative; no historical telemetry credit is reassigned.",
+    "sourceHashes": {
+      "browser-approval-key-store.ts": "139d0f8d1da0fb501ef15abf96f63922df368bcf1fac891a61c226d47ad38a31",
+      "browser-approval-crypto.ts": "4fdd0ee027092f9a0f99aa7459754342cf5a36353ae56826a27073c9bcb9965b",
+      "browser-approval-evidence.ts": "b59a0a54fd254b13dde4a497441848513de17885ab685103705cad6a5171ebd7",
+      "client-diagnostics.ts": "fa397f4dae8cc04291b2a481f47ddd8ef7343015e69139af1886153d13680722"
+    }
+  },
+  "failureFirst": {
+    "lateProofResponse": "Two failed and three healthy client controls before reconciliation; the same five then pass within the 143-test owning run. Six extended independent actual-route/registry/crypto controls pass, preserving grant/session identity and expiry.",
+    "requesterIntent": "One failed and twelve healthy service controls before checking the human remember echo; all thirteen pass afterward.",
+    "routeVocabulary": "The two exact production route-vocabulary controls fail with eight healthy controls before adding challenge/prove/request; all ten pass afterward. Unknown/private segments remain elided.",
+    "integration": "Initial full UI run: six failures, 10735 passes and one existing skip. Pair/navigation/replay transport seams, styling prefix and actual browser boot/deadline integration repaired; initial targeted nine suites pass 117 tests. Full follow-up before added storage unit controls passes 10747 tests with the same existing skip.",
+    "groundingFixture": "The logging increment exposes eleven failures in the existing grounding suite: a newly mounted independent Notice produces its own legitimate diagnostic. The child boundary is isolated without changing any exact grounding assertions. Five dedicated Notice lifecycle tests verify self-revoke, acknowledged/failed repair, focus and stale cancelled-response handling."
+  },
+  "limits": [
+    "No claim of complete Chrome/Safari/Firefox approval/draft/OS-restart/profile/SSD acceptance. Playwright WebKit is not native Safari.",
+    "These changes do not establish Linux/macOS native updater process-generation ownership or packaged version-to-version update/recovery.",
+    "Both customer skills, complete Chat/search/source criteria, final exact-head required CI/reviews and authorized merge remain open."
+  ],
+  "verification": {
+    "fullUIBeforeFinalLoggingProjection": {
+      "passed": 10762,
+      "skipped": 1,
+      "suites": 558,
+      "logSha256": "956163f2caffd54c71019531edc09037f52779975d9076d76e2ecd4a2b47ebac"
+    },
+    "storageUnitLifetime": {
+      "passed": 19,
+      "classification": "Deterministic inert IDB event ports plus genuine nonextractable WebCrypto keys, separate from actual-engine storage runs."
+    },
+    "rootAndUILintBeforeFinalLoggingProjection": "Passed; final scoped logging lint passed. Final full UI/lint/gate runs remain separately recorded.",
+    "latestFullUI": {
+      "passed": 10774,
+      "skipped": 1,
+      "suites": 559,
+      "logSha256": "a550180cf0939e52ce4a07def2442083a631474e839e5de2b749e7af19eb7d3b"
+    },
+    "coreOwnerSuites": {
+      "passed": 634,
+      "suites": 5,
+      "logSha256": "a72f435d47648d0a4329c7032e6f192736e54009c601c207653d07208cb0c4c5"
+    },
+    "sonarRepair": {
+      "beforeFindings": 5,
+      "beforeLogSha256": "35156d20301ddb137513fa2ac112b20fc0b430fe1f351ec3e2252488424d0d9f",
+      "repairs": "Native output elements retain implicit status announcements; octets use fromCodePoint; canonical base64 padding removal uses literal replacement. Authentication and persistence transitions are unchanged. Fresh native engine controls and full UI coverage are rerun against these source bytes."
+    }
+  },
+  "persistenceOrdering": {
+    "classification": "Actual client, nonextractable WebCrypto keys and IndexedDB over two same-origin browser pages; authority transport responses are inert. Not a protected BFF/draft/SSD journey.",
+    "intent": "Before a remembered public request, commit an opaque local intent in the existing object store. Save checks it and writes the key in one transaction. Forget deletes key and intent in one transaction. Missing or superseded intent refuses persistence; preparation failure permits usable session access with unconfirmed persistence.",
+    "forgetBefore": {
+      "failed": 1,
+      "healthy": 3,
+      "receiptSha256": "3907c871d801eae8e99bfe09fdbf2c772665d0fc306c32f89dcaad7708932736"
+    },
+    "cloneBefore": {
+      "failed": 1,
+      "healthy": 8,
+      "receiptSha256": "1e3ab0030be598d973c0f7879088fafb18bd2600125aad1449992a79748e616b",
+      "scope": "Retained actual compiled owner before callback containment, with its original recorded source hashes. Not reconstructed TypeScript source. A real engine DataCloneError is induced at the storage port. The global-error listener has an actual scheduled-throw positive control."
+    },
+    "after": [
+      {
+        "engine": "chromium",
+        "platform": "darwin-arm64",
+        "receiptSha256": "4a153641dc5eef3a6ce4e323f4a75a4c5020284b42b2f0926967b11aa1846253",
+        "bundleSha256": "9c7936b3b4e86778a595380021fab0bb77184c3bd57650628f5d4c8a8a7cd785",
+        "results": [
+          {
+            "scenario": "forget-during",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "no-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "forget-after",
+            "active": true,
+            "stored": false,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "once-only",
+            "active": true,
+            "stored": false,
+            "persistence": "session",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "fresh-after-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "superseded",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "failed-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "failed-forget-after-stored",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "clone-failure",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": true,
+            "passed": true
+          }
+        ]
+      },
+      {
+        "engine": "webkit",
+        "platform": "darwin-arm64",
+        "receiptSha256": "590da8ebb98a707f755e33a53ac593772cdfbe4e1bc32b14dc5e82341fd6a0a9",
+        "bundleSha256": "893c6009ae1e0c47edd20bd66afa7e8cd3ffdfe3e583ee78afe77a5190054013",
+        "results": [
+          {
+            "scenario": "forget-during",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "no-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "forget-after",
+            "active": true,
+            "stored": false,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "once-only",
+            "active": true,
+            "stored": false,
+            "persistence": "session",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "fresh-after-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "superseded",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "failed-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "failed-forget-after-stored",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "clone-failure",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": true,
+            "passed": true
+          }
+        ]
+      },
+      {
+        "engine": "firefox",
+        "platform": "linux-arm64",
+        "receiptSha256": "04d71d9614154c659de180756e6df673b4086f5cb9cde7807f35c22e03f0f2c7",
+        "bundleSha256": "9c7936b3b4e86778a595380021fab0bb77184c3bd57650628f5d4c8a8a7cd785",
+        "results": [
+          {
+            "scenario": "forget-during",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "no-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "forget-after",
+            "active": true,
+            "stored": false,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "once-only",
+            "active": true,
+            "stored": false,
+            "persistence": "session",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "fresh-after-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "superseded",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "failed-forget",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "failed-forget-after-stored",
+            "active": true,
+            "stored": true,
+            "persistence": "stored",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": false,
+            "passed": true
+          },
+          {
+            "scenario": "clone-failure",
+            "active": true,
+            "stored": false,
+            "persistence": "unconfirmed",
+            "escapedErrors": 0,
+            "errorListenerPositiveControl": true,
+            "passed": true
+          }
+        ]
+      }
+    ],
+    "existingCookie": "An already verified usable session is preserved; redundant completion does not replace its cookie or claim unconfirmed remembering. No existing-session upgrade feature is inferred."
+  }
+}

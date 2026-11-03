@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createInMemoryUiStore } from "../store/index.js";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   CodingWorkbenchAuthorityEnvelope,
@@ -9,7 +13,7 @@ import {
   CODING_WORKBENCH_SCHEMA_VERSION,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { UiHandlerDeps } from "../deps.js";
+import { buildUiHandlerDeps, type UiHandlerDeps, type BuildHandlerDepsOptions } from "../deps.js";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
@@ -177,4 +181,83 @@ describe("strictestModeDecision across divergent envelope facets (KEIKO-0200)", 
     );
     expect(outcome.kind).toBe("review-required");
   });
+});
+
+describe("production connector deployment ceiling composition (#4083 AC7)", () => {
+  const roots: string[] = [];
+  afterEach(() => {
+    editorAgentAuthorityRegistry.reset();
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it.each<{
+    label: string;
+    options: Partial<BuildHandlerDepsOptions>;
+    expected: CodingWorkbenchMode;
+  }>([
+    { label: "default", options: {}, expected: "autonomous-delivery" },
+    {
+      label: "runtime option cannot widen narrow environment",
+      options: {
+        env: { KEIKO_CODING_DEPLOYMENT_CEILING: "governed-assist" },
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      },
+      expected: "governed-assist",
+    },
+    {
+      label: "runtime option cannot hide invalid environment",
+      options: {
+        env: { KEIKO_CODING_DEPLOYMENT_CEILING: "invalid" },
+        codingRuntimeDeploymentCeiling: "autonomous-delivery",
+      },
+      expected: "governed-assist",
+    },
+    {
+      label: "narrow environment",
+      options: { env: { KEIKO_CODING_DEPLOYMENT_CEILING: "governed-assist" } },
+      expected: "governed-assist",
+    },
+    {
+      label: "supervised environment",
+      options: { env: { KEIKO_CODING_DEPLOYMENT_CEILING: "supervised-coding" } },
+      expected: "supervised-coding",
+    },
+    {
+      label: "invalid environment",
+      options: { env: { KEIKO_CODING_DEPLOYMENT_CEILING: "invalid" } },
+      expected: "governed-assist",
+    },
+    {
+      label: "legacy narrower option",
+      options: { autonomousDeliveryDeploymentCeiling: "governed-assist" },
+      expected: "governed-assist",
+    },
+    {
+      label: "legacy option cannot widen environment",
+      options: {
+        env: { KEIKO_CODING_DEPLOYMENT_CEILING: "governed-assist" },
+        autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
+      },
+      expected: "governed-assist",
+    },
+  ])(
+    "uses one resolved ceiling in Coding and connector policy: $label",
+    ({ options, expected }) => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-connector-ceiling-"));
+      roots.push(root);
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: root,
+        env: {},
+        store: createInMemoryUiStore(),
+        ...options,
+      });
+      expect(deps.codingRuntimeDeploymentCeiling).toBe(expected);
+      expect(deps.autonomousDeliveryDeploymentCeiling).toBe(expected);
+      const authority = registerEnvelope("autonomous-delivery", expected);
+      expect(decideGovernedAtlassianAction("create-issue", authority, deps).kind).toBe(
+        expected === "autonomous-delivery" ? "allowed" : "review-required",
+      );
+    },
+  );
 });

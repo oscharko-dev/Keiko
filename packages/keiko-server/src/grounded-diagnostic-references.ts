@@ -18,6 +18,7 @@ import {
 import { GROUNDED_TRACE_SEARCH_LIMITS } from "./grounded-symbol-trace.js";
 import {
   admitExplicitPaths,
+  explicitPathReferences,
   normalizedExplicitReferencePath,
   EXPLICIT_PATH_REJECTION_REASONS,
   type ExplicitPathAdmission,
@@ -124,11 +125,29 @@ function frameWithinSelectedScope(
   return isPathWithinSelectedScope(inputs.scope, new Set(inputs.scope.relativePaths), path);
 }
 
+function sourceAdmissionReferences(
+  planned: readonly SearchReference[] | undefined,
+  questionText: string,
+): readonly SearchReference[] | undefined {
+  if (planned === undefined) return undefined;
+  const primary = planned[0]?.origin === "diagnostic" ? planned.slice(0, 1) : [];
+  const references = [...primary, ...explicitPathReferences(questionText), ...planned];
+  const seen = new Set<string>();
+  return references.filter((reference) => {
+    const identity = `${reference.path}:${String(reference.line ?? "")}`;
+    if (seen.has(identity)) return false;
+    seen.add(identity);
+    return true;
+  });
+}
+
 export async function admitDiagnosticReferences(inputs: DiagnosticReferenceInputs): Promise<{
   readonly admission: ExplicitPathAdmission;
   readonly observation: DiagnosticReferenceObservation;
 }> {
-  const admission = await admitExplicitPaths({ ...inputs, references: inputs.plan.references });
+  const channels = extractRetrievalChannels(inputs.query.text, 8);
+  const references = sourceAdmissionReferences(inputs.plan.references, channels.questionText);
+  const admission = await admitExplicitPaths({ ...inputs, references });
   const diagnostic = admission.selections.filter((reference) => reference.origin === "diagnostic");
   const pairs = await primaryDiagnosticPair(
     inputs,
@@ -142,7 +161,6 @@ export async function admitDiagnosticReferences(inputs: DiagnosticReferenceInput
       .filter((atom) => !existing.has(atom.scopePath))
       .map((atom) => ({ path: atom.scopePath, origin: "diagnostic" })),
   });
-  const channels = extractRetrievalChannels(inputs.query.text, 8);
   return {
     admission: mergedAdmission(admission, paired),
     observation: {

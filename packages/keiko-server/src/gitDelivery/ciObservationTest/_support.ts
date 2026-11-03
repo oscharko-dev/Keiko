@@ -1,5 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type DraftDeliveryRecord,
+  type DraftDeliveryRepositoryBinding,
+  type IssueBoundDraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { runMigrations } from "../../store/schema.js";
@@ -30,7 +35,7 @@ export const COMMIT: VerifiedCommitResult = {
   committedTreeDigest: DIGEST,
   recordedAt: AT,
 };
-const INITIAL: DraftDeliveryRecord = {
+const INITIAL: IssueBoundDraftDeliveryRecord = {
   schemaVersion: "1",
   revision: 0,
   phase: "push-proposed",
@@ -57,7 +62,18 @@ const INITIAL: DraftDeliveryRecord = {
     recoveryId: "delivery-1",
   },
 };
-function createRun(snapshots: CodingRuntimeSnapshotStore): void {
+// The same task-branch push without an issue: the binding an issue-free run on a verified
+// github.com origin records from its first push (owner decision, 2026-10-30).
+function repositoryBinding(): DraftDeliveryRepositoryBinding {
+  const {
+    issueBindingDigest: _binding,
+    issueIdDigest: _issueId,
+    issueNumber: _issueNumber,
+    ...shared
+  } = INITIAL.binding;
+  return { ...shared, kind: "github-repository" };
+}
+function createRun(snapshots: CodingRuntimeSnapshotStore, issueFree: boolean): void {
   snapshots.create({
     schemaVersion: "1",
     runId: "run-1",
@@ -77,25 +93,45 @@ function createRun(snapshots: CodingRuntimeSnapshotStore): void {
     toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
-    issueBinding: {
-      schemaVersion: "1",
-      repositoryId: "repository-1",
-      remoteDigest: DIGEST,
-      issueNumber: 1,
-      issueIdDigest: DIGEST,
-      defaultBaseRef: "dev",
-      contentRevisionDigest: DIGEST,
-      bindingDigest: DIGEST,
-    },
+    ...(issueFree
+      ? {}
+      : {
+          issueBinding: {
+            schemaVersion: "1",
+            repositoryId: "repository-1",
+            remoteDigest: DIGEST,
+            issueNumber: 1,
+            issueIdDigest: DIGEST,
+            defaultBaseRef: "dev",
+            contentRevisionDigest: DIGEST,
+            bindingDigest: DIGEST,
+          },
+        }),
   });
 }
-export function createDraftRun(db: DatabaseSync): CodingRuntimeSnapshotStore {
+/** The run's recorded delivery, which these fixtures always bind to an issue. */
+export function recordedIssueDraft(
+  snapshots: CodingRuntimeSnapshotStore,
+): IssueBoundDraftDeliveryRecord | undefined {
+  const draft = snapshots.get("run-1")?.draftDelivery;
+  return draft !== undefined && isIssueBoundDraftDeliveryRecord(draft) ? draft : undefined;
+}
+
+export function createDraftRun(
+  db: DatabaseSync,
+  options: { readonly issueFree?: boolean } = {},
+): CodingRuntimeSnapshotStore {
   runMigrations(db);
   const snapshots = createCodingRuntimeSnapshotStore(db);
-  createRun(snapshots);
-  snapshots.recordVerifiedCommit(COMMIT);
-  snapshots.recordDraftDelivery(INITIAL, null);
-  const steps: readonly Pick<DraftDeliveryRecord, "phase" | "reason">[] = [
+  const issueFree = options.issueFree === true;
+  createRun(snapshots, issueFree);
+  const { issueBindingDigest: _issue, ...issueFreeCommit } = COMMIT;
+  snapshots.recordVerifiedCommit(issueFree ? issueFreeCommit : COMMIT);
+  const initial: DraftDeliveryRecord = issueFree
+    ? { ...INITIAL, binding: repositoryBinding() }
+    : INITIAL;
+  snapshots.recordDraftDelivery(initial, null);
+  const steps: readonly Pick<IssueBoundDraftDeliveryRecord, "phase" | "reason">[] = [
     { phase: "pushing", reason: "in-flight" },
     { phase: "pushed", reason: "completed" },
     { phase: "pr-proposed", reason: "approval-required" },
@@ -105,7 +141,7 @@ export function createDraftRun(db: DatabaseSync): CodingRuntimeSnapshotStore {
   for (const [index, step] of steps.entries())
     snapshots.recordDraftDelivery(
       {
-        ...INITIAL,
+        ...initial,
         ...step,
         revision: index + 1,
         ...(step.phase === "draft-created"

@@ -176,6 +176,152 @@ afterEach(() => {
 });
 
 describe("update remediation manager", () => {
+  it("completes only known restart outcomes for the matching aggregate target in one revision", () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    const row = { status: "pending" as const, updatedAt: new Date(NOW).toISOString() };
+    const initial = durable.writeRuntimeState({
+      ...durable.readRuntimeState(),
+      targetVersion: TARGET,
+      remediations: [
+        { ...row, store: "server-runtime", remediation: "restart-required" },
+        {
+          ...row,
+          store: "ui-layout",
+          remediation: "restart-required",
+          warningCode: "remediation-outcome-uncertain",
+        },
+        { ...row, store: "local-knowledge", remediation: "local-knowledge-reindex-required" },
+      ],
+    });
+    const subject = createUpdateRemediationManager({ localState: durable });
+    subject.completeRestart(TARGET);
+    const final = durable.readRuntimeState();
+    expect(final.revision).toBe(initial.revision + 1);
+    expect(final.targetVersion).toBe(TARGET);
+    expect(final.remediations[0]?.status).toBe("completed");
+    expect(final.remediations.slice(1)).toEqual(initial.remediations.slice(1));
+    expect(subject.updateCanComplete(TARGET)).toBe(false);
+    subject.completeRestart(TARGET);
+    expect(durable.readRuntimeState()).toEqual(final);
+  });
+
+  it("preserves another aggregate target when verifying a different restarted version", () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    const initial = durable.writeRuntimeState({
+      ...durable.readRuntimeState(),
+      targetVersion: "0.2.13",
+      remediations: [
+        {
+          store: "server-runtime",
+          remediation: "restart-required",
+          status: "pending",
+          updatedAt: new Date(NOW).toISOString(),
+        },
+      ],
+    });
+    createUpdateRemediationManager({ localState: durable }).completeRestart(TARGET);
+    expect(durable.readRuntimeState()).toEqual(initial);
+  });
+
+  it("keeps automatic status persistence read-only while the action owner is held", () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    const release = durable.acquireRemediationLease("local-knowledge-reindex:local-knowledge");
+    if (release === undefined) throw new Error("Owner control was not admitted");
+    const subject = createUpdateRemediationManager({
+      localState: durable,
+      localKnowledge: fakeLocalKnowledge(),
+    });
+    try {
+      subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact, persist: true });
+      expect(durable.readRuntimeState().remediations).toEqual([]);
+    } finally {
+      release();
+    }
+    subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact, persist: true });
+    expect(durable.readRuntimeState().remediations[0]?.status).toBe("pending");
+  });
+
+  it("does not let a delayed status persistence overwrite a newly uncertain action", () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    let firstRead = true;
+    const subject = createUpdateRemediationManager({
+      localKnowledge: fakeLocalKnowledge(),
+      localState: {
+        ...durable,
+        readRuntimeState: () => {
+          const snapshot = durable.readRuntimeState();
+          if (firstRead) {
+            firstRead = false;
+            const release = durable.acquireRemediationLease(
+              "local-knowledge-reindex:local-knowledge",
+            );
+            if (release === undefined) throw new Error("Prior owner was not admitted");
+            try {
+              durable.writeRuntimeState({
+                ...snapshot,
+                targetVersion: TARGET,
+                remediations: [
+                  {
+                    store: "local-knowledge",
+                    remediation: "local-knowledge-reindex-required",
+                    status: "running",
+                    updatedAt: new Date(NOW).toISOString(),
+                    warningCode: "remediation-outcome-uncertain",
+                  },
+                ],
+              });
+            } finally {
+              release();
+            }
+          }
+          return snapshot;
+        },
+      },
+    });
+    expect(
+      subject.getStatus({ targetVersion: TARGET, impact: localKnowledgeImpact, persist: true })
+        .actions[0],
+    ).toMatchObject({ status: "manual-review-required", failure: "remediation-outcome-uncertain" });
+    expect(durable.readRuntimeState().remediations[0]?.warningCode).toBe(
+      "remediation-outcome-uncertain",
+    );
+  });
+
+  it("rejects a stale restart completion without replacing the newer target or remediation", () => {
+    const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+    durable.writeRuntimeState({
+      ...durable.readRuntimeState(),
+      targetVersion: TARGET,
+      remediations: [
+        {
+          store: "server-runtime",
+          remediation: "restart-required",
+          status: "pending",
+          updatedAt: new Date(NOW).toISOString(),
+        },
+      ],
+    });
+    let firstRead = true;
+    const subject = createUpdateRemediationManager({
+      localState: {
+        ...durable,
+        readRuntimeState: () => {
+          const snapshot = durable.readRuntimeState();
+          if (firstRead) {
+            firstRead = false;
+            durable.writeRuntimeState({ ...snapshot, targetVersion: "0.2.13" });
+          }
+          return snapshot;
+        },
+      },
+    });
+    expect(() => subject.completeRestart(TARGET)).toThrow();
+    expect(durable.readRuntimeState()).toMatchObject({
+      targetVersion: "0.2.13",
+      remediations: [{ status: "pending" }],
+    });
+  });
+
   it("reports no required action when release impact has no affected stores", () => {
     const status = manager(makeStateDir()).getStatus({ targetVersion: TARGET, impact: {} });
 
@@ -393,6 +539,87 @@ describe("update remediation manager", () => {
     localKnowledge.complete();
     await expect(first).resolves.toMatchObject({ overallStatus: "completed" });
   });
+
+  it.each(["same-manager", "another-manager"])(
+    "refuses deferral while %s owns unsettled work",
+    async (mode) => {
+      const stateDir = makeStateDir();
+      const localKnowledge = deferredLocalKnowledge();
+      const running = manager(stateDir, localKnowledge);
+      const deferring = mode === "same-manager" ? running : manager(stateDir, localKnowledge);
+      const request = {
+        actionId: "local-knowledge-reindex:local-knowledge",
+        targetVersion: TARGET,
+        impact: localKnowledgeImpact,
+      } as const;
+      const work = running.runAction(request);
+      try {
+        await expect(deferring.runAction({ ...request, decision: "defer" })).rejects.toMatchObject({
+          code: "UPDATE_REMEDIATION_RUNNING",
+          status: 409,
+        });
+        expect(deferring.updateCanComplete(TARGET)).toBe(false);
+        expect(
+          createUpdateLocalStateManager({ stateDir }).readRuntimeState().remediations[0],
+        ).toMatchObject({ status: "running" });
+        expect(localKnowledge.runs()).toBe(1);
+      } finally {
+        localKnowledge.complete();
+        await expect(work).resolves.toMatchObject({ overallStatus: "completed" });
+      }
+    },
+  );
+
+  it.each(["run", "defer"] as const)(
+    "rechecks outcome uncertainty under the real action lease before %s",
+    async (decision) => {
+      const durable = createUpdateLocalStateManager({ stateDir: makeStateDir(), now: () => NOW });
+      const localKnowledge = fakeLocalKnowledge();
+      const subject = createUpdateRemediationManager({
+        localKnowledge,
+        localState: {
+          ...durable,
+          acquireRemediationLease: (actionId, correlationId) => {
+            const priorRelease = durable.acquireRemediationLease(actionId);
+            if (priorRelease === undefined) throw new Error("Prior owner was not admitted");
+            const current = durable.readRuntimeState();
+            try {
+              durable.writeRuntimeState({
+                ...current,
+                remediations: [
+                  {
+                    store: "local-knowledge",
+                    remediation: "local-knowledge-reindex-required",
+                    status: "running",
+                    updatedAt: new Date(NOW).toISOString(),
+                    warningCode: "remediation-outcome-uncertain",
+                  },
+                ],
+              });
+            } finally {
+              priorRelease();
+            }
+            return durable.acquireRemediationLease(actionId, correlationId);
+          },
+        },
+      });
+      await expect(
+        subject.runAction({
+          actionId: "local-knowledge-reindex:local-knowledge",
+          targetVersion: TARGET,
+          impact: localKnowledgeImpact,
+          decision,
+        }),
+      ).rejects.toMatchObject({ code: "UPDATE_REMEDIATION_OUTCOME_UNCERTAIN", status: 409 });
+      expect(localKnowledge.runs()).toBe(0);
+      expect(durable.readRuntimeState().remediations[0]?.warningCode).toBe(
+        "remediation-outcome-uncertain",
+      );
+      const release = durable.acquireRemediationLease("local-knowledge-reindex:local-knowledge");
+      expect(release).toBeTypeOf("function");
+      release?.();
+    },
+  );
 
   it("acquires the durable remediation lease before persisting running state", async () => {
     const stateDir = makeStateDir();

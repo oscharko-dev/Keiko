@@ -471,6 +471,7 @@ describe("GET /api/task-workspaces/:workspaceId", () => {
 });
 
 interface LocalRouteFixture {
+  readonly admitWorkspaceSelection: ReturnType<typeof vi.fn<() => Promise<boolean>>>;
   readonly selectLocal: ReturnType<
     typeof vi.fn<NonNullable<WorkspaceLifecycleService["selectLocal"]>>
   >;
@@ -500,6 +501,7 @@ async function localRouteFixture(hasLiveRun = vi.fn(() => false)): Promise<Local
     now: Date.now,
   });
   const selectLocal = vi.fn(lifecycle.selectLocal);
+  const admitWorkspaceSelection = vi.fn(() => Promise.resolve(!hasLiveRun()));
   const sink = createBufferedServerLogSink();
   setServerLogger(createServerLogger({ sink, level: "debug" }));
   await rebuild({
@@ -507,10 +509,11 @@ async function localRouteFixture(hasLiveRun = vi.fn(() => false)): Promise<Local
     workspaceLifecycle: { ...lifecycle, selectLocal },
     codingRuntimeOrchestrator: {
       blocksWorkspaceSelection: hasLiveRun,
+      admitWorkspaceSelection,
       hasLiveRun: vi.fn(() => true),
     } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
   });
-  return { selectLocal, sink, pointer };
+  return { selectLocal, sink, pointer, admitWorkspaceSelection };
 }
 
 function postLocal(
@@ -523,7 +526,37 @@ function postLocal(
   });
 }
 
+describe("POST /api/task-workspaces/active rejected target", () => {
+  it("keeps the held undo window when the managed workspace id is unknown", async () => {
+    const fixture = await localRouteFixture();
+    const response = await fetch(`${baseUrl()}/api/task-workspaces/active`, {
+      method: "POST",
+      headers: csrfHeaders(),
+      body: JSON.stringify({ workspaceId: "ws-missing", requestedBy: "u" }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ error: { code: "WORKSPACE_NOT_FOUND" } });
+    expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+});
+
 describe("POST /api/task-workspaces/local", () => {
+  it.each(["missing requester", "unregistered root"] as const)(
+    "keeps the held undo window when rejecting %s before selection admission",
+    async (kind) => {
+      const fixture = await localRouteFixture();
+      const request =
+        kind === "missing requester"
+          ? { root: repoRoot, branch: "main" }
+          : { root: join(repoRoot, "missing-root"), branch: "main", requestedBy: "u" };
+      const response = await postLocal(request);
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
+      expect(fixture.selectLocal).not.toHaveBeenCalled();
+    },
+  );
+
   it("selects the registered checkout and returns its actual root and branch", async () => {
     const fixture = await localRouteFixture();
     const response = await postLocal();
@@ -581,14 +614,14 @@ describe("POST /api/task-workspaces/local", () => {
     expect(fixture.pointer.get()).toBeUndefined();
   });
 
-  it.each(["before-body", "before-mutation"])("refuses a live run %s", async (phase) => {
+  it.each(["at-admission", "before-mutation"])("refuses a live run %s", async (phase) => {
     const hasLiveRun = vi.fn(() => true);
     if (phase === "before-mutation") hasLiveRun.mockReturnValueOnce(false);
     const fixture = await localRouteFixture(hasLiveRun);
     const response = await postLocal();
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: { code: "LOCK_CONTENTION" } });
-    expect(hasLiveRun).toHaveBeenCalledTimes(phase === "before-body" ? 1 : 2);
+    expect(hasLiveRun).toHaveBeenCalledTimes(phase === "at-admission" ? 1 : 2);
     expect(fixture.selectLocal).not.toHaveBeenCalled();
   });
 
@@ -596,6 +629,11 @@ describe("POST /api/task-workspaces/local", () => {
     let running = false;
     const hasLiveRun = vi.fn(() => running);
     const fixture = await localRouteFixture(hasLiveRun);
+    const received = new Promise<void>((resolve) => {
+      server.once("request", () => {
+        resolve();
+      });
+    });
     const request = httpRequest(`${baseUrl()}/api/task-workspaces/local`, {
       method: "POST",
       headers: csrfHeaders(),
@@ -612,9 +650,8 @@ describe("POST /api/task-workspaces/local", () => {
     });
     try {
       request.write('{"branch":"main",');
-      await vi.waitFor(() => {
-        expect(hasLiveRun).toHaveBeenCalledOnce();
-      });
+      await received;
+      expect(fixture.admitWorkspaceSelection).not.toHaveBeenCalled();
       running = true;
       request.end(JSON.stringify({ root: repoRoot, requestedBy: "u" }).slice(1));
       expect(await response).toBe(409);
@@ -647,4 +684,85 @@ describe("POST /api/task-workspaces/local", () => {
       expect(fixture.pointer.get()).toBeUndefined();
     },
   );
+});
+
+describe("POST /api/task-workspaces/folder (owner decision 2026-10-30)", () => {
+  let plainFolder: string;
+
+  beforeEach(() => {
+    plainFolder = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plain-folder-")));
+    writeFileSync(join(plainFolder, "notes.txt"), "plain folder\n");
+  });
+
+  afterEach(() => {
+    rmSync(plainFolder, { recursive: true, force: true });
+  });
+
+  function postFolder(body: unknown = { root: plainFolder, requestedBy: "u" }): Promise<Response> {
+    return fetch(`${baseUrl()}/api/task-workspaces/folder`, {
+      method: "POST",
+      headers: { ...csrfHeaders(), "X-Keiko-Correlation-Id": "folder-route-regression" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function folderRouteFixture(hasLiveRun = vi.fn(() => false)): Promise<LocalRouteFixture> {
+    const fixture = await localRouteFixture(hasLiveRun);
+    deps.store.createProject(plainFolder, "plain folder");
+    return fixture;
+  }
+
+  it("binds a registered ordinary folder without a base branch and returns its folder binding", async () => {
+    const fixture = await folderRouteFixture();
+    const response = await postFolder();
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      active: {
+        instance: {
+          workspaceKind: "folder",
+          executionLocation: "local",
+          repositoryRoot: plainFolder,
+        },
+        binding: { activeRoot: plainFolder },
+      },
+    });
+    expect(fixture.admitWorkspaceSelection).toHaveBeenCalledTimes(1);
+    expect(fixture.pointer.get()?.workspaceId).toMatch(/^folder:/u);
+    const active = await fetch(`${baseUrl()}/api/task-workspaces/active`);
+    expect(await active.json()).toMatchObject({
+      active: { instance: { workspaceKind: "folder" } },
+    });
+  });
+
+  it("refuses a repository and leaves the pointer alone", async () => {
+    const fixture = await folderRouteFixture();
+    deps.store.createProject(repoRoot, "repository");
+    const response = await postFolder({ root: repoRoot, requestedBy: "u" });
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it("refuses an unregistered folder and a missing requester before selecting", async () => {
+    const fixture = await folderRouteFixture();
+    expect((await postFolder({ root: plainFolder })).status).toBe(400);
+    deps.store.deleteProject(plainFolder);
+    expect((await postFolder()).status).toBe(400);
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it("refuses while a coding run is live", async () => {
+    const fixture = await folderRouteFixture(vi.fn(() => true));
+    const response = await postFolder();
+    expect(response.status).toBe(409);
+    expect(fixture.pointer.get()).toBeUndefined();
+  });
+
+  it("returns 503 when the lifecycle has no folder capability", async () => {
+    await folderRouteFixture();
+    const lifecycle = deps.workspaceLifecycle;
+    if (lifecycle === undefined) throw new Error("lifecycle was not composed");
+    await rebuild({ workspaceLifecycle: { ...lifecycle, selectFolder: undefined } });
+    expect((await postFolder()).status).toBe(503);
+  });
 });

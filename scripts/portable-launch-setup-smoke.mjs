@@ -95,10 +95,15 @@ function writeWindowsFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
 
 function writeLinuxFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
   mkdirSync(join(root, "runtime", "node", "bin"), { recursive: true });
+  mkdirSync(join(root, "runtime", "native"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
   mkdirSync(join(root, "support"), { recursive: true });
   writeAppFixture(join(root, "app"), version);
   writeFileSync(join(root, "runtime", "node", "bin", "node"), "fixture node\n");
+  writeFileSync(
+    join(root, "runtime", "native", "keiko-runtime-supervisor"),
+    "fixture supervisor\n",
+  );
   writeFileSync(join(root, "Keiko"), "fixture launcher\n");
   writeFileSync(join(root, "support", "keiko-support.sh"), "support launcher\n");
   writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));

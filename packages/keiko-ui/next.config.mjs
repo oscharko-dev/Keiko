@@ -4,11 +4,13 @@
  * package-surface check (D6) ships no `.map` files; images are unoptimized because there is no Next
  * server at runtime to optimize them.
  */
+import { writeProductDesignTokens } from "./design-tokens.mjs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../..");
+writeProductDesignTokens(repoRoot);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {

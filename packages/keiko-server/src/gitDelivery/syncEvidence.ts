@@ -11,17 +11,23 @@
 // never the path itself. Records carry counts, the typed outcome, and branch/remote NAMES only; no
 // URLs, secrets, or command output.
 
-import type { GitSyncOperation, GitSyncOutcome } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitSyncOperation,
+  GitSyncOutcome,
+  GitSyncPreview,
+} from "@oscharko-dev/keiko-contracts";
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { randomUUID } from "node:crypto";
 import { isValidCorrelationId } from "../correlation.js";
+import type { UiHandlerDeps } from "../deps.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import type { SyncExecuteResult } from "./syncExecution.js";
 
 export const GIT_SYNC_EVIDENCE_RUNID_PREFIX = "git-sync-evidence-" as const;
 
@@ -178,4 +184,46 @@ export function recordGitSyncEvidence(
   } catch (error) {
     reportPersistFailure(options, runId, error);
   }
+}
+
+/** One settled fetch or pull, as the sync evidence ledger records it. */
+export interface GitSyncResultInput {
+  readonly operation: GitSyncOperation;
+  readonly remote: string | undefined;
+  readonly workspaceRoot: string;
+  readonly before: GitSyncPreview | undefined;
+  readonly result: SyncExecuteResult;
+  readonly recordedAtMs: number;
+}
+
+/**
+ * Appends the content-free evidence record of one settled fetch or pull. The Git Client's sync
+ * routes and the coding runtime's governed sync (#3902 AC2) record through this one function.
+ */
+export function persistGitSyncResult(
+  deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor"> &
+    Partial<Pick<UiHandlerDeps, "diagnostics">>,
+  input: GitSyncResultInput,
+): void {
+  const { before, result } = input;
+  recordGitSyncEvidence(
+    {
+      evidenceStore: deps.evidenceStore,
+      redactString: (text: string): string => deps.redactor(text) as string,
+      ...(deps.diagnostics === undefined ? {} : { diagnostics: deps.diagnostics }),
+    },
+    {
+      schemaVersion: GIT_SYNC_EVIDENCE_SCHEMA_VERSION,
+      operation: input.operation,
+      outcome: result.outcome,
+      repoIdHash: gitSyncRepoIdHash(input.workspaceRoot),
+      branch: result.branch ?? before?.branch,
+      remote: input.remote,
+      aheadBefore: before?.ahead,
+      behindBefore: before?.behind,
+      aheadAfter: result.ahead,
+      behindAfter: result.behind,
+      recordedAtMs: input.recordedAtMs,
+    },
+  );
 }

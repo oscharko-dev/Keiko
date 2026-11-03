@@ -3,8 +3,10 @@
 # The `Scan dependency lockfiles` gate stays fail-closed: every entry below is an explicit,
 # time-boxed decision with a recorded reason, not a blanket suppression. `ignoreUntil` forces the
 # entry back through this gate on that date, so a stale waiver cannot outlive its justification.
-# Nothing here weakens the scan for shipped dependencies — only build-time-only findings that have
-# no upstream fix may be recorded, and each must state why it cannot reach a user.
+# Nothing here weakens the scan for shipped dependencies — only build-time-only findings may be
+# recorded: ones with no upstream fix, or whose patched release cannot be adopted without a separately
+# governed gate change (that entry names the change and its follow-up). Each must state why it cannot
+# reach a user.
 #
 # Each entry is bound to one advisory id, never to a package: a `[[PackageOverrides]]` rule would
 # also hide every present and future advisory of that package, and osv-scanner cannot express
@@ -13,7 +15,10 @@
 # History: the GHSA-mh99-v99m-4gvg brace-expansion waiver (recorded during #2696, PR #2700) was
 # removed when its own revisit condition arrived: upstream shipped patched releases on both
 # affected lines and the lockfile moved to 1.1.18/5.0.9, so the id-wide suppression would only
-# have hidden a reintroduced vulnerable release from the one gate positioned to catch it.
+# have hidden a reintroduced vulnerable release from the one gate positioned to catch it. The
+# fallow GHSA-h4fr-cmh5-qr62 and GHSA-jfwm-3p3c-6hx5 waivers (#3898) were removed on their revisit
+# condition: the owner decided the duplication gate (generated files excluded, the rest frozen in a
+# shrink-only baseline, `scripts/check-semantic-duplication.mjs`) and fallow moved to 3.35.0.
 
 [[IgnoredVulns]]
 id = "GHSA-vfj7-8cjw-p6xm"
@@ -42,34 +47,27 @@ matching it minutes later.
 """
 
 [[IgnoredVulns]]
-id = "GHSA-ch52-4w7c-c8xp"
+id = "GHSA-g3hv-75wg-m249"
 ignoreUntil = 2026-11-30
 reason = """
-GitHub reports that http-cache-semantics max-stale handling discloses security-zeroed shared-cache
-entries across users (CVE-2026-93748, high; CVSS 3.1 7.5, CVSS 4.0 8.7). Rechecked 2026-10-05:
-the advisory remains unwithdrawn, covers releases through 4.2.0, and names no patched version:
-https://github.com/advisories/GHSA-ch52-4w7c-c8xp
-Version 4.3.0 was published on 2026-10-04 and is now the latest registry release:
-https://registry.npmjs.org/http-cache-semantics
+minimatch denial of service through globparts amplification (medium; CVSS 6.9). Build-time only for
+the one remaining affected release: the advisory covers every minimatch before 11.0.1, and the
+shipped path is already moved off it (root overrides `minimatch@^10` -> 11.0.3 and `glob@^13` ->
+14.0.3 for the @sigstore/tuf, sigstore/cacache, eslint and typescript-eslint consumers, which use
+only the `minimatch`/`Minimatch` exports 11 keeps).
 
-Reach: the lockfile holds exactly one instance, http-cache-semantics@4.2.0, flagged dev, on the
-single path root devDependency sigstore@5.0.0 -> @sigstore/sign@5.0.0 -> make-fetch-happen@16.0.1.
-`npm ls --omit=dev --all http-cache-semantics` is empty. The only importer of sigstore is
-scripts/sign-linux-runtime-qualification.mjs, release tooling that is never distributed. Even there
-the vulnerable code cannot run: @sigstore/sign calls make-fetch-happen without a `cachePath`, and
-make-fetch-happen's CachePolicy.storable() returns false for such a request before it constructs an
-http-cache-semantics policy, so nothing is ever stored in or served from a cache. make-fetch-happen
-also configures the library as a private cache (`shared: false`), while the advisory concerns a
-shared cache that serves several users.
+Reach: the lockfile then holds minimatch@3.1.5 only, flagged dev, on the keiko-ui devDependency
+eslint-config-next -> eslint-plugin-import / eslint-plugin-jsx-a11y / eslint-plugin-react path.
+`npm ls --omit=dev --all minimatch@3.1.5` is empty. Those plugins match file names against globs
+from the ESLint configuration this repository authors, only while the keiko-ui lint runs; no user
+and no untrusted input reaches them, and the worst case is a slow lint over a pattern a committer
+wrote.
 
-The locked dev-only resolution remains 4.2.0. The newer release is not an identified security fix
-in the advisory. The maintainer disputes the report; that does not withdraw the GitHub advisory
-or resolve the open Dependabot alert #34:
-https://github.com/kornelski/http-cache-semantics/issues/56#issuecomment-5975759591
-https://github.com/oscharko-dev/Keiko/security/dependabot/34
+No upgrade path exists on that line: the advisory names no patched 3.x release, and the plugins
+call the CommonJS default-export function that minimatch 10 and 11 no longer provide, so an override
+would break the lint rather than fix it.
 
-Revisit condition: drop this entry as soon as http-cache-semantics publishes a patched release, or
-once @sigstore/sign stops depending on make-fetch-happen. Recorded during #3534 (PR #3679): GitHub
-reviewed the advisory on 2026-10-02 at 22:36 UTC, after the last green scan on dev, and OSV began
-matching it minutes later.
+Revisit condition: drop this entry once the eslint plugins move to minimatch >= 11.0.1 or minimatch
+publishes a patched 3.x release. Recorded during #3907 (PR #4167): GitHub reviewed the advisory on
+2026-10-30 at 23:09 UTC and the OSV scan of every branch failed from then on.
 """

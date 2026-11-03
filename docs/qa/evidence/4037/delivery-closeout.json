@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "classification": "Owner-authorized scoped delivery closeout; original full functional acceptance explicitly deferred, not claimed.",
+  "parentCommit": "74a210ed0d519a07d94510069f2415025c1161a0",
+  "followUp": "https://github.com/oscharko-dev/Keiko/issues/4051",
+  "predecessors": [4037, 4040, 4017, 4018, 4019, 4020, 4021, 4042, 4043, 4047],
+  "behavior": [
+    "Keep mobile canvas controls and workbench review actions reachable in the actual available height.",
+    "Reuse validated TS/TSX/JSON parse diagnostics; unknown metadata and other script kinds keep the real public compiler fallback.",
+    "Admit only the mandatory Linux supervisor in managed-layout validation. Preserve real native protocol and existing pin invariants in fixtures.",
+    "Keep Windows single-invocation fixture path arrays off the stack. Regenerate actual inventories without changing floors."
+  ],
+  "sourceBindings": [
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c",
+      "sha256": "44f5eaf42ac11afd076db0ce8b71b6b7c3107b16274a72257834d5f84ec64511"
+    },
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-code-inventory.generated.ts",
+      "sha256": "7b298a90e22869f6948be10b4ebcf7f6499c9719974dfdfb80764afcda7192de"
+    },
+    {
+      "path": "packages/keiko-cli/src/portable-maintenance.test.ts",
+      "sha256": "b5b2ce3d136b0298e03975bde182f64d98fdf4a46ada0a8aadade5e1416daa64"
+    },
+    {
+      "path": "packages/keiko-cli/src/portable-maintenance.ts",
+      "sha256": "4d0ca50f00fd03dcb4d37ff50418b9b80ad8d9326a67f37a17f5641efaf7aea5"
+    },
+    {
+      "path": "packages/keiko-security/src/fs-hardening.test.ts",
+      "sha256": "f2612cb78c0f99a70bd59e55b6c727893f60c06024df7b1781fe26198e96ef13"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-typescript-diagnostics.test.ts",
+      "sha256": "6a450c0cca606d44fd194072ac04f76af76e8e069610b8f6ed3682be8e5e47f8"
+    },
+    {
+      "path": "packages/keiko-security/src/redaction-typescript.ts",
+      "sha256": "e8cff42be5e4a18a587ac30cac5de8787ecd5efe91f4fd12ed6d0ef38f56aa7c"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-sidecar-gateway.test.ts",
+      "sha256": "31b7348b69e77469933058fb1bc8876eb1476572e610817d3c78dd1fec2e3dba"
+    },
+    {
+      "path": "packages/keiko-server/src/gitManagedAppSessionAuthorization.test.ts",
+      "sha256": "3c86ea7db4e372526280b7de768bc296d8f4621dd63edf3f49133cb945a79609"
+    },
+    {
+      "path": "packages/keiko-server/src/gitRoutes.test.ts",
+      "sha256": "1f4d66d87e84c44e79b9d1ae5938e8b57ac93b2b15a04a720154a0fe6ff2fa7a"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Workspace.tsx",
+      "sha256": "20ddab93c7e14411aeaa6da89d4c7f42e9821016923fd6ff2ea9ed7b3e83b3fc"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/WorkspaceControls.module.css",
+      "sha256": "a3532d6a36bd35193a88c68beb984edd51c530f74f24af2a41d64fd5ce88b5eb"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css",
+      "sha256": "3ff4201894a30a20a52599b28f323c6a8b9504f0bb85afefa9b284eb2971dd79"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx",
+      "sha256": "72af3fc2cb0308fb1a9afc21b3dcdfbc8af19fd76725fe55abbafdb151ef6ec4"
+    },
+    {
+      "path": "packages/keiko-workflows/src/bug-investigation/report.test.ts",
+      "sha256": "b51948a0379ff2fb34bbe238e14ec126647d208552f6d6977714b0c1a8c49505"
+    },
+    {
+      "path": "packages/keiko-workflows/src/unit-tests/report.test.ts",
+      "sha256": "a03e7be309d25f61147ffa605621e826c80ffafebc8a2ec3044bc1fd9709e8a4"
+    },
+    {
+      "path": "scripts/__tests__/macos-system-extension-manager.test.mjs",
+      "sha256": "5d16a3e7a96615bcd0d574767afdf89da218ff84c462928a9c12594aa86f4f43"
+    },
+    {
+      "path": "scripts/__tests__/runtime-override-projection.test.mjs",
+      "sha256": "a0904a6f203c931a3c90fbdaa423a8393271805693368e92b06d6f84556d73aa"
+    },
+    {
+      "path": "scripts/__tests__/support/macos-owned-wait-fixture.mjs",
+      "sha256": "bc08fa21fa1dfd77d60aa7a66cdd19f9105d3e1d133ddbb0033f0c3a0b09141d"
+    },
+    {
+      "path": "scripts/native-quality-scope.json",
+      "sha256": "183b80ba88a0bca33a1cd097f61ba574572b475be954a6d94608d5d1d1d578eb"
+    },
+    {
+      "path": "scripts/portable-launch-setup-smoke.mjs",
+      "sha256": "9a3b7e9dc579d31c08171182463f9402142ca56bea52a3dece06c533c95a0917"
+    },
+    {
+      "path": "tests/fixtures/macos-owned-wait-main.c",
+      "sha256": "5cd0ff3423c562f564893b7e0e132fb7dbee9d9891620325955aef524224d458"
+    }
+  ],
+  "gates": [
+    {
+      "name": "delivery-final-typecheck-v2",
+      "exitCode": 0,
+      "receiptSha256": "1651f3c1fe24975df609a3f4f906fd15a2d64bc9e278c25bdfe9cf42f5c3a737",
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "name": "delivery-final-lint-v3",
+      "exitCode": 0,
+      "receiptSha256": "33d91339a7e5eabe070cbc796de63fabcb5c169d78579627359c1f9180bfee6c",
+      "logSha256": "13c3b8c614fe6773027b77d75ed516807cf7bd0813959cc8cfd680dc86681550"
+    },
+    {
+      "name": "delivery-syntax-parent-lint-v1",
+      "exitCode": 0,
+      "receiptSha256": "61d980e107e56bb005df86d0a9b04e337e453312efbe6b8ac6e9556a03b325bb",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "delivery-final-ui-coverage-v2",
+      "exitCode": 0,
+      "receiptSha256": "878f33d211518e0a9728facaf7a82d7d907b8d1484eca1ae550978e5fe9f5054",
+      "logSha256": "cc4ec3989253760856c737899025ba306ddcb785e4661383e615d49947700d58"
+    },
+    {
+      "name": "delivery-final-update-evidence-check-v1",
+      "exitCode": 0,
+      "receiptSha256": "6d9579004321c80d2c2b2df5e4eb3d7161dc551fedc842c4cab157ef6fff3171",
+      "logSha256": "80cde8f932ff5486980875c4619b9a9a7d9845c7ea5ba066f674f96bf518fa43"
+    },
+    {
+      "name": "delivery-final-editor-evidence-check-v1",
+      "exitCode": 0,
+      "receiptSha256": "434ba2a66f01f073f3f49a307b10af7963c5b27f8eb863ce2e8eacd2d373ed2c",
+      "logSha256": "4fbebddfd6c8f111327a91d30fdbd65299f85a4d5e12d5f4c39c66ca5894097f"
+    },
+    {
+      "name": "delivery-final-affected-tests-v1",
+      "exitCode": 0,
+      "receiptSha256": "bf6829cafed52993223e96a9e6c4a52a0dfb5bb94c4dcbee733e955d33c0f7fd",
+      "logSha256": "8b9a9007a6c99e0a1274fa7f9662fa77524f44c9204ed29210615d37df06650f"
+    },
+    {
+      "name": "delivery-final-test-corrections-v1",
+      "exitCode": 0,
+      "receiptSha256": "d11bab66e09b968f0dc961bd216cc4f86dd9ce55c7d1a76908bf5d85cebad89c",
+      "logSha256": "e4ad12e07088fba1b724f6561ac34bfbfa92fb37bfc8bb72e013a99d125934a3"
+    },
+    {
+      "name": "delivery-syntax-parent-fallback-v1",
+      "exitCode": 0,
+      "receiptSha256": "e304aa86e19d6b4b0eb46d5a7ae2df44c6df73bda16541cbf46d9a816d0a0705",
+      "logSha256": "c98967d6c8d91f586ac1eff35eb99d119b799bbbf922d17a6f7db240842c2e9d"
+    },
+    {
+      "name": "delivery-mobile-scoped-v4",
+      "exitCode": 0,
+      "receiptSha256": "53cb624eb13e31dd193b06542fc9b1493eec76a0dec2bf36be8c3df55d3982e6",
+      "logSha256": "7bd650c2fe7dff1457033aa86698d86c91b08ff93b131342355504a8c12ddc71"
+    },
+    {
+      "name": "delivery-mobile-affected-smoke-v1",
+      "exitCode": 0,
+      "receiptSha256": "0b703a6789247790bdf40723c44c383053aa176c7a81f351f3f0ffea42ff0fbd",
+      "logSha256": "20f4c5b3b5607a32bb73c7b6dde04aa3a2d988a6b77df83a6f62a8f49b38dc1b"
+    },
+    {
+      "name": "delivery-final-activity-v1",
+      "exitCode": 0,
+      "receiptSha256": "b37a959dc825e1e764e43e52e694e6002899295388c6c793bc7de0ad36f6406e",
+      "logSha256": "045675dd3ad8aefbfb53cb6f0bfd59a26bd69bc0b72b77ec7d3888f2b114d9df"
+    },
+    {
+      "name": "delivery-final-area-gates-v1",
+      "exitCode": 0,
+      "receiptSha256": "0287b21aaefb8cc99b6334bb9251ca1901a1f2eb7afce718ca2213b8a66a169a",
+      "logSha256": "a952f06dfc7495ab11c2333a556f51592b5f8e9d12c24a3fb49ab6b0ea02285a"
+    },
+    {
+      "name": "delivery-late-review-test-v1",
+      "exitCode": 0,
+      "receiptSha256": "738341702258a5f8749e41adc68689c17ead86ab8a68dd8c9b68237a34c62b73",
+      "logSha256": "745d78b8f4e4f81a9edfcac71775a2d95e68ed02a2a986c31bb72c6b25e69505"
+    },
+    {
+      "name": "delivery-late-review-lint-v1",
+      "exitCode": 0,
+      "receiptSha256": "b4ff5e9e06c7d5625c692ced0045c0c9e0842e1777cb8ab294e99e2104511d1a",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "testCounts": {
+    "affected": {
+      "passed": 1907,
+      "failed": 0,
+      "existingWindowsOnlySkipped": 3
+    },
+    "corrections": {
+      "passed": 368,
+      "failed": 0
+    },
+    "syntaxFallbackSuite": {
+      "passed": 24,
+      "failed": 0
+    },
+    "plannerBoundarySuite": {
+      "passed": 7,
+      "failed": 0
+    },
+    "mobileNarrow": {
+      "passed": 2,
+      "failed": 0
+    },
+    "mobileAffectedSmoke": {
+      "passed": 4,
+      "failed": 0
+    },
+    "updaterEvidenceJourneys": {
+      "passed": 9,
+      "failed": 0
+    },
+    "linuxFilesystem": {
+      "passed": 105,
+      "failed": 0
+    },
+    "linuxPortableOrdinaryHome": {
+      "passed": 5,
+      "failed": 0
+    }
+  },
+  "scopeReconciliation": [
+    "Typecheck and root/UI lint cover final production code; subsequent additions are the independently checked diagnostics compatibility control and planner negative tests, each with targeted lint.",
+    "Activity Log completed all seven controls. Its wrapper source-change flag records only this directory README being added during the run; no product or test input changed.",
+    "Affected1907 tests completed against unchanged source and Node output;40 static UI output changes belong exclusively to the separate original evidence producer.",
+    "Mobile4 final scoped source is bound independently; both unchanged original narrow tests and all four affected smoke journeys pass.",
+    "The prior tmpfs-home portable timeout remains unexplained. The same original suite with ordinary private home passes without warm-up, recovery injection or timeout change.",
+    "The local Linux M3 comparison improved199.4 to149.8ms under the unchanged500ms cap; exact-head hosted CI still owns its platform verdict.",
+    "Full release coverage and exact-head app-bound CI/review settlement are integration conditions, not results inferred from these scoped receipts."
+  ],
+  "preservedLimits": [
+    "No proven Java/React skill advantage, unused-task acceptance or model plateau. Stopped model campaign and original failures remain documented in4051.",
+    "No recovered private pre-PR44 history; replacement fixtures do not establish historical continuity.",
+    "No installed distinct-version update, native generation handoff, cross-browser profile restart or SSD acceptance inferred from synthetic controls.",
+    "No raw incomplete-diff privacy fallback; useful bounded metadata presentation remains deferred.",
+    "Predecessor closure is supersession after verified merge, not completion of unfulfilled functional criteria."
+  ]
+}

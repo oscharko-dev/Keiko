@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
@@ -13,15 +13,19 @@ import {
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import { ApiError } from "./api";
+import { useCodingAppSessionRedemptions } from "./coding-app-session-client";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import {
+  decideCodingWorkbenchRuntimeApproval,
   getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeStatus,
+  isCodingWorkbenchPreempted,
   retryCodingWorkbenchRuntime,
   startCodingWorkbenchRuntime,
   stopCodingWorkbenchRuntime,
   takeOverCodingWorkbenchRuntime,
   acknowledgeCodingWorkbenchRuntimeRecovery,
+  submitCodingWorkbenchRuntimeInboxAction,
 } from "./coding-workbench-runtime-api";
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -52,6 +56,7 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./coding-workbench-runtime-api")>();
   return {
     ...actual,
+    decideCodingWorkbenchRuntimeApproval: vi.fn(),
     getCodingWorkbenchRuntimeReadiness: vi.fn(),
     getCodingWorkbenchRuntimeStatus: vi.fn(),
     startCodingWorkbenchRuntime: vi.fn(),
@@ -59,6 +64,7 @@ vi.mock("./coding-workbench-runtime-api", async (importOriginal) => {
     stopCodingWorkbenchRuntime: vi.fn(),
     takeOverCodingWorkbenchRuntime: vi.fn(),
     acknowledgeCodingWorkbenchRuntimeRecovery: vi.fn(),
+    submitCodingWorkbenchRuntimeInboxAction: vi.fn(),
   };
 });
 
@@ -520,6 +526,7 @@ describe("useCodingWorkbenchRuntimeResources runtime and run refresh", () => {
       deploymentCeiling: "autonomous-delivery",
       effectiveMode: "governed-assist",
       runtimeAvailable: true,
+      selectableAgents: ["build"],
     } as const;
     vi.mocked(getCodingWorkbenchRuntimeReadiness).mockResolvedValueOnce(readiness);
     const { resources, dispatch } = renderResources(runtimeState());
@@ -575,6 +582,26 @@ describe("useCodingWorkbenchRuntimeResources runtime and run refresh", () => {
       "[keiko] coding workbench run status read failed",
       { kind: "other", errorKind: "unavailable", correlationId: "corr-run-status" },
     );
+  });
+
+  // #4109: a status read that hit its own deadline is recorded by the API layer with its call kind
+  // and deadline; the read adds no second, generic note for the same timeout.
+  it("maps a status read that hit its deadline without a second generic note", async () => {
+    vi.mocked(getCodingWorkbenchRuntimeStatus).mockRejectedValueOnce(
+      new DOMException("The operation timed out.", "TimeoutError"),
+    );
+    const { resources, dispatch } = renderResources(runtimeState());
+
+    await act(() => resources.refreshRun());
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "resource-failed",
+        resource: "run",
+        error: expect.objectContaining({ code: "CODING_RUNTIME_REQUEST_TIMEOUT" }),
+      }),
+    );
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
   });
 });
 
@@ -635,6 +662,394 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
   });
 
+  // ADR-0141 D6: a run control from a browser whose app session was revoked is answered with the
+  // existence-concealing not-found result. The refusal alone cannot say which it was, so every
+  // session-dependent read runs again and reports the honest pairing state (#2478).
+  it("re-inspects the app session when a run control is refused as not found", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_RUN_NOT_FOUND", "Runtime run was not found.", 404),
+    );
+    const session = renderHook(() => useCodingAppSessionRedemptions());
+    const before = session.result.current;
+    const { mutations, dispatch } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(() => mutations.stop());
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mutation-failed",
+        error: expect.objectContaining({ code: "CODING_RUNTIME_RUN_NOT_FOUND" }),
+      }),
+    );
+    expect(session.result.current).toBe(before + 1);
+  });
+
+  // #4109 moved the control's failure handling out of its catch: a refused or failed control that
+  // did not hit its own deadline must still leave one body-free note with its correlation.
+  it("records a refused run control once, with its error kind and correlation", async () => {
+    const refused = new ApiError("CODING_RUNTIME_UNAVAILABLE", "runtime offline", 503);
+    refused.correlationId = "corr-stop-1";
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(refused);
+    const { mutations } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(() => mutations.stop());
+
+    expect(reportClientDiagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench run control failed",
+      expect.objectContaining({ kind: "other", correlationId: "corr-stop-1" }),
+    );
+  });
+
+  it("leaves the app session reads alone for any other refused run control", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_REVISION_CONFLICT", "Runtime revision is stale.", 409),
+    );
+    const session = renderHook(() => useCodingAppSessionRedemptions());
+    const before = session.result.current;
+    const { mutations } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(() => mutations.stop());
+
+    expect(session.result.current).toBe(before);
+  });
+
+  // Stability audit item 7: a 409 means the server holds a state this window has not seen yet, so
+  // the failed action's alert is followed by a re-read that lets the newer snapshot supersede it.
+  it("re-reads the run after a conflict-class refusal, once the failure is recorded", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_REVISION_CONFLICT", "Runtime revision is stale.", 409),
+    );
+    const { mutations, dispatch, refreshRun } = renderMutations(
+      readyRunState(snapshot({ state: "running" })),
+    );
+
+    await act(() => mutations.stop());
+
+    expect(refreshRun).toHaveBeenCalledTimes(1);
+    const failedAt = dispatch.mock.calls.findIndex(([a]) => a.kind === "mutation-failed");
+    expect(failedAt).toBeGreaterThanOrEqual(0);
+    expect(refreshRun.mock.invocationCallOrder[0]).toBeGreaterThan(
+      dispatch.mock.invocationCallOrder[failedAt] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("does not re-read the run for a transport failure or a client-side gate refusal", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime).mockRejectedValueOnce(
+      new ApiError("CODING_RUNTIME_UNAVAILABLE", "runtime offline", 503),
+    );
+    const { mutations, refreshRun } = renderMutations(
+      readyRunState(snapshot({ state: "running" })),
+    );
+    await act(() => mutations.stop());
+    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
+    expect(refreshRun).not.toHaveBeenCalled();
+  });
+
+  // Stability audit item 1: a control the BFF never answered fails on the client's own deadline,
+  // which fails its queue item (re-enabling Stop/Approve/Deny) and lets the next one run.
+  it("fails a control that hit its deadline, records it, and lets the next queued control run", async () => {
+    vi.mocked(stopCodingWorkbenchRuntime)
+      .mockRejectedValueOnce(new DOMException("The operation timed out.", "TimeoutError"))
+      .mockResolvedValueOnce(snapshot({ state: "stopping" }));
+    const { mutations, dispatch } = renderMutations(readyRunState(snapshot({ state: "running" })));
+
+    await act(async () => {
+      await Promise.all([mutations.stop(), mutations.stop()]);
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mutation-failed",
+        error: expect.objectContaining({
+          code: "CODING_RUNTIME_REQUEST_TIMEOUT",
+          retryable: true,
+        }),
+      }),
+    );
+    // The API layer records the expiry with its call kind and deadline (coding-workbench-runtime-api
+    // .deadline.test.ts); the queue adds no second, generic note for the same timeout (#4109).
+    expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    expect(stopCodingWorkbenchRuntime).toHaveBeenCalledTimes(2);
+    expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+  });
+
+  // #4109: Stop is never queued behind a mutation that is still waiting for the server.
+  describe("Stop preemption", () => {
+    afterEach(() => {
+      vi.mocked(decideCodingWorkbenchRuntimeApproval).mockReset();
+      vi.mocked(startCodingWorkbenchRuntime).mockReset();
+      vi.mocked(stopCodingWorkbenchRuntime).mockReset();
+      vi.mocked(takeOverCodingWorkbenchRuntime).mockReset();
+    });
+
+    interface HeldCall {
+      readonly signal: AbortSignal | undefined;
+      readonly resolve: (value: CodingWorkbenchRuntimeSnapshot) => void;
+    }
+
+    // A call the server never answers: it settles only when the caller releases it or its signal
+    // aborts, exactly as the real fetch behind it would.
+    function holdCalls(): HeldCall[] {
+      const held: HeldCall[] = [];
+      const hold = (...args: readonly unknown[]): Promise<CodingWorkbenchRuntimeSnapshot> =>
+        new Promise((resolve, reject) => {
+          const signal = args.find((arg): arg is AbortSignal => arg instanceof AbortSignal);
+          held.push({ signal, resolve });
+          signal?.addEventListener("abort", () => {
+            reject(signal.reason as unknown);
+          });
+        });
+      vi.mocked(decideCodingWorkbenchRuntimeApproval).mockImplementation(hold);
+      vi.mocked(startCodingWorkbenchRuntime).mockImplementation(hold);
+      vi.mocked(stopCodingWorkbenchRuntime).mockImplementation(hold);
+      vi.mocked(takeOverCodingWorkbenchRuntime).mockImplementation(hold);
+      return held;
+    }
+
+    const PENDING_PERMISSION = {
+      requestId: "permission-1",
+      tool: "edit",
+      risk: "high",
+    } as unknown as CodingWorkbenchRuntimeSnapshot["pendingPermission"];
+
+    function awaitingApprovalState(): CodingWorkbenchRuntimeState {
+      return readyRunState(
+        snapshot({ state: "awaiting-approval", pendingPermission: PENDING_PERMISSION }),
+      );
+    }
+
+    function startedKinds(dispatch: ReturnType<typeof vi.fn>): unknown[] {
+      return dispatch.mock.calls
+        .map(([action]) => action as { kind: string; mutation?: string })
+        .filter((action) => action.kind === "mutation-start")
+        .map((action) => action.mutation);
+    }
+
+    it("aborts a pending approval's wait, starts Stop at once and raises no alert", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch, refreshRun } = renderMutations(awaitingApprovalState());
+
+      await act(async () => {
+        const approval = mutations.decideApproval("approved");
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        const stop = mutations.stop();
+        // The approval's client wait ended with the preemption reason; the Stop call is on the wire.
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(2);
+        });
+        expect(held[0]?.signal?.aborted).toBe(true);
+        expect(isCodingWorkbenchPreempted(held[0]?.signal?.reason)).toBe(true);
+        expect(held[1]?.signal?.aborted).toBe(false);
+        held[1]?.resolve(snapshot({ state: "stopping", revision: 9 }));
+        await Promise.all([approval, stop]);
+      });
+
+      expect(startedKinds(dispatch)).toEqual(["approval", "stop"]);
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+      expect(dispatch).toHaveBeenLastCalledWith({ kind: "mutation-complete" });
+      // Server truth reconciles through the Stop answer, never through the preempted approval.
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "run-set",
+        snapshot: snapshot({ state: "stopping", revision: 9 }),
+      });
+      expect(refreshRun).not.toHaveBeenCalled();
+      expect(reportClientDiagnostic).not.toHaveBeenCalled();
+    });
+
+    it("drops what an approval that already answered would have done once Stop took its place", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch } = renderMutations(awaitingApprovalState());
+
+      await act(async () => {
+        const approval = mutations.decideApproval("approved");
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        // The answer lands in the same turn as the preemption: it is dropped, not installed.
+        held[0]?.resolve(snapshot({ state: "running", revision: 5 }));
+        const stop = mutations.stop();
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(2);
+        });
+        held[1]?.resolve(snapshot({ state: "stopping", revision: 6 }));
+        await Promise.all([approval, stop]);
+      });
+
+      expect(dispatch).not.toHaveBeenCalledWith({
+        kind: "run-set",
+        snapshot: snapshot({ state: "running", revision: 5 }),
+      });
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "run-set",
+        snapshot: snapshot({ state: "stopping", revision: 6 }),
+      });
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+    });
+
+    it("does not preempt another Stop, which waits for the first", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch } = renderMutations(
+        readyRunState(snapshot({ state: "running" })),
+      );
+
+      await act(async () => {
+        const first = mutations.stop();
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        const second = mutations.stop();
+        await Promise.resolve();
+        await Promise.resolve();
+        // The second Stop neither aborted the first nor started beside it.
+        expect(held).toHaveLength(1);
+        expect(held[0]?.signal?.aborted).toBe(false);
+
+        held[0]?.resolve(snapshot({ state: "stopping" }));
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(2);
+        });
+        held[1]?.resolve(snapshot({ state: "stopping" }));
+        await Promise.all([first, second]);
+      });
+
+      expect(stopCodingWorkbenchRuntime).toHaveBeenCalledTimes(2);
+      expect(held[0]?.signal?.aborted).toBe(false);
+      expect(held[1]?.signal?.aborted).toBe(false);
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+    });
+
+    it("drops a mutation that was still queued behind the preempted one", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch } = renderMutations(awaitingApprovalState());
+
+      await act(async () => {
+        const approval = mutations.decideApproval("approved");
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        const takeover = mutations.takeover();
+        const stop = mutations.stop();
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(2);
+        });
+        held[1]?.resolve(snapshot({ state: "stopping" }));
+        await Promise.all([approval, takeover, stop]);
+      });
+
+      expect(takeOverCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      expect(stopCodingWorkbenchRuntime).toHaveBeenCalledTimes(1);
+      expect(startedKinds(dispatch)).toEqual(["approval", "stop"]);
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+    });
+
+    it("leaves a pending mutation alone when Stop has no run to stop", async () => {
+      const held = holdCalls();
+      const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));
+
+      await act(async () => {
+        const start = mutations.start("write the failing test first", {
+          projectMemoryEnabled: true,
+        });
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        const stop = mutations.stop();
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(held[0]?.signal?.aborted).toBe(false);
+        held[0]?.resolve(snapshot({ state: "starting" }));
+        await Promise.all([start, stop]);
+      });
+
+      expect(stopCodingWorkbenchRuntime).not.toHaveBeenCalled();
+      expect(dispatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "mutation-failed",
+          error: expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+        }),
+      );
+    });
+
+    it("ends a preempted mutation's re-read at once instead of holding Stop behind it", async () => {
+      const held = holdCalls();
+      const { mutations, refreshRun, dispatch } = renderMutations(awaitingApprovalState());
+      // The approval answers for another run, so it re-reads the run, and the re-read never
+      // returns: a join on a hung status read must not delay Stop either.
+      refreshRun.mockImplementationOnce(() => new Promise<void>(() => undefined));
+
+      await act(async () => {
+        const approval = mutations.decideApproval("approved");
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(1);
+        });
+        held[0]?.resolve(snapshot({ runId: "run-2" }));
+        await vi.waitFor(() => {
+          expect(refreshRun).toHaveBeenCalledTimes(1);
+        });
+        const stop = mutations.stop();
+        await vi.waitFor(() => {
+          expect(held).toHaveLength(2);
+        });
+        held[1]?.resolve(snapshot({ state: "stopping" }));
+        await Promise.all([approval, stop]);
+      });
+
+      expect(startedKinds(dispatch)).toEqual(["approval", "stop"]);
+      expect(dispatch).not.toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "mutation-failed" }),
+      );
+    });
+  });
+
+  it("routes a waiting-message action through the queue, bound to the observed revision", async () => {
+    vi.mocked(submitCodingWorkbenchRuntimeInboxAction).mockResolvedValue(snapshot({ revision: 5 }));
+    const { mutations, dispatch } = renderMutations(
+      readyRunState(snapshot({ state: "running", revision: 4 })),
+    );
+
+    await act(() => mutations.inboxAction("promote", "msg_16b08469d001DaT0xxHG2PAKe6"));
+
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "mutation-start", mutation: "inbox" }),
+    );
+    expect(submitCodingWorkbenchRuntimeInboxAction).toHaveBeenCalledWith(
+      "run-1",
+      {
+        requestId: expect.any(String) as unknown,
+        expectedRevision: 4,
+        action: "promote",
+        itemId: "msg_16b08469d001DaT0xxHG2PAKe6",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
+  });
+
+  it("reports a waiting-message action against a run that is not running without sending it", async () => {
+    vi.mocked(submitCodingWorkbenchRuntimeInboxAction).mockClear();
+    const { mutations, dispatch } = renderMutations(readyRunState(snapshot({ state: "paused" })));
+
+    await act(() => mutations.inboxAction("cancel", "msg_16b08469d001DaT0xxHG2PAKe6"));
+
+    expect(submitCodingWorkbenchRuntimeInboxAction).not.toHaveBeenCalled();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "mutation-failed",
+        error: expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+      }),
+    );
+  });
+
   it("routes takeover, retry and recovery acknowledgement through the queue", async () => {
     vi.mocked(takeOverCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "taken-over" }));
     vi.mocked(retryCodingWorkbenchRuntime).mockResolvedValue(snapshot({ revision: 5 }));
@@ -644,7 +1059,11 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
 
     const { mutations: takeoverMutations } = renderMutations(readyRunState(snapshot()));
     await act(() => takeoverMutations.takeover());
-    expect(takeOverCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", { requestId: "run-1" });
+    expect(takeOverCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      "run-1",
+      { requestId: "run-1" },
+      expect.any(AbortSignal),
+    );
 
     const { mutations: retryMutations } = renderMutations(
       readyRunState(snapshot(), { canRetry: true }),
@@ -653,16 +1072,18 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
     expect(retryCodingWorkbenchRuntime).toHaveBeenCalledWith(
       "run-1",
       expect.objectContaining({ taskIntent: "try again" }),
+      expect.any(AbortSignal),
     );
 
     const { mutations: recoveryMutations, dispatch } = renderMutations(
       readyRunState(snapshot({ state: "recovery-required" })),
     );
     await act(() => recoveryMutations.acknowledgeRecovery());
-    expect(acknowledgeCodingWorkbenchRuntimeRecovery).toHaveBeenCalledWith("run-1", {
-      requestId: "run-1",
-      acknowledged: true,
-    });
+    expect(acknowledgeCodingWorkbenchRuntimeRecovery).toHaveBeenCalledWith(
+      "run-1",
+      { requestId: "run-1", acknowledged: true },
+      expect.any(AbortSignal),
+    );
     expect(dispatch).toHaveBeenCalledWith({ kind: "mutation-complete" });
   });
 });

@@ -6,6 +6,8 @@ import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparator
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { catalogArray, catalogObject, catalogString, copyCatalogJson } from "./json.js";
 import { requireCatalog, type CatalogSchemaMismatch } from "./errors.js";
+import { isExternalJsonSchemaDialect } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
+import { compileExternalCatalogSchema, externalCatalogSchemaMismatch } from "./external-schema.js";
 
 const TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const COMMON_KEYS = new Set(["type", "description", "enum", "const"]);
@@ -139,7 +141,10 @@ function normalizeTypedSchema(schema: CatalogJsonObject, type: string): CatalogJ
 
 /** Closed common dialect: unsupported keywords are errors, never dropped transformations. */
 export function compileCatalogSchema(value: unknown): CatalogJsonObject {
-  return normalizeSchema(catalogObject(copyCatalogJson(value)));
+  const schema = catalogObject(copyCatalogJson(value));
+  return isExternalJsonSchemaDialect(schema.$schema)
+    ? compileExternalCatalogSchema(schema)
+    : normalizeSchema(schema);
 }
 
 function withinNumericBounds(
@@ -307,6 +312,8 @@ export function describeCatalogSchemaMismatch(
   schema: CatalogJsonObject,
   value: CatalogJsonValue,
 ): CatalogSchemaMismatch | undefined {
+  if (isExternalJsonSchemaDialect(schema.$schema))
+    return externalCatalogSchemaMismatch(schema, value);
   const out: MismatchCollector = {
     missingRequired: new Set<string>(),
     invalidPaths: new Set<string>(),

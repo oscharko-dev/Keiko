@@ -1,6 +1,9 @@
 "use client";
 
 import dynamic from "next/dynamic";
+const McpSettingsPanel = dynamic(() =>
+  import("./McpSettingsPanel").then((module) => module.McpSettingsPanel),
+);
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
@@ -40,6 +43,7 @@ import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
 import { AutonomySettings } from "./AutonomySettings";
+import { BrowserApprovalSettings } from "../../browser/BrowserApprovalSettings";
 import { OPEN_EDITOR_SETTINGS_EVENT } from "./settingsPanelEvents";
 import type {
   ConversationIneligibilityReason,
@@ -1422,7 +1426,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
   );
 }
 
-type Tab = "models" | "general" | "editor" | "languages" | "debugging" | "security";
+type Tab = "mcp" | "models" | "general" | "editor" | "languages" | "debugging" | "security";
 
 // uiux-fix C287: raw transport strings ("HTTP 500", "Failed to fetch") are
 // codes, not explanations — map them to a human-readable message. Messages
@@ -1825,15 +1829,25 @@ function ModelsTabContent({
 export function SettingsPanel({
   openUpdatesWindow,
   openWorkspaceTrust,
+  initialTab,
+  onInitialTabHandled,
   root,
 }: {
   readonly openUpdatesWindow?: (() => void) | undefined;
   readonly openWorkspaceTrust?: (() => void) | undefined;
+  readonly initialTab?: "mcp" | undefined;
+  readonly onInitialTabHandled?: (() => void) | undefined;
   readonly root?: string | undefined;
 } = {}): ReactNode {
   const t = useTranslate();
   const workspaceT = useGlobalTranslate();
   const [tab, setTab] = useState<Tab>("models");
+  useEffect(() => {
+    if (initialTab === "mcp") {
+      setTab("mcp");
+      onInitialTabHandled?.();
+    }
+  }, [initialTab, onInitialTabHandled]);
   const [models, setModels] = useState<readonly ModelCapability[]>([]);
   const [config, setConfig] = useState<SafeGatewayConfig | null>(null);
   const [configPresent, setConfigPresent] = useState(false);
@@ -1964,7 +1978,15 @@ export function SettingsPanel({
     <div className="set">
       <div className="set-tabs">
         {(
-          ["models", "general", "editor", "languages", "debugging", "security"] as readonly Tab[]
+          [
+            "models",
+            "mcp",
+            "general",
+            "editor",
+            "languages",
+            "debugging",
+            "security",
+          ] as readonly Tab[]
         ).map((id) => (
           <button
             type="button"
@@ -1986,6 +2008,7 @@ export function SettingsPanel({
         ))}
       </div>
       <div className="set-body">
+        {tab === "mcp" && <McpSettingsPanel />}
         {tab === "models" && (
           <ModelsTabContent
             gatewayConfigured={gatewayConfigured}
@@ -2025,6 +2048,7 @@ export function SettingsPanel({
         {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
           <div className="set-list">
+            <BrowserApprovalSettings />
             <AutonomySettings root={root} />
             <div className="set-sec-h">
               <div>
@@ -2049,6 +2073,7 @@ export function SettingsPanel({
 }
 
 function settingsTabLabel(tab: Tab, t: I18nTranslate): string {
+  if (tab === "mcp") return t("settings.tabs.mcp");
   if (tab === "models") return t("settings.tabs.models");
   if (tab === "general") return t("settings.tabs.general");
   if (tab === "editor") return t("settings.tabs.editor");

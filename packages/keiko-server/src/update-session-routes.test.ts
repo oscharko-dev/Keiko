@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type {
   UpdateRemediationActionRequest,
@@ -256,6 +257,27 @@ afterEach(async () => {
 });
 
 describe("update session routes", () => {
+  it("records the actual session status mode with request correlation", async () => {
+    const events: ServerLogEvent[] = [];
+    await rebuild({
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+    const response = await fetch(`${baseUrl()}/api/update/session`, {
+      headers: { "x-keiko-correlation-id": "mode-owner-session" },
+    });
+    expect(response.status).toBe(200);
+    const event = events.find((candidate) => candidate.op === "update.install-mode.detected");
+    expect(event).toMatchObject({
+      correlationId: "mode-owner-session",
+      extra: { source: "session-status", status: "supported" },
+    });
+    expect(typeof event?.extra?.durationMs).toBe("number");
+  });
+
   it("returns install mode and policy status", async () => {
     const res = await fetch(`${baseUrl()}/api/update/session`);
 

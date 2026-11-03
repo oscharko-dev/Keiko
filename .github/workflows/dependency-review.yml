@@ -21,7 +21,6 @@ on:
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
       - epic/updater-reliability
-      - codex/epic-anti-slop-quality
       - "release/**"
   # ADR-0139 D7: the merge queue re-triggers this workflow so the required check reports on the
   # merge group; the diff itself was already reviewed on the pull request head, so the job is
@@ -40,7 +39,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate reviewed runtime license artifacts
@@ -72,11 +71,11 @@ jobs:
           # transitive dependency: same vendor, same LGPL-3.0-only license, same development-only
           # lint tooling that is never linked into or shipped with Keiko. Owner decision 2026-09-25,
           # #3609; recorded in docs/release/2296-dependency-security-closeout.md.
-          # Reviewed original-host component disposition in #3895: this pinned action ignores
-          # versions in PURLs. The full original component notices remain in the host payload.
-          # Its package-wide exclusions apply only after the required preflight validates every
-          # root/native instance against the same exact version, original SRI and declared license.
-          # Local actual-SBOM checks retain the SPDX parser and preserved shipped notices.
+          # Reviewed component dispositions (#3895, #3906): this pinned action ignores versions in
+          # PURLs, so its package-wide exclusions apply only after the required preflight validates
+          # every root-lock instance against the same exact version, original SRI and declared
+          # license. The retired original-host lock no longer exists (#3897). Local actual-SBOM
+          # checks retain the SPDX parser and preserved shipped notices.
           allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs, pkg:npm/@sonarsource/analyzer-commons-configurations, ${{ steps.runtime-license-policy.outputs.exclusions }}
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 120

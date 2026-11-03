@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { CodingWorkbenchOperatorDecision } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { reportCodingWorkbenchInteraction } from "@/lib/coding-workbench-interaction";
 import { mutateWorkspaceTrust, workspaceTrustFailure } from "@/lib/workspace-trust-api";
 import {
   useWorkspaceTrust,
@@ -224,13 +225,10 @@ function useTrustBindingDiagnostic(binding: CodingWorkbenchRepositoryTrustBindin
   const workspaceId = binding?.workspaceId;
   useEffect(() => {
     if (correlationId !== undefined && repositoryId !== undefined && workspaceId !== undefined) {
-      reportClientDiagnostic("[keiko] coding workbench repository trust bound", {
+      reportCodingWorkbenchInteraction(
+        { interaction: "repository-trust-bound", repositoryId, workspaceId },
         correlationId,
-        workspaceTrustBinding: {
-          repositoryId,
-          workspaceId,
-        },
-      });
+      );
     }
   }, [correlationId, repositoryId, workspaceId]);
 }

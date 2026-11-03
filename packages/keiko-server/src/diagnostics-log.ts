@@ -58,7 +58,12 @@ export const PACK_VALIDATION_REASONS = [
 ] as const;
 export type PackValidationReason = (typeof PACK_VALIDATION_REASONS)[number];
 const PACK_VALIDATION_REASON_SET: ReadonlySet<string> = new Set(PACK_VALIDATION_REASONS);
-const DIAGNOSTIC_OUTCOMES = ["request-failed", "source-skipped", "request-refused"] as const;
+const DIAGNOSTIC_OUTCOMES = [
+  "request-failed",
+  "source-skipped",
+  "request-refused",
+  "provider-busy",
+] as const;
 
 const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -526,7 +531,8 @@ function diagnosticActivityLogEvent(record: ServerDiagnosticRecord): ServerLogEv
     {
       level:
         record.diagnosticOutcome === "source-skipped" ||
-        record.diagnosticOutcome === "request-refused"
+        record.diagnosticOutcome === "request-refused" ||
+        record.diagnosticOutcome === "provider-busy"
           ? "warn"
           : "error",
       correlationId: record.correlationId,
@@ -645,6 +651,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "A detached capsule indexing run failed before reaching a terminal state.",
   "The coding sidecar gateway stream failed mid-response.",
   "Audit or evidence persistence failed.",
+  "Private context checkpoint persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
   "Semantic memory retrieval skipped incompatible embeddings.",
@@ -708,6 +715,12 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "tool-result-render-log-failed",
   // The sidecar tool bridge's own request deadline stopped a call (PR #3452, F44).
   "tool-bridge-deadline",
+  // A native OpenCode child session's ancestry could not be read from the runtime's session list;
+  // the child's permission ask is refused because nothing proves it belongs to the run (#3897).
+  "native-session-ancestry-failed",
+  // #3903 AC4: the managed task-workspace owner failed an approved Code Mode `worktree_create`
+  // without a classified answer; the request is refused and the producer's own call stays blocked.
+  "native-worktree-provision-failed",
   // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
   // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
   // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's
@@ -735,10 +748,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "The gateway context-window probe could not be completed.",
   "A Knowledge Pod question did not fit the model's context window with a single reference.",
   "Model discovery exceeded the discovery cap; setup continued with the retained models.",
-  // KEIKO-0884 (#3333): loopback was the only egress class Gateway Setup accepted with no
-  // configuration signal, no log line, and no opt-in trail. Not a failure — a deliberate, silent
-  // acceptance made operator-visible.
-  "Gateway Setup accepted a loopback candidate target.",
   "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
   // #3591: chat counterpart — a candidate the smoke probe never got an answer from is kept
@@ -766,6 +775,10 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "functional-workspace-read-not-found",
   "functional-workspace-read-permission-denied",
   "atlassian-credential-rejection-activity-log-failed",
+  "atlassian-credential-created-activity-log-failed",
+  "atlassian-credential-list-activity-log-failed",
+  "atlassian-credential-updated-activity-log-failed",
+  "atlassian-connection-check-activity-log-failed",
   // #2906 round 3: update-session-lock.ts's corrupt-lock quarantine prune used to swallow
   // directory/stat/unlink failures outright. "-pruned" reports a clean sweep (occurrenceCount is
   // the removed count); "-prune-degraded" reports one where at least one entry could not be

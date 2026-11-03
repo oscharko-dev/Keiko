@@ -7,6 +7,7 @@ import { createBufferedServerLogSink } from "../../../tests/support/buffered-ser
 
 import { describe, expect, it } from "vitest";
 import {
+  logChatContentPolicyResolved,
   logMemoryAuditStateCacheSeeded,
   logRuntimeShutdown,
   logTaskWorkspaceManifestReconnected,
@@ -36,6 +37,47 @@ describe("logMemoryAuditStateCacheSeeded — Activity Log proof", () => {
       formatActivityLogProofLine(line ?? {}),
     );
     expect(proven).toMatchObject({ recordCount: 42 });
+  });
+});
+
+describe("logChatContentPolicyResolved — Activity Log proof (#4098)", () => {
+  it("records the resolved Chat content policy and its closed setting", () => {
+    const sink = createBufferedServerLogSink();
+
+    logChatContentPolicyResolved(sink, "req-content-policy-0001", {
+      policy: "preserve",
+      setting: "off",
+    });
+
+    expect(sink.events).toHaveLength(1);
+    const [line] = sink.events;
+    expect(line).toMatchObject({
+      level: "info",
+      category: "security",
+      op: "chat.content-policy.resolved",
+      correlationId: "req-content-policy-0001",
+      extra: { policy: "preserve", setting: "off" },
+    });
+    const proven = expectActivityLogProof(
+      "chat.content-policy.resolved.setting",
+      formatActivityLogProofLine(line ?? {}),
+    );
+    expect(proven).toMatchObject({ policy: "preserve", setting: "off" });
+  });
+
+  it("warns when a misspelled setting fails closed to the default projection", () => {
+    const sink = createBufferedServerLogSink();
+
+    logChatContentPolicyResolved(sink, "req-content-policy-0002", {
+      policy: "redact",
+      setting: "invalid",
+    });
+
+    expect(sink.events[0]).toMatchObject({
+      level: "warn",
+      op: "chat.content-policy.resolved",
+      extra: { policy: "redact", setting: "invalid" },
+    });
   });
 });
 

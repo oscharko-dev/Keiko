@@ -34,6 +34,10 @@ vi.mock("@oscharko-dev/keiko-tool-catalog", async (importOriginal) => {
 
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import { nativeTextSnapshotRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  CHANGESET_EDIT_ARGUMENT_LIMITS,
+  TOOL_CATALOG_LIMITS,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
@@ -41,6 +45,7 @@ import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { type ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import {
   openCodeCatalogAliasFor,
+  openCodeCatalogSettlementBudgetMs,
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
@@ -825,13 +830,44 @@ describe("canonical catalog facade bridge", () => {
 });
 
 describe("inactive Code Mode handler coverage", () => {
-  it("binds the actual same seventeen handlers to the selected projection identity", () => {
+  it("binds the actual same nineteen handlers to the selected projection identity", () => {
     const direct = createCanonicalOpenCodeHandlerCoverage(new Set());
     const grouped = createCanonicalOpenCodeHandlerCoverage(new Set(), "code-mode");
     expect(grouped.readinessByToolId).toEqual(direct.readinessByToolId);
-    expect(grouped.readinessByToolId.size).toBe(17);
+    expect(grouped.readinessByToolId.size).toBe(19);
     expect(grouped.handlerSetDigest).not.toBe(direct.handlerSetDigest);
   });
+});
+
+// #3902 AC2: an unstage proposal waits for the operator's approval like a stage proposal, so the
+// tool bridge's deadline must come from the same catalog budget, not the 35 s default.
+it("gives an unstage proposal and its redemption the catalog budget of staging", () => {
+  const unstage = openCodeCatalogSettlementBudgetMs({
+    ...identity,
+    action: "git",
+    operation: "unstage",
+    phase: "propose",
+    paths: ["a.ts"],
+  });
+  expect(unstage).toBeDefined();
+  expect(unstage).toBe(
+    openCodeCatalogSettlementBudgetMs({
+      ...identity,
+      action: "git",
+      operation: "stage",
+      phase: "propose",
+      paths: ["a.ts"],
+    }),
+  );
+  expect(
+    openCodeCatalogSettlementBudgetMs({
+      ...identity,
+      action: "git",
+      operation: "unstage",
+      phase: "execute",
+      proposalId: "unstage-1",
+    }),
+  ).toBeDefined();
 });
 
 it("derives mapped aliases from the existing canonical request producer", () => {
@@ -843,6 +879,25 @@ it("derives mapped aliases from the existing canonical request producer", () => 
       operation: "stage",
       phase: "execute",
       proposalId: "proposal",
+    }),
+  ).toBe("keiko_git_execute");
+  // #3902 AC2: an unstage proposal is keiko_git_stage with `unstage: true`, redeemed by kind.
+  expect(
+    openCodeCatalogAliasFor({
+      ...identity,
+      action: "git",
+      operation: "unstage",
+      phase: "propose",
+      paths: ["a.ts"],
+    }),
+  ).toBe("keiko_git_stage");
+  expect(
+    openCodeCatalogAliasFor({
+      ...identity,
+      action: "git",
+      operation: "unstage",
+      phase: "execute",
+      proposalId: "unstage-1",
     }),
   ).toBe("keiko_git_execute");
   expect(new Set(COVERED.map(openCodeCatalogAliasFor)).size).toBe(COVERED.length);
@@ -1030,3 +1085,65 @@ it.each(["", "long-segment/".repeat(50) + "é.ts"])(
     expect(run).toHaveBeenCalledOnce();
   },
 );
+
+// Owner decision 2026-10-28: a governed changeset edit carries file content up to the changeset cap
+// through the canonical boundary; nothing in binding, staging or settlement refuses it at 64 KiB or
+// 256 KiB, while the cap itself is still a closed refusal.
+describe("a large governed changeset edit through the canonical boundary", () => {
+  function replacementEdit(
+    newString: string,
+  ): Extract<CodingToolActionRequest, { readonly action: "edit" }> {
+    return {
+      ...identity,
+      action: "edit",
+      changeset: {
+        edits: [{ file: "data.json", oldString: "", newString, replaceAll: false }],
+        deletions: [],
+        renames: [],
+        files: [{ file: "data.json", expectedContentHash: "e".repeat(64) }],
+        selectedFiles: ["data.json"],
+      },
+    };
+  }
+
+  it("reads the settlement budget of an edit above the generic argument ceiling", () => {
+    const small = openCodeCatalogSettlementBudgetMs(replacementEdit("x"));
+    expect(small).toBeDefined();
+    const large = replacementEdit("y".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1));
+    expect(openCodeCatalogSettlementBudgetMs(large)).toBe(small);
+  });
+
+  it("binds, stages, runs and settles an edit above the generic ceilings", async () => {
+    const { bridge } = createBridge();
+    const run = vi.fn((_signal: AbortSignal, mutationGuard: { readonly check: () => boolean }) => {
+      expect(mutationGuard.check()).toBe(true);
+      return Promise.resolve({
+        status: "completed" as const,
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      });
+    });
+    const request = replacementEdit("z".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1));
+
+    const result = await bridge.execute(
+      request,
+      { body: JSON.stringify(request), capability: "capability" },
+      run,
+    );
+    expect(result).toMatchObject({ status: "completed" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
+  it("still refuses a string over the changeset cap before any effect", async () => {
+    const { bridge } = createBridge();
+    const run = vi.fn(() => Promise.resolve({ status: "completed" as const, evidence: [] }));
+    const request = replacementEdit("z".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes + 1));
+    const outcome = await bridge
+      .execute(request, { body: JSON.stringify(request), capability: "capability" }, run)
+      .then(
+        (result) => result.status,
+        () => "refused",
+      );
+    expect(outcome).not.toBe("completed");
+    expect(run).not.toHaveBeenCalled();
+  });
+});

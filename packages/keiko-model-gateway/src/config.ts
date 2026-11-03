@@ -4,6 +4,7 @@
 // and are excluded from every serialisation path.
 
 import { readFileSync } from "node:fs";
+import { parseAtlassianNetworkConfig } from "./atlassian-network-config.js";
 import { isIP } from "node:net";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -70,6 +71,9 @@ export function toolCallingConfigurationFingerprint(provider: ModelProviderConfi
     provider.baseUrl,
     provider.endpointStyle ?? "openai-compatible",
     provider.apiVersion ?? "",
+    // The deployment the gateway reports behind the alias (#3905). Appended only once observed, so
+    // a provider whose discovery never saw one keeps the digest its earlier proofs were issued for.
+    ...(provider.deploymentIdentitySha256 === undefined ? [] : [provider.deploymentIdentitySha256]),
   ];
   return sha256Hex(canonicalise(binding));
 }
@@ -1858,6 +1862,7 @@ function parseProviderConfig(
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
     ...tokenCounterConfig(raw.tokenCounter, path),
+    ...deploymentIdentityConfig(raw.deploymentIdentitySha256, path),
     ...catalogOriginConfig(raw.catalogOrigin, path),
     timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
@@ -2324,6 +2329,7 @@ function buildGatewayConfig(
   const figma = parseFigmaConnectorConfig(raw);
   const branding = parseGatewayBrandingConfig(raw);
   const groundedAnswers = parseGroundedAnswersConfig(raw);
+  const atlassian = parseAtlassianNetworkConfig(raw.atlassian);
   const codingOutageWindowMs = parseCodingOutageWindow(raw.codingOutageWindowMs);
   return {
     providers,
@@ -2337,6 +2343,7 @@ function buildGatewayConfig(
     ...(figma !== undefined ? { figma } : {}),
     ...(branding !== undefined ? { branding } : {}),
     ...(groundedAnswers !== undefined ? { groundedAnswers } : {}),
+    ...(atlassian === undefined ? {} : { atlassian }),
   };
 }
 
@@ -2508,4 +2515,17 @@ function tokenCounterConfig(
   return value === undefined
     ? {}
     : { tokenCounter: requireEnum<"litellm">(value, `${path}.tokenCounter`, ["litellm"]) };
+}
+
+function deploymentIdentityConfig(
+  value: unknown,
+  path: string,
+): Pick<ModelProviderConfig, "deploymentIdentitySha256"> {
+  if (value === undefined) return {};
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+    throw new ConfigInvalidError(
+      `${path}.deploymentIdentitySha256 must be a lowercase SHA-256 hex digest`,
+    );
+  }
+  return { deploymentIdentitySha256: value };
 }

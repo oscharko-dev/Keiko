@@ -1,0 +1,1028 @@
+{
+  "schemaVersion": 1,
+  "issue": 4046,
+  "parentHead": "7df36d8ff414e23ce52435f338094d76edb4a656",
+  "recordedAt": "2026-10-21T01:48:52.991367+00:00",
+  "scope": "Stable browser-approval Header geometry and actual invoker focus, preserved native source-check ordering, and complete bounded Firefox smoke distribution. No new authority or original-epic acceptance.",
+  "sourceBindings": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "c76877661b33410fe6fbae2dc40bc0b8215e3c23c2ed1f72ff4cf5eb00de63b7"
+    },
+    {
+      "path": "docs/qa/local-sonar.md",
+      "sha256": "06d7ca688329749e2fef1b6557217c634b0cc6a6dede05376dd1aabcf3c5700a"
+    },
+    {
+      "path": "native/runtime-supervisor/linux/protocol.test.mjs",
+      "sha256": "6c65e8e408409f871050c77ba9e2c48797e77a8388e3584fc70c14d79374427b"
+    },
+    {
+      "path": "native/runtime-supervisor/process_scope_observer_worker_fixture.mjs",
+      "sha256": "6504b21d4cc9f79e50f69b9ffb1e7dfea286d6fb0121afddb9c9f01b9a825ec2"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/AppShell.tsx",
+      "sha256": "69c4fc03a45cb6f7624589fc142d19d3dfd08a0a0269e94b72731b31ceb15c2c"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Header.module.css",
+      "sha256": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Header.tsx",
+      "sha256": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApproval.module.css",
+      "sha256": "8904ebd1c4427bfbfdc75bca09c0e443b0e466e23be4be4c903333d62c4e627b"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx",
+      "sha256": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx",
+      "sha256": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba"
+    },
+    {
+      "path": "release-impact.catalog.json",
+      "sha256": "52ea0e06fad267fcbbba1ab0303162237cc28931963f400c003b0116c93bf844"
+    },
+    {
+      "path": "scripts/__tests__/ci-provenance-authority.test.mjs",
+      "sha256": "4ba8dd7e879c0264f4548ef803765e6c2a612fa35a4a2fed725bfb249af4f3e1"
+    },
+    {
+      "path": "scripts/__tests__/ci-test-gate-wiring.test.mjs",
+      "sha256": "4777114e59825037e44825408cab1ae24bb3d40e70fb79b17a30e4dc42de536c"
+    },
+    {
+      "path": "scripts/__tests__/dev-quality-workflows.test.mjs",
+      "sha256": "12a636bd17195832273d72ad01c7103007f9fa5c5ca8bab1f96e61fdc8217e94"
+    },
+    {
+      "path": "scripts/__tests__/native-protocol-source-contract.test.mjs",
+      "sha256": "126731e9e6c73a764398e3618eb5ab2d4a382a879f058c808c774445ceb6ade5"
+    },
+    {
+      "path": "scripts/__tests__/resolve-verified-tree-evidence-unit.test.mjs",
+      "sha256": "694a49fd079f49eda6c14883f339182381b9752db00ec1634b4eadff940d2474"
+    },
+    {
+      "path": "scripts/__tests__/verified-tree-evidence-reuse.test.mjs",
+      "sha256": "2d80e2ebc507597a82a4c2d488442a13f544faa9e31cea56a5916448765c4b75"
+    },
+    {
+      "path": "scripts/__tests__/workflow-node-toolchain-parity.test.mjs",
+      "sha256": "060158a0fad0076e0816610399cbf5de25330ee57d86a92d7f5b80727a7c1159"
+    },
+    {
+      "path": "scripts/resolve-verified-tree-evidence.mjs",
+      "sha256": "cba51b8482ef30f77e6622d62c13ed7fd10baebf9105992d9488bb1a8b964b3e"
+    },
+    {
+      "path": "tests/e2e/a11y.smoke.spec.ts",
+      "sha256": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa"
+    },
+    {
+      "path": "tests/e2e/footer-window-palette-layering.spec.ts",
+      "sha256": "4735950e6d71ba4f2d0520d2981abb53301ae138ced4551e6f00b8dd35a793f3"
+    },
+    {
+      "path": "tests/e2e/support-report-download.spec.ts",
+      "sha256": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+    }
+  ],
+  "qualification": [
+    {
+      "label": "delivery-final95-typecheck-v1",
+      "receiptSha256": "7d1169860cdf25a143d725ae666b9928c4367ee61b7d6a165aa4e80449acd2f8",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "2de1e03e60e93d1f894b58387cfb071e98fa697455b0bedcbf5b45e903069614",
+      "startedAt": "2026-10-21T01:27:46.495004+00:00",
+      "completedAt": "2026-10-21T01:27:52.854425+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-e2e-lint-v1",
+      "receiptSha256": "df25534c737c2456ef57d92a68c5263de08a8a87e077118e93adfcd321b11068",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "startedAt": "2026-10-21T01:27:52.936815+00:00",
+      "completedAt": "2026-10-21T01:27:58.438542+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-ui-typecheck-v1",
+      "receiptSha256": "fc95a7d873f95f1eae58450d29e5e12cb43004cd090b88204a2adf41c1d35faa",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "164275fc19a33a4256a5f69fd08cce49b3b7271499e0d36cbb5afb257bae8a71",
+      "startedAt": "2026-10-21T01:27:58.510379+00:00",
+      "completedAt": "2026-10-21T01:28:12.097336+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-ui-lint-v1",
+      "receiptSha256": "450b2d41002f74bbd55fb2f151a33b88bbcb71c8143e4ebf36d39114bdc85e00",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "dee1d0914d2f2062295b61c59511e551ce27de26bfd214fa5c24b09549855f94",
+      "startedAt": "2026-10-21T01:28:12.170335+00:00",
+      "completedAt": "2026-10-21T01:28:20.727179+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-format-v1",
+      "receiptSha256": "7b0598bba9ae0a4abc4c3503e500048fff1c0b72d7257befe1b2daf3c5756ad1",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "3a8149c56e5cabb143ebf48322ea0ae3c932d26acbdd1171e0072789c4f4767b",
+      "startedAt": "2026-10-21T01:28:20.800421+00:00",
+      "completedAt": "2026-10-21T01:29:14.061664+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-ui-coverage-v1",
+      "receiptSha256": "7e8a5fbd17255ba491c2c981652f3f6864c031bdc14851efb7255ec302bc07ca",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "a86f0760c92c80a5e508fd9b3005733b2c798423367f3558b8ece9d74ca8b5e8",
+      "startedAt": "2026-10-21T01:29:14.135455+00:00",
+      "completedAt": "2026-10-21T01:30:24.610622+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-ui-build-v1",
+      "receiptSha256": "16b572f315738102df8b80ad4937c6b9a0fbb783f3317223c9c3ab6a62d400a4",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "1ef0a2521343960cf753d7e5d129bbe62aa46853ac27eb5403440b40ad26b94e",
+      "startedAt": "2026-10-21T01:30:24.692743+00:00",
+      "completedAt": "2026-10-21T01:30:29.266639+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-editor-evidence-v1",
+      "receiptSha256": "d29f61ede8a32893a729ed92fa16325bb31523d9078979542930fd26b1678fae",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "20a19c8c9cfba91d369d387206e895361b4ca99a46f81961a1f7eb8265003c09",
+      "startedAt": "2026-10-21T01:30:29.343743+00:00",
+      "completedAt": "2026-10-21T01:30:29.735126+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-e2e-wiring-v1",
+      "receiptSha256": "7dca25ce3918b9b78891e8dd8d6d1e70753cf40078cc2b5582086a7a8a820118",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "dc2e77c9f723a241ab7c784389e77179ec525a320e390bab33ab8e64fd80c316",
+      "startedAt": "2026-10-21T01:30:29.816222+00:00",
+      "completedAt": "2026-10-21T01:30:31.819825+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-arch-v1",
+      "receiptSha256": "41692087cc959dee15fe0f89778d226daff5d36ed8c11fe49f7f810511696467",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "55f62df88b556c5a90497a3aa4e8d36c75651fb2088664753802f1fb419d8aad",
+      "startedAt": "2026-10-21T01:30:31.897629+00:00",
+      "completedAt": "2026-10-21T01:30:53.756252+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-arch-negative-v1",
+      "receiptSha256": "5ffb3a3a02c4d6fc5ce5119d76758f3f96a6db62ff828906e4181d90daadff89",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e68174d4b07ba0701427b21cf4e9ce0a302560e1572fc05afc02919397f093b6",
+      "startedAt": "2026-10-21T01:30:53.838938+00:00",
+      "completedAt": "2026-10-21T01:30:58.650032+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-activity-v1",
+      "receiptSha256": "fab157633e95da8ec87188fdf4a67cd7988663e62c4403d186938527249c91ef",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "9c737970f1c5849a2e662d6a235cfe3028db576b0e514785268d97e6ca7feb51",
+      "startedAt": "2026-10-21T01:30:58.732837+00:00",
+      "completedAt": "2026-10-21T01:32:19.602071+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-sonar-v1",
+      "receiptSha256": "c37f369ef867871577902a53a57f2d48386e6a495ef615f56f507819948050c2",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "b8fcab9acfb65ac2491505c47373bddceb0db052ad8c7ef7ee4d2995c7c5cdd6",
+      "startedAt": "2026-10-21T01:32:19.677060+00:00",
+      "completedAt": "2026-10-21T01:35:23.606401+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-full-chromium-v1",
+      "receiptSha256": "c31c0c9b0120d8fa706e238a4f052c412b2ed69effb31f7dfba27c8b63abc94d",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "fd90007750bb8dcc5aa219ee94e70241ca838e70a56bab5a379c4bfaa8936408",
+      "startedAt": "2026-10-21T01:35:23.678881+00:00",
+      "completedAt": "2026-10-21T01:41:54.707540+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-full-webkit-v1",
+      "receiptSha256": "15965a17c36b74f8ff5ca355784e868d3b4aea7cb522295347d4bb068ad4da38",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "fd18aecba139ad99574d46d2c69ad195dff7506ca11de93a2bd1ec9ed6e96217",
+      "startedAt": "2026-10-21T01:41:54.793809+00:00",
+      "completedAt": "2026-10-21T01:48:36.418511+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final94-lint-v1",
+      "receiptSha256": "f312e81262340355da00804f286acf3b1e10f2b903a7b9a809c0c0911d3a79dd",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "30ca5df4c5b12b8b904f65b8b2d0b19471e29aeb59bee080683dc3012e88ecbb",
+      "startedAt": "2026-10-21T00:36:29.835468+00:00",
+      "completedAt": "2026-10-21T00:40:46.036585+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "e7e6c5252726d39395e0542dc99a2d18a8940deb8847c38fbcb8000f63e41577",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "9d822d20988d14f14f0db087ca5d2f3488680abc57aaa61d462dc7e37693518b",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-native-source-v1",
+      "receiptSha256": "09e1ccfe873a1096f5cddc3050d04e1f4f569c36cee1a426343c48e5e1bcae79",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "c439b0b8a437e0a7eb24e8630e3b2c98f1ef6f6646fade5f1a5eeb0e55481059",
+      "startedAt": "2026-10-21T00:45:07.674191+00:00",
+      "completedAt": "2026-10-21T00:45:07.747963+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "e7e6c5252726d39395e0542dc99a2d18a8940deb8847c38fbcb8000f63e41577",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-native-order-v1",
+      "receiptSha256": "24e2ba9176793ac66199fac895f9642f6c9195b1f21477c6541cb96b9aa899c5",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "4cc97bced76ecc2f1a1d041278451b565c36ace7ab54ca38e874bc5453fb5b8f",
+      "startedAt": "2026-10-21T00:45:07.815982+00:00",
+      "completedAt": "2026-10-21T00:45:08.298056+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "e7e6c5252726d39395e0542dc99a2d18a8940deb8847c38fbcb8000f63e41577",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-linux-decoder-v1",
+      "receiptSha256": "21736bf8cf06de56d7e39cd56eb96a0e37330c5400d85c927e9e4c58dfb3b066",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "2dfe8b06201a9d6f91d0dde8da9aa703f0e317de0b753620b0d965192080f7c4",
+      "startedAt": "2026-10-21T00:45:08.365959+00:00",
+      "completedAt": "2026-10-21T00:45:08.899566+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "e7e6c5252726d39395e0542dc99a2d18a8940deb8847c38fbcb8000f63e41577",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-sequential-controls-v1",
+      "receiptSha256": "a923031727eac4dcdafd5522d27047116478698f691158b5732da417a03040dc",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "b4f798f70902728cdaa382cdafb8ffaf0d1eddf726b36a2050116905e631ce41",
+      "startedAt": "2026-10-21T00:45:08.971018+00:00",
+      "completedAt": "2026-10-21T00:45:27.948804+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "e7e6c5252726d39395e0542dc99a2d18a8940deb8847c38fbcb8000f63e41577",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-workflow-anchors-v1",
+      "receiptSha256": "699d96c70b97a1364fbc9d6d4753ed8aaeff63126a00749a27edb502914689ac",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "2888dcfad121b6768d7f3ab8311a33a62a7ee4abae45227c090d70c1a0833ad4",
+      "startedAt": "2026-10-21T00:51:23.610137+00:00",
+      "completedAt": "2026-10-21T00:51:23.752084+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-workflow-branches-v1",
+      "receiptSha256": "562c3ef354adc0d06b4a02269b018aac44b4950ca73df473faab7b28c7abec0d",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "06e0e80b986207d2cc877150a2193db2919b30b8f57846923b2391232a3d6b8a",
+      "startedAt": "2026-10-21T00:51:25.922361+00:00",
+      "completedAt": "2026-10-21T00:51:26.063996+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-release-contexts-v1",
+      "receiptSha256": "2b772f10c4f396da627398555769f0c7387c9e106041c2273eadc6d083a35790",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "c1bc456936b2e1e7af1c83a78f0d223c33f7905c9dfaafcd5fe07fa034afc48e",
+      "startedAt": "2026-10-21T00:51:26.135817+00:00",
+      "completedAt": "2026-10-21T00:51:26.278226+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-dependency-v1",
+      "receiptSha256": "9f8f61bde915f97a07b9559a69794aea8f89bc66f214b0c835aa690ccf91ae2b",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "80603f70147bd62be5cf39ce3c585cd9efa5ba291aa792e7cddc264d792fba58",
+      "startedAt": "2026-10-21T00:52:44.986418+00:00",
+      "completedAt": "2026-10-21T00:52:45.164767+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-release-impact-v1",
+      "receiptSha256": "0a84e737e41631df8e6e8b58276ccb0de17a178c19620bf97872f27b0088f9e3",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "04855147a6eea1d6866494e0f33b55439456085fe579d29b358446c9419d122c",
+      "startedAt": "2026-10-21T00:52:45.235677+00:00",
+      "completedAt": "2026-10-21T00:52:45.430309+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-versions-v1",
+      "receiptSha256": "0657a45eb229f3f3b044a7942d0b3288e616013a6266e69be3259bf08527f61a",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "5b3b2d4e53b5b19152aa5ee25787b33dd9284a8fa746c6be4aecab6280623ca0",
+      "startedAt": "2026-10-21T00:52:45.501726+00:00",
+      "completedAt": "2026-10-21T00:52:45.735547+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-actionlint-v1",
+      "receiptSha256": "97c13bf04be40204ad9ddd322b361fd7a927c11a69f1edf7ef99f7cc6712f206",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "startedAt": "2026-10-21T00:53:10.777351+00:00",
+      "completedAt": "2026-10-21T00:53:11.126486+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-zizmor-v1",
+      "receiptSha256": "fdd75f7a7daed0b60c68ba387ea6907b3b7ed46628f4df7547facf0e2b8a0e5c",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "561492516d365dcdc8a2ea3056bf3f2a0fb9c5241e7c806481db73c810c0a96d",
+      "startedAt": "2026-10-21T00:53:11.199201+00:00",
+      "completedAt": "2026-10-21T00:53:11.270323+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-a11y-visible-contrast-v1",
+      "receiptSha256": "12f7dc4ca44735831cca17d38822a86f090078e4a93e07a38a7456ffa1bce591",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "60afe84cd1cb5e2bbeb0b3cf1b7f6130e297b58c48055eb51bddd8b0e37ecc69",
+      "startedAt": "2026-10-21T00:43:48.912722+00:00",
+      "completedAt": "2026-10-21T00:44:02.750424+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "e7e6c5252726d39395e0542dc99a2d18a8940deb8847c38fbcb8000f63e41577",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-header-local-styling-v1",
+      "receiptSha256": "938502fdc8afd2301e50f48a055c932c6248eb4ac02f496399d2d5a94fb883ff",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "8d7baba49f9db22a0e738d7e7a4c25b1416ac5e4f9062f99b5d14c3849eae6e0",
+      "startedAt": "2026-10-21T00:47:33.991570+00:00",
+      "completedAt": "2026-10-21T00:47:35.783514+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-header-native-causal-v1",
+      "receiptSha256": "625519206762648aa617d073ba839acc48b11d8bc1bf3829e9e8b06d31023f81",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "57fefdd80cc05025e79840a06ebc5d0b306b7db4631f5dae2c3e6c3088831385",
+      "startedAt": "2026-10-21T00:47:50.243173+00:00",
+      "completedAt": "2026-10-21T00:48:38.906726+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-header-props-emit-v1",
+      "receiptSha256": "25ec74942e298fb18cdc579ed02f577dcecf41ef09050a80493ef3c75d0b8fb4",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "c7b30b8c13d490c6e2af0371d46b69130a66ae92478a1c31793bab372a99c20b",
+      "startedAt": "2026-10-21T00:57:29.458562+00:00",
+      "completedAt": "2026-10-21T00:57:29.653530+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final94-header-props-controls-v1",
+      "receiptSha256": "d31b45485cbcae31e2382d9783b02e1ccfa4dc54ce1d7b0d02acc3635ec13d21",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "2bfad7dbdff3a98b4ea93b81bd052e64f45eefeaa27e1cd62f8a836f8727ae80",
+      "startedAt": "2026-10-21T00:57:43.967131+00:00",
+      "completedAt": "2026-10-21T00:57:45.706294+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "0863d58c16af442e1157e501e95d1e30af96647a714e56a2bd64f9e237e7fc56",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "40b7b0027d9a374a926194048723b8dc0ae47cae4f6018704c3c83e9830e5b28",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "ae36c362cb9f76c61ae52b416c272f4de3d343ce2b4ac2fdccd2f891545abdc3"
+      }
+    },
+    {
+      "label": "delivery-final93-workflow-root-consumers-v1",
+      "receiptSha256": "3a3b36b155a0c3ed10df194391043d519caf36347c3f18337d471ac023cf7aa7",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "63c006098dd89102c0445d848c79aa68cbb47a8a92f670f46f6ac31c62e8d336",
+      "startedAt": "2026-10-21T00:12:07.601173+00:00",
+      "completedAt": "2026-10-21T00:12:14.905153+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "b0582f3a704097799771dac8ac8502e6873d79f67ce66c1158c452cf18b795f6",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "fbc87e14d97024ac6f6aff26bb5c29c5bb3e5a7eddca00aaeabb0d5280157799",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "d4d4e1d67745ae0cde13fd1ab07eeb26639df393dea881f4357db831579716d3",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "f84bdf2882c8d3a46cb7945eedc712c0dcb71ca0d6fe29a1f6c4e4022db404cd",
+        "tests/e2e/a11y.smoke.spec.ts": "9d822d20988d14f14f0db087ca5d2f3488680abc57aaa61d462dc7e37693518b",
+        "tests/e2e/support-report-download.spec.ts": "a2e0fcb1a2292a44f37463275ef561fd39bf6cf1d611ce3c14360d9dd1167780"
+      }
+    },
+    {
+      "label": "delivery-final93-workflow-consumers-tests-v2",
+      "receiptSha256": "ab3a408242cbd776533f5832cb75e05860edd7769c8026763ade37aa5e448151",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "6f59e8a6c107a32120f8a80bcd3bc162ec50908dd7c1115682b6f6c38e2e60ad",
+      "startedAt": "2026-10-21T00:01:42.213157+00:00",
+      "completedAt": "2026-10-21T00:02:09.145326+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "b0582f3a704097799771dac8ac8502e6873d79f67ce66c1158c452cf18b795f6",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "fbc87e14d97024ac6f6aff26bb5c29c5bb3e5a7eddca00aaeabb0d5280157799",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "d4d4e1d67745ae0cde13fd1ab07eeb26639df393dea881f4357db831579716d3",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "f84bdf2882c8d3a46cb7945eedc712c0dcb71ca0d6fe29a1f6c4e4022db404cd",
+        "tests/e2e/a11y.smoke.spec.ts": "9d822d20988d14f14f0db087ca5d2f3488680abc57aaa61d462dc7e37693518b",
+        "tests/e2e/support-report-download.spec.ts": "a2e0fcb1a2292a44f37463275ef561fd39bf6cf1d611ce3c14360d9dd1167780"
+      }
+    },
+    {
+      "label": "delivery-final95-editor-performance-v1",
+      "receiptSha256": "eb9e4882f1232c679fcac006faa170ab0646d0c1d2f90955562a689d6f5aa5aa",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "65e72a250bb3d22c3c7b3f0d1c0d03e5c838cff152bbb2e3b80e1874a765400f",
+      "startedAt": "2026-10-21T01:47:00.005273+00:00",
+      "completedAt": "2026-10-21T01:47:00.248500+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-workspace-performance-v1",
+      "receiptSha256": "956ac4d71b02a0e5b3a41b1e4c449e31b74e69763ad3e906250e15d2165e9140",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "34c95f974cac1086ca33347e9835d0322b3db50978e256e848c61e5420912ffe",
+      "startedAt": "2026-10-21T01:47:00.327096+00:00",
+      "completedAt": "2026-10-21T01:47:00.506617+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-coding-performance-v1",
+      "receiptSha256": "8496bf7a6313c6232cadbaa356245e85bc5ec116321c839f90cfc21e0bac0be7",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "2f1438788ea2f8de1f78f872d24c6a7b98f95016dc1983c2e829a58b271803de",
+      "startedAt": "2026-10-21T01:47:00.584269+00:00",
+      "completedAt": "2026-10-21T01:47:00.799176+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-firefox-collection-v1",
+      "receiptSha256": "54dd7ee55e9ee8a6f45339745860696c66dcb5e8aee214abfab1800722203777",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "f28fa643f3ad575839ac76244742b4b61be1aa2350652342ef1af4a8686f391a",
+      "startedAt": "2026-10-21T01:47:00.875823+00:00",
+      "completedAt": "2026-10-21T01:47:09.351999+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    },
+    {
+      "label": "delivery-final95-focus-unit-green-v1",
+      "receiptSha256": "ce51d57840cadcdfc8a9276f3cbad7507de656b9c1243e6964096ad51dcbb15c",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "4e39e7043333425145707c97da777b1b550bd0200d48e073fc8551282826ca62",
+      "startedAt": "2026-10-21T01:22:37.893094+00:00",
+      "completedAt": "2026-10-21T01:22:40.229675+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "bf39169de54f1e66ed30c6603ed8e18487f99c06c6c6aa14e37d83ef2a85dad9"
+      }
+    },
+    {
+      "label": "delivery-final95-focus-webkit-green-v2",
+      "receiptSha256": "edc8b278c22a6f588246556331464a3815df0887e4a1e11a77f0f6514f59d198",
+      "exitCode": 0,
+      "sourceUnchanged": true,
+      "logSha256": "4468e12be9f1286c3a336f9314fca8b64d3137c199720b6e8817bc7a844f095c",
+      "startedAt": "2026-10-21T01:24:40.107164+00:00",
+      "completedAt": "2026-10-21T01:24:56.762648+00:00",
+      "epochSourceSha256": {
+        "packages/keiko-ui/src/app/components/desktop/Header.tsx": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+        "packages/keiko-ui/src/app/components/desktop/Header.module.css": "5363820a3e722c0a17129837baecff88a7e2af8f2f13286ad9d8817f85136b1c",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.tsx": "9cb0cb5d469e19ea163cfb50e3d4546b32741d5e3b6e89ab92648a0b547af8ba",
+        "packages/keiko-ui/src/app/components/desktop/browser/BrowserApprovalNotice.test.tsx": "ef69ecd417184ed44f3250873fbd08a8ca444bf0940ce1e8d6859b0a1dd9bd6a",
+        "tests/e2e/a11y.smoke.spec.ts": "19e80eb89842bc88601aa2a9e14f6a3a287d7caed07e9f16e9bb7442586086fa",
+        "tests/e2e/support-report-download.spec.ts": "13ed9a43889c5496d2ca8a6abb9e18a40c642cf336356872fd147c4fd5de7d1a"
+      }
+    }
+  ],
+  "currentUiCoverage": {
+    "filesPassed": 564,
+    "testsPassed": 10868,
+    "existingSkipped": 1,
+    "logSha256": "a86f0760c92c80a5e508fd9b3005733b2c798423367f3558b8ece9d74ca8b5e8"
+  },
+  "currentWholeBrowsers": {
+    "chromiumPassed": 125,
+    "webkitPassed": 123,
+    "firefox": "Complete selector collected as exact 123 = 64 + 59 disjoint union; actual application qualification requires fresh exact-head hosted shards. Local profile-launch refusal is not an application pass."
+  },
+  "nativePointerRegression": {
+    "originalEnglishFailures": 2,
+    "finalEnglishGermanGeometryCases": 4,
+    "finalTargetedUiPassed": 13,
+    "redLogSha256": "c039d6597ffd554b747ccb920b049f019b955207a4dbeeb3974d09f6b6cf7cd5",
+    "greenLogSha256": "57fefdd80cc05025e79840a06ebc5d0b306b7db4631f5dae2c3e6c3088831385",
+    "retainedAssertions": "Native pointer down/up; no forced clicks; unchanged authority-mutation count; header, workspace and tool geometry remain fixed."
+  },
+  "invokerFocusRegression": {
+    "failure": "WebKit native pointer activation did not focus Connect; the existing modal captured body and returned focus there.",
+    "correction": "The actual Connect handler focuses its own button before opening the existing dialog. Shared modal focus management and original UI assertions remain unchanged.",
+    "unitRed": {
+      "passed": 6,
+      "failed": 1,
+      "logSha256": "9321d50614f3bdd9537b476f27a9bafe6ce4166237e31b9f9ab3e55cdf863abd"
+    },
+    "unitGreen": {
+      "passed": 10,
+      "logSha256": "4e39e7043333425145707c97da777b1b550bd0200d48e073fc8551282826ca62"
+    },
+    "realWebkitRed": {
+      "logSha256": "ed6301dfaa091f3fc89123f039b033bb25fd5a64ba8d745d0c146715f8ad4497",
+      "observation": {
+        "before": {
+          "invokerPresent": true,
+          "invokerActive": false,
+          "bodyActive": true,
+          "dialogActive": false
+        },
+        "focusedBeforeDialog": false,
+        "after": {
+          "invokerPresent": true,
+          "invokerActive": false,
+          "bodyActive": true,
+          "dialogActive": false
+        }
+      },
+      "observationSha256": "e562a71aa67d3fa2a959d6de1cf7f8422d1ee86d1a7d65aa0e58958952c35173"
+    },
+    "realWebkitGreen": {
+      "logSha256": "4468e12be9f1286c3a336f9314fca8b64d3137c199720b6e8817bc7a844f095c",
+      "observation": {
+        "before": {
+          "invokerPresent": true,
+          "invokerActive": false,
+          "bodyActive": true,
+          "dialogActive": false
+        },
+        "focusedBeforeDialog": true,
+        "after": {
+          "invokerPresent": true,
+          "invokerActive": true,
+          "bodyActive": false,
+          "dialogActive": false
+        }
+      },
+      "observationSha256": "98fc8d8df8f6bef75e9ec2247eb82c1d3d9874b230759fe9b1eae37d74690d70"
+    },
+    "excludedDiagnosticAttempt": "Red WebKit v1 timed out reading an inaccessible role locator while the background was inert. Retained as a fixture failure, not the causal regression proof."
+  },
+  "rejectedRuns": [
+    {
+      "label": "delivery-final93-full-chromium-v1",
+      "passed": 43,
+      "failed": 5,
+      "interrupted": 1,
+      "notRun": 76,
+      "exitCode": 130,
+      "sourceUnchanged": true,
+      "logSha256": "3454f1889910c286063f76329e0802e2cd2e6b2386cdf97df91b2ec476c363c7",
+      "qualification": "Rejected: Composer/Skills/Start/Stop pointer interception and forced-colors contrast failures. WebKit was not started."
+    },
+    {
+      "label": "delivery-final94-full-webkit-v1",
+      "passed": 122,
+      "failed": 1,
+      "logSha256": "7037124c34ea22cae61fe4a36d6baca7c31513cfa4b898d3ceabef834e125d09",
+      "qualification": "Failed original invoker-focus return. Does not qualify the final focus correction."
+    },
+    {
+      "label": "delivery-final94-ui-coverage-v1",
+      "passed": 10867,
+      "failed": 1,
+      "existingSkipped": 1,
+      "logSha256": "c8ad051d16b80122b71b10aa634addc72bbc88c4a7937fc9e6840aac272a9029",
+      "qualification": "Failed style governance. Replaced new global compatibility selector with existing local class relationship; suppression register and assertions unchanged."
+    }
+  ],
+  "nativeSourceOrder": {
+    "redPassed": 1,
+    "redFailed": 2,
+    "greenPassed": 3,
+    "redLogSha256": "e4840ffe73dcf9aa04e5b527c4612775f2e4cd72e966956bd8bed976ab7c8fc2",
+    "greenLogSha256": "4cc97bced76ecc2f1a1d041278451b565c36ace7ab54ca38e874bc5453fb5b8f",
+    "scope": "Actual unique owning qualification test extracted, canonical C scanner, harmless marker only, bounded child and owned cleanup. All original token/shell assertions precede qualification; no native execution in the regression pin."
+  },
+  "historicalFullCoverage": {
+    "head": "7df36d8ff414e23ce52435f338094d76edb4a656",
+    "packagesPassed": 57229,
+    "uiPassed": 10866,
+    "scriptsPassed": 7623,
+    "existingSkipped": {
+      "packages": 63,
+      "ui": 1,
+      "scripts": 27
+    },
+    "receiptSha256": "e57b6b0c18c0cf8e969db4cc876d9c60197031e65f2b88759771d87ac45b3215",
+    "logSha256": "448917ea55b05259254fbb3190665db9bcdc1609da0ac0135b01aeb0b5285b42",
+    "qualification": "Historical only. Non-UI package/root runtime sources, manifests, lock and build/coverage inputs remain byte-identical; current changed surfaces have separate runs above. Historical LCOV is not new-head evidence. Fresh complete exact-head hosted CI remains required."
+  },
+  "qualificationScopeNote": "All fifteen final95 UI/type/format/architecture/activity/Sonar/browser stages bind the complete current 22-file source manifest. Earlier unchanged backend/workflow/native controls retain their original six explicit UI epoch hashes; current final95 runs separately qualify the focus and diagnostic-persistence delta. No old result is renamed a new run.",
+  "typeOnlyHeaderPropsCorrection": {
+    "finding": "Local Sonar v1 S6767: HeaderTools shared the wider HeaderProps including parent-only notice.",
+    "correction": "Narrow HeaderTools to Omit<HeaderProps, notice>; no dummy read or suppression.",
+    "emit": {
+      "apiVersion": "6.0.3",
+      "identicalRuntimeEmit": true,
+      "sourceSha256": "7059ee061e18573083037f58f6e77bd7ac96ef504fc7dc3c6e7e87faa89e7e8d",
+      "previousSourceSha256": "229addb2ab4b8d4bb2e06b096e97dc7fb5d15b2beafb1cb76d69d849dd6df81e",
+      "emitSha256": "56e43855d4a1cea258c122946df004f4ede188b7fa2f367155a18c3bf97b591f",
+      "scope": "HeaderTools props exclude the parent-only notice; type-only change, no runtime edit."
+    },
+    "failedLogSha256": "a8cdd88095bb4b3796e10a2bac655d98db762d12c5f4fc4af93888c089b67c69"
+  },
+  "firefoxCollection": {
+    "exactDisjointUnion": true,
+    "fullyParallel": false,
+    "workers": 1,
+    "collections": {
+      "whole": {
+        "count": 123,
+        "sha256": "40f202700acc643c240f570747a1d16f495ef3c850317a5e751974d713abd6b8",
+        "path": "delivery-final95-firefox-collection-whole.private.json",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=firefox",
+          "--grep",
+          "@smoke",
+          "--list",
+          "--reporter=json"
+        ]
+      },
+      "shard1": {
+        "count": 64,
+        "sha256": "177047cacecb4832138016075f2dd25be9c1a1118b9ad6da7561b76f863bb484",
+        "path": "delivery-final95-firefox-collection-shard1.private.json",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=firefox",
+          "--grep",
+          "@smoke",
+          "--list",
+          "--reporter=json",
+          "--shard=1/2"
+        ]
+      },
+      "shard2": {
+        "count": 59,
+        "sha256": "755ab9bce9567b4f7520dcb87913d0a410423f0816979c27d694a3224d8766e1",
+        "path": "delivery-final95-firefox-collection-shard2.private.json",
+        "command": [
+          "node",
+          "node_modules/@playwright/test/cli.js",
+          "test",
+          "--config",
+          "tests/e2e/config/playwright.config.ts",
+          "--project=firefox",
+          "--grep",
+          "@smoke",
+          "--list",
+          "--reporter=json",
+          "--shard=2/2"
+        ]
+      }
+    },
+    "perFileWholeCounts": {
+      "a11y.smoke.spec.ts": 16,
+      "atlassian-connectors-2245.smoke.spec.ts": 1,
+      "atlassian-connectors-2246.smoke.spec.ts": 2,
+      "chat-scope-narrowing.smoke.spec.ts": 8,
+      "chat-send.smoke.spec.ts": 17,
+      "coding-workbench-1990.spec.ts": 2,
+      "coding-workbench-1991.spec.ts": 1,
+      "coding-workbench-1992.spec.ts": 1,
+      "coding-workbench-1994.spec.ts": 2,
+      "coding-workbench-selector-layout.spec.ts": 6,
+      "editor-project-tree-tooltip.spec.ts": 1,
+      "footer-window-palette-layering.spec.ts": 7,
+      "memory-journal.smoke.spec.ts": 1,
+      "pdfjs-legacy-runtime.smoke.spec.ts": 1,
+      "prompt-enhancer-smoke.spec.ts": 3,
+      "release-smoke.spec.ts": 13,
+      "support-report-download.spec.ts": 4,
+      "voice-dialogue.smoke.spec.ts": 20,
+      "voice-dictation.smoke.spec.ts": 4,
+      "voice-realtime.smoke.spec.ts": 4,
+      "voice-recap.smoke.spec.ts": 4,
+      "voice-speech-output.smoke.spec.ts": 3,
+      "window-chunk-stall.smoke.spec.ts": 1,
+      "workspace-trust-2523.spec.ts": 1
+    }
+  },
+  "limits": [
+    "The direct Linux --compile attempt returned native-unavailable kind3/code6 and remains unqualified. Decoder-only controls do not clear kernel or installed-update acceptance.",
+    "Six individually evidenced S9382 applicability decisions require authenticated owner review and exact-head Cloud/ci evidence. ADR-0134 D1 deliberately keeps the free-plan Sonar way active; the required repository verifier independently enforces all stricter Keiko metrics and drift-checks the dormant Banking Grade definition. No custom association, paid plan, suppression, accepted debt or threshold change is required or authorized.",
+    "Final clean-commit assembled-package proof, dependency restoration, exact-head required checks/reviews, protected merge, release 1.2.5 and actual SSD updater UI test remain integration conditions at packet creation.",
+    "All unfinished original acceptance remains in #4051; no repeatable skill advantage, historic private fixture recovery, installed two-update canary or SSD continuity is inferred."
+  ],
+  "sonarArchitectureCorrection": {
+    "authority": "docs/adr/ADR-0134-sonarcloud-free-plan-scope-and-native-compensation.md D1 and D6",
+    "correction": "The initial packet incorrectly treated custom-gate reassignment as an integration condition. That was an unverified assumption, contradicted by the governing ADR and actual provider plan. The existing free-plan native gate plus required strict repository verifier remain unchanged.",
+    "runtimeOrGatePolicyChanged": false
+  }
+}

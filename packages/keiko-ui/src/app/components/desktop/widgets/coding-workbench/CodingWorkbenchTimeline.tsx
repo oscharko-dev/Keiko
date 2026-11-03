@@ -2,12 +2,15 @@
 "use client";
 
 import {
+  memo,
   useCallback,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode,
+  type RefCallback,
   type RefObject,
   type UIEvent,
 } from "react";
@@ -17,11 +20,16 @@ import type {
   CodingSafeActivityTool,
   CodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts";
+import type { CodingSafeActivityVerificationOutcome } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
-import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { useLocale } from "@/lib/i18n";
+import {
+  reportCodingWorkbenchSummaryActivated,
+  reportCodingWorkbenchInteraction,
+} from "@/lib/coding-workbench-interaction";
+import { useLocale, type Locale } from "@/lib/i18n";
+import { useFollowNewest } from "@/lib/useFollowNewest";
 import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
   useCodingWorkbenchTranslate,
@@ -31,6 +39,8 @@ import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { modelGatewayRetrying, settledRunState } from "./codingWorkbenchRunFacts";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
+import { CODING_WORKBENCH_RICH_CONTENT } from "./CodingWorkbenchRichContent";
+import { useHeldNotice } from "./codingWorkbenchPairingHold";
 import styles from "./CodingWorkbenchWindow.module.css";
 
 const VIRTUAL_THRESHOLD = 100;
@@ -38,12 +48,41 @@ const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
 // Known tool identifiers map to Coding Workbench catalog message keys, not to English strings —
 // otherwise a German session would render English labels in the localized timeline. The keys are
-// resolved through `t(...)` inside `ToolRow`.
+// resolved through `t(...)` inside `ToolRow`. The native OpenCode tools (#3897) keep their own ids.
 const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
   keiko_git_status: "codingWorkbench.timeline.tool.git_status",
   keiko_repository_search: "codingWorkbench.timeline.tool.repository_search",
   keiko_workspace_discover: "codingWorkbench.timeline.tool.workspace_discover",
   keiko_workspace_read: "codingWorkbench.timeline.tool.workspace_read",
+  keiko_changeset_edit: "codingWorkbench.timeline.tool.changeset_edit",
+  keiko_verification: "codingWorkbench.timeline.tool.verification",
+  keiko_research_fetch: "codingWorkbench.timeline.tool.research_fetch",
+  keiko_skill_discover: "codingWorkbench.timeline.tool.skill_discover",
+  keiko_skill: "codingWorkbench.timeline.tool.keiko_skill",
+  keiko_child_agent: "codingWorkbench.timeline.tool.child_agent",
+  keiko_git_diff: "codingWorkbench.timeline.tool.git_diff",
+  keiko_git_stage: "codingWorkbench.timeline.tool.git_stage",
+  keiko_git_commit: "codingWorkbench.timeline.tool.git_commit",
+  keiko_git_push: "codingWorkbench.timeline.tool.git_push",
+  keiko_pull_request: "codingWorkbench.timeline.tool.pull_request",
+  keiko_git_execute: "codingWorkbench.timeline.tool.git_execute",
+  keiko_git_sync: "codingWorkbench.timeline.tool.git_sync",
+  keiko_git_branch: "codingWorkbench.timeline.tool.git_branch",
+  keiko_ci_status: "codingWorkbench.timeline.tool.ci_status",
+  read: "codingWorkbench.timeline.tool.read",
+  glob: "codingWorkbench.timeline.tool.glob",
+  grep: "codingWorkbench.timeline.tool.grep",
+  list: "codingWorkbench.timeline.tool.list",
+  edit: "codingWorkbench.timeline.tool.edit",
+  write: "codingWorkbench.timeline.tool.write",
+  patch: "codingWorkbench.timeline.tool.patch",
+  shell: "codingWorkbench.timeline.tool.shell",
+  webfetch: "codingWorkbench.timeline.tool.webfetch",
+  websearch: "codingWorkbench.timeline.tool.websearch",
+  skill: "codingWorkbench.timeline.tool.skill",
+  subagent: "codingWorkbench.timeline.tool.subagent",
+  todo: "codingWorkbench.timeline.tool.todo",
+  question: "codingWorkbench.timeline.tool.question",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -96,6 +135,8 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly plan: CodingSafeActivityPlan;
+      /** The run is active: its plan card stays open so the reader follows the steps live. */
+      readonly open: boolean;
     }
   | {
       readonly kind: "event";
@@ -137,18 +178,14 @@ export function Timeline({
   const [showEvents, setShowEvents] = useState(false);
   const allItems = useTimelineItems(events, activity.feed, generating, active);
   const items = useShownItems(allItems, showEvents);
-  const timeline = useTimelineWindow(items);
-  if (
-    !active &&
-    allItems.length === 0 &&
-    questions.questions.length === 0 &&
-    !activityNeedsAttention(activity)
-  )
+  const timeline = useTimelineWindow(items, questions.questions);
+  const attention = useShownActivityAttention(activity);
+  if (!active && allItems.length === 0 && questions.questions.length === 0 && !attention)
     return null;
   return (
     <section className={styles.cmpConversation} aria-labelledby="timeline-title">
       <TimelineHeading titleRef={titleRef} t={t} />
-      <ActivityStatus activity={activity} t={t} />
+      <ActivityStatus activity={activity} attention={attention} t={t} />
       <RunDetailsToggle
         visible={events.length > 0}
         expanded={showEvents}
@@ -219,7 +256,11 @@ function RunDetailsToggle({
       aria-expanded={expanded}
       onClick={() => {
         onToggle();
-        reportClientDiagnostic("[keiko] coding workbench run details toggled");
+        reportCodingWorkbenchInteraction({
+          interaction: "details-toggled",
+          section: "run",
+          expanded: !expanded,
+        });
       }}
     >
       {t("codingWorkbench.timeline.details")}
@@ -346,7 +387,9 @@ function timelineItems(
   const orderedItems = [...items];
   orderedItems.sort(compareTimelineItems);
   const compacted = compactToolItems(orderedItems);
-  return feed?.plan === undefined ? compacted : insertPlan(compacted, feed.plan, order);
+  return feed?.plan === undefined
+    ? compacted
+    : insertPlan(compacted, feed.plan, order, activeRunId !== undefined);
 }
 
 function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
@@ -358,21 +401,28 @@ function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
 }
 
 function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
-  const byTime = left.occurredAt.localeCompare(right.occurredAt);
-  return byTime === 0 ? left.order - right.order : byTime;
+  // ISO-8601 instants of one fixed format order lexicographically; a locale-aware collation per
+  // comparison is needless work on a sort that runs on every feed update.
+  if (left.occurredAt === right.occurredAt) return left.order - right.order;
+  return left.occurredAt < right.occurredAt ? -1 : 1;
 }
 
 function insertPlan(
   items: readonly TimelineItem[],
   plan: CodingSafeActivityPlan,
   order: number,
+  open: boolean,
 ): readonly TimelineItem[] {
+  // The row identity is the message that anchors the plan, not its revision: every task-list update
+  // bumps the revision, and a row keyed by it would remount the card (and close what the reader
+  // had open) on each update.
   const planItem: TimelineItem = {
     kind: "plan",
-    id: `plan:${String(plan.revision)}`,
+    id: `plan:${plan.anchorMessageId}`,
     occurredAt: plan.updatedAt,
     order,
     plan,
+    open,
   };
   const anchor = items.findIndex(
     (item) => item.kind === "message" && item.message.messageId === plan.anchorMessageId,
@@ -386,11 +436,9 @@ function compactToolItems(items: readonly TimelineItem[]): readonly TimelineItem
   for (const item of items) {
     const previous = compacted.at(-1);
     if (item.kind === "tool" && canMergeToolItem(previous, item.tool)) {
-      compacted[compacted.length - 1] = {
-        ...previous,
-        id: `${previous.id}:${item.tool.callId}`,
-        count: previous.count + 1,
-      };
+      // The merged row keeps the id of its first call: the id is the React key, and a key that
+      // changed as members joined would remount the row and collapse what the reader had opened.
+      compacted[compacted.length - 1] = { ...previous, count: previous.count + 1 };
     } else {
       compacted.push(item);
     }
@@ -441,6 +489,10 @@ interface TimelineWindow {
   readonly visible: readonly TimelineItem[];
   readonly end: number;
   readonly onScroll: (event: UIEvent<HTMLOListElement>) => void;
+  /** Binds the virtualized list so it follows its own newest rows (and a question) when long. */
+  readonly listRef: RefCallback<HTMLElement>;
+  /** Rows measure themselves only while the list is virtualized; a short list needs no heights. */
+  readonly measure: boolean;
   readonly measureRow: (id: string, height: number) => void;
   readonly hasMeasured: (id: string) => boolean;
   readonly spacerBefore: number;
@@ -456,8 +508,11 @@ function useCumulativeOffsets(
   items: readonly TimelineItem[],
   heightsRef: RefObject<ReadonlyMap<string, number>>,
   heightsVersion: number,
+  virtual: boolean,
 ): readonly number[] {
   return useMemo(() => {
+    // A short list renders every row and never reads an offset: skip the O(n) build entirely.
+    if (!virtual) return [0];
     const offsets = new Array<number>(items.length + 1);
     offsets[0] = 0;
     const measured = heightsRef.current ?? new Map<string, number>();
@@ -478,7 +533,7 @@ function useCumulativeOffsets(
     // heightsVersion is the reactive signal that a cached height changed; heightsRef itself is
     // reference-stable, so React would otherwise never re-evaluate this memo on remeasurement.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, heightsVersion]);
+  }, [items, heightsVersion, virtual]);
 }
 
 // First index whose cumulative end offset is strictly greater than the scroll offset. Binary
@@ -495,12 +550,42 @@ function indexAtOffset(cumulative: readonly number[], offset: number): number {
   return lo;
 }
 
-function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
-  const [scrollTop, setScrollTop] = useState(0);
+// The virtualized list is its own scroller inside the session stream, which follows the newest
+// content by itself. Without this the stream's follow-newest scrolled to the list's outer edge
+// while the list stayed at its oldest rows: new rows and a pending question landed below the
+// list's inner fold. The same hook the stream uses keeps the list at its newest rows while the
+// reader is at the bottom, and never yanks a reader who scrolled up into the history.
+function useVirtualListFollow(
+  virtual: boolean,
+  items: readonly TimelineItem[],
+  totalHeight: number,
+  questions: readonly unknown[],
+): { readonly listRef: RefCallback<HTMLElement>; readonly onScroll: () => void } {
+  const scrollRef = useRef<HTMLElement | null>(null);
+  const questionKey = questions.length === 0 ? "" : String(questions.length);
+  const growthKey = virtual
+    ? `${String(items.length)}:${items.at(-1)?.id ?? ""}:${String(totalHeight)}:${questionKey}`
+    : "short";
+  const follow = useFollowNewest(scrollRef, growthKey);
+  const { resume } = follow;
+  // A question is a decision the run waits for: a new one brings the list to its end even when the
+  // reader had scrolled up, as the stream itself does for the run's own prompts.
+  useEffect(() => {
+    if (virtual && questionKey !== "") resume();
+  }, [virtual, questionKey, resume]);
+  return { listRef: follow.regionRef, onScroll: follow.onScroll };
+}
+
+// The measured heights of the rows the virtualizer has laid out, by row id. Held in a ref so a
+// scroll-induced commit never rebuilds them; the version is the reactive signal that one changed.
+function useRowHeights(): {
+  readonly heightsRef: RefObject<ReadonlyMap<string, number>>;
+  readonly heightsVersion: number;
+  readonly measureRow: (id: string, height: number) => void;
+  readonly hasMeasured: (id: string) => boolean;
+} {
   const heightsRef = useRef<ReadonlyMap<string, number>>(new Map());
   const [heightsVersion, setHeightsVersion] = useState(0);
-  const cumulative = useCumulativeOffsets(items, heightsRef, heightsVersion);
-  const virtual = items.length > VIRTUAL_THRESHOLD;
   const measureRow = useCallback((id: string, height: number): void => {
     const map = heightsRef.current;
     if (map.get(id) === height) return;
@@ -510,19 +595,34 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
     setHeightsVersion((value) => value + 1);
   }, []);
   const hasMeasured = useCallback((id: string): boolean => heightsRef.current.has(id), []);
+  return { heightsRef, heightsVersion, measureRow, hasMeasured };
+}
+
+function useTimelineWindow(
+  items: readonly TimelineItem[],
+  questions: readonly unknown[],
+): TimelineWindow {
+  const [scrollTop, setScrollTop] = useState(0);
+  const { heightsRef, heightsVersion, measureRow, hasMeasured } = useRowHeights();
+  const virtual = items.length > VIRTUAL_THRESHOLD;
+  const cumulative = useCumulativeOffsets(items, heightsRef, heightsVersion, virtual);
+  const follow = useVirtualListFollow(virtual, items, cumulative.at(-1) ?? 0, questions);
+  const { onScroll: followScroll } = follow;
   const onScroll = useCallback(
-    (event: UIEvent<HTMLOListElement>): void => setScrollTop(event.currentTarget.scrollTop),
-    [],
+    (event: UIEvent<HTMLOListElement>): void => {
+      followScroll();
+      setScrollTop(event.currentTarget.scrollTop);
+    },
+    [followScroll],
   );
+  const common = { onScroll, listRef: follow.listRef, measure: virtual, measureRow, hasMeasured };
   if (!virtual) {
     return {
+      ...common,
       virtual: false,
       start: 0,
       visible: items,
       end: items.length,
-      onScroll,
-      measureRow,
-      hasMeasured,
       spacerBefore: 0,
       spacerAfter: 0,
     };
@@ -530,16 +630,13 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
   const startIndex = Math.max(0, indexAtOffset(cumulative, scrollTop) - OVERSCAN_ROWS);
   const start = Math.min(startIndex, Math.max(0, items.length - VISIBLE_ROWS));
   const end = Math.min(items.length, start + VISIBLE_ROWS);
-  const visible = items.slice(start, end);
   const totalHeight = cumulative[items.length] ?? 0;
   return {
+    ...common,
     virtual: true,
     start,
-    visible,
+    visible: items.slice(start, end),
     end,
-    onScroll,
-    measureRow,
-    hasMeasured,
     spacerBefore: cumulative[start] ?? 0,
     spacerAfter: Math.max(0, totalHeight - (cumulative[end] ?? totalHeight)),
   };
@@ -548,28 +645,40 @@ function useTimelineWindow(items: readonly TimelineItem[]): TimelineWindow {
 function activityNeedsAttention(activity: UseCodingWorkbenchSafeActivityResult): boolean {
   return (
     retryableActivity(activity.status) ||
+    // A feed kept on screen while its connection is re-read is not confirmed live: say so.
+    (activity.status === "loading" && activity.feed !== null) ||
     activity.feed?.truncated === true ||
     activity.feed?.turns.some((turn) => turn.truncated) === true ||
     (activity.feed?.droppedEventCount ?? 0) > 0
   );
 }
 
+// #3880: an unpaired window cannot connect its activity; the run status sentence says why.
+function useShownActivityAttention(activity: UseCodingWorkbenchSafeActivityResult): boolean {
+  const needed = activityNeedsAttention(activity);
+  const held = useHeldNotice("activity", needed);
+  return needed && !held;
+}
+
 function ActivityStatus({
   activity,
+  attention,
   t,
 }: {
   readonly activity: UseCodingWorkbenchSafeActivityResult;
+  readonly attention: boolean;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   const truncated =
     activity.feed?.truncated === true ||
     activity.feed?.turns.some((turn) => turn.truncated) === true;
-  if (!activityNeedsAttention(activity)) return null;
+  if (!attention) return null;
   return (
     <div className={styles.activityStatus} data-activity-state={activity.status}>
-      <p role="status" aria-live="polite" aria-atomic="true">
-        {t(`codingWorkbench.activity.status.${activity.status}`)}
-      </p>
+      {/* This sits inside the session stream's `role="log"`, which already announces additions. A
+          second live region here would announce the same sentence twice; the key remounts the node
+          so a changed status is an addition the log announces once. */}
+      <p key={activity.status}>{t(`codingWorkbench.activity.status.${activity.status}`)}</p>
       {truncated ? <p>{t("codingWorkbench.activity.truncated")}</p> : null}
       {(activity.feed?.droppedEventCount ?? 0) > 0 ? (
         <p>
@@ -601,7 +710,10 @@ function QuestionSummary({
 }: {
   readonly questions: UseCodingWorkbenchQuestionsResult;
 }): ReactNode {
-  if (questions.questions.length > 0 || !QUESTION_SUMMARY_STATES.has(questions.status)) return null;
+  const shown = questions.questions.length === 0 && QUESTION_SUMMARY_STATES.has(questions.status);
+  // #3880: an unpaired window cannot list its questions; the run status sentence says why.
+  const held = useHeldNotice("questions", shown);
+  if (!shown || held) return null;
   return <CodingWorkbenchQuestionsSurface result={questions} variant="inline" />;
 }
 
@@ -655,21 +767,12 @@ function TimelineList({
   restoreFocusRef,
   t,
 }: TimelineListProps): ReactNode {
-  const {
-    virtual,
-    start,
-    visible,
-    end,
-    onScroll,
-    measureRow,
-    hasMeasured,
-    spacerBefore,
-    spacerAfter,
-  } = timeline;
+  const { virtual, end, onScroll, listRef, spacerBefore, spacerAfter } = timeline;
   const questionCount = questions.questions.length > 0 ? 1 : 0;
   const total = items.length + questionCount;
   return (
     <ol
+      ref={listRef}
       className={styles.timeline}
       data-virtual={virtual}
       aria-label={t("codingWorkbench.timeline.listLabel")}
@@ -678,17 +781,7 @@ function TimelineList({
       onScroll={onScroll}
     >
       {virtual && spacerBefore > 0 ? <TimelineSpacer size={spacerBefore} /> : null}
-      {visible.map((item, index) => (
-        <TimelineRow
-          key={item.id}
-          item={item}
-          position={start + index + 1}
-          total={total}
-          t={t}
-          measureRow={measureRow}
-          hasMeasured={hasMeasured}
-        />
-      ))}
+      <TimelineRows timeline={timeline} total={total} t={t} />
       {virtual && end < items.length && spacerAfter > 0 ? (
         <TimelineSpacer size={spacerAfter} />
       ) : null}
@@ -702,6 +795,30 @@ function TimelineList({
       ) : null}
     </ol>
   );
+}
+
+function TimelineRows({
+  timeline,
+  total,
+  t,
+}: {
+  readonly timeline: TimelineWindow;
+  readonly total: number;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const { start, visible, measure, measureRow, hasMeasured } = timeline;
+  return visible.map((item, index) => (
+    <TimelineRow
+      key={item.id}
+      item={item}
+      position={start + index + 1}
+      total={total}
+      t={t}
+      measureRow={measureRow}
+      hasMeasured={hasMeasured}
+      measure={measure}
+    />
+  ));
 }
 
 function TimelineSpacer({ size }: { readonly size: number }): ReactNode {
@@ -745,13 +862,17 @@ function useRowMeasurement(
   return ref;
 }
 
-function TimelineRow({
+// Memoized so a height measurement (which re-renders the list) leaves every row whose item,
+// position and callbacks are unchanged alone: the items array is stable between feed updates, so
+// only the row whose own content changed renders again.
+const TimelineRow = memo(function TimelineRow({
   item,
   position,
   total,
   t,
   measureRow,
   hasMeasured,
+  measure,
 }: {
   readonly item: TimelineItem;
   readonly position: number;
@@ -759,14 +880,15 @@ function TimelineRow({
   readonly t: CodingWorkbenchTranslate;
   readonly measureRow: (id: string, height: number) => void;
   readonly hasMeasured: (id: string) => boolean;
+  readonly measure: boolean;
 }): ReactNode {
-  const rowProps = { item, position, total, t, measureRow, hasMeasured };
+  const rowProps = { item, position, total, t, measureRow, hasMeasured, measure };
   if (item.kind === "group") return <ToolGroupRow {...rowProps} item={item} />;
   if (item.kind === "message") return <MessageRow {...rowProps} item={item} />;
   if (item.kind === "tool") return <ToolRow {...rowProps} item={item} />;
   if (item.kind === "plan") return <PlanRow {...rowProps} item={item} />;
   return <EventRow {...rowProps} item={item} />;
-}
+});
 
 interface RowProps<T extends TimelineItem> {
   readonly item: T;
@@ -775,6 +897,7 @@ interface RowProps<T extends TimelineItem> {
   readonly t: CodingWorkbenchTranslate;
   readonly measureRow: (id: string, height: number) => void;
   readonly hasMeasured: (id: string) => boolean;
+  readonly measure: boolean;
 }
 
 function MessageRow({
@@ -784,8 +907,9 @@ function MessageRow({
   t,
   measureRow,
   hasMeasured,
+  measure,
 }: RowProps<Extract<TimelineItem, { kind: "message" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
   return (
     <li
       ref={rowRef}
@@ -795,7 +919,9 @@ function MessageRow({
       data-timeline-kind="message"
     >
       <article className={styles.timelineBody} data-message-role={item.message.role}>
-        <p className={styles.timelineTitle}>
+        {/* The agent's role is announced, not drawn above every step: repeated on each message
+            between tool rows it was the loudest text of the timeline (#3897 UI review). */}
+        <p className={item.message.role === "assistant" ? "sr-only" : styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
         {item.message.reasoning === undefined ? null : (
@@ -809,7 +935,10 @@ function MessageRow({
   );
 }
 
-// #3878: the model's own reasoning, apart from the answer and labelled as unverified. It is
+// #3878: the model's own reasoning, apart from the answer. It is shown as the model wrote it under a
+// plain "Thinking" summary: a warning-coloured "Unverified" read as a failed check on every step
+// (#3897, owner), and a note inside every block was text Keiko added around the model's own (#3907,
+// owner: less is more). The timeline's boundary sentence still says it is unverified. It is
 // collapsed until the reader opens it, also while its turn streams, and its text is excluded from
 // the log's live announcements: the session stream is a `role="log"`, whose additions a screen
 // reader reads out, and up to 8 KiB of unverified reasoning per message would crowd out the answer
@@ -824,18 +953,13 @@ function ModelReasoning({
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
-    <details
-      className={styles.cmpReasoning}
-      aria-live="off"
-      onToggle={() => reportClientDiagnostic("[keiko] coding workbench model reasoning toggled")}
-    >
-      <summary className={styles.cmpActivitySummary}>
+    <details className={styles.cmpReasoning} aria-live="off">
+      <summary
+        className={styles.cmpActivitySummary}
+        onClick={(event) => reportCodingWorkbenchSummaryActivated("model-reasoning", event)}
+      >
         <span>{t("codingWorkbench.activity.reasoning.title")}</span>
-        <span className={styles.cmpReasoningBadge}>
-          {t("codingWorkbench.activity.reasoning.badge")}
-        </span>
       </summary>
-      <p className={styles.cmpReasoningNote}>{t("codingWorkbench.activity.reasoning.note")}</p>
       <p className={styles.cmpReasoningText}>
         {reasoning.text}
         {reasoning.truncated ? <TruncationMark t={t} /> : null}
@@ -866,6 +990,7 @@ function MessageContent({
         diagnosticCorrelationId={runId}
         diagnosticMessageId={message.messageId}
         trailing={truncationFor(message, t)}
+        richContent={CODING_WORKBENCH_RICH_CONTENT}
       />
     );
   }
@@ -901,8 +1026,10 @@ function ToolRow({
   t,
   measureRow,
   hasMeasured,
+  measure,
 }: RowProps<Extract<TimelineItem, { kind: "tool" }>> & { readonly grouped?: boolean }): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, !grouped);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure && !grouped);
+  const shownState = shownToolState(item.tool);
   return (
     <li
       ref={rowRef}
@@ -913,11 +1040,13 @@ function ToolRow({
     >
       <details
         className={styles.toolCard}
-        data-tool-state={item.tool.state}
-        open={item.tool.state === "failed" || item.tool.state === "denied"}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench tool details toggled")}
+        data-tool-state={shownState}
+        open={OPEN_WITH_REASON_STATES.has(shownState)}
       >
-        <summary className={styles.cmpActivitySummary}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("tool", event)}
+        >
           <span className={styles.toolIcon} aria-hidden="true" />
           <div className={styles.toolMeta}>
             <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
@@ -930,15 +1059,109 @@ function ToolRow({
               {t("codingWorkbench.activity.toolCount", { count: item.count })}
             </span>
           ) : null}
-          <span className={styles.activityBadge} data-state={item.tool.state}>
-            {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
-          </span>
+          <ToolStateBadge tool={item.tool} state={shownState} t={t} />
         </summary>
+        <ToolOutcome tool={item.tool} t={t} />
         <code className={styles.toolName}>{item.tool.tool}</code>
         <ToolPresentationDetails tool={item.tool} t={t} />
       </details>
     </li>
   );
+}
+
+// The runtime completes a shell call whatever its command returned and reports the exit code; a
+// non-zero code is the command's answer, for example a test run that reproduces a defect, not a
+// failed call. The timeline shows that code as OpenCode does instead of a red "Failed" (#4098
+// acceptance). The run's own state and its verification evidence still count the command as
+// failed; only the card's presentation changes.
+//
+// The same holds for a verification the server knows never checked anything (#3579): the operator's
+// package-script decision still open, a repository with nothing the verifier can run, and a run whose
+// steps were skipped, denied or cancelled. The model still reads a refusal; the card says what
+// happened instead of "Failed". A check that ran and went red keeps the failed badge.
+type UnrunVerificationOutcome = Extract<
+  CodingSafeActivityVerificationOutcome,
+  "waiting-for-trust" | "no-runnable-steps" | "not-run"
+>;
+type ShownToolState = CodingSafeActivityTool["state"] | "exited" | UnrunVerificationOutcome;
+
+const UNRUN_VERIFICATION_OUTCOMES: ReadonlySet<CodingSafeActivityVerificationOutcome> = new Set([
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+]);
+
+// The cards that open to the reason they ended as they did, rather than staying a one-line row.
+const OPEN_WITH_REASON_STATES: ReadonlySet<ShownToolState> = new Set([
+  "failed",
+  "denied",
+  "exited",
+  "waiting-for-trust",
+  "no-runnable-steps",
+  "not-run",
+]);
+
+function isUnrunVerificationOutcome(
+  outcome: CodingSafeActivityVerificationOutcome | undefined,
+): outcome is UnrunVerificationOutcome {
+  return outcome !== undefined && UNRUN_VERIFICATION_OUTCOMES.has(outcome);
+}
+
+function shownToolState(tool: CodingSafeActivityTool): ShownToolState {
+  if (tool.state !== "failed") return tool.state;
+  const exitCode = tool.presentation?.exitCode;
+  if (exitCode !== undefined && exitCode !== 0) return "exited";
+  const outcome = tool.presentation?.verificationOutcome;
+  return isUnrunVerificationOutcome(outcome) ? outcome : tool.state;
+}
+
+function ToolStateBadge({
+  tool,
+  state,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly state: ShownToolState;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  return (
+    <span className={styles.activityBadge} data-state={state}>
+      {state === "exited"
+        ? t("codingWorkbench.activity.toolState.exited", { code: tool.presentation?.exitCode ?? 0 })
+        : t(`codingWorkbench.activity.toolState.${state}`)}
+    </span>
+  );
+}
+
+// Why a call ended as it did, in words: a command's exit status, how a verification ended, or that
+// the tool reported an error to the model. Without it a failed call opened to nothing but its tool
+// name (#3897).
+function ToolOutcome({
+  tool,
+  t,
+}: {
+  readonly tool: CodingSafeActivityTool;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  const exitCode = tool.presentation?.exitCode;
+  if (exitCode !== undefined) {
+    return (
+      <p className={styles.cmpToolOutcome}>
+        {t("codingWorkbench.activity.exitCode", { code: exitCode })}
+      </p>
+    );
+  }
+  const verificationOutcome = tool.presentation?.verificationOutcome;
+  if (verificationOutcome !== undefined) {
+    return (
+      <p className={styles.cmpToolOutcome}>
+        {t(`codingWorkbench.activity.verification.${verificationOutcome}`)}
+      </p>
+    );
+  }
+  return tool.state === "failed" ? (
+    <p className={styles.cmpToolOutcome}>{t("codingWorkbench.activity.toolError")}</p>
+  ) : null;
 }
 
 function ToolPresentationDetails({
@@ -948,10 +1171,11 @@ function ToolPresentationDetails({
   readonly tool: CodingSafeActivityTool;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
+  const locale = useLocale();
   const facts = tool.presentation;
   if (facts === undefined) return null;
   return (
-    <div className={styles.toolMeta}>
+    <div className={styles.cmpToolFacts}>
       {facts.readByteCount === undefined ? null : (
         <p>
           {facts.totalFileLines === undefined
@@ -972,7 +1196,11 @@ function ToolPresentationDetails({
         <p>{t("codingWorkbench.activity.affectedFile", { path: facts.affectedRelativePath })}</p>
       )}
       {facts.bridgeDurationMs === undefined ? null : (
-        <p>{t("codingWorkbench.activity.serviceDuration", { duration: facts.bridgeDurationMs })}</p>
+        <p>
+          {t("codingWorkbench.activity.serviceDuration", {
+            duration: formatDurationMs(facts.bridgeDurationMs, locale),
+          })}
+        </p>
       )}
     </div>
   );
@@ -985,8 +1213,9 @@ function ToolGroupRow({
   t,
   measureRow,
   hasMeasured,
+  measure,
 }: RowProps<Extract<TimelineItem, { kind: "group" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
   const count = item.tools.reduce((sum, tool) => sum + tool.count, 0);
   return (
     <li
@@ -996,11 +1225,11 @@ function ToolGroupRow({
       aria-setsize={total}
       data-timeline-kind="group"
     >
-      <details
-        className={styles.cmpToolGroup}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench activity group toggled")}
-      >
-        <summary className={styles.cmpActivitySummary}>
+      <details className={styles.cmpToolGroup}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("activity-group", event)}
+        >
           {t("codingWorkbench.activity.groupCount", { count })}
         </summary>
         <ol className={styles.cmpGroupedTools}>
@@ -1014,6 +1243,7 @@ function ToolGroupRow({
               t={t}
               measureRow={measureRow}
               hasMeasured={hasMeasured}
+              measure={false}
             />
           ))}
         </ol>
@@ -1023,7 +1253,10 @@ function ToolGroupRow({
 }
 
 function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
-  const knownKey = KNOWN_TOOL_LABEL_KEYS[tool];
+  // The id is runtime text: `constructor` must not resolve to a member inherited from Object.
+  const knownKey = Object.hasOwn(KNOWN_TOOL_LABEL_KEYS, tool)
+    ? KNOWN_TOOL_LABEL_KEYS[tool]
+    : undefined;
   if (knownKey !== undefined) return t(knownKey);
   return tool
     .replace(/^keiko[_-]/u, "")
@@ -1040,8 +1273,9 @@ function PlanRow({
   t,
   measureRow,
   hasMeasured,
+  measure,
 }: RowProps<Extract<TimelineItem, { kind: "plan" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
   return (
     <li
       ref={rowRef}
@@ -1050,12 +1284,13 @@ function PlanRow({
       aria-setsize={total}
       data-timeline-kind="plan"
     >
-      <details
-        className={styles.planCard}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench plan details toggled")}
-      >
-        <summary className={styles.cmpActivitySummary}>
+      <details className={styles.planCard} open={item.open}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("plan", event)}
+        >
           <p className={styles.timelineTitle}>{t("codingWorkbench.activity.plan.title")}</p>
+          <PlanProgress steps={item.plan.steps} t={t} />
         </summary>
         <ol className={styles.planSteps}>
           {item.plan.steps.map((step, index) => (
@@ -1074,6 +1309,26 @@ function PlanRow({
   );
 }
 
+/** "2/5 completed" beside the plan title, so the closed card still shows how far the run is. */
+function PlanProgress({
+  steps,
+  t,
+}: {
+  readonly steps: CodingSafeActivityPlan["steps"];
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (steps.length === 0) return null;
+  const completed = steps.filter((step) => step.state === "completed").length;
+  return (
+    <span
+      className={styles.activityBadge}
+      data-state={completed === steps.length ? "completed" : undefined}
+    >
+      {t("codingWorkbench.activity.plan.progress", { completed, total: steps.length })}
+    </span>
+  );
+}
+
 function EventRow({
   item,
   position,
@@ -1081,8 +1336,9 @@ function EventRow({
   t,
   measureRow,
   hasMeasured,
+  measure,
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
-  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured, measure);
   const tone = eventTone(item.event);
   const detail = timelineEventDetail(item, t);
   return (
@@ -1094,12 +1350,13 @@ function EventRow({
       data-timeline-kind="event"
       data-event-tone={tone}
     >
-      <details
-        className={styles.eventCard}
-        open={tone === "attention"}
-        onToggle={() => reportClientDiagnostic("[keiko] coding workbench event details toggled")}
-      >
-        <summary className={styles.cmpActivitySummary}>{eventTitle(item.event, t)}</summary>
+      <details className={styles.eventCard} open={tone === "attention"}>
+        <summary
+          className={styles.cmpActivitySummary}
+          onClick={(event) => reportCodingWorkbenchSummaryActivated("event", event)}
+        >
+          {eventTitle(item.event, t)}
+        </summary>
         {detail.length > 0 ? <p className={styles.timelineDetail}>{detail}</p> : null}
         <VerificationDetail event={item.event} t={t} />
       </details>
@@ -1135,6 +1392,33 @@ function timelineEventDetail(
   return `${cause} ${progress}`;
 }
 
+type VerificationSummary = NonNullable<
+  Extract<CodingWorkbenchRuntimeSseEvent, { kind: "runtime-event" }>["verificationSummary"]
+>;
+
+// A summary in which no check passed and none failed ran nothing: every step was skipped. It is
+// shown as not run rather than as a failure the counts beside it contradict (#3897 UI review:
+// "Tests: Failed · 0 passed, 0 unsuccessful, 1 skipped").
+function shownVerificationStatus(
+  summary: VerificationSummary,
+): VerificationSummary["status"] | "notRun" {
+  if (summary.status !== "passed" && summary.passedCount === 0 && summary.failedCount === 0) {
+    return "notRun";
+  }
+  return summary.status;
+}
+
+/** A duration as a reader takes it in: milliseconds below a second, seconds with one decimal above. */
+function formatDurationMs(durationMs: number, locale: Locale): string {
+  if (durationMs < 1000) {
+    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(durationMs)} ms`;
+  }
+  const seconds = new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(
+    durationMs / 1000,
+  );
+  return `${seconds} s`;
+}
+
 function VerificationDetail({
   event,
   t,
@@ -1150,11 +1434,11 @@ function VerificationDetail({
   const summary = event.kind === "runtime-event" ? event.verificationSummary : undefined;
   if (summary === undefined) return null;
   return (
-    <div className={styles.timelineDetail}>
+    <div className={`${styles.timelineDetail} ${styles.cmpVerificationFacts}`}>
       <p>
         {t("codingWorkbench.verification.result", {
           verifier: t(`codingWorkbench.verification.verifier.${summary.verifierId}`),
-          status: t(`codingWorkbench.verification.status.${summary.status}`),
+          status: t(`codingWorkbench.verification.status.${shownVerificationStatus(summary)}`),
         })}
       </p>
       <p>
@@ -1166,7 +1450,7 @@ function VerificationDetail({
       </p>
       <p>
         {t("codingWorkbench.verification.duration", {
-          duration: number.format(summary.durationMs),
+          duration: formatDurationMs(summary.durationMs, locale),
         })}
       </p>
     </div>
@@ -1177,7 +1461,9 @@ function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routin
   if (event.state === "failed" || event.failureCode !== undefined) return "attention";
   if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
   if (event.kind === "runtime-event" && event.verificationSummary !== undefined) {
-    return event.verificationSummary.status === "passed" ? "success" : "attention";
+    const shown = shownVerificationStatus(event.verificationSummary);
+    if (shown === "notRun") return "routine";
+    return shown === "passed" ? "success" : "attention";
   }
   if (event.state === "succeeded") return "success";
   return "routine";

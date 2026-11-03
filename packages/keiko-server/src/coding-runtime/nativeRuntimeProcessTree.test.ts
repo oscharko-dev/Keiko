@@ -1,6 +1,6 @@
 import { PassThrough, type Readable, type Writable } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { MAX_PACKET_BYTES, RESPONSE_HEADER_BYTES } from "./nativeRuntimeProcessProtocol.js";
 import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRuntimeProcessTree.js";
@@ -15,6 +15,7 @@ import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRunt
 interface HelperHarness {
   readonly helper: NativeRuntimeHelperProcess;
   readonly controlOutput: PassThrough;
+  readonly controlInput: PassThrough;
   emitExit: (code: number | null) => void;
 }
 
@@ -22,7 +23,7 @@ function harness(): HelperHarness {
   const stdin: Writable = new PassThrough();
   const stdout: Readable = new PassThrough();
   const stderr: Readable = new PassThrough();
-  const controlInput: Writable = new PassThrough();
+  const controlInput = new PassThrough();
   const controlOutput = new PassThrough();
   let emit: (code: number | null) => void = () => undefined;
   const helper: NativeRuntimeHelperProcess = {
@@ -41,6 +42,7 @@ function harness(): HelperHarness {
   return {
     helper,
     controlOutput,
+    controlInput,
     emitExit: (code): void => {
       emit(code);
     },
@@ -144,10 +146,87 @@ describe("NativeRuntimeTree packet reassembly", () => {
     const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
     tree.onTreeExit((code) => exits.push(code));
     const waiter = tree.waitForProof(1_000);
+    // A real helper's control pipe is closed once it has exited; nothing more can arrive.
+    h.controlOutput.end();
     h.emitExit(0);
     expect(exits).toEqual([0]);
     await expect(waiter).resolves.toBe(false);
     // A second waitForProof after the tree has ended immediately resolves false.
     await expect(tree.waitForProof(1_000)).resolves.toBe(false);
+  });
+
+  // Audit finding 7: the helper's `exit` can be observed before the last bytes of its control pipe
+  // have been read, so a reap proof written just before exiting was discarded and a clean reap was
+  // judged unproven. The proof is now accepted until the control pipe closes (bounded by a grace).
+  it("accepts a reap proof that is read after the helper exit was observed", async () => {
+    const h = harness();
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    tree.onTreeExit((code) => exits.push(code));
+    const waiter = tree.waitForProof(1_000);
+
+    h.emitExit(0);
+    expect(exits).toEqual([0]);
+    h.controlOutput.write(proofPacket());
+    h.controlOutput.end();
+
+    await expect(waiter).resolves.toBe(true);
+    expect(tree.hasReapProof()).toBe(true);
+    await expect(tree.waitForProof(10)).resolves.toBe(true);
+  });
+
+  it("settles an unproven reap once the closed control pipe delivered nothing", async () => {
+    const h = harness();
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    const waiter = tree.waitForProof(1_000);
+
+    h.emitExit(0);
+    h.controlOutput.end();
+
+    await expect(waiter).resolves.toBe(false);
+    expect(tree.hasReapProof()).toBe(false);
+  });
+
+  describe("with a control pipe that never closes", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("stops waiting for a proof after a bounded grace", async () => {
+      vi.useFakeTimers();
+      const h = harness();
+      const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+      const waiter = tree.waitForProof(60_000);
+
+      h.emitExit(0);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(waiter).resolves.toBe(false);
+    });
+  });
+
+  it("treats a failed write to the control pipe as the end of the helper, not an unhandled error", () => {
+    const h = harness();
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    tree.onTreeExit((code) => exits.push(code));
+
+    expect(() => h.controlInput.emit("error", new Error("EPIPE"))).not.toThrow();
+
+    expect(exits).toEqual([null]);
+    expect(() => {
+      tree.sendControl(2);
+    }).not.toThrow();
+  });
+
+  it("treats an error on the control output pipe as the end of the helper", () => {
+    const h = harness();
+    const exits: (number | null)[] = [];
+    const tree = new NativeRuntimeTree("a".repeat(32), h.helper);
+    tree.onTreeExit((code) => exits.push(code));
+
+    expect(() => h.controlOutput.emit("error", new Error("EIO"))).not.toThrow();
+
+    expect(exits).toEqual([null]);
   });
 });

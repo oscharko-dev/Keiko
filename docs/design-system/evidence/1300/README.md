@@ -6,10 +6,10 @@ been visually accepted. The narrative, surface matrix, tolerance, retention, des
 final variance register are in [`../../visual-regression.md`](../../visual-regression.md); the governance gates
 are in [ADR-0051](../../../adr/ADR-0051-design-system-visual-regression-and-acceptance-gate.md).
 
-The commands below are historical evidence tools, not standing CI or pull-request gates. They retain their
-non-zero assertions for forensic reproduction, but later intentional changes to the product or reference can
-make an old migration comparison fail. Current release protection is provided by the applicable UI and
-Playwright regression suites.
+The commands below retain historical fixture scope. They are not direct CI entry points, but current UI
+regression tests verify their committed proofs against the declared source inputs. When those inputs change,
+regenerate the original producers before claiming those tests pass. Their non-zero assertions remain active;
+these fixture proofs do not replace applicable product journeys or qualify capabilities they do not exercise.
 
 ## How to reproduce
 
@@ -44,7 +44,7 @@ ghost text, agent prompts) is proven by
 
 ## Environment
 
-- Headless Chromium via Playwright 1.61.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
+- Headless Chromium via Playwright 1.64.1 (`chromium`), Node 24.18.0 and npm 11.16.0.
 - Fidelity gates use `page.setContent` / `file://` (no server — CodeQL-safe); the running-app capture serves
   `packages/keiko-ui/out` over a realpath-confined loopback server and stubs same-origin API responses with
   deterministic `keiko.workspace.v4` workspace-window state.
@@ -81,3 +81,164 @@ ghost text, agent prompts) is proven by
   MemoriaViva/Relationships, Files/Editor, and desktop/constrained Git-client scenarios), shell present
   in every mode/viewport, required selectors present, and 0 page errors, visible error notices, crashed
   window bodies, unexpected API requests, or unavailable workspace-trust states.
+
+## SonarCloud CSS maintenance — 2026-10-24
+
+The original four producers were regenerated for the reported CSS maintenance on Node 24.22.0
+(macOS arm64). Component fidelity retains 427 probes with zero gated or recorded differences;
+editor token fidelity retains zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof retains zero serious/critical violations and zero unresolved incomplete findings.
+The 108 running-app captures retain zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. The browser fixture now supplies the three
+existing browser-approval, empty-draft and absent-skill reads through exact paths and canonical empty
+responses. Unexpected requests still fail closed.
+
+The additional [CSS preservation producer](../sonarcloud-2026-10-24/css-preservation.mjs) compares
+32 fixtures against the pinned pre-change source, including interaction states, pseudo-elements,
+late-loaded Monaco styles and the changed CSS Modules. It records 34,944 equal computed values and
+binds the producer and source digests in its sibling proof JSON. This remains fixture qualification.
+The separate running-editor smoke is not green; its menu-selection and desktop-hover failures also
+reproduce with the original stylesheet. See the complete
+[SonarCloud review record](../../../qa/sonarcloud-blocker-medium-2026-10-24.json) for the actual gate
+outcomes and limitations. No failure or rule was suppressed to produce these artifacts.
+
+## Merge into PR #4064 — 2026-10-24
+
+The producers bind `package.json`, `package-lock.json` and `packages/keiko-ui/package.json`, which
+the merge of `dev` into PR #4064 changes (its own dependency and package updates). The same four
+original producers were rerun on the merged tree on Node 24.22.0 (macOS arm64) and all passed:
+component fidelity with zero gated differences and no missing selectors, editor token fidelity with
+all 14 reference captures, the seven-mode accessibility proof with zero serious/critical violations
+and zero unresolved incomplete findings, and all 108 running-app captures with zero page errors,
+unexpected API requests, missing selectors, crashed windows or unavailable workspace-trust states.
+No gate, fixture or rule was changed.
+
+## Coding runtime pin 1.1.4 — 2026-10-26
+
+The pin of the optional coding-runtime packages to 1.1.4 changes `package.json` and
+`package-lock.json`, which these producers bind. The same four original producers were rerun on the
+pinned tree on Node 24.22.0 (macOS arm64) and all passed: component fidelity with 427 probes and
+zero gated or recorded differences, editor token fidelity with 160 gated probes, zero gated
+differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## Release 1.3.0 — 2026-10-26
+
+The 1.3.0 version bump changes `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, which these producers bind. The same four original producers were
+rerun on the release tree on Node 24.22.0 (macOS arm64) and all passed: component fidelity with 427
+probes and zero gated or recorded differences, editor token fidelity with 160 gated probes, zero
+gated differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## qs override 6.16.1 — 2026-10-27
+
+Raising the `qs` override to 6.16.1 for GHSA-6pq8-jhm2-2vcw (#4098) changes `package.json` and
+`package-lock.json`, which these producers bind. The same four original producers were rerun on that
+tree on Node 24.18.0 (macOS arm64) and all passed: component fidelity with zero gated differences,
+editor token fidelity with all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app captures
+with zero page errors, unexpected API requests, missing selectors, crashed windows or unavailable
+workspace-trust states. No gate, fixture or rule was changed.
+
+## Release 1.3.1 — 2026-10-27
+
+The 1.3.1 version bump changes `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, which these producers bind. The same four original producers were
+rerun on the release tree after `dev` (including the `qs` override above) was merged into it, on
+Node 24.18.0 (macOS arm64), and all passed: component
+fidelity with 427 probes and zero gated or recorded differences, editor token fidelity with 160 gated
+probes, zero gated differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## MCP and Jira Chat integration — 2026-10-28
+
+The original four producers were regenerated in the isolated Linux arm64 environment with Node 24.18.0
+and npm 11.16.0 from `01e3858cd`, plus the MCP CSS class-prefix repair and the exact empty connector-list
+fixture. The first complete browser run rejected 18 previously unstubbed `GET` requests from the new
+Jira-pod view. The fixture now answers only `/api/atlassian-connectors/credentials` with the existing
+`{ credentials: [] }` envelope; unexpected paths and methods still fail closed. All four producers were
+then rerun, so their 29 declared source fingerprints also bind the updated harness.
+
+Component fidelity passed 427 probes with zero gated differences. Editor fidelity passed 160 probes with
+zero gated differences and all 14 reference captures; the previously recorded, non-gated dark high-contrast
+bracket-color difference remains recorded. The seven-mode accessibility proof has zero violations and zero
+unresolved incomplete findings. All 108 running-app captures have zero page errors, missing selectors,
+error notices, crashed windows, unavailable trust states and unexpected API requests. All 287 unchanged
+CSS/proof tests and 25 producer/freshness tests passed. No threshold, exception or suppression changed.
+
+The regenerated browser and editor-reference captures were visually inspected. The historical canvas
+fixtures retain window positions extending beyond narrow viewports, as the prior baseline did; these images
+are not a complete mobile interaction qualification. Reference pages depicting an agent in the Editor
+remain historical design references, not evidence of an available Editor agent. MCP/Jira live effects and
+model behavior are qualified separately in the epic evidence.
+
+## Release 1.3.2 — 2026-10-28
+
+The 1.3.2 version bump changes `package.json`, `package-lock.json` and
+`packages/keiko-ui/package.json`, which these producers bind. The same four original producers were
+rerun on the release tree on Node 24.18.0 (macOS arm64), and all passed: component
+fidelity with 427 probes and zero gated or recorded differences, editor token fidelity with 160 gated
+probes, zero gated differences and all 14 reference captures, the seven-mode accessibility proof with zero
+serious/critical violations and zero unresolved incomplete findings, and all 108 running-app
+captures with zero page errors, unexpected API requests, missing selectors, crashed windows or
+unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+## PR #4093 exact Linux producer run — 2026-10-29
+
+The four original producers passed in the clean Linux checkout at exact source
+`4c129452229068c2cbde5d454b5add0d02187933` (Node 24.18.0, npm 11.16.0,
+Playwright 1.64.1). Component fidelity covered 427 probes with zero gated or
+recorded differences. Editor token fidelity covered 160 gated probes with zero
+gated differences and all 14 reference captures; ten accent differences remain
+recorded and three tokens remain reference-only. The seven-mode axe proof had zero
+violations and zero unresolved incomplete findings. All 108 running-app captures
+had zero page errors, missing selectors, visible error notices, crashed windows,
+unavailable workspace-trust states or unexpected API requests. The refreshed Linux
+release bundle record measures 388 static-export files; B1/B2/B3 and the editor
+bundle-size gate pass. No producer assertions, tolerances or budgets changed.
+
+These are synthetic visual fixtures; real MCP/Jira effects and model behavior are
+qualified separately.
+
+## minimatch and glob advisory overrides — 2026-10-31
+
+GHSA-g3hv-75wg-m249 and GHSA-3g3m-2fjr-6pw4 moved the root overrides to minimatch 11.0.3 and glob
+14.0.3, which changes `package.json` and `package-lock.json`, two of the declared source inputs. The
+four original producers were rerun on that tree on Node 24.18.0 (macOS arm64), as for release 1.3.2,
+and all passed: component fidelity with zero gated differences and no missing selectors, editor
+token fidelity with zero gated differences and all 14 reference captures, the seven-mode
+accessibility proof with zero serious/critical violations and zero unresolved incomplete findings,
+and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
+crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+
+## Release 1.3.4 input refresh — 2026-10-31
+
+The canonical version cut changes the root/workspace manifests and lockfile, which
+are declared producer inputs. All four original producers were rerun against the
+1.3.4 source on macOS arm64, Node 24.22.0, npm 11.19.1 and Playwright 1.64.1.
+The normalized third-party dependency graph is unchanged by this version cut.
+Component and editor fidelity passed with zero gated differences and no missing
+selectors; all 14 editor references and 108 running-app captures completed without
+errors. The seven-mode accessibility proof has zero serious/critical violations
+and zero unresolved incomplete findings. The source-input regression passes all
+281 tests. No producer assertion, tolerance, budget or source stylesheet changed.
+These remain synthetic historical fixtures; they do not qualify model behavior.
+
+## Release 1.3.5 input refresh — 2026-11-01
+
+The canonical version cut changes the root/workspace manifests and lockfile, which are declared
+producer inputs. All four
+original producers were rerun against the 1.3.5 source on macOS arm64, Node 24.18.0. Component
+and editor fidelity passed with zero gated differences and no missing selectors; all 14 editor
+references and 108 running-app captures completed without errors. The seven-mode accessibility
+proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
+assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
+fixtures; they do not qualify model behavior.

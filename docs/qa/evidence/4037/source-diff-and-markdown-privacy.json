@@ -1,0 +1,274 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": 84,
+  "classification": "Scoped source-privacy and public-code preservation qualification; not complete PR acceptance or a new model benchmark.",
+  "parentCommit": "a2b39768b1e6191b0737a40bad08fb5c7a82e2b0",
+  "sourceFreeze": {
+    "sha256": "400cf98d1f38e7ecc3dffa6701ffd891017722c995d96c49d00880ab7cbd987e",
+    "files": 7585,
+    "excludes": "Separately published QA/design evidence."
+  },
+  "compiledFreeze": {
+    "sha256": "1f3fc0f153751f2cbc43f58441756614deb4ed70a7a4e422512a12dc8795496f",
+    "files": 6651
+  },
+  "behavior": {
+    "parser": "Existing unified-diff parser moved to the contracts leaf with an unchanged tools re-export/error identity and optional successful-parse-only source observations.",
+    "privacy": "Native separate old/new images, contiguous-hunk syntax only, per-physical-line replacements and one bounded private-value second pass owned by the complete patch, including nested patches.",
+    "markdown": "One shared field-label grammar protects terminal and pending streaming values, including mixed emphasis. Completed public labels use small linear presentation/label/prose checks.",
+    "json": "Native lexical scalar continuation boundaries retain escaped private objects without classifying the qualified ordinary prose controls as JSON.",
+    "cache": "Redaction revision 8 and workspace index version 16 reject older projected text even when source/stat/ciphertext stay unchanged.",
+    "unchanged": [
+      "Model prompts and compact skills",
+      "Source, model and search budgets",
+      "Native YAML anchor/alias grammar",
+      "Patch execution authority"
+    ]
+  },
+  "failureFirst": [
+    {
+      "name": "checkpoint84-diff-red-v1",
+      "passed": 42,
+      "failed": 4,
+      "testReportSha256": "3dddc0ebd437df0adeb126ab177a5e9b0cbfe65c00728e17b85e602b28a37273"
+    },
+    {
+      "name": "checkpoint84-markdown-red-v1",
+      "passed": 1,
+      "failed": 10,
+      "testReportSha256": "321cd49920d2c97f62ba0eecf70ffb08caf4af9d9a5bdbb9c8eb33b37a7f91a4"
+    },
+    {
+      "name": "checkpoint84-json-inferred-red-v1",
+      "passed": 4,
+      "failed": 7,
+      "testReportSha256": "751eead27b91c373e430f5015f3a405b71197bdaac62182ae2a4427076e127bf"
+    },
+    {
+      "name": "checkpoint84-unowned-red-v1",
+      "passed": 9,
+      "failed": 2,
+      "testReportSha256": "aaec80ede7d64a61fee958bcfdb00f889fa741ded6dd963f316e4d23952a9e68"
+    },
+    {
+      "name": "checkpoint84b-nested-red-v1",
+      "passed": 11,
+      "failed": 2,
+      "testReportSha256": "d07ca94b3bbc55559281d3e6226132b749a6d727acf251bc2c4dfd315d78f0c5"
+    }
+  ],
+  "finalTests": {
+    "passed": 4234,
+    "failed": 0,
+    "existingWindowsOnlySkips": 3,
+    "testReportSha256": "39de2090fd0e2a63b6c2e96c3fbfa39113b2915d16d2289120233b022f4f7b4f",
+    "coverageScope": "packages/keiko-security/src/redaction*.ts",
+    "coverage": {
+      "lines": {
+        "total": 1220,
+        "covered": 1185,
+        "skipped": 0,
+        "pct": 97.13
+      },
+      "statements": {
+        "total": 1449,
+        "covered": 1363,
+        "skipped": 0,
+        "pct": 94.06
+      },
+      "functions": {
+        "total": 285,
+        "covered": 276,
+        "skipped": 0,
+        "pct": 96.84
+      },
+      "branches": {
+        "total": 1128,
+        "covered": 993,
+        "skipped": 0,
+        "pct": 88.03
+      },
+      "branchesTrue": {
+        "total": 0,
+        "covered": 0,
+        "skipped": 0,
+        "pct": "Unknown"
+      }
+    },
+    "coverageSummarySha256": "435788b718419f82da791107015d2b3ea3f136e0f263573a13768a3b6b374d9f"
+  },
+  "gates": [
+    {
+      "name": "checkpoint84b-final-typecheck-v1",
+      "exitCode": 0,
+      "receiptSha256": "091426ca90e61d4b45a9d214d183b42471b69f8a0b69ab3fbabc5bbb27f23228",
+      "logSha256": "44b4c2e26d83b74592c2203d426457c9fac5d2bfff6dee6cbf9f8c70dc52fd29"
+    },
+    {
+      "name": "checkpoint84b-final-lint-v1",
+      "exitCode": 0,
+      "receiptSha256": "c0744ca9e525cc014c5978659749abb969b078b82e308605006de31937ff0231",
+      "logSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "checkpoint84b-activity-v2",
+      "exitCode": 0,
+      "receiptSha256": "308cefe453e367e4ec687783597f2ad7c5490564f38b91dc7a45ed0dbd9781e6",
+      "logSha256": "3190b1192d0a11a6760241f92e901b68b12ff74eee8b116c5125e9228c87801b"
+    },
+    {
+      "name": "checkpoint84b-final-format-check-v1",
+      "exitCode": 0,
+      "receiptSha256": "e4d7c80e38094579dff98b23035ca221d2599b880f6a9243d458a385702f5a0c",
+      "logSha256": "90bda2270ac468296e07c2acba78b48faa4917ee74eaed88b14927c08e159a93"
+    },
+    {
+      "name": "checkpoint84b-final-broad-v1",
+      "exitCode": 0,
+      "receiptSha256": "f8ac4527a114999e5e516c54b97b1aa2392aa24cc1bc1d7511509e679410cff4",
+      "logSha256": "5f067b1ccd5333f1300c5f119c02ee34d75aba6ad7e0efc1caa574142b035f22"
+    },
+    {
+      "name": "checkpoint84b-final-sonar-v1",
+      "exitCode": 0,
+      "receiptSha256": "3428aca9ab1b95c0010dba2996603f5db20a0bd0eb1a48f7f7bf425598139e9d",
+      "logSha256": "33c8dd34c39ee39ade92a5cc16f416ef1ea0c996fb9c7252beea531ea37622b0"
+    },
+    {
+      "name": "checkpoint84b-retrieval-v1",
+      "exitCode": 0,
+      "receiptSha256": "5a90aa350cb2d1db22bff5b9ffedc56aa0094564871ae7924ace5d5355ede478",
+      "logSha256": "445e6b8f0bbe8000a835aeb9638b2e825cefa7fa72f2e299d50a63e77d457540"
+    },
+    {
+      "name": "checkpoint84b-grounded-v1",
+      "exitCode": 0,
+      "receiptSha256": "afa33a089be67436b9902266431aed747aa1efa10d98561326f231193a73a497",
+      "logSha256": "e67d8c1c0dd1eb7195e6135d7e761636176e7b6f8cdaeda7b24b75670f26db8f"
+    },
+    {
+      "name": "checkpoint84b-faithfulness-v1",
+      "exitCode": 0,
+      "receiptSha256": "8109388878f33f5be85cc503f2ee283a8abad95149c240b1bb385e079edbf383",
+      "logSha256": "fdd38052b4664f551a607833d9165fcf7aeb9f337195541781bf2d7f2c63c5e2"
+    },
+    {
+      "name": "checkpoint84b-context-v1",
+      "exitCode": 0,
+      "receiptSha256": "29f18868ffc716eaf898bf59382362830f35354417ae4e15cdb67c1bc00edcf6",
+      "logSha256": "7edf3ba5238526321e22e57e01f2902ffdcf719c2d0741eba2f9c56f13effb1c"
+    },
+    {
+      "name": "checkpoint84b-observability-v1",
+      "exitCode": 0,
+      "receiptSha256": "0dcecfce30941a824a0f6744fae9a34e24c6626b19e62f93254f6ce0aae44e31",
+      "logSha256": "098043d3017c53b1af2ac6327a2eb03c183fbb2b28acadc08885acd9befd0c9d"
+    },
+    {
+      "name": "checkpoint84b-adr-v1",
+      "exitCode": 0,
+      "receiptSha256": "55743be1156999ed99f7bfa9868ab05cb46c2c1b386afdddf974cae6f9918044",
+      "logSha256": "c12a050e5380cfba6f8e26edf940a13bbb47432f6d218018bd1a42fa3ad1a529"
+    }
+  ],
+  "preparedPackage": {
+    "identityReceiptSha256": "82ccc8bd8dc94a3e269c3427e071dc0ee06aabcde9edccecda34f90506d021bf",
+    "sourceRowsUnchanged": 7585,
+    "retainedCompiledRowsUnchanged": 6592,
+    "removedRuntimeSourceMapCount": 0,
+    "removedPublishedForbiddenTestArtifactCount": 24,
+    "rebuiltUiChangedRowCount": 35,
+    "qualifiedPublishedNodeExecutableAndDeclarationBytesUnchanged": true,
+    "commands": [
+      {
+        "command": "npm run clean",
+        "exitCode": 0,
+        "receiptSha256": "b822b41e5edc9855c3262776469dbc464b3bde123554fa1f7a381241be1612a8",
+        "logSha256": "b1528bf2218585c1898e5641ef1042c256abbd335ff30ce4bd8add16c25e8cea"
+      },
+      {
+        "command": "npm run check:package-surface:assembled",
+        "exitCode": 0,
+        "receiptSha256": "61be73ab4a23d7bbb60cdd0f98f2050d9c414bf9928142ee6fa80e3818c67085",
+        "logSha256": "10cc471c6e208fb285b9a46df031dae9dd8525a788ee6b30d7b55f361b622a71"
+      }
+    ]
+  },
+  "independent": {
+    "fixedProtocolReceiptSha256": "6fe58b0c564e69212e58b08046096cee3c4c66e94284c000b7f581ac8d4c6cde",
+    "fixedCorpora": [
+      {
+        "corpus": "diff-boundaries",
+        "rows": 144,
+        "sameInputHashes": true,
+        "requiredConditionsPass": true
+      },
+      {
+        "corpus": "yaml-separation",
+        "rows": 29,
+        "sameInputHashes": true,
+        "requiredConditionsPass": true
+      },
+      {
+        "corpus": "scalar-public-frozen",
+        "rows": 38,
+        "sameInputHashes": true,
+        "requiredConditionsPass": true
+      },
+      {
+        "corpus": "markdown-frozen-boundaries",
+        "rows": 12,
+        "sameInputHashes": true,
+        "requiredConditionsPass": true
+      },
+      {
+        "corpus": "markdown-credential-workspace",
+        "rows": 12,
+        "sameInputHashes": true,
+        "requiredConditionsPass": true
+      },
+      {
+        "corpus": "retained15-reads-v3",
+        "rows": 4,
+        "sameInputHashes": true,
+        "requiredConditionsPass": true
+      }
+    ],
+    "index15to16ChecksPass": true,
+    "nestedTwoOrderCausalRepairPass": true,
+    "unchangedAffectedSourceTests": {
+      "passed": 137,
+      "failed": 0,
+      "receiptSha256": "595c42bb6d2f7fe7660a6f7369fe396c6adb1acbc000d41f03f7cb9f8b227179"
+    },
+    "postReplayIntegritySha256": "4cd80c3c45d17b9bf0f6e134f8c56ddd9b50b44d02d101e6b862201116cb39aa"
+  },
+  "retainedLimits": [
+    "The 29-case separation comparison retains three pre-existing malformed/unknown no-separation-alias witnesses; it is not a 29/29 private-binding claim.",
+    "No new UI/Gemma skill-benefit or untouched-task acceptance is claimed by this source-privacy checkpoint.",
+    "Real portable-update/browser qualification, remaining Chat/Files acceptance, dependency delivery, final required checks/reviews and verified dev integration remain separate work.",
+    "Original private pre-PR44 chronology is not reconstructed by fresh fixtures."
+  ],
+  "retainedVerificationFailures": [
+    {
+      "name": "checkpoint84a-sonar-v1",
+      "disposition": "Five actual findings corrected; final real Sonar has zero findings.",
+      "receiptSha256": "0d872382c2fd6c418f70de440d612af32dc1354b955d6e28a317e9f4ad3104e2"
+    },
+    {
+      "name": "checkpoint84b-typecheck-v1",
+      "disposition": "toSorted was unavailable in the configured library target; separate supported sort statements pass final typing/lint/Sonar.",
+      "receiptSha256": "0e0b970cf212bce86361a7574209dc77cb0ef4c74b25b9e5a02aa0c637fb91e4"
+    },
+    {
+      "name": "checkpoint84b-final-package-surface-v1",
+      "disposition": "Unprepared invocation correctly rejected regenerated incremental build metadata.",
+      "receiptSha256": "f975ccdbe288032d1ecf70ca4eab383ccdc7f52e65ea82c3b9697bf1b3747e6e"
+    },
+    {
+      "name": "checkpoint84b-prepared-surface-v1",
+      "disposition": "Cleanup alone correctly rejected stale output timestamps; a full clean assembled build is the passing result.",
+      "receiptSha256": "156a5436c6fda670001b5fbfb4b6852820f3267bedc5f497551e0a4566c9e404"
+    }
+  ]
+}

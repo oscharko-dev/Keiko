@@ -1,0 +1,186 @@
+{
+  "schemaVersion": 1,
+  "parentCommit": "9b4eb9e3e75e286160bceadb511d1f4abf353b12",
+  "classification": "Scoped required-gate repairs; no original full functional acceptance.",
+  "followUp": "https://github.com/oscharko-dev/Keiko/issues/4051",
+  "behavior": [
+    "Load window chrome when windows exist; preserve minimized hiding, stable identity, latest props and pending removal.",
+    "Reuse identical synchronous redaction inputs only within one prompt fit, capped at 128 entries and the existing excerpt-byte grant including both UTF-8 keys and results. No redaction, prompt, source or token grant is relaxed.",
+    "Wait for actual commit permission events inside the existing 15-second test bound, preserving all three runtime approval modes.",
+    "Pin the reviewed October Windows compiler distribution and unchanged four framework references; two isolated regenerations and committed assembly equality remain mandatory.",
+    "Compile the real macOS event-stream fixture with the actual shared protocol header. Await initial Chat UI readiness before a scope-change announcement assertion. Existing performance assertions run after frame import settlement."
+  ],
+  "sourceBindings": [
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "7ef9fe4915fd541761f10a0d6b636cf67aeaf69148db53a9eaabdd6ea1e6eb1a"
+    },
+    {
+      "path": "docs/release/1209-bundle-evidence.json",
+      "sha256": "e3509f36cb5a0cb43cc4d12868b4071fbc5f423b15240d05cb1cc4ef3b01ed03"
+    },
+    {
+      "path": "packages/keiko-activity-log/src/reader/support-code-inventory.generated.ts",
+      "sha256": "f4ebf53b8432bd312f79bb25e28e902f4a67617072a7feffeb8033db860a0741"
+    },
+    {
+      "path": "packages/keiko-server/src/gitDelivery/verifiedCommitService.test.ts",
+      "sha256": "8c6948e749866d2b9b242743cb884aefc24a28d39a1cc3892aab21381ecc3428"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-prompt-redactor.test.ts",
+      "sha256": "f27817f20eda768f7d9027969ea8450872fb0109605151d4ce8597c336931194"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-prompt-redactor.ts",
+      "sha256": "c4cc29cdd06298dc964089bc648c8ad54efe090182c6c4f9a2a046f8aee9987e"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-qa.test.ts",
+      "sha256": "42736938e6c7b57e7fe05aeb26789c359523a38a0cef16d91bd6be78083e429b"
+    },
+    {
+      "path": "packages/keiko-server/src/grounded-qa.ts",
+      "sha256": "8b19aa2cceae255c3b299ba7dfb2c92f6710b65bb26e6155bcefcae82f93fdd1"
+    },
+    {
+      "path": "packages/keiko-ui/eslint-suppressions.json",
+      "sha256": "2193368e578f265d78fe7e41d4bc770430f3a70d4d732536bbc7664235e1e792"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Workspace.lazy-frame.test.tsx",
+      "sha256": "0cd2f1091cc844ee3bbcf45fe3d6f1f2fe2f66f0cfec2281b2a6aa6230d68df9"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Workspace.test.tsx",
+      "sha256": "87438efa71d7a115d093e9e44e0d3ddeaea3d173880f8ca83f5514cae1916234"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/Workspace.tsx",
+      "sha256": "6ae8cf6078985583efa508ffc8270e64b4bb63c9e468b8db25f926744193cf65"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/hooks/useWorkspace.storage-sync.test.tsx",
+      "sha256": "a85a7aa83fa0a10cc3c2006b9412c211206be70ab66adc38819ab363ddeafe6f"
+    },
+    {
+      "path": "packages/keiko-ui/src/app/components/desktop/workspace-perf.1580.test.tsx",
+      "sha256": "d853be60a775a1d982fb275f78c5074a6518bc1825953d91e8892391cf91165a"
+    },
+    {
+      "path": "scripts/__tests__/check-windows-portable-authenticode-verifier.test.mjs",
+      "sha256": "8cd3d6cea320b874f713ecf6103f8433ddb882c8fd221b8e3fbd73a5a4159022"
+    },
+    {
+      "path": "scripts/__tests__/macos-runtime-monitor-event-stream.test.mjs",
+      "sha256": "690d106e178d4f92cd2b1aa1af96937d7a31b86ea020de889cc072a2c2c69f1b"
+    },
+    {
+      "path": "scripts/check-windows-portable-authenticode-verifier.mjs",
+      "sha256": "47baa99cd44ce6a58df1aa71c187ad5f4e158dff5b4b680dec55c28ac9d4a26b"
+    },
+    {
+      "path": "tests/e2e/chat-scope-narrowing.smoke.spec.ts",
+      "sha256": "4a3fc9e2d6b1b63e0fb55e2b875c1c1c89c5a0ef11c45e03f38d1ad3af8385bc"
+    }
+  ],
+  "scopedReceipts": [
+    {
+      "label": "delivery-october-pin-red-v1",
+      "receiptSha256": "36646e7795744e00679bd69e2d4e988b27a2c1600cfa21d16234855d2eaac4b8",
+      "exitCode": 1,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-native-pin-fixture-green-v1",
+      "receiptSha256": "94c82da7d632a959932ef18feb80855b9fb14b6908ec1ffd1e9ad9e9d0bf91df",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-prompt-fit-reuse-red-v4",
+      "receiptSha256": "0c8c57df099bfa0f4df6bbd2b2f6967623d25f0ee5b7b51af3c5f0b500e4869a",
+      "exitCode": 1,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-fit-equality-v1",
+      "receiptSha256": "f49519ccfe9881b7d04970241dcb8fc53b1f2f9e599fb5c4a6ba8907ecdad5c7",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-event-rendezvous-delay-red-execution-v1",
+      "receiptSha256": "4f5ef55b06b8cf79aeea95e740f4070dd6dfa72e0ffa76c4428a60a8206f4b46",
+      "exitCode": 1,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-event-rendezvous-delay-green-execution-v1",
+      "receiptSha256": "238290387c8831ecf57956105179736e3a1345c51234a99afc8179445e05d541",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-window-perf-v1",
+      "receiptSha256": "d590e1347a15d26d6b22309bcbe257443c7de0a2d38c20e4a3036c931ccf5a5c",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-chromium-affected-smoke-v1",
+      "receiptSha256": "e5182fcfbd8aaad2bec9a45903f327cc5f0f481d3e70054b57aa3262ca9d11bd",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-typecheck-v1",
+      "receiptSha256": "65b4ce00c4c49e33bda8f31ef4385d25d9c2acd1f5ae6850dc86ea0bbe5ed8c9",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-root-scoped-lint-v1",
+      "receiptSha256": "b5d62a2ed9e7b83d98d97e6ef43e69db0216600836df4018c45034af0821c3d2",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-static-export-v1",
+      "receiptSha256": "418ded28aaa26d8aa7a7669f7d44fdba4769be2c78b9254276f5270144d02cf0",
+      "exitCode": 0,
+      "scope": "Retained failure-first or scoped observation at its recorded source binding; not whole-final-head acceptance."
+    },
+    {
+      "label": "delivery-closeout88-window-importers-v1",
+      "receiptSha256": "52c4a9e1dbcb46e0f7c892af475659bedab97a79ba0d4c7131ad2216e6951a8f",
+      "exitCode": 0,
+      "scope": "Retained original-assertion UI qualification; failed runs remain failed. Final repaired full coverage is a separate gate."
+    },
+    {
+      "label": "delivery-closeout88-ui-coverage-v1",
+      "receiptSha256": "e0f5382eb3fde6a953ca5581d474a38ebbdf66835b2c22510099395ded570d1d",
+      "exitCode": 1,
+      "scope": "Retained original-assertion UI qualification; failed runs remain failed. Final repaired full coverage is a separate gate."
+    },
+    {
+      "label": "delivery-closeout88-ui-coverage-v2",
+      "receiptSha256": "b12496dfe7aea6a98edfd6d79fe8ce77d090975e3dc914b892102382d0f71b73",
+      "exitCode": 1,
+      "scope": "Retained original-assertion UI qualification; failed runs remain failed. Final repaired full coverage is a separate gate."
+    }
+  ],
+  "windowsProvenance": {
+    "manifest": "https://raw.githubusercontent.com/actions/runner-images/win25-vs2026/20261018.275/images/windows/Windows2025-VS2026-Readme.md",
+    "imageVersion": "20261018.275.1",
+    "visualStudioVersion": "18.11.12306.390",
+    "measurementJob": "https://github.com/oscharko-dev/Keiko/actions/runs/39472851964/job/118801323826",
+    "nativeRegeneration": "Required final-head Windows CI; not executable on macOS."
+  },
+  "limits": [
+    "The earlier full local chain failed: native event-stream fixture setup and the then-oversized static export. The first UI coverage candidate exposed five synchronous initial-mount assertion failures (four performance cases and one cross-tab storage-event case); the second candidate retained the storage-event failure. All original assertions remain unchanged and now await actual frame settlement. All seven direct Workspace importer suites then pass 122 of 122. Final full coverage remains a separate required qualification.",
+    "Local macOS and isolated Linux Firefox launches failed before application interaction with profile lookup errors; no Firefox browser acceptance is claimed from those attempts. Required hosted final-head Firefox smoke remains authoritative.",
+    "No new Gemma comparison, historical private-chat recovery, installed distinct-version updater, SSD or complete original acceptance is claimed. Deferred requirements remain in #4051.",
+    "Existing client stage lifecycle and grounded prompt-selection/gateway Activity Log observations remain the logging owners; no body-bearing diagnostic or parallel cache/log subsystem is added."
+  ]
+}

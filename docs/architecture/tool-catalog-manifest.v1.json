@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "catalogRevision": "d4928ab0f5f0782cf3a836c2a21b44cd87d2dd3316ed110a6e0554cafa2d7394",
+  "catalogRevision": "0192a2d3c76b31c536710646bdbfc79be9c51a3d675ba3e0e5c8a35beb77bf01",
   "profile": {
     "id": "legacy-native",
     "version": 1
   },
-  "projectionDigest": "fca9b9bd1572205986c45578afc5780a9d36fd5548ab7c86be82f20f0010873a",
+  "projectionDigest": "4d29806050a081eac818626a3df78bd5372890e1a66e53e24f7206cb3dfdceed",
   "toolRefs": [
     {
       "canonicalId": "keiko.command.run",
@@ -37,8 +37,8 @@
     "b4957dae1762fe1c0fcef802630abd724af4665d60a675307573af102a48c730",
     "e17d02fc7e3eca89d62778513890dbcfcc38ac0a5086e36effc33f383c54ba8e",
     "d28e0cc79d81f794a09da74f26c088717ccc075d3e5291439adc752669ac0c91",
-    "20cb350f85c06b377230039c9abb89257f144860f86f18aeb2c84b20bb5ea752",
-    "719f02ef3193806f50597c648aa24e92aea96b23af60559e97d4d0ef9ac542de"
+    "ac0e50ddded99deee9a8798140aaf2580add5158fc9a4ea54f5e2a358255a8e1",
+    "3e0f180b33995f124c84e37f277ac5f8791e2de21e8bb760b09b7afb9dbbdad3"
   ],
   "bounds": [
     {
@@ -66,13 +66,13 @@
       "maxDurationMs": 30000
     },
     {
-      "maxArgumentBytes": 262144,
+      "maxArgumentBytes": 26214400,
       "maxResultBytes": 262144,
       "maxResultCount": 1,
       "maxDurationMs": 30000
     },
     {
-      "maxArgumentBytes": 262144,
+      "maxArgumentBytes": 26214400,
       "maxResultBytes": 262144,
       "maxResultCount": 1,
       "maxDurationMs": 30000

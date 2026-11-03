@@ -102,7 +102,12 @@
   height: 12px;
   border-radius: 50%;
   background: var(--text-secondary);
-  transition: transform 120ms ease;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .toggle::after {
+    transition: transform 120ms ease;
+  }
 }
 
 .toggle:checked {

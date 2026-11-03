@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import { processServerLogSink } from "./process-log-sink.js";
+
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import { localKnowledgeVectorIndexOptions } from "./local-knowledge-store-open.js";
 
 describe("localKnowledgeVectorIndexOptions", () => {
+  it("supplies the existing process Activity Log to native search", () => {
+    expect(localKnowledgeVectorIndexOptions({ env: {} }).logSink).toBe(processServerLogSink());
+  });
   // Issue #2631: production deps.env carries no `KEIKO_LOCAL_KNOWLEDGE_VECTOR_INDEX` in the shipped
   // configuration, so the default the funnel returns for every server handler is what the product
   // actually runs on. It must resolve to auto (default-on by capability); the runtime bytes then gate

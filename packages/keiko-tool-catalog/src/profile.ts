@@ -70,7 +70,7 @@ function qualifyCodeModeExtensions(
       profile.id === "opencode-code-mode" &&
       profile.version === 1 &&
       runtime.id === "opencode" &&
-      runtime.version === "2.0.10" &&
+      runtime.version === "2.1.4" &&
       extensions.some((extension) => extension.alias === "question"),
     "unrepresentable-projection",
   );

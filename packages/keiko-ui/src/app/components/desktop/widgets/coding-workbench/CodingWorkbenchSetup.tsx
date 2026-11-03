@@ -43,9 +43,10 @@ import {
   type VerifiedTaskWorkspaceBindInput,
   type VerifiedTaskWorkspaceRepairOffer,
 } from "@/lib/verified-task-workspace-binding";
+import { selectFolderWorkspace } from "@/lib/task-workspace-api";
 import { TASK_WORKSPACE_MARKER_MESSAGE_KEYS } from "@/lib/task-workspace-marker-labels";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
-import { repositorySelectable } from "./codingWorkbenchRepositories";
+import { folderSelectable, repositorySelectable } from "./codingWorkbenchRepositories";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { secureRandomId } from "@/lib/secure-random";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
@@ -76,6 +77,7 @@ type SetupErrorReason =
   | "unsafe-path"
   | "lock-contention"
   | "provisioning-failed"
+  | "folder-failed"
   | "unavailable"
   | "repair-required"
   | "operator-required"
@@ -224,6 +226,8 @@ async function settleBoundWorkspace(
 interface BindInput {
   readonly root: string;
   readonly baseBranch: string;
+  // The root is an ordinary folder: bound in place, with no branch (owner decision 2026-10-30).
+  readonly folderMode: boolean;
   readonly refreshWorkspace: () => Promise<boolean>;
   readonly onBoundRepository?: ((root: string) => void) | undefined;
   readonly onPhase: (phase: SetupPhase) => void;
@@ -233,6 +237,7 @@ interface BindInput {
 // Drive provision → reconcile → activate as one operator action. `onPhase` advances the surfaced
 // pending phase from binding to verifying; every server error maps to a bounded outcome.
 async function executeBind(input: BindInput): Promise<SetupStatus> {
+  if (input.folderMode) return executeFolderBind(input);
   try {
     if (!(await repositorySelectable(input.root))) {
       return { kind: "error", reason: "repository-not-connected" };
@@ -259,6 +264,24 @@ async function executeBind(input: BindInput): Promise<SetupStatus> {
   return settleBoundWorkspace(input.refreshWorkspace, input.root, input.onBoundRepository);
 }
 
+// An ordinary folder is bound in place: no provision, no reconcile, no branch. The same bounded
+// outcomes apply: a root that is no longer selectable, a refusal, or a refresh that did not settle.
+async function executeFolderBind(input: BindInput): Promise<SetupStatus> {
+  try {
+    if (!(await folderSelectable(input.root))) {
+      return { kind: "error", reason: "repository-not-connected" };
+    }
+    await selectFolderWorkspace({ root: input.root, requestedBy: STUDIO_OPERATOR });
+  } catch (error) {
+    reportClientDiagnostic(
+      `[keiko] coding workbench folder binding failed: ${clientErrorSummary(error)}`,
+      { correlationId: correlationIdOf(error) },
+    );
+    return { kind: "error", reason: "folder-failed" };
+  }
+  return settleBoundWorkspace(input.refreshWorkspace, input.root, input.onBoundRepository);
+}
+
 function setupBindRequest(input: BindInput): VerifiedTaskWorkspaceBindInput {
   return {
     root: input.root,
@@ -271,7 +294,7 @@ function setupBindRequest(input: BindInput): VerifiedTaskWorkspaceBindInput {
   };
 }
 
-interface RepairInput extends Omit<BindInput, "baseBranch" | "collisionSuffix"> {
+interface RepairInput extends Omit<BindInput, "baseBranch" | "collisionSuffix" | "folderMode"> {
   readonly workspaceId: string;
   readonly strategy: NonNullable<VerifiedTaskWorkspaceRepairOffer["strategy"]>;
 }
@@ -365,6 +388,7 @@ interface SetupActionsInput {
   readonly status: SetupStatus;
   readonly setStatus: Dispatch<SetStateAction<SetupStatus>>;
   readonly branchAvailable: boolean;
+  readonly folderMode: boolean;
 }
 
 function useSetupActions(params: SetupActionsInput): SetupActions {
@@ -407,15 +431,17 @@ function setupSubmitAction(
   const pending = status.kind === "pending";
   return (event): void => {
     event.preventDefault();
-    if (pending || root === "" || baseBranch === "") return;
-    // The same branch inventory drives the visible selector and this bind gate.
-    if (!params.branchAvailable) return;
+    if (pending || root === "") return;
+    // The same branch inventory drives the visible selector and this bind gate; a folder has no
+    // branch to choose.
+    if (!params.folderMode && (baseBranch === "" || !params.branchAvailable)) return;
     const publish = start();
     publish({ kind: "pending", phase: "binding" });
     settleOutcome(
       executeBind({
         root,
         baseBranch,
+        folderMode: params.folderMode,
         refreshWorkspace,
         onBoundRepository,
         collisionSuffix,
@@ -454,6 +480,7 @@ const PLAIN_ALERT_KEYS: Readonly<Partial<Record<SetupErrorReason, CodingWorkbenc
   "unsafe-path": "codingWorkbench.setup.unsafePath",
   "lock-contention": "codingWorkbench.setup.lockContention",
   "provisioning-failed": "codingWorkbench.setup.provisioningFailed",
+  "folder-failed": "codingWorkbench.setup.folderBindFailed",
   unavailable: "codingWorkbench.setup.provisioningUnavailable",
   "repair-failed": "codingWorkbench.setup.repairFailed",
 };
@@ -630,6 +657,7 @@ export function CodingWorkbenchSetup({
   const branches = useRepositoryBranchState(repositoryPath.trim() || null);
   const targetBranch = selectedBaseBranch ?? branches.currentBranch ?? "";
   const branchAvailable = targetBranchAvailable(branches, targetBranch);
+  const folderMode = branches.ordinaryFolder;
   const [status, setStatus, pending] = useSetupStatus();
   const actions = useSetupActions({
     repositoryPath,
@@ -639,6 +667,7 @@ export function CodingWorkbenchSetup({
     status,
     setStatus,
     branchAvailable,
+    folderMode,
   });
 
   return (
@@ -647,6 +676,7 @@ export function CodingWorkbenchSetup({
       repositoryPath={repositoryPath}
       targetBranch={targetBranch}
       branches={branches}
+      folderMode={folderMode}
       pending={pending}
       runtimePosture={runtimePosture}
       status={status}
@@ -660,6 +690,7 @@ interface SetupCardProps {
   readonly repositoryPath: string;
   readonly targetBranch: string;
   readonly branches: RepositoryBranchState;
+  readonly folderMode: boolean;
   readonly pending: boolean;
   readonly runtimePosture: CodingWorkbenchSetupRuntimePosture;
   readonly status: SetupStatus;
@@ -677,7 +708,7 @@ function SetupCard(props: SetupCardProps): ReactNode {
       <form onSubmit={props.actions.onSubmit}>
         {props.repositoryControls}
         <p id="coding-workbench-setup-help" className={styles.helpText}>
-          {t("codingWorkbench.setup.help")}
+          {t(props.folderMode ? "codingWorkbench.setup.folderHelp" : "codingWorkbench.setup.help")}
         </p>
         <SetupActionRow
           status={props.status}
@@ -694,6 +725,6 @@ function setupCardSubmitBlocked(props: SetupCardProps): boolean {
   return (
     props.pending ||
     props.repositoryPath.trim() === "" ||
-    !targetBranchAvailable(props.branches, props.targetBranch)
+    (!props.folderMode && !targetBranchAvailable(props.branches, props.targetBranch))
   );
 }

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMMITTED_VERIFIER_ASSET,
+  REVIEWED_WINDOWS_2025_VS2026_OCTOBER_TOOLCHAIN,
   REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
   assertCommittedVerifierAsset,
   discoverTrustedVerifierToolchain,
@@ -142,26 +143,43 @@ describe("committed Windows portable Authenticode verifier asset", () => {
     }
   });
 
-  it("accepts the reviewed updated compiler only with its exact distribution and references", () => {
-    expect(selectReviewedVerifierToolchain(REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN)).toBe(
-      REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
-    );
-    expect(() =>
-      selectReviewedVerifierToolchain({
-        ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
-        compilerDistribution: {
-          ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerDistribution,
-          sha256: "0".repeat(64),
-        },
-      }),
-    ).toThrow(/reviewed generated-asset pin/u);
-    expect(() =>
-      selectReviewedVerifierToolchain({
-        ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
-        compilerSha256: "0".repeat(64),
-      }),
-    ).toThrow(/reviewed generated-asset pin/u);
-  });
+  it.each([REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN, REVIEWED_WINDOWS_2025_VS2026_OCTOBER_TOOLCHAIN])(
+    "accepts a reviewed compiler only with its exact distribution and references",
+    (toolchain) => {
+      expect(selectReviewedVerifierToolchain(toolchain)).toBe(toolchain);
+      expect(() =>
+        selectReviewedVerifierToolchain({
+          ...toolchain,
+          compilerDistribution: {
+            ...toolchain.compilerDistribution,
+            sha256: "0".repeat(64),
+          },
+        }),
+      ).toThrow(/reviewed generated-asset pin/u);
+      expect(() =>
+        selectReviewedVerifierToolchain({
+          ...toolchain,
+          compilerSha256: "0".repeat(64),
+        }),
+      ).toThrow(/reviewed generated-asset pin/u);
+      for (const key of ["fileCount", "totalBytes"]) {
+        expect(() =>
+          selectReviewedVerifierToolchain({
+            ...toolchain,
+            compilerDistribution: { ...toolchain.compilerDistribution, [key]: 1 },
+          }),
+        ).toThrow(/reviewed generated-asset pin/u);
+      }
+      for (const name of Object.keys(toolchain.referenceSha256)) {
+        expect(() =>
+          selectReviewedVerifierToolchain({
+            ...toolchain,
+            referenceSha256: { ...toolchain.referenceSha256, [name]: "0".repeat(64) },
+          }),
+        ).toThrow(/reviewed generated-asset pin/u);
+      }
+    },
+  );
 
   it("binds the canonical source and exact assembly bytes to SHA-256", () => {
     expect(assertCommittedVerifierAsset(COMMITTED_VERIFIER_ASSET)).toHaveLength(

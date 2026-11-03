@@ -4,7 +4,10 @@ import {
   isReadinessSnapshot,
   type ReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isIssueBoundDraftDeliveryRecord,
+  type DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type {
   CodingRuntimeSnapshot,
   CodingRuntimeSnapshotStore,
@@ -37,7 +40,7 @@ export function readinessMatchesDraft(
   readiness: ReadinessSnapshot,
   draft: DraftDeliveryRecord | undefined,
 ): boolean {
-  if (draft?.pullRequest === undefined) return false;
+  if (draft?.pullRequest === undefined || !isIssueBoundDraftDeliveryRecord(draft)) return false;
   const binding = draft.binding;
   return [
     readiness.runId === binding.runId,

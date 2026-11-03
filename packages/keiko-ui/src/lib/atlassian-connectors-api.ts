@@ -13,10 +13,18 @@
 // server shapes the contract layer does not name.
 
 import { bffFetchJson } from "./http";
+import { ApiError } from "./api";
+import {
+  isChatToolReadGrantView,
+  isChatToolWriteApprovalView,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
   AtlassianConnectionVerificationStatus,
-  AtlassianConnectorProvider,
-  AtlassianConnectorAuthScheme,
+  ChatToolReadGrantView,
+  ChatToolWriteApprovalView,
+  AtlassianCredentialPublicMetadata,
+  AtlassianCredentialCreateRequest,
+  AtlassianLivePodUpdateRequest,
   AtlassianConnectorActionExecutionResult,
   AtlassianConnectorActivityRecord,
   AtlassianConnectorActivityReasonCode,
@@ -25,7 +33,6 @@ import type {
   AtlassianSyncJobState,
   JiraLiveSearchResult,
 } from "@oscharko-dev/keiko-contracts";
-import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 // ---------------------------------------------------------------------------
 // UI-local wire shapes (no contract equivalent; enums come from keiko-contracts)
@@ -44,15 +51,7 @@ export { isAtlassianConnectionVerificationStatus as isAtlassianConnectorVerifySt
 // The non-secret credential metadata projection every credentials route answers (ADR-0128 D2). It
 // carries no field that could hold the token; `authRef` is the opaque vault handle and `createdAt`
 // is the epoch-ms registration time surfaced in the connector list.
-export interface AtlassianConnectorMetadata {
-  readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
-  readonly authRef: string;
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly authScheme: AtlassianConnectorAuthScheme;
-  readonly createdAt: number;
-}
+export type AtlassianConnectorMetadata = AtlassianCredentialPublicMetadata;
 
 // ---------------------------------------------------------------------------
 // Request/response envelopes
@@ -60,13 +59,13 @@ export interface AtlassianConnectorMetadata {
 
 // The create request is the ONLY hop the token makes. `apiToken` is write-only: it is not part of
 // any response type below, so a caller cannot round-trip it back into client state.
-export interface CreateAtlassianConnectorInput {
-  readonly provider: AtlassianConnectorProvider;
-  readonly displayName: string;
-  readonly baseUrl: string;
-  readonly accountEmail: string;
-  readonly apiToken: string;
-}
+// Preserve callers of the original Cloud form while the wire always specifies its scheme.
+export type CreateAtlassianConnectorInput =
+  | AtlassianCredentialCreateRequest
+  | Omit<
+      Extract<AtlassianCredentialCreateRequest, { authScheme: "basic-api-token" }>,
+      "authScheme"
+    >;
 
 export interface VerifyAtlassianConnectorResult {
   readonly authRef: string;
@@ -127,6 +126,17 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return bffFetchJson<T>(path, init, { parseFailureMessage: friendlyParseFailureMessage });
 }
 
+/** Body-free invalidation hint; subscribers must GET current server-owned metadata. */
+export const ATLASSIAN_CONNECTORS_CHANGED_EVENT = "keiko:atlassian-connectors-changed";
+async function credentialMutation<T>(path: string, init: RequestInit): Promise<T> {
+  try {
+    return await fetchJson<T>(path, init);
+  } finally {
+    if (typeof window !== "undefined")
+      window.dispatchEvent(new Event(ATLASSIAN_CONNECTORS_CHANGED_EVENT));
+  }
+}
+
 const CREDENTIALS_PATH = "/api/atlassian-connectors/credentials";
 
 function credentialPath(authRef: string, suffix = ""): string {
@@ -147,20 +157,33 @@ export async function listAtlassianConnectors(): Promise<readonly AtlassianConne
 export async function createAtlassianConnector(
   input: CreateAtlassianConnectorInput,
 ): Promise<AtlassianConnectorMetadata> {
-  return fetchJson<AtlassianConnectorMetadata>(CREDENTIALS_PATH, {
+  return credentialMutation<AtlassianConnectorMetadata>(CREDENTIALS_PATH, {
     method: "POST",
+    body: JSON.stringify({
+      ...input,
+      authScheme: "authScheme" in input ? input.authScheme : "basic-api-token",
+    }),
+  });
+}
+
+export async function updateAtlassianConnector(
+  authRef: string,
+  input: AtlassianLivePodUpdateRequest,
+): Promise<AtlassianConnectorMetadata> {
+  return credentialMutation<AtlassianConnectorMetadata>(credentialPath(authRef), {
+    method: "PATCH",
     body: JSON.stringify(input),
   });
 }
 
 export async function deleteAtlassianConnector(authRef: string): Promise<{ ok: true }> {
-  return fetchJson<{ ok: true }>(credentialPath(authRef), { method: "DELETE" });
+  return credentialMutation<{ ok: true }>(credentialPath(authRef), { method: "DELETE" });
 }
 
 export async function verifyAtlassianConnector(
   authRef: string,
 ): Promise<VerifyAtlassianConnectorResult> {
-  return fetchJson<VerifyAtlassianConnectorResult>(credentialPath(authRef, "/verify"), {
+  return credentialMutation<VerifyAtlassianConnectorResult>(credentialPath(authRef, "/verify"), {
     method: "POST",
     body: "{}",
   });
@@ -260,6 +283,7 @@ export interface AtlassianConnectorsClient {
   readonly createConnector: (
     input: CreateAtlassianConnectorInput,
   ) => Promise<AtlassianConnectorMetadata>;
+  readonly updateConnector: typeof updateAtlassianConnector;
   readonly deleteConnector: (authRef: string) => Promise<{ ok: true }>;
   readonly verifyConnector: (authRef: string) => Promise<VerifyAtlassianConnectorResult>;
   readonly startSync: (
@@ -278,6 +302,7 @@ export interface AtlassianConnectorsClient {
 export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   listConnectors: listAtlassianConnectors,
   createConnector: createAtlassianConnector,
+  updateConnector: updateAtlassianConnector,
   deleteConnector: deleteAtlassianConnector,
   verifyConnector: verifyAtlassianConnector,
   startSync: startAtlassianConnectorSync,
@@ -289,3 +314,89 @@ export const defaultAtlassianConnectorsClient: AtlassianConnectorsClient = {
   approveAction: approveAtlassianConnectorAction,
   rejectAction: rejectAtlassianConnectorAction,
 };
+
+function sameReadGrantSource(
+  grant: ChatToolReadGrantView,
+  expected: ChatToolReadGrantView,
+): boolean {
+  if (grant.kind === "mcp-chat-read")
+    return (
+      expected.kind === "mcp-chat-read" &&
+      grant.configurationDigest === expected.configurationDigest
+    );
+  return (
+    expected.kind === "jira-chat-read" &&
+    grant.podId === expected.podId &&
+    grant.bindingGeneration === expected.bindingGeneration &&
+    grant.authenticationGeneration === expected.authenticationGeneration
+  );
+}
+function checkedReadGrant(value: unknown, expected: ChatToolReadGrantView): ChatToolReadGrantView {
+  const grant =
+    typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
+  const identity = ["grantId", "chatId", "disclosureVersion", "requestedAt", "expiresAt"] as const;
+  if (
+    !isChatToolReadGrantView(grant) ||
+    !sameReadGrantSource(grant, expected) ||
+    !identity.every((key) => grant[key] === expected[key])
+  )
+    throw new ApiError("CONTRACT_VALIDATION_FAILED", "Chat read consent response is invalid.", 502);
+  return grant;
+}
+
+export async function decideJiraChatReadConsent(
+  grant: ChatToolReadGrantView,
+  decision: "approve" | "reject",
+): Promise<ChatToolReadGrantView> {
+  return bffFetchJson(
+    approvalPath(grant.grantId, "/chat-read-consent"),
+    {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({ decision, disclosureVersion: grant.disclosureVersion }),
+    },
+    {
+      parseFailureMessage: friendlyParseFailureMessage,
+      validator: (_path, value) => checkedReadGrant(value, grant),
+    },
+  );
+}
+
+function checkedWriteApproval(value: unknown, approvalId: string): ChatToolWriteApprovalView {
+  const approval =
+    typeof value === "object" && value !== null && "approval" in value ? value.approval : undefined;
+  if (!isChatToolWriteApprovalView(approval) || approval.approvalId !== approvalId)
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      "Chat action approval response is invalid.",
+      502,
+    );
+  return approval;
+}
+function writeApprovalRequest(
+  approvalId: string,
+  init?: RequestInit,
+): Promise<ChatToolWriteApprovalView> {
+  return bffFetchJson(
+    approvalPath(approvalId, "/chat-write-approval"),
+    { ...init, cache: "no-store" },
+    {
+      parseFailureMessage: friendlyParseFailureMessage,
+      validator: (_path, value) => checkedWriteApproval(value, approvalId),
+    },
+  );
+}
+export async function getJiraChatWriteApproval(
+  approvalId: string,
+): Promise<ChatToolWriteApprovalView> {
+  return writeApprovalRequest(approvalId);
+}
+export async function decideJiraChatWriteApproval(
+  approval: ChatToolWriteApprovalView,
+  decision: "approve" | "reject",
+): Promise<ChatToolWriteApprovalView> {
+  return writeApprovalRequest(approval.approvalId, {
+    method: "POST",
+    body: JSON.stringify({ decision, actionDigest: approval.actionDigest }),
+  });
+}

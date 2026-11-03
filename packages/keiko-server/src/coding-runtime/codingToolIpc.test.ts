@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { codingToolRequiredActionClasses, parseCodingToolRequest } from "./codingToolIpc.js";
+import { CHANGESET_EDIT_ARGUMENT_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  CODING_TOOL_MAX_BODY_BYTES,
+  CODING_TOOL_MAX_REQUEST_BODY_BYTES,
+  codingToolRequiredActionClasses,
+  parseCodingToolRequest,
+} from "./codingToolIpc.js";
 
 const changeset = {
   patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
@@ -115,6 +121,98 @@ describe("coding tool IPC authority effects", () => {
         proposalId: "stage-1",
       }),
     ).toEqual(["workspace-write"]);
+  });
+
+  // #3902 AC2: a fetch or pull carries the Git sync owner's own requirement, never a read's.
+  it.each(["fetch", "pull"] as const)("requires the Git sync owner's classes for a %s", (op) => {
+    expect(
+      codingToolRequiredActionClasses({
+        action: "git",
+        operation: op,
+        actionId: op,
+        idempotencyKey: op,
+      }),
+    ).toEqual(["delivery-substrate", "network-egress"]);
+  });
+});
+
+// #3902 AC2: keiko_git_sync's wire shape -- the operation, an optional redeemed approval, nothing
+// the model could use to name a remote, a ref or an argument.
+describe("coding tool IPC governed fetch and pull", () => {
+  const proof = { approvalId: "call-1", approvalDigest: "d".repeat(64) };
+
+  it.each(["fetch", "pull"] as const)("admits a %s with and without its approval proof", (op) => {
+    const request = { action: "git", operation: op, actionId: "call-1", idempotencyKey: "call-1" };
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+    const approved = { ...request, approvalProof: proof };
+    expect(parseCodingToolRequest(JSON.stringify(approved), 262_144)).toEqual(approved);
+  });
+
+  it.each([
+    ["a remote", { remote: "origin" }],
+    ["a refspec", { refspec: "main" }],
+    ["the tool's own flag", { pull: true }],
+    ["an invalid proof", { approvalProof: { ...proof, approvalDigest: "not-a-digest" } }],
+  ])("refuses a fetch or pull carrying %s", (_label, extra) => {
+    for (const op of ["fetch", "pull"])
+      expect(
+        parseCodingToolRequest(
+          JSON.stringify({
+            action: "git",
+            operation: op,
+            actionId: "call-1",
+            idempotencyKey: "call-1",
+            ...extra,
+          }),
+          262_144,
+        ),
+      ).toBeUndefined();
+  });
+});
+
+// #3907: keiko_git_branch's wire shape -- one bounded name and an optional redeemed approval.
+describe("coding tool IPC governed task branch", () => {
+  const proof = { approvalId: "call-1", approvalDigest: "d".repeat(64) };
+  const request = {
+    action: "git",
+    operation: "branch",
+    branchName: "feature/x",
+    actionId: "call-1",
+    idempotencyKey: "call-1",
+  };
+
+  it("admits a branch name with and without its approval proof", () => {
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+    const approved = { ...request, approvalProof: proof };
+    expect(parseCodingToolRequest(JSON.stringify(approved), 262_144)).toEqual(approved);
+  });
+
+  it("requires the local ref write the Git kernel's branch-create requires, nothing more", () => {
+    expect(codingToolRequiredActionClasses(request as never)).toEqual(["workspace-write"]);
+  });
+
+  it("leaves the decision on a bad name to the Git service by bounding it only", () => {
+    // These are names Keiko refuses with a closed reason the model can read; they must reach it.
+    for (const branchName of ["-D", "a b", "x..y", "main", "a".repeat(255)])
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...request, branchName }), 262_144),
+      ).toMatchObject({ operation: "branch", branchName });
+  });
+
+  it.each([
+    ["no name", { branchName: undefined }],
+    ["an empty name", { branchName: "" }],
+    ["an oversized name", { branchName: "a".repeat(256) }],
+    ["a non-string name", { branchName: ["feature/x"] }],
+    ["the tool's own argument name", { branchName: undefined, name: "feature/x" }],
+    ["a start point", { startPoint: "HEAD~3" }],
+    ["a base branch", { baseBranch: "main" }],
+    ["a force flag", { force: true }],
+    ["an invalid proof", { approvalProof: { ...proof, approvalDigest: "not-a-digest" } }],
+  ])("refuses a branch request carrying %s", (_label, extra) => {
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...request, ...extra }), 262_144),
+    ).toBeUndefined();
   });
 });
 
@@ -587,5 +685,61 @@ describe("coding tool IPC CI observation (#3388)", () => {
     ["an unexpected extra key with no forceFresh", { extra: "SENTINEL" }],
   ])("rejects %s before a CI observation request exists", (_name, extra) => {
     expect(parseCodingToolRequest(ciBody(extra), 262_144)).toBeUndefined();
+  });
+});
+
+// Owner decision 2026-10-28: a replacement edit string is bounded by the changeset cap, not 64 KiB,
+// and the request that carries it by the changeset-edit argument ceiling, not 256 KiB. The
+// response bound (tool_output) is a different direction and stays what it was.
+describe("coding tool IPC replacement edit size", () => {
+  const DIGEST = "a".repeat(64);
+  function editBody(oldString: string, newString: string): string {
+    return JSON.stringify({
+      action: "edit",
+      actionId: "edit-1",
+      idempotencyKey: "edit-key",
+      changeset: {
+        edits: [{ file: "src/a.ts", oldString, newString, replaceAll: false }],
+        files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+      },
+    });
+  }
+
+  it("bounds the request by the changeset-edit argument ceiling and the response as before", () => {
+    expect(CODING_TOOL_MAX_REQUEST_BODY_BYTES).toBe(
+      CHANGESET_EDIT_ARGUMENT_LIMITS.maxArgumentBytes,
+    );
+    expect(CODING_TOOL_MAX_BODY_BYTES).toBe(262_144);
+  });
+
+  it("admits a replacement far above 64 KiB and above the old 256 KiB body bound", () => {
+    const big = "n".repeat(CODING_TOOL_MAX_BODY_BYTES + 1);
+    const body = editBody("", big);
+    expect(Buffer.byteLength(body)).toBeGreaterThan(CODING_TOOL_MAX_BODY_BYTES);
+    expect(parseCodingToolRequest(body, CODING_TOOL_MAX_REQUEST_BODY_BYTES)).toMatchObject({
+      action: "edit",
+    });
+  });
+
+  it("admits a string of exactly the changeset cap and refuses one byte more", () => {
+    const cap = "c".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes);
+    expect(
+      parseCodingToolRequest(editBody("", cap), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
+    ).toMatchObject({ action: "edit" });
+    expect(
+      parseCodingToolRequest(editBody("", `${cap}c`), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
+    ).toBeUndefined();
+    // Multi-byte text counts UTF-8 bytes, not characters.
+    const wide = "é".repeat(CHANGESET_EDIT_ARGUMENT_LIMITS.maxStringBytes / 2 + 1);
+    expect(
+      parseCodingToolRequest(editBody("", wide), CODING_TOOL_MAX_REQUEST_BODY_BYTES),
+    ).toBeUndefined();
+  });
+
+  it("refuses a body over the request bound, and keeps a small bound when the caller asks for one", () => {
+    expect(parseCodingToolRequest(editBody("", "x".repeat(2_048)), 1_024)).toBeUndefined();
+    const body = editBody("", "x");
+    expect(parseCodingToolRequest(body, Buffer.byteLength(body) - 1)).toBeUndefined();
+    expect(parseCodingToolRequest(body, Buffer.byteLength(body))).toMatchObject({ action: "edit" });
   });
 });

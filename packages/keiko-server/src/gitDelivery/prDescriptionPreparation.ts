@@ -175,7 +175,7 @@ async function generate(
   reference: string,
   input: PreparedPrDescription["captureInput"],
 ): Promise<PrDescription.PrDescriptionGenerationResult> {
-  return PrDescription.generatePrDescription(
+  return await PrDescription.generatePrDescription(
     {
       ...request,
       snapshotReference: reference,

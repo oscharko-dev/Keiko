@@ -20,10 +20,7 @@ export function isolateCodingHistory(store: UiStore, history: CodingHistoryStore
     visitGatewayMessageUnits: (id, current, visit): void => {
       if (ordinary(id)) store.visitGatewayMessageUnits(id, current, visit);
     },
-    chatHistoryRevision: (id): number => {
-      requireOrdinary(id);
-      return store.chatHistoryRevision(id);
-    },
+    ...ordinaryContinuityAccess(store, ordinary, requireOrdinary),
     countMessages: (id) => (ordinary(id) ? store.countMessages(id) : 0),
     findMessageById: (id): ChatMessage | undefined => {
       const message = store.findMessageById(id);
@@ -37,6 +34,7 @@ export function isolateCodingHistory(store: UiStore, history: CodingHistoryStore
       requireOrdinary(id);
       store.deleteChat(id);
     },
+    updateChatToolTranscript: ordinaryTranscriptUpdater(store, requireOrdinary),
     createMessage: (message): ChatMessage => {
       requireOrdinary(message.chatId);
       return store.createMessage(message);
@@ -50,6 +48,47 @@ export function isolateCodingHistory(store: UiStore, history: CodingHistoryStore
     admitChatTurn: (id, message, options): ChatTurnAdmission => {
       requireOrdinary(message.chatId);
       return store.admitChatTurn(id, message, options);
+    },
+  };
+}
+
+function ordinaryTranscriptUpdater(
+  store: UiStore,
+  requireOrdinary: (id: string) => void,
+): UiStore["updateChatToolTranscript"] {
+  return (id, update, correlationId): void => {
+    const message = store.findMessageById(id);
+    if (message === undefined) throw notFound("Message");
+    requireOrdinary(message.chatId);
+    store.updateChatToolTranscript(id, update, correlationId);
+  };
+}
+
+function ordinaryContinuityAccess(
+  store: UiStore,
+  ordinary: (id: string) => boolean,
+  requireOrdinary: (id: string) => void,
+): Pick<
+  UiStore,
+  | "readChatContinuityCheckpoint"
+  | "writeChatContinuityCheckpoint"
+  | "chatHistoryRevision"
+  | "searchGatewayMessageUnits"
+> {
+  return {
+    searchGatewayMessageUnits: (id, terms, visit) =>
+      ordinary(id)
+        ? store.searchGatewayMessageUnits(id, terms, visit)
+        : { candidateRows: 0, eligibleUnits: 0, indexLimitReached: false, visitStopped: false },
+    chatHistoryRevision: (id): number => {
+      requireOrdinary(id);
+      return store.chatHistoryRevision(id);
+    },
+    readChatContinuityCheckpoint: (id) =>
+      ordinary(id) ? store.readChatContinuityCheckpoint(id) : undefined,
+    writeChatContinuityCheckpoint: (id, record, generation): boolean => {
+      requireOrdinary(id);
+      return store.writeChatContinuityCheckpoint(id, record, generation);
     },
   };
 }

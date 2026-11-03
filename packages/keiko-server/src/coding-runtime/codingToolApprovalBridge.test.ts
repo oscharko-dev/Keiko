@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 
+import { createHash } from "node:crypto";
+
 import {
   codingToolApprovalBindingDigest,
+  codingToolBranchApprovalTargetId,
   codingToolVerificationApprovalTargetId,
   createCodingToolApprovalBridge,
+  isApprovableToolRequest,
 } from "./codingToolApprovalBridge.js";
 
 const RUN_ID = "run-bounded-approvals";
@@ -54,6 +58,59 @@ describe("coding tool approval bridge capacity", () => {
     );
     expect(codingToolVerificationApprovalTargetId("targeted-test")).toBeUndefined();
     expect(codingToolVerificationApprovalTargetId("test", "a".repeat(64))).toBeUndefined();
+  });
+
+  // #3907: a governed task branch is approved as the digest of its name, so approving one name
+  // approves no other, and the name itself never enters the approval record.
+  it("binds a task-branch approval to the exact branch name's digest", () => {
+    const request = {
+      action: "git" as const,
+      operation: "branch" as const,
+      branchName: "feature/x",
+      actionId: "branch-action",
+      idempotencyKey: "branch-key",
+    };
+    const digest = createHash("sha256").update("feature/x", "utf8").digest("hex");
+    expect(codingToolBranchApprovalTargetId("feature/x")).toBe(`branch:${digest}`);
+    expect(codingToolApprovalBindingDigest(RUN_ID, request)).not.toBe(
+      codingToolApprovalBindingDigest(RUN_ID, { ...request, branchName: "feature/y" }),
+    );
+    expect(isApprovableToolRequest(request)).toBe(true);
+    const bridge = createCodingToolApprovalBridge();
+    const proof = {
+      approvalId: request.actionId,
+      approvalDigest: codingToolApprovalBindingDigest(RUN_ID, request),
+    };
+    expect(
+      bridge.observePermission({
+        runId: RUN_ID,
+        requestId: "permission-branch",
+        action: "git",
+        actionId: request.actionId,
+        idempotencyKey: request.idempotencyKey,
+        targetId: codingToolBranchApprovalTargetId("feature/x"),
+        proof,
+        expiresAt: EXPIRES_AT,
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+    expect(
+      bridge.activatePermission({
+        runId: RUN_ID,
+        requestId: "permission-branch",
+        approvalAuthorityDigest: "a".repeat(64),
+        expiresAtMs: Date.parse(EXPIRES_AT),
+        nowMs: NOW_MS,
+      }),
+    ).toBe(true);
+    const redeem = (branchName: string): boolean =>
+      bridge.matches({
+        runId: RUN_ID,
+        request: { ...request, branchName, approvalProof: proof },
+        nowMs: NOW_MS,
+      });
+    expect(redeem("feature/y")).toBe(false);
+    expect(redeem("feature/x")).toBe(true);
   });
 
   it("rejects excess pending observations without evicting a live approval", () => {

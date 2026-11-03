@@ -1,0 +1,224 @@
+{
+  "schemaVersion": 1,
+  "classification": "Bounded failure-first chat creation repair and frozen-candidate native Safari observations; not complete epic or final-head acceptance",
+  "publishedParent": "15be44bf9c702e27f20b0cee97cbee1092ff0cf9",
+  "issues": [4040, 4043],
+  "repair": {
+    "owner": "Existing private UiStore and per-window creation coordinator",
+    "behavior": "Atomically bind a bounded opaque creation intent and project to one conversation; preserve intent across transport retry and distinct intents across deliberate creation. Reject conflicting parameters and deleted or closed targets.",
+    "storage": "Schema46; two framed digests and nullable chat FK tombstone only. Original automatic/null or explicit model choice is bound independently of the elected chat result; committed replay does not repeat model admission. Existing project, transaction and new-creation model guards remain.",
+    "activity": "Registered chat.creation.intent decisions; closed outcome/completeness/loss and request correlation only."
+  },
+  "failureFirst": {
+    "mountedHandler": {
+      "beforeFailed": 1,
+      "beforeSkipped": 61,
+      "control": "Actual concurrent mounted create requests with the same intent produced two chats before repair."
+    },
+    "projectScope": {
+      "beforeFailed": 1,
+      "control": "Same accepted reference across authorized A\u2192B\u2192A must preserve each project owner; published UI navigation pin retained."
+    },
+    "retainedIntermediateFailures": [
+      "Initial migration46/constant45 mismatch refused the real SQLite reopen. Fixed source and coherent rebuilt runtime pass.",
+      "Initial UI exact-call assertions strengthened to assert the third stable wire intent; existing navigation, callback and late-result pins retained.",
+      "Two private native commissioning harness mistakes (response accessor and cleanup URL) retained separately without browser acceptance credit.",
+      "New unready-control commissioning first omitted the runtime gateway port and then expected an invented503. Corrected controls explicitly exercise unobserved RuntimeGatewayConfig and match the existing conversationModelNotReadyResult400/body. Failed fixture runs are retained without product-failure credit.",
+      "The scoped failure-path gate refused indirect catch delegation; final boundaries directly propagate unknown errors and retain existing redacted store-error responses, with no register exception. A strict assertion type error was fixed by narrowing its canonical producer body; prior runs remain retained."
+    ],
+    "modelChangeRecovery": {
+      "beforeFailed": 2,
+      "beforeSkipped": 69,
+      "control": "Identical accepted request after a new default: automatic retry409 and explicit retry400 after original model removal. Both must return the original accepted conversation; genuinely fresh requests retain the original model guards."
+    }
+  },
+  "functional": {
+    "targetedBackend": {
+      "suites": 7,
+      "passed": 198,
+      "includes": [
+        "actual mounted concurrent request",
+        "malformed input before model work",
+        "real SQLite reopen and independent connections",
+        "transaction INSERT fault rolls back both rows",
+        "project isolation and title/model/branch conflicts",
+        "deletion tombstones",
+        "typed formatted body-free log proof",
+        "existing draft route authority controls",
+        "same wire retry after changed default or removed explicit model",
+        "accepted replay while fresh creation lacks readiness observations; fresh denial matches unchanged producer",
+        "automatic versus explicit model selection remain distinct"
+      ]
+    },
+    "targetedUiV2": {
+      "suites": 2,
+      "passed": 304,
+      "includes": [
+        "actual hook forwards wire intent",
+        "independent window coordinators",
+        "distinct legacy windows",
+        "retry retains accepted intent",
+        "existing navigation and late-response guards"
+      ]
+    },
+    "fullUiV1": {
+      "suites": 559,
+      "passed": 10776,
+      "skipped": 1,
+      "classification": "Before the subsequent local effect decomposition; full final-source rerun remains separate."
+    },
+    "fullUiV2": {
+      "suites": 559,
+      "passed": 10776,
+      "skipped": 1,
+      "classification": "Full source-v2 UI rerun after effect decomposition; subsequent API change only consolidates an erased type import."
+    }
+  },
+  "nativeSafariV1": {
+    "sourceFreezeSha256": "ed1b8c5934acfd161b0aa27fffe3805399fc4b5b827da8251dfa73a1b30f7126",
+    "receiptSha256": "f4c9756a51a8f6d5d574d1b63339c83a154e18db0c7ea16ca6926c8115ee326b",
+    "sourceWitnessSha256": "395bcf1b08ba4c39036dc696942a8ae57fdf41f5f6e57d02bc848cb2e6df726d",
+    "compiledFiles": 6299,
+    "uiFiles": 301,
+    "sourceAndExecutableStable": true,
+    "chatCount": 1,
+    "draftBytes": 38,
+    "draftSha256": "17551aaf0fc84dc199babc7396abebcc93a87e88fc36be2739e7d86b839e6bd8",
+    "draftRevision": 1,
+    "sameResourcePreGrantDenied": true,
+    "sessionGrantWithoutPageReload": true,
+    "acknowledgedSaveAndPageReload": true,
+    "sessionRevocationDeniedRead": true,
+    "explicitRememberedChoiceAndStoredKeyUi": true,
+    "realBffProcesses": 2,
+    "sameAllocatedOriginAfterRestart": true,
+    "freshRestorationProofs": 1,
+    "restoredProtectedReads": 4,
+    "rememberedRevocationDeniedReads": 6,
+    "providerRequests": 3,
+    "customerDataUsed": false,
+    "ownedWindowsAndBffClosed": true
+  },
+  "sourceFreezeV2": {
+    "sha256": "4cb05e829cb3cc8039c7682f816bd31c7a61ba5c5b235bcbb95183c63958b8b3",
+    "changeSinceNativeV1": "Only effect/initial-state decomposition in SelectionAwareWorkspaceHosts.tsx to meet the existing function-size limit; native observations remain labelled v1.",
+    "independentPreservedEffectControls": 11,
+    "independentClientHandlerChainPasses": 7
+  },
+  "remaining": [
+    "Final frozen/published-source local gates, independent review and exact-head CI remain separate.",
+    "Full Chrome/Firefox/native Safari profile and browser-process restart, expiry and SSD matrix.",
+    "Broader Chat N+1 search, delayed/cancelled send and model compaction qualification.",
+    "Installed updater versions, generation ownership, rollback and state/SSD continuity; schema46 migration is not rollback clearance.",
+    "Both customer skill benefit/convention/held-out matrices and original source-answer criteria."
+  ],
+  "sourceFreezeV3": {
+    "sha256": "94b9e1319d2d002aed47e52b6dcd4dab2e0fe4e87ec01b850b64c22028cfd856",
+    "changeSinceV2": "Canonical duplicate type-import consolidation and generic committed-creation model-choice recovery; separate current functional/independent checks, no relabelling of native v1.",
+    "independentStoreControls": 17,
+    "independentClientHandlerChainPasses": 9,
+    "independentAdmissionControls": 6
+  },
+  "sourceFreezeV4": {
+    "sha256": "d0648333f44049869ac52286eb3fcd94eb18e3530c12bd8f46b279833b2b9ff2",
+    "changeSinceV3": "Inline already-equivalent caught-error propagation at the owning boundaries to satisfy the existing failure-path gate; narrow the canonical error body before the typed assertion. No failure-register allowance added.",
+    "files": [
+      {
+        "path": "docs/adr/ADR-0013-ui-local-persistence-for-projects-and-chats.md",
+        "sha256": "53327404a7f2bf7cd1244a499b14adce6e37ec77731a7ed8dd0bf957d278667c"
+      },
+      {
+        "path": "docs/adr/ADR-0114-per-conversation-chat-sessions.md",
+        "sha256": "46edb3c01ef5d823abb449a7c60b47ad428a2631fdbb4d66897b298f2fa78a32"
+      },
+      {
+        "path": "docs/observability/failure-surface-inventory.generated.json",
+        "sha256": "fb4ac588eed9cee7d823b63851e1951db9d7fcc7a5e790694f6b376a1feb4f31"
+      },
+      {
+        "path": "docs/observability/op-catalog.generated.json",
+        "sha256": "6668b5f14deb504f6233bc01338cf757e23447a15807cc28c862132e57bd6791"
+      },
+      {
+        "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+        "sha256": "ff1adb1e0dd5973d91269760c23f167f8ef3e99855d5cb93de00973a5db54eac"
+      },
+      {
+        "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+        "sha256": "25ac8900809c6ca19257babd5e28fd419d5c1f8dd8c9cd0644748cdd6f88827e"
+      },
+      {
+        "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+        "sha256": "bccd2596781de02f71fab1cbd843e431b5429dfda520e598b380f95ce317e335"
+      },
+      {
+        "path": "packages/keiko-contracts/src/bff-wire.ts",
+        "sha256": "1044ec272f8a23da9ad11c1ff4ea40f6c0ad2aa9d14e3f55ed0bf2648862731a"
+      },
+      {
+        "path": "packages/keiko-contracts/src/chat-creation-intent.test.ts",
+        "sha256": "05222c5d183ccac9feec872b9a05fcbe16f423adb35178196f54769764305cf4"
+      },
+      {
+        "path": "packages/keiko-server/src/chat-handlers.ts",
+        "sha256": "30cf369952e4bb39cadda46c581ac87f2b4dda43c6fd202d53cccaba87a3c78c"
+      },
+      {
+        "path": "packages/keiko-server/src/desktop-chat-handlers.test.ts",
+        "sha256": "e13209d8469310f3d556c48529ac3b71f5906173d99d1ab6dcb0f90f5231c635"
+      },
+      {
+        "path": "packages/keiko-server/src/store/chatCreationIntents.test.ts",
+        "sha256": "4f561aa22fabc1ca117353bfe2aec1dccc486d5cd713aa4eb6ea910ff3e282b9"
+      },
+      {
+        "path": "packages/keiko-server/src/store/chatCreationIntents.ts",
+        "sha256": "66d80eaffcdfbeed129eea8a02600bc88b2d221cb936e8ddca02ab5908d6083e"
+      },
+      {
+        "path": "packages/keiko-server/src/store/db.ts",
+        "sha256": "cc19402f6b9b6047b41fe083733cc6b32a0e4941a26fccbc6ed01d255b5458ba"
+      },
+      {
+        "path": "packages/keiko-server/src/store/forbidden-fields.test.ts",
+        "sha256": "2b37e36dc8f06557aebfc986daa657dba5ccef2a72a518d7725c32acb8edf83f"
+      },
+      {
+        "path": "packages/keiko-server/src/store/legacySchemaTestFixture.ts",
+        "sha256": "a7599a6bce2c5196a5292282ee0c76d5e74dfc5a029b9daa5552bc1eb8d55b44"
+      },
+      {
+        "path": "packages/keiko-server/src/store/schema.test.ts",
+        "sha256": "42cf4f3a84b4bc6f7a9c88d964e66709508796c6ac931f12474db10c0e5d0af3"
+      },
+      {
+        "path": "packages/keiko-server/src/store/schema.ts",
+        "sha256": "ba8393c856a4f978b58e2241f1f17e69a4f094963b79c8d7f4d1088988d264ac"
+      },
+      {
+        "path": "packages/keiko-server/src/store/types.ts",
+        "sha256": "4616b70afd6e515c72882ab08943905a505850651a4fa18c8d9c16f8067cfe62"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.test.tsx",
+        "sha256": "7040a368cff471c9f201303ad189441361e760f2bb50ceabaf139aab0812ef2a"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/hooks/useChatSession.ts",
+        "sha256": "8209a73a68c481a67e1f90b7899992217d75cc6ab29bfc7e3a7c2691e5eac081"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.test.tsx",
+        "sha256": "d1a53f8ee33801b8cc84a7ab49e33f9c896dd6e95b9ed0b600ef3848a3166f56"
+      },
+      {
+        "path": "packages/keiko-ui/src/app/components/desktop/widgets/SelectionAwareWorkspaceHosts.tsx",
+        "sha256": "8fd8f0b613f142067caabdd57cf0aa575db29dd3c42669e091b7198bb7c7b199"
+      },
+      {
+        "path": "packages/keiko-ui/src/lib/api.ts",
+        "sha256": "6545cfb9b984b219ed395ad2c018ed8c57ca9e4462a1e1cc18ce1851d9e938ad"
+      }
+    ]
+  }
+}

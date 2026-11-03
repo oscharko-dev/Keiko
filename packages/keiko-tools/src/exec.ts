@@ -807,6 +807,9 @@ interface SpawnTarget {
   // #3350) and MUST reach spawn's options verbatim. Optional (never `false`) so the network:"none"
   // sandbox-wrapper branch below — POSIX-only, untouched by this issue — never has to mention it.
   readonly windowsVerbatimArguments?: boolean | undefined;
+  // A strict bubblewrap execution-root run's own home inside `cwd`, already created and mounted as
+  // the child's /tmp. The run state takes it over, so it is removed when the run settles.
+  readonly executionHome?: string | undefined;
 }
 
 // Resolves what to spawn for an INHERITED-network run (deps.policy.network !== "none"): normally
@@ -899,6 +902,61 @@ function resolveIsolatedSpawnTarget(
 ): SpawnTarget {
   const platform = deps.platform ?? process.platform;
   const availability = deps.sandboxAvailability ?? probeBackends(deps.processEnv, platform);
+  const executionHome = bubblewrapExecutionHome(deps, availability, platform, cwd);
+  try {
+    const target = planIsolatedSpawnTarget(input, deps, executable, cwd, {
+      availability,
+      platform,
+      executionHome,
+    });
+    return executionHome === undefined ? target : { ...target, executionHome };
+  } catch (error) {
+    releaseExecutionHome(deps, cwd, executionHome);
+    throw error;
+  }
+}
+
+// Strict bubblewrap mounts the execution root itself, so a shared /tmp there is the caller's real
+// directory: npm logs and Node's compile cache outlasted every run and left a governed worktree
+// unclean (PR #4095). Each such run gets its own home there instead, made and removed through the
+// same per-run lifecycle as the confined macOS profile.
+function bubblewrapExecutionHome(
+  deps: RunCommandDeps,
+  availability: BackendAvailability,
+  platform: NodeJS.Platform,
+  cwd: string,
+): string | undefined {
+  if (deps.policy.filesystem !== "execution-root") return undefined;
+  if (selectEnforcingBackend(platform, availability, "execution-root") !== "bubblewrap") {
+    return undefined;
+  }
+  return executionHomeProvider(deps, cwd).make();
+}
+
+function executionHomeProvider(deps: RunCommandDeps, cwd: string): HomeProvider {
+  return deps.home ?? executionHome(cwd, true);
+}
+
+function releaseExecutionHome(
+  deps: RunCommandDeps,
+  cwd: string,
+  executionHome: string | undefined,
+): void {
+  if (executionHome !== undefined) executionHomeProvider(deps, cwd).cleanup(executionHome);
+}
+
+function planIsolatedSpawnTarget(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  executable: string,
+  cwd: string,
+  host: {
+    readonly availability: BackendAvailability;
+    readonly platform: NodeJS.Platform;
+    readonly executionHome: string | undefined;
+  },
+): SpawnTarget {
+  const { availability, executionHome, platform } = host;
   const decision = planIsolatedRun(
     {
       command: isolatedInnerExecutable(input.command, executable, deps, availability, platform),
@@ -906,6 +964,7 @@ function resolveIsolatedSpawnTarget(
       cwd,
       network: deps.policy.network,
       filesystem: deps.policy.filesystem ?? "inherit",
+      ...(executionHome === undefined ? {} : { executionTmp: executionHome }),
     },
     availability,
     platform,
@@ -1448,8 +1507,7 @@ function applyHomeIsolation(
   target: SpawnTarget,
   cwd: string,
 ): RunState {
-  const confined =
-    target.attestation?.backend === "seatbelt" && target.attestation.filesystemEnforced;
+  const confined = confinedExecutionTarget(target);
   if (deps.policy.homeIsolation === "inherit" && !confined) {
     const inherited = inheritedHome(env);
     if (inherited !== undefined) {
@@ -1459,11 +1517,18 @@ function applyHomeIsolation(
     }
   }
   const home = deps.home ?? executionHome(cwd, confined);
-  const homeDir = home.make();
+  const homeDir = target.executionHome ?? home.make();
   if (confined) prepareConfinedHome(env, cwd, homeDir);
   env.HOME = homeDir;
   env.USERPROFILE = homeDir;
   return createRunState(home, homeDir, reservation);
+}
+
+// The child's home lives inside its execution root: Seatbelt confines writes to that root, and
+// strict bubblewrap already mounted the run's own home there as /tmp.
+function confinedExecutionTarget(target: SpawnTarget): boolean {
+  if (target.executionHome !== undefined) return true;
+  return target.attestation?.backend === "seatbelt" && target.attestation.filesystemEnforced;
 }
 
 function executionHome(cwd: string, confined: boolean): HomeProvider {
@@ -1594,6 +1659,26 @@ function commandEnvironment(
   return env;
 }
 
+// Everything between resolving the spawn target and owning a run state. A failure here releases what
+// is already held: the Windows termination reservation and a strict bubblewrap run's own home.
+function prepareRun(
+  input: RunCommandInput,
+  deps: RunCommandDeps,
+  target: SpawnTarget,
+  cwd: string,
+): { readonly env: Record<string, string>; readonly state: RunState } {
+  let reservation: WindowsTerminationReservation | undefined;
+  try {
+    const env = commandEnvironment(input, deps, target);
+    reservation = reserveWindowsTermination(input, deps);
+    return { env, state: applyHomeIsolation(env, deps, reservation, target, cwd) };
+  } catch (error) {
+    reservation?.release();
+    releaseExecutionHome(deps, cwd, target.executionHome);
+    throw error;
+  }
+}
+
 // Runs an allowlisted command. Rejects with CommandDeniedError (before spawn) for a denied
 // command or a workspace-escaping cwd (PathEscapeError), CommandTimeoutError on timeout, and
 // CommandCancelledError on abort; otherwise resolves a redacted, byte-capped CommandResult. All
@@ -1605,15 +1690,7 @@ export function runCommand(input: RunCommandInput, deps: RunCommandDeps): Promis
     const executable = resolveExecutable(input, deps);
     const cwd = resolveCwd(deps, input.cwd);
     const target = resolveSpawnTarget(input, deps, executable, cwd);
-    const env = commandEnvironment(input, deps, target);
-    const reservation = reserveWindowsTermination(input, deps);
-    let state: RunState;
-    try {
-      state = applyHomeIsolation(env, deps, reservation, target, cwd);
-    } catch (error) {
-      reservation?.release();
-      throw error;
-    }
+    const { env, state } = prepareRun(input, deps, target, cwd);
     const child = spawnChild(input, deps, target, cwd, env, state);
     const buffers: Buffers = { out: [], err: [], total: 0, truncated: false, attempted: 0 };
     const ctx: ExecContext = {

@@ -97,6 +97,9 @@ export interface GroundedSynthesisAttemptOptions {
 
 export interface GroundedSynthesisAttemptTracker {
   readonly admission: NonNullable<GatewayCallRequest["attemptAdmission"]>;
+  /** A complete tool-call response is orchestration; its physical usage remains charged. */
+  confirmToolRound(): void;
+  remainingSynthesisCalls(): number;
   /** Injected model ports may not implement the gateway's physical-attempt callback. */
   settleFallbackFailure(promptTokens: number, failure: unknown): void;
   settleFallback(
@@ -111,6 +114,7 @@ export function createGroundedSynthesisAttemptAdmission(
   options: GroundedSynthesisAttemptOptions,
 ): GroundedSynthesisAttemptTracker {
   let gatewayOwned = false;
+  let latest: ReturnType<typeof synthesisAttemptReservation> | undefined;
   const admission: NonNullable<GatewayCallRequest["attemptAdmission"]> = (input) => {
     gatewayOwned = true;
     assertSynthesisAttemptActive(options);
@@ -121,11 +125,12 @@ export function createGroundedSynthesisAttemptAdmission(
       !budget.tryReserve()
     )
       return undefined;
-    return synthesisAttemptReservation(
+    latest = synthesisAttemptReservation(
       budget,
       input.promptTokens,
       Math.min(input.maxOutputTokens, options.outputTokensMax - pending.completionTokens),
     );
+    return latest;
   };
   const settleFallback: GroundedSynthesisAttemptTracker["settleFallback"] = (
     promptTokens,
@@ -140,18 +145,37 @@ export function createGroundedSynthesisAttemptAdmission(
   };
   return {
     admission,
+    remainingSynthesisCalls: budget.remaining,
+    confirmToolRound(): void {
+      confirmObservedToolRound(latest);
+      latest = undefined;
+    },
     settleFallback,
     settleFallbackFailure(promptTokens, failure): void {
-      // The admission wrapper throws before invoking the port: no physical attempt or
-      // uncertain output exists. Gateway-owned attempts keep their own settlement.
-      if (failure instanceof ConversationModelNotReadyError) return;
-      settleFallback(
-        promptTokens,
-        failure instanceof GatewayError ? failure.partialUsage : undefined,
-        failedSynthesisOutputState(failure),
-      );
+      settleFailedAttempt(settleFallback, promptTokens, failure);
     },
   };
+}
+
+function settleFailedAttempt(
+  settle: GroundedSynthesisAttemptTracker["settleFallback"],
+  promptTokens: number,
+  failure: unknown,
+): void {
+  // No physical attempt happened before the admission owner refused an unready model.
+  if (failure instanceof ConversationModelNotReadyError) return;
+  settle(
+    promptTokens,
+    failure instanceof GatewayError ? failure.partialUsage : undefined,
+    failedSynthesisOutputState(failure),
+  );
+}
+
+function confirmObservedToolRound(
+  latest: ReturnType<typeof synthesisAttemptReservation> | undefined,
+): void {
+  if (latest?.confirmToolRound() !== true)
+    throw new CallerAttemptAdmissionError("Tool orchestration attempt was not fully observed");
 }
 
 /** Injected model ports have no gateway-owned attempt settlement. */
@@ -178,13 +202,23 @@ function synthesisAttemptReservation(
   budget: GroundedSynthesisCallBudget,
   promptTokens: number,
   maxOutputTokens: number,
-): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> {
+): NonNullable<ReturnType<NonNullable<GatewayCallRequest["attemptAdmission"]>>> & {
+  confirmToolRound(): boolean;
+} {
   let settled = false;
+  let observed = false;
   return {
     maxOutputTokens,
+    confirmToolRound(): boolean {
+      if (!observed) return false;
+      observed = false;
+      budget.releaseReservation();
+      return true;
+    },
     settle(reported, dispatched, outputState = "observed"): void {
       if (settled) return;
       settled = true;
+      observed = dispatched && outputState === "observed";
       if (dispatched && outputState === "unknown") budget.recordOutputReservation(maxOutputTokens);
       if (dispatched)
         budget.recordUsage(

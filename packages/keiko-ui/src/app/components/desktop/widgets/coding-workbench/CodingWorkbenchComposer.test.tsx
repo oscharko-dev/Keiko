@@ -6,13 +6,22 @@ import type {
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
-import { I18N_STORAGE_KEY, resetLoadedMessageCatalogs } from "@/lib/i18n";
+import {
+  I18nProvider,
+  I18N_STORAGE_KEY,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 import {
   resetClientDiagnosticWriter,
   setClientDiagnosticWriter,
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
+import {
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  gatewayModelCatalogCheckRequested,
+} from "../shared/gatewaySetupBus";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -52,6 +61,13 @@ const ALTERNATE_MODEL: ModelCapability = {
   reasoningEfforts: ["medium"],
 };
 
+// The visible label and one-line description of each run authority option, in menu order.
+const RUN_AUTHORITY_OPTIONS_EN = [
+  ["Ask for approval", "Reads freely; asks before every file change and command"],
+  ["Supervised workspace", "Routine edits and vetted project commands run; other commands ask"],
+  ["Full access", "Works without asking within the task's authority; internet only here"],
+] as const;
+
 const GEMMA_MODEL: ModelCapability = {
   ...CODING_MODEL,
   id: "gemma-4-31b-it",
@@ -78,12 +94,14 @@ function composerProps(
     canResume: true,
     runState,
     mutationPending: false,
+    stopPending: false,
     startBusy: false,
     startBlockedReason: null,
     projectMemoryEnabled: true,
     onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
     autonomyLabel: "Supervised workspace",
+    activeRunMode: null,
     requestedMode: "supervised-coding",
     runtimePreference: "managed-gateway",
     configurationLocked: runState !== "idle",
@@ -94,6 +112,10 @@ function composerProps(
     reasoningEffort: null,
     onSelectedModelChange: vi.fn(),
     onReasoningEffortChange,
+    offeredAgents: ["build"],
+    agent: "build",
+    agentLocked: false,
+    onAgentChange: vi.fn(),
   };
 }
 
@@ -216,6 +238,45 @@ describe("Coding Workbench composer", () => {
     expect(actions.onStop).toHaveBeenCalledOnce();
   });
 
+  // #4109: Stop is the one control a pending mutation must not lock; it preempts that mutation.
+  it.each(["starting", "ready", "awaiting-approval", "running"] as const)(
+    "keeps Stop enabled and clickable while another action is pending in a %s run",
+    async (runState) => {
+      const user = userEvent.setup();
+      const actions = composerActions();
+      render(
+        <TaskStartSection
+          {...composerProps(runState, actions)}
+          mutationPending
+          stopPending={false}
+        />,
+      );
+      const stop = screen.getByRole("button", { name: "Stop run" });
+      expect(stop).toBeEnabled();
+      await user.click(stop);
+      expect(actions.onStop).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["starting", "ready", "awaiting-approval", "running"] as const)(
+    "disables Stop only while a Stop is itself pending in a %s run",
+    (runState) => {
+      render(
+        <TaskStartSection
+          {...composerProps(runState, composerActions())}
+          mutationPending
+          stopPending
+        />,
+      );
+      expect(screen.getByRole("button", { name: "Stop run" })).toBeDisabled();
+    },
+  );
+
+  it("disables Stop once the run is stopping", () => {
+    renderComposer("stopping", composerActions());
+    expect(screen.getByRole("button", { name: "Stop run" })).toBeDisabled();
+  });
+
   it("admits a follow-up only while paused and offers a resume control", async () => {
     const user = userEvent.setup();
     const actions = composerActions();
@@ -300,10 +361,79 @@ describe("Coding Workbench composer", () => {
     await user.click(screen.getByRole("combobox", { name: "Coding model: gpt-5.4" }));
     await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
-    await user.click(screen.getByRole("option", { name: "Full access" }));
+    await user.click(screen.getByRole("option", { name: /^Full access/u }));
 
     expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  // Customer 1.3.4: opening the picker is a person asking again, so a model that failed at startup
+  // is checked once more without a page reload.
+  it("asks for a model check when the coding model picker opens", async () => {
+    const user = userEvent.setup();
+    const listener = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    try {
+      renderComposerWithOverrides({ models: [CODING_MODEL, ALTERNATE_MODEL] });
+      await user.click(screen.getByRole("combobox", { name: "Coding model: gpt-5.4" }));
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(gatewayModelCatalogCheckRequested(listener.mock.calls[0]?.[0] as Event)).toBe(true);
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    }
+  });
+
+  // Owner decision 2026-10-30: one compact choice, "Jira: none" by default; picking a Pod is the
+  // run's Jira read grant, so it is shown in the composer and sent with the start.
+  describe("the Jira Pod choice for the next run", () => {
+    const POD = { id: "d5f5681e-ce98-4c3c-b27e-51d707c9d018", name: "Acme Jira", ready: true };
+
+    it("shows no Jira control when the person has no ready Pod", () => {
+      renderComposerWithOverrides({ jiraPod: undefined });
+
+      expect(screen.queryByRole("combobox", { name: /Jira/u })).toBeNull();
+    });
+
+    it("offers none first and picks a Pod by its name", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: "", onChange } });
+
+      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
+      expect(control).toHaveTextContent("Jira: none");
+      await user.click(control);
+      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(
+        expect.arrayContaining(["Jira: none", "Jira: Acme Jira"]),
+      );
+      await user.click(screen.getByRole("option", { name: "Jira: Acme Jira" }));
+
+      expect(onChange).toHaveBeenCalledWith(POD.id);
+    });
+
+    it("shows the chosen Pod and goes back to none", async () => {
+      const user = userEvent.setup();
+      const onChange = vi.fn();
+      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: POD.id, onChange } });
+
+      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
+      expect(control).toHaveTextContent("Jira: Acme Jira");
+      await user.click(control);
+      await user.click(screen.getByRole("option", { name: "Jira: none" }));
+
+      expect(onChange).toHaveBeenCalledWith("");
+    });
+
+    it("cannot be changed while a run is active", () => {
+      render(
+        <TaskStartSection
+          {...composerProps("running", composerActions())}
+          jiraPod={{ choices: [POD], value: POD.id, onChange: vi.fn() }}
+        />,
+      );
+
+      expect(screen.getByRole("combobox", { name: "Jira Pod for this run" })).toBeDisabled();
+    });
   });
 
   // #3873 live review: both listboxes exposed every option as a nameless "option" in the
@@ -324,10 +454,66 @@ describe("Coding Workbench composer", () => {
     await user.keyboard("{Escape}");
 
     await user.click(screen.getByRole("combobox", { name: "Run authority" }));
-    for (const label of ["Ask for approval", "Supervised workspace", "Full access"]) {
-      expect(screen.getByRole("option", { name: label })).toHaveAttribute("aria-label", label);
+    // Each mode option names itself with exactly its visible text: the label, then its description.
+    for (const [label, description] of RUN_AUTHORITY_OPTIONS_EN) {
+      const option = screen.getByRole("option", { name: `${label}, ${description}` });
+      expect(option).toHaveAttribute("aria-label", `${label}, ${description}`);
+      expect(option).toHaveTextContent(label);
+      expect(option).toHaveTextContent(description);
     }
     expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+  });
+
+  // #3897 review: the mode.*.short texts existed but no option carried them, so the three modes were
+  // three bare names. Each option now says, in one line, what the native profile does in that mode.
+  it("describes what each run authority does, in English and in German", async () => {
+    const user = userEvent.setup();
+    renderComposerWithOverrides({});
+    await user.click(screen.getByRole("combobox", { name: "Run authority" }));
+    const [ask, supervised, full] = screen.getAllByRole("option");
+    expect(ask).toHaveTextContent("Reads freely; asks before every file change and command");
+    expect(supervised).toHaveTextContent(
+      "Routine edits and vetted project commands run; other commands ask",
+    );
+    expect(full).toHaveTextContent(
+      "Works without asking within the task's authority; internet only here",
+    );
+    cleanup();
+
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    render(
+      <I18nProvider>
+        <TaskStartSection {...composerProps("idle", composerActions())} />
+      </I18nProvider>,
+    );
+    await user.click(screen.getByRole("combobox", { name: "Rechte für diesen Lauf" }));
+    const [askDe, supervisedDe, fullDe] = screen.getAllByRole("option");
+    expect(askDe).toHaveTextContent("Liest frei; fragt vor jeder Dateiänderung und jedem Befehl");
+    expect(supervisedDe).toHaveTextContent(
+      "Routinemäßige Änderungen und geprüfte Projektbefehle laufen; andere Befehle fragen",
+    );
+    expect(fullDe).toHaveTextContent(
+      "Arbeitet ohne Rückfrage im Rahmen der Aufgabenbefugnis; Internet nur hier",
+    );
+  });
+
+  // The descriptions live in the menu; the compact chip keeps its single line of label.
+  it("keeps the run authority chip to the mode name while the menu carries the descriptions", () => {
+    renderComposerWithOverrides({ requestedMode: "supervised-coding" });
+
+    const chip = screen.getByRole("combobox", { name: "Run authority" });
+    expect(chip).toHaveTextContent("Supervised workspace");
+    expect(chip).not.toHaveTextContent("vetted project commands");
+  });
+
+  it("explains the whole mode in the control's tooltip, including what no mode ever allows", () => {
+    renderComposerWithOverrides({ requestedMode: "supervised-coding" });
+
+    const title = screen.getByRole("combobox", { name: "Run authority" }).getAttribute("title");
+    expect(title).toContain("vetted project commands");
+    expect(title).toContain("never by the agent's shell");
+    expect(title).toContain("Files outside the workspace and secret files such as .env and keys");
   });
 
   // #3873 live review: the chip showed "gemma-4-…", and neither a tooltip nor the accessible name
@@ -429,6 +615,42 @@ describe("Coding Workbench composer", () => {
     expect(actions.onSend).not.toHaveBeenCalled();
   });
 
+  // #3897 review: a restored run's locked control showed the saved selection, so an Ask or Full
+  // access run read "Supervised workspace" with Supervised's description.
+  it.each([
+    ["governed-assist", "Ask for approval", "every command asks for approval"],
+    ["autonomous-delivery", "Full access", "without asking"],
+  ] as const)(
+    "shows the active %s run's confirmed mode in the locked control, not the saved selection",
+    (mode, label, description) => {
+      renderComposerWithOverrides({
+        runState: "running",
+        configurationLocked: true,
+        autonomyMode: mode,
+        autonomyLabel: label,
+        activeRunMode: mode,
+        requestedMode: "supervised-coding",
+      });
+
+      const authority = screen.getByRole("combobox", { name: "Run authority" });
+      expect(authority).toHaveTextContent(label);
+      expect(authority).not.toHaveTextContent("Supervised workspace");
+      expect(authority.getAttribute("title")).toContain(description);
+      expect(authority.getAttribute("title")).not.toContain("vetted project commands");
+    },
+  );
+
+  it("shows the saved selection again once no run is active", () => {
+    renderComposerWithOverrides({
+      autonomyMode: "governed-assist",
+      activeRunMode: null,
+      requestedMode: "autonomous-delivery",
+    });
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Full access",
+    );
+  });
+
   it("marks only confirmed full access on the authority control", () => {
     renderComposerWithOverrides({
       autonomyMode: "autonomous-delivery",
@@ -439,5 +661,95 @@ describe("Coding Workbench composer", () => {
     const authority = screen.getByRole("combobox", { name: "Run authority" });
     expect(authority).toHaveAttribute("aria-describedby");
     expect(authority.closest("[data-full-access='true']")).not.toBeNull();
+  });
+
+  describe("primary agent switch (#3897)", () => {
+    it("offers no agent switch while the server offers only the default agent", () => {
+      renderComposerWithOverrides({ offeredAgents: ["build"] });
+      expect(screen.queryByRole("group", { name: "Agent" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Plan" })).toBeNull();
+    });
+
+    it("shows a Build | Plan switch next to the model and authority controls", async () => {
+      const user = userEvent.setup();
+      const props = renderComposerWithOverrides({ offeredAgents: ["build", "plan"] });
+      const group = screen.getByRole("group", { name: "Agent" });
+      expect(group.closest(".cmp-bar-model")).toContainElement(
+        screen.getByRole("combobox", { name: "Run authority" }),
+      );
+      expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute("aria-pressed", "true");
+      await user.click(screen.getByRole("button", { name: "Plan" }));
+      expect(props.onAgentChange).toHaveBeenCalledExactlyOnceWith("plan");
+    });
+
+    it("shows the selected agent as pressed", () => {
+      renderComposerWithOverrides({ offeredAgents: ["build", "plan"], agent: "plan" });
+      expect(screen.getByRole("button", { name: "Plan" })).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("button", { name: "Build" })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    });
+
+    it("keeps the switch available while the run is paused, between turns", async () => {
+      const user = userEvent.setup();
+      const props = renderComposerWithOverrides({
+        offeredAgents: ["build", "plan"],
+        runState: "paused",
+        agentLocked: false,
+      });
+      expect(screen.getByRole("button", { name: "Plan" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Plan" }));
+      expect(props.onAgentChange).toHaveBeenCalledWith("plan");
+    });
+
+    it("disables the switch while a turn is running", async () => {
+      const user = userEvent.setup();
+      const props = renderComposerWithOverrides({
+        offeredAgents: ["build", "plan"],
+        runState: "running",
+        agentLocked: true,
+      });
+      expect(screen.getByRole("button", { name: "Build" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "Plan" })).toBeDisabled();
+      await user.click(screen.getByRole("button", { name: "Plan" }));
+      expect(props.onAgentChange).not.toHaveBeenCalled();
+    });
+
+    it("does not change how a task is started or a follow-up is sent", async () => {
+      const user = userEvent.setup();
+      const actions = composerActions();
+      render(
+        <TaskStartSection
+          {...composerProps("idle", actions)}
+          offeredAgents={["build", "plan"]}
+          agent="plan"
+        />,
+      );
+      await user.click(screen.getByRole("button", { name: "Start coding run" }));
+      expect(actions.onStart).toHaveBeenCalledExactlyOnceWith("Investigate the failing test");
+    });
+
+    it("is labelled in German and has no accessibility violations", async () => {
+      await loadLocaleMessages("de");
+      window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+      render(
+        <I18nProvider>
+          <TaskStartSection
+            {...composerProps("idle", composerActions())}
+            offeredAgents={["build", "plan"]}
+          />
+        </I18nProvider>,
+      );
+      expect(screen.getByRole("group", { name: "Agent" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Bauen" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Planen" })).toBeInTheDocument();
+      expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+    });
+
+    it("has no accessibility violations with the switch shown", async () => {
+      renderComposerWithOverrides({ offeredAgents: ["build", "plan"], agent: "plan" });
+      expect(await axe(document.body, AXE_OPTIONS)).toHaveNoViolations();
+    });
   });
 });

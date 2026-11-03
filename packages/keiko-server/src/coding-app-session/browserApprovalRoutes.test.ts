@@ -1,0 +1,350 @@
+import { generateKeyPairSync, sign, type KeyObject } from "node:crypto";
+import { IncomingMessage, ServerResponse } from "node:http";
+import { Socket } from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { BROWSER_APPROVAL_ROUTES } from "./browserApprovalRoutes.js";
+import {
+  browserApprovalChallengeText,
+  BROWSER_APPROVAL_REQUEST_TTL_MS,
+  validateBrowserApprovalRequestResult,
+  validateBrowserApprovalChallengeResult,
+  validateBrowserApprovalDecisionResult,
+  validateBrowserApprovalManagementResult,
+  validateBrowserApprovalProofResult,
+  type BrowserApprovalChallengeResult,
+  type BrowserApprovalProofResult,
+  type BrowserApprovalManagementSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  createFakeSessionPairingPort,
+  extractSessionCookie,
+  fakePairingRequestBody,
+  postHeaders,
+  startAppSessionTestServer,
+  type AppSessionTestServer,
+} from "./_support.js";
+
+const ROOT = "/api/coding-workbench/app-session/browser";
+const servers: AppSessionTestServer[] = [];
+
+afterEach(async () => {
+  try {
+    for (const server of servers.splice(0)) await server.close();
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
+async function fixture(): Promise<{
+  readonly server: AppSessionTestServer;
+  readonly owner: string;
+}> {
+  const server = await startAppSessionTestServer({
+    sessionPairingPort: createFakeSessionPairingPort(),
+  });
+  servers.push(server);
+  const response = await fetch(`${server.baseUrl}/api/coding-workbench/app-session/pair`, {
+    method: "POST",
+    headers: postHeaders(),
+    body: JSON.stringify(fakePairingRequestBody()),
+  });
+  const owner = extractSessionCookie(response);
+  if (owner === undefined) throw new Error("Missing fixture owner session");
+  return { server, owner };
+}
+
+function post(
+  server: AppSessionTestServer,
+  action: string,
+  body: unknown,
+  cookie?: string,
+): Promise<Response> {
+  return fetch(`${server.baseUrl}${ROOT}/${action}`, {
+    method: "POST",
+    headers: { ...postHeaders(cookie), origin: server.baseUrl },
+    body: JSON.stringify(body),
+  });
+}
+
+function keyPair(): { readonly publicKey: KeyObject; readonly privateKey: KeyObject } {
+  return generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+}
+
+/** Keep a failed assertion body-free even when the server incorrectly issues a credential. */
+function sessionCookieIssued(response: Response): boolean {
+  return extractSessionCookie(response) !== undefined;
+}
+
+async function approveBrowser(
+  server: AppSessionTestServer,
+  owner: string,
+  pair = keyPair(),
+  remember = true,
+): Promise<Response> {
+  const jwk = pair.publicKey.export({ format: "jwk" });
+  const requested = await post(server, "request", {
+    publicKey: { x: jwk.x, y: jwk.y },
+    remember,
+  });
+  expect(requested.status).toBe(200);
+  const parsed = validateBrowserApprovalRequestResult(await requested.json());
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("Invalid browser request response");
+  const pending = parsed.value;
+  if (pending.state !== "pending") throw new Error("Missing browser request");
+  const approved = await post(
+    server,
+    "approve",
+    {
+      requestId: pending.request.requestId,
+      comparisonCode: pending.request.comparisonCode,
+      remember,
+    },
+    owner,
+  );
+  const decision: unknown = await approved.json();
+  expect(validateBrowserApprovalDecisionResult(decision).ok).toBe(true);
+  expect(decision).toEqual({ state: "accepted" });
+  return proveFor(server, "complete", pending.request.requestId, pair.privateKey);
+}
+
+async function proveFor(
+  server: AppSessionTestServer,
+  purpose: "complete" | "renew",
+  subjectId: string,
+  privateKey: KeyObject,
+): Promise<Response> {
+  const challenged = await post(server, "challenge", { purpose, subjectId });
+  const parsed = validateBrowserApprovalChallengeResult(await challenged.json());
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) throw new Error("Invalid browser challenge response");
+  const challenge = parsed.value;
+  if (challenge.state !== "challenge") throw new Error("Missing browser challenge");
+  const signature = sign("sha256", Buffer.from(browserApprovalChallengeText(challenge.challenge)), {
+    key: privateKey,
+    dsaEncoding: "ieee-p1363",
+  }).toString("base64url");
+  const response = await post(server, "prove", {
+    challengeId: challenge.challenge.challengeId,
+    signature,
+  });
+  expect(validateBrowserApprovalProofResult(await response.clone().json()).ok).toBe(true);
+  return response;
+}
+
+describe("browser approval on the real mounted BFF", () => {
+  it("emits canonical client management contracts for remembered and session-only grants", async () => {
+    const { server, owner } = await fixture();
+    await approveBrowser(server, owner, keyPair(), false);
+    await approveBrowser(server, owner, keyPair(), true);
+    const response = await fetch(`${server.baseUrl}${ROOT}`, {
+      headers: { cookie: owner },
+    });
+    const parsed = validateBrowserApprovalManagementResult(await response.json());
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok || parsed.value.state !== "active")
+      throw new Error("Missing management response");
+    expect(new Set(parsed.value.approvals.map((approval) => approval.remembered))).toEqual(
+      new Set([false, true]),
+    );
+    const approval = parsed.value.approvals[0];
+    if (approval === undefined) throw new Error("Missing fixture approval");
+    const revoked = await post(server, "revoke", approval.approvalId, owner);
+    expect(validateBrowserApprovalDecisionResult(await revoked.json()).ok).toBe(true);
+  });
+
+  it("refuses renewal after a protected read first observes expiry and time is corrected", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation((): number => now);
+    const { server, owner } = await fixture();
+    const pair = keyPair();
+    const approved = await approveBrowser(server, owner, pair);
+    const body = (await approved.json()) as BrowserApprovalProofResult;
+    if (body.state !== "active" || body.approval === undefined) throw new Error("Missing approval");
+    const project = server.deps.store.createProject(process.cwd());
+    const chat = server.deps.store.createChat(project.path, "Expiry fixture", "fixture-model");
+    const draft = `${server.baseUrl}/api/chats/${chat.id}/draft`;
+    now = body.approval.expiresAtMs - 2_000;
+    const renewed = await proveFor(server, "renew", body.approval.approvalId, pair.privateKey);
+    const cookie = extractSessionCookie(renewed);
+    if (cookie === undefined) throw new Error("Missing near-expiry session");
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(200);
+    now = body.approval.expiresAtMs;
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(404);
+    now = body.approval.expiresAtMs - 1_000;
+    const challengeReply = await post(server, "challenge", {
+      purpose: "renew",
+      subjectId: body.approval.approvalId,
+    });
+    const result = (await challengeReply.json()) as BrowserApprovalChallengeResult;
+    if (result.state === "challenge") {
+      const attempted = await proveFor(server, "renew", body.approval.approvalId, pair.privateKey);
+      expect(sessionCookieIssued(attempted)).toBe(false);
+      expect(await attempted.json()).toEqual({ state: "unavailable" });
+    } else expect(result).toEqual({ state: "unavailable" });
+  });
+  it("records only registered body-free approval lifecycle evidence", async () => {
+    const { server, owner } = await fixture();
+    await approveBrowser(server, owner);
+    await approveBrowser(server, owner, keyPair(), false);
+    const route = BROWSER_APPROVAL_ROUTES.find((entry) => entry.method === "GET");
+    if (route === undefined) throw new Error("Missing inspection route");
+    const events: ServerLogEvent[] = [];
+    const req = new IncomingMessage(new Socket());
+    req.headers.cookie = owner;
+    await route.handler(
+      {
+        req,
+        res: new ServerResponse(req),
+        correlationId: "browser-approval-log-control",
+        params: {},
+        url: new URL(`${server.baseUrl}${ROOT}`),
+      },
+      {
+        ...server.deps,
+        activityLog: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+      },
+    );
+    expect(events).toHaveLength(1);
+    expectActivityLogProof(
+      "coding-app-session.browser-approval.state.line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(events[0]?.extra).toEqual({
+      action: "inspect",
+      outcome: "accepted",
+      sessionCount: 3,
+      pendingRequestCount: 0,
+      sessionApprovalCount: 1,
+      rememberedApprovalCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(events)).not.toContain(owner);
+  });
+  it("manages and revokes actual session-only draft access after the request window closes", async () => {
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation((): number => now);
+    const { server, owner } = await fixture();
+    const response = await approveBrowser(server, owner, keyPair(), false);
+    const cookie = extractSessionCookie(response);
+    if (cookie === undefined) throw new Error("Missing session-only cookie");
+    const project = server.deps.store.createProject(process.cwd());
+    const chat = server.deps.store.createChat(
+      project.path,
+      "Session-only fixture",
+      "fixture-model",
+    );
+    const draft = `${server.baseUrl}/api/chats/${chat.id}/draft`;
+    now += BROWSER_APPROVAL_REQUEST_TTL_MS + 1;
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(200);
+    const inspected = await fetch(`${server.baseUrl}${ROOT}`, { headers: { cookie: owner } });
+    const management = (await inspected.json()) as BrowserApprovalManagementSnapshot;
+    expect(management.approvals).toHaveLength(1);
+    const approval = management.approvals.at(0);
+    if (approval === undefined) throw new Error("Missing session-only management record");
+    expect(approval.remembered).toBe(false);
+    const revoked = await post(server, "revoke", approval.approvalId, owner);
+    expect(await revoked.json()).toEqual({ state: "accepted" });
+    expect((await fetch(draft, { headers: { cookie } })).status).toBe(404);
+  });
+  it("saves authenticated drafts after approval and refuses the same cookie after revocation", async () => {
+    const { server, owner } = await fixture();
+    const project = server.deps.store.createProject(process.cwd());
+    const chat = server.deps.store.createChat(
+      project.path,
+      "Private fixture chat",
+      "fixture-model",
+    );
+    const draftPath = `/api/chats/${chat.id}/draft`;
+    expect((await fetch(`${server.baseUrl}${draftPath}`)).status).toBe(404);
+    const response = await approveBrowser(server, owner);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const cookie = extractSessionCookie(response);
+    expect(cookie).toBeTypeOf("string");
+    if (cookie === undefined) throw new Error("Missing approved cookie");
+    const body = (await response.json()) as BrowserApprovalProofResult;
+    expect(JSON.stringify(body)).not.toContain(cookie.split("=").at(1));
+    if (body.state !== "active" || body.approval === undefined) throw new Error("Missing approval");
+    const saved = await fetch(`${server.baseUrl}${draftPath}`, {
+      method: "PUT",
+      headers: { ...postHeaders(cookie), origin: server.baseUrl },
+      body: JSON.stringify({ text: "Synthetic private draft", expectedRevision: 0 }),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({ text: "Synthetic private draft", revision: 1 });
+    expect((await fetch(`${server.baseUrl}${draftPath}`, { headers: { cookie } })).status).toBe(
+      200,
+    );
+    const revoked = await post(server, "revoke", body.approval.approvalId, owner);
+    expect(await revoked.json()).toEqual({ state: "accepted" });
+    expect((await fetch(`${server.baseUrl}${draftPath}`, { headers: { cookie } })).status).toBe(
+      404,
+    );
+  });
+
+  it.each([undefined, "forged"])(
+    "does not expose approval management to an unapproved browser: %s",
+    async (cookie) => {
+      const { server } = await fixture();
+      const inspected = await fetch(`${server.baseUrl}${ROOT}`, {
+        headers: cookie === undefined ? {} : { cookie },
+      });
+      expect(await inspected.json()).toEqual({ state: "unavailable" });
+      const response = await post(
+        server,
+        "approve",
+        {
+          requestId: `brq_${"a".repeat(32)}`,
+          comparisonCode: "12345678",
+          remember: true,
+        },
+        cookie,
+      );
+      expect(await response.json()).toEqual({ state: "unavailable" });
+      expect(extractSessionCookie(response)).toBeUndefined();
+      expect(server.deps.codingAppSessionChannel?.sessionCount()).toBe(1);
+    },
+  );
+
+  it.each([undefined, "http://localhost:1983", "http://attacker.invalid:1983", "null"])(
+    "requires the exact transport origin for approval requests: %s",
+    async (origin) => {
+      const { server } = await fixture();
+      const key = keyPair().publicKey.export({ format: "jwk" });
+      const response = await fetch(`${server.baseUrl}${ROOT}/request`, {
+        method: "POST",
+        headers: { ...postHeaders(), ...(origin === undefined ? {} : { origin }) },
+        body: JSON.stringify({ publicKey: { x: key.x, y: key.y }, remember: false }),
+      });
+      if (response.status !== 403) {
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ state: "unavailable" });
+      }
+      expect(server.deps.codingAppSessionChannel?.sessionCount()).toBe(1);
+    },
+  );
+
+  it("keeps the existing CSRF and bounded JSON protections", async () => {
+    const { server } = await fixture();
+    const missingCsrf = await fetch(`${server.baseUrl}${ROOT}/request`, {
+      method: "POST",
+      headers: { origin: server.baseUrl, "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(missingCsrf.status).toBe(403);
+    const oversized = await post(server, "request", { padding: "x".repeat(9 * 1_024) });
+    expect(await oversized.json()).toEqual({ state: "unavailable" });
+    expect(extractSessionCookie(oversized)).toBeUndefined();
+    expect(server.deps.codingAppSessionChannel?.sessionCount()).toBe(1);
+  });
+});

@@ -102,3 +102,14 @@ token-routing pins for shadow-ink, overlay-scrim, ed-syn/ed-fg, and product-surf
 semantic tokens (positive + negative, mutation-robust), plus a scope-wide product-surface
 drift guard that classifies rules by product-surface class prefix and fails if any matched
 rule still carries a raw aliased primitive in the token-eligible declaration set.
+
+## Editor evidence refresh — 2026-10-24
+
+The original Editor producer regenerated all 16 screenshots and its manifest on the pinned
+Node 24.18.0/npm 11.16.0 pair. All five journeys pass. The fixture now uses canonical registered
+project roots and explicit bounded trust, the tablist-owned overflow menu, the native separator
+role, and real diagnostic-marker keyboard activation. Compact journeys select the split source
+through the file tree when its inactive tab is hidden. The Editor reserves four pixels for its
+host edge so window resize chrome cannot intercept diagnostic markers. Console errors remain
+failures, and the manifest is written only after that assertion succeeds. Detailed scope and
+validation are recorded in `docs/qa/sonarcloud-blocker-medium-2026-10-24.json`.

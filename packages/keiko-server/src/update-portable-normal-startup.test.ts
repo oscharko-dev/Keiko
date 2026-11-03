@@ -18,6 +18,7 @@ import type {
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
+import { writePosixRegistrationFixture } from "./__tests__/portable-registration.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-builder.js";
 import {
   createPortableHandoffPlan,
@@ -202,7 +203,10 @@ describe("portable recovered launch descriptor", () => {
   });
 });
 
-async function prepare(terminal = false): Promise<NormalStartupFixture> {
+async function prepare(
+  terminal = false,
+  launcherIdentitySha256?: string,
+): Promise<NormalStartupFixture> {
   const root = mkdtempSync(join(tmpdir(), "keiko-normal-startup-recovery-"));
   roots.push(root);
   const stateDir = join(root, "state");
@@ -212,16 +216,15 @@ async function prepare(terminal = false): Promise<NormalStartupFixture> {
   mkdirSync(stateDir, { recursive: true });
   const localState = createUpdateLocalStateManager({ stateDir, now: () => NOW });
   const initial = localState.writeRuntimeState(localState.readRuntimeState());
-  const registration = JSON.stringify({
-    schemaVersion: 1,
-    status: "managed",
-    updateEligible: true,
-    stable: true,
-    platformTarget: "macos-arm64",
-    packageVersion: "1.2.2",
-    installRootIdentitySha256: createHash("sha256").update(realpathSync(managedRoot)).digest("hex"),
+  const { registration } = writePosixRegistrationFixture({
+    managedRoot,
+    stateDir,
+    target: "macos-arm64",
+    version: "1.2.2",
+    home: root,
+    now: NOW,
+    launcherIdentitySha256,
   });
-  writeFileSync(join(stateDir, "portable-install-state.json"), registration);
   const currentTreeSha256 = await hashPortableHandoffTree(managedRoot, {
     deadline: Date.now() + 30_000,
   });
@@ -820,6 +823,39 @@ function prepareAcceptedRecovery(fixture: NormalStartupFixture): void {
 }
 
 describe("portable normal startup recovery", () => {
+  it("rejects a mismatched POSIX launcher binding before settling and records the refusal", async () => {
+    const fixture = await prepare(false, "f".repeat(64));
+    const events: SecurityLogEvent[] = [];
+    const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+    await expect(
+      reconcilePortableNormalStartup({
+        stateDir: fixture.stateDir,
+        target: "macos-arm64",
+        expectedManagedRoot: fixture.managedRoot,
+        currentPid: 303,
+        processIdentity: "binding-recovery-cli",
+        pidAlive: () => false,
+        runNative,
+        securityLogSink: { write: (event) => events.push(event) },
+      }),
+    ).resolves.toEqual({ status: "recovery-required" });
+    expect(runNative).not.toHaveBeenCalled();
+    expect(fixture.localState.readRuntimeState().activationWal).toBeDefined();
+    const refusal = events.find(
+      (event) => event.op === "portable.normal-startup-recovery.required",
+    );
+    const persisted = expectActivityLogProof(
+      "portable.normal-startup-recovery.required.reason",
+      formatActivityLogProofLine(refusal ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      reason: "prepared-settlement-failed",
+      correlationId: fixture.session.correlationId,
+    });
+    expect(JSON.stringify(events)).not.toContain(fixture.managedRoot);
+    expect(JSON.stringify(events)).not.toContain("synthetic non-executed launcher");
+  });
+
   it("treats a Windows installation with no WAL as selected-only normal startup", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-windows-normal-startup-fresh-"));
     roots.push(stateDir);

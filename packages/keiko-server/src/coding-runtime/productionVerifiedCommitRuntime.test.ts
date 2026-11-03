@@ -126,11 +126,37 @@ describe("server-built delivery approval requests", () => {
   it("states the scope and policy reason on the stage approval", () => {
     const events: CodingWorkbenchRuntimeEvent[] = [];
     const service = {
-      review: () => ({ runId: "run-stage", expiresAtMs: EXPIRES_AT_MS }),
+      review: () => ({
+        runId: "run-stage",
+        expiresAtMs: EXPIRES_AT_MS,
+        command: { kind: "stage" },
+      }),
     } as unknown as RuntimeGitService;
     requestRuntimeStageApproval(service, "stage-1", (event) => void events.push(event));
     expect(events[0]?.permissionRequest).toMatchObject({
       actionKind: "git-stage",
+      reasonCode: "stage-approval-required",
+      scopeLabel: "workspace-scope",
+      policyReason: "approval-required",
+    });
+  });
+
+  // #3902 AC2: the operator approves what the proposal does, so an unstage proposal is never
+  // presented as staging.
+  it("names an unstage proposal as unstaging on its approval", () => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const service = {
+      review: () => ({
+        runId: "run-unstage",
+        expiresAtMs: EXPIRES_AT_MS,
+        command: { kind: "unstage" },
+      }),
+    } as unknown as RuntimeGitService;
+    requestRuntimeStageApproval(service, "unstage-1", (event) => void events.push(event));
+    expect(events[0]?.permissionRequest).toMatchObject({
+      requestId: "unstage-1",
+      actionKind: "git-unstage",
+      reasonCode: "unstage-approval-required",
       scopeLabel: "workspace-scope",
       policyReason: "approval-required",
     });
@@ -163,5 +189,47 @@ describe("resolveVerifiedCommitContext correlation id (#3384 B3-16)", () => {
     const hostileRunId = "run:00001";
     const context = resolveVerifiedCommitContext(deps(hostileRunId), binding(hostileRunId));
     expect(context?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
+// #3907 (owner decision 2026-10-31): the one seam commit, push, pull request and CI read the run's
+// branches from. A run Keiko moved onto a task branch delivers from that branch, against the base
+// it started from, while the immutable envelope still names the branch it started on.
+describe("resolveVerifiedCommitContext after a governed task branch (#3907)", () => {
+  const runId = "run-00002";
+  const moved = {
+    runId,
+    taskBranch: "feature/x",
+    baseBranch: "dev",
+    headSha: "1".repeat(40),
+    workspaceDigest: digest,
+  };
+
+  it("takes the run's branches from the envelope when Keiko moved none", () => {
+    const context = resolveVerifiedCommitContext(deps(runId), binding(runId));
+    expect(context).toMatchObject({ headRef: "codex/task", baseRef: "dev" });
+    const unrelated = resolveVerifiedCommitContext(
+      { ...deps(runId), governedTaskBranch: () => undefined },
+      binding(runId),
+    );
+    expect(unrelated).toMatchObject({ headRef: "codex/task", baseRef: "dev" });
+  });
+
+  it("takes both branches from the record Keiko made for this run", () => {
+    const asked: string[] = [];
+    const context = resolveVerifiedCommitContext(
+      {
+        ...deps(runId),
+        governedTaskBranch: (id) => {
+          asked.push(id);
+          return moved;
+        },
+      },
+      binding(runId),
+    );
+    expect(asked).toEqual([runId]);
+    expect(context).toMatchObject({ headRef: "feature/x", baseRef: "dev" });
+    // Nothing else about the run's identity moves with the branch.
+    expect(context).toMatchObject({ runId, envelopeDigest: digest, repositoryDigest: digest });
   });
 });

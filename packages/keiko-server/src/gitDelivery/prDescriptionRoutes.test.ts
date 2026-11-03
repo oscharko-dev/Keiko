@@ -57,6 +57,7 @@ import {
   type PrDescriptionRouteOptions,
 } from "./prDescriptionRoutes.js";
 import { resolveProjectWorkspace } from "./execution.js";
+import { withMarkdownSkillRequestAuthority } from "../markdown-skill-authority.js";
 import { DescriptionFixture } from "./prDescriptionTestSupport.js";
 import type { PrDescriptionApplicationService } from "./prDescriptionTypes.js";
 import {
@@ -255,6 +256,49 @@ describe("pr-description routes — mount (#3399)", () => {
     );
     expect(first.ok && repeated.ok && first.service).toBe(repeated.ok && repeated.service);
     expect(factory).toHaveBeenCalledTimes(3);
+  });
+
+  // A Chat turn runs on a request-scoped copy of the dependencies (withMarkdownSkillRequestAuthority)
+  // and holds its generated proposal on the service it resolves there. The review, approval and apply
+  // routes that follow resolve against the composed graph itself, so the copy must not own a holder
+  // of its own: the proposal the turn retained was reported unknown to every later request.
+  it("keeps one proposal holder for the composed graph and its request-scoped copies", () => {
+    const factory = vi.fn(() => fixture.service);
+    const graph = deps();
+    const request = {
+      projectId,
+      ownerAndRepo: "owner/repo",
+      prNumber: 123,
+      snapshotDigest: "a".repeat(64),
+    };
+    const context = ctxFor(PREVIEW, request);
+    const turnCopy = withMarkdownSkillRequestAuthority(graph, context.req);
+    const copyOfCopy = withMarkdownSkillRequestAuthority(turnCopy, context.req);
+    expect(turnCopy).not.toBe(graph);
+    const held = [turnCopy, graph, copyOfCopy].map((candidate, index) =>
+      resolvePrDescriptionApplicationServiceForRequest(
+        candidate,
+        context,
+        request,
+        `request-copy-${String(index)}`,
+        { serviceFactory: factory },
+      ),
+    );
+    const services = held.map((resolution) => (resolution.ok ? resolution.service : undefined));
+    expect(services[0]).toBeDefined();
+    expect(services[1]).toBe(services[0]);
+    expect(services[2]).toBe(services[0]);
+    expect(factory).toHaveBeenCalledOnce();
+    // A separately composed graph still owns its own holder.
+    const other = resolvePrDescriptionApplicationServiceForRequest(
+      withMarkdownSkillRequestAuthority(deps(), context.req),
+      context,
+      request,
+      "request-copy-other",
+      { serviceFactory: factory },
+    );
+    expect(other.ok && other.service).toBe(fixture.service);
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 });
 

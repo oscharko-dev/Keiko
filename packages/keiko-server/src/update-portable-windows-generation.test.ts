@@ -119,3 +119,15 @@ describe("Windows generation staging authority", () => {
     ).toBe(false);
   });
 });
+
+it("resolves the actual flat Linux producer layout without treating it as a macOS bundle", () => {
+  const root = "/home/alice/.local/opt/Keiko";
+  expect(portablePackageLayout("linux-x64", `${root}/app`)).toMatchObject({
+    installRoot: root,
+    resourceRoot: root,
+    appRoot: `${root}/app`,
+    packageJsonPath: `${root}/app/package.json`,
+    rootLauncherPath: `${root}/Keiko`,
+    rootSetupManifestPath: `${root}/.portable/setup-manifest.json`,
+  });
+});

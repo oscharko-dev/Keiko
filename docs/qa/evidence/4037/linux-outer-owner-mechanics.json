@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "classification": "Existing Linux launcher outer-owner kernel mechanics only; no app startup or installed updater acceptance",
+  "sourceParent": "bcf00058947496d5a6c18d9c5a185ba66386f45b",
+  "sourceFreeze": {
+    "artifact": "checkpoint52-source-freeze-v3.json",
+    "sha256": "d74cf6b2294254f8f57794936151cc7ccbf6eb42cdf6c5f340323428d364bf3e"
+  },
+  "implementation": [
+    "Explicit role of the existing launcher executes the actual opened and hashed supervisor descriptor and owns that supervisor outside its generation. No third helper artifact is introduced.",
+    "A one-shot direct-parent credential-bound channel transfers the already-held root pidfd. The original five-second report bound starts before its first OS probe; the private descriptor closes after the attempt and never reaches the runtime root.",
+    "Root identity, actual supervisor terminal wait and the existing whole-generation zero-live proof remain distinct prerequisites. Original KRP/KRC/KRS framing and native unavailability are preserved.",
+    "The optional original start gate remains independent of newly allocated or received descriptors. Existing coordinator file hashing supplies the retained executable descriptor.",
+    "Received root authority requires authentic procfs in the coherent outer coordinate view, positive descriptor/PID binding and the kernel pidfd type/live check; missing proc entries supply no negative liveness proof.",
+    "The shared Linux kernel parent-death binding captures a parent self pidfd before fork/clone, closes the pre-arming death race, rechecks init setup and verifies the supervisor binding after exec. The lease and actual terminal waits remain required.",
+    "Idle lifetime remains event-driven. A first STOP/TERM/EOF establishes one original stop deadline; every later poll and validation uses its remaining time. Failure teardown retains its separate existing bound."
+  ],
+  "verification": {
+    "fixturePolicy": {
+      "image": "keiko-ci23-linux-functional@sha256:f214647de9d74ee647d741e831a690f0bc5a0971d7960878ac2db8a97fdd35b5",
+      "architecture": "linux/arm64",
+      "user": "1000:1000",
+      "network": "none",
+      "capabilities": "all dropped",
+      "noNewPrivileges": true,
+      "repositoryAndRoot": "read-only",
+      "seccomp": "unconfined only in this declared kernel-qualification fixture; no customer policy change"
+    },
+    "finalNative": {
+      "log": {
+        "artifact": "checkpoint52-native-arm-final-v3.log",
+        "sha256": "f8a3194295f1eb72632f8582d161d03773e1dbe39cb0188f4bf7aabd837a1142"
+      },
+      "compilerAndAnalyzer": true,
+      "directSupervisor": {
+        "kernelCases": 9,
+        "decoderRefusals": 6,
+        "schedulingControls": 13
+      },
+      "outerOwner": {
+        "kernelCases": 13,
+        "decoderRefusals": 6,
+        "schedulingControls": 13,
+        "boundedRefusalCases": 2
+      },
+      "identityReceiver": {
+        "positive": 1,
+        "negative": 16,
+        "includesDescriptorCleanup": true
+      },
+      "actualOwnerChannel": {
+        "positive": 1,
+        "negative": 3,
+        "includesEofBeforeStop": true
+      },
+      "sourceAndGate": {
+        "passed": 5,
+        "scope": "Digest/alias refusal, native refusal preservation, healthy lifetime, original gate and private channel exclusion"
+      },
+      "parentGuard": {
+        "actualPreArmingDeathRacePassed": true,
+        "ignoredParentReadinessMutant": {
+          "artifact": "checkpoint52-parent-race-mutant.log",
+          "sha256": "7a52bd7946d84bc54a761a58502984f494195bdf9290dc747019735bf8d1d921"
+        },
+        "coherentCoordinateAndNonProcSpoofControlsPassed": true
+      }
+    },
+    "sameOwnerChannelBefore": {
+      "failed": 1,
+      "healthy": 3,
+      "log": {
+        "artifact": "outer-owner-channel-before-v2.log",
+        "sha256": "677afeda2a81d74e65324140c5ca965e371f9bbfaf8bcf63a6ace35211a90b1e"
+      }
+    },
+    "reportDeadlineBefore": {
+      "artifact": "outer-owner-report-deadline-before.log",
+      "sha256": "7694398bacd496f3f6b7c11dc11a90392bb7491a4b992c0a1b1dcab91974d6e3"
+    },
+    "actualOneShotEofBefore": {
+      "artifact": "outer-owner-channel-eof-before.log",
+      "sha256": "9c0a66606886753d2ab12335bf2883e9cf19415cdcaaee8c9370846c78f20f4f"
+    },
+    "macosExisting": {
+      "log": {
+        "artifact": "checkpoint52-v2-macos-native.log",
+        "sha256": "29540c75f99f7514af854a8a4a57ddff7688d1f01034fc4f52dc6e98bed7d63e"
+      },
+      "scope": "Compiler/analyzer/existing boundaries only; no installed entitled Endpoint Security owner qualification"
+    },
+    "lintHistoricalRecapture": "checkpoint50-lint-recapture.json",
+    "adverseBeforeInvocations": {
+      "artifact": "checkpoint52-adverse-before-invocations-v2.json",
+      "sha256": "e404d63b8eb9df0a5bd6ed07e42c10e3a58a7042bd91be386e108adcfd17716f"
+    },
+    "referenceTypeBefore": {
+      "artifact": "checkpoint52-reference-type-before-v2.log",
+      "sha256": "44a20671a52f9723408700393e79019cfddd72867c466ab8c6b6cc9dfc10fdf0"
+    },
+    "stoppedInitBefore": {
+      "artifact": "checkpoint52-stopped-init-owner-before-v3.log",
+      "sha256": "d878c633f6ba1d54cac5bfb9403ddcf0f0366957385cf75bfe9bf1ce715aaa6e"
+    },
+    "stoppedSupervisorBefore": {
+      "artifact": "checkpoint52-stopped-supervisor-owner-before.log",
+      "sha256": "ae366f2942058d503eb3def6491f2bab09b254ff04f156f251bde0b5ec5527e6"
+    },
+    "independentIdentity": {
+      "controls": 30,
+      "scope": "Same v2/v3 actual identity/parent function bodies; CPU-only substituted kernel/proc ports, not native execution",
+      "receipt": {
+        "artifact": "checkpoint52-v2-portable-identity-independent.json",
+        "sha256": "866397fa82b86219aaa314e4b6c40ed3e74a5e9e4089b2c1983997587009d99e"
+      }
+    },
+    "independentStopWait": {
+      "controls": 3,
+      "scope": "Actual v3 wait body; CPU-only STOP/TERM/EOF plus healthy idle port checks",
+      "before": {
+        "artifact": "checkpoint52-stop-wait-before-independent.json",
+        "sha256": "bd0883df8274e75c5e0599902f02bcb1814276677370b90195127d1fed44a9a5"
+      },
+      "after": {
+        "artifact": "checkpoint52-stop-wait-after-v3-independent.json",
+        "sha256": "04eb2cafa8455c3b0bba0dfe9a28ca428dea072c16965f4847ba6fb1a8423f1b"
+      }
+    },
+    "actualStoppedSupervisorStopBefore": {
+      "artifact": "checkpoint52-stopped-supervisor-stop-before.log",
+      "sha256": "082078d543a85bb5bfe6a828e332d22b37ec64d88ebfc3f90a0e751c08127cd6"
+    },
+    "actualStoppedSupervisorEofBefore": {
+      "artifact": "checkpoint52-stopped-supervisor-eof-before.log",
+      "sha256": "416fcc99b9337810b81d693bc7b3945f135c31115614b80c3934286432035877"
+    },
+    "stopBound": {
+      "controlMs": 5000,
+      "existingFailureCleanupMs": 3000,
+      "acceptance": "One unchanged stop grant covers all subsequent polls/reads/responses/owned waits. Forced or expired cleanup supplies no zero-live protocol credit."
+    }
+  },
+  "retainedIntermediateFailures": [
+    {
+      "artifact": {
+        "artifact": "outer-owner-full-kernel-v1.log",
+        "sha256": "a952e29b06963a7aada06ab30c9fcf5ba50a231a3a52fcc7f909bcc61af5d098"
+      },
+      "cause": "Received pidfd5 was mistaken for a pre-existing gate; original gate presence is now captured before allocation."
+    },
+    {
+      "artifact": {
+        "artifact": "outer-owner-source-before.log",
+        "sha256": "f2ab09ed811bebe4dc39f3b57ab1d6bc5059843d2f65f0188c679baeec441ac9"
+      },
+      "cause": "Native unavailability6 was masked as observation5 and is now preserved. Its separate gate fixture assumed FIFO-only Node pipes; the corrected fixture also admits Node anonymous sockets, with no product gate policy change."
+    },
+    {
+      "artifact": {
+        "artifact": "checkpoint52-sonar.log",
+        "sha256": "0b54e9f5c820ecd79cbe845c4faf98ad96acafad8e675514642987a8ab9773b5"
+      },
+      "cause": "Real v1 Sonar found an exec-only receiver test without a direct assertion (S2699). Final code explicitly asserts the actual child stdout/stderr; final real analysis remains separately required."
+    }
+  ],
+  "limits": [
+    "Native x64 kernel ownership and installed-version transitions remain unqualified.",
+    "BFF host process identity/liveness before durable state, the direct BFF-created coordinator channel, separate installed-current/running-owner identities and successor retirement remain open.",
+    "Both original native P1 findings and all broader skills/browser/search/source acceptance remain open; no issue checkbox or full disposition changes."
+  ]
+}

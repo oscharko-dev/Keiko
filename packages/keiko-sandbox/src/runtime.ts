@@ -20,6 +20,13 @@ import type {
   RuntimeQualificationTarget,
 } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 
+import {
+  createHostRuntimeService,
+  createNamespaceRuntimeService,
+  LINUX_GATEWAY_SERVICE_ENV,
+  relayRuntimeSockets,
+} from "./runtime-service.js";
+
 export function linuxGatewayLauncherPath(): string {
   return fileURLToPath(new URL("../dist/runtime.js", import.meta.url));
 }
@@ -485,20 +492,6 @@ function parseNamespace(values: readonly string[]): CommonConfig {
   return parseCommon(values, 1);
 }
 
-function relaySockets(client: Socket, upstream: Socket, onUpstreamError: () => void): void {
-  const close = (): void => {
-    client.destroy();
-    upstream.destroy();
-  };
-  client.once("error", close);
-  upstream.once("error", () => {
-    close();
-    onUpstreamError();
-  });
-  client.pipe(upstream);
-  upstream.pipe(client);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -568,6 +561,7 @@ function createHostBridge(
   child: ChildProcess,
   config: CommonConfig,
   onFatal: () => void,
+  onReady: () => void,
 ): HostBridge {
   const pending = new Set<Socket>();
   let ready = false;
@@ -576,11 +570,13 @@ function createHostBridge(
   const onMessage = (message: unknown, handle: unknown): void => {
     if (!active) return;
     if (handle !== undefined) {
+      if (handle instanceof Socket) handle.destroy();
       onFatal();
       return;
     }
     if (isBridgeReadyMessage(message) && !ready) {
       ready = true;
+      onReady();
       return;
     }
     if (!ready || !isBridgeOpenMessage(message)) {
@@ -632,6 +628,7 @@ function receiveGatewaySocket(
   onFatal: () => void,
 ): void {
   if (!isBridgeSocketMessage(message) || !(handle instanceof Socket)) {
+    if (handle instanceof Socket) handle.destroy();
     onFatal();
     return;
   }
@@ -645,10 +642,13 @@ function receiveGatewaySocket(
   handle.once("close", () => {
     connections.delete(handle);
   });
-  relaySockets(client, handle, onFatal);
+  relayRuntimeSockets(client, handle, onFatal);
 }
 
-function namespaceRelay(onFatal: () => void): Relay {
+function namespaceRelay(onFatal: () => void, gatewayPort: number): Relay {
+  const service = serviceForwardingEnabled()
+    ? createNamespaceRuntimeService(gatewayPort, onFatal)
+    : undefined;
   const pending = new Map<number, Socket>();
   const connections = new Set<Socket>();
   let nextConnectionId = 1;
@@ -668,6 +668,7 @@ function namespaceRelay(onFatal: () => void): Relay {
     sendBridgeOpen({ kind: "open", connectionId }, onFatal);
   });
   const onMessage = (message: unknown, handle: unknown): void => {
+    if (service?.receive(message, handle) === true) return;
     receiveGatewaySocket(message, handle, pending, connections, onFatal);
   };
   server.maxConnections = MAX_RELAY_CONNECTIONS;
@@ -678,6 +679,7 @@ function namespaceRelay(onFatal: () => void): Relay {
     server,
     destroyConnections: (): void => {
       destroySockets(connections);
+      service?.close();
     },
     dispose: (): void => {
       process.off("message", onMessage);
@@ -832,6 +834,7 @@ export function buildLinuxGatewayNamespaceCommand(
       "bwrap",
       [
         "--unshare-net",
+        ...(serviceForwardingEnabled() ? ["--unshare-pid"] : []),
         "--die-with-parent",
         "--new-session",
         "--dev-bind",
@@ -844,7 +847,17 @@ export function buildLinuxGatewayNamespaceCommand(
       ],
     ];
   }
-  return ["unshare", ["--map-root-user", "--net", "--kill-child=SIGKILL", "--", ...launcher]];
+  return [
+    "unshare",
+    [
+      "--map-root-user",
+      "--net",
+      ...(serviceForwardingEnabled() ? ["--pid", "--fork"] : []),
+      "--kill-child=SIGKILL",
+      "--",
+      ...launcher,
+    ],
+  ];
 }
 
 function configuredDiagnosticFd(): number | undefined {
@@ -867,11 +880,19 @@ function activeDiagnosticFd(): number | undefined {
   }
 }
 
+function serviceForwardingEnabled(): boolean {
+  const value = process.env[LINUX_GATEWAY_SERVICE_ENV];
+  if (value === undefined) return false;
+  if (value !== "1") return fail("invalid-mode");
+  return true;
+}
+
 function nestedLauncherStdio(preserveDiagnosticFd: boolean): StdioOptions {
+  const output = serviceForwardingEnabled() ? "pipe" : "inherit";
   return [
     "inherit",
-    "inherit",
-    "inherit",
+    output,
+    output,
     "ignore",
     "ignore",
     "ignore",
@@ -884,7 +905,10 @@ function nestedLauncherStdio(preserveDiagnosticFd: boolean): StdioOptions {
 }
 
 function nestedLauncherEnvironment(preserveDiagnosticFd: boolean): NodeJS.ProcessEnv {
-  const environment = targetEnvironment();
+  const environment = {
+    ...targetEnvironment(),
+    ...(serviceForwardingEnabled() ? { [LINUX_GATEWAY_SERVICE_ENV]: "1" } : {}),
+  };
   return preserveDiagnosticFd
     ? {
         ...environment,
@@ -896,6 +920,7 @@ function nestedLauncherEnvironment(preserveDiagnosticFd: boolean): NodeJS.Proces
 function targetEnvironment(): NodeJS.ProcessEnv {
   const privateNames = new Set([
     LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
+    LINUX_GATEWAY_SERVICE_ENV,
     "NODE_CHANNEL_FD",
     "NODE_CHANNEL_SERIALIZATION_MODE",
   ]);
@@ -943,7 +968,7 @@ async function runNamespace(config: CommonConfig): Promise<number> {
   const childReference: ChildReference = { current: undefined, failure: undefined };
   const relay = namespaceRelay(() => {
     terminateForRelayFailure(childReference, "namespace-relay-failed");
-  });
+  }, config.gatewayPort);
   try {
     return await runWithLinuxGatewayCleanup(
       async () => {
@@ -985,9 +1010,13 @@ async function runHost(config: CommonConfig): Promise<number> {
     stdio: nestedLauncherStdio(preserveDiagnosticFd),
   });
   childReference.current = child;
-  const bridge = createHostBridge(child, config, () => {
+  const onFatal = (): void => {
     terminateForRelayFailure(childReference, "host-relay-failed");
-  });
+  };
+  const service = serviceForwardingEnabled()
+    ? createHostRuntimeService(child, config.gatewayPort, onFatal)
+    : undefined;
+  const bridge = createHostBridge(child, config, onFatal, () => service?.ready());
   const stopForwarding = forwardSignals(child);
   try {
     return await waitForChildOrRelayFailure(child, childReference);
@@ -995,6 +1024,7 @@ async function runHost(config: CommonConfig): Promise<number> {
     stopForwarding();
     bridge.destroyConnections();
     bridge.dispose();
+    await service?.close();
   }
 }
 

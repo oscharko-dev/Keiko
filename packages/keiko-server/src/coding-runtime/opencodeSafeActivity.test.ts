@@ -291,6 +291,62 @@ describe("OpenCode safe-activity normalization", () => {
     expect(serialized).not.toContain("answered");
   });
 
+  // #3897: OpenCode 2.1.4 Code Mode catches a JavaScript exception thrown inside the `execute`
+  // program (or by a nested `tools.opencode.*` call it did not catch) and returns a COMPLETED part
+  // with `metadata.error: true`. This projection must agree with the history projection
+  // (opencodeV2History.ts): both use `isOpenCodeCodeModeExecutionFailure`.
+  describe("a Code Mode execute part (#3897)", () => {
+    const thrown = "PRIVATE_THROWN_MESSAGE";
+
+    function executeRow(sequence: number, metadata: unknown, tool = "execute"): unknown {
+      return row(sequence, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: `prt_execute_${String(sequence)}`,
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "tool",
+          callID: `call_execute_${String(sequence)}`,
+          tool,
+          state: {
+            status: "completed",
+            input: { code: "return 1 + 1;" },
+            output: thrown,
+            title: "execute",
+            metadata,
+            time: { start: 1_788_611_600_000, end: 1_788_611_600_001 },
+          },
+        },
+        time: 1_788_611_600_001,
+      });
+    }
+
+    function states(rows: readonly unknown[]): readonly string[] {
+      const normalized = normalizeOpenCodeSafeActivityHistory(rows);
+      expect(normalized.dropped).toBe(0);
+      expect(JSON.stringify(normalized)).not.toContain("PRIVATE_");
+      return normalized.signals.map(({ signal }) => (signal.kind === "tool" ? signal.state : "?"));
+    }
+
+    it("projects the completed part carrying metadata.error true as failed, without its body", () => {
+      expect(states([executeRow(1, { error: true })])).toEqual(["failed"]);
+    });
+
+    it.each([
+      ["false", { error: false }],
+      ["absent", {}],
+      ["the string true", { error: "true" }],
+      ["the number 1", { error: 1 }],
+      ["an object", { error: { message: thrown } }],
+    ])("keeps the part succeeded when metadata.error is %s", (_label, metadata) => {
+      expect(states([executeRow(1, metadata)])).toEqual(["succeeded"]);
+    });
+
+    it("does not read the flag of another tool", () => {
+      expect(states([executeRow(1, { error: true }, "question")])).toEqual(["succeeded"]);
+    });
+  });
+
   it("keeps a facade-dispatched (keiko_*) tool's completed part a silent no-op (#3390)", () => {
     // The Keiko tool facade supplies "succeeded" once its own closed result is known
     // (opencodeRuntimeComposition.ts settleTool). Projecting a second "succeeded" signal here
@@ -440,6 +496,32 @@ describe("OpenCode safe-activity normalization", () => {
       }),
     ]);
     expect(normalized).toEqual({ signals: [], dropped: 2 });
+  });
+
+  // #3897: the pinned 2.1.4 runtime ships the merged `todo` plan tool; it is the same governed
+  // plan surface as `todowrite`: a completed part projects as a plan, a call never as a tool.
+  it("projects the native todo carrier as a plan and keeps its call dead", () => {
+    const todos = [{ content: "Read the entry point", status: "in_progress", priority: "high" }];
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: { ...planToolPart(completedPlanState(todos)), tool: "todo" },
+        time: 1_721_323_200_002,
+      }),
+      row(2, "session.next.tool.called", {
+        timestamp: "2024-07-18T17:20:00Z",
+        sessionID: "ses_safe",
+        assistantMessageID: "msg_assistant",
+        callID: "call_plan",
+        tool: "todo",
+        provider: "keiko",
+      }),
+    ]);
+    expect(normalized.dropped).toBe(1);
+    expect(normalized.signals.map(({ signal }) => signal)).toMatchObject([
+      { kind: "plan", steps: [{ text: "Read the entry point", state: "active" }] },
+    ]);
+    expect(JSON.stringify(normalized)).not.toContain('"tool"');
   });
 
   it("counts malformed relevant rows and remains total for non-array input", () => {

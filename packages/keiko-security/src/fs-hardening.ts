@@ -8,6 +8,12 @@
 // hoisting this module here introduces no dependency cycle.
 
 import { createHash, randomBytes } from "node:crypto";
+import {
+  currentProcessId,
+  isProcessAlive,
+  fileDescriptorOwnerUid,
+  currentProcessScopeKind,
+} from "./process-scope.js";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -516,7 +522,7 @@ function archiveSourceIsSafe(
 ): boolean {
   const checks = [
     opened.isFile(),
-    descriptorOwnerIsTrusted(opened),
+    descriptorOwnerIsTrusted(opened, descriptor),
     permissionIsPrivate(opened.mode),
     new Set([1n, 2n]).has(opened.nlink),
     opened.dev === pathname.dev,
@@ -534,7 +540,7 @@ function linkedArchiveMatches(descriptor: number, source: string, target: string
     const targetStat = lstatSync(target, { bigint: true });
     return (
       opened.isFile() &&
-      descriptorOwnerIsTrusted(opened) &&
+      descriptorOwnerIsTrusted(opened, descriptor) &&
       permissionIsPrivate(opened.mode) &&
       opened.nlink === 2n &&
       sourceStat.dev === opened.dev &&
@@ -552,7 +558,7 @@ function movedArchiveMatches(descriptor: number, target: string): boolean {
     const opened = fstatSync(descriptor, { bigint: true });
     const targetStat = lstatSync(target, { bigint: true });
     return (
-      descriptorIsSafeArtifact(opened) &&
+      descriptorIsSafeArtifact(opened, descriptor) &&
       permissionIsPrivate(opened.mode) &&
       targetStat.dev === opened.dev &&
       targetStat.ino === opened.ino &&
@@ -751,7 +757,7 @@ export function removeSafeArtifactFile(
 function lstatDirectory(path: string, artifactClass: SafeArtifactClass): BigIntStats {
   try {
     const stat = lstatSync(path, { bigint: true });
-    if (!stat.isDirectory() || stat.isSymbolicLink() || !directoryAuthorityIsSafe(stat)) {
+    if (!stat.isDirectory() || stat.isSymbolicLink() || !directoryAuthorityIsSafe(stat, path)) {
       throw safeFileError(artifactClass, "unsafe-ancestor");
     }
     return stat;
@@ -761,22 +767,39 @@ function lstatDirectory(path: string, artifactClass: SafeArtifactClass): BigIntS
   }
 }
 
-function directoryAuthorityIsSafe(stat: BigIntStats): boolean {
+function observedDirectoryUid(stat: BigIntStats, path: string): bigint | undefined {
+  if (currentProcessScopeKind() === "local") return stat.uid;
+  const descriptor = openSync(
+    path,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const held = fstatSync(descriptor, { bigint: true });
+    if (!held.isDirectory() || held.dev !== stat.dev || held.ino !== stat.ino) return undefined;
+    if (held.mode !== stat.mode) return undefined;
+    return fileDescriptorOwnerUid(descriptor, held);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function directoryAuthorityIsSafe(stat: BigIntStats, path: string): boolean {
   if (process.platform === "win32") return true;
   const effectiveUser = process.geteuid?.();
   if (effectiveUser === undefined) return false;
-  const ownerIsTrusted = stat.uid === 0n || stat.uid === BigInt(effectiveUser);
+  const uid = observedDirectoryUid(stat, path);
+  const ownerIsTrusted = uid === 0n || uid === BigInt(effectiveUser);
   const writableByOthers = (stat.mode & 0o022n) !== 0n;
-  const rootStickyDirectory = stat.uid === 0n && (stat.mode & 0o1000n) !== 0n;
+  const rootStickyDirectory = uid === 0n && (stat.mode & 0o1000n) !== 0n;
   return ownerIsTrusted && (!writableByOthers || rootStickyDirectory);
 }
 
-function directoryAuthorityIsOwnerOnly(stat: BigIntStats): boolean {
+function directoryAuthorityIsOwnerOnly(stat: BigIntStats, path: string): boolean {
   if (process.platform === "win32") return true;
   const effectiveUser = process.geteuid?.();
   return (
     effectiveUser !== undefined &&
-    stat.uid === BigInt(effectiveUser) &&
+    observedDirectoryUid(stat, path) === BigInt(effectiveUser) &&
     (stat.mode & 0o777n) === BigInt(DIR_MODE)
   );
 }
@@ -923,7 +946,7 @@ function captureDirectoryGuards(
       if (
         authority === "owner-only-mutation" &&
         isOwnerOnlyMutationDirectory(path, trustedRoot, targetPath) &&
-        !directoryAuthorityIsOwnerOnly(lstatDirectory(path, artifactClass))
+        !directoryAuthorityIsOwnerOnly(lstatDirectory(path, artifactClass), path)
       ) {
         throw safeFileError(artifactClass, "unsafe-ancestor");
       }
@@ -939,7 +962,11 @@ function captureDirectoryGuards(
 function directoryGuardStillOwnerOnly(guard: DirectoryGuard): boolean {
   try {
     const stat = lstatSync(guard.path, { bigint: true });
-    return stat.isDirectory() && !stat.isSymbolicLink() && directoryAuthorityIsOwnerOnly(stat);
+    return (
+      stat.isDirectory() &&
+      !stat.isSymbolicLink() &&
+      directoryAuthorityIsOwnerOnly(stat, guard.path)
+    );
   } catch {
     return false;
   }
@@ -963,6 +990,7 @@ function directoryGuardStillMatches(guard: DirectoryGuard): boolean {
     const pathname = lstatSync(guard.path, { bigint: true });
     if (!pathname.isDirectory() || pathname.isSymbolicLink()) return false;
     if (pathname.dev !== guard.dev || pathname.ino !== guard.ino) return false;
+    if (!directoryAuthorityIsSafe(pathname, guard.path)) return false;
     if (guard.descriptor === undefined) return process.platform === "win32";
     const opened = fstatSync(guard.descriptor, { bigint: true });
     return opened.isDirectory() && opened.dev === guard.dev && opened.ino === guard.ino;
@@ -1018,14 +1046,17 @@ function permissionIsPrivate(mode: number | bigint): boolean {
   return typeof mode === "bigint" ? (mode & 0o077n) === 0n : (mode & 0o077) === 0;
 }
 
-function descriptorOwnerIsTrusted(stat: BigIntStats): boolean {
+function descriptorOwnerIsTrusted(stat: BigIntStats, descriptor: number): boolean {
   if (process.platform === "win32") return true;
   const effectiveUser = process.geteuid?.();
-  return effectiveUser !== undefined && stat.uid === BigInt(effectiveUser);
+  return (
+    effectiveUser !== undefined &&
+    fileDescriptorOwnerUid(descriptor, stat) === BigInt(effectiveUser)
+  );
 }
 
-function descriptorIsSafeArtifact(stat: BigIntStats): boolean {
-  return stat.isFile() && stat.nlink === 1n && descriptorOwnerIsTrusted(stat);
+function descriptorIsSafeArtifact(stat: BigIntStats, descriptor: number): boolean {
+  return stat.isFile() && stat.nlink === 1n && descriptorOwnerIsTrusted(stat, descriptor);
 }
 
 function descriptorSafetyFailureKind(stat: BigIntStats): SafeArtifactFileFailureKind {
@@ -1043,7 +1074,7 @@ function verifyDescriptorIdentity(
   } catch {
     throw safeFileError(artifactClass, "open-failed");
   }
-  if (!descriptorIsSafeArtifact(opened)) {
+  if (!descriptorIsSafeArtifact(opened, descriptor)) {
     throw safeFileError(artifactClass, descriptorSafetyFailureKind(opened));
   }
   let pathname: BigIntStats;
@@ -1342,7 +1373,7 @@ function publicationIntent(
   const commitIndex = entries.findIndex((entry) => entry.path === resolvedCommit);
   return {
     schemaVersion: 1,
-    ownerPid: process.pid,
+    ownerPid: currentProcessId(),
     ownerToken: randomBytes(12).toString("hex"),
     ownerExpiresAt: Date.now() + PUBLICATION_OWNER_LEASE_MS,
     commitIndex,
@@ -2497,18 +2528,13 @@ function countIntentPaths(
 }
 
 function processIsAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return errorCode(error) !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 function publicationOwnerFailureKind(
   intent: PublicationIntent,
 ): SafeArtifactFileFailureKind | undefined {
-  if (intent.ownerPid === process.pid) {
+  if (intent.ownerPid === currentProcessId()) {
     return activePublicationOwnerTokens.has(intent.ownerToken) ? "recovery-conflict" : undefined;
   }
   if (!processIsAlive(intent.ownerPid)) return undefined;

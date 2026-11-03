@@ -777,6 +777,81 @@ describe("macOS portable signing inventory", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("requires a manifest-declared native tool to be a signed Mach-O in the inventory", async () => {
+    // Epic #3897: ripgrep ships in the payload as a Mach-O file, so the same inventory-driven
+    // Developer ID signing must cover it; a manifest that declares a tool the inventory lacks fails.
+    const fixture = macFinalizeStage();
+    const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));
+    manifest.nativeTools = [{ name: "ripgrep", executablePath: "runtime/native/rg", signing: {} }];
+    writeFileSync(fixture.manifestPath, JSON.stringify(manifest));
+    const args = [
+      "inventory",
+      "--stage-root",
+      fixture.stage,
+      "--target",
+      "macos-arm64",
+      "--inventory",
+      join(fixture.stage, "tool-inventory.json"),
+    ];
+
+    await expect(main(args)).rejects.toThrow(/native tool is missing from the Mach-O inventory/u);
+    write(join(fixture.resources, "runtime", "native", "rg"), macho(0xfeedfacf, 12));
+    await expect(main(args)).resolves.toBeUndefined();
+  });
+
+  it("marks a declared native tool Developer ID verified and rebinds its signed bytes", async () => {
+    const prepared = macFinalizeStage();
+    resetSidecarSbomForRebind(prepared);
+    const manifest = JSON.parse(readFileSync(prepared.manifestPath, "utf8"));
+    const unsigned = macho(0xfeedfacf, 12);
+    const signed = Buffer.concat([unsigned, Buffer.from("developer-id-signature", "utf8")]);
+    write(join(prepared.resources, "runtime", "native", "rg"), signed);
+    manifest.nativeTools = [
+      {
+        name: "ripgrep",
+        kind: "native-tool",
+        executablePath: "runtime/native/rg",
+        unsignedSha256: sha256(unsigned),
+        shippedSha256: sha256(unsigned),
+        sizeBytes: unsigned.byteLength,
+        sbomBomRef: "pkg:github/burntsushi/ripgrep@15.1.0?platform=macos-arm64",
+        signing: { verificationStatus: "unverified-staging", signatureVerified: false },
+      },
+    ];
+    writeFileSync(prepared.manifestPath, JSON.stringify(manifest));
+    const sbomPath = join(prepared.stage, "evidence", "sbom.cdx.json");
+    const sbom = JSON.parse(readFileSync(sbomPath, "utf8"));
+    sbom.components.push({ "bom-ref": manifest.nativeTools[0].sbomBomRef, hashes: [] });
+    writeFileSync(sbomPath, JSON.stringify(sbom));
+
+    await main([
+      "prepare-qualified-payload",
+      "--stage-root",
+      prepared.stage,
+      "--target",
+      "macos-arm64",
+    ]);
+
+    const result = JSON.parse(readFileSync(prepared.manifestPath, "utf8"));
+    expect(result.nativeTools[0]).toMatchObject({
+      unsignedSha256: sha256(unsigned),
+      shippedSha256: sha256(signed),
+      sizeBytes: signed.byteLength,
+      signing: {
+        signatureKind: "developer-id-notarized",
+        verificationStatus: "verified-production",
+        signatureVerified: true,
+        notarizationRequired: true,
+        notarizationVerified: true,
+      },
+    });
+    expect(result.releaseImpact.reviewedBinding.nativeTools).toEqual(result.nativeTools);
+    const component = JSON.parse(readFileSync(sbomPath, "utf8")).components.find(
+      (entry) => entry["bom-ref"] === result.nativeTools[0].sbomBomRef,
+    );
+    expect(component.hashes).toEqual([{ alg: "SHA-256", content: sha256(signed) }]);
+  });
+
   it("rejects incomplete macOS inventory authority and unsupported dispatcher input", async () => {
     const fixture = macFinalizeStage();
     const manifest = JSON.parse(readFileSync(fixture.manifestPath, "utf8"));

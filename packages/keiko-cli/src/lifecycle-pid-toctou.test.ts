@@ -19,6 +19,7 @@ import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+import { readPidRecord } from "./state-paths.js";
 
 let armLstatSwap = false;
 let swapPerformed = false;
@@ -106,7 +107,16 @@ describe("keiko start — ui.pid write-side TOCTOU (KEIKO-0886 follow-up, #2906 
         cwd: root,
         homedir: () => root,
         spawnFn: () => child,
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            Response.json(
+              {
+                version: SDK_VERSION,
+                launchId: readPidRecord(join(root, ".keiko", "ui.pid"))?.launchId,
+              },
+              { status: 200 },
+            ),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),

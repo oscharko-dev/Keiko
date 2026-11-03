@@ -15,6 +15,7 @@ import {
   writeSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
+import { currentProcessId, isProcessAlive } from "@oscharko-dev/keiko-security/process-scope";
 import { basename, dirname, join } from "node:path";
 import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
@@ -61,6 +62,7 @@ export interface FileUpdateSessionLockOptions {
   readonly staleMs?: number | undefined;
   readonly now?: (() => number) | undefined;
   readonly pidAlive?: ((pid: number) => boolean) | undefined;
+  readonly currentPid?: number | undefined;
   readonly processIdentity?: string | undefined;
   // KEIKO-0812 follow-up (#2906 round 3): optional sink for the corrupt-lock quarantine prune's
   // bounded removal/failure evidence. Absent means the prune stays silent on success exactly as
@@ -76,6 +78,7 @@ interface ResolvedFileUpdateSessionLockOptions {
   readonly staleMs: number;
   readonly now: () => number;
   readonly pidAlive: (pid: number) => boolean;
+  readonly currentPid: number;
   readonly processIdentity: string;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly securityLogSink: SecurityLogSink | undefined;
@@ -151,12 +154,7 @@ function parseRecord(value: string): UpdateSessionLockRecord | undefined {
 
 function defaultPidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH";
-  }
+  return isProcessAlive(pid);
 }
 
 function lockAgeMs(record: UpdateSessionLockRecord, now: () => number): number | undefined {
@@ -368,10 +366,10 @@ function reclaimableValidRecord(
 ): boolean {
   const ageMs = lockAgeMs(record, options.now);
   if (ageMs === undefined || ageMs < options.staleMs) return false;
-  if (record.pid === process.pid && record.processIdentity === options.processIdentity)
+  if (record.pid === options.currentPid && record.processIdentity === options.processIdentity)
     return false;
   const childCanBeReclaimed = record.childPid === undefined || !options.pidAlive(record.childPid);
-  if (record.pid === process.pid) return childCanBeReclaimed;
+  if (record.pid === options.currentPid) return childCanBeReclaimed;
   if (options.pidAlive(record.pid)) return false;
   return childCanBeReclaimed;
 }
@@ -495,6 +493,7 @@ function resolveLockOptions(
     staleMs: input.staleMs ?? DEFAULT_STALE_LOCK_MS,
     now: input.now ?? Date.now,
     pidAlive: input.pidAlive ?? defaultPidAlive,
+    currentPid: input.currentPid ?? currentProcessId(),
     processIdentity: input.processIdentity ?? PROCESS_START_IDENTITY,
     diagnostics: input.diagnostics,
     securityLogSink: input.securityLogSink,
@@ -808,7 +807,7 @@ export function claimStateDirUpdateSessionLockForRecovery(
     lockPath,
     inspection,
     options,
-    inputOptions.currentPid ?? process.pid,
+    inputOptions.currentPid ?? currentProcessId(),
   );
 }
 
@@ -846,7 +845,7 @@ export function adoptStateDirUpdateSessionLockForRecovery(
     lockPath,
     inspection,
     options,
-    inputOptions.currentPid ?? process.pid,
+    inputOptions.currentPid ?? currentProcessId(),
   );
 }
 

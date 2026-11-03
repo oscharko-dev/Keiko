@@ -19,11 +19,16 @@ import {
   initializeDeliveryRemote,
   installDeliveryTransport,
 } from "./coding-issue-delivery-transport.mjs";
+import { functionalReadinessFetch } from "../../../packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.functional/_support.js";
 import {
-  deliveryDescriptionGatewayConfig,
+  deliveryJourneyGatewayConfig,
+  deliveryJourneyReadinessFetch,
   startDeliveryDescriptionModel,
 } from "./coding-issue-description-model.mjs";
-import { runCodingRuntimeJourneyServer } from "./coding-runtime-server-shared.mjs";
+import {
+  runCodingRuntimeJourneyServer,
+  scriptedGatewayConfig,
+} from "./coding-runtime-server-shared.mjs";
 
 export async function runIssueDeliveryServer(
   options: {
@@ -38,19 +43,18 @@ export async function runIssueDeliveryServer(
   const port = options.port ?? DELIVERY_PORT;
   const modelPort = port - 1;
   await startDeliveryDescriptionModel(stateDir, modelPort);
-  const bffStateRoot = join(stateDir, "bff-state");
-  mkdirSync(join(bffStateRoot, "ui-db"), { recursive: true, mode: 0o700 });
-  writeFileSync(
-    join(bffStateRoot, "ui-db", "keiko.config.json"),
-    `${JSON.stringify(deliveryDescriptionGatewayConfig(modelPort), null, 2)}\n`,
-    { encoding: "utf8", mode: 0o600 },
-  );
   await runCodingRuntimeJourneyServer({
     fixtureId: "draft-delivery-3387",
     fixtureLabel: "Draft delivery 3387",
     runtime: "scripted",
     includeQuestion: false,
     defaultPort: port,
+    // The composed server loads one gateway configuration, and its runtime holder carries the
+    // readiness evidence that admits a coding run (ADR-0171). It names the scripted coding model
+    // and the loopback description model; each is answered at readiness by its own fixture
+    // transport, so no probe reaches the description listener.
+    gatewayConfig: deliveryJourneyGatewayConfig(modelPort, scriptedGatewayConfig()),
+    gatewayReadinessFetch: deliveryJourneyReadinessFetch(modelPort, functionalReadinessFetch),
     ...(options.ciReader === undefined ? {} : { ciReader: options.ciReader }),
     originalContent: COMMIT_ORIGINAL,
     editedContent: COMMIT_EDITED,

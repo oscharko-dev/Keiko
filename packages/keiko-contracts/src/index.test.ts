@@ -739,7 +739,8 @@ describe("keiko-contracts package surface", () => {
     // conflict/file-result guards, and the authority/approval reference guards — is re-exported
     // through the barrel so downstream packages import named symbols instead of re-deriving them.
     expect(mod.EDITOR_AGENT_CHANGESET_MAX_FILES).toBe(50);
-    expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(65_536);
+    // Owner decision 2026-10-28: 8 MiB per governed changeset (was 65,536).
+    expect(mod.EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES).toBe(8 * 1_048_576);
     expect(mod.EDITOR_AGENT_PREPARED_CHANGESET_MAX_EDITS).toBe(2_000);
     expect(mod.EDITOR_AGENT_REFERENCE_ID_MAX_CHARS).toBe(128);
     expect(typeof mod.isEditorAgentChangeset).toBe("function");

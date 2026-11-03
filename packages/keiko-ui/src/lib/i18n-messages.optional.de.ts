@@ -1,6 +1,234 @@
+import { DE_AUTONOMY_MODE_LABELS } from "@/lib/autonomy-mode-labels";
 import type { OptionalWidgetMessageCatalog } from "./i18n-messages.optional.en";
-
 export const OPTIONAL_WIDGET_DE_MESSAGES = {
+  ...DE_AUTONOMY_MODE_LABELS,
+  "atlassianConnectors.live.rename": "Pod umbenennen",
+  "atlassianConnectors.live.renameTitle": "Jira-Pod umbenennen",
+  "atlassianConnectors.live.rotateTitle": "Jira-Token ersetzen",
+  "atlassianConnectors.live.replaceToken": "Token ersetzen",
+  "atlassianConnectors.live.newToken": "Neues API-Token",
+  "atlassianConnectors.live.saveName": "Namen speichern",
+  "atlassianConnectors.live.saveToken": "Token speichern",
+  "atlassianConnectors.live.saving": "Änderungen werden gespeichert…",
+  "atlassianConnectors.live.rotateHint":
+    "Der Pod und seine Chat-Verbindungen bleiben erhalten. Der Tokenwechsel stoppt den aktuellen Zugriff und ausstehende Aktionen. Prüfe die Verbindung erneut und erteile eine neue Lesefreigabe im Chat.",
+  "atlassianConnectors.live.operationFailed":
+    "Die Aktion konnte nicht bestätigt werden. Aktualisiere den Pod-Status, bevor du weitere Änderungen vornimmst.",
+  "atlassianConnectors.live.refresh": "Status aktualisieren",
+  "atlassianConnectors.live.refreshRequired":
+    "Der aktuelle Verbindungsstatus ist unbekannt. Aktualisiere ihn, bevor du diesen Pod verwendest.",
+  "atlassianConnectors.live.verifyRequired":
+    "Prüfe diese Verbindung, bevor du sie im Chat verwendest.",
+  "atlassianConnectors.live.remove": "Pod entfernen",
+  "atlassianConnectors.live.keep": "Pod behalten",
+  "atlassianConnectors.live.removeConfirm":
+    "Diesen Jira-Pod und sein gespeichertes Token entfernen? Alle verbundenen Chats werden getrennt und ihre ausstehenden Freigaben aufgehoben.",
+  "atlassianConnectors.live.capabilities":
+    "Im Chat kannst du Jira-Vorgänge und Metadaten suchen und lesen sowie Vorgänge erstellen, bearbeiten, zuweisen, kommentieren oder ihren Status ändern. Jira-Berechtigungen und Chat-Freigaben gelten für jede Aktion.",
+  "atlassianConnectors.live.readCapabilities":
+    "Nach deiner Lesefreigabe kann der Chat Jira-Vorgänge und Metadaten suchen und lesen. Der Zugriff hängt weiterhin von den Jira-Berechtigungen ab.",
+  "atlassianConnectors.live.patHint":
+    "Erstelle ein persönliches Zugriffstoken in deinem Jira-Profil. Keiko speichert es für den Jira-Zugriff. Gespeicherte Tokens werden nicht erneut angezeigt.",
+
+  "chat.jira.writeApproval.unavailable": "Aktionsfreigabe derzeit nicht verfügbar",
+  "chat.jira.writeApproval.title": "Jira-Aktion prüfen",
+  "chat.jira.writeApproval.pending": "Deine Entscheidung steht aus",
+  "chat.jira.writeApproval.approved": "Für diese Aktion genehmigt",
+  "chat.jira.writeApproval.claimed": "Freigabe für diese Aktion verwendet",
+  "chat.jira.writeApproval.rejected": "Aktion abgelehnt",
+  "chat.jira.writeApproval.expired": "Aktionsfreigabe abgelaufen",
+  "chat.jira.writeApproval.revoked": "Aktionsfreigabe widerrufen",
+  "chat.jira.writeApproval.disclosure":
+    "Prüfe die vorgeschlagene Aktion und ihre genauen Details unten. Die Freigabe gilt nur für diese Aktion. Sie bestätigt keine Änderung in Jira.",
+  "chat.jira.writeApproval.preview": "Details der vorgeschlagenen Aktion",
+  "chat.jira.writeApproval.working": "Aktion wird geprüft…",
+  "chat.jira.writeApproval.failed":
+    "Der aktuelle Aktionsstatus konnte nicht bestätigt werden. Aktualisiere ihn, bevor du entscheidest.",
+  "chat.jira.writeApproval.allow": "Diese Aktion genehmigen",
+  "chat.jira.writeApproval.deny": "Diese Aktion ablehnen",
+  "chat.jira.writeApproval.refresh": "Aktionsstatus aktualisieren",
+
+  "chat.jira.resultUnavailable": "Ergebnis nicht verfügbar",
+  "chat.jira.partial": "Jira-Teilergebnis. Nicht alle verfügbaren Daten sind enthalten.",
+  "chat.jira.write.notDispatched": "Nicht an Jira gesendet",
+  "chat.jira.write.rejected": "Jira-Aktion abgelehnt",
+  "chat.jira.write.succeeded": "Jira-Änderung bestätigt",
+  "chat.jira.write.unconfirmed": "Jira hat die Änderung angenommen; Bestätigung unvollständig",
+  "chat.jira.write.unknown": "Ausgang der Jira-Aktion unbekannt",
+  "chat.jira.write.pending": "Bestätigtes Jira-Ergebnis steht aus",
+  "chat.jira.write.unconfirmedHelp":
+    "Prüfe den aktuellen Stand in Jira, bevor du eine weitere Änderung anforderst. Diese Aktion wird nicht automatisch wiederholt.",
+  "chat.jira.write.unknownHelp":
+    "Die Änderung wurde möglicherweise ausgeführt. Prüfe Jira, bevor du eine weitere Änderung anforderst. Diese Aktion wird nicht automatisch wiederholt.",
+  "chat.jira.write.pendingHelp":
+    "Es liegt kein abschließendes Ergebnis vor. Das bestätigt keine laufende Ausführung. Die Aktion wird nicht automatisch wiederholt.",
+
+  "atlassianConnectors.live.empty":
+    "Noch keine Jira-Pods. Erstelle einen Pod, um Jira mit einem Chat zu verbinden.",
+  "chat.jira.connection": "Jira-Verbindung",
+  "chat.jira.podLabel": "Jira-Pod",
+  "chat.jira.noPod": "Kein Jira-Pod",
+  "chat.jira.podUnavailable": "Aktueller Pod nicht verfügbar",
+  "chat.jira.verifyRequired": "Verifikation erforderlich",
+  "chat.jira.addToWorkspace": "Zum Workspace hinzufügen",
+  "chat.jira.workspaceHint":
+    "Ziehe diesen Jira-Pod auf den Workspace oder füge ihn mit dieser Schaltfläche hinzu. Verbinde seinen Port mit einem Chat.",
+  "chat.jira.liveTools": "Live-Jira-Werkzeuge",
+  "chat.jira.liveReady": "Verifizierter Jira-Pod",
+  "chat.jira.liveUnavailable":
+    "Jira-Pod nicht verfügbar; öffne Knowledge Pods, um ihn zu prüfen oder neu zu verbinden.",
+  "chat.jira.effectiveMode": "Wirksamer Modus: {mode}",
+  "chat.jira.modeLabel": "Autonomiemodus des Chats",
+  "chat.jira.modeHelp":
+    "Der erste Jira-Lesezugriff benötigt immer eine Freigabe. Installationsgrenzen und die aktuellen Chat-Berechtigungen gelten weiterhin.",
+  "chat.jira.replaceConfirm":
+    "Den bisherigen Jira-Pod ersetzen und seine ausstehenden Freigaben widerrufen.",
+  "chat.jira.apply": "Jira-Einstellungen übernehmen",
+  "chat.jira.connectionFailed":
+    "Jira-Einstellungen konnten nicht geladen oder gespeichert werden. Für eine erneute Prüfung und Wiederholung dieses Menü neu öffnen.",
+  "chat.jira.bound": "Jira-Pod vom Server verbunden",
+  "chat.jira.unbound": "Kein Jira-Pod verbunden",
+  "atlassianConnectors.live.title": "Jira Live-Pods",
+  "atlassianConnectors.live.subtitle":
+    "Aktuelle Jira-Daten im verbundenen Chat nach ausdrücklicher Lesefreigabe lesen. Der Live-Zugriff erstellt keinen Index und keine Dokumentensammlung.",
+  "atlassianConnectors.live.add": "Jira-Pod erstellen",
+  "chat.tools.connection": "Tool-Zugriff",
+  "chat.tools.modeHelp":
+    "Der gewählte Modus gilt für Tools in diesem Chat. Lesen über MCP oder Jira erfordert eine Freigabe; Schreibzugriffe folgen dem Modus und den Bereitstellungsgrenzen. MCP-Server konfigurierst du in den Einstellungen.",
+  "chat.tools.apply": "Tool-Einstellungen anwenden",
+  "chat.mcp.title": "MCP-Daten in diesem Chat lesen",
+  "chat.mcp.disclosure":
+    "Über konfigurierte MCP-Server abgerufene Inhalte werden an das ausgewählte Modell gesendet und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder bis sich Konfiguration oder Berechtigung ändern. Sie erlaubt keine Schreibzugriffe.",
+  "chat.mcp.tool": "MCP-Aktion",
+  "chat.mcp.details": "MCP-Ergebnis anzeigen",
+  "chat.mcp.writeApproval.title": "MCP-Aktion freigeben",
+  "chat.mcp.writeApproval.disclosure":
+    "Prüfe das Tool und seine Argumente. Die Freigabe erlaubt diese Aktion einmal innerhalb der aktuellen Verbindung und Berechtigung.",
+  "chat.mcp.write.notDispatched": "Nicht an den MCP-Server gesendet",
+  "chat.mcp.write.rejected": "MCP-Aktion abgelehnt",
+  "chat.mcp.write.succeeded": "Aktion bestätigt",
+  "chat.mcp.write.unconfirmed": "Der Server hat die Änderung angenommen; Bestätigung unvollständig",
+  "chat.mcp.write.unknown": "Ergebnis der MCP-Aktion unbekannt",
+  "chat.mcp.write.pending": "Warten auf ein bestätigtes MCP-Ergebnis",
+  "chat.mcp.write.unconfirmedHelp":
+    "Der Server hat Erfolg gemeldet, aber das endgültige Ergebnis konnte nicht bestätigt werden. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
+  "chat.mcp.write.unknownHelp":
+    "Die Änderung wurde möglicherweise ausgeführt. Sie wird nicht automatisch wiederholt. Prüfe den entfernten Zustand vor einem weiteren Schreibzugriff.",
+  "chat.mcp.write.pendingHelp":
+    "Die Aktion hat begonnen. Warte auf ihr Ergebnis, bevor du einen weiteren Schreibzugriff startest.",
+  "chat.jira.title": "Jira in diesem Chat lesen",
+  "chat.jira.disclosure":
+    "Jira-Inhalte werden an das ausgewählte Modell übermittelt und in diesem Gespräch gespeichert. Die Freigabe gilt für diesen Chat bis zum Ablauf oder einer Änderung der Verbindung oder Berechtigungen. Sie erlaubt keine Schreibaktionen.",
+  "chat.jira.approve": "Lesen erlauben",
+  "chat.jira.reject": "Nicht erlauben",
+  "chat.jira.working": "Entscheidung wird gespeichert…",
+  "chat.jira.failed": "Die Entscheidung konnte nicht gespeichert werden. Bitte erneut versuchen.",
+  "chat.jira.pending": "Wartet auf deine Freigabe",
+  "chat.jira.granted": "Lesen erlaubt",
+  "chat.jira.rejected": "Lesen abgelehnt",
+  "chat.jira.expired": "Freigabe abgelaufen",
+  "chat.jira.revoked": "Freigabe widerrufen",
+  "chat.jira.tool": "Jira-Aktion",
+  "chat.jira.complete": "Abgeschlossen",
+  "chat.jira.running": "Wird ausgeführt",
+  "chat.jira.unavailable": "Konnte nicht abgeschlossen werden",
+  "chat.jira.details": "Jira-Ergebnis ansehen",
+  "browserApproval.title": "Diesen Browser verbinden",
+  "browserApproval.close": "Schließen",
+  "browserApproval.notice":
+    "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
+  "browserApproval.open": "Browser verbinden",
+  "browserApproval.description":
+    "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",
+  "browserApproval.launcherFallback":
+    "Du kannst Keiko auch über den Launcher öffnen, um einen Browser zu verbinden.",
+  "browserApproval.remember": "Diesem Browser auf dieser Installation bis zu 30 Tage vertrauen",
+  "browserApproval.request": "Freigabe anfordern",
+  "browserApproval.working": "Verbindung wird hergestellt…",
+  "browserApproval.compare":
+    "Vergleiche diesen Code mit der Anfrage in deinem verbundenen Browser.",
+  "browserApproval.code": "Browser-Vergleichscode",
+  "browserApproval.instructions":
+    "Öffne im verbundenen Browser Einstellungen → Sicherheit → Browser-Freigaben. Gib nur die Anfrage frei, deren Code mit diesem übereinstimmt.",
+  "browserApproval.expiresSoon":
+    "Diese Anfrage läuft nach fünf Minuten ab. Lass dieses Fenster geöffnet, bis die Freigabe abgeschlossen ist.",
+  "browserApproval.waiting": "Warten auf Freigabe…",
+  "browserApproval.failed":
+    "Die Browser-Verbindung konnte nicht bestätigt werden. Versuche es erneut, ohne ungespeicherte Arbeit zu schließen.",
+  "browserApproval.retry": "Erneut versuchen",
+  "browserApproval.unavailable":
+    "Dieser Browser konnte nicht verbunden werden. Versuche es erneut oder öffne Keiko über den Launcher.",
+  "browserApproval.expired":
+    "Diese Anfrage ist nicht mehr verfügbar. Erstelle eine neue Anfrage, falls dieser Browser noch eine Freigabe benötigt.",
+  "browserApproval.success.session": "Dieser Browser ist für die aktuelle Sitzung verbunden.",
+  "browserApproval.success.stored":
+    "Dieser Browser ist verbunden. Sein freigegebener Schlüssel wurde in diesem Browserprofil für weitere Verbindungen gespeichert, bis die Freigabe abläuft oder widerrufen wird.",
+  "browserApproval.success.unconfirmed":
+    "Dieser Browser ist für die aktuelle Sitzung verbunden. Das Speichern für spätere Verbindungen konnte nicht bestätigt werden.",
+  "browserApproval.manage": "Browser-Freigaben",
+  "browserApproval.manageDescription":
+    "Gib nur selbst gestartete Anfragen nach Vergleich beider Codes frei. Ein Widerruf beendet auch die zugehörigen aktiven Sitzungen.",
+  "browserApproval.refresh": "Aktualisieren",
+  "browserApproval.pendingRequests": "Offene Anfragen",
+  "browserApproval.noRequests": "Keine offenen Anfragen.",
+  "browserApproval.approvals": "Freigegebene Browser",
+  "browserApproval.noApprovals": "Keine Browser-Freigaben.",
+  "browserApproval.managementUnavailable":
+    "Verbinde diesen Browser, bevor du andere Browser-Freigaben verwaltest.",
+  "browserApproval.compared":
+    "Ich habe die Codes in beiden Browsern verglichen; sie stimmen überein",
+  "browserApproval.allowOnce": "Diese Sitzung erlauben",
+  "browserApproval.allowRemembered": "Erlauben und bis zu 30 Tage vertrauen",
+  "browserApproval.remembered": "Gespeicherte Browser-Freigabe",
+  "browserApproval.sessionOnly": "Sitzungsfreigabe",
+  "browserApproval.fingerprint": "Schlüssel-Fingerabdruck: {fingerprint}",
+  "browserApproval.expires": "Läuft ab: {time}",
+  "browserApproval.lastUsed": "Zuletzt verwendet: {time}",
+  "browserApproval.revoke": "Freigabe widerrufen",
+  "browserApproval.forget": "Gespeicherte Verbindung dieses Browsers vergessen",
+  "browserApproval.forgetDescription":
+    "Vergiss automatische Verbindungen aus diesem Browserprofil. Um auch aktive Sitzungen zu beenden, widerrufe die Freigabe unten.",
+  "browserApproval.forgotten":
+    "Die gespeicherte Verbindung wurde aus diesem Browserprofil entfernt. Die aktuelle Sitzung und die Freigabe auf dem Server bleiben bestehen.",
+  "updates.notice.aria": "Keiko-Update-Hinweis",
+  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
+  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
+  "updates.notice.title": "Update verfügbar",
+  "updates.notice.criticalTitle": "Kritisches Update verfügbar",
+  "updates.notice.releaseUnavailableTitle": "Update-Prüfung nicht verfügbar",
+  "updates.notice.body":
+    "Version {version} kann geprüft werden. Keiko installiert sie nicht automatisch.",
+  "updates.notice.releaseUnavailableBody":
+    "Keiko konnte die Update-Download-Informationen gerade nicht prüfen. Es wird nichts installiert.",
+  "updates.notice.portableBody":
+    "Version {version} ist bereit. Öffne Updates und klicke auf Update, wenn du bereit bist.",
+  "updates.notice.portableSetupBody":
+    "Portable Setup ist erforderlich, bevor Keiko App-interne Updates nutzen kann.",
+  "updates.notice.portableExternallyManagedBody":
+    "Diese Keiko-Installation wird außerhalb der App verwaltet. Öffne Updates für Details.",
+  "updates.notice.review": "Update prüfen",
+  "updates.notice.actionTitle": "Update-Einstellungen prüfen",
+  "updates.notice.actionBody":
+    "Öffne Updates, um die erforderliche Aktion zu prüfen. Eine neuere Version wurde nicht bestätigt.",
+  "updates.notice.reviewDetails": "Details prüfen",
+  "updates.notice.notNow": "Nicht jetzt",
+  "chat.draft.attachmentsUnsaved":
+    "Sende oder entferne die vorgemerkten Anhänge, bevor du diesen Chat schließt. Sie sind noch nicht gespeichert.",
+  "chat.draft.loading": "Gespeicherter Entwurf wird geladen…",
+  "chat.draft.saved": "Entwurf privat gespeichert.",
+  "chat.draft.unsaved": "Die Änderungen am Entwurf sind noch nicht gespeichert.",
+  "chat.draft.saving": "Entwurf wird gespeichert…",
+  "chat.draft.unavailable":
+    "Entwurf nicht gespeichert. Verbinde diesen Browser über den Browser-Hinweis oben oder öffne Keiko über den Launcher. Lass dieses Fenster geöffnet.",
+  "chat.draft.failed":
+    "Dieser Entwurf konnte nicht gespeichert werden. Lass dieses Fenster geöffnet und versuche es erneut.",
+  "chat.draft.conflict":
+    "Ein anderes Fenster hat den gespeicherten Entwurf geändert. Behalte diesen Entwurf, um ihn zu ersetzen, oder ersetze diesen Text durch den gespeicherten Entwurf.",
+  "chat.draft.retry": "Erneut speichern",
+  "chat.draft.keepLocal": "Diesen Entwurf behalten",
+  "chat.draft.useSaved": "Gespeicherten Entwurf verwenden",
+  "chat.skills.sendBlocked":
+    "Öffne Skills und wähle einen verfügbaren Skill oder entferne die aktuelle Auswahl, bevor du sendest.",
   "chat.skills.author.title": "Aus Dokument oder Text erstellen",
   "chat.skills.author.description":
     "Füge das vollständige Konzept ein oder lade eine Textdatei. Keiko erstellt mit dem ausgewählten Chat-Modell einen privaten, bearbeitbaren Entwurf.",
@@ -57,6 +285,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "agentLauncher.browseSourceFile": "Quelldatei durchsuchen",
   "agentLauncher.selectRepositoryFirst":
     "Wähle ein Repository aus, bevor du Quelldateien durchsuchst.",
+  "agentLauncher.skill": "Skill",
+  "agentLauncher.skillNone": "Kein Skill",
+  "agentLauncher.skillNote":
+    "Optional. Ein privater Markdown-Skill leitet jeden Modellaufruf dieses Laufs an. Er gewährt keine zusätzlichen Berechtigungen.",
+  "agentLauncher.skillUnavailable":
+    "Private Skills konnten nicht geladen werden. Der Lauf startet ohne Skill.",
   "agentLauncher.observedBehavior": "Beobachtetes Verhalten",
   "agentLauncher.observedBehaviorPlaceholder": "Beschreibe den beobachteten Fehler.",
   "agentLauncher.failingOutput": "Fehlerhafte Ausgabe",
@@ -1313,6 +1547,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   // Chat context meter and grounded evidence panel: both render only in the lazily loaded chat
   // window, so their strings stay out of the first-load catalog (editor-bundle-size budget).
   "chat.context.title": "Gesprächskontext",
+  "chat.context.details": "Details zur Kontextnutzung",
   "chat.context.heading": "Gesprächskontext {percent} %",
   "chat.context.label": "Gesprächskontext: ungefähr {percent} % belegt",
   "chat.context.used": "Geschätzt belegte Tokens",
@@ -1320,14 +1555,14 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.window": "Gesamtes Kontextfenster",
   "chat.context.outputReserve": "Für die Antwort reserviert",
   "chat.context.safetyMargin": "Sicherheitsreserve",
-  "chat.context.saved": "{tokens} Tokens bei {count} zusammengefassten Nachrichten eingespart.",
-  "chat.context.saved.one": "{tokens} Tokens bei 1 zusammengefassten Nachricht eingespart.",
+  "chat.context.saved": "{tokens} Tokens gespart · {count} Nachrichten zusammengefasst",
+  "chat.context.saved.one": "{tokens} Tokens gespart · 1 Nachricht zusammengefasst",
   "chat.context.percent": "{percent} %",
   "chat.context.unavailable": "Kontextschätzung nicht verfügbar",
   "chat.context.estimate":
-    "Geschätzt für die nächste Anfrage, bei Wissens-Chats mit dem Quellenanteil der letzten Frage. Entwurf und Anhänge kommen beim Senden hinzu.",
+    "Schätzung für die nächste Anfrage mit dem letzten Quellenanteil. Entwurf und Anhänge kommen beim Senden hinzu.",
   "chat.context.automaticGrounded":
-    "Keiko kompaktiert den Gesprächsverlauf ab 90 % seines Bereichs von {tokens} Tokens. Die Quellenkapazität ist separat.",
+    "Automatisch ab 90 % des Gesprächsbudgets von {tokens} Tokens. Quellen nutzen separate Kapazität.",
   "chat.context.segment.sourceCapacity": "Zusätzliche Quellenkapazität",
   "chat.context.segment.inputUnavailable": "Für Eingaben nicht verfügbar",
   "chat.context.declaredInputLimit": "Eingabegrenze des Modells: {tokens} Tokens.",
@@ -1335,13 +1570,13 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.untilConversationCompaction":
     "Noch {tokens} Gesprächs-Tokens bis zur automatischen Kompaktierung.",
   "chat.context.sourcesPolicy":
-    "Verbundene Quellenauszüge werden für jede Frage neu geladen und nie zusammengefasst. Der Gesprächsverlauf nutzt ein eigenes Eingabebudget.",
+    "Quellen werden je Frage innerhalb des Quellenbudgets neu geladen und nie zusammengefasst. Die Gesprächskapazität ist separat.",
   "chat.context.sourcesPolicyGrounded":
-    "Verbundene Quellenauszüge werden für jede Frage neu geladen und nie zusammengefasst. Das aktuelle Eingabebudget für den Gesprächsverlauf beträgt {tokens} Tokens.",
+    "Quellen werden je Frage innerhalb des Quellenbudgets neu geladen und nie zusammengefasst.",
   "chat.context.automatic":
-    "Keiko kompaktiert ab 90 % der nutzbaren Eingabe-Kapazität automatisch vor der nächsten Anfrage.",
+    "Automatisch ab 90 % der nutzbaren Kapazität, vor der nächsten Anfrage.",
   "chat.context.retained":
-    "Kompaktierung fasst frühere Nachrichten zusammen. Der vollständige Verlauf bleibt gespeichert; Zusammenfassungen können Details auslassen.",
+    "Manuell: ein Durchlauf; erneut verfügbar mit neuen Nachrichten und 50 % belegter Kapazität. System- und Skill-Anweisungen bleiben unverändert. Der vollständige Chat bleibt gespeichert; Zusammenfassungen können Details auslassen.",
   "chat.context.error": "Der Kontext konnte nicht aktualisiert werden.",
   "chat.context.retry": "Erneut versuchen",
   "chat.context.compact": "Kontext jetzt kompaktieren",
@@ -1349,7 +1584,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.wait": "Nach Abschluss der aktuellen Antwort verfügbar.",
   "chat.context.total": "{used} von {usable} nutzbaren Eingabe-Tokens · Kontextfenster {window}",
   "chat.context.breakdown": "Aufteilung des Kontextfensters",
-  "chat.context.segment.skill": "Skill-Anweisungen (geschützt)",
+  "chat.context.segment.skill": "Skill-Anweisungen",
+  "chat.context.notCompacted": "Wird nicht kompaktiert",
   "chat.context.segment.system": "Systemanweisungen",
   "chat.context.segment.summary": "Zusammenfassung früherer Nachrichten",
   "chat.context.segment.messages": "Nachrichten",
@@ -1364,16 +1600,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.context.referencesTrimmed":
     "Nur {sent} von {available} Referenzen passten ins Kontextfenster des Modells. Verwendet wurden die relevantesten.",
   "chat.context.lastRequestMeasured":
-    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen).",
+    "Letzte Wissensanfrage: {tokens} Tokens vom Anbieter gemessen.",
   "chat.context.lastRequestMeasuredWithEstimate":
-    "Letzte Wissensanfrage: {tokens} Tokens (vom Anbieter gemessen). Keiko hatte diese Anfrage auf {estimated} Tokens geschätzt. Die Aufteilung oben schätzt die nächste Anfrage.",
+    "Letzte Wissensanfrage: {tokens} Tokens vom Anbieter gemessen; {estimated} für diese Anfrage geschätzt.",
   "chat.context.lastRequestEstimated":
     "Letzte Wissensanfrage: ungefähr {tokens} Tokens (geschätzt).",
   "chat.context.untilCompaction": "Noch {tokens} Tokens bis zur automatischen Kompaktierung.",
   "chat.context.windowAssumed":
-    "Das Gateway meldet für dieses Modell kein Kontextfenster. Keiko plant mit dem angenommenen Wert und übernimmt das tatsächliche Fenster automatisch, sobald der Anbieter es meldet.",
+    "Kontextfenster vorläufig angenommen, bis der Anbieter seine Größe meldet.",
   "chat.context.pending":
-    "Der gespeicherte Verlauf ({before} Tokens) wird beim nächsten Senden automatisch auf etwa {after} Tokens kompaktiert.",
+    "Nächste Anfrage: Verlauf von {before} auf etwa {after} Tokens reduziert.",
   "grounded.inspection.coverageGap.one":
     "Diese Antwort berücksichtigt die durchsuchbaren Dateien im verbundenen Ordner. Mindestens {count} Datei wurde nicht durchsucht (erfasste Ausschlüsse: {detail}). Diese erfassten Ausschlüsse umfassen möglicherweise nicht jede ausgeschlossene Datei.",
   "grounded.inspection.coverageGap.other":
@@ -1754,7 +1990,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.error.send": "Nachricht konnte nicht gesendet werden.",
   "chat.error.scopeUpdate": "Wissensbereich konnte nicht aktualisiert werden.",
   "chat.error.memoryUpdate": "Speicher konnte nicht aktualisiert werden.",
-  "chat.grounding.label": "Grounding",
+  "chat.grounding.dataLabel": "Datenquellen",
+  "chat.grounding.noDataSources": "Keine Datenquellen",
+  "chat.grounding.dataCatalogEmpty": "Keine einsatzbereiten Daten-Pods oder Pod-Sets verfügbar.",
+  "chat.grounding.label": "Wissensquellen",
   "chat.grounding.mode": "Grounding-Modus",
   "chat.grounding.strategy": "Strategie",
   "chat.grounding.modelOnly": "Nur Modell",
@@ -2143,8 +2382,6 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "updates.error.title": "Update-Status nicht verfügbar",
   "updates.error.load": "Update-Status konnte nicht vom lokalen Keiko-Backend geladen werden.",
   "updates.window.kicker": "Gesteuertes Update",
-  "updates.status.portableSetupRequired": "Portable Setup erforderlich",
-  "updates.status.portableExternallyManaged": "Updates werden durch deine Organisation verwaltet",
   "updates.primary.title": "Empfohlene Aktion",
   "updates.primary.available": "Prüfe die Statusauswirkungen und installiere, wenn du bereit bist.",
   "updates.primary.portableAvailable":
@@ -2566,16 +2803,28 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.verify.ok.copy": "Die Anmeldeinformation wurde erfolgreich authentifiziert.",
   "atlassianConnectors.verify.auth-failed.label": "Authentifizierung fehlgeschlagen",
   "atlassianConnectors.verify.auth-failed.copy":
-    "Prüfen Sie Konto-E-Mail und API-Token und versuchen Sie es erneut.",
+    "Prüfe das Konto und das Token. Prüfe die Verbindung danach erneut.",
   "atlassianConnectors.verify.forbidden.label": "Zugriff verweigert",
   "atlassianConnectors.verify.forbidden.copy":
-    "Das Konto wurde authentifiziert, hat aber keine Berechtigung. Erteilen Sie den Zugriff in Atlassian und prüfen Sie erneut.",
+    "Atlassian hat den Zugriff verweigert. Prüfe die Kontoberechtigungen sowie Einschränkungen der Website oder Lizenz. Prüfe die Verbindung danach erneut.",
   "atlassianConnectors.verify.unreachable.label": "Website nicht erreichbar",
   "atlassianConnectors.verify.unreachable.copy":
     "Die Basis-URL konnte nicht erreicht werden. Prüfen Sie URL und Netzwerk und versuchen Sie es erneut.",
   "atlassianConnectors.verify.timeout.label": "Zeitüberschreitung der Verbindung",
   "atlassianConnectors.verify.timeout.copy":
     "Die Website hat nicht rechtzeitig geantwortet. Versuchen Sie es gleich erneut.",
+  "atlassianConnectors.verify.redirect-refused.label": "Weiterleitung abgelehnt",
+  "atlassianConnectors.verify.redirect-refused.copy":
+    "Die Adresse leitet weiter. Gib die endgültige HTTPS-Adresse der Atlassian-Website ein.",
+  "atlassianConnectors.verify.invalid-response.label": "Ungültige Atlassian-Antwort",
+  "atlassianConnectors.verify.invalid-response.copy":
+    "Die Adresse lieferte keine gültige Atlassian-JSON-Antwort. Prüfe die Adresse und das Anmelde-Gateway.",
+  "atlassianConnectors.verify.unsupported-version.label": "Jira-Version nicht unterstützt",
+  "atlassianConnectors.verify.unsupported-version.copy":
+    "Diese Verbindung unterstützt Jira Data Center 10.3.26. Prüfe Bereitstellung und Version.",
+  "atlassianConnectors.verify.tls-failed.label": "Zertifikatsprüfung fehlgeschlagen",
+  "atlassianConnectors.verify.tls-failed.copy":
+    "Prüfe Gültigkeit, Hostname und vertrauenswürdige Zertifizierungsstelle.",
   "atlassianConnectors.scope.confluenceLabel": "Confluence-Bereichsschlüssel",
   "atlassianConnectors.scope.confluencePlaceholder": "z. B. ENG",
   "atlassianConnectors.scope.jiraLabel": "Jira-Projektschlüssel",
@@ -2651,6 +2900,16 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "atlassianConnectors.approvals.rejecting": "Wird abgelehnt…",
   "atlassianConnectors.approvals.rejected": "Abgelehnt. Die Aktion wurde nicht ausgeführt.",
   "atlassianConnectors.action.sync-space": "Confluence-Bereich synchronisieren",
+  "atlassianConnectors.action.jira.projects": "Jira-Projekte lesen",
+  "atlassianConnectors.action.jira.issue-types": "Jira-Vorgangstypen lesen",
+  "atlassianConnectors.action.jira.create-fields": "Jira-Erstellungsfelder lesen",
+  "atlassianConnectors.action.jira.edit-fields": "Jira-Bearbeitungsfelder lesen",
+  "atlassianConnectors.action.jira.search": "Jira-Vorgänge suchen",
+  "atlassianConnectors.action.jira.issue": "Jira-Vorgang lesen",
+  "atlassianConnectors.action.jira.comments": "Jira-Kommentare lesen",
+  "atlassianConnectors.action.jira.transitions": "Jira-Statusübergänge lesen",
+  "atlassianConnectors.action.jira.assignable-users": "Zuweisbare Jira-Benutzer suchen",
+  "atlassianConnectors.action.assign-issue": "Jira-Vorgang zuweisen",
   "atlassianConnectors.action.sync-project": "Jira-Projekt synchronisieren",
   "atlassianConnectors.action.search-issues-live": "Jira-Livesuche",
   "atlassianConnectors.action.create-issue": "Jira-Vorgang erstellen",

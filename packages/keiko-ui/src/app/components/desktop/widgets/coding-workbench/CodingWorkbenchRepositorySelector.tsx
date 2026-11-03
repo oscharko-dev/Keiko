@@ -92,10 +92,6 @@ export function repositoryName(root: string): string {
 const FolderIcon = Icons.folder;
 const BranchIcon = Icons.branch;
 
-function controlWidth(label: string, maximum: number): string {
-  return `${Math.min(Math.max(label.length + 4, 13), maximum)}ch`;
-}
-
 type SelectorPlacement = "composer" | "setup";
 export type WorkbenchExecutionLocation = "local" | "worktree";
 
@@ -133,10 +129,11 @@ function repositoryOptions(
   ];
 }
 
-// The trigger of a chip: the setup form's field, or the composer's compact chip sized to its label.
+// The trigger of a chip: the setup form's field, or the composer's compact chip that hugs its
+// label up to a bound. A fixed 13ch floor left "keiko" and "main" floating in wide empty chips
+// with the caret at the far edge (#3897 UI review).
 function chipTrigger(
   placement: SelectorPlacement,
-  label: string,
   maximum: number,
 ): {
   readonly triggerClassName: string | undefined;
@@ -146,7 +143,7 @@ function chipTrigger(
     ? { triggerClassName: styles.cmpSetupSelectorTrigger, triggerStyle: undefined }
     : {
         triggerClassName: styles.cmpRepositorySelectorTrigger,
-        triggerStyle: { width: controlWidth(label, maximum) },
+        triggerStyle: { maxWidth: `${String(maximum)}ch` },
       };
 }
 
@@ -180,7 +177,7 @@ function RepositoryChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.choose")}
       leadingVisual={<FolderIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label, 22)}
+      {...chipTrigger(placement, 22)}
       showMenuHeader={false}
       menuPopoverMinWidth={280}
       menuPlacement="up"
@@ -257,7 +254,7 @@ function BranchChip({
       placeholder={label}
       ariaLabel={t("codingWorkbench.repository.chooseBranch")}
       leadingVisual={<BranchIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label, 26)}
+      {...chipTrigger(placement, 26)}
       showMenuHeader={false}
       menuPopoverMinWidth={340}
       menuPopoverMaxHeight={280}
@@ -284,7 +281,6 @@ function LocationChip({
 }): ReactNode {
   const local = t("codingWorkbench.repository.locationLocal");
   const worktree = t("codingWorkbench.repository.locationWorktree");
-  const label = location === "local" ? local : worktree;
   const LocationIcon = Icons.terminal;
   return (
     <KeikoSelect
@@ -301,7 +297,7 @@ function LocationChip({
       disabled={locked}
       ariaLabel={t("codingWorkbench.repository.locationLabel")}
       leadingVisual={<LocationIcon size={15} aria-hidden="true" />}
-      {...chipTrigger(placement, label, 22)}
+      {...chipTrigger(placement, 22)}
       menuPopoverMinWidth={260}
       showMenuHeader={false}
       menuPlacement="up"
@@ -332,7 +328,26 @@ function repositoryBranchUnavailable(
     !catalog.loading &&
     !catalog.error &&
     !branchState.loading &&
+    !branchState.ordinaryFolder &&
     branchReadUnavailable(branchState)
+  );
+}
+
+// A registered folder the branch read answered as an ordinary folder (not a Git repository). It is
+// no failure: the Workbench works in it without a branch (owner decision 2026-10-30), so it gets a
+// non-blocking hint, no "Open Git" escape and no alert.
+function repositoryFolderMode(
+  root: string | null,
+  unavailable: boolean,
+  catalog: CatalogState,
+  branchState: RepositoryBranchState,
+): boolean {
+  return (
+    root !== null &&
+    !unavailable &&
+    !catalog.loading &&
+    !catalog.error &&
+    branchState.ordinaryFolder
   );
 }
 
@@ -380,6 +395,7 @@ function SelectorNotice({
   unavailable,
   branchUnavailable,
   branchDenied,
+  folderMode,
   catalogError,
   onRetryCatalog,
   t,
@@ -387,6 +403,7 @@ function SelectorNotice({
   readonly unavailable: boolean;
   readonly branchUnavailable: boolean;
   readonly branchDenied: boolean;
+  readonly folderMode: boolean;
   readonly catalogError: boolean;
   readonly onRetryCatalog: () => void;
   readonly t: CodingWorkbenchTranslate;
@@ -399,6 +416,13 @@ function SelectorNotice({
         role="alert"
         retry={{ label: t("codingWorkbench.repository.retryLoad"), onRetry: onRetryCatalog }}
       />
+    );
+  }
+  if (folderMode) {
+    return (
+      <p className={styles.cmpRepositorySelectorNotice} data-testid="coding-workbench-folder-hint">
+        {t("codingWorkbench.repository.folderModeHint")}
+      </p>
     );
   }
   const key = selectorNoticeKey(unavailable, branchUnavailable, branchDenied);
@@ -418,6 +442,7 @@ function SelectorRecovery({
   unavailable,
   branchUnavailable,
   branchDenied,
+  folderMode,
   catalogError,
   onOpenGit,
   onRetryCatalog,
@@ -428,6 +453,7 @@ function SelectorRecovery({
   readonly unavailable: boolean;
   readonly branchUnavailable: boolean;
   readonly branchDenied: boolean;
+  readonly folderMode: boolean;
   readonly catalogError: boolean;
   readonly onOpenGit: () => void;
   readonly onRetryCatalog: () => void;
@@ -446,6 +472,7 @@ function SelectorRecovery({
         unavailable={unavailable}
         branchUnavailable={branchUnavailable}
         branchDenied={branchDenied}
+        folderMode={folderMode}
         catalogError={catalogError}
         onRetryCatalog={onRetryCatalog}
         t={t}
@@ -462,6 +489,8 @@ interface RepositorySelectorState {
   readonly branchUnavailable: boolean;
   // #3873 F1: the branch read was refused as an access decision, not answered by Git.
   readonly branchDenied: boolean;
+  // The root is an ordinary folder: no branch, no Git features, but fully usable.
+  readonly folderMode: boolean;
 }
 
 // Extracted so the exported component stays under the lint bar's max-lines-per-function: the
@@ -474,7 +503,16 @@ function useRepositorySelectorState(root: string | null, locked: boolean): Repos
   const branchState = useRepositoryBranchState(branchLocked ? null : root);
   const branchUnavailable = repositoryBranchUnavailable(root, unavailable, catalog, branchState);
   const branchDenied = branchUnavailable && branchState.denied;
-  return { catalog, unavailable, branchLocked, branchState, branchUnavailable, branchDenied };
+  const folderMode = repositoryFolderMode(root, unavailable, catalog, branchState);
+  return {
+    catalog,
+    unavailable,
+    branchLocked,
+    branchState,
+    branchUnavailable,
+    branchDenied,
+    folderMode,
+  };
 }
 
 interface CodingWorkbenchRepositorySelectorProps {
@@ -567,6 +605,7 @@ function SelectorRecoveryForState({
       unavailable={state.unavailable}
       branchUnavailable={state.branchUnavailable}
       branchDenied={state.branchDenied}
+      folderMode={state.folderMode}
       catalogError={state.catalog.error}
       onOpenGit={onOpenGit}
       onRetryCatalog={state.catalog.reload}
@@ -628,8 +667,8 @@ export function CodingWorkbenchRepositorySelector({
         placement={placement}
       />
       <LocationSelectorField
-        location={location}
-        locked={locked || root === null}
+        location={state.folderMode ? "local" : location}
+        locked={locked || root === null || state.folderMode}
         onSelect={onSelectLocation}
         t={t}
         placement={placement}

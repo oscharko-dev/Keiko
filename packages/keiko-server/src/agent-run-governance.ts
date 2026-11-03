@@ -12,6 +12,7 @@ import {
   codingWorkbenchPolicyEffectFor,
   resolveEffectiveCodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { estimateTokensForSegments } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
@@ -50,7 +51,9 @@ const AGENT_RUN_AUTHORITY_CAPABILITIES = {
     maxRuntimeMs: AGENT_RUN_AUTHORITY_LIFETIME_MS,
     maxToolCalls: 4,
     maxPromptTokens: 128_000,
-    maxPatchBytes: 65_536,
+    // One apply reserves one changeset: the cap of the governed editor path (owner decision
+    // 2026-10-28), not a separate figure.
+    maxPatchBytes: EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES,
   },
 } as const;
 
@@ -269,17 +272,17 @@ function agentRunBudgetFailureReason(
   return reason === "budget-exceeded" ? "budget-exceeded" : authorityFailureReason(reason);
 }
 
-export function reserveAgentRunBudget(input: {
-  readonly binding: AgentRunGovernanceBinding;
-  readonly workspaceRoot: string;
-  readonly usage: CodingWorkbenchRuntimeDelegationUsage;
-  readonly nowIso: string;
-}): AgentRunBudgetReservation {
+// The run's authority as it stands now: resolvable, unexpired, unrevoked and in the run's modes.
+function currentAgentRunAuthority(
+  binding: AgentRunGovernanceBinding,
+  workspaceRoot: string,
+  nowIso: string,
+): AgentRunBudgetReservation {
   const resolved = editorAgentAuthorityRegistry.resolve(
-    input.binding.authorityRef,
-    input.workspaceRoot,
-    input.binding.deploymentCeiling,
-    input.nowIso,
+    binding.authorityRef,
+    workspaceRoot,
+    binding.deploymentCeiling,
+    nowIso,
   );
   if (!resolved.ok) {
     return {
@@ -288,11 +291,31 @@ export function reserveAgentRunBudget(input: {
     };
   }
   if (
-    resolved.envelope.requestedMode !== input.binding.requestedMode ||
-    resolved.envelope.effectiveMode !== input.binding.effectiveMode
+    resolved.envelope.requestedMode !== binding.requestedMode ||
+    resolved.envelope.effectiveMode !== binding.effectiveMode
   ) {
     return { ok: false, reason: "authority-invalid" };
   }
+  return { ok: true };
+}
+
+/** Whether the run may still dispatch: the check a per-attempt grant asks (#4025 AC1). */
+export function agentRunAuthorityCurrent(
+  binding: AgentRunGovernanceBinding,
+  workspaceRoot: string,
+  nowIso: string,
+): boolean {
+  return currentAgentRunAuthority(binding, workspaceRoot, nowIso).ok;
+}
+
+export function reserveAgentRunBudget(input: {
+  readonly binding: AgentRunGovernanceBinding;
+  readonly workspaceRoot: string;
+  readonly usage: CodingWorkbenchRuntimeDelegationUsage;
+  readonly nowIso: string;
+}): AgentRunBudgetReservation {
+  const current = currentAgentRunAuthority(input.binding, input.workspaceRoot, input.nowIso);
+  if (!current.ok) return current;
   const reserved = editorAgentAuthorityRegistry.reserveForAgentRun(
     input.binding.authorityRef,
     input.workspaceRoot,
@@ -316,7 +339,15 @@ function promptTokenEstimate(request: GatewayRequest): number {
     }),
   );
   const tools =
-    request.toolCatalog === undefined ? [] : [JSON.stringify(request.toolCatalog.projection.tools)];
+    request.toolCatalog === undefined
+      ? []
+      : [
+          JSON.stringify(
+            request.toolCatalog.kind === "native"
+              ? request.toolCatalog.tools
+              : request.toolCatalog.projection.tools,
+          ),
+        ];
   const responseFormat =
     request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
   return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));

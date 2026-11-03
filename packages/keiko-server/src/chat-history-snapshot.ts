@@ -14,6 +14,7 @@ import {
   type CompactionDigest,
 } from "@oscharko-dev/keiko-workflows/context-budget";
 import type { ChatMessage, UiStore } from "./store/index.js";
+import { logChatContinuityCheckpoint } from "./chat-continuity-log.js";
 import { usableGatewayTurns } from "./conversation-gateway.js";
 import {
   boundedConversationSourceSpans,
@@ -32,6 +33,7 @@ export interface GatewayHistorySnapshot {
 export interface LoadedHistoryCheckpoint {
   readonly record: ContextCompactionRecord | undefined;
   readonly disposition: CheckpointLoadDisposition;
+  readonly generation?: number;
 }
 
 interface HistoryCheckpointInput {
@@ -50,6 +52,27 @@ interface CheckpointCaptureInput extends HistoryCheckpointInput {
 
 /** Reuse only within a synchronous read phase; reload after checkpoint persistence. */
 export function loadHistoryCheckpoint(input: HistoryCheckpointInput): LoadedHistoryCheckpoint {
+  try {
+    const checkpoint = input.store.readChatContinuityCheckpoint(input.chatId);
+    const presentOutcome = checkpoint?.record === undefined ? "invalid" : "available";
+    logChatContinuityCheckpoint(
+      {
+        operation: "read",
+        outcome: checkpoint === undefined ? "missing" : presentOutcome,
+        ...(checkpoint === undefined ? {} : { generation: checkpoint.generation }),
+      },
+      input.correlationId,
+    );
+    if (checkpoint !== undefined)
+      return {
+        record: checkpoint.record,
+        disposition: checkpoint.record === undefined ? "read-failed" : "available",
+        generation: checkpoint.generation,
+      };
+  } catch {
+    logChatContinuityCheckpoint({ operation: "read", outcome: "failed" }, input.correlationId);
+    return { record: undefined, disposition: "read-failed" };
+  }
   let checkpointDisposition: CheckpointLoadDisposition = "none";
   const checkpoint = loadChatContinuityCheckpoint(
     input.evidenceStore,

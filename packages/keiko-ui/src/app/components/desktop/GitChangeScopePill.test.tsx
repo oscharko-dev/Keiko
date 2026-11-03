@@ -263,10 +263,9 @@ describe("GitChangeScopePill", () => {
     const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
     render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);
     expect(screen.getByText("main...feature/x")).toBeInTheDocument();
-    expect(screen.getByText("Current")).toHaveStyle({
-      background: "var(--surface-primary)",
-      color: "var(--text-accent)",
-    });
+    const current = screen.getByText("Current");
+    expect(current.style.background).toBe("var(--surface-primary)");
+    expect(current).toHaveStyle({ color: "var(--text-accent)" });
     expect(screen.getByText("3 files changed")).toBeInTheDocument();
   });
 

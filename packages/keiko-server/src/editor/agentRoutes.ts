@@ -52,7 +52,10 @@ import type {
   WorkspaceTrustLevel,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  EDITOR_AGENT_ACTION_MAX_BODY_BYTES,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
+  EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
+  EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
@@ -118,7 +121,7 @@ import {
   type RouteResult,
 } from "../routes.js";
 import { readyMessage, SSE_HEADERS, startSseHeartbeat } from "../sse.js";
-import { writeOrDestroy } from "../sse-write.js";
+import { writeSseFrame } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
@@ -139,8 +142,14 @@ import {
   type EditorAgentAuthorityResolution,
 } from "./agentAuthorityRegistry.js";
 import { recordBufferSafetyState } from "./bufferSafetyEvidence.js";
+import { recordActionQueueRefusal } from "./actionQueueEvidence.js";
+import { recordBridgeRegistration } from "./bridgeRegistrationEvidence.js";
 import { retainedDirtyTargets } from "./bufferSafetyTargets.js";
-import { EDITOR_AGENT_MAX_SESSIONS, editorAgentRegistry } from "./agentSessionRegistry.js";
+import {
+  EDITOR_AGENT_MAX_SESSIONS,
+  editorAgentRegistry,
+  type EditorAgentQueueOutcome,
+} from "./agentSessionRegistry.js";
 import {
   _resetEditorAgentAuditForTests,
   editorAgentAuditRootAttribution,
@@ -152,11 +161,13 @@ import {
   editorAgentSnapshotLocation,
   editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
+  refreshReplacedProjectRoot,
   resolveEditorAgentActionRoot,
   resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
   resolveEditorAgentRuntimeRoot,
   type EditorAgentRootBoundaryReason,
+  type EditorAgentRootResolution,
   serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 
@@ -177,6 +188,9 @@ type EditorAgentActionRouteDeps = UiHandlerDeps;
 type EditorAgentEitherRouteDeps = EditorAgentActionRouteDeps | EditorAgentRouteDeps;
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
+// An editor action may carry a whole changeset (a patch plus its prepared preview), sized by the
+// changeset contract; the session, snapshot and scope requests keep the 1 MiB bound.
+const MAX_AGENT_ACTION_BODY_BYTES = EDITOR_AGENT_ACTION_MAX_BODY_BYTES;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
 const MAX_ACTIVE_BRIDGE_STREAMS = 256;
 
@@ -727,7 +741,7 @@ function inspectChangeset(
   const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
-    { fs, lineBreakMarkers },
+    { fs, lineBreakMarkers, limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS },
   );
   const validation = inspection.validation;
   const issues = firstChangesetIssueGroup(action, snapshot, inspection);
@@ -1107,6 +1121,7 @@ function inspectAdmissionAction(
     return {
       patch: inspectPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), action.patch ?? "", {
         fs,
+        limits: EDITOR_AGENT_CHANGESET_PATCH_LIMITS,
       }),
     };
   }
@@ -1227,23 +1242,64 @@ function rootBoundaryError(reason: EditorAgentRootBoundaryReason): RouteResult {
   };
 }
 
-function registerBridgeSnapshot(
-  request: EditorAgentBridgeSnapshotRequest,
-  deps?: EditorAgentRouteDeps,
+function refusedBridgeRoot(
+  reason: EditorAgentRootBoundaryReason,
+  correlationId: string | undefined,
 ): RouteResult {
-  const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
-  if (!root.ok) return rootBoundaryError(root.reason);
+  recordBridgeRegistration("refused", correlationId, reason);
+  return rootBoundaryError(reason);
+}
+
+// A folder replaced at the same path is adopted on its next registration (#4117, owner decision
+// 2026-10-29) and the root resolved again; a binding minted against the former identity then fails
+// that second resolution, so only a fresh registration holds the new one.
+function resolveBridgeSessionRoot(
+  snapshot: EditorAgentSessionSnapshot,
+  store: EditorAgentRouteDeps["store"],
+  correlationId: string | undefined,
+): EditorAgentRootResolution {
+  const resolved = resolveEditorAgentSessionRoot(snapshot, store);
+  if (resolved.ok || resolved.reason !== "root-binding-invalid" || store === undefined) {
+    return resolved;
+  }
+  const refresh = refreshReplacedProjectRoot(snapshot, store, correlationId);
+  if (refresh === undefined) return resolved;
+  recordBridgeRegistration("identity-refreshed", correlationId, undefined, refresh);
+  return resolveEditorAgentSessionRoot(snapshot, store);
+}
+
+// The snapshot bound to its server-resolved root, or the logged refusal of a root that does not
+// own it (#4117).
+function admitBridgeSnapshot(
+  request: EditorAgentBridgeSnapshotRequest,
+  deps: EditorAgentRouteDeps | undefined,
+  correlationId: string | undefined,
+): { readonly snapshot: EditorAgentSessionSnapshot } | { readonly refused: RouteResult } {
+  const root = resolveBridgeSessionRoot(request.snapshot, deps?.store, correlationId);
+  if (!root.ok) return { refused: refusedBridgeRoot(root.reason, correlationId) };
   const pathReason = editorAgentRootContainmentReason(
     root.root,
     snapshotRootPaths(request.snapshot),
     deps,
     shapedCorrelationId(request.snapshot.sessionId),
   );
-  if (pathReason !== null) return rootBoundaryError(pathReason);
-  const snapshot =
-    root.root.workspaceRoot === request.snapshot.workspaceRoot
-      ? request.snapshot
-      : { ...request.snapshot, workspaceRoot: root.root.workspaceRoot };
+  if (pathReason !== null) return { refused: refusedBridgeRoot(pathReason, correlationId) };
+  return {
+    snapshot:
+      root.root.workspaceRoot === request.snapshot.workspaceRoot
+        ? request.snapshot
+        : { ...request.snapshot, workspaceRoot: root.root.workspaceRoot },
+  };
+}
+
+function registerBridgeSnapshot(
+  request: EditorAgentBridgeSnapshotRequest,
+  deps?: EditorAgentRouteDeps,
+  correlationId?: string,
+): RouteResult {
+  const admitted = admitBridgeSnapshot(request, deps, correlationId);
+  if ("refused" in admitted) return admitted.refused;
+  const { snapshot } = admitted;
   const existing = editorAgentRegistry.snapshotFor(snapshot.sessionId);
   const supplied = request.bridgeDecisionCapability;
   if (
@@ -1251,6 +1307,7 @@ function registerBridgeSnapshot(
     supplied !== undefined &&
     editorAgentRegistry.refreshSnapshot(snapshot, bridgeCapabilityDigest(supplied))
   ) {
+    recordBridgeRegistration("refreshed", correlationId);
     return { status: 200, body: { snapshot } };
   }
   const capability = issueBridgeDecisionCapability();
@@ -1259,9 +1316,12 @@ function registerBridgeSnapshot(
     existing === undefined
       ? editorAgentRegistry.registerSnapshot(snapshot, digest)
       : editorAgentRegistry.rotateSnapshotCapability(snapshot, digest);
-  return registered
-    ? { status: 200, body: { snapshot, bridgeDecisionCapability: capability } }
-    : bridgeCapabilityError();
+  if (!registered) {
+    recordBridgeRegistration("refused", correlationId, "capability-held");
+    return bridgeCapabilityError();
+  }
+  recordBridgeRegistration(existing === undefined ? "registered" : "rotated", correlationId);
+  return { status: 200, body: { snapshot, bridgeDecisionCapability: capability } };
 }
 
 function bufferSafetyResponse(
@@ -1422,7 +1482,7 @@ export async function handleEditorAgentSnapshot(
       return registerBufferSafetySnapshot(parsed.value, deps, ctx.correlationId);
     if (parsed.value.kind === "buffer-release")
       return releaseBufferSafetySnapshot(parsed.value, ctx.correlationId);
-    return registerBridgeSnapshot(parsed.value, deps);
+    return registerBridgeSnapshot(parsed.value, deps, ctx.correlationId);
   }
   const selected = editorAgentRegistry.selectSnapshot(parsed.value.sessionId);
   if (selected === undefined) return { status: 200, body: { snapshot: null } };
@@ -1916,6 +1976,7 @@ function projectChangeset(
     const projectedValidation = validatePatch(workspaceInfoFromRoot(snapshot.workspaceRoot), diff, {
       fs,
       lineBreakMarkers,
+      limits: EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS,
     });
     const issues = projectedChangesetIssues(projected, projectedValidation);
     return issues.length === 0
@@ -1963,6 +2024,7 @@ function applyChangeset(
       signal: signal ?? new AbortController().signal,
       fs,
       lineBreakMarkers: projection.lineBreakMarkers,
+      limits: EDITOR_AGENT_CHANGESET_PROJECTION_PATCH_LIMITS,
       ...(editorAgentPatchWriterForTests === undefined
         ? {}
         : { writer: editorAgentPatchWriterForTests }),
@@ -3847,6 +3909,7 @@ async function admitEditorAction(
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
   signal: AbortSignal,
+  correlationId: string | undefined,
 ): Promise<RouteResult> {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   if (snapshot !== undefined) {
@@ -3878,6 +3941,7 @@ async function admitEditorAction(
     decision,
     admitted.inspection,
     runtimeMutation,
+    correlationId,
   );
 }
 
@@ -3885,7 +3949,7 @@ export async function handleEditorAgentActions(
   ctx: RouteContext,
   deps?: EditorAgentEitherRouteDeps,
 ): Promise<RouteResult> {
-  const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
+  const body = await readJsonObject(ctx.req, MAX_AGENT_ACTION_BODY_BYTES);
   if (isRouteResult(body)) return body;
   const parsed = parseEditorAgentActionsPostBody(body);
   if (!parsed.ok) {
@@ -3905,7 +3969,13 @@ export async function handleEditorAgentActions(
   const { action } = preparation.request;
   const signal = actionAbortSignal(ctx);
   const actionDeps = queryGitAbortDeps(action, fullEditorActionDeps(deps), signal);
-  return admitEditorAction(action, preparation.request.requestHash, actionDeps, signal);
+  return admitEditorAction(
+    action,
+    preparation.request.requestHash,
+    actionDeps,
+    signal,
+    ctx.correlationId,
+  );
 }
 
 function fullEditorActionDeps(
@@ -3945,6 +4015,7 @@ function queueAndEmitAction(
   decision: EditorAgentActionPolicyDecision,
   inspection: AdmissionInspection,
   runtimeMutation: RuntimeMutationClassification,
+  correlationId: string | undefined,
 ): RouteResult {
   const boundAction = snapshot === undefined ? action : bindActiveBufferTarget(action, snapshot);
   const requiresReview =
@@ -3965,12 +4036,20 @@ function queueAndEmitAction(
   const outcome = editorAgentRegistry.queueAction(boundAction, emitAction, { runtimeOwned });
   rememberIdempotency(action.idempotencyKey, requestHash, outcome.result);
   auditAction(action, snapshot, decision, outcome.result, undefined, runtimeOwned);
-  if (outcome.kind === "rejected") {
-    // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
-    const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
-    return { status, body: { result: outcome.result } };
-  }
+  if (outcome.kind === "rejected") return rejectedQueueResult(outcome, correlationId);
   return { status: 202, body: { result: outcome.result } };
+}
+
+function rejectedQueueResult(
+  outcome: Extract<EditorAgentQueueOutcome, { readonly kind: "rejected" }>,
+  correlationId: string | undefined,
+): RouteResult {
+  if (outcome.queueRefusal !== undefined) {
+    recordActionQueueRefusal(outcome.queueRefusal, correlationId);
+  }
+  // QUEUE_FULL is backpressure (429); a duplicate in-flight actionId is a conflict (409).
+  const status = outcome.result.failure?.code === "QUEUE_FULL" ? 429 : 409;
+  return { status, body: { result: outcome.result } };
 }
 
 interface AuthenticatedBridgeConnection {
@@ -4145,14 +4224,14 @@ function openAgentSseStream(
   const subscriber = (event: EditorAgentEvent): void => {
     if (controller.signal.aborted) return;
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-    writeOrDestroy(res, frame, controller, undefined, correlationId);
+    writeSseFrame(res, frame, controller, undefined, correlationId);
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
   if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
   // Refused, the ready frame aborts the controller and destroys the stream like any event frame.
-  writeOrDestroy(res, readyMessage(), controller, undefined, correlationId);
+  writeSseFrame(res, readyMessage(), controller, undefined, correlationId);
   ctx.req.on("close", () => {
     res.end();
   });

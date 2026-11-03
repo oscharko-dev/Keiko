@@ -10,10 +10,11 @@ import { describe, expect, it } from "vitest";
 import { PROPOSAL_ID_PREFIXES, mintProposalId, proposalIdPattern } from "./proposalId.js";
 
 describe("proposalId", () => {
-  it("derives a pattern that accepts exactly the three model-visible prefixes", () => {
-    expect(proposalIdPattern()).toBe("^(?:stage|delivery|commit)-[0-9]{1,39}$");
+  it("derives a pattern that accepts exactly the four model-visible prefixes", () => {
+    expect(proposalIdPattern()).toBe("^(?:stage|unstage|delivery|commit)-[0-9]{1,39}$");
     const accepted = new RegExp(proposalIdPattern(), "u");
     expect(accepted.test("stage-1")).toBe(true);
+    expect(accepted.test("unstage-1")).toBe(true);
     expect(accepted.test("delivery-1")).toBe(true);
     expect(accepted.test("commit-1")).toBe(true);
     expect(accepted.test("recovery-1")).toBe(false);

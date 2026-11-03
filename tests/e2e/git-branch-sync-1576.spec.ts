@@ -668,8 +668,11 @@ async function verifyHistoryAndPullEvidence(
   );
 
   await gitWindow.getByRole("button", { name: "Run sync: Pull" }).click();
+  // KEIKO-0228 (#2894, #3089): the worktree-mutation confirmation is a div with role="alertdialog"
+  // (the native <dialog open> shell it replaced advertised modality it never delivered), so the
+  // implicit "dialog" role no longer matches it. Query the role the product now exposes.
   await page
-    .getByRole("dialog", { name: "Confirm pull" })
+    .getByRole("alertdialog", { name: "Confirm pull" })
     .getByRole("button", {
       name: "Pull changes",
     })

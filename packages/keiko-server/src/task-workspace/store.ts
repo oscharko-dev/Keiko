@@ -20,7 +20,10 @@ import type {
   WorkspaceLock,
   WorkspaceRecoveryHint,
 } from "@oscharko-dev/keiko-contracts";
-import { validateWorkspaceInstance } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import {
+  FOLDER_WORKSPACE_BRANCH,
+  validateWorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 export interface WorkspaceInstanceStore {
   readonly getById: (workspaceId: string) => WorkspaceInstance | undefined;
@@ -114,6 +117,9 @@ function rowToInstance(row: InstanceRow): WorkspaceInstance {
     baseBranch: row.base_branch,
     taskBranch: row.task_branch,
     executionLocation: row.execution_location,
+    // A folder workspace is stored as a local row carrying the reserved branch spelling (no column
+    // migration): the contract reserves that spelling for folders, so it identifies the kind.
+    ...(row.base_branch === FOLDER_WORKSPACE_BRANCH ? { workspaceKind: "folder" as const } : {}),
     managedWorktreePath: row.managed_worktree_path,
     gitdirIdentity: row.gitdir_identity,
     lifecycleState: row.lifecycle_state as TaskWorkspaceLifecycleState,

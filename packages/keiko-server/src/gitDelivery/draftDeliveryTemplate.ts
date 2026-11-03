@@ -141,8 +141,12 @@ export type DraftDeliveryTemplateResult =
 
 export interface DraftDeliveryTemplateInput {
   readonly workspace: WorkspaceInfo;
-  /** Accepted server-owned binding, never an issue number supplied by authored metadata. */
-  readonly issueBinding: CodingWorkbenchIssueBinding;
+  /**
+   * Accepted server-owned binding, never an issue number supplied by authored metadata. Absent for
+   * an issue-free run on a github.com origin: its pull request carries no closing line (ADR-0086
+   * D13). An issue only ever links a pull request and is never its precondition.
+   */
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
   /**
    * Same-repository issues the bound issue references and the authorized reader resolved (an epic's
    * children). Rendered as a non-closing "Related issues" line: the bound issue alone is closed.
@@ -186,7 +190,7 @@ function validRelatedIssues(input: DraftDeliveryTemplateInput): boolean {
       (issueNumber) =>
         Number.isSafeInteger(issueNumber) &&
         issueNumber > 0 &&
-        issueNumber !== input.issueBinding.issueNumber,
+        issueNumber !== input.issueBinding?.issueNumber,
     )
   );
 }
@@ -201,8 +205,17 @@ function relatedIssuesLine(input: DraftDeliveryTemplateInput): string {
   return `Related issues: ${related.map(issueReference).join(", ")}\n\n`;
 }
 
+function closingLine(input: DraftDeliveryTemplateInput): string {
+  return input.issueBinding === undefined
+    ? ""
+    : `Closes #${String(input.issueBinding.issueNumber)}\n\n`;
+}
+
 function validateInput(input: DraftDeliveryTemplateInput): void {
-  if (!validateCodingWorkbenchIssueBinding(input.issueBinding).ok)
+  if (
+    input.issueBinding !== undefined &&
+    !validateCodingWorkbenchIssueBinding(input.issueBinding).ok
+  )
     throw new TemplateResolutionError("invalid-issue-binding");
   if (!validRelatedIssues(input)) throw new TemplateResolutionError("invalid-issue-binding");
   const title = input.title;
@@ -315,7 +328,7 @@ function compose(
     throw new TemplateResolutionError("template-unreadable");
   const prefix = template.length === 0 ? "" : `${template}\n\n`;
   const checks = renderedChecks(input);
-  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${relatedIssuesLine(input)}${checks.section}${framePrDescriptionRegion("")}`;
+  const body = `${prefix}${closingLine(input)}${relatedIssuesLine(input)}${checks.section}${framePrDescriptionRegion("")}`;
   return {
     status: "ready",
     title: input.title,

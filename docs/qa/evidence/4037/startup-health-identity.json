@@ -1,0 +1,345 @@
+{
+  "schemaVersion": 1,
+  "classification": "Launch-bound CLI health, total HTTP deadline and effective launch environment; controlled public-CLI/real-HTTP/own-child and actual log-sink qualification, not installed native generation acceptance",
+  "sourceParent": "576177e9efe9f75ca769b910598147f27de85931",
+  "sourceFreeze": {
+    "artifact": "checkpoint66-source-freeze-v2.json",
+    "sha256": "37e1d1e7e10d0ac2c32fb664b46bd3804deacb7052c370fa45111886fdc16656"
+  },
+  "priorFreeze": {
+    "artifact": "checkpoint66-source-freeze-v1.json",
+    "sha256": "14169edad1f563907c3112fa0b70e9921d4e88905bfcb2c4c450726fc0851887"
+  },
+  "sourceJoin": "V2 changes only one diagnostic emitter and three generated source positions from V1. CLI lifecycle, UI environment, server health, state and shared grammar owners remain byte-identical. The16 declared emitted event tuples are deep-equal before/after the diagnostic refactor.",
+  "sources": [
+    {
+      "path": "docs/adr/ADR-0141-authenticated-local-app-session-channel.md",
+      "sha256": "e666a47c1f90da03148b082e1456197a1da46299377cbf044f7e90bcb5a4055b"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "9989f33540ae479e90afa247a57fc94b0b71c1b70b36f8c4b9ac28ae60ea64ca"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "2f20afa8757deaa1024f62c83c690a7ab1eab12a558ecdd93d691f6b2b8d14ef"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-browser-default.test.ts",
+      "sha256": "2dea8ad44126a8ec79c12ca2f69eb0ba4db650549ab889d4f4fef837cbda8c27"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-health-activity.ts",
+      "sha256": "1ac8437b6f6f684b036fa45cd7c0b06c6bd01ea0145a121d1af3acf05d8347e6"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-health-owner.test.ts",
+      "sha256": "7bbb4dc8d1bd8af015aae1dee5adf8af4636564ac0f999ed0e0494bf434033fc"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle-pid-toctou.test.ts",
+      "sha256": "3ef2cb884322613dfac818e7a9a1660bc98c33d7def393ad5fb5a55e4d106703"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle.test.ts",
+      "sha256": "723472fe48c0a20e659dce70dbe17368f5853110c54115fa18a89ac21c761a73"
+    },
+    {
+      "path": "packages/keiko-cli/src/lifecycle.ts",
+      "sha256": "14fa570664927d001a851a4d523078f853a1a31b1d6ef9304841a8975b0199c1"
+    },
+    {
+      "path": "packages/keiko-cli/src/state-paths.ts",
+      "sha256": "a1a2f9f219f7c4eba31aec3e1e92549afd4a79c185b3e9adb3d953babde8a06f"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui.test.ts",
+      "sha256": "357caf9053c27d674064eab02306fbdfc5793651ac6d58d11eee201860337381"
+    },
+    {
+      "path": "packages/keiko-cli/src/ui.ts",
+      "sha256": "9497343ed8530cae5795874ea1fe1434123aba86074d5d5ad2f5f4eaf07d078f"
+    },
+    {
+      "path": "packages/keiko-contracts/package.json",
+      "sha256": "d5ed680854f296ff47c47f105a67078ceaa2aa251a9b7d64d214cf937690e238"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "2bdb39ec29ce60d07cdb19aeff717c7fa53cab4b16a60f308265617a1d684868"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "f5b92e1f1e46dab687ae808819d887db3e76ba6c0d5d53758b44e5650d008e4d"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "20234ea6359e43669695e796cb63b2bb6ec6e13e95fca4fae04ae49ea87da876"
+    },
+    {
+      "path": "packages/keiko-contracts/src/diagnostics.ts",
+      "sha256": "f827f1e185e1ba5a324539fa129d9851d52f6dabfb3e245a82a8b488733c2dae"
+    },
+    {
+      "path": "packages/keiko-contracts/src/index.ts",
+      "sha256": "95e1babe7a575945aa1388758b6a086f4cad924139d8cc32c27397c77dda2c21"
+    },
+    {
+      "path": "packages/keiko-contracts/src/ui-launch.test.ts",
+      "sha256": "19dbc4327080023b382a42b09e4adec2b648c7c8dd2fd6d55d92c0e6bf0c2439"
+    },
+    {
+      "path": "packages/keiko-contracts/src/ui-launch.ts",
+      "sha256": "ea92cf15c0423ad121200ccd1bb79293efc0aa6423d272241fb560e22e0dbf06"
+    },
+    {
+      "path": "packages/keiko-server/src/routes.test.ts",
+      "sha256": "ae73b82104dc4fc70fc164ce4b3a7fa414df0da9ae308946c0289a7d61801b61"
+    },
+    {
+      "path": "packages/keiko-server/src/routes.ts",
+      "sha256": "ccc9f2cbb4f0fc5b4b02920b469db9fec536deea9978b074b155c629e8bf06a2"
+    },
+    {
+      "path": "scripts/lib/activity-log-failure-surfaces.mjs",
+      "sha256": "bb63e7798eb1d76a31df5cd1174d547d735b23645a43d5459366369ad724b95e"
+    }
+  ],
+  "retainedRuntime": {
+    "artifact": "checkpoint66-final-retention-v2.json",
+    "sha256": "8e9f17d3b95ad4f117a112019230ef2788c0f68462494d5c7e83f0e40811e762"
+  },
+  "priorRetainedRuntime": {
+    "artifact": "checkpoint66-final-retention-v1.json",
+    "sha256": "10a18ab3a6ca996a9172c49f21c7e31fe584c26a5aff3d73f50e67e3168936d4"
+  },
+  "fixture": {
+    "artifact": "checkpoint66-fixture-retention-v1.json",
+    "sha256": "85438b7a546dac19919e89dada79706fae8614069115f99396077f006213ac4f"
+  },
+  "pdca": {
+    "plan": {
+      "requirements": [
+        "Fresh startup health must match the selected launch identity and installed version within the original total start grant.",
+        "Tracked/headless startup must revalidate the canonical PID/identity/capability tuple and final live ownership after the probe.",
+        "A continuously active response body cannot renew the request deadline.",
+        "Validated explicit UI launch identity must reach effective health/browser/shutdown composition.",
+        "Non-finite or unsafe duration conversions refuse; positive representable grants retain existing semantics."
+      ],
+      "failureFirst": [
+        {
+          "artifact": "checkpoint66-health-identity-red-v2.log",
+          "sha256": "d77c38f07d76721603242f8e9da9de2c9deb30640b7bcde5634e3947faa30d59"
+        },
+        {
+          "artifact": "checkpoint66-health-identity-red-v3.log",
+          "sha256": "77b2fe43bbfaca5197c358965dc52702bbda7eaf433492d4de719b24d5ffbb19"
+        },
+        {
+          "artifact": "checkpoint66-health-owner-tests-red-v2.log",
+          "sha256": "11308c2f12a03510f941faa41468f5c129bbc19d5d74a3f5a337e33313d6541a"
+        },
+        {
+          "artifact": "checkpoint66-tracked-owner-red-v1.log",
+          "sha256": "323595868dddd726f53f10ac54c466523151cc2276721ac605ddfcdd5e06dcf1"
+        },
+        {
+          "artifact": "checkpoint66-timeout-range-red-v2.log",
+          "sha256": "2cfdc07651dca93631e43fa4ee4dcee7a42d198b9d058582aebac703d0ae9787"
+        },
+        {
+          "artifact": "checkpoint66-ui-launch-binding-red-v1.log",
+          "sha256": "e7322e8018517dc2b735cdf734473ee7163741ab6719d2fae0d3617e765aee03"
+        }
+      ],
+      "retainedBefore": {
+        "artifact": "checkpoint66-before-retention-v1.json",
+        "sha256": "1a2be35b47940623d78c063c8979d393cc806364c460ed04dd955abccc814a9a"
+      },
+      "retainedTrackedIntermediate": {
+        "artifact": "checkpoint66-tracked-before-retention-v1.json",
+        "sha256": "2c66863a0c0ba5a8d3894efcc8e16ce59b7958aed3d8887be5c7d6cc932c3897"
+      },
+      "retainedUiBeforeSource": {
+        "artifact": "checkpoint66-ui-before-retention-v1.json",
+        "sha256": "613a7777c76ab8ce08c12b54c19ab00e803d891fa3327878d1f131d3859c04e1"
+      },
+      "independentContinuousStreamBefore": {
+        "artifact": "independent-checkpoint66/health-transport-before65-independent.json",
+        "sha256": "9c701e0e5f641c8b88ff31b9ea433f9c7c1071f304d9e17201f0c5e25c1ef5e0"
+      }
+    },
+    "do": [
+      "Move the existing non-credential identity grammar unchanged into an explicit contract leaf and reuse it in state, CLI and health.",
+      "Require selected launch/version/liveness plus a final monotonic predicate for fresh startup.",
+      "Bound the entire Node HTTP request and body with AbortSignal, clipped to remaining startup time.",
+      "Recheck current tracked tuple and OS ownership after health; preserve unknown ownership.",
+      "Retain validated --launch-id in effective server environment and shutdown polling.",
+      "Reject non-finite/unsafe millisecond conversions without changing valid positive/default grants.",
+      "Record closed CLI health decisions on the existing Activity Log under process-startup; update ADR-0141 and canonical registrations."
+    ],
+    "check": {
+      "finalActualPublicCliHttpOwnChild": [
+        {
+          "artifact": "checkpoint66-v2-macos-health.json",
+          "sha256": "0aff4446eb979ec27b6025b5839bcdb422954066e3a144466e17133945213f09"
+        },
+        {
+          "artifact": "checkpoint66-v2-linux-uid1000-health.json",
+          "sha256": "a7339e03133b7401d0a84c74e212ceb2648e26aad0c092b255029d5adf82dc0e"
+        },
+        {
+          "artifact": "checkpoint66-v2-linux-uid65534-health.json",
+          "sha256": "218a9d89a4a79a95f8f4a702a4d4531105440cf271fa1ec9786e38220ee1051b"
+        }
+      ],
+      "tests": {
+        "cli": {
+          "passed": 1441,
+          "existingSkipped": 1,
+          "suites": 72
+        },
+        "server": {
+          "passed": 876,
+          "existingSkipped": 2,
+          "suites": 49
+        },
+        "contracts": {
+          "passed": 343,
+          "suites": 2
+        }
+      },
+      "assembled": {
+        "files": 6384,
+        "editorOwnCodeGzipBytes": 78174,
+        "unchangedEditorCeilingBytes": 102400
+      },
+      "fullRootUiLintBeforeEquivalentDiagnosticRefactor": {
+        "artifact": "checkpoint66-v1-lint.json",
+        "sha256": "c9eb9a456cf2e0cb06fb48ad54cd2a635f8143a3f72440c8f0d2713c515c408a"
+      },
+      "finalChangedDiagnosticLint": {
+        "artifact": "checkpoint66-v2-logger-lint.json",
+        "sha256": "3891a267ff1df2c21da012f20f7f62fc4209a10e915b0e31523346f7dc3bc2df"
+      },
+      "diagnosticEquivalence": {
+        "artifact": "checkpoint66-v2-health-log-equivalence.json",
+        "sha256": "c8bc038d61da1dbfb6cd2e25f8747358b9ecf7040ce09ab79c975400a1f1d842"
+      },
+      "finalScopedGates": [
+        {
+          "gate": "typecheck",
+          "artifact": "checkpoint66-v2-typecheck.json",
+          "sha256": "4d80a12d39c65a8a5842f0168f16a28b734bda61062a3ebd08d1cad70e9f6bdd"
+        },
+        {
+          "gate": "cli-tests",
+          "artifact": "checkpoint66-v2-cli-tests.json",
+          "sha256": "a540eb8c481c8fc86408a6db56a5e3dc637bc0536505ed548c8fd60371b0e63a"
+        },
+        {
+          "gate": "core-server-tests",
+          "artifact": "checkpoint66-v2-core-server-tests.json",
+          "sha256": "8beb9f32ea0385174f287764c77ed8df28bfa47795408c70ce04acc80e22b02d"
+        },
+        {
+          "gate": "contract-tests",
+          "artifact": "checkpoint66-v2-contract-tests.json",
+          "sha256": "24504ff2e9f0f9f6de29f8f32be5c0bfe018d3992bc87b52dcd3c0cf74f1a19c"
+        },
+        {
+          "gate": "sonar",
+          "artifact": "checkpoint66-v2-sonar.json",
+          "sha256": "033d18145459f36334d877002764ddbe6417243d6dc7c9b73d99b34ed5a4dc42"
+        },
+        {
+          "gate": "logger-lint",
+          "artifact": "checkpoint66-v2-logger-lint.json",
+          "sha256": "3891a267ff1df2c21da012f20f7f62fc4209a10e915b0e31523346f7dc3bc2df"
+        },
+        {
+          "gate": "assembled",
+          "artifact": "checkpoint66-v2-assembled.json",
+          "sha256": "59f6052fd177bf19760f8f060ce145bf7b1d821bd212dd4fabc1c45052dd4b32"
+        },
+        {
+          "gate": "restore-packages",
+          "artifact": "checkpoint66-v2-restore-packages.json",
+          "sha256": "bdff4ba71bc5260bc5d41525c11a41310d623eaedb3fa42da8f7e57e1ccf1b72"
+        },
+        {
+          "gate": "error-observability",
+          "artifact": "checkpoint66-v2-error-observability.json",
+          "sha256": "a842186d7782b1ce87f3c6e0c671f5bcd8d789f27cc073936981497e7e026ea5"
+        },
+        {
+          "gate": "activity-log",
+          "artifact": "checkpoint66-v2-activity-log.json",
+          "sha256": "2e24f5f11ede45976fb02b040753e2a6f2bc4ea633f018576bcdd2d5a9f3e11a"
+        }
+      ],
+      "independentV1Bounded": [
+        {
+          "artifact": "independent-checkpoint66/health-transport-frozen66-independent.json",
+          "sha256": "d406e34f570625f441f7fc5e6c8e96fcd52be347731da10f7711e086b091a3c8"
+        },
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-own-signed-health-independent.json",
+          "sha256": "787748b434f8d23c4b3d9420e6994a8c9345e59e02c6dded4fc1199122f798c2"
+        },
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-tracked-registered-formatter-independent.json",
+          "sha256": "dfd3b3346bf6bec839f1c11866e6434953f5193132bde7e4cfeba779984be0fd"
+        },
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-effective-env-independent.json",
+          "sha256": "51fd895961f162b72d68cd143cbf69bcc1a087dfeea4a45ca5f16b03ee1124c8"
+        },
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-health-file-sink-independent.json",
+          "sha256": "e84d6dee60d5b1a5dbab44a889681bcc0b86d81e0f8a2ce83e0f2331c34c808e"
+        }
+      ],
+      "independentV2": [
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-v2-health-file-sink-independent.json",
+          "sha256": "4f6edd592731c12e4ba00dbff611c39c8cc572f6418ef5754485614ba7858264"
+        },
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-v2-health-log-matrix-independent.json",
+          "sha256": "223e40f080b51d20cf1a4a1cd0c9aa0b250ea2a54038ab072c479d243f01b5bf"
+        },
+        {
+          "artifact": "independent-checkpoint66/checkpoint66-duration-independent.json",
+          "sha256": "0ae9a4045f0b4b8b342d6c9fa2a851f30d550931f05d5e9141caf86218cb236f"
+        }
+      ]
+    },
+    "act": "Continue actual native initial/detached/successor app ownership, installed cross-version/recovery/SSD and live UI/Gemma/skill qualification. No global acceptance or installed updater claim follows from these bounded health controls."
+  },
+  "intermediateDispositions": {
+    "artifact": "checkpoint66-intermediate-dispositions-v1.json",
+    "sha256": "7ad6488f1ecf7421de2e89055c58938e3d60b3d88d804a7ea0c401f1597ccd27"
+  },
+  "sonarFailureRetained": {
+    "artifact": "checkpoint66-v1-sonar.json",
+    "sha256": "66315dd065c9e72963c72139582cca0551768694eb395b0a089ba922e100ca90"
+  },
+  "limits": [
+    "Signed v3 fixture invokes actual compiled public CLI, actual registered handler, real own loopback HTTP and own child/default PID liveness; spawner, post-admission port snapshot and own-child launch verification are controlled. This is not an installed BFF/native W/S launch.",
+    "Independent continuous stream uses exact actual transport/version/diagnostics functions with actual HTTP in an isolated VM; it is complementary transport evidence, not a full CLI.",
+    "Tracked tuple/identity and file-sink cases declare their synthetic process/fetch ports. Effective-env execution controls lifecycle side effects and does not start a BFF.",
+    "77 retained selected owner/dependency paths are not a claim of the complete transitive runtime.",
+    "The original misplaced grammar-red label is a refuted hypothesis, not a claimed defect; the shared grammar is moved unchanged.",
+    "V1 timeout flag units and unsupported mock setup receive no one-second/causal RED credit; corrected signed V2/V3 fixtures retain their separate provenance.",
+    "No Linuxx64 installed, Windows execution, actual packaged update/rollback/SSD, browser journey or model/skill acceptance is inferred.",
+    "Frozen model inputs/outcomes and both acceptance ledgers remain unchanged."
+  ],
+  "acceptance": {
+    "allCriteriaSatisfied": false,
+    "issuesClosed": false,
+    "exactHeadCiGreen": false,
+    "merged": false,
+    "autoMergeEnabled": false
+  }
+}

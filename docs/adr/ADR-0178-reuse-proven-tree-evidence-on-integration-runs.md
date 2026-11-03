@@ -56,7 +56,8 @@ jobs whose verdict that evidence carries do not run: `semantic-duplication`, `co
 `coverage-packages`, `coverage-ui`, `coverage-scripts`, `coverage-sonar`, `build-scan-sbom-smoke`,
 `cross-platform-smoke`, `node-26-compatibility`, `portable-secure-read`, and `ui`.
 
-`protected-branch-gate`, `secret-scan`, `change-scope`, and the resolver itself always run: they cost
+For admitted lifecycle events (ADR-0139 D4), `protected-branch-gate`, `secret-scan`,
+`change-scope`, and the resolver itself always run: they cost
 under two minutes in total and they judge the integration commit's own identity and history rather
 than its content.
 
@@ -84,12 +85,6 @@ closed on any other state, so a red `dev` analysis turns the integration run red
 4. a completed `pull_request` run of the same workflow on that head concluded `success`;
 5. that run _executed_ every job D1 skips — a candidate that skipped one is not evidence, which
    forecloses a chain in which one reuse authorizes the next.
-
-The Node 26 compatibility matrix requires successful evidence for both exact shard job names.
-Each shard runs its partition of the full hermetic test inventory and independently retains the
-complete toolchain, typecheck, CLI, UI, offline preparation and native installable-package proofs.
-Missing, failed, cancelled or skipped evidence for either shard, or legacy single-job evidence,
-forces fresh execution; one successful shard cannot authorize reuse for the other.
 
 The portable secure-read matrix requires successful evidence for all four exact native job names,
 not merely one matching matrix prefix. Missing or unsuccessful evidence for either macOS

@@ -1,0 +1,38 @@
+{
+  "classification": "fresh-recreated-baseline-not-original-history-replay",
+  "originalQuestionDigest": "57d6a3d6705b648cb3ce233bddcc904707fda32f9be5ff06e6ccbcdb21737f19",
+  "runtimeHead": "7825e78c04c91fc7d04e7aa0f4221f9b2ea5e6f8",
+  "runtimeDiff": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "corpusHead": "0f168fb0355f6f94fce2da421be60b9cf77b1570",
+  "corpusTrackedFiles": 8129,
+  "corpusTrackedNamesDigest": "9a1d2515dc2caae211a6e99451bffef53f2e569cec33a04be6eda59141233d6e",
+  "contextWindow": 131072,
+  "physicalOutputGrant": 8192,
+  "providerTimeoutMs": 1365000,
+  "transportRequestBudgetMs": 2760000,
+  "providerMaxRetries": 1,
+  "status": "native-quality-failed",
+  "providerConfigConfirmed": true,
+  "durationMs": 1131641,
+  "correlationId": "b0d4548a-91e9-42b1-8d67-11120bbc03a2",
+  "persistedContentAgrees": true,
+  "answerDigest": "b284dfc8e08cd4914e1f411f30eea8684e661e112976e700f30b6a1a3d21adc5",
+  "wordCount": 128,
+  "citationCount": 0,
+  "answerKind": "answer",
+  "sourceStable": true,
+  "physicalAttempts": 2,
+  "transportSucceeded": true,
+  "originalHistoryReplay": false,
+  "disposition": {
+    "canonicalCitations": "failed: zero validated citations",
+    "requiredCumulativeAttemptExplanation": "not established",
+    "deadlineAndReadChargeImplementationWindows": "controlled production-cap joins remain absent",
+    "semanticAcceptance": "failed; transport, word limit and persistence are insufficient"
+  },
+  "physicalInventory": {
+    "turnRequests": 2,
+    "nonTurnReadinessRequests": 4,
+    "note": "Readiness probes are reported separately and are not silently counted as turn synthesis."
+  }
+}

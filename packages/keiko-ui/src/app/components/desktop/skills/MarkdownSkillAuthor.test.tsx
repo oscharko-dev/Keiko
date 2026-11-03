@@ -17,7 +17,7 @@ const RESULT = {
   modelRouting: { executionStatus: "model-applied" },
 } as PromptEnhancementWireResponse;
 const upload = vi.fn();
-const library = { upload, busy: false } as unknown as MarkdownSkillLibrary;
+const library = { upload, busy: false, available: true } as unknown as MarkdownSkillLibrary;
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -36,6 +36,19 @@ async function generate(): Promise<void> {
 }
 
 describe("reviewed document-to-skill authoring", () => {
+  it("keeps a reviewed draft editable and downloadable while the private library is unavailable", async () => {
+    const view = render(
+      <MarkdownSkillAuthor modelId="test-model" library={{ ...library, available: false }} />,
+    );
+    await generate();
+    await screen.findByLabelText("Skill draft (Markdown)");
+    expect(screen.getByRole("button", { name: "Save reviewed skill" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Download Markdown" })).toBeEnabled();
+    expect(upload).not.toHaveBeenCalled();
+    view.rerender(<MarkdownSkillAuthor modelId="test-model" library={library} />);
+    expect(screen.getByRole("button", { name: "Save reviewed skill" })).toBeEnabled();
+  });
+
   it("uses the selected model, permits editing and only saves after explicit review", async () => {
     render(<MarkdownSkillAuthor modelId="test-model" library={library} />);
     await generate();

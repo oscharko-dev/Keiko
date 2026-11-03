@@ -130,12 +130,12 @@ describe("executeAtlassianWriteRequest — classification", () => {
 });
 
 describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
-  it("retries PUT on 5xx with exponential backoff and succeeds", async () => {
+  it("retries GET on 5xx with exponential backoff and succeeds", async () => {
     const delays: number[] = [];
     const { port, requests } = scriptedPort([response(503), response(502), response(204, "")]);
     const outcome = await executeAtlassianWriteRequest(
       { http: port, sleep: recordedSleep(delays) },
-      request(),
+      request({ method: "GET", bodyJson: undefined }),
     );
     expect(outcome).toEqual({ ok: true, status: 204, body: undefined });
     expect(requests).toHaveLength(3);
@@ -149,7 +149,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     );
     const outcome = await executeAtlassianWriteRequest(
       { http: port, sleep: recordedSleep(delays) },
-      request(),
+      request({ method: "GET", bodyJson: undefined }),
     );
     expect(outcome).toEqual({ ok: false, reason: "unavailable", httpStatus: 500 });
     expect(requests).toHaveLength(ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS);
@@ -157,7 +157,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     expect(Math.max(...delays)).toBeLessThanOrEqual(ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS);
   });
 
-  it("honors Retry-After on PUT 429 and caps it at the backoff ceiling", async () => {
+  it("honors Retry-After on GET 429 and caps it at the backoff ceiling", async () => {
     const delays: number[] = [];
     const { port } = scriptedPort([
       response(429, "{}", { retryAfterMs: 60_000 }),
@@ -165,7 +165,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     ]);
     const outcome = await executeAtlassianWriteRequest(
       { http: port, sleep: recordedSleep(delays) },
-      request(),
+      request({ method: "GET", bodyJson: undefined }),
     );
     expect(outcome).toEqual({ ok: true, status: 204, body: undefined });
     expect(delays).toEqual([ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS]);
@@ -190,7 +190,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     expect(requests).toHaveLength(1);
   });
 
-  it("retries POST only on a Retry-After-bearing 429 (server-directed pacing)", async () => {
+  it("does not resend POST after a Retry-After-bearing 429", async () => {
     const delays: number[] = [];
     const { port, requests } = scriptedPort([
       response(429, "{}", { retryAfterMs: 1_500 }),
@@ -200,9 +200,9 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
       { http: port, sleep: recordedSleep(delays) },
       request({ method: "POST", expect: "json" }),
     );
-    expect(outcome).toEqual({ ok: true, status: 201, body: { id: "1" } });
-    expect(requests).toHaveLength(2);
-    expect(delays).toEqual([1_500]);
+    expect(outcome).toEqual({ ok: false, reason: "rate-limited", httpStatus: 429 });
+    expect(requests).toHaveLength(1);
+    expect(delays).toEqual([]);
   });
 
   it("issues every attempt with the 30s write timeout and the bounded response cap", async () => {
@@ -216,20 +216,27 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
   // in-flight request — the caller stayed blocked for up to the full per-request timeout. Every
   // port call (initial attempt and every retry) must carry the EXACT AbortSignal instance passed
   // in, so the adapter can compose it with its own timeout and tear the request down immediately.
-  it("forwards the write action's AbortSignal into every port call, including retries (KEIKO-0318)", async () => {
-    const controller = new AbortController();
-    const delays: number[] = [];
-    const { port, requests } = scriptedPort([response(503), response(204, "")]);
-    const outcome = await executeAtlassianWriteRequest(
-      { http: port, sleep: recordedSleep(delays), signal: controller.signal },
-      request(),
-    );
-    expect(outcome).toEqual({ ok: true, status: 204, body: undefined });
-    expect(requests).toHaveLength(2);
-    for (const issued of requests) {
-      expect(issued.signal).toBe(controller.signal);
-    }
-  });
+  it.each(["GET", "PUT", "POST"] as const)(
+    "forwards cancellation into every $method call and GET retry (KEIKO-0318)",
+    async (method) => {
+      const controller = new AbortController();
+      const delays: number[] = [];
+      const { port, requests } = scriptedPort([response(503), response(204, "")]);
+      const outcome = await executeAtlassianWriteRequest(
+        { http: port, sleep: recordedSleep(delays), signal: controller.signal },
+        request({ method, ...(method === "GET" ? { bodyJson: undefined } : {}) }),
+      );
+      expect(outcome).toEqual(
+        method === "GET"
+          ? { ok: true, status: 204, body: undefined }
+          : { ok: false, reason: "unavailable", httpStatus: 503 },
+      );
+      expect(requests).toHaveLength(method === "GET" ? 2 : 1);
+      for (const issued of requests) {
+        expect(issued.signal).toBe(controller.signal);
+      }
+    },
+  );
 
   // KEIKO-0318: the retry loop must respect an aggregate deadline across attempts. Without it a
   // hostile upstream that hangs at the per-request timeout ceiling for every attempt holds the
@@ -261,7 +268,7 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     };
     const outcome = await executeAtlassianWriteRequest(
       { http: port, sleep: advancingSleep, now: () => clock },
-      request(),
+      request({ method: "GET", bodyJson: undefined }),
     );
     expect(outcome).toEqual({ ok: false, reason: "rate-limited", httpStatus: 429 });
     // The executor must have stopped before the D3 max-attempt count. 5 attempts at 30s + 4×8s
@@ -287,10 +294,72 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
       response(500),
       response(204, ""),
     ]);
-    await executeAtlassianWriteRequest({ http: port, sleep: recordedSleep(delays) }, request());
+    await executeAtlassianWriteRequest(
+      { http: port, sleep: recordedSleep(delays) },
+      request({ method: "GET", bodyJson: undefined }),
+    );
     const expected = Array.from({ length: ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS - 1 }, (_, index) =>
       retryDelayMs(index + 1, undefined),
     );
     expect(delays).toEqual(expected);
   });
 });
+
+describe("mutation delivery continuity (#4083/#4081)", () => {
+  it.each(
+    (["PUT", "POST"] as const).flatMap((method) =>
+      [500, 429].map((status) => ({ method, status })),
+    ),
+  )(
+    "never resends $method after a possibly committed $status response",
+    async ({ method, status }) => {
+      let writes = 0;
+      let remoteValue = "initial";
+      const delays: number[] = [];
+      const port: AtlassianHttpBodyPort = () => {
+        writes += 1;
+        remoteValue = "requested";
+        if (writes === 1) {
+          remoteValue = "concurrent-actor-change";
+          return Promise.resolve(response(status, "{}", { retryAfterMs: 500 }));
+        }
+        return Promise.resolve(response(204, ""));
+      };
+      const outcome = await executeAtlassianWriteRequest(
+        { http: port, sleep: recordedSleep(delays) },
+        request({ method }),
+      );
+      expect(writes).toBe(1);
+      expect(remoteValue).toBe("concurrent-actor-change");
+      expect(delays).toEqual([]);
+      expect(outcome.ok).toBe(false);
+    },
+  );
+});
+
+it.each([{ items: [] }, { items: [{ id: "10000", key: "KEIKO" }] }])(
+  "reads bounded Jira collection responses without changing object-response callers",
+  async ({ items }) => {
+    const fixture = scriptedPort([response(200, JSON.stringify(items))]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-array" },
+      ),
+    ).resolves.toEqual({ ok: true, status: 200, body: undefined, items });
+    expect(fixture.requests).toHaveLength(1);
+  },
+);
+
+it.each([response(200, "{}"), response(200, "["), response(200, "[]", { truncated: true })])(
+  "refuses malformed or truncated collection responses",
+  async (reply) => {
+    const fixture = scriptedPort([reply]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { method: "GET", url: URL, expect: "json-array" },
+      ),
+    ).resolves.toMatchObject({ ok: false, reason: "malformed-payload" });
+  },
+);

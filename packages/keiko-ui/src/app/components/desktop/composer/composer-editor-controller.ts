@@ -143,6 +143,9 @@ export class ComposerEditorController implements ComposerInputHandle {
     if (!props.value) {
       this.value = "";
       this.view.updateState(this.createState(""));
+      reportClientDiagnostic("Keiko composer external draft resynchronized.", {
+        composerActivity: "draft-resynchronized",
+      });
       return;
     }
     let tr = this.externalDraftTransaction(props.value);

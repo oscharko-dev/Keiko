@@ -134,6 +134,14 @@ function layoutFor(
       windowsGeneration: binding,
     };
   }
+  return posixPortableActivationLayout(target, root);
+}
+
+/** Canonical POSIX package paths shared by activation and its verified native handoff. */
+export function posixPortableActivationLayout(
+  target: Exclude<UpdatePortableTarget, "windows-x64">,
+  root: string,
+): PortableActivationLayout {
   if (target === "linux-x64") {
     return {
       installRoot: root,
@@ -239,7 +247,7 @@ function validateLayout(
   const rootSetupManifestPath =
     target === "windows-x64"
       ? join(root, ".portable", "setup-manifest.json")
-      : join(root, "Contents", "Resources", ".portable", "setup-manifest.json");
+      : posixPortableActivationLayout(target, root).setupManifestPath;
   requiredFile(rootSetupManifestPath);
   const setupManifest = readJsonRecord(rootSetupManifestPath);
   const layout = layoutFor(target, root, setupManifest);
@@ -422,8 +430,13 @@ function writeExclusiveFile(path: string, content: Uint8Array | string): void {
   }
 }
 
+function openPortableAttestationFile(path: string): number {
+  // Type validation must be reachable even when a FIFO replaces an expected regular file.
+  return openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+}
+
 function readPortableRegistrationSnapshot(path: string): Buffer {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const descriptor = openPortableAttestationFile(path);
   try {
     const stat = fstatSync(descriptor);
     if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_REGISTRATION_BYTES) {
@@ -504,7 +517,7 @@ function assertActiveAttestationDeadline(deadline: number): void {
 }
 
 function readBoundedActiveFile(path: string, maximumBytes: number, deadline: number): Buffer {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const descriptor = openPortableAttestationFile(path);
   try {
     const opened = openedBoundedFile(path, descriptor, maximumBytes);
     const content = Buffer.alloc(opened.size);
@@ -525,7 +538,7 @@ function readBoundedActiveFile(path: string, maximumBytes: number, deadline: num
 }
 
 function digestBoundedActiveFile(path: string, maximumBytes: number, deadline: number): string {
-  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const descriptor = openPortableAttestationFile(path);
   try {
     const opened = openedBoundedFile(path, descriptor, maximumBytes);
     const hash = createHash("sha256");
@@ -579,17 +592,22 @@ function activeRegistrationDigestsMatch(
   );
 }
 
-function activeWindowsInstallBinding(
+function activeInstallBinding(
   record: Record<string, unknown>,
   input: {
     readonly managedRoot: string;
     readonly target: UpdatePortableTarget;
     readonly version: string;
   },
-): WindowsGenerationBinding | undefined {
+): PortableManagedRegistrationAttestationFacts | undefined {
   const deadline = Date.now() + ACTIVE_ATTESTATION_TIMEOUT_MS;
-  const setupManifestPath = join(input.managedRoot, ".portable", "setup-manifest.json");
-  const launcherPath = join(input.managedRoot, "Keiko.exe");
+  const { setupManifestPath, launcherPath } =
+    input.target === "windows-x64"
+      ? {
+          setupManifestPath: join(input.managedRoot, ".portable", "setup-manifest.json"),
+          launcherPath: join(input.managedRoot, "Keiko.exe"),
+        }
+      : posixPortableActivationLayout(input.target, input.managedRoot);
   const setupBytes = readBoundedActiveFile(setupManifestPath, MAX_ACTIVE_SETUP_BYTES, deadline);
   const setup = parseJsonRecord(setupBytes.toString("utf8"));
   if (setup === undefined) return undefined;
@@ -602,14 +620,12 @@ function activeWindowsInstallBinding(
   }
   const setupManifestSha256 = createHash("sha256").update(setupBytes).digest("hex");
   const launcherSha256 = digestBoundedActiveFile(launcherPath, MAX_ACTIVE_LAUNCHER_BYTES, deadline);
-  return activeRegistrationDigestsMatch(
-    record,
-    setupManifestSha256,
-    launcherSha256,
-    expectedGeneration,
-  )
-    ? expectedGeneration
-    : undefined;
+  if (
+    !activeRegistrationDigestsMatch(record, setupManifestSha256, launcherSha256, expectedGeneration)
+  ) {
+    return undefined;
+  }
+  return expectedGeneration === undefined ? {} : { windowsGeneration: expectedGeneration };
 }
 
 function activeRegistrationMetadataMatches(
@@ -649,15 +665,11 @@ export function attestPortableManagedRegistrationFacts(input: {
     }
     const record = parseJsonRecord(registration.toString("utf8"));
     if (record === undefined || !registrationSchemaMatches(record, input.target)) return undefined;
-    const windowsGeneration =
-      input.target === "windows-x64" ? activeWindowsInstallBinding(record, input) : undefined;
-    if (
-      (input.target === "windows-x64" && windowsGeneration === undefined) ||
-      !activeRegistrationMetadataMatches(record, input)
-    ) {
+    const facts = activeInstallBinding(record, input);
+    if (facts === undefined || !activeRegistrationMetadataMatches(record, input)) {
       return undefined;
     }
-    return windowsGeneration === undefined ? {} : { windowsGeneration };
+    return facts;
   } catch {
     return undefined;
   }

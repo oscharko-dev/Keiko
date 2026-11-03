@@ -20,6 +20,7 @@
 import { createServer } from "node:http";
 import { readFileSync } from "node:fs";
 import { GROUNDED_SYSTEM_PROMPT } from "../../../packages/keiko-server/dist/grounded-prompt.js";
+import { groundingAccountingWitness } from "./grounding-accounting-witness.mjs";
 
 const PORT = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32186");
 const HOST = "127.0.0.1";
@@ -47,6 +48,27 @@ const MARKDOWN_SKILL_DRAFT = readFileSync(
 );
 // Code points per streamed delta of any answer other than the reply.
 const STREAM_SLICE_LENGTH = 16;
+const groundingAccounting = [];
+let groundingCallCount = 0;
+
+function completionUsage(content) {
+  const completionTokens = streamTokens(content).length;
+  return {
+    prompt_tokens: 8,
+    completion_tokens: completionTokens,
+    total_tokens: 8 + completionTokens,
+  };
+}
+
+function observeGroundingAccounting(raw) {
+  if (!raw.includes(GROUNDED_PROMPT_MARKER) || !raw.includes(GROUNDING_PARITY_EVIDENCE_MARKER))
+    return;
+  groundingCallCount += 1;
+  groundingAccounting.push(
+    groundingAccountingWitness(raw, completionUsage(completionContent(raw))),
+  );
+  if (groundingAccounting.length > 16) groundingAccounting.shift();
+}
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -105,11 +127,7 @@ function streamCompletion(res, rawRequest) {
     created: 0,
     model: "e2e-chat-model",
     choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
-    usage: {
-      prompt_tokens: 8,
-      completion_tokens: tokens.length,
-      total_tokens: 8 + tokens.length,
-    },
+    usage: completionUsage(completionContent(rawRequest)),
   };
   res.write(`data: ${JSON.stringify(usageFrame)}\n\n`);
   res.write("data: [DONE]\n\n");
@@ -195,8 +213,6 @@ function prDescriptionCandidate(rawRequest) {
 
 function bufferedCompletion(res, rawRequest) {
   const content = completionContent(rawRequest);
-  // The same usage whichever way the answer travels: the count of the deltas it would stream.
-  const completionTokens = streamTokens(content).length;
   const body = {
     id: "chatcmpl-e2e",
     object: "chat.completion",
@@ -209,11 +225,7 @@ function bufferedCompletion(res, rawRequest) {
         finish_reason: "stop",
       },
     ],
-    usage: {
-      prompt_tokens: 8,
-      completion_tokens: completionTokens,
-      total_tokens: 8 + completionTokens,
-    },
+    usage: completionUsage(content),
   };
   res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(body));
@@ -284,8 +296,14 @@ const server = createServer((req, res) => {
     res.end(JSON.stringify({ status: "ok" }));
     return;
   }
+  if (req.method === "GET" && url.pathname === "/grounding-accounting") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ totalCalls: groundingCallCount, witnesses: groundingAccounting }));
+    return;
+  }
   if (req.method === "POST" && url.pathname.endsWith("/chat/completions")) {
     void readBody(req).then((raw) => {
+      observeGroundingAccounting(raw);
       if (raw.includes("KEIKO_E2E_SUPPORT_FAILURE")) {
         res.writeHead(400, { "content-type": "application/json" });
         res.end(

@@ -54,13 +54,25 @@ LiteLLM production-gateway issues are covered in the dedicated
 `x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`
 rejections on reasoning aliases, and truncated discovery on large multi-team proxies.
 
+Whisper dictation failures after a successful microphone capture are covered in
+[Dictation through LiteLLM](voice-dictation-litellm.md), including browser codec compatibility
+and the body-free STT dispatch/completion diagnostics.
+
 Coding Workbench runs that start with less authority than the composer shows — a Supervised
 workspace or Full access selection capped by the installation's deployment ceiling — are covered in
 the dedicated [Coding Workbench Authority Limit](coding-workbench-authority-limit.md) entry.
 
+Coding Workbench tasks whose next run or fork starts a fresh runtime with the task's history as
+context, instead of resuming the retained native session, are covered in
+[Coding Workbench task continues with context only](coding-workbench-session-not-resumed.md),
+including the closed reasons on the `coding-runtime.session-continuity` line.
+
 Chat answers that request a file already inside the connected folder are covered in
 [Restore connected-folder file grounding](chat-connected-folder-file-not-read.md). Use that entry
 for explicit path admission, narrowed scope, low-confidence selection, and insufficient follow-ups.
+
+For document or code content replaced by `[REDACTED]`, see
+[Preserve authorized document content in Chat](chat-content-redaction.md).
 
 ## Severity scale
 

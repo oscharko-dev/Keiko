@@ -19,6 +19,7 @@ import { CONVERSATION_SYSTEM_PROMPT } from "./conversation-prompt.js";
 
 import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import type {
+  ContentRedactionPolicy,
   ContextCompactionRecord,
   ContextProfile,
   ContextTokenAccounting,
@@ -40,14 +41,20 @@ import {
   conversationForGateway,
   usableGatewayTurns,
   type GatewayConversationMessage,
+  type GatewayConversationTurn,
+  gatewayMessagesForTurn,
 } from "./conversation-gateway.js";
 
 export interface ConversationCompactionOptions {
+  /** Explicit maintenance summarizes the complete eligible history in a single pass. */
+  readonly compactAllHistory?: boolean | undefined;
   readonly earlierCompaction?: ContextCompactionRecord | undefined;
   readonly contextProfile?: ContextProfile | undefined;
   readonly effectiveInputBudget?: number | undefined;
   readonly redactionSecrets?: readonly string[] | undefined;
   readonly preserveNewestTurn?: boolean | undefined;
+  /** The deployment content policy of the Chat whose prompt this builds (#4098). */
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }
 
 export interface ConversationCompactionOutcome {
@@ -56,10 +63,9 @@ export interface ConversationCompactionOutcome {
   readonly omittedSummaryCategories?: readonly string[] | undefined;
 }
 
-interface DroppedTurn {
-  readonly role: "user" | "assistant";
-  readonly content: string;
-  readonly stableId: string;
+type RetainedGatewayTurn = Pick<GatewayConversationTurn, "role" | "content" | "verbatim">;
+
+interface DroppedTurn extends GatewayConversationTurn {
   readonly gatewayTokens: number;
 }
 
@@ -86,7 +92,7 @@ export function conversationForGatewayWithCompaction(
   opts: ConversationCompactionOptions = {},
 ): ConversationCompactionOutcome {
   const filtered = usableGatewayTurns(messages);
-  const gatewayMessages = conversationForGateway(messages);
+  const gatewayMessages = conversationForGateway(messages, opts.contentRedaction);
   const systemMessage = gatewayMessages[0];
   const activeProfile = opts.contextProfile ?? DEFAULT_CONTEXT_PROFILE;
   const effectiveInputBudget = opts.effectiveInputBudget ?? activeProfile.effectiveInputBudget;
@@ -97,7 +103,10 @@ export function conversationForGatewayWithCompaction(
     { messages: fullVerbatimMessages },
     tokenAccounting,
   );
-  if (fullVerbatimTokens <= effectiveInputBudget) {
+  if (
+    fullVerbatimTokens <= effectiveInputBudget &&
+    (opts.compactAllHistory !== true || filtered.length === 0)
+  ) {
     return { messages: fullVerbatimMessages, compaction: earlier };
   }
 
@@ -130,11 +139,12 @@ function selectCompactionOutcome(
     tokenAccounting,
     earlier,
     allowTrimming: false,
+    compactAllHistory: opts.compactAllHistory === true,
   };
   const complete = selectCompaction(prepared, system, budget);
   if (complete !== undefined)
     return buildCompactedOutcome(prepared, system, complete, tokenAccounting, earlier);
-  if (earlier !== undefined) {
+  if (earlier !== undefined && (opts.compactAllHistory !== true || prepared.length === 0)) {
     const refitted = refitEarlierCheckpoint(
       prepared,
       system,
@@ -153,7 +163,7 @@ function selectCompactionOutcome(
 
 function buildInitialMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  filtered: readonly RetainedGatewayTurn[],
   earlier: ContextCompactionRecord | undefined,
 ): GatewayConversationMessage[] {
   if (earlier === undefined) return buildVerbatimMessages(systemMessage, filtered);
@@ -167,9 +177,9 @@ function buildInitialMessages(
 
 function buildVerbatimMessages(
   systemMessage: GatewayConversationMessage | undefined,
-  filtered: readonly { role: "user" | "assistant"; content: string }[],
+  filtered: readonly RetainedGatewayTurn[],
 ): GatewayConversationMessage[] {
-  const retained = filtered.map((turn) => ({ role: turn.role, content: turn.content }));
+  const retained = filtered.flatMap(gatewayMessagesForTurn);
   return systemMessage === undefined ? retained : [systemMessage, ...retained];
 }
 
@@ -193,9 +203,9 @@ function buildCompactedOutcome(
 function buildCompactedMessages(
   systemMessage: GatewayConversationMessage | undefined,
   summaryContent: string,
-  retained: readonly Pick<DroppedTurn, "role" | "content">[],
+  retained: readonly Pick<DroppedTurn, "role" | "content" | "verbatim">[],
 ): GatewayConversationMessage[] {
-  const retainedMessages = retained.map((turn) => ({ role: turn.role, content: turn.content }));
+  const retainedMessages = retained.flatMap(gatewayMessagesForTurn);
   const systemScopedSummary: GatewayConversationMessage = {
     role: "system",
     content: buildSystemScopedCompactionContent(systemMessage?.content, summaryContent),
@@ -208,13 +218,15 @@ function selectCompaction(
   systemMessage: GatewayConversationMessage | undefined,
   budget: Omit<CompactionCandidateBudget, "systemContent"> & {
     readonly preserveNewestTurn: boolean;
+    readonly compactAllHistory: boolean;
   },
 ): CompactionSelection | undefined {
   const systemContent = systemMessage?.content;
   if (systemContent === undefined && prepared.length === 0) return undefined;
   const tokenPrefix = buildTokenPrefix(prepared);
   const maxDropCount = budget.preserveNewestTurn ? prepared.length - 1 : prepared.length;
-  for (let dropCount = 1; dropCount <= maxDropCount; dropCount += 1) {
+  const firstDropCount = budget.compactAllHistory ? Math.max(1, maxDropCount) : 1;
+  for (let dropCount = firstDropCount; dropCount <= maxDropCount; dropCount += 1) {
     const selection = selectCompactionCandidate(prepared, tokenPrefix, dropCount, {
       ...budget,
       systemContent,
@@ -290,14 +302,15 @@ function selectCompactionCandidate(
 }
 
 function prepareDroppedTurns(
-  prefix: readonly { role: "user" | "assistant"; content: string; stableId: string }[],
+  prefix: readonly GatewayConversationTurn[],
   tokenAccounting: ContextTokenAccounting | undefined,
 ): DroppedTurn[] {
   return prefix.map((turn) => ({
-    role: turn.role,
-    content: turn.content,
-    stableId: turn.stableId,
-    gatewayTokens: countGatewayPromptTokens({ messages: [turn] }, tokenAccounting),
+    ...turn,
+    gatewayTokens: countGatewayPromptTokens(
+      { messages: gatewayMessagesForTurn(turn) },
+      tokenAccounting,
+    ),
   }));
 }
 

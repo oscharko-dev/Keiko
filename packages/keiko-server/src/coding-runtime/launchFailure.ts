@@ -13,9 +13,11 @@
 // wire-facing failure code instead of collapsing it. Failures stay observable; nothing is swallowed.
 
 import type {
+  CodingWorkbenchAgent,
   CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeFailureCode,
 } from "@oscharko-dev/keiko-contracts";
+import type { CodingJiraPodRefusal } from "./codingJiraPodBinding.js";
 import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
 
 /** A launch refused by a runtime backend, carrying the manager's structured failure code. */
@@ -65,6 +67,52 @@ export class CodingRuntimeLaunchResolutionError extends Error {
 }
 
 /**
+ * A start that names a primary agent the selected runtime cannot honour (#3897): `plan` is
+ * OpenCode's own read-only agent and exists only on the native service, never on the governed
+ * mapped profiles or the Codex adapter. Refusing is the only truthful answer: running the request
+ * as `build` would hand a read-only request an agent that can edit. Carries the closed agent id
+ * and nothing else.
+ */
+export class CodingRuntimeAgentUnsupportedError extends Error {
+  public readonly agent: CodingWorkbenchAgent;
+
+  public constructor(agent: CodingWorkbenchAgent) {
+    super("agent-unsupported");
+    this.name = "CodingRuntimeAgentUnsupportedError";
+    this.agent = agent;
+  }
+}
+
+/**
+ * A start whose first prompt carries inputs the selected runtime cannot take (ADR-0137 D10): files
+ * referenced with `@`, or a slash command, exist on the native service only. The mapped profiles
+ * and the Codex adapter have neither, and starting the run without them would answer another
+ * request than the one the operator wrote. Carries no name, path or text.
+ */
+export class CodingRuntimeInputsUnsupportedError extends Error {
+  public constructor() {
+    super("inputs-unsupported");
+    this.name = "CodingRuntimeInputsUnsupportedError";
+  }
+}
+
+/**
+ * A start that names a Jira Pod the run cannot use (owner decision 2026-10-30): the Pod is not the
+ * caller's own, is not ready, changed since the human chose it, or this runtime cannot offer Jira
+ * tools. Refused before the confirmation is consumed, so the human's confirmation stays valid for
+ * the corrected request. Carries the closed reason and nothing else: no Pod id, name or URL.
+ */
+export class CodingRuntimeJiraPodRefusedError extends Error {
+  public readonly reason: CodingJiraPodRefusal;
+
+  public constructor(reason: CodingJiraPodRefusal) {
+    super(`jira-pod:${reason}`);
+    this.name = "CodingRuntimeJiraPodRefusedError";
+    this.reason = reason;
+  }
+}
+
+/**
  * The closed diagnostic reason of a launch rejection: the structured code, suffixed with its closed
  * sub-reason when the rejection carries one, or the model-selection reason. Never free text.
  */
@@ -73,6 +121,9 @@ export function launchRejectionDiagnosticReason(error: unknown): string | undefi
     return error.reason === undefined ? error.failureCode : `${error.failureCode}:${error.reason}`;
   }
   if (error instanceof CodingRuntimeLaunchResolutionError) return error.reason;
+  if (error instanceof CodingRuntimeAgentUnsupportedError) return "agent-unsupported";
+  if (error instanceof CodingRuntimeInputsUnsupportedError) return "inputs-unsupported";
+  if (error instanceof CodingRuntimeJiraPodRefusedError) return `jira-pod:${error.reason}`;
   return undefined;
 }
 
@@ -118,6 +169,10 @@ export function launchModelRefusalReason(
  * reported as a specific, wrong cause, and must never be reported as success.
  */
 export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeFailureCode {
+  // A request the runtime cannot honour is an invalid intent, not a missing authority.
+  if (error instanceof CodingRuntimeAgentUnsupportedError) return "invalid-intent";
+  if (error instanceof CodingRuntimeInputsUnsupportedError) return "invalid-intent";
+  if (error instanceof CodingRuntimeJiraPodRefusedError) return "invalid-intent";
   if (!(error instanceof CodingRuntimeLaunchRejectedError)) return "authority-resolution-failed";
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
 }

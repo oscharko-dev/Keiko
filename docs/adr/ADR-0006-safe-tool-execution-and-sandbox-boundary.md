@@ -145,7 +145,13 @@ allowlist entirely, because the credential is read off disk, not off the environ
 `runCommand` redirects `HOME` and `USERPROFILE` to a per-run **ephemeral, empty directory** created
 under the OS temp dir (`mkdtempSync(join(tmpdir(), "keiko-home-"))`) and removed after the command
 in every settle path — success, denial-before-spawn (no dir is created), timeout, cancellation, and
-spawn error (`src/tools/exec.ts`, `HomeProvider`/`nodeHomeProvider`). The child still receives a
+spawn error (`src/tools/exec.ts`, `HomeProvider`/`nodeHomeProvider`). A filesystem-confined run
+(macOS Seatbelt, or a strict bubblewrap execution-root run) may write only inside its execution
+root, so its per-run home is a `.keiko-home-*` directory created directly inside that root instead;
+bubblewrap mounts it as the child's `/tmp`, `HOME` and `TMPDIR`, and it is removed in the same settle
+paths (ADR-0043). Removal is the point: anything the child writes there (npm logs, Node's compile
+cache) would otherwise stay behind as untracked files in the workspace the run verified
+(PR #4095). The child still receives a
 valid, writable `HOME` (so `npm` works), but it is empty: a home-directory credential lookup
 resolves to nothing. The provider is injected as a `RunCommandDeps.home` dependency with a Node
 default, so tests use a recording/fake provider and assert the child `HOME` is a real, existing,
@@ -307,11 +313,17 @@ contains no validation logic — because validation belongs to the caller, not t
 
 ### D4 — Patch validation rules, dry-run-never-writes, and fail-closed atomic apply
 
-**Supported subset.** `parseUnifiedDiff` (`src/tools/patch-parse.ts:193`) handles standard unified
+**Supported subset.** `parseUnifiedDiff` handles standard unified
 diffs: `--- a/<path>` / `+++ b/<path>` headers, `@@ -l,s +l,s @@` hunks, ` `/`+`/`-` body lines,
 file creation (`--- /dev/null`), and deletion (`+++ /dev/null`). This is not git-apply: no rename
 detection, no fuzzy matching, no binary patches. The parser is linear — a single pass over split
 lines with bounded per-line regexes — so it cannot backtrack catastrophically (CodeQL ReDoS guard).
+
+The pure parser lives in `keiko-contracts/runtime/unified-diff`; the existing tools module re-exports
+the same function and error constructor. Its default return shape and accepted grammar are unchanged.
+An optional observer publishes exact UTF-16 header/body ranges only after the entire parse succeeds.
+Incomplete/header-only files and ignored preamble, gaps or tails gain no ownership. Security uses
+these observations for source privacy; there is no second diff grammar or new patch authority.
 
 The `\ No newline at end of file` marker is kept on the body line it annotates and applied as Git
 reads it (#3873): a marked line is the file's last line without a line break, an unmarked line has
@@ -327,7 +339,7 @@ and surfaced as a `malformed` entry in `reasons` (it is NOT re-thrown). The only
 `validatePatch` propagates is a genuine security violation from the symlink path gate
 (`PathEscapeError`), where failing closed is correct. Checks in order:
 
-1. **Size limit** — `Buffer.byteLength(diff, "utf8") <= maxPatchBytes` (default 65 536 bytes, matching the harness `maxPatchBytes` limit from ADR-0004 D3).
+1. **Size limit** — `Buffer.byteLength(diff, "utf8") <= maxPatchBytes` (default `GOVERNED_PATCH_MAX_BYTES`, 8 MiB since the owner decision of 2026-10-29 (#4110, ADR-0125 D3), matching the harness `maxPatchBytes` limit from ADR-0004 D3).
 2. **Binary rejection** — any diff containing `GIT binary patch`, `Binary files … differ`, or NUL bytes is rejected.
 3. **Path safety** — every target path is checked via `resolveWithinWorkspace` (rejects `..`, abs, NUL), `isDenied` (always-on deny list from ADR-0005 D3: `.env*`, `*.pem`, `*.key`, `.git/**`, `node_modules/**`, etc.), AND `containedRealPathInfo` — the same symlink/realpath gate the read path applies (ADR-0005 D2). The realpath gate resolves the target (or, for a create, the nearest existing parent) and rejects a path whose real location escapes the root or resolves to an always-denied in-workspace target, closing both symlink-write/outside and symlink-alias-to-denied-file escalations. The write path re-asserts it at `planWrites` as defence in depth.
 4. **Line-count limits** — `maxChangedLines` (default 2 000) and `maxFilesChanged` (default 50).
@@ -375,7 +387,11 @@ Tool `output` strings are redacted at two points:
    Content-bearing blob, patch and CI failure-log readers retain the default all-environment-value
    scrub; the pull-request body reader applies that same scrub to the body text it returns (text the
    scrub would alter is an altered read, never a fact) while the identity envelope around it is a
-   typed fact. An explicitly stricter caller policy remains authoritative; typed
+   typed fact. The one exception is an environment value whose every occurrence, overlapping ones
+   included, lies inside Keiko's own compiled-in PR-description attribution: that text is public
+   source, so the occurrence discloses nothing, and a GitHub-hosted runner's repository slug and
+   server URL otherwise made every body Keiko had written an altered read (PR #4095). An occurrence
+   outside the attribution, or one that straddles its boundary, keeps the read altered. An explicitly stricter caller policy remains authoritative; typed
    GitHub reads share their original invocation, byte, deadline and authority budgets.
 
 2. **ToolCallResult.output** — the `WorkspaceToolHost.execute` method returns `output` that is

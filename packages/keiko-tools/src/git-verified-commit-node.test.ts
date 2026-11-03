@@ -254,6 +254,43 @@ describe("verified commit at the sole mutation adapter", () => {
     expect(result.outcome).toBe("failed");
     expect(git(["rev-parse", "HEAD"])).toBe(request.verified.headSha);
   });
+  // #3907 AC3: a human who checks out the task branch locally gives the run that branch as its own
+  // base. Git refuses a ref transaction that both verifies and updates one ref, so the governed
+  // commit used to fail after creating its signed object, and the run could never commit.
+  it("commits on a branch that is its own base", async () => {
+    const request = await candidate();
+    const ownBase = {
+      ...request,
+      verified: { ...request.verified, baseRef: "codex/task", baseSha: request.verified.headSha },
+    };
+    const result = await adapter().commit(ownBase);
+    expect(result.outcome).toBe("succeeded");
+    expect(result.externalId).toBe(git(["rev-parse", "HEAD"]));
+    expect(git(["rev-parse", "HEAD^"])).toBe(request.verified.headSha);
+    expectLastCommitSigned();
+  });
+  it("atomically refuses movement of a branch that is its own base", async () => {
+    const request = await candidate();
+    const ownBase = {
+      ...request,
+      verified: { ...request.verified, baseRef: "codex/task", baseSha: request.verified.headSha },
+    };
+    const other = git([
+      "commit-tree",
+      git(["write-tree"]),
+      "-p",
+      git(["rev-parse", "HEAD"]),
+      "-m",
+      "concurrent branch movement",
+    ]);
+    let checks = 0;
+    const result = await adapter(() => {
+      if (++checks === 3) git(["update-ref", "refs/heads/codex/task", other]);
+      return true;
+    }).commit(ownBase);
+    expect(result.outcome).toBe("failed");
+    expect(git(["rev-parse", "HEAD"])).toBe(other);
+  });
   it("atomically refuses base movement during the last authority check", async () => {
     const request = await candidate();
     const other = git([

@@ -24,6 +24,7 @@ import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { API_ROUTES, matchRoute, type RouteContext, type HandlerOutcome } from "./routes.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
+import { CODING_TOOL_MAX_REQUEST_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -318,7 +319,7 @@ describe("coding-sidecar tool facade route", () => {
     const log = captureServerLog();
     const handle = vi.fn(() => Promise.resolve({ status: 200, body: "{}" }));
     const deps = depsWith(bridge(handle));
-    const oversized = `{"padding":"${"x".repeat(2_000_000)}"}`;
+    const oversized = `{"padding":"${"x".repeat(CODING_TOOL_MAX_REQUEST_BODY_BYTES)}"}`;
     const ctx = toolFacadeContext({ bearer: "tool-capability", body: oversized });
     const result = await handleCodingSidecarToolFacade(ctx, deps);
     expect(result).toMatchObject({
@@ -334,6 +335,18 @@ describe("coding-sidecar tool facade route", () => {
         extra: { reason: "body-too-large", completeness: "complete", loss: "none" },
       }),
     ]);
+  });
+
+  // Owner decision 2026-10-28: the bound is the changeset-edit request ceiling, not 256 KiB, so a
+  // governed edit above 64 KiB reaches the bridge instead of being cut off at the BFF.
+  it("admits a body above the response bound, up to the request bound", async () => {
+    const handle = vi.fn(() => Promise.resolve({ status: 200, body: "{}" }));
+    const deps = depsWith(bridge(handle));
+    const large = `{"padding":"${"x".repeat(2_000_000)}"}`;
+    const ctx = toolFacadeContext({ bearer: "tool-capability", body: large });
+    const result = await handleCodingSidecarToolFacade(ctx, deps);
+    expect(result).toMatchObject({ status: 200 });
+    expect(handle).toHaveBeenCalledOnce();
   });
 
   // #3390: relocated from opencodeRuntimeComposition.test.ts's retired raw-listener fatal-UTF-8

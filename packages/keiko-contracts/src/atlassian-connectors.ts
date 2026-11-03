@@ -32,6 +32,9 @@ import {
   stripUnsafeFormatChars,
 } from "./text-safety.js";
 
+import { JIRA_MANAGED_READ_TOOLS, type JiraManagedReadToolName } from "./jira-tool-fields.js";
+import type { JiraMutationOperation } from "./jira-tool-execution.js";
+
 // ─── Schema version ───────────────────────────────────────────────────────────
 // Pinned to "1". A breaking change introduces a NEW literal rather than mutating "1", the same
 // evolution rule as `CODING_WORKBENCH_SCHEMA_VERSION` and the other audit surfaces.
@@ -45,10 +48,107 @@ export const ATLASSIAN_CONNECTOR_PROVIDERS: readonly AtlassianConnectorProvider[
   "jira",
 ] as const satisfies readonly AtlassianConnectorProvider[]);
 
-// `basic-api-token` is the only implemented v1 scheme (Atlassian Cloud). `bearer-pat` is declared
-// now for the Data Center follow-up (ADR-0128 D7) so the credential shape never needs a breaking
-// change; no runtime ships for it in v1.
+// Cloud uses Basic API tokens; Jira Data Center uses an explicitly selected Bearer PAT variant.
 export type AtlassianConnectorAuthScheme = "basic-api-token" | "bearer-pat";
+
+export type AtlassianConnectorDeployment = "cloud" | "data-center";
+
+/** Operator file configuration, never a credential-create or Chat request field. */
+export interface AtlassianPrivateTarget {
+  readonly baseUrl: string;
+  readonly addressClass: "private" | "loopback";
+}
+
+export interface AtlassianNetworkConfig {
+  readonly privateTargets: readonly AtlassianPrivateTarget[];
+}
+
+interface AtlassianCredentialMetadataBase {
+  readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
+  readonly authRef: string;
+  readonly displayName: string;
+  readonly baseUrl: string;
+  readonly createdAt: number;
+  /** Legacy Cloud records without this field have generation 1. */
+  readonly generation?: number;
+}
+
+/** Private-custody identity and verification facts, never a Chat authorization grant. */
+export interface JiraLivePodMetadata {
+  /** Durable incomplete custody work; execution and verification remain blocked. */
+  readonly credentialOperation?: "replace-token" | "delete";
+  readonly podId: string;
+  readonly ownerDigest: string;
+  readonly creationRequestId: string;
+  readonly verificationRevision: number;
+  readonly verificationInProgress: boolean;
+  readonly verificationStatus: "unverified" | AtlassianConnectionVerificationStatus;
+}
+
+/** A secret-free projection. An absent legacy deployment always means Cloud. */
+export type AtlassianCredentialMetadata = AtlassianCredentialMetadataBase &
+  (
+    | {
+        readonly provider: AtlassianConnectorProvider;
+        readonly deployment?: "cloud";
+        readonly authScheme: "basic-api-token";
+      }
+    | {
+        readonly provider: "jira";
+        readonly deployment: "data-center";
+        readonly authScheme: "bearer-pat";
+        readonly generation: number;
+        readonly livePod?: JiraLivePodMetadata;
+      }
+  );
+
+/** UI projection only; possession never grants Chat or connector authority. */
+export interface JiraLivePodView {
+  readonly kind: "jira-live";
+  readonly podId: string;
+  readonly authenticationGeneration: number;
+  readonly verificationRevision: number;
+  readonly verificationInProgress: boolean;
+  readonly verificationStatus: JiraLivePodMetadata["verificationStatus"];
+  readonly capabilities: readonly ("live-read" | "live-write")[];
+}
+
+/** The credential API omits all private custody identity and pending-operation facts. */
+export type AtlassianCredentialPublicMetadata =
+  | Extract<AtlassianCredentialMetadata, { authScheme: "basic-api-token" }>
+  | (Omit<Extract<AtlassianCredentialMetadata, { authScheme: "bearer-pat" }>, "livePod"> & {
+      readonly livePod?: JiraLivePodView;
+    });
+
+interface AtlassianCredentialCreateBase {
+  readonly displayName: string;
+  readonly baseUrl: string;
+  /** Write-only, accepted by custody and never returned by a metadata projection. */
+  readonly apiToken: string;
+}
+
+export type AtlassianCredentialCreateRequest = AtlassianCredentialCreateBase &
+  (
+    | {
+        readonly provider: AtlassianConnectorProvider;
+        readonly deployment?: "cloud";
+        readonly authScheme: "basic-api-token";
+        readonly accountEmail: string;
+      }
+    | {
+        readonly provider: "jira";
+        readonly deployment: "data-center";
+        readonly authScheme: "bearer-pat";
+        readonly accountEmail?: never;
+        readonly livePodCreationRequestId?: string;
+      }
+  );
+
+/** Owner-scoped Live-Pod updates retain identity; token replacement advances the generation. */
+export type AtlassianLivePodUpdateRequest = { readonly expectedGeneration: number } & (
+  | { readonly displayName: string; readonly apiToken?: string }
+  | { readonly displayName?: string; readonly apiToken: string }
+);
 
 export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthScheme[] =
   Object.freeze([
@@ -61,7 +161,15 @@ export const ATLASSIAN_CONNECTOR_AUTH_SCHEMES: readonly AtlassianConnectorAuthSc
 // surface renders exactly these actionable states — never a raw provider error. Defined in this
 // leaf so both the server package and the UI share one source of truth (no re-declaration).
 export type AtlassianConnectionVerificationStatus =
-  "ok" | "auth-failed" | "forbidden" | "unreachable" | "timeout";
+  | "ok"
+  | "auth-failed"
+  | "forbidden"
+  | "unreachable"
+  | "timeout"
+  | "redirect-refused"
+  | "invalid-response"
+  | "unsupported-version"
+  | "tls-failed";
 
 export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConnectionVerificationStatus[] =
   Object.freeze([
@@ -70,6 +178,10 @@ export const ATLASSIAN_CONNECTION_VERIFICATION_STATUSES: readonly AtlassianConne
     "forbidden",
     "unreachable",
     "timeout",
+    "redirect-refused",
+    "invalid-response",
+    "unsupported-version",
+    "tls-failed",
   ] as const satisfies readonly AtlassianConnectionVerificationStatus[]);
 
 export function isAtlassianConnectionVerificationStatus(
@@ -153,6 +265,16 @@ export function isSafeAtlassianConnectorBaseUrl(value: unknown): value is string
   }
   if (!isSafeParsedBaseUrl(url)) return false;
   return !value.includes("@") && !value.includes("?") && !value.includes("#");
+}
+
+/** Exact target identity; ambiguous path encodings and normalizing traversal are not admitted. */
+export function canonicalAtlassianConnectorBaseUrl(value: unknown): string | undefined {
+  if (!isSafeAtlassianConnectorBaseUrl(value)) return undefined;
+  const url = new URL(value);
+  const normalized = url.toString().replace(/\/$/, "");
+  if (normalized !== value.replace(/\/$/, "")) return undefined;
+  if (url.pathname.includes("%") || url.pathname.includes("//")) return undefined;
+  return normalized;
 }
 
 // ─── Connector descriptor (ADR-0128 D2) ───────────────────────────────────────
@@ -415,6 +537,8 @@ export type AtlassianSyncJobState =
 
 // ─── Governed action vocabulary and effect-class table (ADR-0128 D4) ──────────
 export type AtlassianConnectorActionType =
+  | JiraManagedReadToolName
+  | "assign-issue"
   | "sync-space"
   | "sync-project"
   | "search-issues-live"
@@ -438,7 +562,32 @@ export const ATLASSIAN_CONNECTOR_ACTION_TYPES: readonly AtlassianConnectorAction
     "create-page",
     "update-page",
     "add-page-comment",
+    ...JIRA_MANAGED_READ_TOOLS,
+    "assign-issue",
   ] as const satisfies readonly AtlassianConnectorActionType[]);
+
+/** One mapping from canonical tools to the existing connector policy vocabulary. */
+export const JIRA_MANAGED_ACTION_TYPES: Readonly<
+  Record<JiraManagedReadToolName | JiraMutationOperation, AtlassianConnectorActionType>
+> = Object.freeze({
+  ...(Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, name])) as Record<
+    JiraManagedReadToolName,
+    JiraManagedReadToolName
+  >),
+  "jira.create": "create-issue",
+  "jira.edit": "update-issue-fields",
+  "jira.assign": "assign-issue",
+  "jira.comment": "add-issue-comment",
+  "jira.transition": "transition-issue",
+});
+function jiraReadActionValues<Value extends string>(
+  value: Value,
+): Record<JiraManagedReadToolName, Value> {
+  return Object.fromEntries(JIRA_MANAGED_READ_TOOLS.map((name) => [name, value])) as Record<
+    JiraManagedReadToolName,
+    Value
+  >;
+}
 
 // The D4 "Action class" column, verbatim. `connector-access` is the shared
 // `CodingWorkbenchActionClass` that admits connector operations into the Authority Envelope;
@@ -456,6 +605,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASSES: readonly AtlassianConnectorActi
 export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorActionClass>
 > = Object.freeze({
+  ...jiraReadActionValues("connector-access"),
+  "assign-issue": "connector-write",
   "sync-space": "connector-access",
   "sync-project": "connector-access",
   "search-issues-live": "connector-access",
@@ -471,6 +622,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_CLASS: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
   Record<AtlassianConnectorActionType, AtlassianConnectorProvider>
 > = Object.freeze({
+  ...jiraReadActionValues("jira"),
+  "assign-issue": "jira",
   "sync-space": "confluence",
   "sync-project": "jira",
   "search-issues-live": "jira",
@@ -486,6 +639,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_PROVIDER: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchConnectorScope>
 > = Object.freeze({
+  ...jiraReadActionValues("issue-tracker.read"),
+  "assign-issue": "issue-tracker.write",
   "sync-space": "knowledge-base.read",
   "sync-project": "issue-tracker.read",
   "search-issues-live": "issue-tracker.read",
@@ -504,6 +659,8 @@ export const ATLASSIAN_CONNECTOR_ACTION_REQUIRED_SCOPE: Readonly<
 export const ATLASSIAN_CONNECTOR_ACTION_APPROVAL_RISK: Readonly<
   Record<AtlassianConnectorActionType, CodingWorkbenchApprovalRisk>
 > = Object.freeze({
+  ...jiraReadActionValues("low"),
+  "assign-issue": "medium",
   "sync-space": "low",
   "sync-project": "low",
   "search-issues-live": "low",
@@ -1355,3 +1512,29 @@ export function isAtlassianConnectorRegistryFailureReason(
 ): value is AtlassianConnectorRegistryFailureReason {
   return isOneOf(value, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS);
 }
+
+export type {
+  JiraFieldKind,
+  JiraFieldOperation,
+  JiraFieldReference,
+  JiraFieldMetadata,
+  JiraFieldUpdate,
+} from "./jira-tool-fields.js";
+
+export {
+  JIRA_FIELD_KINDS,
+  JIRA_FIELD_READ_MAX,
+  JIRA_FIELD_ID_PATTERN,
+  JIRA_MANAGED_READ_TOOLS,
+  type JiraManagedReadToolName,
+} from "./jira-tool-fields.js";
+export {
+  JIRA_MUTATION_OPERATIONS,
+  JIRA_MUTATION_OUTCOMES,
+  JIRA_MUTATION_RESULT_STATES,
+  type JiraMutationOperation,
+  type JiraMutationOutcome,
+  type JiraMutationResultState,
+  type JiraMutationReceipt,
+  type JiraMutationAttempt,
+} from "./jira-tool-execution.js";

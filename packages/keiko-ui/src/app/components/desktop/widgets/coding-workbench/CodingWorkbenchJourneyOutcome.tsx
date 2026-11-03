@@ -22,7 +22,7 @@ import { useJourneyClock } from "./_useJourneyClock";
 import common from "./CodingWorkbenchWindow.module.css";
 import styles from "./CodingWorkbenchJourneyOutcome.module.css";
 
-/** A bounded, content-free join of `CodingWorkbenchChanges`' own live data (AC2) — a count and a
+/** A bounded, content-free join of the run's live changed-file data (AC2) — a count and a
  * truncation flag only, never a path or diff body. */
 export interface CodingWorkbenchJourneyChangedFilesSummary {
   readonly status: "loading" | "ready" | "unavailable";

@@ -1,0 +1,48 @@
+.cmpStack {
+  display: grid;
+  gap: 8px;
+  margin-block: 12px;
+  min-width: 0;
+}
+.cmpCard {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
+  color: var(--text-primary);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.cmpCard p {
+  margin: 0;
+}
+.cmpActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cmpResult {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: inherit;
+}
+
+.cmpPreview {
+  width: 100%;
+  resize: vertical;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface-primary);
+  color: inherit;
+  font: inherit;
+}
+.cmpPreview:focus-visible {
+  outline: var(--focus-width, 2px) solid var(--focus-ring);
+  outline-offset: 2px;
+}

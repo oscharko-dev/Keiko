@@ -12,6 +12,8 @@ import {
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
 import {
+  CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS,
+  CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS,
   useCodingWorkbenchSafeActivity,
   type UseCodingWorkbenchSafeActivityInput,
 } from "./useCodingWorkbenchSafeActivity";
@@ -387,6 +389,92 @@ describe("useCodingWorkbenchSafeActivity", () => {
     await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
   });
 
+  // Stability audit item 5: every reconnect used to blank the conversation until the snapshot read
+  // answered, and a failed read then left it blank. The feed already held is kept, captioned by the
+  // non-live status, until a new snapshot replaces it.
+  it("keeps the previous feed, not live, while a reconnect reads its new snapshot", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    const confirmed = view.result.current.feed;
+    expect(confirmed).not.toBeNull();
+
+    getSnapshotMock.mockImplementation(
+      () => new Promise<CodingAppSessionChannelSnapshot>(() => undefined),
+    );
+    act(() => view.result.current.retry());
+
+    expect(view.result.current.status).toBe("loading");
+    expect(view.result.current.feed).toBe(confirmed);
+  });
+
+  it("keeps the previous feed when the reconnect's snapshot read fails", async () => {
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+    const confirmed = view.result.current.feed;
+
+    getSnapshotMock.mockRejectedValue(new TypeError("Network request failed"));
+    act(() => view.result.current.retry());
+
+    await waitFor(() => expect(view.result.current.status).toBe("offline"));
+    expect(view.result.current.feed).toBe(confirmed);
+  });
+
+  it("does not relabel a held feed as live while its reconnect is still reading", async () => {
+    const view = renderHook(
+      ({ runState }: { readonly runState: "running" | "paused" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "running" as "running" | "paused" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("live"));
+
+    getSnapshotMock.mockImplementation(
+      () => new Promise<CodingAppSessionChannelSnapshot>(() => undefined),
+    );
+    act(() => view.result.current.retry());
+    view.rerender({ runState: "paused" });
+
+    expect(view.result.current.status).toBe("loading");
+  });
+
+  // Audit item 14 relocates the Epic #3384 pin here: the window no longer calls `retry` when a run
+  // id changes, because this hook already reconnects for the new run on its own, exactly once.
+  it("reconnects for a new run id by itself, once, even from a disconnected state", async () => {
+    getSnapshotMock.mockResolvedValue(snapshot(0, "run-1"));
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(
+      (input: UseCodingWorkbenchSafeActivityInput) => useCodingWorkbenchSafeActivity(input),
+      {
+        initialProps: {
+          runId: "run-1",
+          runState: "running",
+          runtimeEventSignal: 0,
+        } satisfies UseCodingWorkbenchSafeActivityInput,
+      },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("disconnected"));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(1);
+
+    getSnapshotMock.mockResolvedValue(snapshot(0, "run-2"));
+    holdStreamUntilAbort();
+    view.rerender({ runId: "run-2", runState: "running", runtimeEventSignal: 0 });
+
+    await waitFor(() => expect(view.result.current.feed?.runId).toBe("run-2"));
+    expect(view.result.current.status).toBe("live");
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
   it("ignores a superseded initial read after a newer connection confirmed its feed", async () => {
     vi.useFakeTimers();
     let release!: (value: CodingAppSessionChannelSnapshot) => void;
@@ -599,6 +687,141 @@ describe("useCodingWorkbenchSafeActivity", () => {
     // ones.
     view.rerender({ runId: "run-1", runState: "running", runtimeEventSignal: 2 });
     await act(async () => vi.advanceTimersByTimeAsync(1_000));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Keiko 1.3.0 test (#3897): a dropped live channel stayed "disconnected" until the next runtime
+  // event or a click, so a quiet run looked lost. It now reconnects by itself, a bounded number of
+  // times.
+  async function settleConnection(): Promise<void> {
+    await act(async () => {
+      for (let tick = 0; tick < 6; tick += 1) await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+    });
+  }
+
+  it("reconnects a dropped channel by itself, with growing pauses and a bounded number of attempts", async () => {
+    vi.useFakeTimers();
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await settleConnection();
+    expect(view.result.current.status).toBe("disconnected");
+    expect(getSnapshotMock).toHaveBeenCalledTimes(1);
+
+    for (const [attempt, delay] of CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS.entries()) {
+      await act(async () => vi.advanceTimersByTimeAsync(delay - 100));
+      expect(getSnapshotMock).toHaveBeenCalledTimes(attempt + 1);
+      await act(async () => vi.advanceTimersByTimeAsync(100));
+      await settleConnection();
+      expect(getSnapshotMock).toHaveBeenCalledTimes(attempt + 2);
+      expect(view.result.current.status).toBe("disconnected");
+    }
+    // A channel that closes as soon as it opens never earns a fresh budget: it stops here, and the
+    // Reconnect action still works.
+    await act(async () => vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS * 2));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(
+      CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS.length + 1,
+    );
+    act(() => view.result.current.retry());
+    await settleConnection();
+    expect(getSnapshotMock).toHaveBeenCalledTimes(
+      CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS.length + 2,
+    );
+  });
+
+  it("recovers a failed connection by itself and keeps the recovered stream live", async () => {
+    vi.useFakeTimers();
+    getSnapshotMock
+      .mockRejectedValueOnce(new TypeError("Network request failed"))
+      .mockResolvedValue(snapshot());
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await settleConnection();
+    expect(view.result.current.status).toBe("offline");
+
+    await act(async () =>
+      vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS[0] ?? 0),
+    );
+    await settleConnection();
+    expect(view.result.current.status).toBe("live");
+    await act(async () => vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS * 2));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives a channel that stayed live a fresh reconnect budget", async () => {
+    vi.useFakeTimers();
+    const closes: (() => void)[] = [];
+    streamSnapshotsMock.mockImplementation(
+      (): Promise<void> =>
+        new Promise((resolve) => {
+          closes.push(resolve);
+        }),
+    );
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    const delays = CODING_SAFE_ACTIVITY_RECONNECT_DELAYS_MS;
+    // Spend every attempt but the last on channels that close at once.
+    for (let attempt = 0; attempt < delays.length; attempt += 1) {
+      await settleConnection();
+      await act(async () => closes.at(-1)?.());
+      await settleConnection();
+      expect(view.result.current.status).toBe("disconnected");
+      await act(async () => vi.advanceTimersByTimeAsync(delays[attempt] ?? 0));
+    }
+    await settleConnection();
+    expect(view.result.current.status).toBe("live");
+    await act(async () => vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS));
+    const calls = getSnapshotMock.mock.calls.length;
+    await act(async () => closes.at(-1)?.());
+    await settleConnection();
+    await act(async () => vi.advanceTimersByTimeAsync(delays[0] ?? 0));
+    await settleConnection();
+    expect(getSnapshotMock).toHaveBeenCalledTimes(calls + 1);
+  });
+
+  it("does not reconnect a finished run's channel or one with no projection", async () => {
+    vi.useFakeTimers();
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    getSnapshotMock.mockResolvedValue({ schemaVersion: "1", content: null });
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "running",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await settleConnection();
+    expect(view.result.current.status).toBe("unavailable");
+    await act(async () => vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS));
+    expect(getSnapshotMock).toHaveBeenCalledTimes(1);
+
+    getSnapshotMock.mockResolvedValue(snapshot());
+    const finished = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-2",
+        runState: "succeeded",
+        runtimeEventSignal: 0,
+      }),
+    );
+    await settleConnection();
+    expect(finished.result.current.status).toBe("ended");
+    await act(async () => vi.advanceTimersByTimeAsync(CODING_SAFE_ACTIVITY_RECONNECT_RESET_MS));
     expect(getSnapshotMock).toHaveBeenCalledTimes(2);
   });
 });

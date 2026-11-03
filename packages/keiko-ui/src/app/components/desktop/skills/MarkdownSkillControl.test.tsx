@@ -1,3 +1,4 @@
+import userEvent from "@testing-library/user-event";
 import {
   act,
   cleanup,
@@ -22,8 +23,10 @@ import {
   expectedMarkdownSkillSelection,
 } from "../hooks/useChatMarkdownSkill";
 import { ApiError } from "@/lib/api";
+import { notifyCodingAppSessionChanged } from "@/lib/coding-app-session-client";
 import { MarkdownSkillControl } from "./MarkdownSkillControl";
 import { MarkdownSkillDialog } from "./MarkdownSkillDialog";
+import { useMarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 
 vi.mock("@/lib/markdown-skills-api", () => ({
   fetchMarkdownSkills: vi.fn(),
@@ -142,6 +145,61 @@ describe("Chat Markdown skill controls", () => {
     expect(api.changeMarkdownSkillSelection).toHaveBeenLastCalledWith("chat-a", null, 1);
   });
 
+  it("keeps keyboard focus on the preview action while its read is pending", async () => {
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    let resolve!: (document: MarkdownSkillDocument) => void;
+    vi.mocked(api.readMarkdownSkill).mockReturnValue(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    render(<Harness />);
+    const dialog = await open();
+    await waitFor(() => expect(dialog).toHaveFocus());
+    const preview = within(dialog).getByRole("button", { name: DOCUMENT.name });
+    preview.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    expect(preview).toBeEnabled();
+    expect(preview).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Enter}");
+    expect(api.readMarkdownSkill).toHaveBeenCalledOnce();
+    await act(async () => resolve(DOCUMENT));
+    expect(preview).toHaveFocus();
+    await user.tab();
+    expect(within(dialog).getByRole("button", { name: "Select" })).toHaveFocus();
+  });
+
+  it("keeps selection keyboard focus through activation so Escape returns to Skills", async () => {
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    let resolve!: (view: MarkdownSkillSelectionView) => void;
+    vi.mocked(api.changeMarkdownSkillSelection).mockReturnValueOnce(
+      new Promise((done) => {
+        resolve = done;
+      }),
+    );
+    render(<Harness />);
+    const trigger = screen.getByRole("button", { name: "Skills" });
+    trigger.focus();
+    const dialog = await open();
+    await waitFor(() => expect(dialog).toHaveFocus());
+    const select = within(dialog).getByRole("button", { name: "Select" });
+    select.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Enter}");
+    expect(select).toBeEnabled();
+    expect(select).toHaveAttribute("aria-disabled", "true");
+    await user.keyboard("{Enter}");
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledOnce();
+    await act(async () => resolve(SELECTED));
+    expect(select).toHaveFocus();
+    expect(select).toHaveAccessibleName("Active in this chat");
+    await user.keyboard("{Enter}{Escape}");
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it("does not upload unsupported or oversized files", async () => {
     render(<Harness />);
     const dialog = await open();
@@ -254,6 +312,79 @@ describe("Chat Markdown skill controls", () => {
     expect(within(dialog).queryByRole("alert")).toBeNull();
   });
 
+  it("disables unavailable uploads and reloads an open dialog after launcher pairing", async () => {
+    const unavailable = new ApiError("NOT_FOUND", "Skill not found", 404);
+    vi.mocked(api.fetchMarkdownSkills).mockRejectedValue(unavailable);
+    vi.mocked(api.fetchMarkdownSkillSelection).mockRejectedValue(unavailable);
+    render(<Harness />);
+    const dialog = await open();
+    await within(dialog).findByText(/Open Keiko from its launcher/);
+    expect(within(dialog).getByLabelText(/Upload Markdown/)).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Reload" })).toBeEnabled();
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue(EMPTY);
+    act(() => notifyCodingAppSessionChanged());
+    await within(dialog).findByRole("button", { name: DOCUMENT.name });
+    await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
+    expect(within(dialog).getByLabelText(/Upload Markdown/)).toBeEnabled();
+    expect(api.saveMarkdownSkill).not.toHaveBeenCalled();
+  });
+
+  it("retries the library after pairing that arrives during its initial read", async () => {
+    let rejectRead: ((error: Error) => void) | undefined;
+    vi.mocked(api.fetchMarkdownSkills).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectRead = reject;
+        }),
+    );
+    const hook = renderHook(() => useMarkdownSkillLibrary(async () => undefined));
+    await waitFor(() => expect(api.fetchMarkdownSkills).toHaveBeenCalledTimes(1));
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    act(() => notifyCodingAppSessionChanged());
+    await act(async () => rejectRead?.(new ApiError("NOT_FOUND", "Skill not found", 404)));
+    await waitFor(() => expect(hook.result.current.skills).toEqual([DOCUMENT]));
+    expect(hook.result.current.error).toBeUndefined();
+    expect(api.fetchMarkdownSkills).toHaveBeenCalledTimes(2);
+  });
+
+  it("hides the previous private library and preview when its authoritative refresh fails", async () => {
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    const hook = renderHook(() => useMarkdownSkillLibrary(async () => undefined));
+    await waitFor(() => expect(hook.result.current.available).toBe(true));
+    await act(async () => hook.result.current.inspect(DOCUMENT));
+    expect(hook.result.current.preview).toEqual(DOCUMENT);
+    vi.mocked(api.fetchMarkdownSkills).mockRejectedValue(
+      new ApiError("NOT_FOUND", "Skill not found", 404),
+    );
+    await act(async () => hook.result.current.refresh());
+    expect(hook.result.current.available).toBe(false);
+    expect(hook.result.current.skills).toEqual([]);
+    expect(hook.result.current.preview).toBeUndefined();
+  });
+
+  it("refreshes after a pending upload loses its session without repeating the mutation", async () => {
+    let rejectUpload: ((error: Error) => void) | undefined;
+    vi.mocked(api.saveMarkdownSkill).mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectUpload = reject;
+        }),
+    );
+    const hook = renderHook(() => useMarkdownSkillLibrary(async () => undefined));
+    await waitFor(() => expect(hook.result.current.busy).toBe(false));
+    act(() => {
+      void hook.result.current.upload(new File(["# Test"], "test.md"));
+    });
+    await waitFor(() => expect(api.saveMarkdownSkill).toHaveBeenCalledTimes(1));
+    vi.mocked(api.fetchMarkdownSkills).mockResolvedValue([DOCUMENT]);
+    act(() => notifyCodingAppSessionChanged());
+    await act(async () => rejectUpload?.(new ApiError("NOT_FOUND", "Skill not found", 404)));
+    await waitFor(() => expect(hook.result.current.skills).toEqual([DOCUMENT]));
+    expect(api.saveMarkdownSkill).toHaveBeenCalledTimes(1);
+    expect(hook.result.current.error).toBeUndefined();
+  });
+
   it("keeps unavailable selections removable and refuses stale changes without false success", async () => {
     vi.mocked(api.fetchMarkdownSkillSelection).mockResolvedValue({
       availability: "unavailable",
@@ -269,6 +400,40 @@ describe("Chat Markdown skill controls", () => {
 });
 
 describe("Chat skill selection lifecycle", () => {
+  it("rereads a selection after pairing during a mutation and discards its obsolete result", async () => {
+    let finish: ((view: MarkdownSkillSelectionView) => void) | undefined;
+    vi.mocked(api.changeMarkdownSkillSelection).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const hook = renderHook(() => useChatMarkdownSkill("chat-a"));
+    await waitFor(() => expect(hook.result.current.view).toEqual(EMPTY));
+    act(() => {
+      void hook.result.current.select(DOCUMENT);
+    });
+    await waitFor(() => expect(api.changeMarkdownSkillSelection).toHaveBeenCalledTimes(1));
+    act(() => notifyCodingAppSessionChanged());
+    await act(async () => finish?.(SELECTED));
+    await waitFor(() => expect(api.fetchMarkdownSkillSelection).toHaveBeenCalledTimes(2));
+    expect(hook.result.current.view).toEqual(EMPTY);
+    expect(hook.result.current.busy).toBe(false);
+    expect(api.changeMarkdownSkillSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes an unpaired selection when the launcher restores the session", async () => {
+    vi.mocked(api.fetchMarkdownSkillSelection).mockRejectedValueOnce(
+      new ApiError("NOT_FOUND", "Skill not found", 404),
+    );
+    const hook = renderHook(() => useChatMarkdownSkill("chat-a"));
+    await waitFor(() => expect(hook.result.current.requireNoSkill).toBe(true));
+    act(() => notifyCodingAppSessionChanged());
+    await waitFor(() => expect(hook.result.current.view).toEqual(EMPTY));
+    expect(hook.result.current.requireNoSkill).toBe(false);
+    expect(hook.result.current.failed).toBe(false);
+  });
+
   it("keeps an unpaired ordinary Chat usable only with an explicit server-checked no-skill precondition", async () => {
     vi.mocked(api.fetchMarkdownSkillSelection).mockRejectedValue(
       new ApiError("NOT_FOUND", "Skill not found", 404),

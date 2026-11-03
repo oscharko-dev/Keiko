@@ -1,16 +1,34 @@
 // Desktop canvas chat routes: real UI chat persistence with an injected ModelPort, keeping provider
 // credentials behind the existing gateway seam and avoiding network calls in tests.
 
-import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { composeDiscussionDirectiveBlock } from "./discussion-prompt.js";
-import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
-import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import { conversationModelNotReadyResult } from "./conversation-readiness-admission.js";
+import {
+  buildRedactor,
+  buildUiHandlerDeps,
+  createRunRegistry,
+  type UiHandlerDeps,
+} from "./index.js";
+import { createServerLogger, setServerLogger } from "./observability/index.js";
+import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
+import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
+import type { RuntimeGatewayConfig } from "./deps.js";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import {
+  buildUiStoreOverDatabase,
+  createInMemoryUiStore,
+  runMigrations,
+  type UiStore,
+} from "./store/index.js";
+import { migrateLegacyProjectManifests } from "./store/workspaceManifests.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
 import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
@@ -182,6 +200,21 @@ function base(): string {
   return `http://${UI_HOST}:${String(port)}`;
 }
 
+function unobservedRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
+  return {
+    storagePath: join(tmp, "unobserved-gateway.json"),
+    current: () => config,
+    present: () => true,
+    set: () => undefined,
+    verification: () => UNVERIFIED_GATEWAY,
+    generation: () => 0,
+    recordVerification: () => undefined,
+    verifiedCapability: () => undefined,
+    recordVerifiedCapability: () => undefined,
+    clearVerifiedCapability: () => false,
+  };
+}
+
 function customModelConfig(
   modelId = "example-private-chat",
   apiKey = "test-config-secret-value-1234567890",
@@ -218,6 +251,108 @@ function customModelConfig(
       },
     ],
   };
+}
+
+function heldReadinessProbe(): { readonly fetch: typeof fetch; readonly release: () => void } {
+  let finish: ((response: Response) => void) | undefined;
+  let first = true;
+  const answer = (): Response =>
+    new Response(
+      JSON.stringify({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      { headers: { "content-type": "application/json" } },
+    );
+  return {
+    fetch: vi.fn(() => {
+      if (!first) return Promise.resolve(answer());
+      first = false;
+      return new Promise<Response>((resolve) => {
+        finish = resolve;
+      });
+    }),
+    release: (): void => {
+      finish?.(answer());
+    },
+  };
+}
+
+async function pendingCreationRace(input: {
+  readonly automatic: boolean;
+  readonly accepted: boolean;
+  readonly conflict: boolean;
+  readonly projectPath?: string;
+}): Promise<{
+  readonly status: number;
+  readonly chatCount: number;
+  readonly selectedModel?: string;
+}> {
+  const runtime = buildUiHandlerDeps({
+    configPath: undefined,
+    env: {},
+    uiDbPath: join(tmp, "concurrent-creation.db"),
+    evidenceDir: join(tmp, "concurrent-evidence"),
+  });
+  const request = fetch;
+  const probe = heldReadinessProbe();
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "info" }));
+  vi.stubGlobal("fetch", probe.fetch);
+  try {
+    runtime.store.createProject(projectDir, "Concurrent creation");
+    runtime.gatewayConfig?.set(customModelConfig(CHAT_MODEL), true, "corr-creation-initialization");
+    await restartWithDeps(runtime);
+    const pending = request(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({
+        projectPath: input.projectPath ?? projectDir,
+        title: input.conflict ? "Conflicting creation" : "Accepted creation",
+        creationRequestId: "creation-pending-initialization",
+        ...(input.automatic ? {} : { modelId: CHAT_MODEL }),
+      }),
+    });
+    await vi.waitFor(() => {
+      expect(sink.events.some((event) => event.op === "gateway.readiness.automatic.joined")).toBe(
+        true,
+      );
+    });
+    if (input.accepted) persistConcurrentCreation(runtime, input.automatic);
+    runtime.gatewayConfig?.set(customModelConfig("replacement-chat-model"), true);
+    probe.release();
+    const response = await pending;
+    const body = (await response.json()) as { chat?: { selectedModel: string } };
+    return {
+      status: response.status,
+      chatCount: runtime.store.listChats(projectDir).length,
+      ...(body.chat === undefined ? {} : { selectedModel: body.chat.selectedModel }),
+    };
+  } finally {
+    probe.release();
+    await restartWithDeps(deps());
+    await runtime.dispose?.();
+    vi.unstubAllGlobals();
+    resetServerLogger();
+  }
+}
+
+function creationAlias(target: string, name: string): string {
+  const alias = join(tmp, name);
+  symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+  return alias;
+}
+
+async function postDesktopCreation(body: object): Promise<Response> {
+  return fetch(`${base()}/api/desktop/chats`, {
+    method: "POST",
+    headers: POST_JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+}
+
+function persistConcurrentCreation(runtime: UiHandlerDeps, automatic: boolean): void {
+  runtime.store.createChat(projectDir, "Accepted creation", CHAT_MODEL, {
+    creationRequestId: "creation-pending-initialization",
+    automaticModelSelection: automatic,
+  });
 }
 
 function makeMemoryId(value: string): MemoryId {
@@ -270,6 +405,41 @@ async function restartWithDeps(handlerDeps: UiHandlerDeps): Promise<void> {
     });
   });
   await startServer(handlerDeps);
+}
+
+function legacyProjectStore(older: string): UiStore {
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec("PRAGMA foreign_keys = ON");
+    runMigrations(db);
+    const insert = db.prepare(
+      "INSERT INTO projects(path,name,favorite,created_at,last_opened_at) VALUES(?,?,0,?,?)",
+    );
+    insert.run(older, "Older project", 1, 1);
+    insert.run(projectDir, "Recent project", 2, 2);
+    migrateLegacyProjectManifests(db);
+    return buildUiStoreOverDatabase(db);
+  } catch (error) {
+    db.close();
+    throw error;
+  }
+}
+
+async function useLegacyProjects(aliased: boolean): Promise<string> {
+  const older = join(tmp, "legacy-project");
+  if (aliased) symlinkSync(projectDir, older, process.platform === "win32" ? "junction" : "dir");
+  else mkdirSync(older);
+  const previous = store;
+  store = legacyProjectStore(older);
+  try {
+    await restartWithDeps(deps());
+  } finally {
+    previous.close();
+  }
+  expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
+  expect(store.findWorkspaceManifestRecordByProject(older)).toBeUndefined();
+  expect(store.findWorkspaceManifestRecordByProject(projectDir)).toBeDefined();
+  return older;
 }
 
 async function startServer(handlerDeps: UiHandlerDeps): Promise<void> {
@@ -353,6 +523,500 @@ describe("desktop chat routes", () => {
     expect(body.chat).toMatchObject({ projectPath: projectDir, selectedModel: CHAT_MODEL });
     expect(body.messages).toEqual([]);
   });
+
+  it("shares one persisted chat for a creation intent submitted by independent clients", async () => {
+    const body = JSON.stringify({
+      projectPath: projectDir,
+      modelId: CHAT_MODEL,
+      creationRequestId: "9c710d81-b368-4dad-a5ae-1c261cc20c67",
+    });
+    const responses = await Promise.all(
+      [0, 1].map(() =>
+        fetch(`${base()}/api/desktop/chats`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body,
+        }),
+      ),
+    );
+    const identifiers: string[] = [];
+    for (const response of responses) {
+      expect(response.status).toBe(201);
+      const result = (await response.json()) as { chat: { id: string } };
+      identifiers.push(result.chat.id);
+    }
+    expect(new Set(identifiers).size).toBe(1);
+    expect(store.listChats(projectDir)).toHaveLength(1);
+  });
+
+  it.each([null, 1, {}, [], "", "../escape", "x".repeat(161)])(
+    "refuses malformed creation identity %j before model or store work",
+    async (creationRequestId) => {
+      const before = seenRequests.length;
+      const response = await fetch(`${base()}/api/desktop/chats`, {
+        method: "POST",
+        headers: POST_JSON_HEADERS,
+        body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL, creationRequestId }),
+      });
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(seenRequests).toHaveLength(before);
+      expect(store.listChats(projectDir)).toHaveLength(0);
+    },
+  );
+
+  it.each([true, false])(
+    "recovers a committed creation after the configured model changes (automatic=%s)",
+    async (automatic) => {
+      await restartWithDeps(
+        deps(fakeModel("unused"), { config: customModelConfig("model-a"), configPresent: true }),
+      );
+      const input = {
+        projectPath: projectDir,
+        creationRequestId: "lost-creation-response",
+        ...(automatic ? {} : { modelId: "model-a" }),
+      };
+      const post = (body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chats`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify(body),
+        });
+      const first = await post(input);
+      expect(first.status).toBe(201);
+      const created = (await first.json()) as { chat: { id: string } };
+      await restartWithDeps(
+        deps(fakeModel("unused"), { config: customModelConfig("model-b"), configPresent: true }),
+      );
+      const replay = await post(input);
+      expect(replay.status).toBe(201);
+      expect(await replay.json()).toMatchObject({
+        chat: { id: created.chat.id, selectedModel: "model-a" },
+      });
+      const conflict = await post({ ...input, modelId: "model-b" });
+      expect(conflict.status).toBe(409);
+      await conflict.text();
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      const fresh = await post({ projectPath: projectDir, creationRequestId: "new-creation" });
+      expect(fresh.status).toBe(201);
+      expect(await fresh.json()).toMatchObject({ chat: { selectedModel: "model-b" } });
+      expect(store.listChats(projectDir)).toHaveLength(2);
+      const invalid = await post({ modelId: "model-a", creationRequestId: "fresh-removed-model" });
+      expect(invalid.status).toBe(400);
+      await invalid.text();
+    },
+  );
+
+  describe("aliased creation replay", () => {
+    let creationLog: ReturnType<typeof createBufferedServerLogSink>;
+    beforeEach(() => {
+      creationLog = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink: creationLog, level: "info" }));
+    });
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    it.each([
+      { aliased: false, replay: false },
+      { aliased: false, replay: true },
+      { aliased: true, replay: false },
+      { aliased: true, replay: true },
+    ])("preserves ordinary legacy project identity after the actual migration: %j", async (row) => {
+      const older = await useLegacyProjects(row.aliased);
+      const manifests = store.listWorkspaceManifestRecords();
+      const body = {
+        projectPath: older,
+        title: "Legacy chat",
+        modelId: CHAT_MODEL,
+        creationRequestId: "legacy-creation",
+      };
+      const accepted = row.replay
+        ? store.createChat(older, body.title, CHAT_MODEL, {
+            creationRequestId: body.creationRequestId,
+            automaticModelSelection: false,
+          })
+        : undefined;
+      if (row.replay)
+        await restartWithDeps(
+          deps(fakeModel("unused"), { config: customModelConfig("replacement") }),
+        );
+      const response = await postDesktopCreation(body);
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({
+        project: { path: older, name: "Older project" },
+        chat: { projectPath: older, ...(accepted === undefined ? {} : { id: accepted.id }) },
+      });
+      expect(store.listChats(older)).toHaveLength(1);
+      expect(store.listChats(projectDir)).toHaveLength(0);
+      expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+      expect(store.findWorkspaceManifestRecordByProject(older)).toBeUndefined();
+    });
+
+    it("preserves ordinary Chat on the most-recent migrated project", async () => {
+      await useLegacyProjects(false);
+      const response = await postDesktopCreation({ projectPath: projectDir, modelId: CHAT_MODEL });
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({ chat: { projectPath: projectDir } });
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(store.listWorkspaceManifestRecords()).toHaveLength(1);
+    });
+
+    it.each([false, true])(
+      "preserves explicit legacy project registration behavior (aliased=%s)",
+      async (aliased) => {
+        const older = await useLegacyProjects(aliased);
+        const response = await fetch(`${base()}/api/projects`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({ path: older }),
+        });
+        expect(response.status).toBe(201);
+        expect(await response.json()).toMatchObject({
+          project: { path: aliased ? projectDir : older },
+        });
+        expect(store.listWorkspaceManifestRecords()).toHaveLength(aliased ? 1 : 2);
+        expect(store.findWorkspaceManifestRecordByProject(older) === undefined).toBe(aliased);
+      },
+    );
+
+    it.each([false, true])(
+      "preserves explicit legacy reconnect behavior (aliased=%s)",
+      async (aliased) => {
+        const older = await useLegacyProjects(aliased);
+        const projects = store.listProjects();
+        const manifests = store.listWorkspaceManifestRecords();
+        if (aliased) {
+          expect(() => store.reconnectProject(older)).toThrow(
+            expect.objectContaining({ code: "PROJECT_EXISTS", status: 409 }),
+          );
+          expect(store.listProjects()).toEqual(projects);
+          expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+        } else {
+          expect(store.reconnectProject(older).path).toBe(older);
+          expect(store.listWorkspaceManifestRecords()).toHaveLength(2);
+          expect(store.findWorkspaceManifestRecordByProject(older)).toBeDefined();
+        }
+      },
+    );
+
+    it.each([
+      { retired: false, conflict: false, status: 201 },
+      { retired: true, conflict: false, status: 201 },
+      { retired: true, conflict: true, status: 409 },
+    ])("preserves the registered identity across model admission: %j", async (input) => {
+      const alias = creationAlias(projectDir, "project-alias");
+      const body = {
+        projectPath: alias,
+        title: "Accepted",
+        modelId: CHAT_MODEL,
+        creationRequestId: "alias-creation",
+      };
+      const first = await postDesktopCreation(body);
+      expect(first.status).toBe(201);
+      const accepted = (await first.json()) as { chat: { id: string } };
+      if (input.retired)
+        await restartWithDeps(
+          deps(fakeModel("unused"), {
+            config: customModelConfig("replacement"),
+            configPresent: true,
+          }),
+        );
+      const replay = await postDesktopCreation({
+        ...body,
+        title: input.conflict ? "Conflicting" : body.title,
+      });
+      expect(replay.status).toBe(input.status);
+      if (input.status === 201)
+        expect(await replay.json()).toMatchObject({
+          project: { path: projectDir, name: "repo" },
+          chat: { id: accepted.chat.id },
+        });
+      else await replay.text();
+      expect(store.listProjects()).toHaveLength(1);
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(store.listChats(alias)).toHaveLength(0);
+      expect(
+        creationLog.events.filter((event) => event.op === "chat.creation.intent").at(-1)?.extra,
+      ).toMatchObject({
+        outcome: input.conflict ? "refused" : "reused",
+        completeness: "complete",
+        loss: "none",
+      });
+      expect(creationLog.lines().join("\n")).not.toContain(alias);
+    });
+
+    it.each([false, true])(
+      "retains an originally aliased stored project path (secondAlias=%s)",
+      async (secondAlias) => {
+        const root = join(tmp, "founding-root");
+        mkdirSync(root);
+        const original = creationAlias(root, "founding-alias");
+        const requested = secondAlias ? creationAlias(root, "second-alias") : root;
+        const registered = store.createProject(original, "Founding identity");
+        const body = {
+          projectPath: original,
+          modelId: CHAT_MODEL,
+          creationRequestId: "original-alias-creation",
+        };
+        const first = await postDesktopCreation(body);
+        expect(first.status).toBe(201);
+        const accepted = (await first.json()) as { chat: { id: string } };
+        await restartWithDeps(
+          deps(fakeModel("unused"), {
+            config: customModelConfig("replacement"),
+            configPresent: true,
+          }),
+        );
+        const replay = await postDesktopCreation({ ...body, projectPath: requested });
+        expect(replay.status).toBe(201);
+        expect(await replay.json()).toMatchObject({
+          project: { path: registered.path, name: "Founding identity" },
+          chat: { id: accepted.chat.id, projectPath: registered.path },
+        });
+        expect(registered.path).toBe(original);
+        expect(store.listProjects()).toHaveLength(2);
+        expect(store.listChats(original)).toHaveLength(1);
+        expect(store.listChats(requested)).toHaveLength(0);
+      },
+    );
+
+    it("does not register a fresh alias before model admission", async () => {
+      const root = join(tmp, "fresh-root");
+      mkdirSync(root);
+      const alias = creationAlias(root, "fresh-alias");
+      const projects = store.listProjects();
+      await restartWithDeps(
+        deps(fakeModel("unused"), {
+          config: customModelConfig("replacement"),
+          configPresent: true,
+        }),
+      );
+      const response = await postDesktopCreation({
+        projectPath: alias,
+        modelId: CHAT_MODEL,
+        creationRequestId: "fresh-alias-creation",
+      });
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(store.listProjects()).toEqual(projects);
+      expect(store.listChats(root)).toHaveLength(0);
+      expect(store.listChats(alias)).toHaveLength(0);
+    });
+
+    it("does not recover an accepted intent through an unrelated alias target", async () => {
+      const root = join(tmp, "unrelated-root");
+      mkdirSync(root);
+      const alias = creationAlias(projectDir, "retargeted-alias");
+      const body = {
+        projectPath: alias,
+        modelId: CHAT_MODEL,
+        creationRequestId: "retargeted-creation",
+      };
+      const first = await postDesktopCreation(body);
+      expect(first.status).toBe(201);
+      await first.text();
+      rmSync(alias);
+      symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+      await restartWithDeps(
+        deps(fakeModel("unused"), {
+          config: customModelConfig("replacement"),
+          configPresent: true,
+        }),
+      );
+      const response = await postDesktopCreation(body);
+      expect(response.status).toBe(400);
+      await response.text();
+      expect(store.listProjects()).toHaveLength(1);
+      expect(store.listChats(projectDir)).toHaveLength(1);
+      expect(store.listChats(root)).toHaveLength(0);
+    });
+
+    it.each(
+      [false, true].flatMap((accepted) =>
+        ["retargeted", "registered-target", "missing"].flatMap((state) =>
+          (state === "missing" ? [false] : [false, true]).map((requestAlias) => ({
+            accepted,
+            state,
+            requestAlias,
+          })),
+        ),
+      ),
+    )(
+      "rejects a stale registered project alias without mutation: %j",
+      async ({ accepted, state, requestAlias }) => {
+        const root = join(tmp, "original-physical-root");
+        const replacement = join(tmp, "different-physical-root");
+        mkdirSync(root);
+        mkdirSync(replacement);
+        const alias = creationAlias(root, "stored-project-alias");
+        store.createProject(alias, "Preserved identity");
+        if (state === "registered-target") store.createProject(replacement, "Other identity");
+        const body = {
+          projectPath: alias,
+          modelId: CHAT_MODEL,
+          creationRequestId: "stale-stored-alias",
+        };
+        if (accepted) {
+          const first = await postDesktopCreation(body);
+          expect(first.status).toBe(201);
+          await first.text();
+          await restartWithDeps(
+            deps(fakeModel("unused"), {
+              config: customModelConfig("replacement"),
+              configPresent: true,
+            }),
+          );
+        }
+        rmSync(alias);
+        if (state !== "missing")
+          symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+        const projects = store.listProjects();
+        const create = vi.spyOn(store, "createProject");
+        const update = vi.spyOn(store, "updateProject");
+        const response = await postDesktopCreation({
+          ...body,
+          projectPath: requestAlias ? alias : root,
+        });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({
+          error: { code: "PROJECT_IDENTITY_CHANGED" },
+        });
+        expect(() => realpathSync(root)).not.toThrow();
+        expect(store.listProjects()).toEqual(projects);
+        expect(create).not.toHaveBeenCalled();
+        expect(update).not.toHaveBeenCalled();
+        expect(store.listChats(alias)).toHaveLength(accepted ? 1 : 0);
+        expect(store.listChats(root)).toHaveLength(0);
+        expect(store.listChats(replacement)).toHaveLength(0);
+        expect(
+          creationLog.events.filter((event) => event.op === "chat.creation.intent").at(-1)?.extra,
+        ).toMatchObject({
+          outcome: "refused",
+          reason: "project-identity-changed",
+          completeness: "complete",
+          loss: "none",
+        });
+        expect(creationLog.lines().join("\n")).not.toContain(alias);
+      },
+    );
+
+    it.each([
+      { state: "retargeted", requestAlias: false },
+      { state: "retargeted", requestAlias: true },
+      { state: "registered-target", requestAlias: false },
+      { state: "registered-target", requestAlias: true },
+      { state: "missing", requestAlias: false },
+    ])(
+      "rejects stale registry aliases through project registration: %j",
+      async ({ state, requestAlias }) => {
+        const root = join(tmp, "registration-original");
+        const replacement = join(tmp, "registration-unrelated");
+        mkdirSync(root);
+        mkdirSync(replacement);
+        const alias = creationAlias(root, "registration-stored-alias");
+        store.createProject(alias, "Original registration");
+        if (state === "registered-target") store.createProject(replacement, "Other registration");
+        rmSync(alias);
+        if (state !== "missing")
+          symlinkSync(replacement, alias, process.platform === "win32" ? "junction" : "dir");
+        const projects = store.listProjects();
+        const manifests = store.listWorkspaceManifestRecords();
+        const response = await fetch(`${base()}/api/projects`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify({
+            path: requestAlias ? alias : root,
+            name: "Unaccepted registration",
+          }),
+        });
+        expect(response.status).toBe(409);
+        expect(await response.json()).toMatchObject({
+          error: { code: "PROJECT_IDENTITY_CHANGED" },
+        });
+        expect(store.listProjects()).toEqual(projects);
+        expect(store.listWorkspaceManifestRecords()).toEqual(manifests);
+        expect(store.listChats(alias)).toHaveLength(0);
+        expect(store.listChats(root)).toHaveLength(0);
+        expect(
+          creationLog.events.filter((event) => event.op === "workspace.root.denied").at(-1)?.extra,
+        ).toMatchObject({
+          reason: "ordinary-root-identity",
+          failureKind: "PROJECT_IDENTITY_CHANGED",
+        });
+        expect(creationLog.lines().join("\n")).not.toContain(alias);
+      },
+    );
+
+    it.each([false, true])(
+      "rechecks registered alias identity after actual readiness joins (conflict=%s)",
+      async (conflict) => {
+        const alias = creationAlias(projectDir, "waiting-alias");
+        const result = await pendingCreationRace({
+          automatic: false,
+          accepted: true,
+          conflict,
+          projectPath: alias,
+        });
+        expect(result.status).toBe(conflict ? 409 : 201);
+        expect(result.chatCount).toBe(1);
+      },
+    );
+  });
+
+  it.each([
+    { automatic: false, accepted: true, conflict: false, status: 201 },
+    { automatic: true, accepted: true, conflict: false, status: 201 },
+    { automatic: false, accepted: true, conflict: true, status: 409 },
+    { automatic: false, accepted: false, conflict: false, status: 400 },
+  ])("rechecks a durable creation after a real readiness join: %j", async (input) => {
+    const result = await pendingCreationRace(input);
+    expect(result.status).toBe(input.status);
+    expect(result.chatCount).toBe(input.accepted ? 1 : 0);
+    if (input.status === 201) expect(result.selectedModel).toBe(CHAT_MODEL);
+  });
+
+  it.each([true, false])(
+    "recovers accepted creation while new admission has no readiness observation (automatic=%s)",
+    async (automatic) => {
+      const input = {
+        projectPath: projectDir,
+        creationRequestId: "accepted-before-model-unavailable",
+        ...(automatic ? {} : { modelId: CHAT_MODEL }),
+      };
+      const post = (body: object): Promise<Response> =>
+        fetch(`${base()}/api/desktop/chats`, {
+          method: "POST",
+          headers: POST_JSON_HEADERS,
+          body: JSON.stringify(body),
+        });
+      const first = await post(input);
+      expect(first.status).toBe(201);
+      const created = (await first.json()) as { chat: { id: string } };
+      await restartWithDeps(
+        deps(fakeModel("unused"), {
+          config: customModelConfig("unavailable-model"),
+          configPresent: true,
+          gatewayConfig: unobservedRuntimeGatewayConfig(customModelConfig("unavailable-model")),
+          modelPortFactory: () => undefined,
+        }),
+      );
+      const replay = await post(input);
+      expect(replay.status).toBe(201);
+      expect(await replay.json()).toMatchObject({ chat: { id: created.chat.id } });
+      const fresh = await post({
+        projectPath: projectDir,
+        modelId: "unavailable-model",
+        creationRequestId: "new-unready-creation",
+      });
+      const refused = conversationModelNotReadyResult();
+      expect(fresh.status).toBe(refused.status);
+      if (typeof refused.body !== "object" || refused.body === null)
+        throw new TypeError("Expected the canonical model admission error object.");
+      expect(await fresh.json()).toMatchObject(refused.body);
+      expect(store.listChats(projectDir)).toHaveLength(1);
+    },
+  );
 
   it("keeps internal managed-worktree projects out of the returned project catalog", async () => {
     const managedRoot = join(projectDir, ".keiko", "ui", "task-workspaces");

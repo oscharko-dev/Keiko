@@ -55,6 +55,28 @@ import { useWindowStageEvidence } from "./hooks/useWindowStageEvidence";
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
 
+/**
+ * Opt-in rich rendering for one surface (the Coding Workbench timeline). It is injected rather than
+ * imported so this shared renderer keeps no dependency on a typesetter, a diff view or a feature's
+ * message catalog. Passing it also turns on math parsing; omitting it leaves the output of every
+ * other surface exactly as it was.
+ *
+ * Both hooks receive only parser output. They are called for COMPLETE constructs alone: a math span
+ * whose closing delimiter has not arrived is still prose, and a fenced block still being streamed
+ * keeps its plain code view until the closing fence arrives, so a streamed answer is never
+ * typeset, diffed or diagrammed token by token. The implementation must be a module constant: it is
+ * part of the memoization key.
+ */
+export interface SafeMarkdownRichContent {
+  /** Renders a complete math span; `node.raw` is its verbatim source, `node.display` its mode. */
+  readonly renderMath: (node: SafeMarkdownNode) => ReactNode;
+  /**
+   * May replace a closed fenced block. `standard` is the unchanged code view of that block; return
+   * it, or wrap it, whenever the block is not something this surface renders.
+   */
+  readonly renderCodeBlock: (node: SafeMarkdownNode, standard: ReactNode) => ReactNode;
+}
+
 export interface SafeMarkdownProps {
   readonly literalUserInput?: boolean | undefined;
   readonly source: string;
@@ -66,9 +88,11 @@ export interface SafeMarkdownProps {
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly streaming?: boolean | undefined;
   readonly trailing?: ReactNode | undefined;
+  readonly richContent?: SafeMarkdownRichContent | undefined;
 }
 
 interface RenderOptions {
+  readonly richContent: SafeMarkdownRichContent | undefined;
   readonly literalUserInput: boolean;
   readonly citationPreview: CitationPreviewController | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
@@ -401,6 +425,26 @@ function renderCodeBlockHeader(
 }
 
 function renderCodeBlockNode(
+  node: SafeMarkdownNode,
+  key: string,
+  options: RenderOptions,
+  trailing?: ReactNode | undefined,
+): ReactNode {
+  const rich = options.literalUserInput ? undefined : options.richContent;
+  // A fence the stream has not closed keeps the plain code view; the surface is asked about a
+  // block only once it is complete, which is also what keeps streaming from re-rendering it.
+  if (rich === undefined || (options.streaming && node.unterminated === true)) {
+    return standardCodeBlock(node, key, options, trailing);
+  }
+  return (
+    <Fragment key={key}>
+      {rich.renderCodeBlock(node, standardCodeBlock(node, key, options))}
+      {trailing}
+    </Fragment>
+  );
+}
+
+function standardCodeBlock(
   node: SafeMarkdownNode,
   key: string,
   options: RenderOptions,
@@ -770,6 +814,14 @@ function renderInlineNode(
     case "inline-code":
       return renderInlineCode(node, key, options, trailing);
 
+    case "math":
+      return (
+        <Fragment key={key}>
+          {options.richContent === undefined ? node.raw : options.richContent.renderMath(node)}
+          {trailing}
+        </Fragment>
+      );
+
     case "link":
       return (
         <a key={key} href={node.href} className="sm-link" rel="noopener noreferrer" target="_blank">
@@ -929,6 +981,22 @@ function referencePathsInTree(tree: readonly SafeMarkdownNode[]): readonly strin
   return paths;
 }
 
+// Math is parsed only for a surface that brought a renderer for it; every other surface keeps the
+// exact tree it always had.
+function useMarkdownTree(
+  source: string,
+  literalUserInput: boolean,
+  richContent: SafeMarkdownRichContent | undefined,
+): readonly SafeMarkdownNode[] {
+  return useMemo(
+    () =>
+      literalUserInput
+        ? parseSafeUserInput(source)
+        : parseSafeMarkdown(source, { math: richContent !== undefined }),
+    [source, literalUserInput, richContent],
+  );
+}
+
 function SafeMarkdownImpl({
   source,
   literalUserInput = false,
@@ -940,11 +1008,9 @@ function SafeMarkdownImpl({
   citationPreview,
   streaming = false,
   trailing,
+  richContent,
 }: SafeMarkdownProps): ReactNode {
-  const tree = useMemo(
-    () => (literalUserInput ? parseSafeUserInput(source) : parseSafeMarkdown(source)),
-    [source, literalUserInput],
-  );
+  const tree = useMarkdownTree(source, literalUserInput, richContent);
   useMarkdownListEvidence(tree, streaming, diagnosticCorrelationId, diagnosticMessageId);
   const repositoryPathLabels = useMemo(
     () =>
@@ -955,6 +1021,7 @@ function SafeMarkdownImpl({
   );
   const options = useMemo<RenderOptions>(
     () => ({
+      richContent,
       literalUserInput,
       citationPreview,
       streaming,
@@ -964,6 +1031,7 @@ function SafeMarkdownImpl({
       repositoryPathLabels,
     }),
     [
+      richContent,
       literalUserInput,
       citationPreview,
       openRepositoryReference,
@@ -1006,6 +1074,7 @@ export interface SafeMarkdownBoundaryProps {
   readonly citationPreview?: CitationPreviewController | undefined;
   readonly streaming?: boolean | undefined;
   readonly trailing?: ReactNode | undefined;
+  readonly richContent?: SafeMarkdownRichContent | undefined;
 }
 
 interface SafeMarkdownBoundaryState {
@@ -1043,6 +1112,7 @@ export class SafeMarkdownBoundary extends Component<
         citationPreview={this.props.citationPreview}
         streaming={this.props.streaming}
         trailing={this.props.trailing}
+        richContent={this.props.richContent}
       />
     );
   }

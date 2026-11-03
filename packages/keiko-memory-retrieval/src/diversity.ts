@@ -18,7 +18,7 @@ export const DEFAULT_MMR_LAMBDA = 0.7;
 
 // Cosine in [0,1], clamped like the rest of the stack (negative => 0). Length-mismatch / zero vector
 // => 0 (no penalty).
-function cosine(a: Float32Array, b: Float32Array): number {
+export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
   if (a.length === 0 || a.length !== b.length) return 0;
   let dot = 0;
   let na = 0;
@@ -46,7 +46,7 @@ function maxSimilarity(vec: Float32Array | undefined, selected: readonly Float32
   if (vec === undefined) return 0;
   let max = 0;
   for (const sv of selected) {
-    const sim = cosine(vec, sv);
+    const sim = cosineSimilarity(vec, sv);
     if (sim > max) max = sim;
   }
   return max;

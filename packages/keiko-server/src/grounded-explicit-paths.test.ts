@@ -79,6 +79,161 @@ async function retrieve(
 }
 
 describe("query-named explicit path admission", () => {
+  it("keeps architecture prose in ordinary ranking without inventing a named file", async () => {
+    const { output, log } = await retrieve("Explain the architecture model.", {
+      files: {
+        "docs/architecture.md": "Architecture model: dependencies flow toward shared contracts.\n",
+      },
+    });
+    expect(output.pack.files.map((file) => file.scopePath)).toContain("docs/architecture.md");
+    expect(
+      log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+    ).toMatchObject({ explicitPathAnchorCount: 0, explicitPathAdmittedCount: 0 });
+    expect(JSON.stringify(log.events)).not.toContain("dependencies flow");
+  });
+
+  it.each(["README", "readme", "CONTRIBUTING"])(
+    "retains the requested conventional document stem %s inside the selected folder",
+    async (stem) => {
+      const document = stem.toLowerCase() === "readme" ? "README.md" : "CONTRIBUTING.md";
+      const content = "Accepted contract: only ordered values from 3 through 11 are valid.\n";
+      const { output, log } = await retrieve(
+        `Read the connected source, ${stem} requirements, build configuration and neighboring test. Generate the complete src/OrderTest.java unit test file covering the requirements. Keep the application unchanged. Return one complete Java code block.`,
+        {
+          kind: "directory",
+          relativePaths: ["backend"],
+          files: {
+            "backend/pom.xml": "<project><artifactId>orders</artifactId></project>\n",
+            "backend/src/Order.java": "class Order { int apply(int value) { return value; } }\n",
+            "backend/src/NeighborTest.java": "class NeighborTest { void checksOrder() {} }\n",
+            [`backend/${document}`]: content,
+            "outside/README.md": "Unselected and private sibling.\n",
+          },
+        },
+      );
+      expect(output.pack.files.map((file) => file.scopePath)).toContain(`backend/${document}`);
+      expect(output.pack.files.map((file) => file.scopePath)).toEqual(
+        expect.arrayContaining([
+          "backend/pom.xml",
+          "backend/src/Order.java",
+          "backend/src/NeighborTest.java",
+        ]),
+      );
+      expect(
+        output.pack.files.flatMap((file) => file.excerpts).map((entry) => entry.content),
+      ).toContain(content);
+      expect(output.pack.files.map((file) => file.scopePath)).not.toContain("outside/README.md");
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+      ).toMatchObject({ explicitPathAdmittedCount: 1, basenameDiscoveryMatchCount: 1 });
+      expect(JSON.stringify(log.events)).not.toContain("Accepted contract");
+    },
+  );
+
+  it.each([
+    ["README.md", 0],
+    ["README.md", 3],
+    ["README.md", 6],
+    ["docs/accepted.md", 0],
+    ["docs/accepted.md", 3],
+    ["docs/accepted.md", 6],
+  ] as const)(
+    "admits every requested file with %s at position %s beyond the planning reference preview",
+    async (requirementsPath, position) => {
+      const sources = Array.from({ length: 6 }, (_, index) => `frontend/source${String(index)}.ts`);
+      const paths = [...sources.slice(0, position), requirementsPath, ...sources.slice(position)];
+      const { output, log } = await retrieve(`Generate tests using ${paths.join(", ")}.`, {
+        files: {
+          ...Object.fromEntries(sources.map((path) => [path, "export const value = 7;\n"])),
+          [requirementsPath]: "Accepted behavior: only the submit control is disabled.\n",
+        },
+      });
+      expect(output.pack.files.map((file) => file.scopePath)).toEqual(
+        expect.arrayContaining(paths),
+      );
+      expect(
+        output.pack.files.find((file) => file.scopePath === requirementsPath)?.excerpts[0]?.content,
+      ).toContain("only the submit control is disabled");
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+      ).toMatchObject({
+        referenceChannelCount: 6,
+        explicitPathAdmittedCount: paths.length,
+        explicitPathRejectedCount: 0,
+      });
+      expect(JSON.stringify(log.events)).not.toContain(requirementsPath);
+    },
+  );
+
+  it.each([{ filesReadMax: 6 }, { searchCallsMax: 6 }, { excerptBytesMax: 64 }])(
+    "retains the actual grant when explicit references exceed the preview: %j",
+    async (limit) => {
+      const paths = Array.from({ length: 7 }, (_, index) => `src/source${String(index)}.ts`);
+      const budget = { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 20, ...limit };
+      const { output } = await retrieve(`Generate tests using ${paths.join(", ")}.`, {
+        files: Object.fromEntries(paths.map((path) => [path, "export const requiredValue = 7;\n"])),
+        budget,
+      });
+      expect(output.pack.usage.filesRead).toBeLessThanOrEqual(budget.filesReadMax);
+      expect(output.pack.usage.searchCalls).toBeLessThanOrEqual(budget.searchCallsMax);
+      expect(output.pack.usage.excerptBytes).toBeLessThanOrEqual(budget.excerptBytesMax);
+      expect(output.pack.uncertainty.some((marker) => marker.kind === "budget-clipped")).toBe(true);
+      const unread = paths.filter(
+        (path) => !output.pack.files.some((file) => file.scopePath === path),
+      );
+      expect(unread.length).toBeGreaterThan(0);
+      for (const path of unread)
+        expect(output.pack.omitted).toContainEqual({
+          scopePath: path,
+          reason: "budget-exhausted",
+          omittedAtMs: NOW,
+        });
+    },
+  );
+
+  it.each([
+    [".env", "denied"],
+    ["../outside.ts", "outside-scope"],
+    ["ignored/hidden.ts", "ignored"],
+    ["dist/generated.ts", "generated"],
+  ])(
+    "rejects the seventh named path %s through the existing admission policy",
+    async (path, reason) => {
+      const sources = Array.from({ length: 6 }, (_, index) => `src/source${String(index)}.ts`);
+      const { output, log } = await retrieve(
+        `Generate tests using ${[...sources, path].join(", ")}.`,
+        {
+          files: {
+            ...Object.fromEntries(sources.map((source) => [source, "export const value = 7;\n"])),
+            [path]: "private rejected fixture text",
+          },
+        },
+      );
+      expect(output.pack.files.map((file) => file.scopePath)).not.toContain(path);
+      expect(JSON.stringify(output.pack)).not.toContain("private rejected fixture text");
+      expect(
+        log.events.find((event) => event.op === "search.connected-context.source-details")?.extra,
+      ).toMatchObject({ explicitPathRejectedCount: 1, explicitPathRejectionReasons: [reason] });
+    },
+  );
+
+  it("reports an exhausted search grant before discovering an overflow basename", async () => {
+    const paths = Array.from({ length: 6 }, (_, index) => `src/source${String(index)}.ts`);
+    const { output } = await retrieve(
+      `Generate tests using ${[...paths, "README.md"].join(", ")}.`,
+      {
+        files: {
+          ...Object.fromEntries(paths.map((path) => [path, "export const requiredValue = 7;\n"])),
+          "README.md": "Accepted behavior: preserve customer input.\n",
+        },
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, searchCallsMax: 6 },
+      },
+    );
+    expect(output.pack.usage.searchCalls).toBeLessThanOrEqual(6);
+    expect(output.pack.files.map((file) => file.scopePath)).not.toContain("README.md");
+    expect(output.pack.uncertainty.some((marker) => marker.kind === "budget-clipped")).toBe(true);
+  });
+
   it("canonicalizes a leading current-directory segment before strict literal-at path admission", async () => {
     const path = "@src/checker.ts";
     const { output, log } = await retrieve(`Explain ./@src/checker.ts`, {

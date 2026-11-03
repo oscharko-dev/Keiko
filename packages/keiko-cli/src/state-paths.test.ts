@@ -60,6 +60,27 @@ describe("resolveStateDir", () => {
     expect(resolveContainedStateDir(cwd, {}, cwd)).toBe(join(cwd, DEFAULT_STATE_DIR_NAME));
   });
 
+  it("retains the selected workspace state when a native restart makes its path explicit", () => {
+    const cwd = makeRoot(),
+      home = makeRoot();
+    const state = join(cwd, DEFAULT_STATE_DIR_NAME);
+    expect(resolveContainedStateDir(cwd, { KEIKO_STATE_DIR: state }, home)).toBe(state);
+    expect(resolveContainedStateDir(cwd, { KEIKO_STATE_DIR: `${state}/` }, home)).toBe(state);
+    expect(resolveContainedStateDir(cwd, {}, home, state)).toBe(state);
+  });
+
+  it("refuses explicit workspace state redirected by a symlink or to another external folder", () => {
+    const cwd = makeRoot(),
+      home = makeRoot(),
+      outside = makeRoot();
+    const state = join(cwd, DEFAULT_STATE_DIR_NAME);
+    symlinkSync(outside, state, "junction");
+    for (const selected of [state, outside])
+      expect(() => resolveContainedStateDir(cwd, { KEIKO_STATE_DIR: selected }, home)).toThrow(
+        expect.objectContaining({ code: "STATE_DIR_ESCAPE" }),
+      );
+  });
+
   it("uses an explicit --state-dir argument over env and default", () => {
     const dir = resolveStateDir("/cwd", { KEIKO_STATE_DIR: "/env/state" }, "/explicit/state");
     expect(dir).toBe("/explicit/state");

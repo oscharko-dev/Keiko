@@ -1,3 +1,5 @@
+import { withUiLifecycleGuard } from "./ui-lifecycle-guard.js";
+import { nativeUiGenerationReaped } from "./native-ui-reap.js";
 // `keiko repair` — an offline, deterministic remediation pass that fixes a broken or
 // half-installed local Keiko state so a user gets a working install without a full
 // reinstall. CLI-only surface; no model call, no network, no server change.
@@ -179,6 +181,15 @@ function checkStalePid(
   const pidPath = join(stateDir, "ui.pid");
   const probe = classifyPid(pidPath, isAlive);
   if (probe.state === "absent") return ok("UI process state", "no pid file recorded");
+  if (probe.state === "starting" || probe.state === "unknown")
+    return action("UI process state", "ownership is uncertain; lifecycle tracking retained");
+  if (
+    probe.state === "stale" &&
+    probe.nativeAppRuntime &&
+    probe.pid !== undefined &&
+    !nativeUiGenerationReaped(stateDir, { pid: probe.pid, launchId: probe.launchId })
+  )
+    return action("UI process state", "native generation ownership remains held");
   if (probe.state === "running")
     return ok("UI process state", `running (pid ${String(probe.pid)})`);
   if (dryRun)
@@ -1045,7 +1056,22 @@ export async function runRepairCli(
   // scripts can detect "manual step required".
   let results: readonly CheckResult[];
   try {
-    results = collectRepairResults(args, io, env, parsed, resolved, await loadCredentialVault());
+    const vault = await loadCredentialVault();
+    const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
+    const operation = (): Promise<readonly CheckResult[]> =>
+      Promise.resolve(collectRepairResults(args, io, env, parsed, resolved, vault));
+    const guarded = parsed.dryRun
+      ? { kind: "complete" as const, value: await operation() }
+      : await withUiLifecycleGuard(stateDir, true, operation, resolved.homedir());
+    results =
+      guarded.kind === "complete"
+        ? guarded.value
+        : [
+            action(
+              "UI process state",
+              "another lifecycle operation is in progress; state retained",
+            ),
+          ];
   } catch (error) {
     const name = error instanceof Error ? error.name : "UnknownError";
     io.out("Keiko repair\n");

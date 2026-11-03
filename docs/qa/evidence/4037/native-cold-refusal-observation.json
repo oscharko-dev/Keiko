@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "classification": "Qualification-test diagnostics only. Does not diagnose or fix the macOS-x64 cold-refusal failure, change product runtime, or satisfy native updater acceptance.",
+  "parentHead": "882424ba75d826fc76f386d606fcee3fa19924e4",
+  "source": {
+    "path": "native/opencode-service-host/entry.test.mjs",
+    "sha256": "7dcffe5503265d0801c8ff34879e83ecb2dadbfb7329e3e30b8ffe85a61f3509"
+  },
+  "originalFailure": {
+    "head": "14946692661e27f55863e18c0e0d0a7e64c19fb5",
+    "job": "https://github.com/oscharko-dev/Keiko/actions/runs/39178676087/job/117827258909",
+    "errorClass": "fixed-entry-cold-refusal-timeout",
+    "ageMs": 5003,
+    "readinessObserved": false,
+    "processExited": false,
+    "refusalObserved": "not measured by the original fixture",
+    "conclusion": "The original log cannot distinguish cold initialization from an already refused process retaining handles."
+  },
+  "change": "The existing timeout cause additionally records constant-refusal observation, stderr byte count, first stderr elapsed time and refusal elapsed time. The successful targeted cold-refusal case emits the same body-free observations. No stderr, packet, config, endpoint or native error body is added to the cause.",
+  "originalBoundsUnchanged": {
+    "coldReadyMs": 10000,
+    "eofAndRefusalExitMs": 5000
+  },
+  "causal": {
+    "classification": "Real existing test output collector and timeout cause; synthetic owned Node children classify pending/refused/other stderr. Not native x64 cause or native update acceptance.",
+    "beforeSourceSha256": "a0bf84f91ab013772cf902ec65c438f9e0dbd413cd609d4440f61957f5b39008",
+    "afterSourceSha256": "7dcffe5503265d0801c8ff34879e83ecb2dadbfb7329e3e30b8ffe85a61f3509",
+    "identicalDiagnosticTestBlockSha256": "bffc823c35a2c612ec7d328b47bbe22d520d4a1ed2f0de46e1dc61b81e1f9a06",
+    "beforeExitCode": 1,
+    "afterExitCode": 0,
+    "restored": true
+  },
+  "diagnosticControls": {
+    "beforeFailed": 3,
+    "beforePassed": 0,
+    "afterPassed": 3,
+    "method": "Real existing collector/timeoutError with three fixture-owned actual Node children: no stderr, constant refusal while alive, unrelated synthetic stderr while alive. All close on owned stdin EOF."
+  },
+  "targetedOwnerAfter": {
+    "testsPassed": 4,
+    "coldCaseDurationMs": 1161.899875,
+    "refusalObserved": true,
+    "stderrByteCount": 19,
+    "firstStderrAtMs": 553,
+    "refusalAtMs": 553
+  },
+  "fullAffectedOwner": {
+    "command": "npm run test:opencode-service-host",
+    "platform": "darwin-arm64",
+    "passed": 59,
+    "failed": 0,
+    "skipped": 0,
+    "durationMs": 15649.241083,
+    "coldRefusalAtMs": 547
+  },
+  "logs": [
+    {
+      "name": "native31-final-before.log",
+      "sha256": "f93264f279b05dbdd3c822fd8e9fc124899bf2c86562ae1cad47b0e7fbdf70e8"
+    },
+    {
+      "name": "native31-final-after.log",
+      "sha256": "e13d6e623aa9e92b76bc7b049b9502df77b8c375f5faa8ed46058d44296b67bc"
+    },
+    {
+      "name": "native31-full-owner.log",
+      "sha256": "5076dd6c8f31ab66afb097f71b1da042540bac570fc96c562ad775a76fb69b37"
+    }
+  ],
+  "limitations": [
+    "Synthetic diagnostic controls do not run the native application graph.",
+    "The full affected native suite runs actual original host/route/guard owners on ARM64; it does not qualify x64.",
+    "The original failed x64 attempt remains retained. Exact-head x64 evidence and cause analysis are still required.",
+    "No timeout increase, skipped assertion, process-generation ownership change or release-impact waiver is introduced."
+  ],
+  "subsequentCiObservation": {
+    "head": "034a572572eecae8b734142027e0e869dd800c7a",
+    "job": "https://github.com/oscharko-dev/Keiko/actions/runs/39181616028/job/117835812270",
+    "rawLogSha256": "b8223b703a084e47a44e0b0715aacf698cd48065ae292a93e63e14816df6b066",
+    "platform": "macos-x64",
+    "passed": 59,
+    "failed": 0,
+    "refusalObserved": true,
+    "stderrByteCount": 19,
+    "firstStderrAtMs": 3150,
+    "refusalAtMs": 3150,
+    "wholeTwoProcessCaseMs": 6555.026618,
+    "scope": "Successful later exact-head owner CI evidence; does not reconstruct or diagnose the earlier failed attempt or qualify native updater ownership."
+  },
+  "sameHead31FailedObservation": {
+    "head": "034a572572eecae8b734142027e0e869dd800c7a",
+    "job": "https://github.com/oscharko-dev/Keiko/actions/runs/39181640969/job/117835872312",
+    "ageMs": 5004,
+    "readinessObserved": false,
+    "processExited": false,
+    "refusalObserved": false,
+    "stderrByteCount": 0,
+    "rawLogSha256": "d21870b7def9df1934cfa45612cb2ce489367c6a0f2260025829aeaaab7fbd91",
+    "interpretation": "This attempt had no parent-observed stderr/refusal at the original five-second failure. The same-head successful job does not reconstruct or explain it."
+  },
+  "lateObservation": {
+    "classification": "Test-only follow-up observation after an already failed cold-refusal control. The original five-second error is rethrown unchanged regardless of later exit; no timeout or product acceptance relaxation.",
+    "parentHead": "5f5f41563e7215e930cef3e341428da0ff3c3220",
+    "source": {
+      "path": "native/opencode-service-host/entry.test.mjs",
+      "sha256": "f7c4e32b0b9150dd600cdc0415424d74d3406e6de34269372bf095c7bf97899d"
+    },
+    "mechanism": [
+      "Only the exact cold-refusal timeout triggers a follow-up; ordinary results, spawn failures and other assertion errors are preserved.",
+      "The existing owned exit promise is observed through the remaining original monotonic spawn-relative ten-second cold horizon, never a fresh ten-second grant. Timers are cleared/unrefed and rejected or past-horizon observations do not cause unhandled rejection.",
+      "The original timeout snapshot and later closed observations remain separate. Exit1 is labelled exit-1; only the independently observed exact constant line establishes refusal.",
+      "Cleanup retains the same owned child, allows one second for TERM and then uses KILL before reaping; it does not signal an enumerated or inferred process tree."
+    ],
+    "promisePortControls": {
+      "passed": 8,
+      "scope": "Actual diagnostic helpers with inert owned-exit promises, timer/finish ports and closed observations; no native-process or kernel proof."
+    },
+    "actualCleanup": {
+      "beforeFailed": 1,
+      "afterPassed": 1,
+      "scope": "Identical real Node TERM-ignoring fixture and actual published parent disposeChild function, then corrected function. Bounded assertion/finally always forcibly reaps that same fixture child."
+    },
+    "actualAffectedOwner": {
+      "passed": 68,
+      "failed": 0,
+      "skipped": 0,
+      "durationMs": 16733.408916,
+      "platform": "macOS ARM64"
+    },
+    "controlledColdGraph": {
+      "classification": "Private copied test harness with an explicit six-second Node pre-main import delay. Actual host/entry/native graph sources remain unchanged; launch options differ. This is a measurement control, not real x64 cause or native updater acceptance.",
+      "copiedHarnessSha256": "515e4e82ed4c68b99fa683c534ba681d495879e64e5eed845e3a26030ea5561d",
+      "originalTimeout": {
+        "ageMs": 5003,
+        "readinessObserved": false,
+        "processExited": false,
+        "refusalObserved": false,
+        "stderrByteCount": 0
+      },
+      "laterObservation": {
+        "ageMs": 6589,
+        "readinessObserved": false,
+        "processExited": true,
+        "refusalObserved": true,
+        "stderrByteCount": 19,
+        "firstStderrAtMs": 6581,
+        "refusalAtMs": 6581
+      },
+      "disposition": "exit-1",
+      "originalErrorStillThrown": true,
+      "hostSourceSha256": "700bb4cae8d5befdc7f6b62cd3a651fdc1c75de73256c82820863246cbd48142",
+      "entrySourceSha256": "7c7d2d6987029dacbf329cb14fe47ba0c731dae81bf06f01c012746f4c4c071a"
+    },
+    "independentControls": {
+      "passed": 13,
+      "scope": "Actual-source diagnostic helpers with inert ports; source join before the subsequent exit-1 label refinement. No real process/signal/native call by the auditor."
+    },
+    "logs": [
+      {
+        "name": "native33-owner-final-v5.log",
+        "sha256": "15297c70301caeca21091017173aa457fb48b8de7362acebb017287943663705"
+      },
+      {
+        "name": "native33-controlled-cold-delay-final-v3.log",
+        "sha256": "5d42644a9a0694e105e9802c26361b0c838278805cbe1267be36f862202ca031"
+      },
+      {
+        "name": "native33-cleanup-before.log",
+        "sha256": "345a7da943ced2ffa3546a927c167925c16610575f3f017bc3095d8f40df0c39"
+      },
+      {
+        "name": "native33-cleanup-after.log",
+        "sha256": "e5f253288f7c033a049a4c18d93fadd14bb1a7242531b8c375def69aa6dae581"
+      }
+    ],
+    "remainingHolds": [
+      "The actual failed x64 attempt has not yet been observed through the remaining cold horizon; its cause remains open.",
+      "Actual Linux/macOS generation ownership, signed platform environment and packaged update/restart/abort/rollback/two-update/state/SSD acceptance remain open.",
+      "Final exact-head required checks, broader acceptance and authorized integration remain open."
+    ]
+  }
+}

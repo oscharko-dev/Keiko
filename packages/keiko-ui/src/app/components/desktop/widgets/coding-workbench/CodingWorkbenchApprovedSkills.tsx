@@ -14,6 +14,7 @@ import {
 } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import styles from "./CodingWorkbenchWindow.module.css";
+import { useHeldNotice } from "./codingWorkbenchPairingHold";
 
 const SKILLS_LABEL_ID = "coding-workbench-skills-label";
 
@@ -49,8 +50,11 @@ export function ApprovedSkillsDisclosure({
   readonly retry: () => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  // #3880: an unpaired window cannot read the channel; the run status sentence says why.
+  const held = useHeldNotice("skills", status === "unavailable");
   // A channel that could not be read is not the same fact as a run with no approved skill: the
   // operator is told which one it is, and keeps the one recourse the hook offers.
+  if (held) return null;
   if (status === "unavailable") {
     return (
       <p className={styles["cmp-skills-unavailable"]} role="note">

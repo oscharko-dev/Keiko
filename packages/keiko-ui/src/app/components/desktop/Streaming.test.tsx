@@ -1462,7 +1462,9 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
           correlationId: "ui_stream-stall-0001",
           errorEvidence: { errorClass: "ApiError", frames: [], causeChain: [] },
         },
+        { composerActivity: "send-failure-restored", correlationId: "ui_stream-stall-0001" },
       ]);
+      expect(view.result.current.draft).toBe("hello");
     } finally {
       resetClientDiagnosticWriter();
     }
@@ -1627,7 +1629,9 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
         });
 
       const view = await bootStreamingHook();
-      act((): void => view.result.current.setDraft("trigger network error"));
+      act((): void => {
+        view.result.current.setDraft("trigger network error");
+      });
       await act(async (): Promise<void> => {
         await view.result.current.sendMessage();
       });

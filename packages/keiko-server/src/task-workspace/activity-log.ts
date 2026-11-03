@@ -40,6 +40,7 @@
 // retained independently in `extra.failureKind`, so reconstruction keeps both the cross-domain
 // failure class and the original task-workspace verdict.
 
+import { randomUUID } from "node:crypto";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
@@ -53,14 +54,18 @@ import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-activity
 import { causeChain, keikoStackFrames } from "@oscharko-dev/keiko-activity-log";
 import type {
   TaskWorkspaceDriftMarker,
+  TaskWorkspaceLifecycleState,
   WorkspaceCleanupRefusalReason,
   WorkspaceReconciliationStatus,
 } from "@oscharko-dev/keiko-contracts";
+import { TASK_WORKSPACE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { processServerLogSink } from "../process-log-sink.js";
 import { TaskWorkspaceError, type TaskWorkspaceErrorCode } from "./errors.js";
 import {
   appendWorkspaceLifecycleEvidence,
+  buildWorkspaceEvent,
+  WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleEvidenceRecord,
   type WorkspaceLifecycleOperation,
   type WorkspaceLifecycleOutcome,
@@ -134,6 +139,15 @@ const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
     // repository and branch choice takes effect here, so support can check it without the name
     // (PR #3625 review).
     baseBranchDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    // Present only when an ordinary folder (not a repository) was selected: a folder workspace has
+    // no branch, so this is how the log tells it apart from a Local checkout (owner decision
+    // 2026-10-30). Absent on every repository workspace.
+    workspaceKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["folder"],
+    },
     driftMarker: {
       type: "string",
       dataClass: "closed-enum",
@@ -231,6 +245,13 @@ const FAILURE_OUTCOMES: ReadonlySet<WorkspaceLifecycleOutcome> = new Set([
   "cleanup-refused",
 ]);
 
+/** What an in-place workspace selection (Local checkout, folder) needs to record its outcome. */
+export interface WorkspaceSelectionEvidenceDeps extends WorkspaceActivityLogSeam {
+  readonly evidenceStore: EvidenceStore;
+  readonly redactString: (value: string) => string;
+  readonly now: () => number;
+}
+
 export interface WorkspaceLifecycleLogInput {
   readonly operation: WorkspaceLifecycleOperation;
   readonly outcome: WorkspaceLifecycleOutcome;
@@ -266,6 +287,7 @@ export interface WorkspaceLifecycleLogInput {
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   // The branch a provisioned workspace was cut from. Only its digest reaches `extra`.
   readonly baseBranch?: string | undefined;
+  readonly workspaceKind?: "folder" | undefined;
 }
 
 export interface WorkspaceLifecycleFailureInput {
@@ -287,6 +309,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly error?: unknown;
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   readonly baseBranch?: string | undefined;
+  readonly workspaceKind?: "folder" | undefined;
 }
 
 interface WorkspaceErrorTrace {
@@ -414,6 +437,7 @@ export function logWorkspaceLifecycle(
       ...(input.baseBranch === undefined
         ? {}
         : { baseBranchDigest: baseBranchDigest(input.baseBranch) }),
+      ...(input.workspaceKind === undefined ? {} : { workspaceKind: input.workspaceKind }),
       ...(input.error === undefined ? {} : errorTrace(input.error)),
     },
   });
@@ -482,6 +506,55 @@ export function recordWorkspaceLifecycle(
     error: input.error,
     driftMarker: input.driftMarker,
     baseBranch: input.baseBranch,
+    workspaceKind: input.workspaceKind,
+  });
+}
+
+/** One in-place selection outcome (Local checkout or folder), activated or rejected. */
+export interface WorkspaceSelectionOutcome {
+  readonly workspaceId: string;
+  readonly taskId: string;
+  readonly correlationId: string | undefined;
+  readonly startedAt: number;
+  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
+  readonly error?: TaskWorkspaceError | undefined;
+  readonly baseBranch?: string | undefined;
+  readonly workspaceKind?: "folder" | undefined;
+}
+
+export function recordWorkspaceSelection(
+  deps: WorkspaceSelectionEvidenceDeps,
+  input: WorkspaceSelectionOutcome,
+): void {
+  const { error } = input;
+  const recordedAt = deps.now();
+  recordWorkspaceLifecycle(deps, {
+    evidenceStore: deps.evidenceStore,
+    redactString: deps.redactString,
+    record: {
+      kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
+      schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
+      recordedAt,
+      operation: "activate",
+      outcome: error?.outcome ?? "activated",
+      attempt: 1,
+      durationMs: Math.max(0, recordedAt - input.startedAt),
+      worktreeCount: 0,
+      event: buildWorkspaceEvent({
+        eventId: randomUUID(),
+        workspaceId: input.workspaceId,
+        taskId: input.taskId,
+        type: error === undefined ? "activated" : "transition-rejected",
+        at: new Date(recordedAt).toISOString(),
+        correlationId: correlationIdOrUnknown(input.correlationId),
+        fromState: input.fromState,
+        toState: error === undefined ? "active" : undefined,
+      }),
+    },
+    baseBranch: input.baseBranch,
+    workspaceKind: input.workspaceKind,
+    errorCode: error?.code,
+    error,
   });
 }
 

@@ -3,6 +3,7 @@ import {
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
+import type { ContentRedactionPolicy } from "@oscharko-dev/keiko-contracts";
 import { MAX_RECURSIVE_TEXT_FILE_BYTES } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 // Shared grounded-answer system prompt. Extracted to a contracts-only LEAF module so the
 // hybrid grounding module can interpolate it in a top-level constant without a circular-import
@@ -35,6 +36,19 @@ export const GROUNDED_SYSTEM_PROMPT =
   "Never expose secrets, credential-shaped strings, internal search/planning/tool-call/orchestration text, " +
   "pseudo-tool calls, JSON-like search arguments, or search preambles.";
 
+// #4098: the deployment opt-out (`KEIKO_CONTENT_REDACTION=off`) lets Chat quote authorized
+// excerpts exactly. The guardrails against untrusted instructions, invented facts and leaked
+// credentials stay; the model is told that a placeholder was withheld and must not be guessed.
+const GROUNDED_PRESERVE_RULE =
+  "Quote the authorized excerpts exactly, including personal data, configuration values and code. " +
+  "Text shown as [REDACTED] was withheld by Keiko; never guess or reconstruct it. " +
+  "Never expose API keys, access tokens, private keys, URL credentials, ";
+
+const GROUNDED_SYSTEM_PROMPT_PRESERVING = GROUNDED_SYSTEM_PROMPT.replace(
+  "Never expose secrets, credential-shaped strings, ",
+  GROUNDED_PRESERVE_RULE,
+);
+
 /** Distinct files with usable excerpts in the final prompt, independent of assembled audit packs. */
 export function sentGroundedFileCount(packs: readonly ConnectedContextPack[]): number {
   return new Set(
@@ -50,8 +64,9 @@ export function sentGroundedFileCount(packs: readonly ConnectedContextPack[]): n
 export function groundedSystemPrompt(
   policy: OwnAssessmentPolicy = "disabled",
   markerKind: "file" | "numeric" = "file",
+  contentRedaction: ContentRedactionPolicy = "redact",
 ): string {
-  return policy === "allowed"
-    ? `${GROUNDED_SYSTEM_PROMPT} ${ownAssessmentPromptRule(markerKind)}`
-    : GROUNDED_SYSTEM_PROMPT;
+  const base =
+    contentRedaction === "preserve" ? GROUNDED_SYSTEM_PROMPT_PRESERVING : GROUNDED_SYSTEM_PROMPT;
+  return policy === "allowed" ? `${base} ${ownAssessmentPromptRule(markerKind)}` : base;
 }

@@ -191,13 +191,15 @@ function observeSerializedSignal(
   observed: ReturnType<typeof deferred<AbortSignal>>,
 ): ChatTurnSerializer {
   return {
+    ...serializer,
     runExclusive: <T>(
       chatId: string,
       signal: AbortSignal,
       operation: () => T | Promise<T>,
+      generation?: AbortController,
     ): Promise<T | typeof CHAT_TURN_WAIT_CANCELLED> => {
       observed.resolve(signal);
-      return serializer.runExclusive(chatId, signal, operation);
+      return serializer.runExclusive(chatId, signal, operation, generation);
     },
   };
 }
@@ -368,7 +370,7 @@ function contextRouteBody(): { chatId: string; projectPath: string; modelId: str
 }
 
 function seedContextRouteHistory(chatId: string): void {
-  for (let index = 0; index < 80; index += 1) {
+  for (let index = 0; index < 140; index += 1) {
     store.createMessage({
       chatId,
       role: index % 2 === 0 ? "user" : "assistant",
@@ -397,6 +399,7 @@ describe("context maintenance HTTP routes", () => {
     const beforeResponse = await fetch(url(`/api/chats/context?${query}`));
     expect(beforeResponse.status).toBe(200);
     const before = (await beforeResponse.json()) as ChatContextStatusWire;
+    expect(before.canCompact).toBe(true);
     const response = await fetch(url("/api/chats/context/compact"), {
       method: "POST",
       headers: POST_HEADERS,
@@ -406,6 +409,7 @@ describe("context maintenance HTTP routes", () => {
     const after = (await response.json()) as ChatContextStatusWire;
     expect(after.estimatedInputTokens).toBeLessThan(before.estimatedInputTokens);
     expect(after.compaction?.tokensSaved).toBeGreaterThan(0);
+    expect(after.canCompact).toBe(false);
     expect(after.contextWindowTokens).toBe(64_000);
     expect(store.listMessages(body.chatId, 500)).toEqual(original);
     expect(await (await fetch(url(`/api/chats/context?${query}`))).json()).toEqual(after);
@@ -1059,6 +1063,48 @@ describe("PATCH /api/projects", () => {
     }
   });
 
+  it.each([false, true])(
+    "reconnects a stored alias through HTTP with registered body-free evidence (retargeted=%s)",
+    async (retargeted) => {
+      const alias = join(tmp, "reconnect-alias");
+      symlinkSync(projDir, alias, process.platform === "win32" ? "junction" : "dir");
+      store.createProject(alias, "Aliased project");
+      const target = join(tmp, "reconnect-target");
+      if (retargeted) {
+        mkdirSync(target);
+        rmSync(alias);
+        symlinkSync(target, alias, process.platform === "win32" ? "junction" : "dir");
+      }
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      try {
+        const res = await fetch(url(`/api/projects?path=${encodeURIComponent(alias)}`), {
+          method: "PATCH",
+          headers: PATCH_HEADERS,
+          body: "{}",
+        });
+        expect(res.status).toBe(200);
+        expect(await res.json()).toMatchObject({
+          project: { path: alias, name: "Aliased project", workspaceAvailable: true },
+        });
+        const event = sink.events.find((entry) => entry.op === "project.workspace.reconnect");
+        if (event === undefined) throw new Error("expected an alias reconnect event");
+        const line = formatActivityLogProofLine(event);
+        expect(expectActivityLogProof("project.workspace.reconnect.outcome", line)).toMatchObject({
+          status: 200,
+          outcome: "available",
+          completeness: "complete",
+          loss: "none",
+        });
+        expect(line).not.toContain(alias);
+        expect(line).not.toContain(target);
+        expect(line).not.toContain("Aliased project");
+      } finally {
+        resetServerLogger();
+      }
+    },
+  );
+
   // Registry-linked executable proof (#3532): the same reconnect event above, read back through the
   // real formatter/registry path so `project.workspace.reconnect.outcome` resolves against a
   // production-computed event (this task's rule 1: no hand-built event or registration object).
@@ -1216,7 +1262,11 @@ describe("GET /api/chats", () => {
       url(`/api/chats?projectPath=${encodeURIComponent(projDir)}&id=${oldest.id}`),
     );
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ chats: [oldest] });
+    expect(await res.json()).toEqual({
+      chats: [
+        { ...oldest, toolModeCeiling: "governed-assist", effectiveToolMode: "governed-assist" },
+      ],
+    });
     expect(listSpy).not.toHaveBeenCalled();
     listSpy.mockRestore();
   });
@@ -2847,6 +2897,25 @@ describe("chat scope precondition review regressions", () => {
 });
 
 describe("GET chats by ID review regressions", () => {
+  it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
+    "projects the actual %s ceiling without changing the retained mode selection",
+    (ceiling) => {
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "Selected mode", "m");
+      const selected = store.updateChat(chat.id, { toolMode: "autonomous-delivery" });
+      const result = handleListChats(
+        directRouteContext(`/api/chats?projectPath=${encodeURIComponent(projDir)}&id=${chat.id}`)
+          .ctx,
+        deps({ autonomousDeliveryDeploymentCeiling: ceiling }),
+      );
+      expect(result).toEqual({
+        status: 200,
+        body: { chats: [{ ...selected, toolModeCeiling: ceiling, effectiveToolMode: ceiling }] },
+      });
+      expect(store.listChats(projDir).find((item) => item.id === chat.id)).toEqual(selected);
+    },
+  );
+
   it.each(["id=", "id=known&limit=invalid", "id=known&limit=0", "id=known&limit=201"])(
     "validates all supplied query fields for %s",
     (query) => {
@@ -2878,7 +2947,14 @@ describe("GET chats by ID review regressions", () => {
       );
     expect(history.get(coding.id)).toBeDefined();
     expect(lookup(coding.id)).toEqual({ status: 200, body: { chats: [] } });
-    expect(lookup(ordinary.id)).toEqual({ status: 200, body: { chats: [ordinary] } });
+    expect(lookup(ordinary.id)).toEqual({
+      status: 200,
+      body: {
+        chats: [
+          { ...ordinary, toolModeCeiling: "governed-assist", effectiveToolMode: "governed-assist" },
+        ],
+      },
+    });
   });
 });
 

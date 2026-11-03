@@ -278,6 +278,7 @@ function stagingManifest(shippedSha256) {
       assetName: "keiko-windows-x64.zip",
       archiveFormat: "zip",
       sizeBytes: 12345678,
+      uncompressedSizeBytes: 23456789,
       sha256: DIGEST_A,
     },
     provenance: {

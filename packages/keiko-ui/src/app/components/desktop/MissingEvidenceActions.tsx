@@ -188,18 +188,10 @@ export function MissingEvidenceActions(props: MissingEvidenceActionsProps): Reac
   return (
     <section className={styles.cmpNotice} aria-label={t("scope.missing.title")}>
       <p>{t("scope.missing.count", { count: declarations.length })}</p>
-      <button
-        type="button"
-        onClick={(event) => {
-          const help = event.currentTarget
-            .closest(".chatw")
-            ?.querySelector<HTMLElement>('[data-testid="grounding-help"]');
-          help?.focus();
-          help?.scrollIntoView?.({ block: "nearest" });
-        }}
-      >
-        {t("scope.missing.help")}
-      </button>
+      <details>
+        <summary>{t("scope.missing.help")}</summary>
+        <p>{t("chat.grounding.help")}</p>
+      </details>
       {declarations.map((declaration, index) => (
         <DeclaredFileAction
           key={`${declaration.scopePath}-${String(index)}`}

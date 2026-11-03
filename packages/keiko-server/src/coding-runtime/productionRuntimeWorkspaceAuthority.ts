@@ -2,11 +2,18 @@ import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import type { GovernedSyncHead } from "./governedSyncHeads.js";
+import type { GovernedTaskBranch } from "./governedTaskBranches.js";
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 import { isAbsolute, relative, sep } from "node:path";
 
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  folderWorkspaceHead,
+  isFolderWorkspace,
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import { CODING_RUNTIME_PATCH_BUDGET_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 
 import type {
@@ -100,7 +107,14 @@ type LaunchResolutionInput = Parameters<CodingRuntimeLaunchResolver["resolve"]>[
 export interface ProductionWorkspaceAuthorityInput {
   /** Retained last successful runtime receipt; latest proposals never replace HEAD provenance. */
   readonly verifiedCommitResult?: (runId: string) => VerifiedCommitResult | undefined;
-  readonly workspaceLifecycle: Pick<WorkspaceLifecycleService, "getActive">;
+  /** The last head a governed fast-forward of the run wrote (governedSyncHeads.ts, #3902 AC2). */
+  readonly governedSyncHead?: (runId: string) => GovernedSyncHead | undefined;
+  /** The task branch Keiko's own `keiko_git_branch` moved the run onto (governedTaskBranches.ts, #3907). */
+  readonly governedTaskBranch?: (runId: string) => GovernedTaskBranch | undefined;
+  readonly workspaceLifecycle: Pick<
+    WorkspaceLifecycleService,
+    "getActive" | "admitTaskBranch" | "adoptTaskBranch"
+  >;
   readonly managedTaskWorkspaceRoot: string;
   readonly deploymentCeiling: CodingWorkbenchMode;
   /** Trusted deployment ceiling for a newly minted run; never changes an existing envelope. */
@@ -123,6 +137,10 @@ export interface ProductionWorkspaceAuthorityInput {
         reasoningEffort: ModelReasoningEffort | undefined,
       ) => { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort })
     | undefined;
+  // Checks the managed model a start launches with when it is not ready now, before the start is
+  // admitted; `resolveManagedModelProfile` then judges the answer (customer 1.3.4).
+  readonly prepareManagedModel?:
+    ((modelId: string | undefined, correlationId: string | undefined) => Promise<void>) | undefined;
 }
 
 // Exported so a caller that needs to project the SAME run-context connector-scope entitlement
@@ -165,11 +183,24 @@ export function resolveProductionRuntimeContext(
     active.binding.activeRoot,
     active.instance,
   );
-  const head = input.readWorkspaceHead(workspaceRoot, active.instance.repositoryRoot);
+  const head = workspaceHeadOf(input, workspaceRoot, active.instance);
   if (head === undefined || active.instance.lastVerifiedHead !== head) {
     invalidWorkspace("verified-head");
   }
   return contextFromActive(input, { ...request, workspaceRoot }, active.instance, head);
+}
+
+// A folder has no commit: its head is the folder identity stand-in the contract defines, never a
+// Git read, so a plain directory is admitted on exactly the same containment, identity and
+// verified-head checks as a repository (owner decision 2026-10-30).
+function workspaceHeadOf(
+  input: ProductionWorkspaceAuthorityInput,
+  workspaceRoot: string,
+  instance: WorkspaceInstance,
+): string | undefined {
+  return isFolderWorkspace(instance)
+    ? folderWorkspaceHead(instance.gitdirIdentity)
+    : input.readWorkspaceHead(workspaceRoot, instance.repositoryRoot);
 }
 
 // eslint-disable-next-line max-lines-per-function -- Explicit authority fields form one auditable policy manifest.
@@ -205,6 +236,7 @@ function contextFromActive(
     projectDigest: digest(instance.repositoryRoot),
     workspaceId: instance.workspaceId,
     workspaceRoot: request.workspaceRoot,
+    ...(isFolderWorkspace(instance) ? { workspaceKind: "folder" as const } : {}),
     branchRef: branch,
     branchHeadDigest: digest(head),
     ...issueBindingFromRequest(request, instance),
@@ -236,7 +268,8 @@ function contextFromActive(
       maxPromptTokens: checkedRuntimePromptTokenBudget(
         input.promptTokenBudget ?? DEFAULT_RUNTIME_PROMPT_TOKENS,
       ),
-      maxPatchBytes: 262_144,
+      // Owner decision 2026-10-28: 64 MiB per run, defined once next to the per-changeset cap.
+      maxPatchBytes: CODING_RUNTIME_PATCH_BUDGET_BYTES,
     },
     expiresAt: new Date(now.getTime() + maxRuntimeMs).toISOString(),
   };
@@ -387,10 +420,10 @@ export function productionWorkspaceMatches(
       active.binding.activeRoot,
       active.instance,
     );
-    const head = input.readWorkspaceHead(workspaceRoot, active.instance.repositoryRoot);
+    const head = workspaceHeadOf(input, workspaceRoot, active.instance);
     return (
       trustedIdentityMatches(active.instance, context) &&
-      trustedBranchMatches(active.instance, context) &&
+      trustedBranchMatches(input, active.instance, context) &&
       trustedHeadMatches(input, active.instance, context, head)
     );
   } catch {
@@ -411,9 +444,15 @@ function trustedIdentityMatches(
 }
 
 function trustedBranchMatches(
+  input: ProductionWorkspaceAuthorityInput,
   instance: WorkspaceInstance,
   context: CodingRuntimeTrustedContext,
 ): boolean {
+  const rebound =
+    context.runId === undefined ? undefined : input.governedTaskBranch?.(context.runId);
+  // Once Keiko moved this run onto a task branch, that record is the only branch fact that holds:
+  // the envelope's own branch is no longer where the workspace stands, and it must not match again.
+  if (rebound !== undefined) return reboundBranchMatches(instance, context, rebound);
   return (
     instance.baseBranch === context.branch.baseRef &&
     instance.taskBranch === context.branchRef &&
@@ -421,6 +460,24 @@ function trustedBranchMatches(
     !context.branch.allowDetachedHead &&
     context.branch.allowedPrefixes.length === 1 &&
     context.branch.allowedPrefixes[0] === branchPrefix(instance.taskBranch)
+  );
+}
+
+// #3907: the branch a governed `keiko_git_branch` created for this very run in this very workspace,
+// held to the same facts as a governed fast-forward's head: the run, the workspace and the live
+// instance itself. The base branch is the envelope's own and never moves.
+function reboundBranchMatches(
+  instance: WorkspaceInstance,
+  context: CodingRuntimeTrustedContext,
+  rebound: GovernedTaskBranch,
+): boolean {
+  return (
+    rebound.runId === context.runId &&
+    rebound.workspaceDigest === digest(context.workspaceRoot) &&
+    rebound.baseBranch === context.branch.baseRef &&
+    instance.baseBranch === rebound.baseBranch &&
+    instance.taskBranch === rebound.taskBranch &&
+    !context.branch.allowDetachedHead
   );
 }
 
@@ -433,6 +490,7 @@ function trustedHeadMatches(
   if (head === undefined || instance.lastVerifiedHead !== head) return false;
   if (digest(head) === context.branchHeadDigest) return true;
   if (context.runId === undefined) return false;
+  if (governedSyncHeadMatches(input, context, head)) return true;
   const receipt = input.verifiedCommitResult?.(context.runId);
   if (!isVerifiedCommitResult(receipt) || receipt.status !== "succeeded") return false;
   return [
@@ -441,6 +499,22 @@ function trustedHeadMatches(
     receipt.workspaceDigest === digest(context.workspaceRoot),
     receipt.issueBindingDigest === context.issueBinding?.bindingDigest,
   ].every(Boolean);
+}
+
+// #3902 AC2: a head a governed fast-forward of this very run wrote in this very workspace, held to
+// the same three facts as the verified commit's receipt above.
+function governedSyncHeadMatches(
+  input: ProductionWorkspaceAuthorityInput,
+  context: CodingRuntimeTrustedContext,
+  head: string,
+): boolean {
+  const synced = context.runId === undefined ? undefined : input.governedSyncHead?.(context.runId);
+  return (
+    synced !== undefined &&
+    synced.runId === context.runId &&
+    synced.headSha === head &&
+    synced.workspaceDigest === digest(context.workspaceRoot)
+  );
 }
 
 export function trustedManagedWorkspaceRoot(root: string): boolean {

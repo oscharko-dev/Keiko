@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { runBugVerification, SKIP_UNRESOLVED } from "./verify-stage.js";
 import { buildBugRunState, type BugRunState } from "./internal.js";
 import { computeBugFingerprint } from "./emit.js";
@@ -18,7 +21,12 @@ vi.mock("@oscharko-dev/keiko-verification", async (importOriginal) => {
   return withConfinedVerificationFixture(actual);
 });
 
-const ROOT = "/repo";
+// A strict bubblewrap execution-root run creates its per-run home inside the execution root before
+// spawn (PR #4095), so this suite's root must exist on disk; its contents stay in memFs.
+const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "keiko-workflow-verify-")));
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 interface StateOpts {
   readonly withTestScript?: boolean;

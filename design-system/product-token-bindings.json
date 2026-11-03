@@ -1,0 +1,4609 @@
+{
+  "schemaVersion": 1,
+  "description": "Product token bindings to the existing canonical design-system CSS. Literal values are product-specific additions or reviewed compatibility overrides. Rule order preserves the existing token cascade.",
+  "rules": [
+    {
+      "selector": ":root",
+      "conditions": [],
+      "declarations": [
+        {
+          "comment": "Tell the user agent the app paints on a dark surface by default. Without\n     this hint the browser fills the empty document with its own white \"blank\"\n     state between document swap and CSS variable resolution during F5 reloads,\n     producing a visible white flash before the shader/background paints (#302)."
+        },
+        {
+          "property": "color-scheme",
+          "value": "dark"
+        },
+        {
+          "comment": "surfaces — warm-neutral near-black, derived in oklch from #333"
+        },
+        {
+          "property": "--bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "app background"
+        },
+        {
+          "property": "--surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "sidebar / panels"
+        },
+        {
+          "property": "--card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "raised cards"
+        },
+        {
+          "property": "--card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "hover / nested"
+        },
+        {
+          "property": "--inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "wells, inputs"
+        },
+        {
+          "comment": "borders"
+        },
+        {
+          "property": "--line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "canvas dot-grid pitch tone + focus-ring width (#1292) — the two Tier-1\n     primitives the design-system reference carries that product CSS lacked.\n     Stepped in the high-contrast + forced-colors blocks below."
+        },
+        {
+          "property": "--grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--focus-w",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "text"
+        },
+        {
+          "property": "--fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "WCAG 1.4.3 — 0.58 measured 3.88:1 on --card / 4.17:1 on --surface (FAIL for\n     11-12px text: settings tabs, zoom %, tb-status, QI counts). 0.66 measures\n     5.36:1 on --card, 4.92:1 on --card-2, 5.76:1 on --surface; stays below\n     --fg-muted (0.74) so the hierarchy remains monotonic."
+        },
+        {
+          "property": "--fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "WCAG 1.4.3 — 0.46 measured 2.34:1 on --card / 2.75:1 on --inset (FAIL for\n     11-12.5px text: scope labels, section labels, empty states, win subtitles).\n     0.64 measures 4.96:1 on --card, 4.55:1 on --card-2, 5.82:1 on --inset;\n     stays below --fg-dim (0.66) so the hierarchy remains monotonic (uiux-fix F020)."
+        },
+        {
+          "property": "--fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "dark text token for use on light/accent backgrounds (Issue #184)"
+        },
+        {
+          "property": "--ink-inverse",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ink-muted",
+          "value": "oklch(0.58 0.004 160)"
+        },
+        {
+          "comment": "brand"
+        },
+        {
+          "property": "--accent",
+          "value": "#4eba87"
+        },
+        {
+          "property": "--accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "text-tone alias — equals --accent in dark theme; overridden to ≥4.5:1 on white in light"
+        },
+        {
+          "property": "--accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--accent-solid",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--accent-solid-ink",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--accent-on-tint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "status"
+        },
+        {
+          "property": "--ok",
+          "value": "#4eba87"
+        },
+        {
+          "property": "--warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radius",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radius-sm",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radius-lg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "Mode-aware shadow ink (#1295 Category C1). Dark = pure black (the historical\n     hardcoded shadow ink), so rgb(var(--shadow-ink-rgb) / α) is byte-identical to the\n     prior rgba(0, 0, 0, α) in dark/+HC/forced-colors. The light block re-points it to\n     the DS warm shadow ink (20 30 25) so component drop-shadows adapt in Light."
+        },
+        {
+          "property": "--shadow-ink-rgb",
+          "value": "0 0 0"
+        },
+        {
+          "property": "--shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--shadow-pop",
+          "value": "0 16px 50px -16px rgba(0, 0, 0, 0.7), 0 0 0 1px var(--line)"
+        },
+        {
+          "property": "--font-ui",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--font-mono",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "============================================================\n   DESIGN-SYSTEM TOKEN TIERS 2–4 (#1292) — scales · semantic · component\n   ------------------------------------------------------------\n   SOURCE OF TRUTH: this file (globals.css) is the single emitted stylesheet\n   the product ships (imported once at app/layout.tsx). The standalone\n   design-system/keiko-*.css files are the human-readable REFERENCE mirror,\n   not a build input — nothing imports them. This block consolidates the\n   middle + top of the four-tier token architecture into the product so the\n   reference and the runtime stop diverging (epic #1290, blueprint #1291,\n   docs/design-system/token-component-reuse-map.md §1).\n\n   Strategy = EXTEND, never fork: every alias below resolves to a Tier-1\n   primitive already defined in the :root above, so the rendered product is\n   byte-identical until components are migrated to consume these names (the\n   migrations are scoped to #1293–#1298). Because the primitives already\n   redefine themselves for the light theme, prefers-contrast / in-app\n   high-contrast, and forced-colors, these aliases inherit all modes\n   automatically — there is no per-mode duplication to keep in sync. The\n   globals.css.test.ts suite pins this set\n   against design-system/keiko-semantic-tokens.css as a drift gate; adding a\n   second :root token source (a parallel namespace) is forbidden by the epic\n   reuse gate. ============================================================"
+        },
+        {
+          "comment": "── SCALE · SPACING — 2-based rhythm, mode-independent ──"
+        },
+        {
+          "property": "--space-0",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-1",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-2",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-3",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-4",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-5",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-6",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-7",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-8",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-9",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-10",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-12",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--space-16",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · RADIUS (alias — primitives own the values) ──"
+        },
+        {
+          "property": "--radius-pill",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radius-control",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radius-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radius-floating",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · TYPE WEIGHT ──"
+        },
+        {
+          "property": "--weight-regular",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--weight-medium",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--weight-semibold",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--weight-strong",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · LINE-HEIGHT ──"
+        },
+        {
+          "property": "--leading-tight",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--leading-snug",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--leading-normal",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--leading-relaxed",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · TYPE SIZE — role-named ramp, 11px floor ──"
+        },
+        {
+          "property": "--text-caption",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-label",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-body-sm",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-body",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-body-lg",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-heading",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-title",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-title-lg",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-display-sm",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-display",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · OPACITY ──"
+        },
+        {
+          "property": "--opacity-disabled",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--opacity-muted",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--opacity-hover-veil",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--opacity-scrim",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--opacity-scrim-strong",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · BLUR ──"
+        },
+        {
+          "property": "--blur-sm",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--blur-md",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--blur-lg",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · MOTION (reduced-motion handled globally below) ──"
+        },
+        {
+          "property": "--dur-instant",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--dur-fast",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--dur-base",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--dur-slow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--dur-flow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ease-standard",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ease-out",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ease-in",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ease-spring",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · Z-INDEX — named layers, closes the raw-z-index gap ──"
+        },
+        {
+          "property": "--z-base",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-canvas-window",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-canvas-window-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-rail",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-nav",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-sticky",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-dropdown",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-overlay",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-modal",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-popover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-toast",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--z-tooltip",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--shell-rail-width",
+          "value": "50px"
+        },
+        {
+          "property": "--shell-right-rail-reserve",
+          "value": "var(--shell-rail-width)"
+        },
+        {
+          "comment": "── SCALE · BREAKPOINTS — canonical media-query reference values ──"
+        },
+        {
+          "property": "--bp-xs",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--bp-sm",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--bp-md",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--bp-lg",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--bp-xl",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--bp-2xl",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SCALE · DENSITY — comfortable default, compact overridden below ──"
+        },
+        {
+          "property": "--control-height",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--control-height-sm",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--control-height-lg",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--control-pad-x",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--row-pad-y",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--row-pad-x",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── SEMANTIC — the layer product code should consume. All resolve to\n        mode-aware primitives, so correct in dark · light · +HC · forced-colors ──"
+        },
+        {
+          "property": "--background-primary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--background-secondary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-primary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-secondary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-elevated",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-inset",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-overlay",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-accent-subtle",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--surface-accent-glow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-primary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-secondary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-tertiary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-faint",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-disabled",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-inverse",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-accent",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--text-on-accent",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--border-subtle",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--border-default",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--border-strong",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--border-accent",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--action-primary",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--action-primary-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--action-secondary-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--action-secondary-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--action-tertiary-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-success",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-warning",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-danger",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-info",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-success-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-warning-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-danger-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--feedback-info-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--focus-ring",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--focus-width",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--selection-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--overlay-scrim",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--overlay-scrim-strong",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--skeleton-base",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--skeleton-highlight",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "── COMPONENT — one resolved name per component decision ──"
+        },
+        {
+          "property": "--button-primary-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-primary-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-primary-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-primary-disabled-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-primary-disabled-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-secondary-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-secondary-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-secondary-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-secondary-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-ghost-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-danger-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--button-danger-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-border-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-border-focus",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-border-error",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-placeholder",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--input-ring-focus",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--card-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--card-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--card-shadow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--card-shadow-raised",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "WCAG 2.2 AA (RB-14) — the window zoom cluster (.win-zoom) rests at opacity:0.72,\n     which composites this badge's text toward the window surface. --text-tertiary then\n     measured only 3.45:1 in a real browser (jsdom axe cannot see it). A primary+secondary\n     mix clears 4.5:1 at that resting opacity in dark (6.15:1) and light (4.97:1) while\n     staying dimmer than the window title; it resolves per-theme through the referenced\n     tokens (dark/light/HC), and brightens to --text-primary on hover."
+        },
+        {
+          "property": "--win-zoom-pct",
+          "value": "color-mix(in oklch, var(--text-primary), var(--text-secondary))"
+        },
+        {
+          "property": "--modal-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--modal-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--modal-backdrop",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--modal-shadow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--popover-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--popover-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--popover-shadow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--tooltip-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--tooltip-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--menu-item-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--toast-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--toast-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--toast-shadow",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-response-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-response-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-thinking-indicator",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-streaming-cursor",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-source-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-source-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-tool-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-tool-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-confidence-high",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-confidence-medium",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-confidence-low",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-permission-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ai-permission-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-header-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-header-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-row-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-row-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-row-surface-selected",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-foot-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-sort-indicator",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--table-num-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--nav-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--nav-item-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--nav-item-text-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--nav-item-surface-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--nav-item-indicator",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--checkbox-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--checkbox-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--checkbox-surface-selected",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--checkbox-mark",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radio-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radio-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radio-border-selected",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--radio-dot",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--slider-track",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--slider-fill",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--slider-thumb",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--slider-thumb-ring",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--slider-thumb-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--stepper-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--stepper-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--stepper-button-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--stepper-button-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--stepper-input-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--combobox-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--combobox-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--combobox-list-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--combobox-list-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--combobox-option-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--combobox-option-selected-mark",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--tag-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--tag-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--tag-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--file-dropzone-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--file-dropzone-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--file-dropzone-border-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--file-progress",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--file-item-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--date-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--date-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--date-segment-surface-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--date-segment-text-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--breadcrumb-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--breadcrumb-text-current",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--breadcrumb-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--pagination-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--pagination-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--pagination-surface-current",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--pagination-text-current",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--pagination-border-current",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--tab-underline-indicator",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--context-item-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--context-item-surface-hover",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--context-item-text-danger",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-dot-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-dot-border",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-dot-surface-done",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-dot-text-done",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-dot-border-active",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-line",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--step-line-done",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-gridline",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-axis-text",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-tooltip-surface",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-tooltip-value",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "Issue #1297 — Design System 0.4.0 data-visualisation palette (design-system/keiko-dataviz.css).\n     Categorical hues at a matched chroma so no single series shouts (order = legend order), a\n     single-hue green sequential ramp for magnitude, plus grid/axis tokens. Dark values live here;\n     the light-theme block overrides --viz-2..6 and --viz-seq-1..5 for light backgrounds."
+        },
+        {
+          "property": "--viz-1",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-2",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-3",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-4",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-5",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-6",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-1",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-2",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-3",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-4",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-5",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-grid",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--viz-axis",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "Single-source HC palettes — the OS media query and explicit in-app attribute\n   below both promote these same primitives, matching the design-system mirror."
+        },
+        {
+          "property": "--hc-d-bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-ok",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-d-shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-ok",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--hc-l-shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "============================================================\n   Editor theme tokens (#1212) — consumed by the Keiko Editor Monaco runtime (#1193).\n   Lifted from design/keiko-editor-tokens.css; EXTENDS the base palette (does not fork it):\n   editor chrome reuses --bg/--fg/--danger/--warn/--info, and only the syntax palette plus the\n   editor-specific chrome/diff/ghost-text are net-new. Surfaced here so the --ed-* / --ed-syn-*\n   custom properties resolve at runtime when the editor mounts (host integration, #1194); the\n   Monaco theme reads them via getComputedStyle and embeds no colour literals. Dark is the default;\n   the light and high-contrast variants follow the source. High contrast is exposed both through\n   prefers-contrast and [data-hc=\"more\"], matching the design-system source.\n   ============================================================"
+        },
+        {
+          "comment": "editor surface (reuses the inset tone as the code well)"
+        },
+        {
+          "property": "--ed-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "syntax palette — TS/JS first, semantic types reused by all languages"
+        },
+        {
+          "property": "--ed-syn-comment",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-string",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-number",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-constant",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-keyword",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-type",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-function",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-property",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-variable",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-operator",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-punct",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-regexp",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "editor chrome"
+        },
+        {
+          "property": "--ed-gutter-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-gutter-fg-active",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-line-active",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-cursor",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-selection",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-selection-blur",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-find-match",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-find-match-active",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bracket-match",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-indent-guide",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-indent-guide-active",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-whitespace",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "focus ring / keyboard-visible chrome — two-tone ring (#1212 final, #1232)"
+        },
+        {
+          "property": "--ed-focus",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-focus-inner",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "diff (patch-review surface)"
+        },
+        {
+          "property": "--ed-diff-ins-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-ins-text",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-rem-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-rem-text",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-ins-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-rem-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "changed / word-diff middle state — info hue, distinct from ins/rem (#1232)"
+        },
+        {
+          "property": "--ed-diff-chg-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-chg-text",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-chg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "diagnostics (map straight onto the status palette)"
+        },
+        {
+          "property": "--ed-error",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-warn",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-info",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-hint",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-error-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-warn-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "inline ghost text / AI suggestion + suggest widget"
+        },
+        {
+          "property": "--ed-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-suggest-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-suggest-sel",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-suggest-match",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "agent-in-editor surfaces (editor-agent.html)"
+        },
+        {
+          "property": "--ed-agent-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-agent-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-agent-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-agent-accept",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-agent-reject",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-agent-chip-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-agent-chip-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "comment": "editor card: tabs, status bar, minimap"
+        },
+        {
+          "property": "--ed-tab-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-tab-active-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-tab-active-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-tab-inactive-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-tab-accent",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-statusbar-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-statusbar-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-statusbar-accent",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-minimap-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-minimap-slider",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": []
+        },
+        {
+          "property": "--ed-scrollbar-track",
+          "value": "transparent"
+        },
+        {
+          "property": "--ed-scrollbar-thumb",
+          "value": "color-mix(in oklch, var(--ed-fg) 30%, transparent)"
+        },
+        {
+          "property": "--ed-scrollbar-thumb-hover",
+          "value": "color-mix(in oklch, var(--ed-fg) 44%, transparent)"
+        }
+      ]
+    },
+    {
+      "selector": "[data-density=\"compact\"]",
+      "conditions": [],
+      "declarations": [
+        {
+          "property": "--control-height",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": "[data-density=\"compact\"]",
+          "conditions": []
+        },
+        {
+          "property": "--control-height-sm",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": "[data-density=\"compact\"]",
+          "conditions": []
+        },
+        {
+          "property": "--control-height-lg",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": "[data-density=\"compact\"]",
+          "conditions": []
+        },
+        {
+          "property": "--control-pad-x",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": "[data-density=\"compact\"]",
+          "conditions": []
+        },
+        {
+          "property": "--row-pad-y",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": "[data-density=\"compact\"]",
+          "conditions": []
+        },
+        {
+          "property": "--row-pad-x",
+          "source": "design-system/keiko-semantic-tokens.css",
+          "selector": "[data-density=\"compact\"]",
+          "conditions": []
+        }
+      ]
+    },
+    {
+      "selector": "[data-theme=\"light\"]",
+      "conditions": [],
+      "declarations": [
+        {
+          "property": "color-scheme",
+          "value": "light"
+        },
+        {
+          "property": "--bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "comment": "WCAG 1.4.3 — 0.54 measured 4.28:1 on --inset chips (.kbd, .modesw-opt; FAIL).\n     0.48 measures 5.55:1 on --inset, 6.50:1 on white; stays darker than --fg-faint."
+        },
+        {
+          "property": "--fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "comment": "WCAG 1.4.3 — 0.66 measured 3.09:1 on white --card / 2.64:1 on --inset (FAIL\n     for 10-12.5px text). 0.52 measures 5.48:1 on white, 4.67:1 on --inset; stays\n     lighter than --fg-dim (0.48) so the hierarchy remains monotonic (uiux-fix F020)."
+        },
+        {
+          "property": "--fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "comment": "WCAG 1.4.3 text-tone overrides — all ≥4.5:1 on white (--card: oklch(1 0 0)).\n     --accent #4eba87 = 2.41:1 FAIL; oklch(0.48 0.13 160) ≈ 5.9:1 PASS on white and\n     ≥4.8:1 on the 18% --accent-dim tint (0.5 measured only 4.48:1 there — accent\n     text frequently sits on accent-dim chips: .rail-avatar, .set-onprem, .chat-ctx).\n     --danger oklch(0.68 0.16 25) = 3.11:1 FAIL; oklch(0.50 0.18 25) ≈ 5.46:1 PASS.\n     --warn oklch(0.78 0.13 75) = 2.04:1 FAIL; oklch(0.43 0.14 75) ≈ 5.82:1 PASS.\n     --info oklch(0.74 0.1 240) = 1.96:1 FAIL; oklch(0.45 0.15 240) ≈ 5.08:1 PASS on the 20%\n     info tint (info-blue severity/badge text — .qi-sev-medium, .qi-badge-running, .arun-gate,\n     lkd diag info). Measured from rendered pixels over the badge's own info-tint background."
+        },
+        {
+          "property": "--accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-solid",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-solid-ink",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-on-tint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "comment": "Light danger surfaces require light ink; the dark inverse ink used by the dark theme\n     fails WCAG contrast on this deliberately darker semantic danger surface."
+        },
+        {
+          "property": "--button-danger-text",
+          "value": "var(--accent-solid-ink)"
+        },
+        {
+          "property": "--warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "comment": "--ok #4eba87 = 2.12:1 FAIL on light --bg; matches --accent-text light (uiux-fix F005)"
+        },
+        {
+          "property": "--ok",
+          "value": "oklch(0.5 0.13 160)"
+        },
+        {
+          "property": "--shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "comment": "#1295 C1 — DS warm shadow ink for Light (same 20 30 25 the light --shadow-card/-pop\n     already use), so component drop-shadows routed through rgb(var(--shadow-ink-rgb) / α)\n     adapt instead of staying pure black."
+        },
+        {
+          "property": "--shadow-ink-rgb",
+          "value": "20 30 25"
+        },
+        {
+          "comment": "#1295 C3 — Light dialog scrim. Centralises the shared light backdrop value the\n     per-component overrides used (.dlg-overlay/.wf-dialog-overlay/.mc-dialog-backdrop),\n     so the base scrim rules routed to var(--overlay-scrim) adapt in Light."
+        },
+        {
+          "property": "--overlay-scrim",
+          "value": "oklch(0.3 0.01 160 / 0.34)"
+        },
+        {
+          "comment": "Issue #1297 — DS 0.4.0 dataviz light-mode palette overrides (design-system/keiko-dataviz.css):\n     same categorical hues re-tuned to a higher chroma / lower lightness so they stay distinct on\n     the light --bg, and the sequential ramp inverts dark→light to remain a magnitude scale."
+        },
+        {
+          "property": "--viz-2",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-3",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-4",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-5",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-6",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-1",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-2",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-3",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-4",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--viz-seq-5",
+          "source": "design-system/keiko-dataviz.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-comment",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-string",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-number",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-constant",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-keyword",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-type",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-function",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-property",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-variable",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-operator",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-punct",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-regexp",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-ins-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-ins-text",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-rem-line",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-rem-text",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-ins-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-diff-rem-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-whitespace",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-minimap-slider",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-scrollbar-track",
+          "value": "transparent"
+        },
+        {
+          "property": "--ed-scrollbar-thumb",
+          "value": "color-mix(in oklch, var(--ed-fg) 28%, transparent)"
+        },
+        {
+          "property": "--ed-scrollbar-thumb-hover",
+          "value": "color-mix(in oklch, var(--ed-fg) 42%, transparent)"
+        },
+        {
+          "comment": "darkened so ghost text clears the 4.5:1 floor on the near-white well (#1232)"
+        },
+        {
+          "property": "--ed-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": []
+        }
+      ]
+    },
+    {
+      "selector": ":root",
+      "conditions": [
+        {
+          "name": "media",
+          "params": "(prefers-contrast: more)"
+        }
+      ],
+      "declarations": [
+        {
+          "property": "color-scheme",
+          "value": "dark"
+        },
+        {
+          "comment": "Raw HC smoke values: --bg: oklch(0.11 0.004 160); --fg: oklch(1 0 0); --accent-text: oklch(0.86 0.16 160); --shadow-card: 0 0 0 1px var(--line); --grid-dot: oklch(0.52 0.006 160)."
+        },
+        {
+          "property": "--bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--focus-w",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ok",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-bg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-comment",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-string",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-number",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-constant",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-keyword",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-type",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-function",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-property",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-variable",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-operator",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-punct",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-regexp",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-line-active",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-indent-guide",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-whitespace",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": ":root",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-scrollbar-track",
+          "value": "transparent"
+        },
+        {
+          "property": "--ed-scrollbar-thumb",
+          "value": "color-mix(in oklch, var(--ed-fg) 52%, transparent)"
+        },
+        {
+          "property": "--ed-scrollbar-thumb-hover",
+          "value": "color-mix(in oklch, var(--ed-fg) 68%, transparent)"
+        }
+      ]
+    },
+    {
+      "selector": "[data-theme=\"light\"]",
+      "conditions": [
+        {
+          "name": "media",
+          "params": "(prefers-contrast: more)"
+        }
+      ],
+      "declarations": [
+        {
+          "property": "color-scheme",
+          "value": "light"
+        },
+        {
+          "comment": "Raw light HC smoke values: --fg-faint: oklch(0.36 0.012 160); --grid-dot: oklch(0.6 0.01 160)."
+        },
+        {
+          "property": "--bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--focus-w",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ok",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-bg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-comment",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-string",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-number",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-constant",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-keyword",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-type",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-function",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-property",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-variable",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-operator",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-punct",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-syn-regexp",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-theme=\"light\"]",
+          "conditions": [
+            {
+              "name": "media",
+              "params": "(prefers-contrast: more)"
+            }
+          ]
+        },
+        {
+          "property": "--ed-scrollbar-track",
+          "value": "transparent"
+        },
+        {
+          "property": "--ed-scrollbar-thumb",
+          "value": "color-mix(in oklch, var(--ed-fg) 48%, transparent)"
+        },
+        {
+          "property": "--ed-scrollbar-thumb-hover",
+          "value": "color-mix(in oklch, var(--ed-fg) 62%, transparent)"
+        }
+      ]
+    },
+    {
+      "selector": "[data-hc=\"more\"]",
+      "conditions": [],
+      "declarations": [
+        {
+          "property": "color-scheme",
+          "value": "dark"
+        },
+        {
+          "comment": "Raw dark HC values: --bg: oklch(0.11 0.004 160); --line: oklch(0.62 0.006 160); --fg-faint: oklch(0.82 0.004 160); --warn: oklch(0.88 0.14 80); --grid-dot: oklch(0.52 0.006 160)."
+        },
+        {
+          "property": "--bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--focus-w",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ok",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-comment",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-string",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-number",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-constant",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-keyword",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-type",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-function",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-property",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-variable",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-operator",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-punct",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-regexp",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-line-active",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-indent-guide",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-whitespace",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-scrollbar-track",
+          "value": "transparent"
+        },
+        {
+          "property": "--ed-scrollbar-thumb",
+          "value": "color-mix(in oklch, var(--ed-fg) 52%, transparent)"
+        },
+        {
+          "property": "--ed-scrollbar-thumb-hover",
+          "value": "color-mix(in oklch, var(--ed-fg) 68%, transparent)"
+        }
+      ]
+    },
+    {
+      "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+      "conditions": [],
+      "declarations": [
+        {
+          "property": "color-scheme",
+          "value": "light"
+        },
+        {
+          "comment": "Raw light HC values: --bg: oklch(1 0 0); --line: oklch(0.45 0.008 160); --fg-faint: oklch(0.36 0.012 160); --warn: oklch(0.38 0.14 75); --grid-dot: oklch(0.6 0.01 160)."
+        },
+        {
+          "property": "--bg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--surface",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--card-2",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--inset",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line-soft",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--line-strong",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--grid-dot",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--focus-w",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-muted",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--fg-faint",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-text",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-bright",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-dim",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-line",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--accent-glow",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--danger",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--warn",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--info",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ok",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--shadow-card",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--shadow-pop",
+          "source": "design-system/keiko-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-bg-gutter",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-fg",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-comment",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-string",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-number",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-constant",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-keyword",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-type",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-function",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-property",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-variable",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-operator",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-punct",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-syn-regexp",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-ghost",
+          "source": "design-system/keiko-editor-tokens.css",
+          "selector": "[data-hc=\"more\"][data-theme=\"light\"]",
+          "conditions": []
+        },
+        {
+          "property": "--ed-scrollbar-track",
+          "value": "transparent"
+        },
+        {
+          "property": "--ed-scrollbar-thumb",
+          "value": "color-mix(in oklch, var(--ed-fg) 48%, transparent)"
+        },
+        {
+          "property": "--ed-scrollbar-thumb-hover",
+          "value": "color-mix(in oklch, var(--ed-fg) 62%, transparent)"
+        }
+      ]
+    },
+    {
+      "selector": ":root",
+      "conditions": [
+        {
+          "name": "media",
+          "params": "(max-width: 700px), (max-height: 430px)"
+        }
+      ],
+      "declarations": [
+        {
+          "property": "--shell-rail-width",
+          "value": "44px"
+        },
+        {
+          "property": "--shell-right-rail-reserve",
+          "value": "var(--shell-rail-width)"
+        }
+      ]
+    },
+    {
+      "selector": ":root",
+      "conditions": [
+        {
+          "name": "media",
+          "params": "(max-width: 420px)"
+        }
+      ],
+      "declarations": [
+        {
+          "property": "--shell-right-rail-reserve",
+          "value": "0px"
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,9 @@
 import { captureActivityLog } from "./activityLogCapture.test-support.js";
+import { parseUnifiedDiff } from "@oscharko-dev/keiko-contracts/runtime/unified-diff";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 import { Buffer } from "node:buffer";
 import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -823,7 +828,9 @@ describe("GET /api/git/diff", () => {
     const runner = vi
       .fn<GitProcessRunner>()
       .mockResolvedValueOnce(ok(`${selectedRoot}\n`))
-      .mockResolvedValueOnce(ok("diff --git a/file.ts b/file.ts\n+staged\n"));
+      .mockResolvedValueOnce(
+        ok("diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+staged\n"),
+      );
 
     const result = await handleGitDiff(
       ctx(`/api/git/diff?root=${encodeURIComponent(selectedRoot)}&scope=staged`),
@@ -835,7 +842,7 @@ describe("GET /api/git/diff", () => {
       state: "available",
       scope: "staged",
       path: undefined,
-      diff: "diff --git a/file.ts b/file.ts\n+staged\n",
+      diff: "diff --git a/f b/f\n--- /dev/null\n+++ b/f\n@@ -0,0 +1 @@\n+staged\n",
     });
     expect(runner.mock.calls[1]?.[0]).toEqual(expect.arrayContaining(["--cached"]));
   });
@@ -933,6 +940,161 @@ describe("GET /api/git/diff", () => {
 
     expect(result.status).toBe(200);
     expect(result.body).toMatchObject({ truncated: true, diff: "staged-outpu" });
+  });
+
+  it("returns a tracked diff cut at the byte cap as truncated instead of failing (#4113)", async (): Promise<void> => {
+    // The real runner kills git once the output reaches the cap, so the result carries a signal
+    // and a non-zero exit. That cut is the intended bounded view, not a failed diff.
+    await runRealGit(["init", "--quiet"]);
+    await runRealGit(["config", "user.name", "Keiko Lab"]);
+    await runRealGit(["config", "user.email", "lab@keiko.invalid"]);
+    await runRealGit(["config", "commit.gpgsign", "false"]);
+    const rows = (field: string): string =>
+      Array.from(
+        { length: 16_000 },
+        (_, index) => `  { id: ${String(index)}, ${field}: ${String(index)} },`,
+      ).join("\n");
+    await writeFile(
+      join(root, "stations.ts"),
+      `export const stations = [\n${rows("elevationM")}\n];\n`,
+      "utf8",
+    );
+    await runRealGit(["add", "stations.ts"]);
+    await runRealGit(["commit", "--quiet", "-m", "baseline"]);
+    await writeFile(
+      join(root, "stations.ts"),
+      `export const stations = [\n${rows("elevationMeters")}\n];\n`,
+      "utf8",
+    );
+    const activity = captureActivityLog();
+    // The production redactor: the cut prefix must stay readable, not be masked whole (#4114).
+    const routeDeps = deps(defaultGitProcessRunner);
+
+    const raw = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree`, "corr-diff-view-01"),
+      routeDeps,
+      {
+        runner: defaultGitProcessRunner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+        activityLog: activity.sink,
+      },
+    );
+    expect(raw.status).toBe(200);
+    expect(raw.body).toMatchObject({ available: true, truncated: true });
+    const diff = (raw.body as { readonly diff: string }).diff;
+    expect(diff).toContain("diff --git a/stations.ts");
+    // A whole-file rewrite lists every removal first, so the bounded prefix shows removals only.
+    expect(diff).toContain("-  { id: 0, elevationM: 0 },\n");
+    expect(diff).toMatch(/^@@ -1,\d+ \+1,1 @@$/mu);
+    expect(diff).not.toContain("[REDACTED]");
+    expect(diff.endsWith("\n")).toBe(true);
+    expect(() => parseUnifiedDiff(diff)).not.toThrow();
+    // The cap is the declared outcome of this read, so the observer records no failed git run.
+    expect(activity.withOp("git.process.failed")).toHaveLength(0);
+    const lines = activity.withOp("git.diff.view-bounded");
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      correlationId: "corr-diff-view-01",
+      extra: {
+        truncated: true,
+        maxBytes: 4_096,
+        shownBytes: Buffer.byteLength(diff, "utf8"),
+        credentialFloorFileCount: 1,
+      },
+    });
+    const persisted = expectActivityLogProof(
+      "git.diff.view-bounded.emitted-line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ truncated: true, credentialFloorFileCount: 1 });
+
+    const structured = await handleGitStructuredDiff(
+      ctx(`/api/git/diff/structured?root=${encodeURIComponent(root)}&scope=unstaged`),
+      routeDeps,
+    );
+    expect(structured.status).toBe(200);
+    expect(structured.body).toMatchObject({ truncated: true });
+  });
+
+  const cutPrefix = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,4 +1,4 @@\n-old\n";
+  const cutRun = (
+    overrides: Partial<Awaited<ReturnType<GitProcessRunner>>>,
+  ): Awaited<ReturnType<GitProcessRunner>> => ({
+    exitCode: null,
+    signal: "SIGTERM",
+    stdout: cutPrefix,
+    stderr: "",
+    truncated: true,
+    ...overrides,
+  });
+
+  it.each([
+    { name: "a timeout", result: cutRun({ timedOut: true }) },
+    { name: "an abort", result: cutRun({ aborted: true }) },
+    { name: "a refusal", result: cutRun({ refusal: "diff-enabling-flag" }) },
+    { name: "git error output", result: cutRun({ stderr: "fatal: unable to read blob" }) },
+    { name: "a genuine non-zero git exit", result: cutRun({ exitCode: 128, signal: null }) },
+  ])(
+    "keeps a truncated diff that ended with $name a failure (#4113)",
+    async ({ result }): Promise<void> => {
+      const runner = vi
+        .fn<GitProcessRunner>()
+        .mockResolvedValueOnce(ok(`${root}\n`))
+        .mockResolvedValueOnce(result);
+
+      const response = await handleGitDiff(
+        ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree`),
+        deps(runner),
+      );
+
+      expect(response.status).not.toBe(200);
+    },
+  );
+
+  it("keeps token shapes and configured secrets masked in a floored diff view (#4114)", async (): Promise<void> => {
+    const token = "ghp_" + "abcdefghijklmnopqrstuvwxyz0123456789";
+    const runner = vi
+      .fn<GitProcessRunner>()
+      .mockResolvedValueOnce(ok(`${root}\n`))
+      .mockResolvedValueOnce(
+        ok(
+          [
+            "diff --git a/config.ts b/config.ts",
+            "index 1111111..2222222 100644",
+            "--- a/config.ts",
+            "+++ b/config.ts",
+            "@@ -1,2 +1,2 @@",
+            `-  { token: "${token}" },`,
+            '+  { token: "none" },',
+            "   { id: 1 },",
+            "",
+          ].join("\n"),
+        ),
+      );
+    const activity = captureActivityLog();
+
+    const result = await handleGitDiff(
+      ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree`),
+      deps(runner),
+      {
+        runner,
+        maxDiffBytes: 4_096,
+        maxStatusBytes: 4_096,
+        maxChanges: 10,
+        activityLog: activity.sink,
+      },
+    );
+
+    expect(result.status).toBe(200);
+    const diff = (result.body as { readonly diff: string }).diff;
+    expect(diff).not.toContain(token);
+    expect(diff).toContain('+  { token: "none" },\n');
+    expect(diff).toContain("   { id: 1 },\n");
+    expect(activity.withOp("git.diff.view-bounded")[0]).toMatchObject({
+      extra: { truncated: false, credentialFloorFileCount: 1 },
+    });
   });
 });
 
@@ -1096,15 +1258,25 @@ describe("GET /api/git/diff/structured", () => {
     );
   });
 
-  it("returns a bounded truncated diff for a large untracked file", async (): Promise<void> => {
+  it("bounds the real untracked producer and refuses an incomplete source preview", async (): Promise<void> => {
     await runRealGit(["init", "--quiet"]);
     await writeFile(join(root, "large.txt"), "large line\n".repeat(200), "utf8");
+    const outputs: string[] = [];
+    const runner: GitProcessRunner = async (args, options) => {
+      const output = await defaultGitProcessRunner(args, options);
+      if (args.includes("--no-index")) {
+        expect(options.maxBytes).toBe(96);
+        expect(output.truncated).toBe(true);
+        outputs.push(output.stdout);
+      }
+      return output;
+    };
 
     const result = await handleGitDiff(
       ctx(`/api/git/diff?root=${encodeURIComponent(root)}&scope=worktree&path=large.txt`),
-      deps(defaultGitProcessRunner),
+      deps(runner),
       {
-        runner: defaultGitProcessRunner,
+        runner,
         maxDiffBytes: 96,
         maxStatusBytes: 4_096,
         maxChanges: 10,
@@ -1112,8 +1284,22 @@ describe("GET /api/git/diff/structured", () => {
     );
 
     expect(result.status).toBe(200);
-    expect(result.body).toMatchObject({ available: true, truncated: true });
-    expect(result.body).toHaveProperty("diff", expect.stringMatching(/^diff --git /u));
+    // Relocate the bounded prefix pin to its real producer. Useful incomplete preview and
+    // Workbench truncation presentation remain deferred to #4051; source refusal stays strict.
+    expect(outputs).toEqual([expect.stringMatching(/^diff --git /u)]);
+    expect(Buffer.byteLength(outputs[0] ?? "", "utf8")).toBe(96);
+    const projected: unknown = buildRedactor({})(outputs[0] ?? "");
+    expect(projected).toEqual(expect.stringMatching(/^\[REDACTED\]\s*$/u));
+    if (typeof projected !== "string") throw new TypeError("Expected projected diff text");
+    expect(Buffer.byteLength(projected, "utf8")).toBeLessThanOrEqual(96);
+    expect(result.body).toMatchObject({
+      available: true,
+      truncated: true,
+      scope: "worktree",
+      path: "large.txt",
+      maxBytes: 96,
+      diff: projected,
+    });
   });
 
   it("rejects a symlink swap after Git confirms the untracked path", async (): Promise<void> => {

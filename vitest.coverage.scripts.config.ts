@@ -31,7 +31,11 @@ export default defineConfig({
       reporter: ["text", "json", "json-summary", "lcov"],
       reportOnFailure: true,
       reportsDirectory: "coverage/scripts",
-      include: ["scripts/**/*.{js,mjs}"],
+      include: [
+        "scripts/**/*.{js,mjs}",
+        "packages/keiko-ui/design-tokens.mjs",
+        "packages/keiko-ui/read-stylesheet.mjs",
+      ],
       exclude: [
         ...packageCoverageGateScripts,
         "scripts/__tests__/**",

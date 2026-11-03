@@ -7,7 +7,6 @@ const workerSource = () =>
 
 describe("exact closed Coding Workbench validation boundaries", () => {
   it.each([
-    ["packages/keiko-contracts/src/opencode-service-host.ts", "dataRecord"],
     ["packages/keiko-server/src/grounded-preselection-reranker.ts", "rerankGroundedCandidates"],
     ["packages/keiko-server/src/grounded-repo-semantic-search.ts", "fingerprintPreflight"],
     ["packages/keiko-server/src/grounded-worktree-recency.ts", "admittedPath"],
@@ -17,10 +16,6 @@ describe("exact closed Coding Workbench validation boundaries", () => {
       "currentCandidateContentSnapshot",
     ],
     ["packages/keiko-sandbox/src/seatbelt-execution-root.ts", "copyRuntimeGatewayFilesystem"],
-    [
-      "packages/keiko-server/src/coding-runtime/opencodeServiceHostArtifact.ts",
-      "closedHostEnvironment",
-    ],
     [
       "packages/keiko-server/src/coding-runtime/secureWorkspaceTextRead.ts",
       "decodeSnapshotHelperResponse",

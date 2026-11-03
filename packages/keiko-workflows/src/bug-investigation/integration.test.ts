@@ -134,3 +134,64 @@ describe("investigateBug — apply + verify integration (AC #6/#8)", () => {
     expect(report.verificationSkipReason).toBeUndefined();
   }, 60_000);
 });
+
+// #4025 AC4: the apply writes the fix the human reviewed. The model is never asked, so a different
+// answer it would now give cannot reach the workspace.
+describe("investigateBug — apply of a reviewed fix (#4025 AC4)", () => {
+  const unusedModel: ModelPort = {
+    call: (): Promise<NormalizedResponse> => Promise.reject(new Error("the apply asks no model")),
+  };
+  const reviewedInput = (root: string, diff: string): Parameters<typeof investigateBug>[0] => ({
+    workspaceRoot: root,
+    report: {
+      description: "half returns the wrong value",
+      failingOutput: "AssertionError: expected 3.33 to be 5\n at half (src/buggy.ts:5:40)",
+    },
+    apply: true,
+    modelId: "test-model",
+    reviewedPatch: { diff, hypothesis: { rootCause: "The divisor was 3 instead of 2." } },
+  });
+
+  it("writes exactly the reviewed fix without a model call", async () => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bug-reviewed-")));
+    cpSync(FIXTURE, dir, { recursive: true });
+
+    const report = await investigateBug(reviewedInput(dir, FIX_DIFF), {
+      model: unusedModel,
+      verificationNetworkEnforcement: "enforce-or-degrade",
+    });
+
+    expect(report.status).toBe("fix-applied");
+    expect(report.modelCallCount).toBe(0);
+    expect(readFileSync(join(dir, "src", "buggy.ts"), "utf8")).toContain("n / 2");
+  }, 60_000);
+
+  it("rejects a reviewed fix the workspace no longer accepts and writes nothing", async () => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bug-reviewed-stale-")));
+    cpSync(FIXTURE, dir, { recursive: true });
+    const stale = FIX_DIFF.replace("n / 3", "n / 4");
+
+    const report = await investigateBug(reviewedInput(dir, stale), {
+      model: unusedModel,
+      verificationNetworkEnforcement: "enforce-or-degrade",
+    });
+
+    expect(report.status).not.toBe("fix-applied");
+    expect(report.modelCallCount).toBe(0);
+    expect(readFileSync(join(dir, "src", "buggy.ts"), "utf8")).toContain("n / 3");
+  });
+
+  it("ignores a reviewed fix in a dry run, which asks the model as before", async () => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bug-reviewed-dry-")));
+    cpSync(FIXTURE, dir, { recursive: true });
+
+    const report = await investigateBug(
+      { ...reviewedInput(dir, FIX_DIFF), apply: false },
+      { model: model(MODEL_CONTENT) },
+    );
+
+    expect(report.status).toBe("fix-proposed");
+    expect(report.modelCallCount).toBe(1);
+    expect(readFileSync(join(dir, "src", "buggy.ts"), "utf8")).toContain("n / 3");
+  });
+});

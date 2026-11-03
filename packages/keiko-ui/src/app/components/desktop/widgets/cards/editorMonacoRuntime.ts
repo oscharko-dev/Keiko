@@ -16,15 +16,26 @@
  */
 import { loader } from "@monaco-editor/react";
 import * as monaco from "monaco-editor/editor/editor.api.js";
-// Register only the standalone editor UX features Keiko exposes in smoke coverage. Avoid
-// Monaco's broad feature/language `register.all` entrypoints so rich language services stay out
-// of the static export under ADR-0042 D3.6.
+// Register only the standalone editor UX features Keiko exposes. Avoid Monaco's broad
+// feature/language `register.all` entrypoints so rich language services stay out of the static
+// export under ADR-0042 D3.6. Every surface a governed provider bridge feeds needs its own
+// registration, because the provider alone adds no keybinding or widget: code actions (Ctrl+.
+// and the lightbulb), go-to-line (Ctrl+G), definitions (F12), inlay hints, signature help,
+// peek references (Shift+F12) and the host-owned rename review (F2). The 0.3.8 trim of the
+// editor bundle dropped them together and F12/F2/Shift+F12/Ctrl+. silently stopped answering.
+import "monaco-editor/features/codeAction/register.js";
 import "monaco-editor/features/find/register.js";
 import "monaco-editor/features/format/register.js";
+import "monaco-editor/features/gotoLine/register.js";
+import "monaco-editor/features/gotoSymbol/register.js";
 import "monaco-editor/features/hover/register.js";
+import "monaco-editor/features/inlayHints/register.js";
 import "monaco-editor/features/inlineCompletions/register.js";
+import "monaco-editor/features/parameterHints/register.js";
 import "monaco-editor/features/quickCommand/register.js";
 import "monaco-editor/features/quickHelp/register.js";
+import "monaco-editor/features/referenceSearch/register.js";
+import "monaco-editor/features/rename/register.js";
 import "monaco-editor/features/suggest/register.js";
 import "monaco-editor/languages/definitions/javascript/register.js";
 import "monaco-editor/languages/definitions/markdown/register.js";

@@ -17,7 +17,9 @@ import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueRead
 import type {
   DraftDeliveryDependencies,
   DraftDeliveryRunContext,
+  IssueBoundDraftDeliveryRunContext,
 } from "../gitDelivery/draftDeliveryTypes.js";
+import { foreignOriginDigest } from "../gitDelivery/verifiedRepositoryIdentity.js";
 import { resolveProjectWorkspace } from "../gitDelivery/execution.js";
 import type { ServerLogEvent } from "@oscharko-dev/keiko-activity-log";
 import { createInMemoryUiStore } from "../store/index.js";
@@ -155,14 +157,20 @@ interface Fixture {
   events: ServerLogEvent[];
   deps: DraftDeliveryCompositionDeps;
   snapshots: ReturnType<typeof createCodingRuntimeSnapshotStore>;
-  context: DraftDeliveryRunContext;
+  context: IssueBoundDraftDeliveryRunContext;
+  /** The same checkout and task, for a run that has no accepted issue (ADR-0085 D1b). */
+  branchContext: DraftDeliveryRunContext;
   abort: AbortController;
   stillAuthorized: Mock<() => boolean>;
   factory: DraftDeliveryDependencies & {
     resolveRelatedIssues: NonNullable<DraftDeliveryDependencies["resolveRelatedIssues"]>;
   };
 }
-async function fixture(): Promise<Fixture> {
+interface FixtureOptions {
+  /** Stores the run with no accepted issue, as an issue-free run is (ADR-0085 D1b). */
+  readonly issueFree?: boolean;
+}
+async function fixture(options: FixtureOptions = {}): Promise<Fixture> {
   const { scratch, root } = repository();
   const service = services(scratch);
   const store = createInMemoryUiStore();
@@ -241,11 +249,11 @@ async function fixture(): Promise<Fixture> {
     toolCallCount: 0,
     patchByteCount: 0,
     modelRequestCount: 0,
-    issueBinding: accepted.binding,
+    ...(options.issueFree === true ? {} : { issueBinding: accepted.binding }),
   });
   const abort = new AbortController();
   const stillAuthorized = vi.fn((): boolean => true);
-  const context: DraftDeliveryRunContext = {
+  const context: IssueBoundDraftDeliveryRunContext = {
     runId: "run-42",
     taskId: instance.taskId,
     workspaceId: instance.workspaceId,
@@ -262,6 +270,11 @@ async function fixture(): Promise<Fixture> {
     signal: abort.signal,
     stillAuthorized,
     buffersClean: (): boolean => true,
+  };
+  const { issueBinding: _issue, issueBindingDigest: _digest, ...shared } = context;
+  const branchContext: DraftDeliveryRunContext = {
+    ...shared,
+    repositoryKind: "github-origin",
   };
   const factory = createProductionDraftDeliveryDependencies(deps, snapshots);
   if (factory === undefined) throw new Error("Fixture production factory required");
@@ -280,6 +293,7 @@ async function fixture(): Promise<Fixture> {
     deps,
     snapshots,
     context,
+    branchContext,
     abort,
     stillAuthorized,
     factory: { ...factory, resolveRelatedIssues },
@@ -803,6 +817,151 @@ describe("resolves and logs related issues for the pull request body (#3452)", (
       runId: "run-42",
       state: "resolved",
       count: 2,
+    });
+  });
+});
+
+describe("production issue-free branch push target (ADR-0085 D1b)", () => {
+  const FOREIGN = "ssh://git@gitlab.example/team/repo.git";
+  function lastVerifiedRemoteUrl(): unknown {
+    return vi.mocked(createNodeGitPublishAdapter).mock.calls.at(-1)?.[0].verifiedRemoteUrl;
+  }
+  it("verifies a GitHub origin and pins its canonical push URL for this exact effect context", async () => {
+    const f = await fixture({ issueFree: true });
+    // The live repository rides with the verified origin, so the run's pull request binding names it
+    // (ADR-0086 D13); a foreign remote below answers no repository.
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: true,
+      repository: "owner/repo",
+    });
+    f.factory.publishSeams(f.branchContext).publishAdapterFactory?.(f.branchContext.workspace);
+    expect(lastVerifiedRemoteUrl()).toBe("https://github.com/owner/repo.git");
+    expect(() =>
+      f.factory
+        .publishSeams({ ...f.branchContext })
+        .publishAdapterFactory?.(f.branchContext.workspace),
+    ).toThrow("authority-denied");
+    expect(f.readJson).not.toHaveBeenCalled();
+  });
+  it("lets a non-GitHub origin through the pinned origin push with no verified URL", async () => {
+    const f = await fixture({ issueFree: true });
+    git(f.root, "remote", "set-url", "origin", FOREIGN);
+    const context: DraftDeliveryRunContext = {
+      ...f.branchContext,
+      repositoryDigest: foreignOriginDigest(FOREIGN),
+      repositoryKind: "foreign-origin",
+    };
+    expect(await f.factory.resolveBranchTarget?.(context)).toEqual({ ok: true });
+    f.factory.publishSeams(context).publishAdapterFactory?.(context.workspace);
+    expect(vi.mocked(createNodeGitPublishAdapter).mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "verifiedRemoteUrl",
+    );
+    expect(f.events.at(-1)).toMatchObject({
+      op: "git.draft-target.resolved",
+      correlationId: "delivery-42",
+      extra: { state: "ready", reason: "completed" },
+    });
+    expect(f.events.at(-1)?.extra).not.toHaveProperty("issueBindingDigest");
+    const line = f.events.at(-1);
+    if (line === undefined) throw new Error("expected a target-resolved event");
+    expect(
+      expectActivityLogProof(
+        "git.draft-target.resolved.emitted-line",
+        formatActivityLogProofLine(line),
+      ),
+    ).toMatchObject({ state: "ready", reason: "completed" });
+  });
+  it("resolves an issue-free GitHub run's pull request repository without reading any issue", async () => {
+    const f = await fixture({ issueFree: true });
+    expect(await f.factory.resolveTarget(f.branchContext)).toEqual({
+      ok: true,
+      repository: "owner/repo",
+    });
+    expect(f.readJson).not.toHaveBeenCalled();
+    expect(f.events.at(-1)).toMatchObject({
+      op: "git.draft-target.resolved",
+      correlationId: "delivery-42",
+      extra: { state: "ready", reason: "completed" },
+    });
+    expect(f.events.at(-1)?.extra).not.toHaveProperty("issueBindingDigest");
+  });
+  it("holds an issue-free pull request target to the checkout's GitHub grant", async () => {
+    const f = await fixture({ issueFree: true });
+    const repositoryId = githubIssueReaderRepositoryId(f.root);
+    f.store.updateGitHubIssueReaderAuthorization(repositoryId ?? "missing", false, 1);
+    expect(await f.factory.resolveTarget(f.branchContext)).toEqual({
+      ok: false,
+      reason: "authority-denied",
+    });
+    // The push of the same run needs no GitHub grant and stays admissible.
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: true,
+      repository: "owner/repo",
+    });
+  });
+  it("refuses an issue-free pull request target whose origin moved to another repository", async () => {
+    const f = await fixture({ issueFree: true });
+    git(f.root, "remote", "set-url", "origin", "https://github.com/foreign/repo.git");
+    expect(await f.factory.resolveTarget(f.branchContext)).toEqual({
+      ok: false,
+      reason: "remote-drift",
+    });
+  });
+  it.each([
+    ["an origin that moved to another repository", FOREIGN],
+    ["an origin that moved to another GitHub repository", "https://github.com/foreign/repo.git"],
+  ])("refuses %s after admission as remote-drift", async (_label, url) => {
+    const f = await fixture({ issueFree: true });
+    git(f.root, "remote", "set-url", "origin", url);
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: false,
+      reason: "remote-drift",
+    });
+    expect(() =>
+      f.factory.publishSeams(f.branchContext).publishAdapterFactory?.(f.branchContext.workspace),
+    ).toThrow("authority-denied");
+  });
+  it("refuses an origin that was removed after admission", async () => {
+    const f = await fixture({ issueFree: true });
+    git(f.root, "remote", "remove", "origin");
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: false,
+      reason: "remote-drift",
+    });
+  });
+  it("refuses a GitHub push URL that names a different repository than the admitted origin", async () => {
+    const f = await fixture({ issueFree: true });
+    git(f.root, "config", "remote.origin.pushurl", "https://github.com/foreign/repo.git");
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: false,
+      reason: "remote-drift",
+    });
+  });
+  it.each([
+    ["a run that is not in the snapshot store", { runId: "run-missing" }],
+    ["a changed task", { taskId: "other" }],
+    ["a changed workspace digest", { workspaceDigest: "b".repeat(64) }],
+    ["a changed head branch", { headRef: "changed" }],
+  ])("refuses %s before any Git read", async (_label, change) => {
+    const f = await fixture({ issueFree: true });
+    expect(await f.factory.resolveBranchTarget?.({ ...f.branchContext, ...change })).toEqual({
+      ok: false,
+      reason: "authority-denied",
+    });
+  });
+  it("refuses an issue-free context for a run whose snapshot still carries an accepted issue", async () => {
+    const f = await fixture();
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: false,
+      reason: "authority-denied",
+    });
+  });
+  it("refuses once the run's authority is gone", async () => {
+    const f = await fixture({ issueFree: true });
+    f.stillAuthorized.mockReturnValue(false);
+    expect(await f.factory.resolveBranchTarget?.(f.branchContext)).toEqual({
+      ok: false,
+      reason: "authority-denied",
     });
   });
 });

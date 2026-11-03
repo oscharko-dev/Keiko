@@ -22,8 +22,8 @@ import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
-const APPROVED_OPENCODE_VERSION = "2.0.10";
-const APPROVED_OPENCODE_COMMIT = "b8cedc1a7a5e2916bbb65dc1d4b620729c261638";
+const APPROVED_OPENCODE_VERSION = "2.1.4";
+const APPROVED_OPENCODE_COMMIT = "68bc26b7da1990ce10ffecfbc1e09eb13aa5d824";
 const ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
 const TEXT_MAX_BYTES = 16 * 1024 * 1024;
 const NODE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);

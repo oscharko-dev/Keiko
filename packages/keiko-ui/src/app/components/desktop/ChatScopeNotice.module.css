@@ -50,11 +50,3 @@
     max-width: 260px;
   }
 }
-.cmpHelp {
-  flex: 0 0 100%;
-  width: 100%;
-  color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 1.4;
-  margin: 0;
-}

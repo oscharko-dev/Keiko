@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "classification": "New current-source ESLint execution; original empty artifact and historical claims remain retained",
+  "sourceHead": "bcf00058947496d5a6c18d9c5a185ba66386f45b",
+  "startedAt": "2026-10-19T13:26:58.918540+00:00",
+  "finishedAt": "2026-10-19T13:27:11.038898+00:00",
+  "command": {
+    "runtime": "Node v24.18.0",
+    "runtimeSha256": "ee6fb0e015284d83a91e8ec5213f43a157f8a392b58555301682892ba928c04a",
+    "argv": [
+      "node_modules/eslint/bin/eslint.js",
+      "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts",
+      "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts",
+      "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.test.ts",
+      "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.ts",
+      "scripts/__tests__/build-runtime-supervisor.test.mjs",
+      "scripts/__tests__/portable-manual-review.test.mjs",
+      "scripts/__tests__/portable-runtime.test.mjs",
+      "scripts/__tests__/qualify-linux-runtime-release.test.mjs",
+      "scripts/__tests__/release-publish-pipeline.test.mjs",
+      "scripts/build-runtime-supervisor.mjs",
+      "scripts/portable-manual-review.mjs",
+      "scripts/portable-runtime.mjs",
+      "scripts/qualify-linux-runtime-release.mjs",
+      "scripts/stage-portable-runtime.mjs",
+      "--max-warnings=0"
+    ],
+    "presentation": "Repository-relative display of the actual invocation; absolute private paths are retained only in the local command receipt."
+  },
+  "exitCode": 0,
+  "all20SourceObjectsUnchangedBeforeAndAfter": true,
+  "sourceObjects": [
+    {
+      "path": "docs/adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md",
+      "sha256": "8155a183d8de498b75a9597f82d5231caf438b0114042fe281c8adf43ab43e49"
+    },
+    {
+      "path": "docs/observability/failure-surface-inventory.generated.json",
+      "sha256": "718f0432e2ea3de2a889c1d1450a8dc424503d7ed1ecd279c5d31b5a07a9eb39"
+    },
+    {
+      "path": "docs/observability/op-catalog.generated.json",
+      "sha256": "72199e33f0e8af86aa84c4ceff470199f4715aad6704d27be4012c9c58f1d415"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-failure-class-contracts.ts",
+      "sha256": "242e5064e3435a8ee197fd3472cdfa814405fb0edce086095c6c2180fa9051a0"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-operations.generated.ts",
+      "sha256": "5c139a5d1981c721bdabdfa2066abd014b5ef2d29fb92cda0a1195461176a62b"
+    },
+    {
+      "path": "packages/keiko-contracts/src/activity-log-registry.generated.ts",
+      "sha256": "f3310e3c94d7d765e4c66659200aef6802bd73a3b993925a04e570024e1f7fa3"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.test.ts",
+      "sha256": "ff6a1394ac70849747d7106128ee3db1c636aa9e8a3bd0739f8af006f61c2555"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts",
+      "sha256": "bdb634528742496f20104eeb1a8a258b300ddab2c5e0cecb1f3e8d202ed7c925"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.test.ts",
+      "sha256": "f2f752df845dd42b3cff64d0976902b39b5a140ca7bb38313259e73ff534afb3"
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/secureWorkspaceTextReadPortable.ts",
+      "sha256": "630946213d5068b76f0ffaf9b6b59345b9db84cc7326e269628a4ee3891e4291"
+    },
+    {
+      "path": "scripts/__tests__/build-runtime-supervisor.test.mjs",
+      "sha256": "7c8fdeeb9c5d3e2e9e34cfcfa9862f90957f261a5df5234a9e999bca09676e33"
+    },
+    {
+      "path": "scripts/__tests__/portable-manual-review.test.mjs",
+      "sha256": "d53b4dbabc629e697dbc4b40eb970ac85a2a15911a7491196395d0731054a0fc"
+    },
+    {
+      "path": "scripts/__tests__/portable-runtime.test.mjs",
+      "sha256": "d09107c6bc7d2dd90d73b6056ce99122bc74139fddeda81770efb9696675392d"
+    },
+    {
+      "path": "scripts/__tests__/qualify-linux-runtime-release.test.mjs",
+      "sha256": "bec44b9790495dea820ec88f5c3042a1cf5005f9c7dd80ef94dabdbccef7a4a1"
+    },
+    {
+      "path": "scripts/__tests__/release-publish-pipeline.test.mjs",
+      "sha256": "a7a619380dde4e092ed7da103d15367d24bb232cc11c48d7fa6cfbeb4f41997c"
+    },
+    {
+      "path": "scripts/build-runtime-supervisor.mjs",
+      "sha256": "0be8232aa6bccfb7255e99c9a3c0825c9d502936f043d5d2b8d099cbfd3dcfdb"
+    },
+    {
+      "path": "scripts/portable-manual-review.mjs",
+      "sha256": "f262066767788d400b5354f396e1fd5fa1f29dc851698eab636288352d40b823"
+    },
+    {
+      "path": "scripts/portable-runtime.mjs",
+      "sha256": "1221c154f1268863fa1a13e36ccf0682fd844a26eb8858e4c0f2de8e8c901401"
+    },
+    {
+      "path": "scripts/qualify-linux-runtime-release.mjs",
+      "sha256": "529690084f41e3c4d0c3093ba7c159a86103a926f886dc2f8ce330a62f9f3dc5"
+    },
+    {
+      "path": "scripts/stage-portable-runtime.mjs",
+      "sha256": "e783a30410ae7736b70c725447c496871cd9d96aa85baf0636dbec34f5061ce1"
+    }
+  ],
+  "executionReceipt": {
+    "artifact": "checkpoint50-lint-recapture-v1.json",
+    "sha256": "5f81ef9c67c37d9893f3f8c9f561ab68c65a5009e95cecc21df8d4805ffcc2c1"
+  },
+  "log": {
+    "artifact": "checkpoint50-lint-recapture-v1.log",
+    "sha256": "a69c919b011dbbce183407161dded2e36ebbed5931e8ad9be8efd612465f35d3"
+  },
+  "originalEmptyArtifact": {
+    "artifact": "checkpoint50-lint-v3.log",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0,
+    "limit": "Empty bytes alone do not establish command execution or exit status."
+  },
+  "limit": "This is a source-bound execution on published51, not a retroactive proof of the historical silent command."
+}

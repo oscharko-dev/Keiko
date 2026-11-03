@@ -1,3 +1,4 @@
+import { boundGatewayToolCatalog } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
 import { resetServerLogger } from "../../../tests/support/activity-log-test-support.js";
 import {
   createBufferedServerLogSink,
@@ -8,13 +9,16 @@ import {
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import type { IncomingMessage } from "node:http";
-import { PassThrough } from "node:stream";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { PassThrough, Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   Gateway,
   ProviderError,
+  ProviderResponseInvalidError,
   ResponseRedactionError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
@@ -53,15 +57,21 @@ import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contrac
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { buildRedactor, CONVERSATION_READINESS_MAX_AGE_MS, type UiHandlerDeps } from "./deps.js";
+import {
+  buildRedactor,
+  CONVERSATION_READINESS_MAX_AGE_MS,
+  currentConversationReadinessObservation,
+  type UiHandlerDeps,
+} from "./deps.js";
 import type { VerifiedModelCapabilityObservation } from "./deps.js";
-import { runGatewayReadiness } from "./gateway-readiness.js";
+import { runGatewayReadiness, stopConfiguredConversationReadiness } from "./gateway-readiness.js";
 import { handleModels } from "./read-handlers.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
   admitCodingRunModel,
+  awaitCodingRunModelReadiness,
   codingSidecarGatewayRequestDeadlineMs,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
@@ -71,7 +81,14 @@ import {
   admissiblePromptTokens,
   admittedOutputTokens,
 } from "./coding-sidecar-gateway.js";
-import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
+import {
+  mockRequest,
+  mockResponse,
+  probeVerifiedGatewayConfig,
+  type MockResponse,
+  type MockResponseOptions,
+} from "./_support.js";
+import { SSE_STALLED_READER_TIMEOUT_MS } from "./sse-write.js";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
@@ -89,6 +106,15 @@ import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
+import {
+  CODING_SIDECAR_IMAGE_REJECTION_MESSAGES,
+  CODING_SIDECAR_MAX_IMAGE_PARTS,
+} from "./coding-sidecar-image-parts.js";
+import {
+  CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES,
+  CODING_SIDECAR_MAX_DOCUMENT_PARTS,
+} from "./coding-sidecar-document-parts.js";
+import { countGatewayPromptTokens } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
 import { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import {
@@ -283,6 +309,44 @@ function runtimeGatewayDeps(
   } as unknown as UiHandlerDeps;
 }
 
+// A response whose reader takes the first `acceptedWrites` frames and then falls behind: every later
+// `write` returns false and `writableNeedDrain` holds (the frames are still queued, as Node queues
+// them) until `drain()` — the reader catching up — and the response cannot finish before then.
+function stalledReaderResponse(
+  options: MockResponseOptions & { readonly acceptedWrites?: number } = {},
+): MockResponse & { readonly drain: () => void } {
+  const response = mockResponse(options);
+  const res = response.res;
+  const stream = res as unknown as PassThrough;
+  const write = (chunk: string): boolean => PassThrough.prototype.write.call(stream, chunk, "utf8");
+  const finished = (): boolean => Reflect.get(Writable.prototype, "writableFinished", stream);
+  let accepted = 0;
+  let needDrain = false;
+  let drained = false;
+  res.write = ((chunk: string): boolean => {
+    write(chunk);
+    if (drained || accepted < (options.acceptedWrites ?? 0)) {
+      accepted += 1;
+      return true;
+    }
+    needDrain = true;
+    return false;
+  }) as ServerResponse["write"];
+  Object.defineProperty(res, "writableNeedDrain", { configurable: true, get: () => needDrain });
+  Object.defineProperty(res, "writableFinished", {
+    configurable: true,
+    get: () => !needDrain && finished(),
+  });
+  return {
+    ...response,
+    drain: (): void => {
+      drained = true;
+      needDrain = false;
+      res.emit("drain");
+    },
+  };
+}
+
 function authenticatedContext(body: unknown, origin?: string): RouteContext {
   const rawBody = typeof body === "string" ? body : JSON.stringify(body);
   const response = mockResponse({ captureBody: true });
@@ -303,12 +367,12 @@ function authenticatedContext(body: unknown, origin?: string): RouteContext {
   };
 }
 
-// Captured from the real OpenCode 2.0.10 model request (schemas only, no request content).
-// These bytes are independent of Keiko's tool-catalog implementation.
+// Captured from the real OpenCode 2.1.4 model request in the direct profile (schemas only, no
+// request content). These bytes are independent of Keiko's tool-catalog implementation.
 const PINNED_MODEL_VISIBLE_TOOLS = JSON.parse(
   readFileSync(
     new URL(
-      "./coding-runtime/opencodeToolSchemas.opencode-2.0.10-advertised.fixture.json",
+      "./coding-runtime/opencodeToolSchemas.opencode-2.1.4-direct-advertised.fixture.json",
       import.meta.url,
     ),
     "utf8",
@@ -478,6 +542,46 @@ describe("coding-sidecar gateway", () => {
       // #3873 review: the call also carries the observer through which the route surfaces the
       // gateway's retries to the run status; the default factories keep it.
       expect(captured[0]?.retryObserver).toBeTypeOf("function");
+    } finally {
+      chat.mockRestore();
+      chatStream.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // #4098 (owner decision): OpenCode receives the model's answer as written, credential floor only,
+  // whatever the deployment's Chat content policy, so a quoted diff no longer becomes `[REDACTED]`.
+  it.each([
+    { label: "buffered, Chat opted out", stream: false, policy: "preserve" as const },
+    { label: "streamed, Chat opted out", stream: true, policy: "preserve" as const },
+    { label: "buffered, default", stream: false, policy: undefined },
+    { label: "streamed, default", stream: true, policy: undefined },
+  ])("preserves the answer of a $label coding turn", async ({ stream, policy }) => {
+    resetGatewayInstanceCacheForTests();
+    const captured: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      captured.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    const chatStream = vi.spyOn(Gateway.prototype, "chatStream").mockImplementation((request) => {
+      captured.push(request);
+      return streamedResponse(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const deps = depsValue(configValue(provider(), capability()));
+      await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          stream,
+          messages: [{ role: "user", content: "continue" }],
+          tools: [],
+        }),
+        policy === undefined ? deps : { ...deps, contentRedaction: policy },
+      );
+
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.contentRedaction).toBe("preserve");
+      expect(captured[0]).toMatchObject({ latencyProfile: "coding-workbench" });
     } finally {
       chat.mockRestore();
       chatStream.mockRestore();
@@ -658,6 +762,74 @@ describe("coding-sidecar gateway", () => {
       expect(typeof remaining).toBe("number");
       expect(remaining as number).toBeGreaterThan(deadline);
       expect(remaining as number).toBeLessThanOrEqual(opencodeGatewayOfferLifetimeMs(deadline));
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // #3897 lab (T7): a native run forwards OpenCode's own tool definitions; the mapped handler
+  // coverage neither applies nor is advertised, so its availability line (which named `keiko_*`
+  // tools the run never offered) must not be written. `gateway.tool-catalog.projected` records the
+  // native contract instead.
+  it("forwards native tool definitions without a mapped tool-availability line", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    let requestBody:
+      { tools?: readonly { function: { name: string; parameters: unknown } }[] } | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        const body = typeof init?.body === "string" ? init.body : "{}";
+        requestBody = JSON.parse(body) as typeof requestBody;
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps: UiHandlerDeps = {
+      ...depsValue(configValue(provider(), capability())),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-native" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-native" }),
+        unavailableOptionalTools: () => new Set(["keiko_research_fetch"]),
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry("native"),
+    } as unknown as UiHandlerDeps;
+    const nativeTools = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+      type: "function" as const,
+      function: { name, description: "", parameters: { type: "object", properties: {} } },
+    }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            messages: [{ role: "user", content: "continue" }],
+            tools: nativeTools,
+          }),
+          correlationId: "correlation-native-tools",
+        },
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect((requestBody?.tools ?? []).map((tool) => tool.function.name)).toEqual([
+        "read",
+        "glob",
+        "grep",
+        "edit",
+        "shell",
+        "todo",
+      ]);
+      expect(
+        sink.events.filter((event) => event.op === "coding-sidecar.gateway.tool-availability"),
+      ).toEqual([]);
+      const projected = sink.events.find((event) => event.op === "gateway.tool-catalog.projected");
+      expect(projected?.extra).toMatchObject({ compatibility: "native", toolCount: 6 });
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
@@ -984,7 +1156,7 @@ describe("coding-sidecar gateway", () => {
     expect(properties.proposalId?.pattern).toBe(proposalIdPattern());
   });
 
-  it("accepts exactly the captured OpenCode 2.0.10 visible schemas by canonical digest", async () => {
+  it("accepts exactly the captured OpenCode 2.1.4 direct-profile schemas by canonical digest", async () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([
@@ -992,15 +1164,22 @@ describe("coding-sidecar gateway", () => {
       // the producer with projectedGatewaySchema; a schema change here is deliberate, never typed).
       // Discovery now requires explicit mode/directory; its pin comes from the actual captured
       // OpenCode request fixture, with the canonical trust check below still exercised.
-      ["keiko_changeset_edit", "a88e907c1c4f7f955dccfa4d960e10f315a59a1f94b16cedc223f2a47bf4abf6"],
+      // 2026-10-28: the edit strings' maxLength follows the 8 MiB changeset cap (owner decision).
+      ["keiko_changeset_edit", "e22472d477c4bafd0e04282d09baee185286dad3d984394740c681c7f8477a4e"],
       ["keiko_child_agent", "370bb0f282b4b848f08ce4a780ceb45d4959c150839d71025c32b54de4c87773"],
       ["keiko_ci_status", "0c55bc6340d0d7f1622c529153d24ccae35be81da319b5369c49385aa3aba58e"],
+      // #3907: the governed task branch, whose only argument is the new branch's name.
+      ["keiko_git_branch", "798fbc8729f917eeaa10ce6a7a84ddd73033d3521b66ce6e5209ae929114fd79"],
       ["keiko_git_commit", "21f595f8c387e9f705c4146ee99d3d0acbb5d69b460834ae114b400c0372a6bf"],
       ["keiko_git_diff", "0d3a0f35cca521a4883ce70ad847f2585425483ae0d9c58d8ff6cea14119c079"],
-      ["keiko_git_execute", "fa0e9a6590a7012c266a77fe380c587fcc96f6e7fef39037f8596267d478d60f"],
+      // #3902 AC2: `unstage` joined the redeemable kinds and the proposal-id prefixes.
+      ["keiko_git_execute", "e4f2a410a7b4af87cc0f81faa436eab0e109dbcf33ae050c45cccb64e4dc127a"],
       ["keiko_git_push", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
-      ["keiko_git_stage", "6c0ce52bf8a41e07edd650c8f2cb37ebf89706a88ed4112e7166e43eef6860ba"],
+      // #3902 AC2: staging carries the explicit `unstage` choice.
+      ["keiko_git_stage", "f8a74e3d1d15960a9252ea9471a03e55ab92f544e8d2c4286ff645e428f9328a"],
       ["keiko_git_status", "d746974fa9afd5e951f76f9af38954b0ad7f436f2120dc974da65e5ee39f856f"],
+      // #3902 AC2: the governed fetch / fast-forward pull, captured from the producer.
+      ["keiko_git_sync", "fa0f6ff1b09f36182eceb06bd3b72e028f5d71accf1a597c24ab3549f060b228"],
       ["keiko_pull_request", "3a1a2638bddc571a74a54ff53556219b1ead22034797cd62f683b2abd7ab8ef1"],
       [
         "keiko_repository_search",
@@ -1182,6 +1361,48 @@ describe("coding-sidecar gateway", () => {
       });
     }
     expect(chat).not.toHaveBeenCalled();
+  });
+
+  // #3903 AC1 (owner decision 2026-10-25): on the native profile an agent may name another model the
+  // gateway serves; the request runs on that model's own profile. The run's upstream id and any
+  // model the gateway does not serve stay refused.
+  it("routes a native agent's own gateway model to that model and refuses every other id", async () => {
+    const chat = vi.fn((request: GatewayRequest) =>
+      Promise.resolve(assistantResponse(request.modelId)),
+    );
+    const readiness = createOpenCodeGatewayReadinessRegistry("native");
+    const config: GatewayConfig = {
+      providers: [provider(), provider({ modelId: "small-coding-model" })],
+      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      capabilities: [capability(), capability({ id: "small-coding-model" })],
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-1" } }),
+        () => chat,
+        readiness,
+      ),
+      config,
+      gatewayConfig: freshServingHolder(config),
+    } as unknown as UiHandlerDeps;
+    const ask = (model: string): ReturnType<typeof handleCodingSidecarGatewayChatCompletions> =>
+      handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model,
+          messages: [{ role: "user", content: "explore" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+    expect(await ask("small-coding-model")).toMatchObject({ status: 200 });
+    expect(chat).toHaveBeenCalledOnce();
+    expect(chat.mock.calls[0]?.[0].modelId).toBe("small-coding-model");
+    for (const model of ["azure-coding-model", "unserved-model"])
+      expect(await ask(model), model).toMatchObject({
+        status: 400,
+        body: { error: { code: "INVALID_MODEL" } },
+      });
+    expect(chat).toHaveBeenCalledOnce();
   });
 
   it("observes readiness only after authenticated exact tool-contract validation", async () => {
@@ -1892,6 +2113,102 @@ describe("coding-sidecar gateway", () => {
     );
   });
 
+  // #3907 AC3: nothing renews the chat model's readiness in the background, so without this an
+  // expired success left the Workbench reading "still checking this model" after every long run.
+  it("renews the model's expired chat readiness from an accepted answer, and nothing else", async () => {
+    const sink = captureServerLog("info");
+    const answer = (deps: UiHandlerDeps): Promise<unknown> =>
+      handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "coding",
+            stream: true,
+            messages: [{ role: "user", content: "answer" }],
+            tools: modelVisibleTools(),
+          }),
+          res: mockResponse({ captureBody: true }).res,
+        },
+        { ...deps, codingSidecarGatewayEvidenceAggregator: { record: vi.fn() } },
+      );
+    const base = (
+      runId: string,
+      finishReason: NormalizedResponse["finishReason"] = "stop",
+    ): UiHandlerDeps =>
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse({
+            ...assistantResponse("azure-coding-model"),
+            content: "Done.",
+            finishReason,
+          }),
+      );
+    const expired = new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString();
+    const withObservation = (
+      runId: string,
+      conversationReady: boolean,
+      finishReason: NormalizedResponse["finishReason"] = "stop",
+    ): {
+      readonly deps: UiHandlerDeps;
+      readonly holder: ReturnType<typeof probeVerifiedGatewayConfig>;
+    } => {
+      const deps = base(runId, finishReason);
+      if (deps.config === undefined) throw new TypeError("the fixture has a gateway config");
+      const holder = probeVerifiedGatewayConfig(deps.config);
+      holder.recordVerifiedCapability(
+        "azure-coding-model",
+        { conversationReady },
+        expired,
+        holder.generation(),
+      );
+      return { deps: { ...deps, gatewayConfig: holder }, holder };
+    };
+    const renewal = (runId: string): unknown =>
+      sink.events.find(
+        (event) => event.op === "coding-sidecar.gateway.outcome" && event.extra?.runId === runId,
+      )?.extra?.readinessRenewal;
+
+    const expiredSuccess = withObservation("run-renews", true);
+    expect(
+      currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model"),
+    ).toBeUndefined();
+    expect(await answer(expiredSuccess.deps)).toBe(STREAMING);
+    expect(currentConversationReadinessObservation(expiredSuccess.deps, "azure-coding-model")).toBe(
+      true,
+    );
+    expect(renewal("run-renews")).toBe("renewed");
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(
+        sink.events.find(
+          (event) =>
+            event.extra?.runId === "run-renews" && event.op === "coding-sidecar.gateway.outcome",
+        ) ?? {},
+      ),
+    );
+
+    // A failed observation is never repaired by an answer: only a probe can clear it.
+    const failed = withObservation("run-failed-proof", false);
+    await answer(failed.deps);
+    expect(currentConversationReadinessObservation(failed.deps, "azure-coding-model")).toBe(false);
+    expect(renewal("run-failed-proof")).toBe("not-renewable");
+
+    // A filtered answer reached the runtime but does not prove the model served the turn.
+    const filtered = withObservation("run-filtered", true, "content_filter");
+    await answer(filtered.deps);
+    expect(
+      currentConversationReadinessObservation(filtered.deps, "azure-coding-model"),
+    ).toBeUndefined();
+    expect(renewal("run-filtered")).toBe("not-renewable");
+
+    // Without a success to renew, an answer establishes nothing.
+    const holderless = base("run-no-holder");
+    await answer(holderless);
+    expect(renewal("run-no-holder")).toBe("not-renewable");
+  });
+
   it("preserves a smaller positive provider token count over the stream byte estimate", async () => {
     const sink = captureServerLog("info");
     const response = mockResponse({ captureBody: true });
@@ -2063,17 +2380,16 @@ describe("coding-sidecar gateway", () => {
     ).toMatchObject({ source: "output-byte-estimate" });
   });
 
-  // #3602 review: a buffered stream whose opening frame the client will not take (the shared SSE
-  // path kills the stream) must not start a provider call for an answer nobody can receive — the
-  // same early exit `beginGatewayStream` gives the streamed path.
-  it("starts no provider call when the buffered stream's opening frame cannot be delivered", async () => {
+  // #3602 review: a buffered stream whose client is already gone must not start a provider call for
+  // an answer nobody can receive — the same early exit `beginGatewayStream` gives the streamed path.
+  // A merely slow reader is not "gone": `res.write()` returning false is flow control (see below).
+  it("starts no provider call when the client left before the buffered stream's opening frame", async () => {
     const sink = captureServerLog("info");
-    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const chat = vi.fn((): Promise<NormalizedResponse> =>
       Promise.resolve(assistantResponse("azure-coding-model")),
     );
     const response = mockResponse({ captureBody: true });
-    response.res.write = vi.fn(() => false);
+    response.res.destroy();
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -2083,16 +2399,15 @@ describe("coding-sidecar gateway", () => {
       }),
       res: response.res,
     };
-
     const settlePromptTokens = vi.fn(
       (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
     );
+
     const result = await handleCodingSidecarGatewayChatCompletions(context, {
       ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
         () => chat,
       ),
-      diagnostics,
       runtimeCapabilityAuthenticator: {
         authenticate: () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
         reservePromptTokens: () => ({ ok: true, runId: "run-undeliverable" }),
@@ -2102,18 +2417,8 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toBe(STREAMING);
     expect(chat).not.toHaveBeenCalled();
-    expect(response.res.destroyed).toBe(true);
-    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
-    expect(outcome?.extra).toMatchObject({
-      runId: "run-undeliverable",
-      outcome: "cancelled",
-      cancellationCause: "backpressure-killed",
-      completionTokens: 0,
-      outputBytes: 0,
-    });
     // No provider call ran, so the reservation goes back to the run's budget in full (actual usage
-    // 0, never the conservative estimate a dispatched-but-unobserved call keeps), and the usage
-    // line records the release.
+    // 0, never the conservative estimate a dispatched-but-unobserved call keeps).
     expect(settlePromptTokens).toHaveBeenCalledOnce();
     const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
     expect(reserved).toBeGreaterThan(0);
@@ -2128,20 +2433,67 @@ describe("coding-sidecar gateway", () => {
       completionTokens: 0,
       outputBytes: 0,
     });
-    // One id joins the outcome line, the backpressure diagnostic and the stream's terminal line —
-    // for a context without a correlation id the sanctioned fallback on all three, never a fresh
-    // mint on one of them.
-    expect(outcome?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
-    expect(diagnostics.record).toHaveBeenCalledWith(
-      expect.objectContaining({
-        errorClass: "SseBackpressureKill",
-        correlationId: UNKNOWN_CORRELATION_ID,
-      }),
-    );
-    // The terminal line arrives on the response's `close`, a tick after destroy; the sink may also
-    // hold a late close from an earlier test's response, so the join is asserted on this stream's
-    // own reason and id rather than on whichever terminal line comes first.
-    await vi.waitFor(() => {
+  });
+
+  // 2026-10-28 stability blocker: Node answers `false` for every write of 64 KiB or more, even to an
+  // idle loopback reader, so a false write is flow control. The buffered turn keeps running; only a
+  // reader that drains nothing within the shared stalled-reader bound is torn down, and that teardown
+  // still cancels the provider call, names the kill and joins its evidence under one id.
+  it("cancels the buffered provider call only when the reader stalls past the shared bound", async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = captureServerLog("info");
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const chat = vi.fn(
+        (request: GatewayRequest): Promise<NormalizedResponse> =>
+          new Promise((_resolve, reject) => {
+            request.cancellationSignal?.addEventListener("abort", () => {
+              reject(new DOMException("aborted", "AbortError"));
+            });
+          }),
+      );
+      const response = stalledReaderResponse();
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "slow reader" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      };
+
+      const pending = handleCodingSidecarGatewayChatCompletions(context, {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stalled" } }),
+          () => chat,
+        ),
+        diagnostics,
+      });
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(chat).toHaveBeenCalledOnce();
+      expect(response.res.destroyed).toBe(false);
+      expect(diagnostics.record).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toBe(STREAMING);
+      expect(response.res.destroyed).toBe(true);
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-stalled",
+        outcome: "cancelled",
+        cancellationCause: "backpressure-killed",
+      });
+      // One id joins the outcome line, the backpressure diagnostic and the stream's terminal line —
+      // for a context without a correlation id the sanctioned fallback on all three.
+      expect(outcome?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+      expect(diagnostics.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          errorClass: "SseBackpressureKill",
+          correlationId: UNKNOWN_CORRELATION_ID,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
       const closed = sink.events
         .filter((event) => event.op === "sse.stream.closed")
         .map((event) => ({ correlationId: event.correlationId, ...event.extra }));
@@ -2151,12 +2503,46 @@ describe("coding-sidecar gateway", () => {
           reason: "backpressure-killed",
         }),
       );
-    });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("delivers the buffered answer to a reader that drains after a false write", async () => {
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const response = stalledReaderResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "late drain" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const pending = handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-late-drain" } }),
+        () => chat,
+      ),
+    );
+    response.drain();
+
+    expect(await pending).toBe(STREAMING);
+    expect(chat).toHaveBeenCalledOnce();
+    expect(response.res.destroyed).toBe(false);
+    expect(response.body()).toContain('"finish_reason":"stop"');
+    expect(response.body()).toContain("data: [DONE]");
   });
 
   // The streamed counterpart: the gateway's stream is an async generator that dispatches on its
-  // first pull, and a failed handshake comes before that pull, so the reservation is released too.
-  it("releases the prompt reservation when the streamed handshake cannot be delivered", async () => {
+  // first pull, and a handshake to a client that is already gone comes before that pull, so the
+  // reservation is released too.
+  it("releases the prompt reservation when the client left before the streamed handshake", async () => {
     const sink = captureServerLog("info");
     let pulls = 0;
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -2165,7 +2551,7 @@ describe("coding-sidecar gateway", () => {
       yield { type: "delta", token: "never" };
     };
     const response = mockResponse({ captureBody: true });
-    response.res.write = vi.fn(() => false);
+    response.res.destroy();
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -2197,18 +2583,13 @@ describe("coding-sidecar gateway", () => {
 
     expect(result).toBe(STREAMING);
     expect(pulls).toBe(0);
-    expect(response.res.destroyed).toBe(true);
     expect(settlePromptTokens).toHaveBeenCalledOnce();
     const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
     expect(reserved).toBeGreaterThan(0);
     expect(actual).toBe(0);
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
-    ).toMatchObject({
-      runId: "run-stream-undeliverable",
-      outcome: "cancelled",
-      cancellationCause: "backpressure-killed",
-    });
+    ).toMatchObject({ runId: "run-stream-undeliverable", outcome: "cancelled" });
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
     ).toMatchObject({
@@ -2661,6 +3042,92 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // The output guard judges bytes only as a runaway backstop (8 bytes per allowed token): an answer
+  // inside its token budget is never cut for being denser than a 4-bytes-per-token estimate.
+  describe("output budget guard", () => {
+    const MAX_TOKENS = 10;
+
+    async function bufferedStatus(content: string, completionTokens: number): Promise<number> {
+      const base = assistantResponse("azure-coding-model");
+      const response: NormalizedResponse = {
+        ...base,
+        content,
+        usage: { ...base.usage, completionTokens },
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-budget" } }),
+          (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+            Promise.resolve(response),
+        ),
+        config: configValue(provider(), capability({ maxOutputTokens: MAX_TOKENS })),
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "budget" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      return (result as { readonly status: number }).status;
+    }
+
+    it("keeps a buffered answer within its provider-reported token budget at 6 bytes per token", async () => {
+      await expect(bufferedStatus("x".repeat(60), MAX_TOKENS)).resolves.toBe(200);
+    });
+
+    it("still rejects a buffered answer whose provider-reported tokens exceed the budget", async () => {
+      await expect(bufferedStatus("x".repeat(20), MAX_TOKENS + 1)).resolves.toBe(503);
+    });
+
+    it("still rejects a buffered answer past the runaway backstop, whatever the provider reports", async () => {
+      await expect(bufferedStatus("x".repeat(200), 5)).resolves.toBe(503);
+    });
+
+    it("does not cut a streamed answer that stays within its token budget", async () => {
+      const base = assistantResponse("azure-coding-model");
+      const text = "x".repeat(30);
+      const final: NormalizedResponse = {
+        ...base,
+        content: text + text,
+        usage: { ...base.usage, completionTokens: MAX_TOKENS },
+      };
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield { type: "delta", token: text };
+        yield { type: "delta", token: text };
+        yield { type: "done", response: final };
+      };
+      const response = mockResponse({ captureBody: true });
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "dense stream" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      };
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-budget-stream" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        config: configValue(provider(), capability({ maxOutputTokens: MAX_TOKENS })),
+      } as UiHandlerDeps;
+      await expect(handleCodingSidecarGatewayChatCompletions(context, deps)).resolves.toBe(
+        STREAMING,
+      );
+      expect(response.body().split(text).length - 1).toBe(2);
+      expect(response.body()).toContain('"finish_reason":"stop"');
+      expect(response.body()).not.toContain('"finish_reason":"length"');
+    });
+  });
+
   it("uses the injected gateway stream, bounds cumulative output, and returns it on overflow", async () => {
     let returned = false;
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -3065,66 +3532,267 @@ describe("coding-sidecar gateway", () => {
         cancellationCause: "route-deadline",
         deadlineMs: routeDeadlineMs,
       });
+      // The runtime is still connected after the backstop fires: the response must end with the
+      // error finish the buffered path writes, not linger open until the runtime's own timeout.
+      expect(response.res.writableEnded).toBe(true);
+      expect(response.body()).toContain('"finish_reason":"error"');
+      expect(response.body()).toContain("data: [DONE]");
     } finally {
       timeoutSpy.mockRestore();
     }
   });
 
-  it("cancels the provider iterator when the streaming response applies backpressure", async () => {
+  it("ends a streamed response with an error finish when the run is stopped mid-stream", async () => {
     const sink = captureServerLog("info");
-    let pulls = 0;
-    let returned = false;
-    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
-      try {
-        await Promise.resolve();
-        pulls += 1;
-        yield { type: "delta", token: "first" };
-        pulls += 1;
-        yield { type: "delta", token: "must-not-be-pulled" };
-      } finally {
-        returned = true;
-      }
+    const run = new AbortController();
+    const stalled = async function* (request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      await new Promise<void>((resolve) => {
+        request.cancellationSignal?.addEventListener(
+          "abort",
+          () => {
+            resolve();
+          },
+          { once: true },
+        );
+      });
+      yield* [] as GatewayStreamChunk[];
     };
     const response = mockResponse({ captureBody: true });
-    let writes = 0;
-    response.res.write = vi.fn(() => {
-      writes += 1;
-      return writes === 1;
-    });
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
         stream: true,
-        messages: [{ role: "user", content: "stream slowly" }],
+        messages: [{ role: "user", content: "stop me" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-stop" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> =>
+            stalled(request),
+      ),
+      codingSidecarGatewayCancellationRegistry: { signalFor: () => run.signal },
+    } as unknown as UiHandlerDeps;
+
+    const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+    await vi.waitFor((): void => {
+      expect(response.body()).toContain('"role":"assistant"');
+    });
+    run.abort();
+    await expect(pending).resolves.toBe(STREAMING);
+    await vi.waitFor((): void => {
+      expect(response.res.writableEnded).toBe(true);
+    });
+    expect(response.body()).toContain('"finish_reason":"error"');
+    expect(response.body()).toContain("data: [DONE]");
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      outcome: "cancelled",
+      cancellationCause: "run-stopped",
+    });
+  });
+
+  it("writes no failure diagnostic for a user stop or a client abort, but keeps real failures", async () => {
+    for (const cancellation of ["response-close", "run-stop"] as const) {
+      for (const streamed of [false, true]) {
+        const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+        const run = new AbortController();
+        const abortable = (request: GatewayRequest): Promise<never> =>
+          new Promise((_resolve, reject) => {
+            request.cancellationSignal?.addEventListener(
+              "abort",
+              () => {
+                reject(new CancelledError("request cancelled"));
+              },
+              { once: true },
+            );
+          });
+        const abortableStream = (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> => ({
+          [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => ({
+            next: (): Promise<IteratorResult<GatewayStreamChunk>> => abortable(request),
+            return: (): Promise<IteratorResult<GatewayStreamChunk>> =>
+              Promise.resolve({ done: true, value: undefined }),
+          }),
+        });
+        const response = mockResponse({ captureBody: true });
+        const context: RouteContext = {
+          ...authenticatedContext({
+            model: "coding",
+            ...(streamed ? { stream: true } : {}),
+            messages: [{ role: "user", content: "cancel" }],
+            tools: modelVisibleTools(),
+          }),
+          res: response.res,
+        };
+        const deps = {
+          ...runtimeGatewayDeps(
+            () => ({ ok: true, binding: { runId: "run-cancel-diagnostic" } }),
+            () => abortable,
+            createOpenCodeGatewayReadinessRegistry(),
+            (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) => abortableStream,
+          ),
+          diagnostics,
+          codingSidecarGatewayCancellationRegistry: { signalFor: () => run.signal },
+        } as unknown as UiHandlerDeps;
+
+        const pending = handleCodingSidecarGatewayChatCompletions(context, deps);
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        if (cancellation === "response-close") context.res.emit("close");
+        else run.abort();
+        await pending;
+        await new Promise<void>((resolve) => setTimeout(resolve, 20));
+        const failures = diagnostics.record.mock.calls
+          .map(([record]) => record)
+          .filter((record) => record.source.startsWith("coding-sidecar-gateway."));
+        expect(failures, `${cancellation} streamed=${String(streamed)}`).toEqual([]);
+      }
+    }
+  });
+
+  it("keeps a genuine mid-stream provider failure as a failure diagnostic", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const failing = (): AsyncIterable<GatewayStreamChunk> => ({
+      [Symbol.asyncIterator]: (): AsyncIterator<GatewayStreamChunk> => ({
+        next: (): Promise<IteratorResult<GatewayStreamChunk>> =>
+          Promise.reject(new TransportError("connection reset")),
+      }),
+    });
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "fail" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-real-failure" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => failing,
+      ),
+      diagnostics,
+    } as unknown as UiHandlerDeps;
+    await handleCodingSidecarGatewayChatCompletions(context, deps);
+    await vi.waitFor((): void => {
+      expect(
+        diagnostics.record.mock.calls.some(
+          ([record]) => record.source === "coding-sidecar-gateway.stream",
+        ),
+      ).toBe(true);
+    });
+  });
+
+  // 2026-10-28 stability blocker: the producer pulls the provider no faster than the runtime reads.
+  // A reader that is behind pauses the iterator instead of being killed; only a reader that drains
+  // nothing within the shared stalled-reader bound loses the stream, and that teardown cancels the
+  // provider iterator and names the kill rather than a disconnect the client never made.
+  it("pauses the provider iterator for a reader that is behind and cancels it once the reader stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      const sink = captureServerLog("info");
+      let pulls = 0;
+      let returned = false;
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        try {
+          await Promise.resolve();
+          pulls += 1;
+          yield { type: "delta", token: "first" };
+          pulls += 1;
+          yield { type: "delta", token: "must-not-be-pulled" };
+        } finally {
+          returned = true;
+        }
+      };
+      const response = stalledReaderResponse({ captureBody: true, acceptedWrites: 1 });
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "stream slowly" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+      };
+
+      const pending = handleCodingSidecarGatewayChatCompletions(
+        context,
+        runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-backpressure" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(SSE_STALLED_READER_TIMEOUT_MS - 1);
+      expect(pulls).toBe(1);
+      expect(returned).toBe(false);
+      expect(response.res.destroyed).toBe(false);
+      expect(response.body()).toContain('"content":"first"');
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toBe(STREAMING);
+      expect(returned).toBe(true);
+      expect(pulls).toBe(1);
+      expect(response.res.destroyed).toBe(true);
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-backpressure",
+        outcome: "cancelled",
+        cancellationCause: "backpressure-killed",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes the provider iterator when the reader drains", async () => {
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield { type: "delta", token: "first" };
+      yield { type: "delta", token: "second" };
+      yield { type: "done", response: assistantResponse("azure-coding-model") };
+    };
+    const response = stalledReaderResponse({ captureBody: true, acceptedWrites: 1 });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "drain later" }],
         tools: modelVisibleTools(),
       }),
       res: response.res,
     };
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
+    const pending = handleCodingSidecarGatewayChatCompletions(
       context,
       runtimeGatewayDeps(
-        () => ({ ok: true, binding: { runId: "run-backpressure" } }),
+        () => ({ ok: true, binding: { runId: "run-drained" } }),
         undefined,
         createOpenCodeGatewayReadinessRegistry(),
         (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
           stream(),
       ),
     );
-
-    expect(result).toBe(STREAMING);
-    expect(returned).toBe(true);
-    expect(pulls).toBe(1);
-    expect(response.res.destroyed).toBe(true);
-    // #3602 review: the frames go through the shared protective SSE path, so a client that stops
-    // draining is killed the way every other SSE route kills it, and the outcome line names the
-    // kill rather than a disconnect the client never made.
-    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
-    expect(outcome?.extra).toMatchObject({
-      runId: "run-backpressure",
-      outcome: "cancelled",
-      cancellationCause: "backpressure-killed",
+    await vi.waitFor(() => {
+      expect(response.body()).toContain('"content":"first"');
     });
+    expect(response.body()).not.toContain('"content":"second"');
+    response.drain();
+
+    expect(await pending).toBe(STREAMING);
+    expect(response.res.destroyed).toBe(false);
+    expect(response.body()).toContain('"content":"second"');
+    expect(response.body()).toContain("data: [DONE]");
   });
 
   it.each(["empty", "partial"] as const)(
@@ -3191,7 +3859,10 @@ describe("coding-sidecar gateway", () => {
     },
   );
 
-  it("destroys the response when the terminal tool-call frame hits backpressure", async () => {
+  // 2026-10-28 stability blocker: a terminal tool call larger than Node's high-water mark used to be
+  // destroyed mid-frame. It is queued whole for a reader that is behind, the response ends, and the
+  // finished provider stream is released at once.
+  it("queues the whole terminal tool call for a reader that is behind and ends the response", async () => {
     let returned = false;
     const toolResponse: NormalizedResponse = {
       ...assistantResponse("azure-coding-model"),
@@ -3206,12 +3877,8 @@ describe("coding-sidecar gateway", () => {
         returned = true;
       }
     };
-    const response = mockResponse({ captureBody: true });
-    let writes = 0;
-    response.res.write = vi.fn(() => {
-      writes += 1;
-      return writes === 1;
-    });
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const response = stalledReaderResponse({ captureBody: true, acceptedWrites: 1 });
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -3222,20 +3889,25 @@ describe("coding-sidecar gateway", () => {
       res: response.res,
     };
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      context,
-      runtimeGatewayDeps(
+    const result = await handleCodingSidecarGatewayChatCompletions(context, {
+      ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-tool-backpressure" } }),
         undefined,
         createOpenCodeGatewayReadinessRegistry(),
         (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
           stream(),
       ),
-    );
+      diagnostics,
+    });
 
     expect(result).toBe(STREAMING);
     expect(returned).toBe(true);
-    expect(response.res.destroyed).toBe(true);
+    expect(response.res.writableEnded).toBe(true);
+    expect(response.body()).toContain('"tool_calls"');
+    expect(response.body()).toContain("data: [DONE]");
+    expect(diagnostics.record).not.toHaveBeenCalledWith(
+      expect.objectContaining({ errorClass: "SseBackpressureKill" }),
+    );
   });
 
   it("returns an opaque 503 when stream construction fails before committing SSE headers", async () => {
@@ -3313,10 +3985,11 @@ describe("coding-sidecar gateway", () => {
     expect(put).not.toHaveBeenCalled();
   });
 
-  // F-01: `status: "available"` describes the stored configuration. A deps assembly with no probe
-  // record must therefore publish `verification: "unverified"` — the Workbench renders this field,
-  // and a missing one would let it keep reading a configured source as a healthy one.
-  it("publishes the last probe outcome alongside the config-derived profile", async () => {
+  // F-01: `status: "available"` describes the stored configuration, so the profile also publishes
+  // the model's live verification. Customer 1.3.4: the field used to be the gateway-wide word of the
+  // LAST probe of ANY model, so a busy neighbour's failed probe read as "failed" for a model that had
+  // just answered, and the Workbench kept saying it was still checking the model source.
+  it("publishes the selected model's own readiness, not another model's last probe", async () => {
     const context = {
       req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
       res: mockResponse().res,
@@ -3326,20 +3999,117 @@ describe("coding-sidecar gateway", () => {
     } satisfies RouteContext;
     const config = configValue(provider(), capability());
     const holder = freshServingHolder(config);
-    const unprobed = await handleCodingSidecarGatewayProfile(context, {
+    holder.recordVerification("failed");
+
+    const profile = await handleCodingSidecarGatewayProfile(context, {
       ...depsValue(config),
       gatewayConfig: holder,
     });
 
-    expect(unprobed.body).toMatchObject({ status: "available", verification: "unverified" });
+    expect(profile.body).toMatchObject({
+      status: "available",
+      modelAlias: "azure-coding-model",
+      verification: "verified",
+    });
+  });
 
-    holder.recordVerification("verified");
-    const verified = await handleCodingSidecarGatewayProfile(context, {
+  // The owner's model picker (customer 1.3.4): the profile describes the model the person chose,
+  // not the default the server would elect; an id the gateway does not configure is ignored.
+  it("describes the model chosen in the picker through the modelId query", async () => {
+    const second = "second-coding-model";
+    const config: GatewayConfig = {
+      ...configValue(provider(), capability()),
+      providers: [provider(), provider({ modelId: second })],
+      capabilities: [capability(), capability({ id: second })],
+    };
+    const holder = freshServingHolder(config);
+    const read = async (query: string): Promise<unknown> =>
+      (
+        await handleCodingSidecarGatewayProfile(
+          {
+            req: mockRequest({ method: "GET", url: `/api/coding-sidecar/gateway/profile${query}` }),
+            res: mockResponse().res,
+            params: {},
+            url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile${query}`),
+            correlationId: undefined,
+          } satisfies RouteContext,
+          { ...depsValue(config), gatewayConfig: holder },
+        )
+      ).body;
+
+    expect(await read(`?modelId=${second}`)).toMatchObject({
+      status: "available",
+      modelAlias: second,
+      verification: "verified",
+    });
+    const elected = await read("");
+    expect(await read("?modelId=not-configured")).toEqual(elected);
+
+    holder.recordVerifiedCapability(
+      second,
+      { conversationReady: false },
+      new Date().toISOString(),
+      holder.generation(),
+    );
+    expect(await read(`?modelId=${second}`)).toMatchObject({
+      status: "unavailable",
+      reason: "conversation-not-ready",
+    });
+  });
+
+  // #3907 AC3: an expired success read as `model-verification-pending` while nothing checked the
+  // model, so the Workbench polled a promise no probe kept. Customer 1.3.4 moved the check to the
+  // human's actions: a passive re-read never claims a check and never starts one, and a read for a
+  // model just chosen in the picker (`check=1`) starts the one on-demand check.
+  it("checks an expired model only when the picker asks, and never claims a check nobody runs", async () => {
+    const context = (query: string): RouteContext => ({
+      req: mockRequest({ method: "GET", url: `/api/coding-sidecar/gateway/profile${query}` }),
+      res: mockResponse().res,
+      params: {},
+      url: new URL(`http://127.0.0.1/api/coding-sidecar/gateway/profile${query}`),
+      correlationId: "corr-profile-expired",
+    });
+    const config = configValue(provider(), capability());
+    const holder = probeVerifiedGatewayConfig(config);
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { conversationReady: true },
+      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      holder.generation(),
+    );
+    const fetch = vi.fn(() =>
+      Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      ),
+    );
+    const deps: UiHandlerDeps = {
       ...depsValue(config),
       gatewayConfig: holder,
-    });
+      gatewayReadinessFetch: fetch,
+    };
+    try {
+      const passive = await handleCodingSidecarGatewayProfile(context(""), deps);
+      expect(fetch).not.toHaveBeenCalled();
+      expect(passive.body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+        verification: "unverified",
+      });
 
-    expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+      const chosen = await handleCodingSidecarGatewayProfile(context("?check=1"), deps);
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(chosen.body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+        verification: "verified",
+      });
+
+      // A fresh success adds nothing, even when the picker asks again.
+      await handleCodingSidecarGatewayProfile(context("?check=1"), deps);
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
+    }
   });
 
   // #3591 (1.1.7): the browser reads this profile with a 15 s deadline. While the automatic probe
@@ -4012,7 +4782,7 @@ describe("coding-sidecar gateway", () => {
     );
     expect(validated?.correlationId).toEqual(expect.any(String));
     expect(validated?.extra).toMatchObject({
-      maxRequestBytes: 1_048_576,
+      maxRequestBytes: 4_194_304,
       inputMessageCount: 1,
       offeredToolCount: 0,
       completeness: "complete",
@@ -4029,7 +4799,7 @@ describe("coding-sidecar gateway", () => {
       "coding-sidecar.gateway.request-validated.line",
       formatActivityLogProofLine(validated ?? {}),
     );
-    expect(persistedValidated).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(persistedValidated).toMatchObject({ maxRequestBytes: 4_194_304, inputMessageCount: 1 });
   });
 
   it("rejects an over-limit assistant tool-call continuation before provider dispatch or spend", async () => {
@@ -4105,7 +4875,7 @@ describe("coding-sidecar gateway", () => {
       } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
     } as UiHandlerDeps;
     const result = await handleCodingSidecarGatewayChatCompletions(
-      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(100_000) }] }),
+      routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(300_000) }] }),
       deps,
     );
     assertRouteResult(result);
@@ -5639,10 +6409,10 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 18,
+        expectedToolCount: 20,
         receivedToolCount: 2,
         unexpectedToolCount: 0,
-        missingToolCount: 16,
+        missingToolCount: 18,
         completeness: "complete",
         loss: "none",
       },
@@ -5674,7 +6444,7 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 403 });
     expect(sink.events[0]?.extra).toMatchObject({
       unexpectedToolCount: 1,
-      missingToolCount: 18,
+      missingToolCount: 20,
       completeness: "complete",
       loss: "none",
     });
@@ -6264,7 +7034,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     const settlePromptTokens =
       vi.fn<(capability: string, reserved: number, actual: number, modelCallId?: number) => void>();
     const response = mockResponse({ captureBody: true });
-    response.res.write = vi.fn(() => false);
+    response.res.destroy();
     const context: RouteContext = {
       ...authenticatedContext({
         model: "coding",
@@ -6492,7 +7262,7 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     resetServerLogger();
   });
 
-  it("forwards each provider delta to the coding runtime before the provider has finished", async () => {
+  it("publishes a complete safe public line before the provider has finished", async () => {
     resetGatewayInstanceCacheForTests();
     const upstream = drivenProviderStream();
     vi.stubGlobal(
@@ -6507,7 +7277,14 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     );
     upstream.push(sseDelta({ role: "assistant", content: "First " }));
     await vi.waitFor(() => {
-      expect(response.body()).toContain('"content":"First "');
+      expect(response.body()).toContain('"role":"assistant"');
+    });
+    // The privacy owner must retain an unresolved fragment; F2 still requires live publication
+    // of its completed safe unit before finish, rather than terminal-only concatenation.
+    expect(response.body()).not.toContain('"content":"First "');
+    upstream.push(sseDelta({ content: "public line.\n" }));
+    await vi.waitFor(() => {
+      expect(response.body()).toContain('"content":"First public line.\\n"');
     });
     upstream.push(sseDelta({ content: "second." }));
     upstream.push(sseFinish("stop"));
@@ -6517,7 +7294,7 @@ describe("coding sidecar gateway live streaming (lab ledger F2)", () => {
     expect(await pending).toBe(STREAMING);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { content: "First " },
+      { content: "First public line.\n" },
       { content: "second." },
     ]);
     expect(response.body().trim().endsWith("data: [DONE]")).toBe(true);
@@ -6752,7 +7529,7 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     );
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
-    ).toMatchObject({ outcome: "accepted", reasoningFrames: 2 });
+    ).toMatchObject({ outcome: "accepted", reasoningFrames: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("Randfall");
   });
 
@@ -6770,14 +7547,13 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     );
 
     const deltas = frameDeltas(response.body());
-    expect(deltas.slice(0, 5)).toEqual([
+    // Safe-boundary coalescing changes frame count, never channel, bytes or ordering.
+    expect(deltas.slice(0, 3)).toEqual([
       { role: "assistant" },
-      { reasoning_content: REASONING_DELTAS[0] },
-      { reasoning_content: REASONING_DELTAS[1] },
-      { content: CONTENT_DELTAS[0] },
-      { content: CONTENT_DELTAS[1] },
+      { reasoning_content: REASONING_DELTAS.join("") },
+      { content: CONTENT_DELTAS.join("") },
     ]);
-    expect(deltas[5]).toMatchObject({
+    expect(deltas[3]).toMatchObject({
       tool_calls: [{ index: 0, id: "call-q", type: "function", function: { name: "question" } }],
     });
     expect(
@@ -7061,6 +7837,39 @@ describe("coding sidecar gateway model reasoning (#3878)", () => {
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
     ).toMatchObject({ runId: "run-after-text", runtimeRetry: "allowed" });
+  });
+
+  // An oversized or unparseable provider answer is the same answer on every attempt: the runtime
+  // must not retry it as a dropped connection.
+  it("ends a live turn whose provider answer was unusable as a final rejection, not a stream interruption", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-invalid-answer" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) =>
+          async function* (): AsyncGenerator<GatewayStreamChunk> {
+            await Promise.resolve();
+            yield { type: "delta", token: "partial" };
+            throw new ProviderResponseInvalidError("azure-coding-model", "size-exceeded");
+          },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    await handleCodingSidecarGatewayChatCompletions(liveTurnContext(response), deps);
+
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({
+      runId: "run-invalid-answer",
+      failureCode: "provider-failed",
+      runtimeRetry: "refused",
+    });
   });
 });
 
@@ -7389,8 +8198,7 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
     expect(bodies).toHaveLength(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
       { reasoning_content: "Briefly: " },
       { content: "Done." },
     ]);
@@ -7407,7 +8215,7 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
       outcome: "accepted",
       repairAttempted: true,
       repairOutcome: "recovered",
-      reasoningFrames: 3,
+      reasoningFrames: 2,
     });
     expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
     expect(JSON.stringify(sink.events)).not.toContain("Think ");
@@ -7430,10 +8238,8 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
+      { reasoning_content: "Think hard." },
     ]);
     // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
     expect(response.body()).toContain('"code":400');
@@ -7448,7 +8254,7 @@ describe("coding sidecar gateway output-exhausted repair after forwarded reasoni
       outcome: "failed",
       repairAttempted: true,
       repairOutcome: "exhausted-again",
-      reasoningFrames: 4,
+      reasoningFrames: 2,
     });
     expect(JSON.stringify(sink.events)).not.toContain("Think ");
   });
@@ -7708,8 +8514,7 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
     expect(bodies).toHaveLength(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
       { reasoning_content: "Briefly: " },
       { content: "Done." },
     ]);
@@ -7726,7 +8531,7 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
       outcome: "accepted",
       repairAttempted: true,
       repairOutcome: "recovered",
-      reasoningFrames: 3,
+      reasoningFrames: 2,
     });
     expect(lineOf(sink.events, "coding-sidecar.gateway.turn-failed")).toBeUndefined();
     expect(JSON.stringify(sink.events)).not.toContain("Think ");
@@ -7749,10 +8554,8 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(frameDeltas(response.body())).toEqual([
       { role: "assistant" },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
-      { reasoning_content: "Think " },
-      { reasoning_content: "hard." },
+      { reasoning_content: "Think hard." },
+      { reasoning_content: "Think hard." },
     ]);
     // The final rejection chunk the runtime reads as the end of the turn, never a retryable error.
     expect(response.body()).toContain('"code":400');
@@ -7773,7 +8576,7 @@ describe("coding sidecar gateway empty-answer repair after forwarded reasoning (
       outcome: "failed",
       repairAttempted: true,
       repairOutcome: "empty-again",
-      reasoningFrames: 4,
+      reasoningFrames: 2,
     });
     expectActivityLogProof(
       "coding-sidecar.gateway.outcome.line",
@@ -7881,6 +8684,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
     expect(validated?.extra).toMatchObject({
       inputMessageCount: 6,
       droppedReasoningMessageCount: 2,
+      toolCallTextMessageCount: 1,
       offeredToolCount: OPENCODE_MODEL_VISIBLE_TOOL_NAMES.length,
     });
     expect(
@@ -7888,7 +8692,7 @@ describe("coding sidecar gateway never resends prior reasoning upstream (#3873 F
         "coding-sidecar.gateway.request-validated.line",
         formatActivityLogProofLine(validated ?? {}),
       ),
-    ).toMatchObject({ droppedReasoningMessageCount: 2 });
+    ).toMatchObject({ droppedReasoningMessageCount: 2, toolCallTextMessageCount: 1 });
     expect(JSON.stringify(sink.events)).not.toContain("private");
   });
 
@@ -9085,7 +9889,7 @@ describe("inactive Code Mode readiness selection", () => {
     expect(readiness.isVerified("run-1")).toBe(false);
   });
 
-  it("advertises two outer tools and retains the seventeen canonical inner bindings", async () => {
+  it("advertises two outer tools and retains the nineteen canonical inner bindings", async () => {
     const readiness = createOpenCodeGatewayReadinessRegistry("code-mode");
     const chat = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
@@ -9105,13 +9909,14 @@ describe("inactive Code Mode readiness selection", () => {
     expect(result).toMatchObject({ status: 200 });
     const request = chat.mock.calls[0]?.[0];
     expect(request).not.toHaveProperty("tools");
-    expect(request?.toolCatalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
+    const catalog = boundGatewayToolCatalog(request?.toolCatalog);
+    expect(catalog?.projection.nativeExtensions.map((tool) => tool.alias)).toEqual([
       "execute",
       "question",
     ]);
-    expect(request?.toolCatalog?.projection.tools).toHaveLength(17);
-    expect(request?.toolCatalog?.offered.toolRefs).toHaveLength(17);
-    expect(request?.toolCatalog?.projection.profile).toEqual({
+    expect(catalog?.projection.tools).toHaveLength(19);
+    expect(catalog?.offered.toolRefs).toHaveLength(19);
+    expect(catalog?.projection.profile).toEqual({
       id: "opencode-code-mode",
       version: 1,
     });
@@ -9383,15 +10188,97 @@ describe("fresh chat serving for new coding tasks", () => {
     }
   });
 
-  it("keeps unobserved new-task admission and passive source pending", async () => {
+  // An unobserved model is never admitted and never claimed verified. Customer 1.3.4: the passive
+  // source no longer says "still checking" when no check runs (the Workbench then waited for a check
+  // nobody started); it names the model as usable but unverified, and the start checks it first.
+  it("keeps unobserved new-task admission strict and lets the start check the model", async () => {
     const deps = servingDeps();
     try {
       expect(() => liveAdmission(deps)).toThrow(
         expect.objectContaining({ reason: "model-verification-pending" }) as Error,
       );
       const profile = await handleCodingSidecarGatewayProfile(servingContext(), deps);
-      expect(profile.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+      expect(profile.body).toMatchObject({
+        status: "available",
+        modelAlias: "azure-coding-model",
+        verification: "unverified",
+      });
+
+      const fetch = vi.fn(() =>
+        Promise.resolve(
+          Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+        ),
+      );
+      const checking = { ...deps, gatewayReadinessFetch: fetch };
+      await awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-start-0001");
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+
+      // A ready model adds nothing to a later start.
+      await awaitCodingRunModelReadiness(checking, undefined, "serving-start-0002");
+      expect(fetch).toHaveBeenCalledOnce();
     } finally {
+      await stopConfiguredConversationReadiness(deps);
+      deps.store.close();
+    }
+  });
+
+  // Auditor blocker (customer 1.3.4): a start after five idle minutes was refused as "still
+  // checking" and started no check. The start now checks the expired model and is admitted.
+  it("admits a start after an idle while by checking the expired model first", async () => {
+    const deps = servingDeps();
+    const holder = deps.gatewayConfig;
+    if (holder === undefined) throw new Error("missing serving fixture");
+    holder.recordVerifiedCapability(
+      "azure-coding-model",
+      { toolCalling: true, conversationReady: true },
+      new Date(Date.now() - CONVERSATION_READINESS_MAX_AGE_MS - 60_000).toISOString(),
+      holder.generation(),
+    );
+    const fetch = vi.fn(() =>
+      Promise.resolve(
+        Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }),
+      ),
+    );
+    const checking = { ...deps, gatewayReadinessFetch: fetch };
+    try {
+      expect(() => liveAdmission(deps)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      await awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-idle-start");
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(liveAdmission(deps)).toEqual({ profileId: "azure-coding-model" });
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
+      deps.store.close();
+    }
+  });
+
+  // F3 (customer 1.3.4): a check that outlives the bounded profile wait is still running; the
+  // projection says "still checking" exactly then, so the Workbench re-reads until it settles.
+  it("reports a pending verification exactly while a check of that model runs", async () => {
+    const deps = servingDeps();
+    let answer: ((response: Response) => void) | undefined;
+    const fetch = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const checking = { ...deps, gatewayReadinessFetch: fetch };
+    try {
+      const check = awaitCodingRunModelReadiness(checking, "azure-coding-model", "serving-f3");
+      await vi.waitFor(() => {
+        expect(fetch).toHaveBeenCalledOnce();
+      });
+      const running = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+      expect(running.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+      answer?.(Response.json({ choices: [{ message: { content: "OK" }, finish_reason: "stop" }] }));
+      await check;
+      const settled = await handleCodingSidecarGatewayProfile(servingContext(), deps);
+      expect(settled.body).toMatchObject({ status: "available", verification: "verified" });
+    } finally {
+      await stopConfiguredConversationReadiness(deps);
       deps.store.close();
     }
   });
@@ -9531,7 +10418,10 @@ describe("pending readiness original cause evidence", () => {
       const probe = initializeLiteLlmCodingReadiness(deps, "corr-stored-shortfall");
       try {
         const read = handleCodingSidecarGatewayProfile(
-          { correlationId: "corr-shortfall-read" } as RouteContext,
+          {
+            correlationId: "corr-shortfall-read",
+            url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+          } as RouteContext,
           deps,
         );
         await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
@@ -9560,4 +10450,807 @@ describe("pending readiness original cause evidence", () => {
       }
     },
   );
+});
+
+// #3897 S14 (review P2): the native `read` of a workspace image reaches the model as an
+// OpenAI-compatible user message holding one `image_url` data-URL part. The route admits it only
+// for the native profile and a model whose configuration declares image input, hands it to the
+// existing gateway content-part path (token accounting, admission evidence, provider projection),
+// and refuses everything else under a closed, body-free reason.
+describe("coding-sidecar gateway native image input", () => {
+  afterEach(() => {
+    resetServerLogger();
+    vi.unstubAllGlobals();
+    resetGatewayInstanceCacheForTests();
+  });
+
+  const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const NATIVE_TOOLS = ["read", "glob", "grep", "edit", "shell", "todo"].map((name) => ({
+    type: "function" as const,
+    function: { name, description: "", parameters: { type: "object", properties: {} } },
+  }));
+
+  function pngDataUrl(extraBytes = 56): string {
+    const bytes = Buffer.concat([PNG_SIGNATURE, Buffer.alloc(extraBytes, 7)]);
+    return `data:image/png;base64,${bytes.toString("base64")}`;
+  }
+
+  // The shape the pinned OpenCode 2.1.4 sends after a native `read` of an image: the tool result
+  // text, then the image alone in a user message (captured by opencodeNativeMediaInput.real.test).
+  function readImageMessages(url: string): readonly Record<string, unknown>[] {
+    return [
+      { role: "user", content: "Look at pixel.png" },
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          {
+            id: "call_image_1",
+            type: "function",
+            function: { name: "read", arguments: '{"path":"pixel.png"}' },
+          },
+        ],
+      },
+      { role: "tool", tool_call_id: "call_image_1", content: "Image read successfully" },
+      { role: "user", content: [{ type: "image_url", image_url: { url } }] },
+    ];
+  }
+
+  function nativeDeps(
+    options: {
+      readonly imageInput?: boolean;
+      readonly documentInput?: boolean;
+      readonly toolProfile?: "direct" | "code-mode" | "native";
+      readonly contextWindow?: number;
+      readonly chatFactory?: UiHandlerDeps["codingSidecarGatewayChatFactory"];
+    } = {},
+  ): UiHandlerDeps {
+    return {
+      ...depsValue(
+        configValue(
+          provider(),
+          capability({
+            supportsImageInput: options.imageInput ?? true,
+            supportsDocumentInput: options.documentInput ?? false,
+            ...(options.contextWindow === undefined
+              ? {}
+              : { contextWindow: options.contextWindow }),
+          }),
+        ),
+        options.chatFactory,
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-native-image" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-native-image" }),
+      },
+      openCodeGatewayReadinessRegistry: createOpenCodeGatewayReadinessRegistry(
+        options.toolProfile ?? "native",
+      ),
+    };
+  }
+
+  function send(
+    messages: readonly Record<string, unknown>[],
+    deps: UiHandlerDeps,
+  ): Promise<RouteResult | typeof STREAMING> {
+    return handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({ model: "coding", messages, tools: NATIVE_TOOLS }),
+      deps,
+    );
+  }
+
+  function stubProvider(): { readonly bodies: Record<string, unknown>[] } {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        bodies.push(
+          JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<string, unknown>,
+        );
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    return { bodies };
+  }
+
+  function rejectionLine(sink: BufferedServerLogSink): ServerLogEvent | undefined {
+    return sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
+  }
+
+  it("forwards a read image to the provider as one image_url part through the gateway path", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const provider = stubProvider();
+    const url = pngDataUrl();
+
+    const result = await send(readImageMessages(url), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(provider.bodies).toHaveLength(1);
+    const sent = provider.bodies[0]?.messages as readonly { content: unknown }[];
+    expect(sent[0]?.content).toBe("Look at pixel.png");
+    expect(sent[3]?.content).toEqual([{ type: "image_url", image_url: { url } }]);
+    // The existing gateway admission path accounted for the image and logged it without bytes.
+    const admission = sink.events.find((event) => event.op === "gateway.prompt.admission");
+    expect(admission?.extra).toMatchObject({
+      imageCount: 1,
+      imageAccounting: "fallback-estimated",
+    });
+    expect(Number(admission?.extra?.imageReserveTokens)).toBeGreaterThan(0);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.extra).toMatchObject({ runId: "run-native-image", imageCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain(url.slice(30));
+  });
+
+  it("charges the gateway's image allowance and keeps the part list beside the joined text", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const seen: GatewayRequest[] = [];
+    const url = pngDataUrl();
+    const deps = nativeDeps({
+      chatFactory:
+        (_config, modelId) =>
+        (request): Promise<NormalizedResponse> => {
+          seen.push(request);
+          return Promise.resolve(assistantResponse(modelId));
+        },
+    });
+
+    const result = await send(
+      [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "first" },
+            { type: "image_url", image_url: { url, detail: "low" } },
+            { type: "text", text: "second" },
+          ],
+        },
+      ],
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(seen[0]?.messages).toEqual([
+      {
+        role: "user",
+        content: "first\n\nsecond",
+        contentParts: [
+          { type: "text", text: "first" },
+          { type: "image_url", image_url: { url } },
+          { type: "text", text: "second" },
+        ],
+      },
+    ]);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    const withoutImage = countGatewayPromptTokens({
+      messages: [{ role: "user", content: "first\n\nsecond" }],
+    });
+    const estimated = Number(validated?.extra?.estimatedPromptTokens);
+    // The estimate is the shared gateway counter over the complete projection, image included.
+    expect(estimated).toBe(
+      countGatewayPromptTokens({
+        messages: seen[0]?.messages ?? [],
+        tools: NATIVE_TOOLS.map(({ function: tool }) => tool),
+      }),
+    );
+    expect(estimated).toBeGreaterThan(withoutImage);
+  });
+
+  it.each([
+    { label: "a text-only model", options: { imageInput: false } },
+    { label: "the direct (mapped) profile", options: { toolProfile: "direct" as const } },
+    { label: "the Code Mode (mapped) profile", options: { toolProfile: "code-mode" as const } },
+  ])("refuses image input for $label before any provider call", async ({ options }) => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    const url = pngDataUrl();
+
+    const result = await send(readImageMessages(url), nativeDeps(options));
+
+    assertRouteResult(result);
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: CODING_SIDECAR_IMAGE_REJECTION_MESSAGES["image-input-unsupported"],
+        },
+      },
+    });
+    expect(provider.bodies).toHaveLength(0);
+    expect(rejectionLine(sink)).toMatchObject({
+      level: "warn",
+      status: 400,
+      errorKind: "invalid-request",
+      extra: { reason: "image-input-unsupported", runId: "run-native-image" },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(url.slice(30));
+  });
+
+  it.each([
+    { reason: "image-part-invalid", url: "data:image/png;base64,@@@@" },
+    { reason: "image-part-invalid", url: "data:image/png;base64,AAAAA" },
+    { reason: "image-part-invalid", url: "data:image/png;base64," },
+    { reason: "image-part-invalid", url: "data:image/png;base64,AA=A" },
+    { reason: "image-part-invalid", url: "data:image/png,AAAA" },
+    { reason: "image-part-invalid", url: "data:image/png;charset=utf-8;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:image/svg+xml;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:image/svg;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:application/pdf;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:text/plain;base64,AAAA" },
+    { reason: "image-mime-unsupported", url: "data:;base64,AAAA" },
+  ])("refuses the image part $url with $reason", async ({ reason, url }) => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+
+    const result = await send(readImageMessages(url), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(400);
+    expect(result.body).toEqual({
+      error: {
+        code: "BAD_REQUEST",
+        message:
+          CODING_SIDECAR_IMAGE_REJECTION_MESSAGES[
+            reason as keyof typeof CODING_SIDECAR_IMAGE_REJECTION_MESSAGES
+          ],
+      },
+    });
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason });
+    expect(provider.bodies).toHaveLength(0);
+  });
+
+  it.each(["assistant", "system", "tool"])(
+    "refuses an image part on a %s message, which providers never accept",
+    async (role) => {
+      resetGatewayInstanceCacheForTests();
+      const sink = captureServerLog("warn");
+      const message =
+        role === "tool"
+          ? {
+              role,
+              tool_call_id: "call_1",
+              content: [{ type: "image_url", image_url: { url: pngDataUrl() } }],
+            }
+          : { role, content: [{ type: "image_url", image_url: { url: pngDataUrl() } }] };
+
+      const result = await send([{ role: "user", content: "go" }, message], nativeDeps());
+
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+      expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "image-part-invalid" });
+    },
+  );
+
+  it("refuses more image parts than one request may carry, and admits exactly that many", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    stubProvider();
+    const images = (count: number): Record<string, unknown> => ({
+      role: "user",
+      content: Array.from({ length: count }, () => ({
+        type: "image_url",
+        image_url: { url: pngDataUrl(0) },
+      })),
+    });
+    // A large declared window keeps the prompt-token bound out of the way of the count bound.
+    const deps = nativeDeps({ contextWindow: 4_000_000 });
+
+    const admitted = await send([images(CODING_SIDECAR_MAX_IMAGE_PARTS)], deps);
+    assertRouteResult(admitted);
+    expect(admitted.status).toBe(200);
+
+    const refused = await send([images(CODING_SIDECAR_MAX_IMAGE_PARTS + 1)], deps);
+    assertRouteResult(refused);
+    expect(refused.status).toBe(400);
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "image-count-exceeded" });
+  });
+
+  it("refuses an image that exceeds the request-body ceiling under the existing size reason", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    const oversized = `data:image/png;base64,${"A".repeat(5 * 1_048_576)}`;
+
+    const result = await send(readImageMessages(oversized), nativeDeps());
+
+    assertRouteResult(result);
+    expect(result.status).toBe(413);
+    expect(rejectionLine(sink)?.extra).toMatchObject({ reason: "request-too-large" });
+    expect(provider.bodies).toHaveLength(0);
+  });
+
+  it("keeps a remote or file image reference an unsupported content part", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    for (const url of [
+      "https://example.invalid/x.png",
+      "file:///etc/passwd",
+      "http://127.0.0.1/x",
+    ]) {
+      const result = await send(readImageMessages(url), nativeDeps());
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+    }
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["content-part-unsupported", "content-part-unsupported", "content-part-unsupported"]);
+  });
+
+  // #3906: the shape OpenCode's OpenAI-chat serializer sends for a read PDF.
+  const PDF_BYTES = Buffer.from("%PDF-1.4\n1 0 obj << >> endobj\n%%EOF\n", "latin1");
+  const pdfDataUrl = `data:application/pdf;base64,${PDF_BYTES.toString("base64")}`;
+  const readDocumentMessages = (fileData: string): readonly Record<string, unknown>[] => [
+    { role: "user", content: "Summarize spec.pdf" },
+    {
+      role: "user",
+      content: [{ type: "file", file: { filename: "spec.pdf", file_data: fileData } }],
+    },
+  ];
+
+  it("forwards a read PDF to a document-capable model as one file part (#3906)", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    const provider = stubProvider();
+
+    const result = await send(
+      readDocumentMessages(pdfDataUrl),
+      nativeDeps({ documentInput: true }),
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    const sent = provider.bodies[0]?.messages as readonly { content: unknown }[];
+    expect(sent[1]?.content).toEqual([
+      { type: "file", file: { filename: "spec.pdf", file_data: pdfDataUrl } },
+    ]);
+    const admission = sink.events.find((event) => event.op === "gateway.prompt.admission");
+    expect(admission?.extra).toMatchObject({
+      imageCount: 0,
+      documentCount: 1,
+      imageAccounting: "fallback-estimated",
+    });
+    expect(Number(admission?.extra?.imageReserveTokens)).toBeGreaterThan(0);
+    const validated = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.request-validated",
+    );
+    expect(validated?.extra).toMatchObject({ documentCount: 1 });
+    expect(JSON.stringify(sink.events)).not.toContain(PDF_BYTES.toString("base64").slice(4));
+  });
+
+  it("refuses PDF input openly for a model or profile that does not declare it (#3906)", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    const provider = stubProvider();
+    for (const deps of [
+      nativeDeps({ documentInput: false }),
+      nativeDeps({ documentInput: true, toolProfile: "direct" }),
+    ]) {
+      const result = await send(readDocumentMessages(pdfDataUrl), deps);
+      assertRouteResult(result);
+      expect(result.status).toBe(400);
+    }
+    expect(provider.bodies).toHaveLength(0);
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["document-input-unsupported", "document-input-unsupported"]);
+  });
+
+  it("refuses a non-PDF or remote file part and more documents than one request may carry", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("warn");
+    stubProvider();
+    const deps = nativeDeps({ documentInput: true, contextWindow: 4_000_000 });
+    const documents = (count: number): Record<string, unknown> => ({
+      role: "user",
+      content: Array.from({ length: count }, () => ({
+        type: "file",
+        file: { filename: "spec.pdf", file_data: pdfDataUrl },
+      })),
+    });
+    const admitted = await send([documents(CODING_SIDECAR_MAX_DOCUMENT_PARTS)], deps);
+    assertRouteResult(admitted);
+    expect(admitted.status).toBe(200);
+    for (const messages of [
+      [documents(CODING_SIDECAR_MAX_DOCUMENT_PARTS + 1)],
+      readDocumentMessages(`data:text/html;base64,${PDF_BYTES.toString("base64")}`),
+      readDocumentMessages("https://example.invalid/spec.pdf"),
+    ]) {
+      const refused = await send(messages, deps);
+      assertRouteResult(refused);
+      expect(refused.status).toBe(400);
+    }
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.rejected")
+        .map((event) => event.extra?.reason),
+    ).toEqual(["document-count-exceeded", "document-mime-unsupported", "content-part-unsupported"]);
+  });
+
+  it("classifies each document refusal message under its own closed reason", () => {
+    for (const [reason, message] of Object.entries(CODING_SIDECAR_DOCUMENT_REJECTION_MESSAGES)) {
+      expect(
+        _classifyBadRequestReasonForTests({
+          status: 400,
+          body: { error: { code: "BAD_REQUEST", message } },
+        }),
+      ).toBe(reason);
+    }
+  });
+
+  it("classifies each image refusal message under its own closed reason", () => {
+    for (const [reason, message] of Object.entries(CODING_SIDECAR_IMAGE_REJECTION_MESSAGES)) {
+      expect(
+        _classifyBadRequestReasonForTests({
+          status: 400,
+          body: { error: { code: "BAD_REQUEST", message } },
+        }),
+      ).toBe(reason);
+    }
+  });
+});
+
+describe("coding sidecar gateway carries the run's bound private skill (#4025, #3897 review)", () => {
+  afterEach(resetServerLogger);
+  const RUN_ID = "run-gateway-test";
+  const MARKER = "AUDIT_SKILL_RECEIPT_4064";
+  const BODY = `# Audit method\nFor the audit receipt task, include ${MARKER} in the reply.\n`;
+  const roots: string[] = [];
+  afterEach(() => {
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  /** A Coding History task whose run began with `body` selected (or nothing selected). */
+  function runStore(body?: string): {
+    readonly store: ReturnType<typeof createInMemoryUiStore>;
+    readonly skill?: { readonly id: string; readonly revision: number; readonly digest: string };
+  } {
+    const root = mkdtempSync(join(tmpdir(), "keiko-gateway-skill-"));
+    roots.push(root);
+    const store = createInMemoryUiStore();
+    const history = store.codingHistory;
+    if (history === undefined) throw new Error("Coding History store missing");
+    const task = {
+      projectPath: root,
+      title: "Audit receipt",
+      modelId: "coding",
+      workspaceId: "ws_skill",
+      taskId: "task_skill",
+      branch: "keiko/task/skill",
+      operatorDigest: "a".repeat(64),
+    };
+    const created = history.create(task);
+    const imported =
+      body === undefined
+        ? undefined
+        : store.markdownSkills.import({
+            fileName: "audit.md",
+            contentBase64: Buffer.from(body).toString("base64"),
+          });
+    const skill =
+      imported === undefined
+        ? undefined
+        : { id: imported.id, revision: imported.revision, digest: imported.digest };
+    if (skill !== undefined) store.markdownSkills.select(created.id, skill, 0);
+    history.begin({
+      ...task,
+      conversationId: created.id,
+      runId: RUN_ID,
+      intent: "Give a receipt.",
+    });
+    return { store, ...(skill === undefined ? {} : { skill }) };
+  }
+
+  async function dispatch(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    contextWindow = 128_000,
+  ): Promise<{ readonly result: RouteResult; readonly sent: GatewayCallRequest[] }> {
+    resetGatewayInstanceCacheForTests();
+    const sent: GatewayCallRequest[] = [];
+    const chat = vi.spyOn(Gateway.prototype, "chat").mockImplementation((request) => {
+      sent.push(request);
+      return Promise.resolve(assistantResponse("azure-coding-model"));
+    });
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [
+            { role: "system", content: "You are the coding runtime." },
+            { role: "user", content: "Give a receipt." },
+            { role: "assistant", content: "Reading." },
+            { role: "user", content: "Continue." },
+          ],
+          tools: [],
+        }),
+        { ...depsValue(configValue(provider(), capability({ contextWindow }))), store },
+      );
+      assertRouteResult(result);
+      return { result, sent };
+    } finally {
+      chat.mockRestore();
+      resetGatewayInstanceCacheForTests();
+    }
+  }
+
+  const occurrences = (request: GatewayCallRequest | undefined, text: string): number =>
+    JSON.stringify(request?.messages ?? []).split(text).length - 1;
+
+  it("sends the selected skill exactly once, in the task turn, and records only its identity", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    expect(occurrences(sent[0], MARKER)).toBe(1);
+    const messages = sent[0]?.messages ?? [];
+    expect(JSON.stringify(messages[1])).toContain(MARKER);
+    expect(JSON.stringify(messages[1])).toContain("Give a receipt.");
+    expect(JSON.stringify(messages[3])).not.toContain(MARKER);
+    const attached = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.skill-attached",
+    );
+    expect(attached?.extra).toMatchObject({
+      runId: RUN_ID,
+      skillRevision: skill?.revision,
+      skillDigest: skill?.digest,
+      skillByteCount: Buffer.byteLength(BODY),
+    });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+    expectActivityLogProof(
+      "coding-sidecar.gateway.skill-attached.line",
+      formatActivityLogProofLine(attached ?? {}),
+    );
+  });
+
+  it("sends no skill text and records no attachment for a run that began without a selection", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore();
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(200);
+    expect(occurrences(sent[0], "Selected skill instructions")).toBe(0);
+    expect(sink.events.some((event) => event.op === "coding-sidecar.gateway.skill-attached")).toBe(
+      false,
+    );
+  });
+
+  it("keeps the revision the run was bound to when the skill is replaced afterwards", async () => {
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+    store.markdownSkills.replace(skill.id, skill.revision, {
+      fileName: "audit.md",
+      contentBase64: Buffer.from("# Audit method\nA REPLACED METHOD.\n").toString("base64"),
+    });
+
+    const { sent } = await dispatch(store);
+
+    expect(occurrences(sent[0], MARKER)).toBe(1);
+    expect(occurrences(sent[0], "A REPLACED METHOD")).toBe(0);
+  });
+
+  it("refuses the dispatch once the bound skill was deleted, before any provider call", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+    store.markdownSkills.delete(skill.id, skill.revision);
+
+    const { result, sent } = await dispatch(store);
+
+    expect(result.status).toBe(409);
+    expect(sent).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+  });
+
+  /**
+   * The real gateway and its retry, with only the provider's HTTP replaced: the first attempt is
+   * answered 503, `between` runs before that answer returns, and the retry is answered 200, as one
+   * JSON answer or, for a streamed turn, as a stream.
+   */
+  async function dispatchWithRetry(
+    store: ReturnType<typeof createInMemoryUiStore>,
+    between: () => void,
+    stream = false,
+  ): Promise<{
+    readonly result: RouteResult | typeof STREAMING;
+    readonly bodies: string[];
+    readonly streamed: string;
+  }> {
+    resetGatewayInstanceCacheForTests();
+    const bodies: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: string, init?: RequestInit): Promise<Response> => {
+        bodies.push(typeof init?.body === "string" ? init.body : "");
+        if (bodies.length === 1) {
+          between();
+          return Promise.resolve(new Response("{}", { status: 503 }));
+        }
+        return Promise.resolve(
+          stream
+            ? providerSse([
+                sseDelta({ content: "Receipt." }),
+                sseFinish("stop"),
+                "data: [DONE]\n\n",
+              ])
+            : new Response(
+                JSON.stringify({
+                  choices: [{ finish_reason: "stop", message: { content: "Receipt." } }],
+                }),
+                { status: 200, headers: { "content-type": "application/json" } },
+              ),
+        );
+      }),
+    );
+    const response = mockResponse({ captureBody: true });
+    try {
+      const config = configValue(provider({ maxRetries: 1, retryBaseDelayMs: 1 }), capability());
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...authenticatedContext({
+            model: "azure-coding-model",
+            messages: [{ role: "user", content: "Give a receipt." }],
+            tools: [],
+            stream,
+          }),
+          res: response.res,
+        },
+        { ...depsValue(config), store },
+      );
+      return { result, bodies, streamed: response.body() };
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  }
+
+  it.each([
+    ["a buffered", false],
+    ["a streamed", true],
+  ])(
+    "sends the bound skill once in every physical attempt of %s turn, a retry included",
+    async (_label, stream) => {
+      const { store } = runStore(BODY);
+
+      const { result, bodies, streamed } = await dispatchWithRetry(store, () => undefined, stream);
+
+      expect(bodies.map((body) => body.split(MARKER).length - 1)).toEqual([1, 1]);
+      if (stream) {
+        expect(result).toBe(STREAMING);
+        expect(frameDeltas(streamed)).toContainEqual({ content: "Receipt." });
+      } else {
+        expect(result).toMatchObject({ status: 200 });
+      }
+    },
+  );
+
+  it("refuses the retry when the bound skill was deleted after the first attempt", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+
+    const { result, bodies } = await dispatchWithRetry(store, () => {
+      store.markdownSkills.delete(skill.id, skill.revision);
+    });
+
+    // The skill was current when the first attempt was sent; the retry is checked again and never
+    // reaches the provider.
+    expect(bodies).toHaveLength(1);
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+    expect(JSON.stringify(sink.events)).not.toContain(MARKER);
+  });
+
+  it("ends a streamed turn as rejected when the bound skill was deleted before its retry", async () => {
+    const sink = captureServerLog("info");
+    const { store, skill } = runStore(BODY);
+    if (skill === undefined) throw new Error("expected a selected skill");
+
+    const { result, bodies, streamed } = await dispatchWithRetry(
+      store,
+      () => {
+        store.markdownSkills.delete(skill.id, skill.revision);
+      },
+      true,
+    );
+
+    expect(bodies).toHaveLength(1);
+    expect(result).toBe(STREAMING);
+    // A rejection, not a retryable fault: the runtime does not resend a turn the skill check refuses.
+    expect(streamed).toContain("invalid_request_error");
+    expect(streamed).not.toContain("Receipt.");
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "skill-unavailable", runId: RUN_ID });
+  });
+
+  it("sends no further attempt once the run's capability is revoked", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore(BODY);
+    let revoked = false;
+    const deps = (config: GatewayConfig): UiHandlerDeps => {
+      const base = depsValue(config);
+      const authenticator = base.runtimeCapabilityAuthenticator;
+      return {
+        ...base,
+        store,
+        runtimeCapabilityAuthenticator: {
+          ...authenticator,
+          authenticate: (capability: string, audience: "model-gateway" | "tool-facade") =>
+            revoked ? { ok: false } : authenticator?.authenticate(capability, audience),
+        },
+      };
+    };
+    resetGatewayInstanceCacheForTests();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> => {
+        calls += 1;
+        revoked = true;
+        return Promise.resolve(new Response("{}", { status: 503 }));
+      }),
+    );
+    try {
+      const config = configValue(provider({ maxRetries: 1, retryBaseDelayMs: 1 }), capability());
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "azure-coding-model",
+          messages: [{ role: "user", content: "Give a receipt." }],
+          tools: [],
+        }),
+        deps(config),
+      );
+      expect(calls).toBe(1);
+      expect(result).toMatchObject({ status: 401 });
+      expect(
+        sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+      ).toMatchObject({ reason: "capability-invalid", runId: RUN_ID });
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  it("counts the skill against the prompt bound: a skill that does not fit refuses as overflow", async () => {
+    const sink = captureServerLog("info");
+    const { store } = runStore(`${BODY}${"Keep every step of this method in mind. ".repeat(600)}`);
+
+    const { result, sent } = await dispatch(store, 8_192);
+
+    expect(result.status).toBe(400);
+    expect(result.body).toMatchObject({ error: { code: "context_length_exceeded" } });
+    expect(sent).toHaveLength(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected")?.extra,
+    ).toMatchObject({ reason: "prompt-tokens-exceeded" });
+  });
 });

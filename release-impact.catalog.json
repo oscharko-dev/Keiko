@@ -3338,6 +3338,872 @@
         "warningText": "Restart after installation. Review custom support scripts when upgrading from before 1.2.0: use canonical private reports, a directory for export output and the versioned analysis envelope. Preserve a backup of local application state before changing versions; older binaries cannot read the updated skill schema.",
         "verifiedCarryForward": false
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-15-keiko-1.2.3-chat-reliability",
+      "packageVersion": "1.2.3",
+      "releaseTag": "v1.2.3",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Repair Whisper/LiteLLM dictation and simplify recording to one control. Recover private skill access and Chat drafts, validate generated source references, and preserve relevant context through compaction.",
+      "affectedStateStores": ["ui-store-schema", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "Forward-only SQLite migration V44 adds authenticated private Chat drafts with revision compare-and-swap. Existing skill and conversation records are retained. Simultaneous edits require an explicit choice; draft bodies remain outside browser persistence and diagnostics. Normal startup applies the migration. Preserve a backup before changing versions; older binaries cannot read the newer schema.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Registered body-free draft lifecycle, composer recovery and speech format/status observations extend the catalog. Drafts, skill bodies and audio remain excluded from diagnostics. Historical registries are retained.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "releaseNoteBullets": [
+        "Dictation: compatible browser recordings are normalized to mono PCM16 WAV for Whisper through LiteLLM. One microphone control starts and stops recording, a subtle waveform shows input, and the transcript goes directly into the editable draft without automatically sending.",
+        "Private skills: the library refreshes when the normal launcher session becomes available. Deleted selected revisions stop a turn with a correction path. Drafting guidance covers concrete applicability, numbered steps and bounded validation loops; generated drafts still require human review. Source references must match the actual document, and fenced examples cannot impersonate required sections.",
+        "Chat recovery: unsent drafts survive reload and restart, simultaneous edits require an explicit choice, and proven failed sends preserve the unchanged draft without automatically replaying it.",
+        "Context and layout: manual compaction completes in one pass and stays disabled until new messages bring conversation usage back to at least 50%. Automatic compaction remains at 90%. The context meter prioritizes metrics and keeps concise explanations collapsed until requested. Compaction recovery retains complementary relevant sections, while maximized Chat windows fit each tab so the composer remains reachable."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-15",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4033#issuecomment-6196901568",
+        "rationale": "The owner explicitly selected version 1.2.3 and requested release conditional on completed qualification. The referenced comment records that instruction without claiming a separate approval review or completed acceptance. This entry covers the combined repairs in #4033 and #4035 since v1.2.2; the source integration base has no additional commits since that stable tag. Publication still requires completed acceptance, protected exact-head checks and review settlement, owner-authorized integration, the governed Release workflow and artifact alignment. OpenCode skill integration and universal model accuracy are not claimed."
+      },
+      "breakingException": {
+        "rationale": "This patch retains existing manual-update eligibility and does not claim new native cross-platform updater canaries. The V44 local schema migration is forward-only.",
+        "warningText": "Restart after installation. Back up local application state before changing versions; older binaries cannot read the newer draft schema. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
+        "verifiedCarryForward": false
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-17-keiko-1.2.4-chat-files-reliability",
+      "packageVersion": "1.2.4",
+      "releaseTag": "v1.2.4",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Improve Chat resilience with slow model gateways, source selection in connected folders and repositories, and the compact source header. Preserve cancelled drafts and keep restored source displays current.",
+      "affectedStateStores": ["ui-store-schema", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "Existing conversations and completed history are retained. Connected-source changes use the current validated scope identity. Legacy keep-folder UI pins are discarded so future navigation follows the visible Files selection. This patch adds no SQLite schema migration.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Existing registered body-free observations report gateway waits, retrieval admission, scope transitions and draft recovery. Source excerpts, private skills, prompts and answers remain excluded from diagnostics. Historical registries are retained.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "releaseNoteBullets": [
+        "Slow gateways: Chat tolerates extended response-start silence through the existing bounded gateway wait policy, keeps cancellation available and preserves unchanged unsent drafts after cancellation. Catalog refresh no longer creates duplicate conversations.",
+        "Connected Files: the compact Sources header removes OK and Keep folder confirmations. Validated source changes cancel server-owned active and queued generation while preserving completed conversation history. Restored windows reload a source snapshot invalidated during startup; Files refresh retains the selected preview only while its resolved root still matches.",
+        "Repository search: compound terms, related source evidence and explicitly requested files are retained more accurately in Git repositories and ordinary folders. Incidental lockfiles no longer crowd out ordinary source evidence, while explicit dependency-version questions retain relevant metadata. Bounded cooperative indexing improves responsiveness without widening read authority or budgets.",
+        "OpenCode host containment: Windows metadata and home resolution remain inside private host state, with original host, MCP and YAML dependency-consumer compatibility coverage.",
+        "Qualification limits: editable Java/Spring Boot and React/MUI/Vitest skill candidates are available for review. Immediate client-side cancellation before source acknowledgement, complete multi-source compaction qualification and repeatable generated-test quality remain follow-up work; this release does not certify universal Gemma accuracy."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-17",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4039#issuecomment-6229375703",
+        "rationale": "The owner explicitly requested bounded PR closeout, a follow-up for deferred qualification, protected integration into dev and release 1.2.4. The reference records that direct instruction, not a separate approving review or completed acceptance. This entry covers #4036 and #4039, the complete integrated change set since v1.2.3. Publication remains conditional on local verification, exact-head required checks, settled review conversations, owner-authorized integration, dev smoke and the governed release workflow. Epic #4037 and follow-up #4040 retain unqualified source-transition, multi-source compaction and generated-test outcomes."
+      },
+      "breakingException": {
+        "rationale": "This patch retains existing manual-update eligibility and does not claim new native cross-platform updater canaries. Existing forward-only state migrations remain applicable when upgrading older installations.",
+        "warningText": "Restart after installation. Back up local application state before changing versions; older binaries may not read newer schemas. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
+        "verifiedCarryForward": false
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-20-keiko-1.2.5-chat-browser-updater-reliability",
+      "packageVersion": "1.2.5",
+      "releaseTag": "v1.2.5",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Harden connected Chat sources, browser approval and private drafts, updater status and native ownership, and syntax-preserving source privacy. Deliver compact model-agnostic test-generation skills with explicit qualification limits.",
+      "affectedStateStores": ["ui-store-schema", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "Forward-only SQLite migrations V45 and V46 add bounded browser approvals and shared Chat creation intents to the v1.2.4 schema V44. Existing conversations, private skills and drafts are retained. Normal startup applies the migrations. Back up local state before upgrading; older binaries cannot read the newer schema.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Registered body-free observations cover source transitions, browser approval, draft acknowledgements, native updater ownership and privacy/retrieval decisions. No source, draft, skill, prompt or answer bodies are added to diagnostics. Generated history retains the v1.2.4 registries.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "releaseNoteBullets": [
+        "Connected Chat: hold or cancel generation while Files sources change, retain acknowledged source ownership across reconnects and preserve shared conversation creation identities without replaying accepted sends.",
+        "Browser access and drafts: explicitly approve another browser, optionally remember access with expiration, and revoke access through the existing session controls. Late browser notices use the existing header without shifting navigation or covering workspace controls. Private draft acknowledgements stay bound to their conversation and revision.",
+        "Updater reliability: distinguish setup requirements from a newer available version and enforce bounded native process, installation and recovery ownership checks. Existing manual-update eligibility remains unchanged.",
+        "Source fidelity and privacy: retain certified recursive source evidence within existing grants, preserve supported code syntax while masking private literals, and preserve code formatting when copying answers. Patch Vite tooling and the private native-host build's MCP inputs for newly reviewed security advisories.",
+        "Test-generation skills: offer repository Markdown examples for import into Chat covering Java/Spring Boot and TypeScript/React/MUI/Vitest. Demonstrated repeatable skill benefit, installed update cycles, SSD continuity and complete original browser/retrieval acceptance remain in follow-up #4051; this release does not certify those outcomes.",
+        "Coding Workbench: keep repository and composer controls stable during late readiness updates, with independently scrollable status and transcript regions in narrow windows.",
+        "Markdown parsing: patch the runtime markdown-it dependency to 14.3.3 against quadratic reference-definition and inline-HTML parsing denial of service. Keep the Composer HTML-disabled parser policy unchanged."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-20",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/4046",
+        "rationale": "The owner explicitly authorized protected integration, native auto-merge after required qualification and immediate release 1.2.5 after the verified dev merge. PR #4046 records that direct instruction; this is not an invented GitHub approval review or completed original epic acceptance. The entry covers the complete change set since v1.2.4: dev and that stable release resolve to the same integration base. The owner narrowed delivery scope and transferred every unfulfilled criterion to #4051. Publication still requires exact-head checks, settled review conversations, the protected merge and the governed Release workflow with verified portable artifacts."
+      },
+      "breakingException": {
+        "rationale": "Existing manual-update eligibility remains; this release does not establish native cross-platform N-1 to N canaries or SSD continuity. V45 and V46 are forward-only local migrations. No new emergency compatibility exception is introduced.",
+        "warningText": "Restart after installation. Back up local application state before changing versions; older binaries cannot read the newer schema. When upgrading from before 1.2.0, review custom support scripts for the canonical private report workflow.",
+        "verifiedCarryForward": false
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-21-keiko-1.2.6-portable-updater-repair",
+      "packageVersion": "1.2.6",
+      "releaseTag": "v1.2.6",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Repair portable updates and restarts without an Apple Developer account while preserving the selected workspace and existing application state.",
+      "affectedStateStores": ["updater-state", "portable-install-state", "activity-log"],
+      "stateImpact": [
+        {
+          "store": "updater-state",
+          "description": "Native cleanup completes before startup reports ready; completed sessions release their exact ownership so another update can start. No customer database schema migration is added.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "portable-install-state",
+          "description": "Retain the selected working directory and managed installation state across native restart. Existing state and keys stay outside the replaceable application bundle.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "activity-log",
+          "description": "Authenticated release-impact admission records only catalog counts. Existing registered lifecycle and recovery observations retain body-free diagnostics.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "macOS updates use the native application lifecycle independently of Apple Developer membership and Endpoint Security activation. Update integrity remains authenticated by Keiko release trust.",
+        "Updates retain the selected workspace, finish native cleanup before reporting success and release completed session ownership so consecutive updates can proceed.",
+        "Release archives carry measured expanded sizes, and authenticated manifests provide future release-impact metadata. Malformed, oversized or altered update inputs remain refused.",
+        "Existing published 1.2.5 installations require a verified updater bootstrap before automatic updates. A local repair build is identified separately from a published release; back up local state before applying the bootstrap.",
+        "Linux compiler and protocol controls and Windows manifest and signing regressions were checked. This release does not claim an installed Windows or Linux cross-version canary.",
+        "Background folder refreshes keep visible rows in place so pointer clicks still open the selected folder.",
+        "The bundled web framework and its matching lint configuration update to Next.js 16.4.1 for the newly reviewed security advisories."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-21",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4056#6323955124",
+        "rationale": "The owner explicitly requested release 1.2.6 after updater repair and verification, followed by a live SSD update from the current Latest installation after successful deployment. This entry covers PR #4056 and issue #4055. Publication remains conditional on applicable local gates, exact-head required checks, accepted review findings and the protected release workflow. Full-package fixture updates and the existing SSD bootstrap are recorded separately; the requested production-release SSD update remains post-deployment acceptance. The same release preparation patches development-only Vitest tooling to 4.1.12 after the required OSV scan reported two newly indexed mocker advisories; no security waiver or quality threshold is changed."
+      },
+      "breakingException": {
+        "rationale": "The already-published 1.2.5 updater cannot acquire future impact entries or use the repaired macOS app owner; immutable release assets are retained. The verified local managed-install bootstrap repairs those existing-reader defects without changing customer database schemas.",
+        "warningText": "Published 1.2.5 installations need the verified updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install updater bootstrap retaining the existing state and keys, followed by authenticated native promotion with the workspace kept outside the replaceable application root."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-23-keiko-1.2.7-canonical-updater-state",
+      "packageVersion": "1.2.7",
+      "releaseTag": "v1.2.7",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Repair portable update handoff and recovery when UI data uses a nested or separate directory, preserving the existing workspace and keys.",
+      "affectedStateStores": ["updater-state", "portable-install-state"],
+      "stateImpact": [
+        {
+          "store": "updater-state",
+          "description": "The coordinator, session lock, handoff plan and recovery share the canonical runtime-state directory. UI database location no longer changes the updater plan lookup. No customer database schema migration is introduced.",
+          "userActionRequired": true,
+          "remediation": "repair-required"
+        },
+        {
+          "store": "portable-install-state",
+          "description": "Retain the registered managed root and the existing workspace and keys outside the replaceable application bundle. Published source updaters require the verified one-time bootstrap described in the warning before using the corrected handoff.",
+          "userActionRequired": true,
+          "remediation": "repair-required"
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "repair-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Portable update handoff and recovery use the same canonical state directory even when UI data is nested or configured separately.",
+        "The update retains the existing workspace and keys outside the replaceable application bundle and introduces no customer database schema migration.",
+        "macOS continues to use the native application lifecycle without Apple Developer membership or Endpoint Security activation; authenticated release trust and process-ownership checks remain enforced.",
+        "Published 1.2.6 and earlier source updaters need the verified one-time bootstrap before using the corrected automatic handoff. Back up local state and preserve private keys when replacing the application bundle.",
+        "Reviewed dependency and pinned CI Action updates are consolidated. TypeScript API/UI lanes, PDF.js 6.3.289 and axe-core 4.12.1 retain the owner-approved compatibility and license baselines.",
+        "Two consecutive isolated full-product macOS updates retain synthetic state and keys and stop normally. Published-release SSD acceptance and native installed Windows/Linux cycles are recorded separately and are not claimed by that fixture."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-23",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4066#6365544545",
+        "rationale": "The owner explicitly authorized preparation of 1.2.7 in PR #4066 after reviewing the canonical updater repair and the dependency exceptions. This records release-impact preparation under the repository signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings. Publication requires the protected release path. The real published-release SSD update, data/key continuity, restart and normal eject remain post-deployment acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published source updaters look for the handoff plan under the UI database parent instead of the canonical update-state root. Updating only a future target cannot repair that old source before handoff. The corrected production composition passes two isolated full-product native update cycles.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic handoff. Keep a backup of local state and preserve private keys; a local repair build is identified separately from a published release.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the corrected production composition. Isolated synthetic data/key retention is qualified; the real published-release SSD acceptance is still required after deployment."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-26-keiko-1.3.0-native-opencode-workbench",
+      "packageVersion": "1.3.0",
+      "releaseTag": "v1.3.0",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "On macOS the Coding Workbench runs the original OpenCode 2.1.4 engine under Keiko's three modes, and Coding History can continue, export and import tasks.",
+      "affectedStateStores": ["coding-runtime", "workbench-task-history"],
+      "stateImpact": [
+        {
+          "store": "coding-runtime",
+          "description": "The approved coding runtime moves to OpenCode 2.1.4. A settled native run may keep one audited, version-bound copy of its session for the next run of the same task; a copy written by another runtime version is refused and removed, and the task continues in a fresh session. No customer database schema migration is introduced.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "workbench-task-history",
+          "description": "Existing tasks and Coding History are kept unchanged. Imported tasks are added as new entries after their text is redacted again; nothing existing is rewritten.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "On macOS the Coding Workbench runs the original OpenCode 2.1.4 engine with its own tools, agents and project configuration. Keiko's three modes, the Authority Envelope and the Model Gateway still decide what a run may do and which model it reaches.",
+        "The Workbench offers plan or build mode, undo of the latest turn, queued follow-up messages, image input, file references, and formulas and diagrams in the task timeline.",
+        "A finished task can be continued or forked, exported locally as JSON or Markdown, and a saved task or OpenCode transcript can be imported into Coding History. Imported text is redacted again before it is stored.",
+        "Without a network, web lookups, remote skills, research fetches and package installs end with a bounded, clear failure instead of waiting.",
+        "The Workbench shows the installed coding runtime version and the latest Keiko release.",
+        "macOS npm installations install the coding runtime packages 1.1.4, which carry OpenCode 2.1.4. Linux keeps Keiko's mapped coding tools, and Windows Coding execution remains unavailable.",
+        "Tasks and Coding History carry over unchanged. The first run of an earlier task after the update starts a fresh engine session with that task's history as context.",
+        "Published 1.2.6 and earlier installations still need the verified updater bootstrap before automatic updates. The installed upgrade demonstration from 1.2.x and the fresh npm and Yarn installation qualification are recorded separately and are not claimed by this release."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-26",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6423086344",
+        "rationale": "The owner explicitly authorized preparing release 1.3.0, merging its pull request after green required checks and triggering the release; the authorization is recorded on epic #3897. This entry covers the native OpenCode 2.1.4 integration (#4064) and its follow-ups (#4076). Publication remains conditional on exact-head required checks, settled review findings and the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-27-keiko-1.3.1-coding-workbench-reliability",
+      "packageVersion": "1.3.1",
+      "releaseTag": "v1.3.1",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Long coding runs keep their live activity and browser pairing, the task timeline says why a call failed, the editor, Git-change Chat and Linux verification work again, and a trusted deployment can let Chat keep authorized document details.",
+      "affectedStateStores": ["ui-store-schema", "workspace-search-index"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema migration. Without the opt-out nothing changes. With KEIKO_CONTENT_REDACTION=off, new Chat answers are stored with the authorized document details they contain; credentials stay removed. Text stored earlier is not rewritten in either direction, and history recall and compaction redact it again after the opt-out is removed.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-search-index",
+          "description": "A Chat that preserves content builds its own workspace-index snapshot on first use, so preserved and default snapshots never serve each other. Default snapshots are untouched.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "A long coding run keeps its live activity feed and its browser pairing. A busy feed waits for the browser instead of closing, a dropped feed reconnects on its own, and a quiet model turn no longer signs the window out.",
+        "In Full access on macOS, when the isolated verifier cannot install a project's dependencies, the model is told to run the project's own checks in its shell, and the Activity Log names the reason.",
+        "The task timeline says why a call failed, such as the command's exit code, and model reasoning no longer carries a warning-coloured badge.",
+        "Routine Coding Workbench actions are recorded as interaction events instead of browser diagnostics, so real browser failures stand out in the Activity Log.",
+        "The editor answers go to definition, find references, rename, code actions, signature help and go to line again.",
+        "Chats that use a Git change can connect, send, and review, approve and apply proposals again, and pull request description review finds its proposal.",
+        "Applying a pull request description no longer reports a failure when Keiko runs in GitHub Codespaces or on a hosted runner.",
+        "On Linux, strict sandbox runs keep temporary files outside the worktree, so verified commits are no longer reported as failed. Below Full access, governed research can ask for its network approval again.",
+        "A restored Coding Workbench window picks up the project's repository, a signed-out window shows the pairing guidance, and an open Changes section stays open while it refreshes.",
+        "`keiko start` in a project installation no longer warns about a stale binary when it runs the installed package through npm's bin link.",
+        "A Coding Workbench run that passed the repository's own combined check in its shell, such as `npm run check` running the type check, lint and tests, now counts every check that line ran. Before, such a run could be reported as not verified because only its tests counted.",
+        "Operators of trusted model deployments can start Keiko with `KEIKO_CONTENT_REDACTION=off` so Chat keeps authorized document details such as phone numbers, account numbers, configuration values and code. Credentials, private keys, URL credentials and `Authorization` values are still removed, memory proposals keep their redaction, and the default is unchanged. The setting applies to every configured model provider, and the Activity Log records it at startup.",
+        "The Coding Workbench hands its agent the model's answers as written, so a quoted change in a closing summary no longer appears as `[REDACTED]`. Only credentials, private keys, URL credentials and `Authorization` values are removed, in every installation.",
+        "A command that ran and returned a non-zero exit code, such as a test run that reproduces a defect, shows its exit code in the task timeline instead of a red Failed, as OpenCode reports it. A tool that reported an error still shows Failed with its reason.",
+        "Updating from 1.2.7 or 1.3.0 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-27",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6443332275",
+        "rationale": "The owner explicitly authorized preparing release 1.3.1 with the fixes from #4096; the authorization is recorded on epic #3897. The entry accounts for every change integrated since v1.3.0: the Coding Workbench defects from the 1.3.0 test (#4096), the product defects found by the nightly journeys (#4095), contributor guidance only (#4080) and the deployment-owned Chat content opt-out (#4098), which the owner asked in chat on 2026-10-27 to include in this release; its default behaviour is unchanged. This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow. The installed upgrade demonstration from 1.2.x (#3908) and the fresh npm and Yarn installation qualification (#3898) remain post-release acceptance."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0", "1.3.1"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "id": "2026-10-28-keiko-1.3.2-stream-stability-and-parity-fixes",
+      "packageVersion": "1.3.2",
+      "releaseTag": "v1.3.2",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Live streams no longer end because a message is large, larger code changes fit in one Coding Workbench task, a large Git diff opens as a bounded view, and a busy local model stays selectable.",
+      "affectedStateStores": ["activity-log"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "No schema migration. The Activity Log gains additive, body-free fields and operations (the stream drain-wait count, the bounded Git diff view and the busy-provider readiness retention); older segments stay readable and nothing is rewritten.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "releaseNoteBullets": [
+        "Live streams no longer end because a message is large. Chat, task timelines and the other live feeds queue a large frame and wait for the browser to read it, and only a browser that reads nothing for 30 seconds is disconnected. Before, any frame of 64 KiB or more could close the stream.",
+        "The Coding Workbench accepts code changes of up to 8 MiB per changeset and 64 MiB per run, and the model is told the same limits.",
+        "A Git diff above the size limit opens as a bounded, truncated view instead of failing with an error (#4113).",
+        "The raw Git diff view of your own repository keeps hunks that cannot be parsed readable and shows a cut diff as a complete patch. Keys, token shapes, configured secrets and private literals stay masked (#4114).",
+        "A local model that is busy answering another request, such as a single-slot server, stays selectable in the Coding Workbench instead of being reported as not ready (#4115).",
+        "Credentials shaped like a JSON Web Token are now removed everywhere the credential floor applies, and the bundled search tool runs only after its checksum has been verified; Keiko never downloads or runs a different one.",
+        "Coding runs are steadier: a model answer that stops mid tool call is repaired once, runs left over from an interrupted session are cleaned up at startup, history reads load the newest window, and the task timeline follows the newest entry, reconnects with a notice and labels its tools.",
+        "`keiko start` reports a healthy instance that is already running on another port instead of starting a second one.",
+        "Updating from 1.3.0 or 1.3.1 needs no action. An installation on 1.2.6 or earlier still runs the verified updater bootstrap once before automatic updates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-28",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6476730395",
+        "rationale": "The owner approved release 1.3.2 on 2026-10-28 on the condition that no OpenCode parity deviation remains open; the referenced comment on epic #3897 records that approval and the met condition. The entry accounts for every change integrated since v1.3.1: the SSE flow-control fix with the 1.3.1 stress-qualification findings (#4102) and the OpenCode parity deviations in the Git diff view and model readiness (#4113, #4114, #4115, #4116). This records release-impact preparation under the signed-version-bump policy, not permission to integrate or publish. Integration remains subject to the owner's authorization, exact-head required checks and settled review findings, and publication requires the protected release workflow after the owner's live lab re-check."
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      },
+      "id": "2026-10-30-keiko-1.3.3-central-mcp-hardening",
+      "packageVersion": "1.3.3",
+      "releaseTag": "v1.3.3",
+      "supportedFrom": ["0.2.0", "1.2.5", "1.2.6", "1.2.7", "1.3.0", "1.3.1", "1.3.2"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "MCP servers and OAuth are managed centrally for Chat and Coding Workbench, with consistent permission invalidation, encrypted credentials and bounded provider lifetimes.",
+      "affectedStateStores": [
+        "mcp-server-registry",
+        "mcp-credential-vault",
+        "chat-mcp-read-consent",
+        "coding-runtime-state",
+        "knowledge-pod-store",
+        "workspace-and-coding-history"
+      ],
+      "stateImpact": [
+        {
+          "store": "mcp-server-registry",
+          "description": "Existing server definitions remain readable. Settings preserves advanced transport and tool policy fields; legacy bearer URLs are normalized into encrypted header custody. Identity and credential changes rotate the existing configuration generation.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "mcp-credential-vault",
+          "description": "The existing encrypted vault gains issuer/resource/client/scope-bound OAuth grants and bounded token-redaction history. Unbound legacy OAuth records and malformed expiry require central sign-in again; known-token redaction custody remains protected.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "chat-mcp-read-consent",
+          "description": "Conversation read permissions remain separate from central connection availability and are invalidated by relevant configuration or authority changes.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "coding-runtime-state",
+          "description": "Run-bound MCP capabilities and bounded per-call budget identities are checked before effects. An unknown write outcome remains recovery-required across reload and must be reconciled before retrying. Legacy history stays readable.",
+          "remediation": "manual-review-required",
+          "userActionRequired": true
+        },
+        {
+          "store": "knowledge-pod-store",
+          "description": "Existing Cloud Pods remain compatible. New Data Center records require a version supporting that provider; preserve encrypted credentials, consent and mutation recovery records when considering a downgrade.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-and-coding-history",
+          "description": "No new persisted-state migration. Existing history and dirty-buffer ownership remain readable; stale folder bindings stay invalid while a valid replacement folder can be refreshed through the existing registration owner.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": true,
+      "remediation": "manual-review-required",
+      "oneClickEligible": false,
+      "releaseNoteBullets": [
+        "Configure MCP servers and sign in with OAuth once in Settings for both Chat and Coding Workbench. Each conversation and coding task retains its own permissions.",
+        "MCP credentials remain encrypted. Changing a target or signing out invalidates previous permissions; incompatible legacy OAuth records require signing in again centrally.",
+        "A lost response after an MCP write requires explicit reconciliation, survives reload and never triggers an automatic replay.",
+        "Local MCP providers close together with their descendants. Settings preserves advanced stdio, Streamable HTTP and explicitly selected legacy SSE options.",
+        "MCP tool names support 128 characters; invalid stored OAuth expiry is refused, and an unreadable OAuth vault no longer breaks central Settings or healthy server connections.",
+        "Legacy access-token URLs migrate into encrypted headers instead of remaining in server configuration.",
+        "Jira Data Center Knowledge Pods join existing Jira Cloud connections with scoped read consent, governed writes and durable recovery for uncertain mutations.",
+        "Reloading an LF file into an initially empty editor no longer leaves it incorrectly marked as unsaved on Windows browsers.",
+        "Governed patch paths share the 8 MiB ceiling. Project-folder refresh, history synchronization and bounded Git diff views are more reliable."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-30",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4129#6514337888",
+        "rationale": "The owner explicitly selected patch release 1.3.3 in the MCP audit task on 2026-10-30 and authorized integration/publication only after final production qualification, exact-head checks and resolved reviews. This release-cut record carries the accepted MCP hardening scope and its documented sign-in/reconciliation actions; it does not waive any required check or authorize premature publication. The same release cut also includes already owner-merged PR #4093 (shared MCP/Jira Data Center Pods) and reliability fixes #4126/#4144 since v1.3.2. Their public impact is consolidated in this single approval-bound record rather than inventing separate approval artifacts."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      },
+      "packageVersion": "1.3.4",
+      "releaseTag": "v1.3.4",
+      "supportedFrom": ["0.2.0", "1.2.6", "1.2.7", "1.3.0", "1.3.1", "1.3.2", "1.3.3"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-10-31",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#4156#6547591824",
+        "rationale": "The owner explicitly selected stable release 1.3.4 after successful dev integration. The referenced actual owner-account comment records this decision and the complete since-v1.3.3 scope. Publication still requires protected signed integration, exact-head checks, resolved reviews and the owner-authorized release workflow; it makes no claim of completed multi-hour model continuity qualification."
+      },
+      "id": "2026-10-31-keiko-1.3.4-continuity-coding-hardening",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "security",
+      "userVisibleSummary": "Chat continuity, governed Coding delivery and shipped dependency security are hardened.",
+      "affectedStateStores": [
+        "chat-history",
+        "chat-context-checkpoints",
+        "chat-history-search-index",
+        "coding-runtime-state",
+        "workspace-and-coding-history"
+      ],
+      "stateImpact": [
+        {
+          "store": "chat-history",
+          "description": "Existing canonical messages are retained. SQLite schema migrations 55 and 56 add private continuity state and maintained history-search indexes automatically; older binaries may refuse the upgraded database.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "chat-context-checkpoints",
+          "description": "Private checkpoints are revision/source-profile bound and survive independently of redacted audit evidence. Failed persistence prevents unsafe continuation instead of replacing valid state.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "chat-history-search-index",
+          "description": "Existing canonical messages populate the bounded scoped search index automatically; current access and content policy still govern recovered excerpts.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "coding-runtime-state",
+          "description": "Existing task/run records remain compatible. Branch creation stays governed; commit evidence and protected-ref restrictions remain enforced.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-and-coding-history",
+          "description": "Stopped-run tool observations and readiness renewal reuse existing history/state. This release adds no separate Coding history schema migration.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Shipped glob and minimatch dependencies use reviewed versions that address GHSA-3g3m-2fjr-6pw4 and GHSA-g3hv-75wg-m249. The remaining development-only compatibility exception stays separately scoped (#4167).",
+        "Chat preserves private continuity checkpoints across restarts and detects stale or failed checkpoint writes before continuing (#4156).",
+        "Questions about older conversation details can recover short identifiers and German word forms from indexed original messages instead of only a recent history tail (#4156).",
+        "Recovered context respects a local token budget that includes labels and separators; these counts remain estimates (#4156).",
+        "Chat history is retained during the automatic database upgrade. Back up local state before any downgrade; older Keiko versions may not open the upgraded database.",
+        "Coding Workbench can create and switch to a governed task branch, open a draft pull request without an issue, and use the Jira Pod explicitly selected for the task (#4170, #4159).",
+        "Native commits work more reliably on macOS. Full access can commit an unchanged staged candidate after completed checks report failures or beside unrelated untracked files; failed evidence remains visible and protected integration still requires successful checks (#4150, #4162, #4166).",
+        "Readiness refreshes after a run and stopped runs retain tool observations. Git plumbing writes remain reserved, protected-branch refusals explain the required task branch, and stopping closes stale revert-state reads (#4166, #4167)."
+      ]
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "breakingException": {
+        "rationale": "Immutable published 1.2.6 and earlier source updaters still look for the handoff plan outside the canonical update-state root. A newer target cannot repair that source before handoff; the verified managed-install bootstrap introduced with 1.2.7 remains the carry-forward path.",
+        "warningText": "Published 1.2.6 and earlier installations require the verified managed-install updater bootstrap before using automatic updates. Keep a backup of local state and preserve private keys when replacing the application bundle.",
+        "verifiedCarryForward": true,
+        "carryForwardPath": "Verified managed-install bootstrap with existing state and keys outside the application bundle, then authenticated native handoff using the canonical update-state root introduced in 1.2.7."
+      },
+      "packageVersion": "1.3.5",
+      "releaseTag": "v1.3.5",
+      "supportedFrom": ["0.2.0", "1.2.6", "1.2.7", "1.3.0", "1.3.1", "1.3.2", "1.3.3", "1.3.4"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "oneClickEligible": true,
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-11-01",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3897#6556712618",
+        "rationale": "The owner explicitly selected stable release 1.3.5 to close the customer's 1.3.4 Coding Workbench failures, conditional on complete verification. The referenced actual owner-account comment records this decision and the complete since-v1.3.4 scope. Publication still requires protected signed integration, exact-head checks, resolved reviews and the owner-authorized release workflow."
+      },
+      "id": "2026-11-01-keiko-1.3.5-coding-workbench-readiness",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench judges the selected model, uses the host Git and no longer probes models in the background.",
+      "affectedStateStores": ["coding-runtime-state"],
+      "stateImpact": [
+        {
+          "store": "coding-runtime-state",
+          "description": "Existing task and run records remain compatible. Model readiness is held in memory and checked once per connection; this release adds no schema migration.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "The Coding Workbench judges the readiness of the model you picked, so a ready model no longer waits behind \"Keiko is still checking the model source\" while another model is busy or down.",
+        "Native coding runs use the Git the host provides; a managed Mac without administrator rights no longer fails runs with \"Model source unavailable\", and Keiko installs nothing.",
+        "Each chat model is checked once per connection when Keiko starts; opening the Workbench or a model list, choosing a model, a page load or a run start checks it again, and no timer keeps busy single-slot models occupied.",
+        "A model whose tool-calling check was never answered is reported as unverified instead of unable to call tools, and is checked again when someone asks.",
+        "The gateway transport remembers per origin when the configured CA bundle is needed, and rerank, discovery and embedding calls write their transport lines to the Activity Log."
+      ]
     }
   ]
 }

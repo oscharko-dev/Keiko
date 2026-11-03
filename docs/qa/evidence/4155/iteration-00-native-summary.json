@@ -1,0 +1,177 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-31T11:09:26.003Z",
+  "analysisModuleDigest": "75e5f23ac1232fedf397e3e0d7a303ffed098bdd31e64080bd3041fd4b83a3cd",
+  "inputs": {
+    "baseline": {
+      "ledgerDigest": "472e9f6764bd2fb37843494f6e4e56a9f26f08045decd0566237ffeef7288bf5",
+      "corpusManifestDigest": "a1b89d5db947a7379da0c6acaea5f6e4e02baf52d4d836fef27a25531203e6aa",
+      "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+      "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+      "distributionDigest": "eee0f9cac0df44b3f3ad4c2cec5f7ec6d329d7814dfcb9e30176dc8bbb15e132"
+    }
+  },
+  "baseline": {
+    "schemaVersion": 1,
+    "scope": "critical-conversation-recall-fixture-only",
+    "globalSystemScore": null,
+    "sourceStatus": "terminated",
+    "configuredRosterMatches": true,
+    "fixtureQualification": "incomplete",
+    "lanes": [
+      {
+        "model": "gemma-4-31b-it",
+        "kind": "plain",
+        "present": true,
+        "cycles": 3,
+        "executionFailures": 3,
+        "control": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "postCompaction": {
+          "answers": 3,
+          "correct": 27,
+          "questions": 27,
+          "observedScore0to10": 10
+        },
+        "lastPostCompaction": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "restart": {
+          "answers": 0,
+          "correct": 0,
+          "questions": 0,
+          "observedScore0to10": null
+        },
+        "criticalFixtureQualified": false
+      },
+      {
+        "model": "gemma-4-31b-it",
+        "kind": "grounded",
+        "present": true,
+        "cycles": 10,
+        "executionFailures": 2,
+        "control": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "postCompaction": {
+          "answers": 10,
+          "correct": 90,
+          "questions": 90,
+          "observedScore0to10": 10
+        },
+        "lastPostCompaction": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "restart": {
+          "answers": 0,
+          "correct": 0,
+          "questions": 0,
+          "observedScore0to10": null
+        },
+        "criticalFixtureQualified": false
+      },
+      {
+        "model": "qwen3.6-35b-a3b-8bit",
+        "kind": "plain",
+        "present": true,
+        "cycles": 10,
+        "executionFailures": 0,
+        "control": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "postCompaction": {
+          "answers": 10,
+          "correct": 46,
+          "questions": 90,
+          "observedScore0to10": 5.1111
+        },
+        "lastPostCompaction": {
+          "answers": 1,
+          "correct": 2,
+          "questions": 9,
+          "observedScore0to10": 2.2222
+        },
+        "restart": {
+          "answers": 0,
+          "correct": 0,
+          "questions": 0,
+          "observedScore0to10": null
+        },
+        "criticalFixtureQualified": false
+      },
+      {
+        "model": "qwen3.6-35b-a3b-8bit",
+        "kind": "grounded",
+        "present": true,
+        "cycles": 10,
+        "executionFailures": 0,
+        "control": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "postCompaction": {
+          "answers": 10,
+          "correct": 89,
+          "questions": 90,
+          "observedScore0to10": 9.8889
+        },
+        "lastPostCompaction": {
+          "answers": 1,
+          "correct": 9,
+          "questions": 9,
+          "observedScore0to10": 10
+        },
+        "restart": {
+          "answers": 0,
+          "correct": 0,
+          "questions": 0,
+          "observedScore0to10": null
+        },
+        "criticalFixtureQualified": false
+      }
+    ],
+    "repetitions": [
+      {
+        "model": "gemma-4-31b-it",
+        "planned": 5,
+        "observed": 0,
+        "passed": 0
+      },
+      {
+        "model": "qwen3.6-35b-a3b-8bit",
+        "planned": 5,
+        "observed": 0,
+        "passed": 0
+      }
+    ]
+  },
+  "verification": {
+    "kind": "independent-hash-matched-rescore-of-all-retained-answers",
+    "rescoreEvidenceDigest": "7098afa7da238cc3b60248e447da0ed5e398888c3d77d37201c06008422d4332",
+    "rescoreObserverDigest": "fe73d213f79881f433b8759637fc143563b55480ee229692055662552e22c88e",
+    "commonOracleModuleDigest": "11dc72648e00b66ad4c3fe3bd9cfbdb0c82305deb1070e395a5b50ddf188e077",
+    "commonCorpusManifestDigest": "34092132b1ca65ca5110854f26e141c2606f48ea69a25cd8530d667d5d210d64",
+    "answers": 37,
+    "hashMatchedAnswers": 37,
+    "initialOriginalPresent": 37,
+    "changedScores": 0
+  }
+}

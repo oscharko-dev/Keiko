@@ -1,4 +1,5 @@
 import type {
+  ContentRedactionPolicy,
   ContextAssemblyDiagnostics,
   ContextBudgetPressure,
   ContextLaneDiagnostics,
@@ -305,6 +306,7 @@ export function buildPromptAssemblyDiagnostics(input: {
   };
   readonly finalMessages: readonly GatewayConversationMessage[];
   readonly allocatorDiagnostics?: ContextAssemblyDiagnostics | undefined;
+  readonly contentRedaction?: ContentRedactionPolicy | undefined;
 }): ContextAssemblyDiagnostics {
   const tokenAccounting = resolveContextTokenAccounting(input.profile);
   const profile: ContextProfile =

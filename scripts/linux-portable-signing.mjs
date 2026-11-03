@@ -16,6 +16,7 @@ import {
 // smoke:portable-launch-setup invokes it one step earlier -- so dist is present. The sibling
 // entry point linuxPortableSigstore.ts has no such specifiers and stays a direct src import.
 import { discoverQualifiedPortableOpenCode } from "../packages/keiko-server/dist/coding-runtime/productionPortableCodingRuntime.js";
+import { MAX_PORTABLE_MANIFEST_BYTES } from "../packages/keiko-server/dist/update-portable-staging-shared.js";
 import { readZipArchiveEntryNames, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import { qualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
 import {
@@ -60,7 +61,7 @@ function required(options, name) {
 function stageFiles(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
-  const manifest = readBoundedJson(manifestPath, "manifest");
+  const manifest = readBoundedJson(manifestPath, "manifest", MAX_PORTABLE_MANIFEST_BYTES);
   if (manifest.artifact?.platformTarget !== TARGET) fail("manifest target is not Linux x64");
   return {
     stageRoot,
@@ -70,7 +71,7 @@ function stageFiles(options) {
   };
 }
 
-function readBoundedJson(path, label) {
+function readBoundedJson(path, label, maxBytes = MAX_METADATA_BYTES) {
   try {
     const entry = lstatSync(path);
     if (
@@ -78,7 +79,7 @@ function readBoundedJson(path, label) {
       entry.isSymbolicLink() ||
       entry.nlink !== 1 ||
       entry.size <= 0 ||
-      entry.size > MAX_METADATA_BYTES
+      entry.size > maxBytes
     ) {
       fail(`${label} is invalid`);
     }
@@ -120,7 +121,9 @@ function assertProductionComponentSet(manifest) {
     !Array.isArray(manifest.nativeHelpers) ||
     manifest.nativeHelpers.length !== 2 ||
     !Array.isArray(manifest.nativeAddons) ||
-    manifest.nativeAddons.length !== 1
+    manifest.nativeAddons.length !== 1 ||
+    (manifest.nativeTools !== undefined &&
+      (!Array.isArray(manifest.nativeTools) || manifest.nativeTools.length !== 1))
   ) {
     fail("manifest production component set is invalid");
   }
@@ -137,6 +140,7 @@ function markProduction(manifest) {
   const helperState = helperProductionState();
   for (const helper of manifest.nativeHelpers) helper.signing = { ...helperState };
   for (const addon of manifest.nativeAddons) addon.signing = { ...helperState };
+  for (const tool of manifest.nativeTools ?? []) tool.signing = { ...helperState };
   manifest.releaseImpact.reviewedBinding = {
     ...manifest.releaseImpact.reviewedBinding,
     ...state,
@@ -150,6 +154,8 @@ function syncReviewedPayloads(manifest) {
   binding.sidecarRuntimes = structuredClone(manifest.sidecarRuntimes);
   binding.nativeHelpers = structuredClone(manifest.nativeHelpers);
   binding.nativeAddons = structuredClone(manifest.nativeAddons);
+  if (manifest.nativeTools !== undefined)
+    binding.nativeTools = structuredClone(manifest.nativeTools);
 }
 
 export function prepareLinuxQualifiedPayload(options, dependencies = {}) {

@@ -15,6 +15,30 @@ function deferred<T>(): {
   return { promise, resolve, reject };
 }
 
+function heldGeneration(
+  serializer: ReturnType<typeof createChatTurnSerializer>,
+  chatId: string,
+): {
+  controller: AbortController;
+  started: Promise<undefined>;
+  release: ReturnType<typeof deferred<string>>;
+  result: Promise<string | typeof CHAT_TURN_WAIT_CANCELLED>;
+} {
+  const controller = new AbortController();
+  const started = deferred<undefined>();
+  const release = deferred<string>();
+  const result = serializer.runExclusive(
+    chatId,
+    controller.signal,
+    () => {
+      started.resolve(undefined);
+      return release.promise;
+    },
+    controller,
+  );
+  return { controller, started: started.promise, release, result };
+}
+
 describe("chat turn serializer", () => {
   it("runs turns for one chat in FIFO order", async () => {
     const serializer = createChatTurnSerializer();
@@ -133,5 +157,46 @@ describe("chat turn serializer", () => {
     abandoned.reject(new Error("late abandoned operation rejection"));
     await expect(successor).resolves.toBe("successor");
     expect(successorRan).toBe(true);
+  });
+  it("interrupts active and queued generation without releasing noncooperative work or mutations", async () => {
+    const serializer = createChatTurnSerializer();
+    const first = heldGeneration(serializer, "chat-a");
+    await first.started;
+    const queued = heldGeneration(serializer, "chat-a");
+    let mutationRan = false;
+    const mutation = serializer.runExclusive("chat-a", new AbortController().signal, () => {
+      mutationRan = true;
+      return "updated";
+    });
+    expect(serializer.interruptGenerations("chat-a")).toBe(2);
+    expect(await first.result).toBe(CHAT_TURN_WAIT_CANCELLED);
+    expect(await queued.result).toBe(CHAT_TURN_WAIT_CANCELLED);
+    expect(mutationRan).toBe(false);
+    expect(serializer.interruptGenerations("chat-a")).toBe(0);
+    first.release.resolve("late ignored answer");
+    expect(await mutation).toBe("updated");
+    const next = heldGeneration(serializer, "chat-a");
+    await next.started;
+    next.release.resolve("new answer");
+    expect(await next.result).toBe("new answer");
+    expect(serializer.interruptGenerations("chat-a")).toBe(0);
+  });
+
+  it("keeps other chats and serializer instances running", async () => {
+    const serializer = createChatTurnSerializer();
+    const first = heldGeneration(serializer, "chat-a");
+    const other = heldGeneration(serializer, "chat-b");
+    const differentStore = heldGeneration(createChatTurnSerializer(), "chat-a");
+    await Promise.all([first.started, other.started, differentStore.started]);
+    expect(serializer.interruptGenerations("chat-a")).toBe(1);
+    expect(first.controller.signal.aborted).toBe(true);
+    expect(other.controller.signal.aborted).toBe(false);
+    expect(differentStore.controller.signal.aborted).toBe(false);
+    first.release.resolve("discarded");
+    other.release.resolve("other chat answer");
+    differentStore.release.resolve("other store answer");
+    expect(await first.result).toBe(CHAT_TURN_WAIT_CANCELLED);
+    expect(await other.result).toBe("other chat answer");
+    expect(await differentStore.result).toBe("other store answer");
   });
 });

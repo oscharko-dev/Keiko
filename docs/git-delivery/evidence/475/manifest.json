@@ -5,8 +5,12 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/475",
-  "generatedAt": "2026-08-28T20:06:10.075Z",
-  "governedRoutes": ["/api/git-delivery/commit/preview", "/api/git-delivery/commit/execute"],
+  "generatedAt": "2026-10-26T17:33:19.630Z",
+  "governedRoutes": [
+    "/api/git-delivery/commit/preview",
+    "/api/git-delivery/commit/approve",
+    "/api/git-delivery/commit/execute"
+  ],
   "windowRegistration": {
     "kind": "governedGit",
     "seededVia": "keiko.workspace.v4",
@@ -20,18 +24,21 @@
     "commitPathSurfacesGovernedBlock": true,
     "blockReasonIsMessagePolicy": true,
     "blockedMessageNeverReachesExecute": true,
+    "blockedMessageNeverMintsApproval": true,
     "browserReachedGovernedExecuteRoute": true,
+    "executeRedeemsTheMintedApproval": true,
     "conventionalCommitReachesSucceeded": true
   },
   "requestLedger": {
     "previewReached": true,
+    "approveRequests": 1,
     "executeRequests": 1
   },
   "notes": [
     "Real packaged CLI UI; governedGit window rendered through the real WindowsRegistry.",
     "Read surface and commit routes intercepted with governed JSON for determinism; routing enforcement is proven by the integration/contract suites.",
-    "The UI exposes no force-commit escape: a message-policy violation disables the only commit affordance, and a forced click reaches no execute request.",
-    "browserReachedGovernedExecuteRoute is proven by the conventional-message control, which is the only path on which execute may be called at all."
+    "The UI exposes no force-commit escape: a message-policy violation disables the only commit affordance, and a forced click reaches neither the approval mint nor the execute request.",
+    "browserReachedGovernedExecuteRoute is proven by the conventional-message control, which is the only path on which execute may be called at all, and only with the approval claim minted for that exact message."
   ],
   "artifacts": ["manifest.json", "governed-commit-block.png"]
 }

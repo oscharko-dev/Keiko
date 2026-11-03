@@ -26,6 +26,12 @@ const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "git-delivery", "evidence", "157
 const EVIDENCE_PROJECT_PATH = "keiko-git-client-closeout-1578";
 const FIXTURE_TIMESTAMP = Date.parse("2026-07-01T00:00:00.000Z");
 const FILE_CONTENT = "export const version = 2;\n";
+const COMMIT_SUMMARY = "test(git-ui): verify closeout evidence";
+const COMMIT_APPROVAL_CLAIM = {
+  schemaVersion: "1",
+  approvalId: "e2e-1578-approval",
+  approvalToken: "e2e-1578-token",
+} as const;
 const ARTIFACT_NAMES = [
   "manifest.json",
   "git-client-closeout-desktop.png",
@@ -45,6 +51,7 @@ const ROUTES = [
   "/api/files/content",
   "/api/git-delivery/staging/stage",
   "/api/git-delivery/commit/preview",
+  "/api/git-delivery/commit/approve",
   "/api/git-delivery/commit/execute",
   "/api/git-delivery/local-branch/create",
   "/api/git-delivery/local-branch/switch",
@@ -75,6 +82,7 @@ interface RouteLedger {
   readonly fileContentReads: unknown[];
   readonly stageCalls: unknown[];
   readonly commitPreviews: unknown[];
+  readonly commitApprovals: unknown[];
   readonly commitExecutes: unknown[];
   readonly branchCreates: unknown[];
   readonly branchSwitches: unknown[];
@@ -495,6 +503,18 @@ async function installLocalWriteRoutes(page: Page, ledger: RouteLedger): Promise
     ledger.commitPreviews.push(parsePost(route));
     return json(route, commitPreviewBody());
   });
+  // Epic #3384 correction 5 (#3386): a Commit click mints a one-use approval here and redeems it at
+  // /commit/execute (api.ts `proposeCommit`), so the mint is part of the governed path this
+  // capstone integrates. Unmocked it reached the real server and failed against an unregistered
+  // project, so the execute route below was never called.
+  await page.route("**/api/git-delivery/commit/approve", (route) => {
+    ledger.commitApprovals.push(parsePost(route));
+    return json(route, {
+      schemaVersion: "1",
+      approval: COMMIT_APPROVAL_CLAIM,
+      expiresAt: new Date(FIXTURE_TIMESTAMP + 300_000).toISOString(),
+    });
+  });
   await page.route("**/api/git-delivery/commit/execute", (route) => {
     ledger.commitExecutes.push(parsePost(route));
     return json(route, {
@@ -625,7 +645,14 @@ function writeManifest(ledger: RouteLedger): void {
       workspaceReads: ledger.workspaceReads.length,
       fileContentReads: ledger.fileContentReads.length,
       stageCalls: ledger.stageCalls.length,
-      commitPreviews: ledger.commitPreviews.length,
+      // The number of EMPTY-draft suggestion reads follows timing (one per repository-state
+      // revision), so the evidence records the single preview of the typed summary and that the
+      // suggestion read was reached, never the volatile total.
+      commitPreviewsForTypedSummary: commitPreviewDrafts(ledger).filter(
+        (draft) => draft === COMMIT_SUMMARY,
+      ).length,
+      commitDraftSuggestionPreviewsReached: commitPreviewDrafts(ledger).includes(""),
+      commitApprovals: ledger.commitApprovals.length,
       commitExecutes: ledger.commitExecutes.length,
       branchCreates: ledger.branchCreates.length,
       branchSwitches: ledger.branchSwitches.length,
@@ -649,6 +676,7 @@ function emptyLedger(): RouteLedger {
     fileContentReads: [],
     stageCalls: [],
     commitPreviews: [],
+    commitApprovals: [],
     commitExecutes: [],
     branchCreates: [],
     branchSwitches: [],
@@ -713,13 +741,44 @@ async function verifyChangesAndCommit(
   await expect(revealedEditor).toHaveCount(0);
 
   const commitSection = gitWindow.locator('section[aria-label="Commit"]');
-  await commitSection.getByLabel("Summary").fill("test(git-ui): verify closeout evidence");
+  await commitSection.getByLabel("Summary").fill(COMMIT_SUMMARY);
   await expect(page.locator('[data-testid="git-commit-preview"]')).toBeVisible();
-  expect(ledger.commitPreviews).toHaveLength(1);
+  expectCommitPreviewsForSingleEdit(ledger, COMMIT_SUMMARY);
   await commitSection.getByRole("button", { name: /Commit/u }).click();
   await expect
     .poll(() => ledger.commitExecutes.length, { message: "commit execute route called" })
     .toBeGreaterThan(0);
+  expectCommitExecuteRedeemsApproval(ledger, COMMIT_SUMMARY);
+}
+
+function commitRequestField(request: unknown, field: string): unknown {
+  if (typeof request !== "object" || request === null) return undefined;
+  return (request as Record<string, unknown>)[field];
+}
+
+// The composer reads the governed preview in two ways (#3272, CommitComposer.tsx): with an EMPTY
+// draft whenever the repository state revises, which feeds the staged-change "Use draft" suggestion,
+// and, debounced, with the message the user typed. One edit must therefore produce exactly one
+// preview for the typed summary, and every other preview must be the empty suggestion read: a stale
+// or partial message reaching the governed route is the regression this guards.
+function expectCommitPreviewsForSingleEdit(ledger: RouteLedger, summary: string): void {
+  const drafts = commitPreviewDrafts(ledger);
+  expect(drafts.filter((draft) => draft === summary)).toHaveLength(1);
+  expect(drafts.filter((draft) => draft !== summary && draft !== "")).toEqual([]);
+}
+
+function commitPreviewDrafts(ledger: RouteLedger): readonly unknown[] {
+  return ledger.commitPreviews.map((request) => commitRequestField(request, "messageDraft"));
+}
+
+// Epic #3384 correction 5 (#3386): the execute request redeems exactly the claim the mint returned,
+// for the message the mint was asked to approve.
+function expectCommitExecuteRedeemsApproval(ledger: RouteLedger, summary: string): void {
+  expect(ledger.commitApprovals).toHaveLength(1);
+  expect(ledger.commitExecutes).toHaveLength(1);
+  expect(commitRequestField(ledger.commitApprovals[0], "message")).toBe(summary);
+  expect(commitRequestField(ledger.commitExecutes[0], "message")).toBe(summary);
+  expect(commitRequestField(ledger.commitExecutes[0], "approval")).toEqual(COMMIT_APPROVAL_CLAIM);
 }
 
 async function verifyBranchAndHistory(
@@ -731,7 +790,9 @@ async function verifyBranchAndHistory(
   await gitWindow.getByRole("button", { name: "Branch: main" }).click();
   await gitWindow.getByRole("searchbox", { name: "Search branches" }).fill("feature");
   await gitWindow.getByRole("menuitemradio", { name: /feature\/closeout/u }).click();
-  const branchSwitchDialog = page.getByRole("dialog", { name: "Confirm branch switch" });
+  // #3089 (KEIKO-0228): the worktree-mutation confirmations are `role="alertdialog"`, not a native
+  // `<dialog>`: they interrupt for a decision that rewrites the working tree.
+  const branchSwitchDialog = page.getByRole("alertdialog", { name: "Confirm branch switch" });
   await expectViewportModal(page, branchSwitchDialog);
   await branchSwitchDialog.getByRole("button", { name: "Switch branch" }).click();
   await expect
@@ -761,7 +822,7 @@ async function verifyBranchAndHistory(
 
 async function verifySyncPull(page: Page, gitWindow: Locator, ledger: RouteLedger): Promise<void> {
   await gitWindow.getByRole("button", { name: "Run sync: Pull" }).click();
-  const pullDialog = page.getByRole("dialog", { name: "Confirm pull" });
+  const pullDialog = page.getByRole("alertdialog", { name: "Confirm pull" });
   await expectViewportModal(page, pullDialog);
   await pullDialog.getByRole("button", { name: "Pull changes" }).click();
   await expect
@@ -780,18 +841,40 @@ async function verifyPrAndMerge(
   await expect(createPullRequest).toBeVisible();
   await createPullRequest.click();
   const prPanel = page.getByRole("region", { name: "Pull Request", exact: true });
-  await expect(prPanel.getByLabel("Repository (owner/repo)")).toHaveValue("oscharko-dev/Keiko");
-  await prPanel.getByRole("button", { name: "Preview" }).click();
+  // #3394 added a "Description repository (owner/repo)" field to this panel, which the default
+  // substring match of getByLabel also resolves; the creation field is the exact label.
+  await expect(prPanel.getByLabel("Repository (owner/repo)", { exact: true })).toHaveValue(
+    "oscharko-dev/Keiko",
+  );
+  // #3272 (inferBaseBranch): a pull request base is never inferred equal to the head. This fixture
+  // sits on `main` with `main` as its upstream and no other integration branch, so nothing can be
+  // inferred and Preview stays disabled until the person names the base, as they do here.
+  await expect(prPanel.getByLabel("Head branch")).toHaveValue("main");
+  await prPanel.getByLabel("Base branch").fill("dev");
+  // Exact: the panel's description section has its own "Preview description" button (#3394).
+  await prPanel.getByRole("button", { name: "Preview", exact: true }).click();
   await expect
     .poll(() => ledger.prPreviews.length, { message: "PR preview route called" })
     .toBeGreaterThan(0);
+  expect(commitRequestField(ledger.prPreviews[0], "headBranchName")).toBe("main");
+  expect(commitRequestField(ledger.prPreviews[0], "baseBranchName")).toBe("dev");
   await expect(prPanel.locator('[data-field="policy"]')).toContainText("policy-pack-blocked");
-  await page.getByRole("button", { name: "Back to diff" }).click();
+  // The control returns to the changes view; #3272 relabelled it from "Back to diff".
+  await page.getByRole("button", { name: "Back to changes" }).click();
 
+  // The merge card seeds its form once, from the repository state at the moment it opens, so open
+  // it only after the Git window shows that state (the toolbar names the current branch).
+  await expect(gitWindow.getByRole("button", { name: "Branch: main" })).toBeVisible();
   await gitWindow.getByRole("button", { name: /Merge/u }).click();
   const mergePanel = page.getByRole("region", { name: "Merge", exact: true });
+  await expect(mergePanel.getByLabel("Head branch", { exact: true })).toHaveValue("main");
+  await expect(mergePanel.getByLabel("Repository (owner/repo)", { exact: true })).toHaveValue(
+    "oscharko-dev/Keiko",
+  );
   await mergePanel.getByLabel("Pull Request number").fill("1578");
-  await mergePanel.getByRole("button", { name: "Preview" }).click();
+  // The merge target needs a base branch too, and none is inferred here (see the PR step above).
+  await mergePanel.getByLabel("Base branch", { exact: true }).fill("dev");
+  await mergePanel.getByRole("button", { name: "Preview", exact: true }).click();
   await expect
     .poll(() => ledger.mergePreviews.length, { message: "merge preview route called" })
     .toBeGreaterThan(0);
@@ -807,10 +890,14 @@ async function captureCloseoutEvidence(
 ): Promise<void> {
   const editorWindows = page.locator('[data-window-id^="editor-"]');
   if ((await editorWindows.count()) > 0) {
-    await editorWindows
-      .first()
-      .getByRole("button", { name: /^Close .+ window$/u })
-      .click();
+    const closeEditor = editorWindows.first().getByRole("button", { name: /^Close .+ window$/u });
+    // Returning to the diff reveals the selected file in a new Editor window, and the clicks in the
+    // Git window that follow raise it over that Editor (#3506, primary window activation). The
+    // Editor sits entirely behind the Git window, so a pointer click on its close control would hit
+    // the Git window; the keyboard reaches the control without hit-testing.
+    await closeEditor.focus();
+    await expect(closeEditor).toBeFocused();
+    await closeEditor.press("Enter");
   }
   await expect(editorWindows).toHaveCount(0);
   await expect(gitWindow.getByRole("combobox", { name: "Repository" })).toBeVisible();

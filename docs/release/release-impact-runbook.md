@@ -23,6 +23,13 @@ Every release-impacting issue and PR must record:
 - Release-owner review evidence, including an `approvalReference` that points to the issue, PR, or
   release decision record.
 
+For compatibility with installed updater readers, published reviewed entries use a real
+`github-issue-comment:owner/repository#issue-or-pr-number#comment-id` or
+`github-pr-review:owner/repository#pr-number#review-id` reference. Record an already authorized
+release decision in an actual comment when needed and use its returned identifier. A bare PR URL
+does not satisfy those readers; never invent a comment or review id. The reference records the
+decision and does not independently grant publication authority.
+
 The catalog gate validates that every current-version entry is structurally reviewed and carries a
 non-empty durable approval reference. It does not call GitHub or infer authorization from a comment
 phrase. Publication authority comes from the protected signed merge and, for the Actions path, the

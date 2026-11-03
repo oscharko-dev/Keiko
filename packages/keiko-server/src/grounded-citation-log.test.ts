@@ -114,6 +114,39 @@ describe("logCitationReconciliation", () => {
     return sink;
   }
 
+  it.each([
+    { kind: "numeric", prose: false },
+    { kind: "numeric", prose: true },
+    { kind: "file", prose: false },
+    { kind: "file", prose: true },
+  ])("records prose availability without promoting uncited code: $kind/$prose", (test) => {
+    const sink = capture();
+    const answer = `${test.prose ? "A source claim.\n" : ""}\`\`\`java\nclass ExampleTest {}\n\`\`\``;
+    const metadata = { citationRepairDisposition: "skipped-capability" as const };
+    if (test.kind === "numeric")
+      logCitationReconciliation(evidence({ answer }), "repair-prose-0001", metadata);
+    else
+      reconcileAndLogInlineCitations(
+        answer,
+        { scopePaths: new Set(), sourceIdsByPath: new Map(), lineWindowsBySourceId: new Map() },
+        "repair-prose-0001",
+        metadata,
+      );
+    const event = sink.events.find((entry) => entry.op === "search.citations.reconciled");
+    expect(
+      expectActivityLogProof(
+        "search.citations.reconciled.line",
+        formatActivityLogProofLine(event ?? {}),
+      ),
+    ).toMatchObject({
+      repairProseAvailable: test.prose,
+      citationRepairDisposition: "skipped-capability",
+      outcome: "uncited",
+      attachedCount: 0,
+    });
+    expect(sink.lines().join("\n")).not.toContain("ExampleTest");
+  });
+
   it("persists unknown, ambiguous and prose-filtered file locations without paths or answer text", () => {
     const sink = capture();
     const result = reconcileAndLogInlineCitations(

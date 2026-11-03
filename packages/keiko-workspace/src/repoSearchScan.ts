@@ -11,11 +11,12 @@ import type {
   EvidenceAtom,
   EvidenceEdge,
   EvidenceAtomProvenanceKind,
+  EvidenceAtomMetrics,
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/connected-context";
 import { Buffer } from "node:buffer";
-import { redact } from "@oscharko-dev/keiko-security";
+import { redactWorkspaceSource } from "./sourceRedaction.js";
 import {
   discoverCandidateInventory,
   readWorkspaceFileBytesPrefixForInternalUse,
@@ -23,6 +24,8 @@ import {
   type InternalWorkspaceTextByteRead,
   readWorkspaceFileTextForInternalUse,
   type WorkspaceContentLane,
+  workspaceContentPolicy,
+  workspaceContentSecrets,
 } from "./discovery.js";
 import {
   FileTooLargeError,
@@ -143,6 +146,7 @@ export interface AtomShape {
   readonly queryFingerprint: string;
   readonly edge?: EvidenceEdge | undefined;
   readonly score: number;
+  readonly metrics?: EvidenceAtomMetrics | undefined;
   readonly emittedAtMs: number;
 }
 
@@ -162,6 +166,7 @@ export function buildAtom(shape: AtomShape): EvidenceAtom {
     scopePath: shape.scopePath,
     lineRange: shape.lineRange,
     score: shape.score,
+    ...(shape.metrics === undefined ? {} : { metrics: shape.metrics }),
     provenance: {
       kind: shape.provenanceKind,
       tool: shape.tool,
@@ -713,6 +718,7 @@ export async function probeBinary(fs: WorkspaceFs, abs: string, size: number): P
 }
 
 export interface SearchTextRunner {
+  readonly cachedLexicalQuery?: CachedLexicalQuery | undefined;
   readonly streamingWorkspaceIndex?: StreamingWorkspaceIndexSession | undefined;
   readonly queryIdentitySha256?: string | undefined;
   readonly eligibleTextObserver?:
@@ -1029,10 +1035,16 @@ function recordSizeExceeded(relativePath: string, candidates: CandidateFile[]): 
 // The lane switch for every byte the matcher sees. The evidence lane redacts here, at the IO
 // boundary, so no secret-shaped byte can reach an evidence atom, the persisted index, or a grounded
 // answer. The editor lane keeps the raw bytes: see `SearchTextRunner.contentLane`.
-function laneText(runner: SearchTextRunner, text: string): string {
+function laneText(runner: SearchTextRunner, text: string, relativePath: string): string {
   return runner.contentLane === "editor"
     ? text
-    : redact(text, [], { preserveSourceLineBreaks: true });
+    : redactWorkspaceSource(
+        text,
+        relativePath,
+        true,
+        workspaceContentPolicy(runner.scope.workspace),
+        workspaceContentSecrets(runner.scope.workspace),
+      );
 }
 
 async function readRawTextForScan(
@@ -1106,7 +1118,7 @@ async function readBoundedRawText(
     recordCandidateOmission(candidates, relativePath, "binary");
     return undefined;
   }
-  const text = laneText(runner, decoded.text);
+  const text = laneText(runner, decoded.text, relativePath);
   if (runner.eligibleTextObserver?.active !== true && !abortScanFile(runner, state))
     runner.streamingWorkspaceIndex?.observeRead(
       workspaceIndexFileMetadata(relativePath, read.stat),
@@ -1148,13 +1160,14 @@ function readUtf8TextForScan(
       recordCandidateOmission(candidates, relativePath, "binary");
       return undefined;
     }
+    const text = laneText(runner, read.content, relativePath);
     persistWorkspaceIndexRecord(runner, {
       kind: "text",
       scopePath: relativePath,
       metadata: workspaceIndexFileMetadata(relativePath, read.stat),
-      content: laneText(runner, read.content),
+      content: text,
     });
-    return laneText(runner, read.content);
+    return text;
   } catch (err) {
     if (err instanceof FileTooLargeError) {
       return readOversizedUtf8Text(runner, relativePath, state, candidates, err.sizeBytes);
@@ -1213,6 +1226,16 @@ function emitBestLines(
         tool: "repo.searchText",
         queryFingerprint: runner.fingerprint,
         score: match.score,
+        ...(match.queryGroupKey === undefined && match.sourceDescriptorMatch !== true
+          ? {}
+          : {
+              metrics: {
+                ...(match.queryGroupKey === undefined
+                  ? {}
+                  : { lexicalQueryGroupKey: match.queryGroupKey }),
+                ...(match.sourceDescriptorMatch === true ? { sourceDescriptorMatch: true } : {}),
+              },
+            }),
         emittedAtMs: runner.nowMs(),
       }),
     );
@@ -1361,7 +1384,10 @@ function cachedLexicalRecord(
   if (lexical === undefined || lexical.truncated) {
     return undefined;
   }
-  const query = prepareCachedLexicalQuery(runner.query);
+  const query =
+    "cachedLexicalQuery" in runner
+      ? runner.cachedLexicalQuery
+      : prepareCachedLexicalQuery(runner.query);
   return query === undefined ? undefined : { lexical, query };
 }
 
@@ -1615,6 +1641,7 @@ function collectRankedSemanticDocument(
 
 function fileCanContainMatches(runner: SearchTextRunner, text: string): boolean {
   if (runner.sourceInspection === true) return true;
+  if (runner.matcher.matchesSourceDescriptor?.(text) === true) return true;
   // Reuse the prepared literal matcher: alternatives and case folding must match line selection.
   if (runner.literalTerms !== undefined) return runner.matcher.match(text) > 0;
   return shouldScoreContent(runner.query, text, runner.policy);
@@ -1673,9 +1700,12 @@ function textFileMatches(
   const sourceLinesFor = prepareSourceLines(text, file.relativePath);
   collectRankedSemanticDocument(runner, file, text, sourceLinesFor);
   const projected = htmlEntitySearchText(file.relativePath, text);
-  if (!projectedFileCanContainMatches(runner, text, projected)) return undefined;
   const matchingRunner =
-    projected === text ? runner : { ...runner, matcher: htmlEntityLineMatcher(runner.matcher) };
+    projected !== text ||
+    (isHtmlSearchPath(file.relativePath) && runner.matcher.matchesSourceDescriptor !== undefined)
+      ? { ...runner, matcher: htmlEntityLineMatcher(runner.matcher, text) }
+      : runner;
+  if (!projectedFileCanContainMatches(matchingRunner, text, projected)) return undefined;
   const matched = scanLines(matchingRunner, text, state, file.relativePath, sourceLinesFor);
   const best = sourceInspectionOrMatchedLines(runner, text, state, matched);
   if (best.length === 0) {

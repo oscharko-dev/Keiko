@@ -21,7 +21,7 @@ import { createUiServer, UI_HOST } from "./server.js";
 import { EventEmitter } from "node:events";
 import type { ServerResponse } from "node:http";
 import { handleTerminalEvents, openTerminalSseStream } from "./terminal-routes.js";
-import type { SseBackpressureSignal } from "./sse-write.js";
+import { SSE_STALLED_READER_TIMEOUT_MS, type SseBackpressureSignal } from "./sse-write.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import {
@@ -732,15 +732,18 @@ describe("GET /api/terminal/events", () => {
 // header before transmission so an in-process test cannot exercise that path through fetch).
 
 // KEIKO-0142: terminal-routes hand-rolled the write+destroy backpressure check instead of the
-// shared writeOrDestroy helper, so it had no per-connection AbortController, no unsubscribe on a
+// shared writeSseFrame helper, so it had no per-connection AbortController, no unsubscribe on a
 // backpressure kill, and no observable signal — a slow-client termination was indistinguishable
 // from an intentional cancel. Mirrors command-runner-routes.test.ts's already-migrated block.
 interface FakeSseRes {
   res: ServerResponse;
   readonly writes: string[];
   destroyCount: number;
+  destroyed: boolean;
+  ended: boolean;
   writeReturns: boolean;
   readonly emitClose: () => void;
+  readonly emitDrain: () => void;
 }
 
 function makeFakeSseRes(): FakeSseRes {
@@ -750,12 +753,23 @@ function makeFakeSseRes(): FakeSseRes {
     res: undefined as unknown as ServerResponse,
     writes,
     destroyCount: 0,
+    destroyed: false,
+    ended: false,
     writeReturns: true,
     emitClose: (): void => {
       emitter.emit("close");
     },
+    emitDrain: (): void => {
+      emitter.emit("drain");
+    },
   };
   const res = {
+    get destroyed(): boolean {
+      return state.destroyed;
+    },
+    get writableEnded(): boolean {
+      return state.ended;
+    },
     writeHead(): ServerResponse {
       return res as unknown as ServerResponse;
     },
@@ -764,13 +778,26 @@ function makeFakeSseRes(): FakeSseRes {
       return state.writeReturns;
     },
     end(): ServerResponse {
+      state.ended = true;
       return res as unknown as ServerResponse;
     },
+    // Like a real response: destroying marks it destroyed and fires `close`, which is what the
+    // route's own close handler unsubscribes on.
     destroy(): void {
       state.destroyCount += 1;
+      state.destroyed = true;
+      emitter.emit("close");
     },
     on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
       emitter.on(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    once(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.once(event, listener);
+      return res as unknown as ServerResponse;
+    },
+    off(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+      emitter.off(event, listener);
       return res as unknown as ServerResponse;
     },
   };
@@ -779,7 +806,19 @@ function makeFakeSseRes(): FakeSseRes {
 }
 
 describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
-  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const completed = (executionId: string): TerminalEventEnvelope =>
+    ({
+      kind: "execution-completed",
+      executionId,
+      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
+    }) as unknown as TerminalEventEnvelope;
+
+  it("aborts, unsubscribes, destroys once, and signals when the reader stalls after res.write returns false", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();
     const signals: SseBackpressureSignal[] = [];
@@ -793,12 +832,17 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
       },
     );
 
-    manager.emitExternal({
-      kind: "execution-completed",
-      executionId: "exec-bp",
-      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
-    } as unknown as TerminalEventEnvelope);
+    // A false write is flow control: the stream stays open and keeps queueing frames.
+    manager.emitExternal(completed("exec-bp"));
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
 
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.accepted).toBe(false);
@@ -806,11 +850,7 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
 
     // The abort unsubscribed, so a second event produces no further writes or destroys.
     const writesAfterKill = fake.writes.length;
-    manager.emitExternal({
-      kind: "execution-completed",
-      executionId: "exec-bp-2",
-      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
-    } as unknown as TerminalEventEnvelope);
+    manager.emitExternal(completed("exec-bp-2"));
     expect(fake.writes).toHaveLength(writesAfterKill);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
@@ -822,8 +862,9 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
   });
 
   it("protects the ready frame itself, not just later events (KEIKO-0142)", () => {
-    // The ready frame is written before any manager event. If it is rejected and bypasses
-    // writeOrDestroy, the subscription stays live on a socket that is already not draining.
+    // The ready frame is written before any manager event. If it is queued and the reader never
+    // drains it, the stalled-reader bound must still tear the stream down without a later event.
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();
     const signals: SseBackpressureSignal[] = [];
@@ -836,14 +877,23 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
         signals.push(signal);
       },
     );
+    expect(fake.writes.length).toBeGreaterThan(0);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
 
-    // Destroyed and signalled immediately, with no manager event required.
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    // Destroyed and signalled at the bound, with no manager event required.
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
   });
 
-  it("kills on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
-    // The complementary path: ready frame accepted, a later event frame rejected.
+  it("kills a stalled reader on an event frame when the ready frame was accepted (KEIKO-0142)", () => {
+    // The complementary path: ready frame accepted, a later event frame queued and never drained.
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
     const manager = new FakeTerminalExecutionManager();
     const signals: SseBackpressureSignal[] = [];
@@ -858,14 +908,44 @@ describe("openTerminalSseStream backpressure (KEIKO-0142)", () => {
     expect(fake.destroyCount).toBe(0);
 
     fake.writeReturns = false;
-    manager.emitExternal({
-      kind: "execution-completed",
-      executionId: "exec-late",
-      payload: { exitCode: 0, durationMs: 1, truncated: false, timedOut: false },
-    } as unknown as TerminalEventEnvelope);
+    manager.emitExternal(completed("exec-late"));
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
 
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+
+    vi.advanceTimersByTime(1);
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
+  });
+
+  it("keeps the stream open and subscribed when a false write is followed by drain", () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSseRes();
+    const manager = new FakeTerminalExecutionManager();
+    const signals: SseBackpressureSignal[] = [];
+    fake.writeReturns = false;
+    openTerminalSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+
+    fake.emitDrain();
+    fake.writeReturns = true;
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS * 2);
+
+    expect(fake.destroyCount).toBe(0);
+    expect(signals).toHaveLength(0);
+    const writesBefore = fake.writes.length;
+    manager.emitExternal(completed("exec-drain"));
+    expect(fake.writes).toHaveLength(writesBefore + 1);
+    expect(fake.destroyCount).toBe(0);
   });
 
   it("keeps the normal write path intact when res.write returns true", () => {
@@ -934,9 +1014,14 @@ describe("openTerminalSseStream correlationId threading (#2902 audit finding 0)"
 });
 
 describe("handleTerminalEvents backpressure correlation (ADR-0173 D5 / g12)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("threads the request's own correlation id into the backpressure diagnostic instead of minting one", () => {
+    vi.useFakeTimers();
     const fake = makeFakeSseRes();
-    fake.writeReturns = false; // rejects the ready frame -> immediate backpressure kill.
+    fake.writeReturns = false; // the ready frame is queued; the reader never drains -> stall kill.
     const manager = new FakeTerminalExecutionManager();
     const records: ServerDiagnosticRecord[] = [];
     const diagnostics: ServerDiagnosticSink = {
@@ -954,7 +1039,12 @@ describe("handleTerminalEvents backpressure correlation (ADR-0173 D5 / g12)", ()
     const routeDeps: UiHandlerDeps = { ...deps, terminal: manager, diagnostics };
 
     handleTerminalEvents(ctx, routeDeps);
+    expect(records).toHaveLength(0);
+    vi.advanceTimersByTime(SSE_STALLED_READER_TIMEOUT_MS - 1);
+    expect(records).toHaveLength(0);
+    vi.advanceTimersByTime(1);
 
+    expect(fake.destroyCount).toBe(1);
     expect(records).toHaveLength(1);
     expect(records[0]?.source).toBe("sse.terminal.backpressure");
     expect(records[0]?.correlationId).toBe("req-terminal-thread-01");

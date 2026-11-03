@@ -96,8 +96,10 @@ may still need the explicit output-token parameter described below.
 Read `coding-runtime.dev-lane.activated` first: `secureReadHelperSha256` and `secureReadByteCap`
 identify the admitted native helper without recording its path or source contents. The current
 helper reads whole files up to 1 MiB while `keiko_workspace_read` returns at most 64 KiB per model
-window; request fewer lines if the requested window itself is too large. Initial root `AGENTS.md`
-context stays bounded to 16 KiB and 800 lines and reports `truncated` with whole-file counts/digest.
+window; request fewer lines if the requested window itself is too large. The mapped profiles bound
+the initial root `AGENTS.md` block to 16 KiB and 800 lines; a native run's copy carries the whole
+masked file within half the model's input window. Either reports `truncated` with whole-file
+counts/digest, the byte bound (`limitByteCount`) and the bytes left out (`omittedByteCount`).
 
 The approved npm runtime 1.1.3 helper retains a 64 KiB whole-file bound during an application
 upgrade. Larger files still return `workspace-read-too-large` on that legacy helper. Large-file
@@ -385,6 +387,49 @@ with `reason: "no-tool-calling"` and `probeMode: "passive"`, and no
 Update to 1.1.9 or later: opening the Workbench renews the expired proof itself, and
 `gateway.readiness.automatic.started` / `.completed` record the renewal. On an earlier version, run
 the model's check in Settings → Models once.
+
+---
+
+## Coding Workbench finds no coding model behind a gateway that is not LiteLLM
+
+| Field             | Value                                                                  |
+| ----------------- | ---------------------------------------------------------------------- |
+| Severity          | Medium                                                                 |
+| Surface           | Coding Workbench                                                       |
+| Stable identifier | `coding-sidecar.gateway.readiness-insufficient` with `no-tool-calling` |
+
+**Symptom**
+
+The gateway is a plain OpenAI-compatible or Azure endpoint, not a recognised LiteLLM connection. The
+Coding Workbench says the automatic tool-calling check did not confirm a compatible coding model,
+and Settings → Models shows its chat models with tools "no" although nobody ever ran a check on
+them. A check started from Settings makes the Workbench usable.
+
+**Root Cause**
+
+A chat model carries no tool-calling proof until Keiko's forced tool-call probe has run against it.
+Keiko verified such a model by itself at process start only for a recognised LiteLLM connection, and
+the Workbench's own verification only renewed a proof that had lapsed, so a never-proven model behind
+any other gateway waited for a manual check. After 1.3.2 the profile read asks for the first proof
+through the same bounded verification, whichever gateway serves the model.
+
+**Diagnostic Steps**
+
+On the Workbench profile read, `gateway.readiness.automatic.started` carries `probeBasis:
+never-proven` and `probeTrigger: profile-read`, followed by `.completed` and
+`gateway.tool-calling.verification` under the same correlation id. While the run is open the read
+logs `coding-sidecar.gateway.readiness-insufficient` with `reason: "model-verification-pending"` and
+`storedReason: "no-tool-calling"`. If the probe refuted tool calling, the verification line reads
+`unsupported`, the model stays unavailable with `reason: "no-tool-calling"`, and the Workbench does
+not probe it again. A probe the gateway never answered is retried after one minute; any other
+failure waits out the six-hour cooldown.
+
+**Resolution**
+
+Update to a release after 1.3.2 and open the Workbench; the check runs without any manual action. A model
+that answered but refused forced tool calls does not support tools through this gateway: choose a
+model that does, or fix the gateway's tool parser and run the model's check in Settings → Models
+once.
 
 ---
 

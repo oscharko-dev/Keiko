@@ -4,6 +4,7 @@ import {
   type OwnAssessmentPolicy,
 } from "@oscharko-dev/keiko-contracts/runtime/grounded-assessment";
 import * as multiSourceQa from "./grounded-qa-multi-source.js";
+import * as promptRedaction from "./grounded-prompt-redactor.js";
 import * as groundedOrchestrator from "./grounded-orchestrator.js";
 import * as chatActivity from "./chat-activity.js";
 import { buildPackCitationIndex, reconcileInlineCitations } from "./grounded-faithfulness.js";
@@ -1330,6 +1331,48 @@ describe("buildGroundedGatewayMessages", () => {
     expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
   });
 
+  it("redacts identical source text once while fitting multiple excerpt windows", () => {
+    const base = packWithCitations();
+    const { file, excerpt } = requirePackExcerpt(base, 0);
+    const content = `export const values = [\n${Array.from({ length: 1000 }, (_, i) => `  ${String(i)},`).join("\n")}\n];`;
+    const pack: ConnectedContextPack = {
+      ...base,
+      budget: { ...base.budget, excerptBytesMax: 64_000 },
+      files: [
+        {
+          ...file,
+          excerpts: [
+            {
+              ...excerpt,
+              content,
+              atom: { ...excerpt.atom, lineRange: { startLine: 10, endLine: 1011 } },
+            },
+          ],
+        },
+      ],
+    };
+    const redact = buildRedactor({});
+    const observed = vi.fn(redact);
+    const sent = fittedGroundedGatewayPrompt("Read the source", pack, observed, {
+      modelInputTokensMax: 1024,
+    });
+    expect(observed.mock.calls.filter(([value]) => value === content)).toHaveLength(1);
+    expect(sent.sentReferenceCount).toBe(1);
+    expect(countGatewayPromptTokens({ messages: sent.messages })).toBeLessThanOrEqual(1024);
+    const reuse = vi
+      .spyOn(promptRedaction, "promptFitRedactor")
+      .mockImplementation((original) => original);
+    try {
+      const uncached = fittedGroundedGatewayPrompt("Read the source", pack, redact, {
+        modelInputTokensMax: 1024,
+      });
+      expect(sent.messages).toEqual(uncached.messages);
+      expect(sent.withoutSources).toEqual(uncached.withoutSources);
+    } finally {
+      reuse.mockRestore();
+    }
+  });
+
   it("falls back to the shared default-profile budget when contextWindow=0 (KEIKO-0461)", () => {
     // A placeholder / not-yet-probed capability arrives with contextWindow=0 and
     // maxOutputTokens=0. The final-answer budget must not silently return undefined and
@@ -1705,6 +1748,44 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each([undefined, 1])(
+    "refuses a deleted selected skill before grounded admission: %j",
+    async (revision) => {
+      const { chatId, projectPath } = await setupChatWithScope();
+      seedScopedRepo(projectPath);
+      const skill = store.markdownSkills.import({
+        fileName: "method.md",
+        contentBase64: Buffer.from("# Method\nCheck boundaries.").toString("base64"),
+      });
+      store.markdownSkills.select(chatId, skill, 0);
+      store.markdownSkills.delete(skill.id, skill.revision);
+      const paired = pairedReportOwner(tmp);
+      const seen: GatewayRequest[] = [];
+      const result = await handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: GROUNDED_FIXTURE_QUESTION,
+            expectedSkillSelectionRevision: revision,
+          }),
+          fakeRes(),
+          paired.cookie,
+        ),
+        deps(
+          fakeModel("Must not dispatch", seen),
+          {},
+          { codingAppSessionChannel: paired.owner.codingAppSessionChannel },
+        ),
+      );
+      expect(result).toMatchObject({
+        status: 409,
+        body: { error: { code: "SKILL_SELECTION_CHANGED" } },
+      });
+      expect(seen).toHaveLength(0);
+      expect(store.listMessages(chatId)).toHaveLength(0);
+    },
+  );
+
   it("requires live skill authority before grounded turn persistence regardless of client preconditions", async () => {
     const { chatId, projectPath } = await setupChatWithScope();
     seedScopedRepo(projectPath);
@@ -2446,9 +2527,10 @@ describe("handleGroundedAsk", () => {
     const serializer = createChatTurnSerializer();
     let serializationEntries = 0;
     const observingSerializer: ChatTurnSerializer = {
-      runExclusive: (chat, signal, operation) => {
+      ...serializer,
+      runExclusive: (chat, signal, operation, generation) => {
         serializationEntries += 1;
-        return serializer.runExclusive(chat, signal, operation);
+        return serializer.runExclusive(chat, signal, operation, generation);
       },
     };
     const sharedDeps = deps(model, {}, { chatTurnSerializer: observingSerializer });
@@ -2908,6 +2990,61 @@ describe("handleGroundedAsk", () => {
     },
   );
 
+  // A connected Git change is admitted (description authority) and answered by the ordinary Chat
+  // route, never by this one. A chat whose only scope is a Git change must therefore fail closed
+  // here, before retrieval or a model call, instead of running as an unadmitted grounded turn; the
+  // browser selects the ordinary route for it (`hasGroundedRouteScope` in useChatSession.ts).
+  it("refuses a grounded turn for a chat whose only scope is a Git change before any model call", async () => {
+    const { chatId } = await setupChatWithScope();
+    store.updateChat(chatId, {
+      connectedScope: null,
+      connectedScopes: null,
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-grounded-refusal",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/x",
+          baseRef: "main",
+          headRef: "feature/x",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "a".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 1,
+        },
+      ],
+    });
+    const seenRequests: GatewayRequest[] = [];
+    const scopedRunner = vi.fn(runner(emptyPack(), "must not run"));
+    const result = await handleGroundedAsk(
+      {
+        ...ctx(
+          JSON.stringify({
+            chatId,
+            content: "git-change-only-grounded-refusal",
+            clientTurnId: "git-change-only-grounded-refusal",
+            expectedGroundingScopeIdentity: deriveChatGroundingScopeIdentity(requiredChat(chatId)),
+          }),
+        ),
+        correlationId: "git-change-only-grounded-refusal",
+      },
+      deps(fakeModel("must not run", seenRequests)),
+      scopedRunner,
+    );
+    expect(result).toMatchObject({
+      status: 409,
+      body: { error: { code: "GROUNDING_SCOPE_CHANGED" } },
+    });
+    expect(scopedRunner).not.toHaveBeenCalled();
+    expect(seenRequests).toEqual([]);
+  });
+
   it("exports the scope admission cause through the real diagnostic sink and worker at full quota", async () => {
     const { chatId } = await setupChatWithScope();
     const expectedGroundingScopeIdentity = deriveChatGroundingScopeIdentity(requiredChat(chatId));
@@ -3049,7 +3186,7 @@ describe("handleGroundedAsk", () => {
     }
   });
 
-  it("linearizes a scope PATCH after the active grounded turn", async () => {
+  it("cancels on scope change while retaining the gate until the old grounded runner settles", async () => {
     const { chatId } = await setupChatWithScope();
     const started = deferred<undefined>();
     const answer = deferred<OrchestratorOutput>();
@@ -3083,14 +3220,14 @@ describe("handleGroundedAsk", () => {
     expect(patchSettled).toBe(false);
     expect(store.findChatById(chatId)?.connectedScope).toBeDefined();
 
+    await expect(grounded).resolves.toMatchObject({ status: 499 });
+    expect(patchSettled).toBe(false);
     answer.resolve({ pack: emptyPack(), assistantContent: "linearized answer", elapsedMs: 1 });
 
-    await expect(grounded).resolves.toMatchObject({ status: 200 });
     await expect(patch).resolves.toMatchObject({ status: 200 });
     expect(store.findChatById(chatId)?.connectedScope).toBeUndefined();
     expect(store.listMessages(chatId).map((message) => message.content)).toEqual([
       "linearized scope request",
-      "linearized answer",
     ]);
   });
 

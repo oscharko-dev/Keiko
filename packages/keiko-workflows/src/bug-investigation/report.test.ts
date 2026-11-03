@@ -68,7 +68,8 @@ function parts(overrides: Partial<BugReportParts> = {}): BugReportParts {
     verification: VERIFICATION,
     failureFrames: [{ file: "src/buggy.ts", line: 1 }],
     hypothesis: HYPOTHESIS,
-    proposedDiff: "--- a\n+++ b",
+    proposedDiff:
+      "--- a/src/buggy.ts\n+++ b/src/buggy.ts\n@@ -1 +1,2 @@\n-old\n+new\n+  it('regresses', () => {});\n",
     dryRunPreview: "PATCH OK — 1 file",
     verificationSkipReason: undefined,
     nextActions: ["Review the applied fix in src/buggy.ts"],

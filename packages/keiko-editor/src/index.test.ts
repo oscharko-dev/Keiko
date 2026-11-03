@@ -298,7 +298,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
       // keiko-ui sibling. The exact dev pin tracks the product's React version and remains inside
       // the compatible peer range, so the workspace hoist never resolves a divergent version.
       const devPin = manifest.devDependencies?.[packageName];
-      expect(devPin).toBe("19.3.0");
+      expect(devPin).toBe("19.3.1");
     }
   });
 
@@ -306,7 +306,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
     const manifest = readManifest();
     const rootManifest = readRootManifest();
 
-    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.56.0");
+    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.57.0");
     expect(manifest.dependencies?.["@monaco-editor/react"]).toBe("4.7.0");
     expect(rootManifest.overrides?.["@monaco-editor/loader"]).toBe("1.7.0");
   });

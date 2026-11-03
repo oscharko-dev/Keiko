@@ -36,13 +36,19 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceUiSelectionState,
 } from "@oscharko-dev/keiko-contracts";
-import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type {
+  ChatConnectedScope,
+  ChatGitChangeScope,
+  ChatConnectorSelection,
+  ChatLocalKnowledgeScope,
+} from "@/lib/types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { connectedScopeFingerprint, isConnectedScopeFingerprint } from "./workspaceScopeIdentity";
 
 function addPosition(
@@ -75,6 +81,7 @@ function initialWindowCfg(type: WindowType, cfg: AppWindow["cfg"] | undefined): 
 }
 
 interface MutateArgs {
+  readonly onWindowAllocated?: ((window: AppWindow) => void) | undefined;
   readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
   readonly zc: RefObject<number>;
@@ -284,10 +291,24 @@ function makeRestore(
     });
 }
 
+export function fitInitialWindowSize(
+  size: { readonly w: number; readonly h: number; readonly min: { w: number; h: number } },
+  vp: ViewportWorld,
+): { readonly w: number; readonly h: number } {
+  const fitted = {
+    w: Math.max(size.min.w, Math.min(size.w, vp.w - 32)),
+    h: Math.max(size.min.h, Math.min(size.h, vp.h - 32)),
+  };
+  if (fitted.w !== size.w || fitted.h !== size.h) {
+    reportClientDiagnostic("Workspace window fitted to available space.", {
+      composerActivity: "workspace-viewport-fitted",
+    });
+  }
+  return fitted;
+}
+
 function fallbackRestoreGeometry(type: WindowType, vp: ViewportWorld): SnapPrev {
-  const def = WIN_TYPES[type];
-  const w = Math.min(def.w, Math.max(def.min.w, vp.w - 32));
-  const h = Math.min(def.h, Math.max(def.min.h, vp.h - 32));
+  const { w, h } = fitInitialWindowSize(WIN_TYPES[type], vp);
   return {
     x: vp.x + Math.max(16, Math.round((vp.w - w) / 2)),
     y: vp.y + Math.max(16, Math.round((vp.h - h) / 2)),
@@ -333,7 +354,7 @@ function makeMaximize(args: MutateArgs): WorkspaceApi["maximize"] {
     });
 }
 
-interface NewWindowAllocationArgs {
+interface NewWindowAllocationArgs extends Pick<MutateArgs, "onWindowAllocated"> {
   readonly cfg: AppWindow["cfg"] | undefined;
   readonly defaultH: number;
   readonly defaultMinH: number;
@@ -352,29 +373,36 @@ function allocateNewWindow(args: NewWindowAllocationArgs): {
   // Keep live UI state inside the same trust boundary enforced by local persistence and the BFF.
   // Existing singleton/per-identity windows are focused before this allocation is attempted.
   if (args.list.length >= MAX_WORKSPACE_WINDOWS) return { id: null, windows: args.list };
-  const { x, y } = addPosition(args.vp, args.defaultW, args.defaultH, args.list.length, 40);
+  const { w, h } = fitInitialWindowSize(
+    {
+      w: args.defaultW,
+      h: args.defaultH,
+      min: { w: args.defaultMinW, h: args.defaultMinH },
+    },
+    args.vp,
+  );
+  const { x, y } = addPosition(args.vp, w, h, args.list.length, 40);
   const typeDefinition = WIN_TYPES[args.type];
   const id =
     typeDefinition.singleton === true
       ? args.type
       : nextWindowId(args.type, args.list, args.zc.current + 1);
+  const window: AppWindow = {
+    id,
+    type: args.type,
+    x,
+    y,
+    w,
+    h,
+    z: ++args.zc.current,
+    cfg: initialWindowCfg(args.type, args.cfg),
+    max: false,
+    zoom: 1,
+  };
+  args.onWindowAllocated?.(window);
   return {
     id,
-    windows: [
-      ...args.list,
-      {
-        id,
-        type: args.type,
-        x,
-        y,
-        w: Math.max(args.defaultW, args.defaultMinW),
-        h: Math.max(args.defaultH, args.defaultMinH),
-        z: ++args.zc.current,
-        cfg: initialWindowCfg(args.type, args.cfg),
-        max: false,
-        zoom: 1,
-      },
-    ],
+    windows: [...args.list, window],
   };
 }
 
@@ -495,6 +523,7 @@ function makeAdd(args: MutateArgs): WorkspaceApi["add"] {
         }
       }
       const allocation = allocateNewWindow({
+        onWindowAllocated: args.onWindowAllocated,
         cfg,
         defaultH,
         defaultMinH,
@@ -576,44 +605,44 @@ function makeOpenEditorFile(args: MutateArgs): WorkspaceApi["openEditorFile"] {
       };
     }
     const t = WIN_TYPES.editor;
-    const { x, y } = addPosition(vp, t.w, t.h, currentWins.length, 40);
+    const { w, h } = fitInitialWindowSize(t, vp);
+    const { x, y } = addPosition(vp, w, h, currentWins.length, 40);
     const id = `editor-${Date.now().toString(36)}`;
     const result: OpenEditorFileResult = { ok: true, windowId: id };
     setWins((ws) => {
       const list = ws ?? [];
-      return [
-        ...list,
-        {
-          id,
-          type: "editor",
-          x,
-          y,
-          w: Math.max(t.w, t.min.w),
-          h: Math.max(t.h, t.min.h),
-          z: ++zc.current,
-          cfg: {
-            root: normalizedRoot,
-            ...(isManagedTaskWorkspaceRoot(normalizedRoot)
-              ? {}
-              : { rootBinding: "coding-repository" }),
-            file: normalizedPath,
-            openFiles: [normalizedPath],
-            layoutJson: serializeEditorLayoutStateV2(
-              createEditorLayoutStateV2({
-                root: normalizedRoot,
-                file: normalizedPath,
-                openFiles: [normalizedPath],
-                defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
-                minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
-                maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
-              }),
-            ),
-            ...reveal,
-          },
-          max: false,
-          zoom: 1,
+      const window: AppWindow = {
+        id,
+        type: "editor",
+        x,
+        y,
+        w,
+        h,
+        z: ++zc.current,
+        cfg: {
+          root: normalizedRoot,
+          ...(isManagedTaskWorkspaceRoot(normalizedRoot)
+            ? {}
+            : { rootBinding: "coding-repository" }),
+          file: normalizedPath,
+          openFiles: [normalizedPath],
+          layoutJson: serializeEditorLayoutStateV2(
+            createEditorLayoutStateV2({
+              root: normalizedRoot,
+              file: normalizedPath,
+              openFiles: [normalizedPath],
+              defaultSidebarWidth: EDITOR_SIDEBAR_DEFAULT_WIDTH,
+              minSidebarWidth: EDITOR_SIDEBAR_MIN_WIDTH,
+              maxSidebarWidth: EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
+            }),
+          ),
+          ...reveal,
         },
-      ];
+        max: false,
+        zoom: 1,
+      };
+      args.onWindowAllocated?.(window);
+      return [...list, window];
     });
     return result;
   };
@@ -655,12 +684,20 @@ function makeToggleTool(args: MutateArgs): WorkspaceApi["toggleTool"] {
         windowLimitReached = true;
         return list;
       }
-      const { x, y } = addPosition(vp, t.w, t.h, list.length, 28);
-      const geometry = { x, y, w: t.w, h: t.h };
-      return [
-        ...list,
-        { id: type, type, ...geometry, z: nextWorkspaceZ(list, zc), cfg: {}, max: false, zoom: 1 },
-      ];
+      const { w, h } = fitInitialWindowSize(t, vp);
+      const { x, y } = addPosition(vp, w, h, list.length, 28);
+      const geometry = { x, y, w, h };
+      const window = {
+        id: type,
+        type,
+        ...geometry,
+        z: nextWorkspaceZ(list, zc),
+        cfg: {},
+        max: false,
+        zoom: 1,
+      };
+      args.onWindowAllocated?.(window);
+      return [...list, window];
     });
     if (windowLimitReached) args.onWindowLimitReached?.(MAX_WORKSPACE_WINDOWS);
   };
@@ -1025,7 +1062,7 @@ export function makeSnapActions({
   return { setSnap, commitSnap };
 }
 
-interface ConnectArgs {
+export interface ConnectArgs {
   readonly onConnectionOutcome?: ((outcome: ConnectionOutcome) => void) | undefined;
   readonly wsRef: RefObject<HTMLElement | null>;
   readonly viewRef: RefObject<View>;
@@ -1060,19 +1097,19 @@ interface ConnectArgs {
       ) => boolean | Promise<boolean>)
     | undefined;
   // Epic #189 Slice 3 M3 — invoked when a Connector↔Chat relationship edge is created/removed,
-  // with the selected ChatLocalKnowledgeScope from the connector window's cfg. The composition
+  // with the selected ChatConnectorSelection from the connector window's cfg. The composition
   // root (AppShell) appends/removes it from the active chat's localKnowledgeScopes.
   readonly onConnectorBind?:
     | ((
         chatWindowId: string,
-        scope: ChatLocalKnowledgeScope,
+        scope: ChatConnectorSelection,
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
     | ((
         chatWindowId: string,
-        scope: ChatLocalKnowledgeScope,
+        scope: ChatConnectorSelection,
         target?: ChatUnbindTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
@@ -1107,7 +1144,7 @@ interface BindAcceptance {
 interface ConnectionBindingSelection {
   readonly boundScope: ChatConnectedScope | null;
   readonly chatWindowId: string | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
 }
 
@@ -1117,7 +1154,7 @@ interface ConnectionAttempt {
   readonly boundScope: ChatConnectedScope | null;
   readonly chatWindowId: string | null;
   readonly chatConversationIdAtBind: string | undefined;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
   readonly bindingTarget: ChatBindingTarget | undefined;
   readonly hadGitConnectionBeforeBind: boolean;
@@ -1126,7 +1163,7 @@ interface ConnectionAttempt {
 interface BindAcceptanceInput {
   readonly chatWindowId: string | null;
   readonly boundScope: ChatConnectedScope | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
   readonly onScopeBind: ConnectArgs["onScopeBind"];
   readonly onConnectorBind: ConnectArgs["onConnectorBind"];
@@ -1138,7 +1175,7 @@ interface ConnectionUnbindAcceptanceInput {
   readonly connectionId: string;
   readonly chatWindowId: string;
   readonly boundScope: ChatConnectedScope | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeRelationshipId: string | null;
   readonly target: ChatUnbindTarget | undefined;
   readonly onScopeUnbind: ConnectArgs["onScopeUnbind"];
@@ -1154,7 +1191,7 @@ interface ApplyConnectionInput {
   readonly chatWindowId: string | null;
   readonly chatConversationIdAtBind: string | undefined;
   readonly boundScope: ChatConnectedScope | null;
-  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly connectorScope: ChatConnectorSelection | null;
   readonly gitChangeSelection: GitChangeBindSelection | null;
 }
 
@@ -1194,13 +1231,17 @@ function chatBindingTarget(
   chatWindowId: string | null,
   conversationId: string | undefined,
   winById: (id: string) => AppWindow | undefined,
+  sourceWindowId: string,
 ): ChatBindingTarget | undefined {
   if (chatWindowId === null) return undefined;
   const chatWindow = winById(chatWindowId);
   return {
     conversationId,
+    sourceWindowId,
     projectPath: chatProjectPath(chatWindow),
-    isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
+    isCurrent: (): boolean =>
+      winById(sourceWindowId) !== undefined &&
+      chatConversationId(winById(chatWindowId)) === conversationId,
   };
 }
 
@@ -1260,11 +1301,12 @@ function resolveScopeBindAcceptance(
 
 function resolveConnectorBindAcceptance(
   chatWindowId: string | null,
-  scope: ChatLocalKnowledgeScope,
+  scope: ChatConnectorSelection,
   onConnectorBind: ConnectArgs["onConnectorBind"],
   target: ChatBindingTarget | undefined,
 ): Promise<BindAcceptance> | BindAcceptance {
-  if (chatWindowId === null) return { accepted: false };
+  if (chatWindowId === null || (scope.kind === "jira-live" && onConnectorBind === undefined))
+    return { accepted: false };
   return Promise.resolve(onConnectorBind?.(chatWindowId, scope, target)).then(
     booleanBindAcceptance,
   );
@@ -1352,11 +1394,13 @@ async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput):
 }
 
 function connectionConnectorFields(
-  connectorScope: ChatLocalKnowledgeScope | null,
+  connectorScope: ChatConnectorSelection | null,
 ): Partial<Pick<Connection, "boundConnectorKind" | "boundConnectorId">> {
   if (connectorScope === null) {
     return {};
   }
+  if (connectorScope.kind === "jira-live")
+    return { boundConnectorKind: "jira-live", boundConnectorId: connectorScope.podId };
   if (connectorScope.kind === "capsule") {
     return {
       boundConnectorKind: "capsule",
@@ -1375,7 +1419,7 @@ function connectionConnectorFields(
 function connectionScopeFields(
   chatWindowId: string | null,
   boundScope: ChatConnectedScope | null,
-  connectorScope: ChatLocalKnowledgeScope | null,
+  connectorScope: ChatConnectorSelection | null,
   gitChangeSelection: GitChangeBindSelection | null,
   gitChangeRelationshipId: string | undefined,
 ): Partial<
@@ -1416,6 +1460,16 @@ function connectionScopeFields(
   };
 }
 
+function validConnectionSelection(
+  from: AppWindow,
+  to: AppWindow,
+  gitChange: GitChangeBindSelection | null,
+): boolean {
+  if (isGitChangeChatPair(from, to) && gitChange === null) return false;
+  if (windowOfType(from, to, "connector")?.cfg["selectedKind"] !== "jira-live") return true;
+  return windowOfType(from, to, "chat") !== null && connectorChatBind(from, to) !== null;
+}
+
 function connectionBindingSelection(
   from: AppWindow,
   to: AppWindow,
@@ -1427,7 +1481,7 @@ function connectionBindingSelection(
     boundScope === null && connectorScope === null && isGitChangePair
       ? gitChangeChatBind(from, to)
       : null;
-  if (isGitChangePair && gitChangeSelection === null) return null;
+  if (!validConnectionSelection(from, to, gitChangeSelection)) return null;
   const chatWindowId =
     boundScope !== null || connectorScope !== null || gitChangeSelection !== null
       ? chatWindowIdInPair(from, to)
@@ -1437,7 +1491,7 @@ function connectionBindingSelection(
 
 function connectionHasUnbindWork(
   boundScope: ChatConnectedScope | null,
-  connectorScope: ChatLocalKnowledgeScope | null,
+  connectorScope: ChatConnectorSelection | null,
   gitChangeRelationshipId: string | null,
   onScopeUnbind: ConnectArgs["onScopeUnbind"],
   onConnectorUnbind: ConnectArgs["onConnectorUnbind"],
@@ -1685,14 +1739,27 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     if (!binding.accepted) return false;
     if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById))
       return false;
+    if (connectorScope?.kind === "jira-live") {
+      const from = winById(fromId);
+      const to = winById(toId);
+      const current = from === undefined || to === undefined ? null : connectorChatBind(from, to);
+      if (current?.kind !== "jira-live" || current.podId !== connectorScope.podId) return false;
+    }
     // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
     // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
     // the user navigated the Files window or re-selected another capsule.
-    setConns((cs) =>
-      isDuplicate(cs, fromId, toId)
-        ? cs
+    setConns((cs) => {
+      const retained =
+        connectorScope?.kind === "jira-live"
+          ? cs.filter(
+              (edge) =>
+                edge.boundConnectorKind !== "jira-live" || edge.boundChatWindowId !== chatWindowId,
+            )
+          : cs;
+      return isDuplicate(retained, fromId, toId)
+        ? retained
         : [
-            ...cs,
+            ...retained,
             {
               id: `${fromId}~${toId}`,
               a: fromId,
@@ -1705,8 +1772,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
                 binding.gitChangeRelationshipId,
               ),
             },
-          ],
-    );
+          ];
+    });
     focus(toId);
     return true;
   };
@@ -1835,7 +1902,12 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       chatConversationIdAtBind,
       connectorScope,
       gitChangeSelection,
-      bindingTarget: chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById),
+      bindingTarget: chatBindingTarget(
+        chatWindowId,
+        chatConversationIdAtBind,
+        winById,
+        fromId === chatWindowId ? toId : fromId,
+      ),
       // With the duplicate-guard above, a Git↔Chat attempt that reaches this point never had a
       // prior connection between the pair. `hadGitConnectionBeforeBind` therefore stays false
       // for the Git case and always reflects a first-time bind.
@@ -2036,6 +2108,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const left = winById(a);
     const right = winById(b);
     if (left === undefined || right === undefined || !canConnect(left.type, right.type)) return;
+    if (windowOfType(left, right, "connector")?.cfg["selectedKind"] === "jira-live") {
+      const attempt = connectionAttemptFor(a, b, left, right);
+      if (attempt !== null && attempt !== "already-connected") beginConnectionAttempt(attempt);
+      return;
+    }
     setConns((cs) => (isDuplicate(cs, a, b) ? cs : [...cs, { id: `${a}~${b}`, a, b }]));
   };
 
@@ -2361,21 +2438,6 @@ export function filesChatBindScope(
   return filesVisibleScope(files, connectedAtMs);
 }
 
-export const KEEP_FILES_FOLDER_CFG_KEY = "keepFilesFolder";
-
-export function pinnedFilesScope(
-  next: ChatConnectedScope,
-  canonical: readonly ChatConnectedScope[] | undefined,
-  keepFolder: boolean,
-): ChatConnectedScope | null {
-  if (!keepFolder || next.kind !== "files") return next;
-  if (canonical === undefined) return null;
-  const sameRoot = canonical.filter((scope) => scope.root === next.root);
-  if (sameRoot.length === 0) return next;
-  const folders = sameRoot.filter((scope) => scope.kind !== "files");
-  return folders.length === 1 ? (folders[0] ?? null) : null;
-}
-
 export function boundScopeOf(conn: {
   readonly boundRoot?: string;
   readonly boundScopeKind?: string;
@@ -2644,10 +2706,12 @@ export function removeConnectorScope(
  * `connectedAtMs: 0` is fine — unbind paths only match on kind + id.
  */
 export function boundConnectorScopeOf(conn: {
-  readonly boundConnectorKind?: "capsule" | "capsule-set";
+  readonly boundConnectorKind?: "capsule" | "capsule-set" | "jira-live";
   readonly boundConnectorId?: string;
-}): ChatLocalKnowledgeScope | null {
+}): ChatConnectorSelection | null {
   if (typeof conn.boundConnectorId !== "string" || conn.boundConnectorId.length === 0) return null;
+  if (conn.boundConnectorKind === "jira-live")
+    return { kind: "jira-live", podId: conn.boundConnectorId, connectedAtMs: 0 };
   if (conn.boundConnectorKind === "capsule") {
     return {
       kind: "capsule",
@@ -2717,7 +2781,7 @@ function isGitChangeChatPair(a: AppWindow, b: AppWindow): boolean {
  * window's cfg when exactly one side is a `"connector"` window and the other
  * is a `"chat"` window; otherwise null.
  */
-export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledgeScope | null {
+export function connectorChatBind(a: AppWindow, b: AppWindow): ChatConnectorSelection | null {
   const connector = windowOfType(a, b, "connector");
   const chatWin = windowOfType(a, b, "chat");
   if (connector === null || chatWin === null) return null;
@@ -2726,6 +2790,8 @@ export function connectorChatBind(a: AppWindow, b: AppWindow): ChatLocalKnowledg
   if (typeof kind !== "string" || typeof id !== "string") return null;
   const selectedId = id.trim();
   if (selectedId.length === 0) return null;
+  if (kind === "jira-live")
+    return { kind: "jira-live", podId: selectedId, connectedAtMs: Date.now() };
   if (kind === "capsule") {
     return {
       kind: "capsule",

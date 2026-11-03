@@ -69,6 +69,27 @@ function stubMedia(
     value: { getUserMedia: vi.fn(getUserMedia) },
   });
   vi.stubGlobal("MediaRecorder", FakeMediaRecorder);
+  // jsdom lacks Blob.arrayBuffer; the injected decoder tests the normalized output separately.
+  vi.stubGlobal(
+    "Blob",
+    class extends Blob {
+      override arrayBuffer(): Promise<ArrayBuffer> {
+        return Promise.resolve(new ArrayBuffer(this.size));
+      }
+    },
+  );
+  if (typeof OfflineAudioContext === "undefined") {
+    const buffer = { duration: 3 / 16000, getChannelData: (): Float32Array => new Float32Array(3) };
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        destination = {};
+        decodeAudioData = vi.fn(async () => buffer);
+        createBufferSource = (): object => ({ connect: vi.fn(), start: vi.fn() });
+        startRendering = vi.fn(async () => buffer);
+      },
+    );
+  }
   return track;
 }
 
@@ -102,6 +123,29 @@ describe("dictationCaptureSupported", () => {
 });
 
 describe("createBrowserDictationRecorder", () => {
+  it("normalizes browser Opus capture to mono PCM WAV before provider delivery", async () => {
+    const samples = new Float32Array([0, 0.5, -0.5]);
+    const buffer = { length: 3, duration: 3 / 16000, getChannelData: (): Float32Array => samples };
+    const source = { buffer: undefined, connect: vi.fn(), start: vi.fn() };
+    vi.stubGlobal(
+      "OfflineAudioContext",
+      class {
+        destination = {};
+        decodeAudioData = vi.fn(async () => buffer);
+        createBufferSource = (): typeof source => source;
+        startRendering = vi.fn(async () => buffer);
+      },
+    );
+    const track = { stop: vi.fn() };
+    stubMedia(async () => fakeStream(track), track);
+    const session = await createBrowserDictationRecorder().start();
+    const capture = await session.stop();
+    expect(capture.mimeType).toBe("audio/wav");
+    expect(atob(capture.audioBase64).slice(0, 4)).toBe("RIFF");
+    expect(atob(capture.audioBase64).slice(8, 12)).toBe("WAVE");
+    expect(track.stop).toHaveBeenCalledOnce();
+  });
+
   it("renews silent audio with overlapping encoders on the same live microphone", async () => {
     vi.useFakeTimers();
     const track = { stop: vi.fn() };
@@ -260,8 +304,8 @@ describe("createBrowserDictationRecorder", () => {
     const recorder = createBrowserDictationRecorder();
     const session = await recorder.start({ timesliceMs: 125 });
     const capture = await session.stop();
-    expect(capture.audioBase64).toBe("AQID"); // base64 of [1,2,3]
-    expect(capture.mimeType).toBe("audio/webm;codecs=opus");
+    expect(atob(capture.audioBase64).slice(0, 4)).toBe("RIFF");
+    expect(capture.mimeType).toBe("audio/wav");
     expect(capture.durationMs).toBeGreaterThan(0);
     expect(FakeMediaRecorder.instances[0]?.startTimeslice).toBe(125);
     expect(FakeMediaRecorder.instances[0]?.requestDataCalls).toBeGreaterThan(0);

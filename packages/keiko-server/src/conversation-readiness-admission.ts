@@ -20,21 +20,35 @@ export interface ConversationReadinessAdmission {
   readonly gatewayConfigGeneration?: number | undefined;
 }
 
+type RequiredConversationCapability = "conversation" | "tool-calling";
+const TOOL_CALLING_REQUIRED_MESSAGE =
+  "Jira access requires a model with verified tool calling. Run the tool-calling check in Settings > Models, choose a verified model, or disconnect the Jira Pod.";
+const CONVERSATION_REQUIRED_MESSAGE =
+  "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.";
+
 export class ConversationModelNotReadyError extends Error {
-  public constructor() {
+  public constructor(
+    public readonly requiredCapability: RequiredConversationCapability = "conversation",
+  ) {
     super(
-      "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+      requiredCapability === "tool-calling"
+        ? TOOL_CALLING_REQUIRED_MESSAGE
+        : CONVERSATION_REQUIRED_MESSAGE,
     );
     this.name = "ConversationModelNotReadyError";
   }
 }
 
-export function conversationModelNotReadyResult(): RouteResult {
+export function conversationModelNotReadyResult(
+  requiredCapability: RequiredConversationCapability = "conversation",
+): RouteResult {
   return {
     status: 400,
     body: errorBody(
-      "BAD_REQUEST",
-      "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+      requiredCapability === "tool-calling" ? "CONVERSATION_UNAVAILABLE_MODEL" : "BAD_REQUEST",
+      requiredCapability === "tool-calling"
+        ? TOOL_CALLING_REQUIRED_MESSAGE
+        : CONVERSATION_REQUIRED_MESSAGE,
     ),
   };
 }
@@ -181,6 +195,6 @@ export function withConversationReadinessAdmission(
 
 export function mappedConversationReadinessError(error: unknown): RouteResult | undefined {
   return error instanceof ConversationModelNotReadyError
-    ? conversationModelNotReadyResult()
+    ? conversationModelNotReadyResult(error.requiredCapability)
     : undefined;
 }

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { encodeAppEnvironmentPacket } from "@oscharko-dev/keiko-contracts/runtime/native-runtime-wire";
 import {
   createPortableHandoffCoordinator,
   PortableHandoffCoordinatorError,
@@ -15,98 +16,70 @@ import {
 import {
   createPortableHandoffPlan,
   writePortableHandoffPlan,
-  type PortableHandoffPlan,
 } from "./update-portable-handoff-plan.js";
 
+import { prepare, type HandoffFixture } from "./__tests__/portable-handoff-fixture.js";
+import { portableRegistrationDocument } from "./update-portable-activation-files.js";
+import {
+  parseWindowsGenerationBinding,
+  resolveWindowsGenerationLayout,
+} from "./update-portable-windows-generation.js";
+
 const roots: string[] = [];
+
+// Child-transport fixtures inject the transport. Production Darwin admission requires its owner.
+vi.mock("./update-native-app-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-native-app-control.js")>()),
+  currentNativeAppControl: (): Promise<undefined> => Promise.resolve(undefined),
+}));
 
 afterEach(async () => {
   const { rm } = await import("node:fs/promises");
   await Promise.all(roots.splice(0).map((root) => rm(root, { force: true, recursive: true })));
 });
 
-interface HandoffFixture {
-  readonly coordinator: string;
-  readonly plan: PortableHandoffPlan;
-  readonly stateDir: string;
-  readonly supervisor: string;
-}
-
-function prepare(root: string): HandoffFixture {
-  const stateDir = join(root, "state");
-  const parent = join(root, "install-parent");
-  const managedRoot = join(parent, "Keiko.app");
-  const stageRoot = join(parent, ".keiko-portable-updates", "stage-1");
-  mkdirSync(managedRoot, { recursive: true });
-  mkdirSync(stageRoot, { recursive: true });
-  const coordinator = join(managedRoot, "Contents", "MacOS", "Keiko");
-  const supervisor = join(
-    managedRoot,
-    "Contents",
-    "Resources",
-    "runtime",
-    "native",
-    "keiko-runtime-supervisor",
+function writeWindowsCurrentRegistration(
+  managedRoot: string,
+  stateDir: string,
+  treeSha256: string,
+): string {
+  const binding = parseWindowsGenerationBinding({
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: createHash("sha256")
+      .update(readFileSync(join(managedRoot, "Keiko.exe")))
+      .digest("hex"),
+  });
+  if (binding === undefined) throw new Error("Invalid Windows registration fixture");
+  const layout = resolveWindowsGenerationLayout(managedRoot, binding);
+  writeFileSync(
+    layout.rootSetupManifestPath,
+    JSON.stringify({
+      schemaVersion: 2,
+      platformTarget: "windows-x64",
+      packageVersion: "1.2.2",
+      stable: true,
+      windowsGeneration: binding,
+    }),
   );
-  mkdirSync(join(managedRoot, "Contents", "MacOS"), { recursive: true });
-  mkdirSync(join(managedRoot, "Contents", "Resources", "runtime", "native"), {
-    recursive: true,
+  const registration = portableRegistrationDocument({
+    layout: {
+      ...layout,
+      launcherPath: layout.rootLauncherPath,
+      setupManifestPath: layout.rootSetupManifestPath,
+      windowsGeneration: binding,
+    },
+    target: "windows-x64",
+    env: {},
+    home: managedRoot,
+    now: 1_800_000_000_000,
   });
-  writeFileSync(coordinator, "coordinator");
-  writeFileSync(supervisor, "supervisor");
-  const plan = createPortableHandoffPlan({
-    activationId: "a".repeat(32),
-    sessionId: "session-1",
-    stageId: "stage-1",
-    target: "macos-arm64",
-    targetVersion: "1.2.3",
-    newLaunchId: "2".repeat(32),
-    restoreLaunchId: "3".repeat(32),
-    aggregateRevision: 7,
-    previousRegistrationState: "present",
-    oldProcess: {
-      pid: 123,
-      launchId: "b".repeat(32),
-      host: "127.0.0.1",
-      port: 1983,
-      version: "1.2.2",
-    },
-    paths: {
-      managedRoot,
-      stageRoot,
-      candidateRoot: join(stageRoot, "Keiko", "Keiko.app"),
-      backupRoot: join(parent, `.keiko-previous-${"a".repeat(32)}`),
-      candidateLauncher: join(stageRoot, "Keiko", "Keiko.app", "Contents", "MacOS", "Keiko"),
-      candidateSupervisor: join(
-        stageRoot,
-        "Keiko",
-        "Keiko.app",
-        "Contents",
-        "Resources",
-        "runtime",
-        "native",
-        "keiko-runtime-supervisor",
-      ),
-    },
-    digests: {
-      currentTreeSha256: "c".repeat(64),
-      candidateTreeSha256: "d".repeat(64),
-      currentLauncherSha256: createHash("sha256").update("coordinator").digest("hex"),
-      currentSupervisorSha256: createHash("sha256").update("supervisor").digest("hex"),
-      candidateLauncherSha256: "e".repeat(64),
-      candidateSupervisorSha256: "f".repeat(64),
-      previousRegistrationSha256: "0".repeat(64),
-      preparedRegistrationSha256: "1".repeat(64),
-    },
-    deadlines: {
-      oldExitAt: 1_800_000_000_000,
-      startAt: 1_800_000_030_000,
-      verifyAt: 1_800_000_060_000,
-      cleanupAt: 1_800_000_090_000,
-    },
-  });
-  writePortableHandoffPlan({ stateDir, plan });
-  return { coordinator, plan, stateDir, supervisor };
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(join(stateDir, "portable-install-state.json"), registration);
+  return registration;
 }
 
 function prepareWindows(root: string): HandoffFixture {
@@ -147,9 +120,12 @@ function prepareWindows(root: string): HandoffFixture {
   writeFileSync(supervisor, "supervisor");
   writeFileSync(candidateLauncher, "candidate-launcher");
   writeFileSync(candidateSupervisor, "candidate-supervisor");
-  writeFileSync(currentSetup, "current-setup");
   writeFileSync(candidateSetup, "candidate-setup");
-  const registrationPrevious = "registration-previous";
+  const registrationPrevious = writeWindowsCurrentRegistration(
+    managedRoot,
+    stateDir,
+    currentGenerationTreeSha256,
+  );
   const registrationNext = "registration-next";
   const digest = (value: string): string => createHash("sha256").update(value).digest("hex");
   const plan = createPortableHandoffPlan({
@@ -196,7 +172,7 @@ function prepareWindows(root: string): HandoffFixture {
     cutoverKind: "windows-generation-v1",
     currentGenerationTreeSha256,
     candidateGenerationTreeSha256,
-    currentSetupManifestSha256: digest("current-setup"),
+    currentSetupManifestSha256: digest(readFileSync(currentSetup, "utf8")),
     candidateSetupManifestSha256: digest("candidate-setup"),
   });
   writePortableHandoffPlan({ stateDir, plan });
@@ -227,10 +203,12 @@ describe("portable handoff coordinator", () => {
       expect(readFileSync(join(capsule, "coordinator.exe"), "utf8")).toBe("coordinator");
       expect(readFileSync(join(capsule, "runtime-supervisor.exe"), "utf8")).toBe("supervisor");
       expect(readFileSync(join(capsule, "launcher.next"), "utf8")).toBe("candidate-launcher");
-      expect(readFileSync(join(capsule, "setup-manifest.previous"), "utf8")).toBe("current-setup");
+      expect(readFileSync(join(capsule, "setup-manifest.previous"))).toEqual(
+        readFileSync(join(fixture.plan.paths.managedRoot, ".portable", "setup-manifest.json")),
+      );
       expect(readFileSync(join(capsule, "setup-manifest.next"), "utf8")).toBe("candidate-setup");
-      expect(readFileSync(join(capsule, "registration.previous"), "utf8")).toBe(
-        "registration-previous",
+      expect(readFileSync(join(capsule, "registration.previous"))).toEqual(
+        readFileSync(join(fixture.stateDir, "portable-install-state.json")),
       );
       expect(readFileSync(join(capsule, "registration.next"), "utf8")).toBe("registration-next");
       return Promise.resolve();
@@ -423,8 +401,31 @@ describe("portable handoff coordinator", () => {
       coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
     ).resolves.toMatchObject({ acceptedAt: "2023-11-14T22:13:20.000Z" });
     expect(order).toStrictEqual(["persist", "spawn", "publish", "accept"]);
-    expect(controlText).toMatch(/^[a-f0-9]{64}\n$/u);
+    expect(controlText.slice(0, 65)).toMatch(/^[a-f0-9]{64}\n$/u);
+    expect(controlText.slice(65)).toBe(encodeAppEnvironmentPacket({}).toString("utf8"));
     expect(control.writableEnded).toBe(false);
+  });
+
+  it("validates the private Mac environment before publishing or spawning a child", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-"));
+    roots.push(root);
+    const fixture = prepare(root);
+    const spawnFn = vi.fn();
+    const publishCoordinatorPid = vi.fn(() => true);
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      publishCoordinatorPid,
+      persistPrepared: vi.fn(() => Promise.resolve()),
+      persistAccepted: vi.fn(() => Promise.resolve()),
+      verifyNativeCopy: vi.fn(() => Promise.resolve()),
+      spawnFn,
+      runtimeEnvironment: { INVALID: "contains\u0000nul" },
+    });
+    await expect(
+      coordinator.begin({ sessionId: "session-1", activationId: fixture.plan.activationId }),
+    ).rejects.toThrow();
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(publishCoordinatorPid).not.toHaveBeenCalled();
   });
 
   it("does not spawn when the aggregate CAS fails", async () => {
@@ -691,3 +692,44 @@ describe("portable handoff coordinator", () => {
     });
   });
 });
+
+it.each(["linux-x64", "macos-arm64"] as const)(
+  "copies the actual %s native layout before durable preparation",
+  async (target): Promise<void> => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-native-layout-"));
+    roots.push(root);
+    const fixture = prepare(root, target);
+    const stop = new Error("Synthetic stop before native spawn");
+    const persistPrepared = vi.fn(() => Promise.reject(stop));
+    const verifyNativeCopy = vi.fn(
+      ({
+        currentPath,
+        copiedPath,
+      }: {
+        readonly currentPath: string;
+        readonly copiedPath: string;
+      }): Promise<void> => {
+        expect(readFileSync(copiedPath)).toEqual(readFileSync(currentPath));
+        return Promise.resolve();
+      },
+    );
+    const spawnFn = vi.fn();
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared,
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy,
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+    await expect(
+      coordinator.begin({
+        sessionId: fixture.plan.sessionId,
+        activationId: fixture.plan.activationId,
+      }),
+    ).rejects.toBe(stop);
+    expect(verifyNativeCopy).toHaveBeenCalledTimes(2);
+    expect(persistPrepared).toHaveBeenCalledOnce();
+    expect(spawnFn).not.toHaveBeenCalled();
+  },
+);

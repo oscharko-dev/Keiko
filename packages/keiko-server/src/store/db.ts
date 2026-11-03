@@ -1,5 +1,11 @@
+import { updateChatToolTranscript } from "./chatToolTranscript.js";
+import { readContinuityCheckpoint, writeContinuityCheckpoint } from "./chatContinuity.js";
+import { createChatToolMutationStore } from "./chatToolMutations.js";
 import { withImmediateTransaction } from "./transaction.js";
+import { replayChatCreationIntent, withChatCreationIntent } from "./chatCreationIntents.js";
+import { readChatDraft, updateChatDraft } from "./chatDrafts.js";
 import { createMarkdownSkillStore } from "./markdownSkills.js";
+import { createBrowserApprovalStore } from "./browserApprovals.js";
 import { bindMarkdownSkillTurn } from "./markdownSkillSelections.js";
 import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 // ADR-0013 D3/D8/D9 — DB lifecycle, factories, and the public UiStore wiring. The synchronous
@@ -8,7 +14,7 @@ import { isolateCodingHistory } from "./codingHistoryIsolation.js";
 
 import { DatabaseSync } from "node:sqlite";
 import { createCodingHistoryStore } from "./codingHistory.js";
-import { existsSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -41,6 +47,7 @@ import {
   errorRecord,
   isSqliteCorruptionError,
 } from "@oscharko-dev/keiko-security/sqlite-corruption";
+import { createChatReadGrantStore } from "./chatToolReadGrants.js";
 import type {
   Chat,
   ChatMessage,
@@ -80,7 +87,9 @@ import {
   touchChat as sqlTouchChat,
   mutateGitChangeScopes as sqlMutateGitChangeScopes,
   updateChat as sqlUpdateChat,
+  invalidateJiraPod as sqlInvalidateJiraPod,
 } from "./chats.js";
+import { searchGatewayMessageUnits } from "./chatHistorySearch.js";
 import {
   type ClientTurnRecord,
   countMessages as sqlCountMessages,
@@ -122,7 +131,8 @@ import {
   workspaceManifestRootCountForProject,
 } from "./workspaceManifests.js";
 import { validateProjectPath } from "./validation.js";
-import { deriveWorkspaceRootRef } from "../workspace-root-identity.js";
+import { resolveRegisteredWorkspaceProjectPath } from "../workspace-root-identity.js";
+import { recordWorkspaceRootDenied } from "../workspace-root-denial-log.js";
 import {
   readMemoryAutonomyPolicy as sqlReadMemoryAutonomyPolicy,
   updateMemoryAutonomyPolicy as sqlUpdateMemoryAutonomyPolicy,
@@ -131,7 +141,7 @@ import {
   readGitHubIssueReaderAuthorization as sqlReadGitHubIssueReaderAuthorization,
   updateGitHubIssueReaderAuthorization as sqlUpdateGitHubIssueReaderAuthorization,
 } from "./github-issue-reader-authorization.js";
-import { invalidRequest } from "./errors.js";
+import { invalidRequest, UiStoreError } from "./errors.js";
 
 const STORE_OPENED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -183,6 +193,7 @@ interface ResolvedFactoryOptions {
   // A chat id is persisted by the browser as a window reference (#3557 review).
   readonly newChatId: (correlationId: string | undefined) => string;
   readonly redactString: (s: string) => string;
+  readonly redactContentString: (s: string) => string;
 }
 
 // An injected id source (tests) keeps its ids; otherwise a chat id is a reference id.
@@ -193,12 +204,16 @@ function chatIdFactory(
   return (correlationId): string => newReferenceId({ kind: "chat", correlationId });
 }
 
-function resolveOptions(opts: UiStoreFactoryOptions | undefined): ResolvedFactoryOptions {
+function resolveOptions(opts: UiStoreFactoryOptions = {}): ResolvedFactoryOptions {
+  const redactString = opts.redactString ?? DEFAULT_REDACT;
   return {
-    now: opts?.now ?? ((): number => Date.now()),
-    newId: opts?.newId ?? randomUUID,
-    newChatId: chatIdFactory(opts?.newId),
-    redactString: opts?.redactString ?? DEFAULT_REDACT,
+    now: opts.now ?? ((): number => Date.now()),
+    newId: opts.newId ?? randomUUID,
+    newChatId: chatIdFactory(opts.newId),
+    redactString,
+    // #4098: a store keeps private Chat content only when its composer hands it the deployment's
+    // preserving redactor; every other store projects that content like everything else.
+    redactContentString: opts.redactContentString ?? redactString,
   };
 }
 
@@ -206,6 +221,13 @@ function deriveProjectName(explicit: string | undefined, path: string): string {
   if (explicit === undefined) return basename(path);
   if (explicit.length === 0) throw invalidRequest("Name must not be empty.");
   return explicit;
+}
+
+function assertChatProjectAvailable(db: DatabaseSync, projectPath: string): void {
+  const project = sqlGetProject(db, projectPath);
+  if (project !== undefined && !isProjectAvailable(project)) {
+    throw invalidRequest("Project path is unavailable.");
+  }
 }
 
 function createChatRecord(
@@ -216,18 +238,30 @@ function createChatRecord(
   selectedModel: string,
   opts: StoreCreateChatOptions | undefined,
 ): Chat {
-  const project = sqlGetProject(db, projectPath);
-  if (project !== undefined && !isProjectAvailable(project)) {
-    throw invalidRequest("Project path is unavailable.");
-  }
-  return sqlInsertChat(db, {
-    id: options.newChatId(opts?.correlationId),
-    projectPath,
-    title,
-    selectedModel,
-    opts,
-    now: options.now(),
-  });
+  assertChatProjectAvailable(db, projectPath);
+  const create = (): Chat =>
+    sqlInsertChat(db, {
+      id: options.newChatId(opts?.correlationId),
+      projectPath,
+      title,
+      selectedModel,
+      opts,
+      now: options.now(),
+    });
+  return opts?.creationRequestId === undefined
+    ? create()
+    : withChatCreationIntent(
+        db,
+        {
+          requestId: opts.creationRequestId,
+          projectPath,
+          title,
+          requestedModelId: opts.automaticModelSelection === true ? undefined : selectedModel,
+          branchLabel: opts.branchLabel,
+          correlationId: opts.correlationId,
+        },
+        create,
+      );
 }
 
 function createMessageRecord(
@@ -247,7 +281,7 @@ function createMessageRecord(
       db,
       messageId,
       msg,
-      options.redactString,
+      options,
       clientTurnId,
       clientTurnState,
       clientTurnContentDigest,
@@ -315,19 +349,39 @@ function createProjectRecord(
   options: ResolvedFactoryOptions,
   path: string,
   name?: string,
+  correlationId?: string,
 ): Project {
   const normalized = validateProjectPath(path, { mustExist: true });
   const now = options.now();
-  return withImmediateTransaction(db, () => {
-    const rootRef = deriveWorkspaceRootRef(realpathSync.native(normalized));
-    const membership = sqlFindWorkspaceManifestRecordByRoot(db, rootRef);
-    const registeredPath =
-      membership?.rootProjects.find((root) => root.rootRef === rootRef)?.projectPath ?? normalized;
-    const resolvedName = deriveProjectName(name, registeredPath);
-    const project = sqlUpsertProject(db, registeredPath, resolvedName, name !== undefined, now);
-    ensureProjectWorkspaceManifest(db, project.path, project.name, now);
-    return project;
-  });
+  try {
+    return withImmediateTransaction(db, () => {
+      const registeredPath = resolveRegisteredWorkspaceProjectPath(
+        {
+          listProjects: () => sqlListProjects(db),
+          findWorkspaceManifestRecordByRoot: (rootRef) =>
+            sqlFindWorkspaceManifestRecordByRoot(db, rootRef),
+          findWorkspaceManifestRecordByProject: (projectPath) =>
+            sqlFindWorkspaceManifestRecordByProject(db, projectPath),
+        },
+        normalized,
+      );
+      const resolvedName = deriveProjectName(name, registeredPath);
+      const project = sqlUpsertProject(db, registeredPath, resolvedName, name !== undefined, now);
+      ensureProjectWorkspaceManifest(db, project.path, project.name, now);
+      return project;
+    });
+  } catch (error) {
+    if (error instanceof UiStoreError && error.code === "PROJECT_IDENTITY_CHANGED")
+      recordWorkspaceRootDenied(
+        {
+          reason: "ordinary-root-identity",
+          failureKind: error.code,
+          errorKind: "permission-denied",
+        },
+        { correlationId },
+      );
+    throw error;
+  }
 }
 
 function reconnectProjectRecord(
@@ -570,7 +624,7 @@ function persistStagedAssistant(
         assistantMessageId,
         pending.draft.groundedAnswer,
         pending.previewCitations,
-        options.redactString,
+        options.redactContentString,
       )
     : assistant;
 }
@@ -599,14 +653,20 @@ function completeChatTurnRecord(
       assistantMessageId,
     );
     if (plan.kind !== "commit") return plan;
-    const assistant = persistStagedAssistant(
-      db,
-      options,
-      assistantMessageId,
-      plan.pendingAssistant,
-    );
+    persistStagedAssistant(db, options, assistantMessageId, plan.pendingAssistant);
     sqlLinkAssistantToClientTurn(db, chatId, assistantMessageId, storedTurnId);
-    return { kind: "completed", userMessage: plan.userMessage, assistantMessage: assistant };
+    const committed = sqlFindClientTurn(db, chatId, storedTurnId);
+    if (
+      committed.state !== "completed" ||
+      committed.userMessage === undefined ||
+      committed.assistantMessage === undefined
+    )
+      throw new UiStoreError("INTERNAL", "Canonical turn completion was not observable.", 500);
+    return {
+      kind: "completed",
+      userMessage: committed.userMessage,
+      assistantMessage: committed.assistantMessage,
+    };
   });
   if (result.kind === "completed") staged.delete(assistantMessageId);
   return result;
@@ -675,10 +735,13 @@ function createMessageBatch(
 function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore {
   const stagedTurnAssistants: StagedTurnAssistants = new Map();
   const store: UiStore = {
+    chatToolReadGrants: createChatReadGrantStore(db),
+    chatToolMutations: createChatToolMutationStore(db, options.now),
     markdownSkills: createMarkdownSkillStore(db, options.now),
+    browserApprovals: createBrowserApprovalStore(db),
     listProjects: () => sqlListProjects(db),
-    createProject: (path: string, name?: string): Project =>
-      createProjectRecord(db, options, path, name),
+    createProject: (path: string, name?: string, correlationId?: string): Project =>
+      createProjectRecord(db, options, path, name, correlationId),
     reconnectProject: (path: string): Project => reconnectProjectRecord(db, options, path),
     updateProject: (path: string, patch: UpdateProjectPatch): Project =>
       updateProjectRecord(db, options, path, patch),
@@ -690,6 +753,12 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         ? sqlListChats(db, projectPath)
         : sqlListChatsLimited(db, projectPath, limit),
     findChatById: (id: string): Chat | undefined => sqlFindChatById(db, id),
+    replayChatCreation: (intent): Chat | undefined => {
+      assertChatProjectAvailable(db, intent.projectPath);
+      return replayChatCreationIntent(db, intent);
+    },
+    readChatDraft: (id) => readChatDraft(db, id),
+    updateChatDraft: (id, update) => updateChatDraft(db, id, update),
     createChat: (
       projectPath: string,
       title: string,
@@ -698,6 +767,8 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     ): Chat => createChatRecord(db, options, projectPath, title, selectedModel, opts),
     updateChat: (id: string, patch: UpdateChatPatch, updateOptions?: UpdateChatOptions): Chat =>
       sqlUpdateChat(db, id, patch, options.now(), updateOptions),
+    invalidateJiraPod: (podId, generation, correlationId) =>
+      sqlInvalidateJiraPod(db, podId, generation, options.now(), correlationId),
     mutateGitChangeScopes: (
       id: string,
       mutate: (current: readonly ChatGitChangeScope[]) => readonly ChatGitChangeScope[],
@@ -718,9 +789,24 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
     visitGatewayMessageUnits: (chatId, currentUserMessageId, visit): void => {
       sqlVisitGatewayMessageUnits(db, chatId, currentUserMessageId, visit);
     },
+    searchGatewayMessageUnits: (chatId, terms, visit) =>
+      searchGatewayMessageUnits(db, chatId, terms, visit),
     chatHistoryRevision: (chatId): number => sqlChatHistoryRevision(db, chatId),
+    readChatContinuityCheckpoint: (chatId) =>
+      readContinuityCheckpoint(db, chatId, options.redactContentString),
+    writeChatContinuityCheckpoint: (chatId, record, expectedGeneration): boolean =>
+      writeContinuityCheckpoint(
+        db,
+        chatId,
+        record,
+        expectedGeneration,
+        options.redactContentString,
+      ),
     countMessages: (chatId: string): number => sqlCountMessages(db, chatId),
     findMessageById: (id: string): ChatMessage | undefined => sqlFindMessageById(db, id),
+    updateChatToolTranscript: (id, update, correlationId): void => {
+      updateChatToolTranscript(db, id, update, options.redactString, correlationId);
+    },
     createMessage: (msg: NewChatMessage): ChatMessage => {
       const message = createMessageRecord(db, options, msg);
       sqlTouchChat(db, msg.chatId, options.now());
@@ -785,7 +871,7 @@ function buildStore(db: DatabaseSync, options: ResolvedFactoryOptions): UiStore 
         id,
         answer,
         previewCitations,
-        options.redactString,
+        options.redactContentString,
       ),
     findGroundedPreviewCitations: (id: string) => sqlFindGroundedPreviewCitations(db, id),
     createAssistantResponseVersion: (id: string, content: string, timestamp: number): ChatMessage =>

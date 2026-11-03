@@ -4,6 +4,7 @@ import type { ContextCoverageTruncationReason } from "@oscharko-dev/keiko-contra
 
 import {
   collectBestLines,
+  lexicalQueryGroupKey,
   looksLikeBlockHeader,
   looksLikeSignatureStart,
   looksLikeTypedCallStart,
@@ -634,5 +635,31 @@ describe("looksLikeTypedCallStart", () => {
     }
     // The corpus must exercise both outcomes, or the equivalence claim is vacuous.
     expect(accepted).toBeGreaterThan(150);
+  });
+});
+
+describe("lexical query-group identity", () => {
+  it("encodes the set independently of group order and duplicate matches", () => {
+    expect(lexicalQueryGroupKey([0, 2])).toBe("5");
+    expect(lexicalQueryGroupKey([2, 0, 2])).toBe("5");
+    expect(lexicalQueryGroupKey([0, 1])).toBe("3");
+  });
+
+  it("preserves the highest admitted group without truncating it", () => {
+    expect(lexicalQueryGroupKey([0, 127])).toBe("80000000000000000000000000000001");
+    expect(lexicalQueryGroupKey(Array.from({ length: 128 }, (_, index) => index))).toBe(
+      "ffffffffffffffffffffffffffffffff",
+    );
+  });
+
+  it.each([[], [0], [1, 1], [-1, 0], [0, 128], [0, 0.5], [0, NaN], [0, Infinity]])(
+    "rejects missing, single-group or invalid matches %j",
+    (...groups) => {
+      expect(lexicalQueryGroupKey(groups)).toBeUndefined();
+    },
+  );
+
+  it("rejects an oversized group list before constructing an identity", () => {
+    expect(lexicalQueryGroupKey(Array.from({ length: 129 }, (_, index) => index))).toBeUndefined();
   });
 });

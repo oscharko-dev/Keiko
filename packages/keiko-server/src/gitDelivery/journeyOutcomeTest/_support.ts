@@ -1,9 +1,9 @@
-import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { IssueBoundDraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 import { DatabaseSync } from "node:sqlite";
 import type { GitJourneyRemoteFacts } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
-import { createDraftRun, AT, DIGEST } from "../ciObservationTest/_support.js";
+import { createDraftRun, recordedIssueDraft, AT, DIGEST } from "../ciObservationTest/_support.js";
 import { produceCiReadinessSnapshot } from "../ciReadinessSnapshot.js";
 import type { JourneyOutcomeInput } from "../journeyOutcome.js";
 
@@ -12,7 +12,7 @@ export function journeyFixture(
 ): JourneyOutcomeInput & { readonly facts: GitJourneyRemoteFacts } {
   const db = new DatabaseSync(":memory:");
   try {
-    const draft = createDraftRun(db).get("run-1")?.draftDelivery;
+    const draft = recordedIssueDraft(createDraftRun(db));
     if (draft?.pullRequest === undefined) throw new TypeError("Confirmed draft fixture missing");
     const identity = { ...draft.pullRequest, isDraft };
     const readiness = observedReadiness(draft, identity);
@@ -41,7 +41,7 @@ export function journeyFixture(
 }
 
 function appliedDescription(
-  draft: DraftDeliveryRecord,
+  draft: IssueBoundDraftDeliveryRecord,
   identity: GitPullRequestIdentity,
   expiresAt: string,
 ): PrDescriptionApplicationStatus {
@@ -78,7 +78,7 @@ function appliedDescription(
 }
 
 function observedReadiness(
-  draft: DraftDeliveryRecord,
+  draft: IssueBoundDraftDeliveryRecord,
   identity: GitPullRequestIdentity,
 ): NonNullable<JourneyOutcomeInput["readiness"]> {
   const page = {

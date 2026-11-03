@@ -126,6 +126,10 @@ function extraOf(event: ServerLogEvent | undefined): Readonly<Record<string, unk
 }
 
 describe("parseUiArgs", () => {
+  it("retains a validated explicit launch identity for the effective server environment", () => {
+    expect(expectParsed(["--launch-id", "a".repeat(32)]).launchId).toBe("a".repeat(32));
+    expect(parseUiArgs(["--launch-id", `${"a".repeat(32)}\n`])).toBeNull();
+  });
   it("defaults the port to 1983", () => {
     expect(parseUiArgs([])).toEqual({
       port: DEFAULT_UI_PORT,
@@ -423,50 +427,57 @@ describe("runUiCli", () => {
     }
   });
 
-  it("lets a process-local harness replace only handler dependency composition", async () => {
-    const { io } = captureIo();
-    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-handler-deps-"));
-    const stateDir = join(cwd, ".keiko");
-    let input: BuildHandlerDepsOptions | undefined;
-    let built: UiHandlerDeps | undefined;
-    let served: UiHandlerDeps | undefined;
-    try {
-      const code = await runUiCli(
-        ["--port", "4399"],
-        io,
-        {},
-        {
-          staticRoot,
-          hashesFile: join(staticRoot, "csp-hashes.json"),
-          cwd,
-          buildHandlerDeps: (options) => {
-            input = options;
-            built = buildUiHandlerDeps(options);
-            return built;
+  it.each([
+    { source: "environment", args: [], expected: "a".repeat(32) },
+    { source: "explicit flag", args: ["--launch-id", "b".repeat(32)], expected: "b".repeat(32) },
+  ])(
+    "composes real handler dependencies with the launch identity from $source",
+    async ({ args, expected }) => {
+      const { io } = captureIo();
+      const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-handler-deps-"));
+      const stateDir = join(cwd, ".keiko");
+      let input: BuildHandlerDepsOptions | undefined;
+      let built: UiHandlerDeps | undefined;
+      let served: UiHandlerDeps | undefined;
+      try {
+        const code = await runUiCli(
+          ["--port", "4399", ...args],
+          io,
+          { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+          {
+            staticRoot,
+            hashesFile: join(staticRoot, "csp-hashes.json"),
+            cwd,
+            buildHandlerDeps: (options) => {
+              input = options;
+              built = buildUiHandlerDeps(options);
+              return built;
+            },
+            createServer: ({ handlerDeps }) => {
+              served = handlerDeps;
+              return fakeServer({});
+            },
           },
-          createServer: ({ handlerDeps }) => {
-            served = handlerDeps;
-            return fakeServer({});
-          },
-        },
-      );
+        );
 
-      expect(code).toBe(0);
-      expect(input).toMatchObject({
-        configPath: undefined,
-        evidenceDir: undefined,
-        uiDbPath: undefined,
-        initialProjectPath: cwd,
-        env: { KEIKO_STATE_DIR: stateDir },
-        updateStartupRecovery: undefined,
-      });
-      expect(typeof input?.portableHandoffShutdown).toBe("function");
-      expect(served).toBe(built);
-    } finally {
-      closeHandlerDeps(built);
-      await rm(cwd, { recursive: true, force: true });
-    }
-  });
+        expect(code).toBe(0);
+        expect(input).toMatchObject({
+          configPath: undefined,
+          evidenceDir: undefined,
+          uiDbPath: undefined,
+          initialProjectPath: cwd,
+          env: { KEIKO_STATE_DIR: stateDir, KEIKO_UI_LAUNCH_ID: expected },
+          updateStartupRecovery: undefined,
+        });
+        expect(typeof input?.portableHandoffShutdown).toBe("function");
+        expect(served).toBe(built);
+        expect(served?.env.KEIKO_UI_LAUNCH_ID).toBe(expected);
+      } finally {
+        closeHandlerDeps(built);
+        await rm(cwd, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps readiness closed through pre-listen and opens only after post-listen recovery", async () => {
     const { io, out } = captureIo();
@@ -634,6 +645,86 @@ describe("runUiCli", () => {
     expect(event?.errorKind).toBe("durability-failed");
     expect(extraOf(event).failureKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
     expect(extraOf(event).recoveryReason).toBe("persistence-failed");
+  });
+
+  it("waits for late native cleanup before reporting the updated application ready", async () => {
+    const { io } = captureIo();
+    const order: string[] = [];
+    let postListenCalls = 0;
+    const server = Object.assign(fakeServer({}), {
+      once(): Server {
+        return this as unknown as Server;
+      },
+      removeListener(): Server {
+        return this as unknown as Server;
+      },
+      address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+    });
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: {
+          write: (event): void => {
+            if (event.op === "process.started") order.push("started");
+          },
+        },
+        createServer: () => server,
+        updateStartupRecovery: {
+          reconcile: ({ phase }) => {
+            if (phase === "pre-listen") return Promise.resolve({ status: "ready" as const });
+            postListenCalls += 1;
+            order.push(postListenCalls === 1 ? "verified" : "cleanup-complete");
+            return Promise.resolve({
+              status: "ready" as const,
+              ...(postListenCalls === 1 ? { completionDeadline: Date.now() + 1000 } : {}),
+            });
+          },
+        },
+      },
+    );
+    expect(code).toBe(0);
+    expect(order).toEqual(["verified", "cleanup-complete", "started"]);
+  });
+
+  it("closes without reporting startup when native cleanup has already expired", async () => {
+    const { io } = captureIo();
+    const sink = createRecordingSink();
+    const close = vi.fn((callback?: () => void) => callback?.());
+    const server = Object.assign(fakeServer({}), {
+      removeListener(): Server {
+        return this as unknown as Server;
+      },
+      address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+      close,
+    });
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          activityLog: sink,
+          createServer: () => server,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) =>
+              Promise.resolve({
+                status: "ready" as const,
+                ...(phase === "post-listen" ? { completionDeadline: 0 } : {}),
+              }),
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "PORTABLE_UPDATE_RECOVERY_INTERRUPTED" });
+    expect(close).toHaveBeenCalledOnce();
+    expect(sink.events.some(({ op }) => op === "process.started")).toBe(false);
   });
 
   it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {
@@ -1304,6 +1395,8 @@ describe("runUiCli", () => {
       expect(extra.port).toBe(DEFAULT_UI_PORT);
       expect(extra.stateDirSource).toBe("default");
       expect(extra.logLevel).toBe("debug");
+      expect(extra.processScope).toBe("local");
+      expect(extra.processScopeState).toBe("local");
       // Neither is computable without loading the real server module graph (`installMode`) or a
       // resolved gateway config (`gatewayProviderCount`, and no `--config` was given here) — both
       // are correctly absent on the injected-server path, never a fabricated placeholder value.
@@ -2446,6 +2539,7 @@ describe("startProcessHeartbeat", () => {
       expect(heartbeat).toBeDefined();
       expect(heartbeat?.category).toBe("process");
       const extra = extraOf(heartbeat);
+      expect(extra.processScopeState).toBe("local");
       expect(typeof extra.rssBytes).toBe("number");
       expect(typeof extra.heapUsedBytes).toBe("number");
       expect(typeof extra.heapTotalBytes).toBe("number");

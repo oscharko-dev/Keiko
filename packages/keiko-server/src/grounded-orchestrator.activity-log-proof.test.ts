@@ -1,3 +1,4 @@
+import { CODE_REDACTION_REVISION } from "@oscharko-dev/keiko-security/redaction";
 import {
   createBufferedServerLogSink,
   type BufferedServerLogSink,
@@ -16,6 +17,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  DEFAULT_EXPLORATION_BUDGET,
   type EvidenceAtom,
   type RetrievalQuery,
   type SelectedScope,
@@ -109,6 +111,44 @@ function fixtureDeps(activityLog: BufferedServerLogSink): OrchestratorDeps {
 }
 
 describe("retrieveConnectedContextPack Activity Log proofs", () => {
+  it("records independent compound-source selection on the existing body-free completion", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const input = fixtureInput();
+    const targets = ["src/backend/RefundPolicy.java", "src/frontend/RefundSummary.tsx"];
+    const files = Object.fromEntries(targets.map((path) => [path, "// Maple partner refunds.\n"]));
+    for (let index = 0; index < 40; index += 1) {
+      files[`src/backend/Catalog${String(index)}.java`] = "// Other partner refunds.\n".repeat(100);
+    }
+    const output = await retrieveConnectedContextPack(
+      {
+        ...input,
+        budget: { ...DEFAULT_EXPLORATION_BUDGET, filesReadMax: 2, excerptBytesMax: 4096 },
+        scope: {
+          ...input.scope,
+          kind: "workspace-root",
+          relativePaths: [],
+          explicitConnection: true,
+        },
+        query: { ...input.query, text: "Maple-Partner" },
+      },
+      { ...fixtureDeps(activityLog), fs: memFs(FIXTURE_ROOT, files) },
+    );
+    expect(output.pack.files.map((file) => file.scopePath).sort()).toEqual(targets);
+    const completed = activityLog.events.find(
+      (event) => event.op === "search.connected-context.completed",
+    );
+    const proof = expectActivityLogProof(
+      "search.connected-context.completed.line",
+      formatActivityLogProofLine(completed ?? {}),
+    );
+    expect(proof.selectedFileCount).toBe(2);
+    expect(proof.usageFilesRead).toBe(output.pack.usage.filesRead);
+    expect(proof.usageExcerptBytes).toBe(output.pack.usage.excerptBytes);
+    const serialized = activityLog.lines().join("\n");
+    expect(serialized).not.toContain("Maple");
+    for (const path of targets) expect(serialized).not.toContain(path);
+  });
+
   it("records citation-only subject normalization without query or source bodies", async () => {
     const activityLog = createBufferedServerLogSink();
     const input = fixtureInput();
@@ -131,13 +171,14 @@ describe("retrieveConnectedContextPack Activity Log proofs", () => {
     expect(serialized).not.toContain(SCOPE_FILE);
   });
 
-  it("resolves started, completion, source and selection siblings from one real retrieval", async () => {
+  it("resolves started, completion, source, selection and evidence siblings from one retrieval", async () => {
     const activityLog = createBufferedServerLogSink();
 
     const output = await retrieveConnectedContextPack(fixtureInput(), fixtureDeps(activityLog));
 
-    expect(activityLog.events).toHaveLength(5);
-    const [started, details, sourceDetails, selectionDetails, completed] = activityLog.events;
+    expect(activityLog.events).toHaveLength(6);
+    const [started, details, sourceDetails, selectionDetails, evidenceDetails, completed] =
+      activityLog.events;
 
     const startedProof = expectActivityLogProof(
       "search.connected-context.started.line",
@@ -191,6 +232,22 @@ describe("retrieveConnectedContextPack Activity Log proofs", () => {
       completeness: "complete",
       loss: "none",
     });
+
+    const evidenceProof = expectActivityLogProof(
+      "search.connected-context.evidence-details.line",
+      formatActivityLogProofLine(evidenceDetails ?? {}),
+    );
+    expect(evidenceProof).toMatchObject({
+      codeRedactionRevision: CODE_REDACTION_REVISION,
+      correlationId: CORRELATION_ID,
+      scopeIdentitySha256: startedProof.scopeIdentitySha256,
+      queryIdentitySha256: startedProof.queryIdentitySha256,
+      activityDetailStatus: "complete",
+      sourceDescriptorPathCount: 0,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(sourceProof).not.toHaveProperty("_truncatedFieldCount");
 
     const completedProof = expectActivityLogProof(
       "search.connected-context.completed.line",

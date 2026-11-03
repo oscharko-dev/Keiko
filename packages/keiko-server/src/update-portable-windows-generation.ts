@@ -33,7 +33,7 @@ export interface WindowsGenerationLayout {
 }
 
 export interface PortablePackageLayout {
-  readonly kind: "macos-bundle-v1" | "windows-flat-v1" | "windows-generation-v1";
+  readonly kind: "macos-bundle-v1" | "linux-flat-v1" | "windows-flat-v1" | "windows-generation-v1";
   readonly installRoot: string;
   readonly resourceRoot: string;
   readonly appRoot: string;
@@ -183,6 +183,17 @@ export function portablePackageLayout(
   if (pathApi.basename(packageRoot) !== "app") return undefined;
 
   const resourceRoot = pathApi.dirname(packageRoot);
+  if (target === "linux-x64") {
+    return {
+      kind: "linux-flat-v1",
+      installRoot: resourceRoot,
+      resourceRoot,
+      appRoot: packageRoot,
+      packageJsonPath: pathApi.join(packageRoot, "package.json"),
+      rootLauncherPath: pathApi.join(resourceRoot, "Keiko"),
+      rootSetupManifestPath: pathApi.join(resourceRoot, ".portable", "setup-manifest.json"),
+    };
+  }
   if (target !== "windows-x64") {
     return macosPackageLayout(pathApi, packageRoot, resourceRoot);
   }

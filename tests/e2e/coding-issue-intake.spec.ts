@@ -118,24 +118,33 @@ async function openWorkbench(page: Page): Promise<void> {
   await page.goto(`/${fragment}`);
   await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   await expect(workbench(page)).toBeVisible();
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toBeVisible();
+  // PR #3659 (2026-09-27) made the "Code setup" card a fallback that renders only while no
+  // repository root is resolved (CodingWorkbenchWindow.tsx's `showSetup`). This fixture's one
+  // registered checkout resolves at once, so the repository, branch and "Work in" controls sit
+  // inline above the composer from the first paint.
+  await expect(repositoryCombobox(page)).toBeVisible();
+  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
 }
 
-function codeSetupRepositoryCombobox(page: Page): Locator {
-  return page
-    .getByRole("region", { name: "Code setup", exact: true })
-    .getByRole("combobox", { name: "Choose coding repository" });
+function repositoryCombobox(page: Page): Locator {
+  return workbench(page).getByRole("combobox", { name: "Choose coding repository" });
 }
 
-function codeSetupBranchCombobox(page: Page): Locator {
-  return page
-    .getByRole("region", { name: "Code setup", exact: true })
-    .getByRole("combobox", { name: "Choose coding branch" });
+function branchCombobox(page: Page): Locator {
+  return workbench(page).getByRole("combobox", { name: "Choose coding branch" });
+}
+
+function workInCombobox(page: Page): Locator {
+  return workbench(page).getByRole("combobox", { name: "Work in" });
 }
 
 // PR #3625 retired the setup card's own issue field: binding the repository/branch task workspace
-// is now unrelated to any issue (code-task-authority.spec.ts's `bindFixtureWorkspace` already
-// established this exact repository+branch+Bind-workspace pattern against a different fixture).
+// is unrelated to any issue (code-task-authority.spec.ts's `bindFixtureWorkspace` established this
+// exact repository+branch+"Work in" pattern against a different fixture). PR #3659 (2026-09-27)
+// then made the Workbench bind the selected checkout itself (useWorkbenchExecutionLocation.ts) and
+// keep the "Code setup" card for the no-repository case only, so a managed worktree is requested
+// through the same "Work in" control a person uses. This fixture wires managed worktrees rather
+// than local checkout provisioning, and the journey reads the run's edit from that worktree.
 // The fixture checkout has exactly one branch, "main" (coding-runtime-server-shared.mts's
 // `git init -q -b main`), which is also what `resolveGitHubIssue`'s local default-branch read
 // reports for every issue this fixture serves -- selecting it here is what keeps the later
@@ -143,28 +152,38 @@ function codeSetupBranchCombobox(page: Page): Locator {
 // to do with the cross-repository check that name is really for
 // (codingRuntimeIssueIntake.ts's `bindingFailure`).
 async function bindPlainWorkspace(page: Page): Promise<void> {
-  const setup = page.getByRole("region", { name: "Code setup", exact: true });
-  const repository = codeSetupRepositoryCombobox(page);
-  if ((await repository.textContent()) !== ISSUE_INTAKE_PROJECT_NAME) {
+  const repository = repositoryCombobox(page);
+  if (!((await repository.textContent()) ?? "").includes(ISSUE_INTAKE_PROJECT_NAME)) {
     await repository.click();
     await page
       .getByRole("listbox", { name: "Choose coding repository" })
       .getByRole("option", { name: ISSUE_INTAKE_PROJECT_NAME, exact: true })
       .click();
   }
-  await expect(repository).toHaveText(ISSUE_INTAKE_PROJECT_NAME);
-  const branch = codeSetupBranchCombobox(page);
-  if ((await branch.textContent()) !== "main") {
+  await expect(repository).toContainText(ISSUE_INTAKE_PROJECT_NAME);
+  const branch = branchCombobox(page);
+  if (!((await branch.textContent()) ?? "").includes("main")) {
     await branch.click();
     await page
       .getByRole("listbox", { name: "Choose coding branch" })
       .getByRole("option", { name: "main", exact: true })
       .click();
   }
-  await expect(branch).toHaveText("main");
-  await setup.getByRole("button", { name: "Bind workspace", exact: true }).click();
+  await expect(branch).toContainText("main");
+  await workInCombobox(page).click();
   // The bind performs real filesystem + git reconciliation before it yields, so allow for that IO.
-  await expect(setup).toHaveCount(0, { timeout: 30_000 });
+  const activation = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === "/api/task-workspaces/active" &&
+      response.request().method() === "POST",
+    { timeout: 30_000 },
+  );
+  await page
+    .getByRole("listbox", { name: "Work in" })
+    .getByRole("option", { name: "New local worktree", exact: true })
+    .click();
+  expect((await activation).ok()).toBe(true);
+  await expect(workInCombobox(page)).toContainText("New local worktree");
 }
 
 async function snapshot(page: Page): Promise<CodingWorkbenchRuntimeSnapshot> {
@@ -590,7 +609,9 @@ async function reloadPreservesBoundWorkspace(page: Page): Promise<void> {
     },
     previewAndAccept: () => reacceptBoundIssue(page, "#42"),
   });
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
+  // The Workbench reopens on the SAME bound checkout: repository and managed worktree.
+  await expect(repositoryCombobox(page)).toContainText(ISSUE_INTAKE_PROJECT_NAME);
+  await expect(workInCombobox(page)).toContainText("New local worktree");
   await expect(page.getByLabel("Task instructions")).toBeVisible();
   const after = await taskWorkspaceInstances(page);
   expect(after).toHaveLength(1);

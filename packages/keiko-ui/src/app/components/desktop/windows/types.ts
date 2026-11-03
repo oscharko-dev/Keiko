@@ -38,7 +38,7 @@ export interface Connection {
   readonly boundRelativePath?: string;
   readonly boundScopeElided?: true;
   readonly boundScopeFingerprint?: string | undefined;
-  readonly boundConnectorKind?: "capsule" | "capsule-set";
+  readonly boundConnectorKind?: "capsule" | "capsule-set" | "jira-live";
   readonly boundConnectorId?: string;
   readonly boundGitChangeBaseRef?: string;
   readonly boundGitChangeHeadRef?: string;
