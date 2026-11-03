@@ -294,7 +294,7 @@ static const char *const DENIED_ACCESS[] = {
     "open-foreign-terminate", "open-foreign-vm-read",     "open-foreign-query",
     "open-foreign-duplicate", "open-peer-terminate",      "read-env-file",
     "read-key-file",          "read-workspace-ungranted", "list-user-profile",
-    "list-credential-store",  "write-ungranted",          "registry-user-environment",
+    "list-credential-store",  "write-ungranted",
 };
 /* The same operation must work outside the container, or its denial says nothing. */
 static const char *const CONTROL_ALLOWED[] = {
@@ -327,6 +327,9 @@ static int verify_confined(const char *text) {
       ++failures;
     }
   }
+  /* Open W1 blocker, never a pass: values stored with setx stay readable beside the env allowlist. */
+  if (observed_code(text, "registry-user-environment") == 0)
+    printf("OPEN W1 blocker: the confined root reads HKCU\\Environment\n");
   code = observed_code(text, "read-granted");
   if (code != 0) {
     printf("FAIL confined read-granted=%ld (expected 0)\n", code);

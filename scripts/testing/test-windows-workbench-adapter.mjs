@@ -53,7 +53,8 @@ function launch(source, contents, port, args) {
     executable: observer,
     cwd: root,
     args,
-    env: { SystemRoot: process.env.SystemRoot },
+    // A launch request never decides where Winsock loads its providers from (#4068 W11).
+    env: { SystemRoot: join(root, "untrusted-system-root") },
     runtimeSource: "keiko-sidecar",
     modelSource: "keiko-model-gateway",
     authorityEnvelopeDigest: policy.envelopeDigest,
