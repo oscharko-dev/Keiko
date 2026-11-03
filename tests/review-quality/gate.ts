@@ -5,7 +5,9 @@
 //
 // The evaluation family owns the holdout discipline, the scoring and the verdicts; this composition
 // only supplies the review ports, the evaluation repository and the evidence. It runs one review at
-// a time and stops the composed server when it is done.
+// a time and stops the composed server when it is done. A replay probes both models again once its
+// pull requests are prepared, because preparing the holdout takes minutes and the gateway closes
+// idle connections in that time. `--resume-since` continues an interrupted replay (resume.ts).
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -29,16 +31,21 @@ import {
 } from "./evidence.js";
 import {
   createGateReviewer,
+  type GateReuse,
   type GateReviewer,
   presentedLocations,
   presentedReports,
   UNUSED_EVALUATION_MODEL,
 } from "./ports.js";
 import { fileAt, git, hasCommit, prepareOverlay, preparePullRequest } from "./repository.js";
+import { type GateResume, openGateResume } from "./resume.js";
 import { developmentSample, holdoutPullRequests } from "./selection.js";
 import { type GateServer, startGateServer } from "./server.js";
 
 const READINESS_TIMEOUT_MS = 900_000;
+const READINESS_ATTEMPTS = 5;
+const READINESS_RETRY_MS = 30_000;
+const PROBE_PASSED = /^200\/(ready|partial)$/;
 
 interface GateContext {
   readonly args: GateArguments;
@@ -68,6 +75,29 @@ async function probeReadiness(args: GateArguments): Promise<Record<string, strin
   return outcomes;
 }
 
+/** Probes until every model passes, or returns the last outcomes after the final attempt. */
+async function probeUntilReady(args: GateArguments): Promise<Record<string, string>> {
+  let outcomes: Record<string, string> = {};
+  for (let attempt = 1; attempt <= READINESS_ATTEMPTS; attempt += 1) {
+    outcomes = await probeReadiness(args);
+    if (Object.values(outcomes).every((outcome) => PROBE_PASSED.test(outcome))) break;
+    if (attempt < READINESS_ATTEMPTS) {
+      await new Promise((settle) => setTimeout(settle, READINESS_RETRY_MS));
+    }
+  }
+  return outcomes;
+}
+
+function reuseOf(resume: GateResume): GateReuse {
+  return {
+    reusableRun: (caseKey, repositoryRoot, refs) =>
+      resume.reusableRun(caseKey, {
+        baseSha: git(repositoryRoot, ["rev-parse", refs.baseRef]),
+        headSha: git(repositoryRoot, ["rev-parse", refs.headRef]),
+      }),
+  };
+}
+
 function preparedPullRequests(
   ctx: GateContext,
   selected: readonly number[],
@@ -94,6 +124,7 @@ async function runReplay(ctx: GateContext): Promise<Record<string, unknown>> {
     ? holdoutPullRequests(dataset)
     : (args.pullRequests ?? developmentSample(dataset, args.sampleSize));
   const { available, unavailable } = preparedPullRequests(ctx, selected);
+  const readinessAfterPreparation = await probeUntilReady(args);
   const run = await ReviewEval.runReviewReplay({
     dataset,
     split: holdout ? "holdout" : "development",
@@ -120,6 +151,7 @@ async function runReplay(ctx: GateContext): Promise<Record<string, unknown>> {
   return {
     selected,
     unavailable,
+    readinessAfterPreparation,
     run,
     summary,
     verdict,
@@ -205,6 +237,13 @@ function writeEvidence(
     configuration: ctx.configuration,
     readiness,
     activityLogReadiness: ctx.server.activityLogReadiness,
+    resume:
+      ctx.args.resumeSinceMs === undefined
+        ? null
+        : {
+            since: new Date(ctx.args.resumeSinceMs).toISOString(),
+            reusedReviews: records.filter((record) => record.resumed).length,
+          },
     settlements: settlementCounts(records),
     cost: summarizeGateCost(records),
     reviews: records,
@@ -238,12 +277,20 @@ async function main(argv: readonly string[]): Promise<void> {
     variant: args.variant,
     env: process.env,
   });
+  const resume =
+    args.resumeSinceMs === undefined
+      ? undefined
+      : openGateResume(args.stateDir, args.resumeSinceMs, args);
   try {
     const readiness = await probeReadiness(args);
     const ctx: GateContext = {
       args,
       server,
-      reviewer: createGateReviewer(server.deps, args),
+      reviewer: createGateReviewer(
+        server.deps,
+        args,
+        resume === undefined ? undefined : reuseOf(resume),
+      ),
       configuration,
       dataset,
     };
@@ -251,6 +298,7 @@ async function main(argv: readonly string[]): Promise<void> {
     const dir = writeEvidence(ctx, readiness, result);
     process.stdout.write(`review gate: evidence in ${dir}\n`);
   } finally {
+    resume?.close();
     await server.close();
   }
 }

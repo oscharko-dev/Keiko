@@ -15,6 +15,7 @@
     "gate.ts",
     "ports.ts",
     "repository.ts",
+    "resume.ts",
     "selection.ts",
     "server.ts"
   ]

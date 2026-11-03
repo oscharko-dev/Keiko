@@ -1,7 +1,8 @@
 // Arguments of the offline review gate (Issue #4138). Every run names its set, its variant, the
 // exact model pair and where its evidence goes; a development run also names its iteration and the
 // pull requests whose labels informed its configuration. The holdout run needs an explicit
-// confirmation flag because it may happen exactly once (ADR-0182 D9).
+// confirmation flag because it may happen exactly once (ADR-0182 D9). `--resume-since` continues
+// an interrupted replay from the reviews the original run stored since that instant.
 
 export const GATE_SETS = ["development", "holdout", "seeds"] as const;
 export type GateSet = (typeof GATE_SETS)[number];
@@ -23,6 +24,7 @@ export interface GateArguments {
   readonly pullRequests: readonly number[] | undefined;
   readonly tuningInputs: readonly number[];
   readonly port: number;
+  readonly resumeSinceMs: number | undefined;
 }
 
 export class GateArgumentError extends Error {
@@ -76,6 +78,15 @@ function positiveInteger(value: string, flag: string): number {
   return parsed;
 }
 
+function instant(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Date.parse(value);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(parsed)) {
+    throw new GateArgumentError(`${flag} must be an ISO 8601 instant`);
+  }
+  return parsed;
+}
+
 function numberList(value: string | undefined, flag: string): readonly number[] | undefined {
   if (value === undefined) return undefined;
   if (value.trim() === "") return [];
@@ -92,6 +103,9 @@ function checkSetRules(
   }
   if (set !== "development" && variant !== "product") {
     throw new GateArgumentError("variants are measured on the development set only");
+  }
+  if (set === "seeds" && values.has("--resume-since")) {
+    throw new GateArgumentError("--resume-since continues a replay, not the seed gate");
   }
   if (set !== "development" && values.has("--tuning-inputs")) {
     throw new GateArgumentError("--tuning-inputs belongs to a development run");
@@ -118,5 +132,6 @@ export function parseGateArguments(argv: readonly string[]): GateArguments {
     pullRequests: numberList(values.get("--pull-requests"), "--pull-requests"),
     tuningInputs: numberList(values.get("--tuning-inputs"), "--tuning-inputs") ?? [],
     port: positiveInteger(values.get("--port") ?? String(DEFAULT_PORT), "--port"),
+    resumeSinceMs: instant(values.get("--resume-since"), "--resume-since"),
   };
 }

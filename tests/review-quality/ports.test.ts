@@ -28,7 +28,10 @@ function view(): ReviewRunView {
   } as unknown as ReviewRunView;
 }
 
-function deps(start: () => Promise<unknown>): {
+function deps(
+  start: () => Promise<unknown>,
+  get: () => Promise<ReviewRunView> = () => Promise.resolve(view()),
+): {
   readonly deps: UiHandlerDeps;
   readonly release: ReturnType<typeof vi.fn>;
   readonly started: unknown[];
@@ -41,7 +44,7 @@ function deps(start: () => Promise<unknown>): {
       return start();
     },
     whenSettled: (): Promise<void> => Promise.resolve(),
-    get: (): Promise<ReviewRunView> => Promise.resolve(view()),
+    get,
   };
   return {
     deps: { reviewRunService: service, reviewRuntime: { release } } as unknown as UiHandlerDeps,
@@ -90,6 +93,44 @@ describe("createGateReviewer", () => {
       reviewer: { promptTokens: 0, completionTokens: 0, durationMs: 0 },
     });
     expect(f.release).not.toHaveBeenCalled();
+  });
+
+  it("reads a stored review back instead of reviewing a case the reuse names", async () => {
+    const settled = {
+      ...view(),
+      phase: "settled",
+      createdAt: "2026-11-02T17:36:00.000Z",
+      settledAt: "2026-11-02T17:50:00.000Z",
+    } as ReviewRunView;
+    const f = deps(
+      () => Promise.reject(new Error("a reused case must not start a review")),
+      () => Promise.resolve(settled),
+    );
+    const asked: unknown[] = [];
+    const reviewer = createGateReviewer(f.deps, MODELS, {
+      reusableRun: (...input) => {
+        asked.push(input);
+        return input[0] === "pr-1" ? "review-1" : undefined;
+      },
+    });
+
+    const { record } = await reviewer.review("pr-1", "/lab/keiko", REFS);
+
+    expect(asked).toEqual([["pr-1", "/lab/keiko", REFS]]);
+    expect(record).toMatchObject({ runId: "review-1", resumed: true, wallTimeMs: 840_000 });
+    expect(f.started).toEqual([]);
+    expect(f.release).not.toHaveBeenCalled();
+    expect(reviewer.records()).toEqual([record]);
+  });
+
+  it("reviews a case again when the stored review it names is not settled", async () => {
+    const f = deps(() => Promise.resolve({ kind: "started", run: { runId: "review-2" } }));
+    const reviewer = createGateReviewer(f.deps, MODELS, { reusableRun: () => "review-1" });
+
+    const { record } = await reviewer.review("pr-1", "/lab/keiko", REFS);
+
+    expect(f.started).toHaveLength(1);
+    expect(record.resumed).toBe(false);
   });
 
   it("refuses a composition without a review run service", () => {

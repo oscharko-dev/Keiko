@@ -36,6 +36,8 @@ export interface GateReviewRecord {
   readonly reviewer: RoleCost;
   readonly counterChecker: RoleCost;
   readonly wallTimeMs: number;
+  /** Reused from the stored review of an interrupted run; its wall time spans start to settle. */
+  readonly resumed: boolean;
 }
 
 export interface RoleCost {
@@ -61,6 +63,17 @@ export interface GateReviewer {
   readonly records: () => readonly GateReviewRecord[];
 }
 
+type GateReview = Awaited<ReturnType<GateReviewer["review"]>>;
+
+/** Names the stored review of an interrupted run that a resumed run reuses for one case. */
+export interface GateReuse {
+  readonly reusableRun: (
+    caseKey: string,
+    repositoryRoot: string,
+    refs: EvaluationRefs,
+  ) => string | undefined;
+}
+
 function recordOf(caseKey: string, view: ReviewRunView, wallTimeMs: number): GateReviewRecord {
   return {
     caseKey,
@@ -73,6 +86,7 @@ function recordOf(caseKey: string, view: ReviewRunView, wallTimeMs: number): Gat
     reviewer: view.totals.reviewer,
     counterChecker: view.totals.counterChecker,
     wallTimeMs,
+    resumed: false,
   };
 }
 
@@ -88,15 +102,44 @@ function refusedRecord(caseKey: string, refusal: string, wallTimeMs: number): Ga
     reviewer: NO_COST,
     counterChecker: NO_COST,
     wallTimeMs,
+    resumed: false,
   };
 }
 
-/** Runs reviews one at a time through the composed review service. */
-export function createGateReviewer(deps: UiHandlerDeps, models: GateModels): GateReviewer {
+function storedWallTimeMs(view: ReviewRunView): number {
+  return view.settledAt === null ? 0 : Date.parse(view.settledAt) - Date.parse(view.createdAt);
+}
+
+/** Reads a stored review back as a resumed record; `undefined` when it has not settled. */
+async function storedReview(
+  service: NonNullable<UiHandlerDeps["reviewRunService"]>,
+  caseKey: string,
+  runId: string,
+): Promise<GateReview | undefined> {
+  const view = await service.get(runId, randomUUID());
+  if (view?.phase !== "settled") return undefined;
+  return { view, record: { ...recordOf(caseKey, view, storedWallTimeMs(view)), resumed: true } };
+}
+
+/**
+ * Runs reviews one at a time through the composed review service. With `reuse`, a case whose
+ * stored review it names is read back through the same service instead of being reviewed again.
+ */
+export function createGateReviewer(
+  deps: UiHandlerDeps,
+  models: GateModels,
+  reuse?: GateReuse,
+): GateReviewer {
   const service = deps.reviewRunService;
   if (service === undefined) throw new Error("the composition has no review run service");
   const records: GateReviewRecord[] = [];
   const review: GateReviewer["review"] = async (caseKey, repositoryRoot, refs) => {
+    const runId = reuse?.reusableRun(caseKey, repositoryRoot, refs);
+    const reused = runId === undefined ? undefined : await storedReview(service, caseKey, runId);
+    if (reused !== undefined) {
+      records.push(reused.record);
+      return reused;
+    }
     const startedAt = Date.now();
     const correlationId = randomUUID();
     const started = await service.start({

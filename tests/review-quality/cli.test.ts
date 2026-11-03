@@ -73,6 +73,34 @@ describe("parseGateArguments", () => {
     expect(args).toMatchObject({ set: "holdout", iteration: "holdout", tuningInputs: [] });
   });
 
+  it("reads the instant a resumed replay continues from, and keeps it off the seed gate", () => {
+    const resumed = parseGateArguments([
+      "--set",
+      "holdout",
+      "--confirm-final-holdout",
+      "--resume-since",
+      "2026-11-02T17:35:00Z",
+      ...COMMON,
+    ]);
+    expect(resumed.resumeSinceMs).toBe(Date.parse("2026-11-02T17:35:00Z"));
+    expect(parseGateArguments(["--set", "seeds", ...COMMON]).resumeSinceMs).toBeUndefined();
+    expect(() =>
+      parseGateArguments(["--set", "seeds", "--resume-since", "2026-11-02T17:35:00Z", ...COMMON]),
+    ).toThrow(/not the seed gate/u);
+    for (const value of ["yesterday", "2026-11-02", "2026-13-45T99:00:00Z"]) {
+      expect(() =>
+        parseGateArguments([
+          "--set",
+          "holdout",
+          "--confirm-final-holdout",
+          "--resume-since",
+          value,
+          ...COMMON,
+        ]),
+      ).toThrow(/ISO 8601 instant/u);
+    }
+  });
+
   it("refuses variants and tuning inputs outside the development set", () => {
     expect(() =>
       parseGateArguments(["--set", "seeds", "--variant", "roles-swapped", ...COMMON]),
