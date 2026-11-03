@@ -433,7 +433,7 @@ jobs:
       - run: npm run check:git-client-evidence
       - run: npm run lint
         env:
-          NODE_OPTIONS: --max-old-space-size=12288
+          NODE_OPTIONS: --max-old-space-size=14336
       - run: npm run format:check
       - name: UI i18n guard
         env:
