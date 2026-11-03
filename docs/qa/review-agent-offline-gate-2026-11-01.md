@@ -33,6 +33,19 @@ The evaluation clone is a local clone of Keiko with `origin` pointing at GitHub.
 fetches each replayed pull request's head through `refs/pull/<n>/head` when the clone lacks it, and
 reviews the range from the merge base of its base and head commits to its head.
 
+A replay probes both models again after it has prepared its pull requests, and retries a failed
+probe up to five times, 30 seconds apart. Preparing the 229 holdout pull requests takes minutes,
+and the probe before preparation does not keep the gateway connection open that long.
+
+A replay stopped between reviews can continue with `--resume-since <instant>`, where the instant
+lies before the original run's first review. The review service stores every review it settles.
+The resumed run reads each stored review of the original run back through that service and
+reviews the remaining cases. It reuses a stored review only when the pair and the exact base and
+head commits match. It reviews two settlements again because neither measured the review:
+`abandoned/interrupted`, which the stop causes, and `skipped/model-unavailable`, which a model the
+review never reached causes. The evidence marks each reused review `resumed: true` and gives its
+wall time from the stored start and settle times.
+
 The development sample is the 30 most recent development pull requests with at least one decided
 thread (a hit or a false alarm), because only decided threads can move the actionable rate:
 #2978 to #3065. Every iteration replays the same sample.
@@ -140,7 +153,22 @@ Reading of the runs so far:
 
 ## Final holdout run
 
-Not run yet.
+The single holdout run started at 17:36 UTC on 2026-11-02 with the product configuration
+(`0edb7387a`, review code as `912b930f5`, so the configuration digest of the development runs).
+
+- The first 17 reviews (#3066 to #3090) settled `skipped/model-unavailable` within 30 seconds.
+  The gate had prepared the 229 pull requests for 5.5 minutes after its readiness probe. The first
+  review's own readiness probe of the Reviewer then failed with `EPIPE` on the loopback gateway
+  connection, and the reviews that followed skipped until the next probe passed. No model saw
+  these 17 pull requests.
+- By 12:59 UTC on 2026-11-03 the run had settled 87 reviews. The gate was stopped then, right after
+  the 87th settled, for a machine restart; the review that had just started was interrupted before
+  any model call. The run is continued with `--resume-since 2026-11-02T17:35:00Z` (`c90b64cdf`),
+  which reuses the 70 stored reviews that measured something and reviews the 17 refused ones, the
+  interrupted one and the remaining pull requests.
+- No finding, match or rate of the holdout was read before the stop. Only settlement counts and
+  the Activity Log entries around the first review were read, to find the cause of the 17
+  refusals.
 
 ## Seed gates
 
