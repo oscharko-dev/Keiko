@@ -138,9 +138,8 @@ import {
 } from "./grounded-citation-log.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
 import { processServerLogSink } from "./process-log-sink.js";
-import { isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
-import { gatewayErrorStatus } from "./grounded-gateway-error-status.js";
+import { gatewayErrorStatus, isGatewayAdmissionRefusal } from "./grounded-gateway-error-status.js";
 import {
   assertConversationReadinessAdmission,
   captureConversationReadinessAdmission,

@@ -686,6 +686,27 @@ function advisesUntraced(
   return input.adviseUntraced(draft.items.map((item) => item.ref));
 }
 
+/**
+ * The same advice for a draft about to be put before a human (S05 of #4173), where it can still
+ * change what the human reviews. Undefined when nothing needs saying.
+ */
+export function jiraDraftUntracedAdvice(
+  draftArguments: CatalogJsonObject,
+  openTrace: () => TraceSession,
+  adviseUntraced: (refs: readonly string[]) => boolean,
+): CatalogJsonObject | undefined {
+  const draft = parseJiraDraft(draftArguments);
+  if (draft === undefined || !untracedRun(draft, new Set())) return undefined;
+  const session = openTrace();
+  try {
+    return session.unitCount() > 0 && adviseUntraced(draft.items.map((item) => item.ref))
+      ? untracedDraft().data
+      : undefined;
+  } finally {
+    session.close();
+  }
+}
+
 function refusedDraft(
   refused: ReadonlyMap<string, Extract<TraceResolution, { ok: false }>>,
 ): ManagedMcpToolResult {

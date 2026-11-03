@@ -107718,7 +107718,7 @@
     {
       "op": "chat.tool-turn.state-unreadable",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-tool-runtime.ts:66",
+      "site": "packages/keiko-server/src/chat-tool-runtime.ts:73",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110130,7 +110130,7 @@
     {
       "op": "jira.template-preflight-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:98",
+      "site": "packages/keiko-server/src/atlassian/jiraChatTemplatePreflight.ts:105",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110561,7 +110561,7 @@
     {
       "op": "retrieval-activity.tryBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2402",
+      "site": "packages/keiko-server/src/local-knowledge-grounded-qa.ts:2401",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

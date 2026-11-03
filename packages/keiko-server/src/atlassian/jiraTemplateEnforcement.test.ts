@@ -44,7 +44,10 @@ import {
   jiraMutationToolResult,
   validJiraMutationAttempt,
 } from "./jiraMutationResult.js";
-import { createJiraChatTemplatePreflight } from "./jiraChatTemplatePreflight.js";
+import {
+  createJiraChatTemplatePreflight,
+  type JiraChatTemplatePreflightPorts,
+} from "./jiraChatTemplatePreflight.js";
 import {
   jiraIssueTemplateSource,
   recordJiraFieldRefusal,
@@ -85,6 +88,8 @@ function logs(): ReturnType<typeof createBufferedServerLogSink> {
   setServerLogger(createServerLogger({ sink, level: "debug" }));
   return sink;
 }
+
+const SECTION_GUIDANCE: unknown = expect.stringContaining("h2. Title");
 
 describe("the model-facing refusal", () => {
   it("keeps violations only on a field-validation refusal and bounds them", () => {
@@ -235,7 +240,7 @@ describe("a refused write through the Chat mutation journal", () => {
     expect(result.data).toEqual({
       outcome: "rejected",
       reason: "field-validation",
-      guidance: expect.stringContaining("h2. Title"),
+      guidance: SECTION_GUIDANCE,
       violations: [VIOLATION],
     });
     expect(http).not.toHaveBeenCalled();
@@ -366,6 +371,7 @@ describe("the dry run before approval", () => {
       readonly fields?: readonly unknown[];
       readonly existing?: readonly unknown[];
       readonly metadataFails?: boolean;
+      readonly untracedAdvice?: JiraChatTemplatePreflightPorts["untracedAdvice"];
     } = {},
   ): {
     run: () => Promise<unknown>;
@@ -415,6 +421,7 @@ describe("the dry run before approval", () => {
       } as never,
       writeArguments: () => args as never,
       readAllowed: () => true,
+      untracedAdvice: jira.untracedAdvice,
     });
     return {
       http,
@@ -435,7 +442,7 @@ describe("the dry run before approval", () => {
     expect(await f.run()).toEqual({
       outcome: "rejected",
       reason: "field-validation",
-      guidance: expect.stringContaining("h2. Title"),
+      guidance: SECTION_GUIDANCE,
       violations: [
         { ruleId: "section-missing", subject: "Acceptance criteria", template: "SYN/Story" },
       ],
@@ -480,7 +487,7 @@ describe("the dry run before approval", () => {
       expect(await f.run()).toEqual({
         outcome: "rejected",
         reason: "field-validation",
-        guidance: expect.stringContaining("h2. Title"),
+        guidance: SECTION_GUIDANCE,
         items: [
           {
             ref: "story",
@@ -501,6 +508,35 @@ describe("the dry run before approval", () => {
         refusal: "template-violation",
         violationCount: 1,
       });
+    });
+
+    it("returns the untraced advice instead of an approval, logged once as refused (S05)", async () => {
+      const sink = logs();
+      const advice = { outcome: "rejected", requirementRefusal: "untraced" };
+      const untracedAdvice = vi.fn(() => advice);
+      const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+        untracedAdvice,
+      });
+      expect(await f.run()).toBe(advice);
+      expect(untracedAdvice).toHaveBeenCalledTimes(1);
+      const drafts = sink.events.filter((event) => event.op === "atlassian.jira-draft");
+      expect(drafts).toEqual([]);
+    });
+
+    it("asks for approval when there is no advice, and gives none on an invalid draft (S05)", async () => {
+      const untracedAdvice = vi.fn(() => undefined);
+      const valid = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+        untracedAdvice,
+      });
+      await expect(valid.run()).resolves.toBeUndefined();
+      expect(untracedAdvice).toHaveBeenCalledTimes(1);
+
+      const refused = vi.fn(() => ({ outcome: "rejected" }));
+      const invalid = preflight(TEMPLATE, { items: [item("story", "nothing")] }, "jira.draft", {
+        untracedAdvice: refused,
+      });
+      expect(await invalid.run()).toMatchObject({ reason: "field-validation" });
+      expect(refused).not.toHaveBeenCalled();
     });
 
     it("tells the model which item of an invalid draft to correct, in fixed words (S07 of #4173)", async () => {
@@ -796,7 +832,7 @@ describe("a violating write never reaches Jira under Full access (#4177)", () =>
     expect(result.data).toEqual({
       outcome: "rejected",
       reason: "field-validation",
-      guidance: expect.stringContaining("h2. Title"),
+      guidance: SECTION_GUIDANCE,
       violations: [
         { ruleId: "section-missing", subject: "Acceptance criteria", template: "SYN/Story" },
       ],

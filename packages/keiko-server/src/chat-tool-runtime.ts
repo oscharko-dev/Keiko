@@ -5,6 +5,7 @@ import { createJiraChatToolTurn } from "./atlassian/jiraChatToolTurn.js";
 import { createMcpChatToolTurn } from "./mcp/mcpChatToolTurn.js";
 import { createChatSourcesToolTurn } from "./chat-tool-sources-turn.js";
 import { correlationIdOrUnknown } from "./correlation.js";
+import { openTraceSession } from "./requirement-trace.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 export type { ChatToolTurnPort } from "./chat-tool-turn.js";
 
@@ -24,7 +25,13 @@ export async function createChatToolTurn(
     chat.mcpServers,
   );
   return mcp === undefined
-    ? createJiraChatToolTurn(deps, modelId, message, signal, correlationId)
+    ? createJiraChatToolTurn(deps, modelId, message, signal, correlationId, (context) =>
+        openTraceSession(deps, {
+          chatId: context.chatId,
+          userMessageId: context.userMessageId,
+          correlationId: context.correlationId,
+        }),
+      )
     : createChatSourcesToolTurn(deps, modelId, message, signal, correlationId, mcp);
 }
 export function scopeChatToolTurn(

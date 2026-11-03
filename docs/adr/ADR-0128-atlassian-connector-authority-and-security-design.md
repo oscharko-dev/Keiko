@@ -799,7 +799,8 @@ The journal keeps no arguments or results, so a replayed refusal cannot repeat i
 the same request was already refused and cannot pass (2026-11-03, S16, where a model resent a refused
 draft and read bare `failed` rows). A template refusal says how to correct it; a section is a line of
 its own, `h2. Title`. The advice about a draft that names no requirement applies once per set of item
-refs in a turn: corrected items pass as sent, a draft of other items is advised again.
+refs in a turn: corrected items pass as sent, a draft of other items is advised again. Before approval
+it comes after the field checks, so the human reviews the draft the model settled on.
 The draft's one approval is claimed once at the first item's dispatch and covers its remaining
 items; Full access admits the draft under its envelope exactly as it admits a single create. The
 journal's bound of 32 single writes per turn counts records that may have reached Jira and does not

@@ -43,6 +43,9 @@ process.on("warning", (warning) => {
   process.exitCode = 1;
 });
 
+/** Where the lab's live Keiko writes its Activity Log; a lane's state directory holds none. */
+export const chatReadLogDirectory = (session) => join(session.directory, "chat-read-logs");
+
 async function unusedPort() {
   const probe = createServer();
   await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -442,7 +445,7 @@ function createLiveDeps(root, session, secret, retainState, restoring = false, m
     : randomBytes(32).toString("base64");
   if (retainState && !restoring)
     writeFileSync(join(root, "credential-key"), credentialKey, { mode: 0o600, flag: "wx" });
-  const activityLog = createFileServerLogSink(join(session.directory, "chat-read-logs"), {
+  const activityLog = createFileServerLogSink(chatReadLogDirectory(session), {
     level: "debug",
   });
   setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));

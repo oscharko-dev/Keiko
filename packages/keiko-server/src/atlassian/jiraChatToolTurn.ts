@@ -33,9 +33,14 @@ import {
 } from "./jiraChatCatalogConsumer.js";
 import type { ManagedProviderCatalog } from "../tool-catalog/managedProviderCatalog.js";
 import { createJiraChatMutationIntent } from "./jiraChatMutationIntent.js";
-import { createJiraChatTemplatePreflight } from "./jiraChatTemplatePreflight.js";
+import {
+  createJiraChatTemplatePreflight,
+  type JiraChatTemplatePreflightPorts,
+} from "./jiraChatTemplatePreflight.js";
 import { jiraChatMutationOutcome } from "./jiraChatMutationOutcome.js";
-import { observedJiraDraftOutcome } from "./jiraChatDraft.js";
+import { jiraDraftUntracedAdvice, observedJiraDraftOutcome } from "./jiraChatDraft.js";
+import { untracedAdvisory } from "./jiraChatCatalogRuntime.js";
+import type { TraceSession } from "../requirement-trace.js";
 import type {
   CatalogJsonObject,
   ToolResultEnvelope,
@@ -66,6 +71,22 @@ export interface JiraChatTurnOptions {
   readonly managed: ManagedProviderCatalog<JiraChatCatalogConsumer>;
   readonly signal: AbortSignal;
   readonly correlationId: string;
+  /** Opens the requirements of the Chat's Pods; without it a draft is never advised about them. */
+  readonly openTrace?: ((context: JiraChatCatalogContext) => TraceSession) | undefined;
+}
+
+function draftUntracedAdvice(
+  deps: JiraChatTurnOptions["deps"],
+  openTrace: JiraChatTurnOptions["openTrace"],
+): JiraChatTemplatePreflightPorts["untracedAdvice"] {
+  if (openTrace === undefined) return undefined;
+  const advised = new Set<string>();
+  return (draftArguments, context) =>
+    jiraDraftUntracedAdvice(
+      draftArguments,
+      () => openTrace(context),
+      untracedAdvisory(deps, advised, context),
+    );
 }
 
 export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
@@ -106,6 +127,7 @@ export class JiraChatToolTurn extends ChatToolTurn<JiraChatCatalogContext> {
               deps,
               writeArguments: (action) => this.proposedWriteArguments(action),
               readAllowed: () => !current.signal.aborted,
+              untracedAdvice: draftUntracedAdvice(deps, jiraOptions.openTrace),
             }),
             attachmentPreview: (action) => this.reviewedAttachment(action),
           }),
@@ -219,6 +241,7 @@ export async function createJiraChatToolTurn(
   message: ChatMessage,
   signal: AbortSignal,
   correlationId: string | undefined,
+  openTrace?: JiraChatTurnOptions["openTrace"],
 ): Promise<JiraChatToolTurn | undefined> {
   if (deps.store.findChatById(message.chatId)?.jiraPodBinding === undefined) return undefined;
   if (!jiraChatModelSupportsTools(deps, modelId)) {
@@ -247,6 +270,7 @@ export async function createJiraChatToolTurn(
     managed: await deps.jiraChatCatalog.get(),
     signal: AbortSignal.any([signal, AbortSignal.timeout(remaining)]),
     correlationId: correlationIdOrUnknown(correlationId),
+    openTrace,
   });
 }
 export function scopeJiraChatToolTurn(

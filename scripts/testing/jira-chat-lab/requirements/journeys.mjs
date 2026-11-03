@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { URLSearchParams } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
-import { jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
+import { chatReadLogDirectory, jsonRequest, prepareChat, withLiveChat } from "../chat-read.mjs";
 import { eachJourneyInLicenseWindow, ensureLicenseWindow } from "./license-window.mjs";
 import { withWorkProjectLock } from "./work-project-lock.mjs";
 import { WORK_PROJECT, clearWorkProject } from "./work-project-reset.mjs";
@@ -315,7 +315,7 @@ function exportReport(ctx, chat, reportId, format) {
   return api(ctx, "report-export", path, undefined, "GET");
 }
 
-function logMatchCount(root, needle) {
+export function logMatchCount(root, needle) {
   let count = 0;
   const stack = [root];
   while (stack.length > 0) {
@@ -371,8 +371,8 @@ function journeyContext(live, session, truth) {
     deselectSkill: (chat) => deselectSkill(ctx, chat),
     comments: (key) => issueComments(session, key),
     exportReport: (chat, reportId, format) => exportReport(ctx, chat, reportId, format),
-    refusals: () => logMatchCount(ctx.root, "generation-changed"),
-    turnEnds: () => logMatchCount(ctx.root, "chat.tool-turn.ended"),
+    refusals: () => logMatchCount(chatReadLogDirectory(session), "generation-changed"),
+    turnEnds: () => logMatchCount(chatReadLogDirectory(session), "chat.tool-turn.ended"),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
   };
   return ctx;

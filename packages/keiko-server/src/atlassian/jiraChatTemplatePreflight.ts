@@ -53,6 +53,13 @@ export interface JiraChatTemplatePreflightPorts {
   readonly writeArguments: (action: JiraChatCatalogAction) => CatalogJsonObject | undefined;
   /** The read grant the dry run's GET requests depend on is still current. */
   readonly readAllowed: (action: JiraChatCatalogAction) => boolean;
+  /** Asks a draft that names no requirement to name them before a human reviews it. */
+  readonly untracedAdvice?:
+    | ((
+        draftArguments: CatalogJsonObject,
+        context: JiraChatCatalogContext,
+      ) => CatalogJsonObject | undefined)
+    | undefined;
 }
 
 type Credential = Extract<ReturnType<typeof resolveCurrentJiraChatAuthority>, { ok: true }>;
@@ -254,6 +261,9 @@ async function draftPreflight(
   const refusal = draft.ok
     ? await draftItemsRefusal(ports, action, context, draft.arguments)
     : undefined;
+  // The advice records its own refusal, so this draft is not also logged as submitted.
+  const advice = untracedAdviceOf(ports, draft, refusal !== undefined, context);
+  if (advice !== undefined) return advice;
   recordDraftPreflight(ports, context, {
     reason: draft.ok ? refusal?.reason : draft.reason,
     sizes: draftSizes(jiraDraftStore, context.chatId, args, draft),
@@ -262,6 +272,14 @@ async function draftPreflight(
   });
   if (refusal !== undefined) return refusal.data;
   return draft.ok ? undefined : draftRefusalData(draft);
+}
+function untracedAdviceOf(
+  ports: JiraChatTemplatePreflightPorts,
+  draft: ReturnType<typeof readableChatDraft>,
+  refused: boolean,
+  context: JiraChatCatalogContext,
+): CatalogJsonObject | undefined {
+  return draft.ok && !refused ? ports.untracedAdvice?.(draft.arguments, context) : undefined;
 }
 function recordDraftPreflight(
   ports: JiraChatTemplatePreflightPorts,

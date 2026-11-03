@@ -154,10 +154,13 @@ function prepareMutation(
  */
 const ADVISED_DRAFTS_MAX = 256;
 export function untracedAdvisory(
-  deps: UiHandlerDeps,
+  deps: Pick<UiHandlerDeps, "activityLog">,
   advised: Set<string>,
-  context: CatalogHandlerContext<JiraChatCatalogConsumer>,
-  draftItemCount: number,
+  context: {
+    readonly chatId: string;
+    readonly userMessageId?: string | undefined;
+    readonly correlationId: string;
+  },
 ): (refs: readonly string[]) => boolean {
   return (refs): boolean => {
     const turn = `${context.chatId}\u0000${context.userMessageId ?? context.correlationId}`;
@@ -170,7 +173,7 @@ export function untracedAdvisory(
       refusal: "requirements-untraced",
       newDraft: false,
       pageItemCount: 0,
-      itemCount: draftItemCount,
+      itemCount: refs.length,
       pageCount: 0,
       byteCount: 0,
       unresolvedRefCount: 0,
@@ -196,7 +199,6 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
       const draft = readableChatDraft(deps.jiraDraftStore, context.chatId, args);
       if (!draft.ok) return Promise.resolve({ data: draftRefusalData(draft), isError: true });
       const approval = draftApproval(deps, current.envelope.subject, context, intent);
-      const items: unknown = draft.arguments.items;
       return executeJiraChatDraft({
         ...shared,
         arguments: draft.arguments,
@@ -207,12 +209,7 @@ function mutationExecutor(deps: UiHandlerDeps): MutationExecutor {
         // A draft a human reviewed runs as approved; the advisory guides an unreviewed one only.
         ...(approval === undefined
           ? {
-              adviseUntraced: untracedAdvisory(
-                deps,
-                advised,
-                context,
-                Array.isArray(items) ? items.length : 0,
-              ),
+              adviseUntraced: untracedAdvisory(deps, advised, context),
             }
           : {}),
         activity: (activity): void => {

@@ -210,6 +210,18 @@ export function jiraFailureDetailData(
     ...(detail.messages === undefined ? {} : { messages: [...detail.messages] }),
   };
 }
+function toolResultGuidance(
+  outcome: JiraMutationResultState,
+  reason: AtlassianConnectorWriteFailureReason | undefined,
+  receipt: JiraMutationReceipt,
+  replayed: boolean,
+  detail: JiraMutationFailureDetail | undefined,
+  violations: readonly JiraTemplateViolation[] | undefined,
+): string | undefined {
+  const guidance = jiraResultGuidance(outcome, reason, detail, receipt);
+  if (!replayed) return guidance ?? jiraTemplateViolationGuidance(violations ?? []);
+  return outcome === "rejected" ? JIRA_ALREADY_REFUSED_GUIDANCE : guidance;
+}
 export function jiraMutationToolResult(
   outcome: JiraMutationResultState,
   reason?: AtlassianConnectorWriteFailureReason,
@@ -219,11 +231,7 @@ export function jiraMutationToolResult(
   links?: JiraMutationLinkAccount,
   violations?: readonly JiraTemplateViolation[],
 ): ManagedMcpToolResult {
-  const guidance =
-    replayed && outcome === "rejected"
-      ? JIRA_ALREADY_REFUSED_GUIDANCE
-      : (jiraResultGuidance(outcome, reason, detail, receipt) ??
-        jiraTemplateViolationGuidance(violations ?? []));
+  const guidance = toolResultGuidance(outcome, reason, receipt, replayed, detail, violations);
   return {
     data: {
       ...receipt,

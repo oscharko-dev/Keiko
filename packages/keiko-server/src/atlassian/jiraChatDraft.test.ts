@@ -41,6 +41,7 @@ import {
   JIRA_DRAFT_PARTLY_REJECTED_GUIDANCE,
   JIRA_DRAFT_PENDING_GUIDANCE,
   jiraDraftOutcome,
+  jiraDraftUntracedAdvice,
   observedJiraDraftOutcome,
   type JiraChatDraftExecution,
 } from "./jiraChatDraft.js";
@@ -1014,6 +1015,24 @@ describe("source traceability of a draft (#4179)", () => {
     expect(second.data).toMatchObject({ outcome: "succeeded", createdCount: 4 });
     expect(jira.posts()).toHaveLength(4);
     expect(adviseUntraced).toHaveBeenCalledTimes(2);
+  });
+
+  it("advises before a human is asked only when the Pods hold requirements (S05 of #4173)", () => {
+    const advise = vi.fn(() => true);
+    const open = (units: number) => (): TraceSession => session(vi.fn(), units);
+    const refused = jiraDraftUntracedAdvice(BACKLOG, open(1), advise);
+    expect(refused).toMatchObject({
+      outcome: "rejected",
+      requirementRefusal: "untraced",
+      guidance: JIRA_DRAFT_UNTRACED_GUIDANCE,
+    });
+    expect(advise).toHaveBeenCalledWith(["epic", "story", "task", "loose"]);
+    expect(jiraDraftUntracedAdvice(BACKLOG, open(0), advise)).toBeUndefined();
+    expect(jiraDraftUntracedAdvice(TRACED, open(1), advise)).toBeUndefined();
+    // Sending it again is the choice to have it reviewed as it is.
+    expect(jiraDraftUntracedAdvice(BACKLOG, open(1), () => false)).toBeUndefined();
+    expect(jiraDraftUntracedAdvice({}, open(1), advise)).toBeUndefined();
+    expect(advise).toHaveBeenCalledTimes(1);
   });
 
   it("does not advise when the Pods hold no requirement or an item names one", async () => {
