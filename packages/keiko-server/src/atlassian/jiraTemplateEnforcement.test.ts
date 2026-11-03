@@ -539,6 +539,15 @@ describe("the dry run before approval", () => {
       expect(refused).not.toHaveBeenCalled();
     });
 
+    it("still asks for approval when the requirements cannot be read for the advice (S05)", async () => {
+      const f = preflight(TEMPLATE, { items: [item("story", GOOD)] }, "jira.draft", {
+        untracedAdvice: () => {
+          throw new Error("trace unavailable");
+        },
+      });
+      await expect(f.run()).resolves.toBeUndefined();
+    });
+
     it("tells the model which item of an invalid draft to correct, in fixed words (S07 of #4173)", async () => {
       const sink = logs();
       const orphan = { ...item("story", GOOD), parent: { fieldId: "customfield_10101" } };

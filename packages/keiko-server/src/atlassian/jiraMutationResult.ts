@@ -168,7 +168,7 @@ export const JIRA_EXISTING_GUIDANCE =
   "Nothing was written: the issue under the issueKey of this result already exists or already holds this, as messages say. Report that as the result. Do not send it again, and do not change its fields to create another one.";
 /** The journal holds no arguments or results, so a replay cannot repeat the earlier reasons. */
 export const JIRA_ALREADY_REFUSED_GUIDANCE =
-  "This exact request was refused earlier in this Chat and nothing was changed, so sending it again cannot succeed. Change what the earlier result named, then send the corrected request.";
+  "This exact request was refused earlier in this Chat and nothing was changed, so sending it again cannot succeed. Do what the earlier result said instead.";
 export const JIRA_UNCERTAIN_GUIDANCE =
   "Whether this change reached Jira is uncertain. Do not repeat it and make no further change in this turn. Tell the user in plain language that the change may or may not have been applied and ask them to check the issue in Jira before deciding whether to try again.";
 

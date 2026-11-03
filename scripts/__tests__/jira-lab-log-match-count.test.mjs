@@ -18,11 +18,15 @@ describe("logMatchCount", () => {
     roots.push(directory);
     const logs = join(chatReadLogDirectory({ directory }), "logs");
     mkdirSync(logs, { recursive: true });
-    const line = (op) => `${JSON.stringify({ op })}\n`;
-    writeFileSync(join(logs, "activity-1.jsonl"), line("chat.tool-turn.ended").repeat(2));
-    writeFileSync(join(logs, "activity-2.active.jsonl"), line("chat.tool-turn.ended"));
-    writeFileSync(join(logs, "notes.txt"), line("chat.tool-turn.ended"));
-    expect(logMatchCount(chatReadLogDirectory({ directory }), '"chat.tool-turn.ended"')).toBe(3);
-    expect(logMatchCount(chatReadLogDirectory({ directory }), '"other.op"')).toBe(0);
+    const line = (reason) =>
+      `${JSON.stringify({ op: "chat.tool-turn.ended", extra: { reason } })}\n`;
+    writeFileSync(join(logs, "activity-1.jsonl"), line("authority-invalid").repeat(2));
+    writeFileSync(join(logs, "activity-2.active.jsonl"), line("authority-invalid"));
+    writeFileSync(join(logs, "activity-3.jsonl"), line("budget-exhausted"));
+    writeFileSync(join(logs, "notes.txt"), line("authority-invalid"));
+    const root = chatReadLogDirectory({ directory });
+    expect(logMatchCount(root, "chat.tool-turn.ended")).toBe(4);
+    expect(logMatchCount(root, "chat.tool-turn.ended", '"reason":"authority-invalid"')).toBe(3);
+    expect(logMatchCount(root, '"other.op"')).toBe(0);
   });
 });

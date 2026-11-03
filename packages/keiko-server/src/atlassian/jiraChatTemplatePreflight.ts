@@ -279,7 +279,13 @@ function untracedAdviceOf(
   refused: boolean,
   context: JiraChatCatalogContext,
 ): CatalogJsonObject | undefined {
-  return draft.ok && !refused ? ports.untracedAdvice?.(draft.arguments, context) : undefined;
+  if (!draft.ok || refused) return undefined;
+  try {
+    return ports.untracedAdvice?.(draft.arguments, context);
+  } catch (error) {
+    recordPreflightFailure(context.correlationId, error);
+    return undefined;
+  }
 }
 function recordDraftPreflight(
   ports: JiraChatTemplatePreflightPorts,

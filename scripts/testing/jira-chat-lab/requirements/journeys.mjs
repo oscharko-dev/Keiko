@@ -315,7 +315,8 @@ function exportReport(ctx, chat, reportId, format) {
   return api(ctx, "report-export", path, undefined, "GET");
 }
 
-export function logMatchCount(root, needle) {
+/** The product log lines under `root` that contain every needle. */
+export function logMatchCount(root, ...needles) {
   let count = 0;
   const stack = [root];
   while (stack.length > 0) {
@@ -325,7 +326,9 @@ export function logMatchCount(root, needle) {
       const stat = statSync(child);
       if (stat.isDirectory()) stack.push(child);
       else if (/\.(jsonl|log|ndjson)$/.test(name))
-        count += readFileSync(child, "utf8").split(needle).length - 1;
+        count += readFileSync(child, "utf8")
+          .split("\n")
+          .filter((line) => needles.every((needle) => line.includes(needle))).length;
     }
   }
   return count;
@@ -372,7 +375,13 @@ function journeyContext(live, session, truth) {
     comments: (key) => issueComments(session, key),
     exportReport: (chat, reportId, format) => exportReport(ctx, chat, reportId, format),
     refusals: () => logMatchCount(chatReadLogDirectory(session), "generation-changed"),
-    turnEnds: () => logMatchCount(chatReadLogDirectory(session), "chat.tool-turn.ended"),
+    // Only the end the mode change caused: a turn that ended on its own proves nothing.
+    turnEnds: () =>
+      logMatchCount(
+        chatReadLogDirectory(session),
+        "chat.tool-turn.ended",
+        '"reason":"authority-invalid"',
+      ),
     labSprint: () => labSprintSetup(session, WORK_PROJECT),
   };
   return ctx;
