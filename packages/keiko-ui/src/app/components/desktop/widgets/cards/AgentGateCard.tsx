@@ -78,11 +78,11 @@ export function AgentGateCard({
           <span className="gr" aria-hidden="true">
             ✓
           </span>
-          {`Allow ${gate.kind} action after review`}
+          {tUi("agentGate.ui.allowAfterReview", { kind: gate.kind })}
         </div>
         <div className="row">
           <span aria-hidden="true">✗</span>
-          {"No extra BFF authority or autonomous follow-up"}
+          {tUi("agentGate.ui.noExtraAuthority")}
         </div>
       </div>
       <div className="arun-gate-btns ai-permit-act">

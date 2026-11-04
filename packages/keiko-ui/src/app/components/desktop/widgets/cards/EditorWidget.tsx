@@ -385,13 +385,17 @@ function DirtyCloseDialog(props: {
 // The split controls rendered into each pane's toolbar. A pure function of the pane plus the stable
 // split/close callbacks, so it can be built inside the memoized per-pane binding without depending on
 // the live layout (the >1-pane condition is passed in as `showClose`).
-function renderPaneActions(
-  pane: EditorPaneStateV2,
-  showClose: boolean,
-  splitPane: (paneId: string, direction: EditorSplitDirection) => void,
-  closePane: (paneId: string) => void,
-  tUi: OptionalWidgetTranslate,
-): ReactNode {
+interface PaneActionsProps {
+  readonly pane: EditorPaneStateV2;
+  readonly showClose: boolean;
+  readonly splitPane: (paneId: string, direction: EditorSplitDirection) => void;
+  readonly closePane: (paneId: string) => void;
+}
+
+// A component (not a plain render helper) so the labels re-render when the German optional catalog
+// finishes loading, even though the surrounding pane binding is memoized.
+function PaneActions({ pane, showClose, splitPane, closePane }: PaneActionsProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   return (
     <span className="ed-pane-actions" aria-label={tUi("editor.ui.splitControls")}>
       <button
@@ -1914,7 +1918,14 @@ export function EditorWidget({
         onSelectOpenFile: (file: string) => selectOpenFile(paneId, file),
         onCloseOpenFile: (path: string) => closeOpenFile(paneId, path),
         onDirtyChange: (path: string, dirty: boolean) => markDirty(paneId, path, dirty),
-        toolbarExtras: renderPaneActions(pane, paneCount > 1, splitPane, closePane, tUi),
+        toolbarExtras: (
+          <PaneActions
+            pane={pane}
+            showClose={paneCount > 1}
+            splitPane={splitPane}
+            closePane={closePane}
+          />
+        ),
         // GEN-PERF-EDITOR-003 — the full drag-capable tab handle lives HERE (in the
         // pane-memoized closure) instead of as a per-render inline closure in renderPane,
         // so its identity is stable and does not defeat React.memo(EditorRuntimeWidget).
@@ -1963,7 +1974,6 @@ export function EditorWidget({
     handleTabKeyDown,
     beginTabPointerDrag,
     suppressTabClickAfterPointerDrag,
-    tUi,
   ]);
 
   if (workspaceRoot.length === 0) {

@@ -22,12 +22,7 @@
     "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": ["Authorization"],
     "packages/keiko-ui/src/app/components/desktop/modals/RelationshipCreateDialog.tsx": [
-      "Create",
-      "Creating…",
-      "endpoint id",
-      "Relationship type",
-      "Summary (optional, ≤240 chars)",
-      "Validating…"
+      "endpoint id"
     ],
     "packages/keiko-ui/src/app/components/desktop/SafeMarkdown.tsx": [
       "(opens in new tab)",
@@ -41,11 +36,8 @@
       "Voice profile"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/AgentGateCard.tsx": [
-      "✗ No extra BFF authority or autonomous follow-up",
-      "Allow action after review",
       "Approval required",
-      "Keiko escalated to you",
-      "No extra BFF authority or autonomous follow-up"
+      "Keiko escalated to you"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/editorCommands.ts": [
       "Cancel Verification",
@@ -78,9 +70,7 @@
       "Branch:"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/ChangesPane.tsx": [
-      "Changes",
       "changes; the list is truncated.",
-      "History",
       "Showing the first"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
@@ -105,7 +95,6 @@
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/GovernedMergeCard.tsx": [
       "” is not eligible.",
       "Defaulting to “”.",
-      "I confirm this high-risk merge",
       "The requested strategy “"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/pdf-citation-preview-session.ts": [
@@ -242,7 +231,6 @@
       "src/app.ts README.md"
     ],
     "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
-    "packages/keiko-ui/src/lib/ResourceLimitDecisionsTable.tsx": ["No", "Yes", "Yes (breached)"]
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"]
   }
 }

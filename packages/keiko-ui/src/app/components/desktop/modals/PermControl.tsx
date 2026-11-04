@@ -1,8 +1,11 @@
 "use client";
 
 import { useTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 
 import type { ReactNode } from "react";
+
+type Translate = ReturnType<typeof useTranslate>;
 
 export type CfgValue = string | number | boolean | readonly string[] | undefined;
 export type Cfg = Record<string, CfgValue>;
@@ -13,29 +16,21 @@ interface PermControlProps {
   readonly set: (key: string, value: CfgValue) => void;
 }
 
-const LEGACY_OPTIONS: readonly (readonly [AccessMode, string])[] = [
-  ["ask", "Ask every action"],
-  ["full", "Full access"],
+const LEGACY_OPTIONS: readonly (readonly [AccessMode, MessageKey])[] = [
+  ["ask", "permControl.askEveryAction"],
+  ["full", "permControl.fullAccess"],
 ];
 
-function resolveAccessNote(keiko: boolean, access: AccessMode): string {
-  let note: string;
-  if (keiko) {
-    note =
-      "No rights by default. You approve while manual; Keiko governs per policy when autonomous.";
-  } else if (access === "full") {
-    note = "Legacy: agent acts without prompts.";
-  } else {
-    note = "Legacy: you approve each privileged action.";
-  }
-  return note;
+function resolveAccessNote(keiko: boolean, access: AccessMode, t: Translate): string {
+  if (keiko) return t("permControl.noteKeiko");
+  return t(access === "full" ? "permControl.noteLegacyFull" : "permControl.noteLegacyAsk");
 }
 
 export function PermControl({ cfg, set }: PermControlProps): ReactNode {
   const tUi = useTranslate();
   const keiko = cfg["keikoMode"] !== false;
   const access: AccessMode = cfg["access"] === "full" ? "full" : "ask";
-  const note = resolveAccessNote(keiko, access);
+  const note = resolveAccessNote(keiko, access, tUi);
   return (
     <div className="permctl">
       <button
@@ -78,7 +73,7 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
               aria-checked={access === a}
               onClick={() => set("access", a)}
             >
-              {lbl}
+              {tUi(lbl)}
             </button>
           ))}
         </div>

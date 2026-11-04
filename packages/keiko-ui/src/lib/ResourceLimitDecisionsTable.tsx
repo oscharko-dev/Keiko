@@ -70,10 +70,10 @@ export function ResourceLimitDecisionsTable({ results }: Props): ReactNode {
                   <td className="py-1.5 pr-4 font-mono">{lim.dimension}</td>
                   <td className="py-1.5 pr-4 font-mono">{lim.limit.toString()}</td>
                   <td className={`py-1.5 pr-4 ${limitCellClasses(lim.enforced, lim.breached)}`}>
-                    {lim.enforced ? "Yes" : "No"}
+                    {tUi(lim.enforced ? "resourceLimits.ui.yes" : "resourceLimits.ui.no")}
                   </td>
                   <td className={`py-1.5 ${limitCellClasses(lim.enforced, lim.breached)}`}>
-                    {breached ? "Yes (breached)" : "No"}
+                    {tUi(breached ? "resourceLimits.ui.yesBreached" : "resourceLimits.ui.no")}
                     {lim.note !== undefined && lim.note !== "" && (
                       <span className="ml-1 text-ink-muted">— {lim.note}</span>
                     )}

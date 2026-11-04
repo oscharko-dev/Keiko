@@ -505,9 +505,9 @@ function MergeApprovalGate({
           checked={confirmed}
           disabled={busy}
           onChange={(e) => onChange(e.target.checked)}
-          aria-label="I confirm this high-risk merge"
+          aria-label={t("governedDelivery.ui.confirmHighRisk")}
         />{" "}
-        I confirm this high-risk merge
+        {t("governedDelivery.ui.confirmHighRisk")}
       </label>
     </section>
   );

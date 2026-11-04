@@ -367,10 +367,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
             </label>
             <KeikoSelect
               value={form.type}
-              ariaLabel="Relationship type"
+              ariaLabel={tUi("relationshipDialog.ui.relationshipType")}
               /* eslint-disable-next-line jsx-a11y/no-autofocus -- relationship dialog intentionally starts on type selection. */
               autoFocus
-              menuTitle="Relationship type"
+              menuTitle={tUi("relationshipDialog.ui.relationshipType")}
               triggerStyle={{
                 width: "100%",
                 background: "var(--inset)",
@@ -548,7 +548,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               htmlFor="rel-summary"
               style={{ fontSize: 12, color: "var(--fg-muted)", display: "block", marginBottom: 3 }}
             >
-              Summary (optional, ≤240 chars)
+              {tUi("relationshipDialog.ui.summaryOptional")}
             </label>
             <textarea
               id="rel-summary"
@@ -591,7 +591,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           {/* Server-side preview loading */}
           {previewLoading && (
             <div style={{ fontSize: 12, color: "var(--fg-muted)" }} aria-live="polite">
-              Validating…
+              {tUi("relationshipDialog.ui.validating")}
             </div>
           )}
 
@@ -665,7 +665,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               aria-busy={submitting}
               style={{ minWidth: 24, minHeight: 24 }}
             >
-              {submitting ? "Creating…" : "Create"}
+              {tUi(submitting ? "relationshipDialog.ui.creating" : "relationshipDialog.ui.create")}
             </button>
           </div>
         </div>

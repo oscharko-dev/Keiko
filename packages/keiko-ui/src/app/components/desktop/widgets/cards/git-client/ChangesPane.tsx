@@ -12,6 +12,7 @@ import type {
 import {
   useOptionalWidgetTranslate,
   useOptionalWidgetTranslate as useTranslate,
+  type WidgetMessageKey,
 } from "@/lib/optional-widget-i18n";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
@@ -121,9 +122,9 @@ interface ChangesPaneProps {
   readonly commitComposer: ReactNode;
 }
 
-const TABS: readonly { readonly id: ChangesTab; readonly label: string }[] = [
-  { id: "changes", label: "Changes" },
-  { id: "history", label: "History" },
+const TABS: readonly { readonly id: ChangesTab; readonly label: WidgetMessageKey }[] = [
+  { id: "changes", label: "gitClientWindow.ui.tabChanges" },
+  { id: "history", label: "gitClientWindow.ui.tabHistory" },
 ];
 
 export function ChangesPane({
@@ -198,7 +199,7 @@ export function ChangesPane({
                 onClick={() => onTabChange(entry.id)}
                 onKeyDown={onTabKeyDown}
               >
-                {entry.label}
+                {t(entry.label)}
                 {entry.id === "changes" ? (
                   <span aria-hidden="true" style={tabBadgeStyle(active)}>
                     {changeCount}

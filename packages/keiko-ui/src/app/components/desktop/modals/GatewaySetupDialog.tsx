@@ -107,12 +107,16 @@ function deploymentNamesFromInput(value: string): readonly string[] {
   );
 }
 
-function timeoutMsFromInput(value: string, label = "Request timeout"): number | undefined {
+function timeoutMsFromInput(
+  value: string,
+  label: string,
+  t: GatewaySetupTranslate,
+): number | undefined {
   const trimmed = value.trim();
   if (trimmed === "") return undefined;
   const parsed = Number(trimmed);
   if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new Error(`${label} must be a positive integer in milliseconds.`);
+    throw new Error(t("gatewaySetup.ui.timeoutPositive", { label }));
   }
   return parsed;
 }
@@ -539,9 +543,10 @@ function computeDialogCopy(preserveExisting: boolean, t: GatewaySetupTranslate):
 function validateFoundryDeploymentNames(
   baseUrl: string,
   parsedDeploymentNames: readonly string[],
+  t: GatewaySetupTranslate,
 ): string | undefined {
   if (isMicrosoftFoundryUrl(baseUrl) && parsedDeploymentNames.length === 0) {
-    return "Microsoft Foundry requires deployment names. Paste the names from the Deployments tab.";
+    return t("gatewaySetup.ui.foundryDeploymentsRequired");
   }
   return undefined;
 }
@@ -554,17 +559,25 @@ type SubmitTimeoutsResult =
     }
   | { readonly ok: false; readonly message: string };
 
-function parseSubmitTimeouts(timeoutMs: string, voiceTimeoutMs: string): SubmitTimeoutsResult {
+function parseSubmitTimeouts(
+  timeoutMs: string,
+  voiceTimeoutMs: string,
+  t: GatewaySetupTranslate,
+): SubmitTimeoutsResult {
   try {
     return {
       ok: true,
-      timeoutMs: timeoutMsFromInput(timeoutMs),
-      voiceTimeoutMs: timeoutMsFromInput(voiceTimeoutMs, "Voice request timeout"),
+      timeoutMs: timeoutMsFromInput(timeoutMs, t("gatewaySetup.ui.requestTimeoutLabel"), t),
+      voiceTimeoutMs: timeoutMsFromInput(
+        voiceTimeoutMs,
+        t("gatewaySetup.ui.voiceRequestTimeoutLabel"),
+        t,
+      ),
     };
   } catch (error_) {
     return {
       ok: false,
-      message: error_ instanceof Error ? error_.message : "Request timeout is invalid.",
+      message: error_ instanceof Error ? error_.message : t("gatewaySetup.ui.timeoutInvalid"),
     };
   }
 }
@@ -962,7 +975,10 @@ function figmaAndVerifiedModelsMessage(
       skipped: skippedSummary,
     });
   }
-  return `${verifiedModelSummary} and Figma access token. Reloading Keiko…${skippedSummary}`;
+  return t("gatewaySetup.ui.success.verifiedAndFigma", {
+    verified: verifiedModelSummary,
+    skipped: skippedSummary,
+  });
 }
 
 function verifiedModelsMessage(
@@ -977,7 +993,10 @@ function verifiedModelsMessage(
       skipped: skippedSummary,
     });
   }
-  return `${verifiedModelSummary}. Reloading Keiko…${skippedSummary}`;
+  return t("gatewaySetup.ui.success.verified", {
+    verified: verifiedModelSummary,
+    skipped: skippedSummary,
+  });
 }
 
 interface ResolveSuccessMessageInput {
@@ -1027,7 +1046,7 @@ async function performGatewaySubmission(
   t: GatewaySetupTranslate,
 ): Promise<GatewaySubmissionOutcome> {
   const parsedDeploymentNames = deploymentNamesFromInput(fields.deploymentNames);
-  const foundryError = validateFoundryDeploymentNames(fields.baseUrl, parsedDeploymentNames);
+  const foundryError = validateFoundryDeploymentNames(fields.baseUrl, parsedDeploymentNames, t);
   if (foundryError !== undefined) {
     return { kind: "validation-error", message: foundryError };
   }
@@ -1072,7 +1091,7 @@ async function performGatewaySubmission(
       message: t("gatewaySetup.voice.outputVoiceRequired"),
     };
   }
-  const timeoutsResult = parseSubmitTimeouts(fields.timeoutMs, fields.voiceTimeoutMs);
+  const timeoutsResult = parseSubmitTimeouts(fields.timeoutMs, fields.voiceTimeoutMs, t);
   if (!timeoutsResult.ok) {
     return { kind: "validation-error", message: timeoutsResult.message };
   }
@@ -1097,7 +1116,10 @@ async function performGatewaySubmission(
     buildSetupGatewayPayload(fields, derived, voiceCredentialFields),
   );
   const count = result.testedModelIds.length;
-  const verifiedModelSummary = `Verified ${String(count)} workflow chat model${count === 1 ? "" : "s"}`;
+  const verifiedModelSummary = t(
+    count === 1 ? "gatewaySetup.ui.verifiedModels.one" : "gatewaySetup.ui.verifiedModels.other",
+    { count },
+  );
   return {
     kind: "success",
     message: resolveSuccessMessage({

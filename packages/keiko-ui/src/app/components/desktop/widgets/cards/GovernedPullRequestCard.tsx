@@ -1547,8 +1547,8 @@ function PrBodyHeader({
   );
 }
 
-function prSubmitLabel(kind: GitDeliveryPrKind): string {
-  return kind === "pr-create" ? "Create Pull Request" : "Update Pull Request";
+function prSubmitLabel(kind: GitDeliveryPrKind, t: ReturnType<typeof useTranslate>): string {
+  return t(kind === "pr-create" ? "governedDelivery.ui.createPr" : "governedDelivery.ui.updatePr");
 }
 
 function PrFormActionButtons({
@@ -1579,7 +1579,7 @@ function PrFormActionButtons({
         onClick={onExecute}
         data-testid="gpr-submit"
       >
-        {prSubmitLabel(kind)}
+        {prSubmitLabel(kind, tUi)}
       </button>
     </div>
   );

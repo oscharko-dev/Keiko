@@ -1,6 +1,6 @@
 "use client";
 
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import { useOptionalWidgetTranslate, type WidgetMessageKey } from "@/lib/optional-widget-i18n";
 
 // Issue #1559, Epic #1556 — presentational dialog-mode controls.
 //
@@ -35,6 +35,12 @@ const PERSONA_LABEL: Record<VoicePersona, string> = {
   female: "Female voice",
   neutral: "Neutral voice",
 };
+
+const PERSONA_KEYS = {
+  male: "voiceDialog.ui.personaMale",
+  female: "voiceDialog.ui.personaFemale",
+  neutral: "voiceDialog.ui.personaNeutral",
+} as const satisfies Record<VoicePersona, WidgetMessageKey>;
 
 export function personaLabel(persona: VoicePersona): string {
   return PERSONA_LABEL[persona];
@@ -178,7 +184,7 @@ export function VoiceProfileSelect({
   return (
     <div className={`cmp-model mono${compact ? " cmp-model-compact" : ""}`}>
       <span id={VOICE_PROFILE_LABEL_ID} className="sr-only">
-        {tUi("voiceDialog.ui.voiceProfile", { profile: personaLabel(selected) })}
+        {tUi("voiceDialog.ui.voiceProfile", { profile: tUi(PERSONA_KEYS[selected]) })}
       </span>
       <KeikoSelect
         value={selected}
@@ -196,7 +202,7 @@ export function VoiceProfileSelect({
           {
             options: personas.map((persona) => ({
               value: persona,
-              label: personaLabel(persona),
+              label: tUi(PERSONA_KEYS[persona]),
             })),
           },
         ]}
