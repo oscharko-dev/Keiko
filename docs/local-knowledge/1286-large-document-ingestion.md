@@ -82,7 +82,11 @@ A `ProgressiveExtractor` yields the document as an ordered sequence of bounded
 next window is requested, so the extraction working set never grows past one
 window plus the policy-bounded accumulators.
 
-- `progressive-pdf` reuses the existing pdfjs loader and per-page text reader.
+- `progressive-pdf` reuses the existing pdfjs loader, per-page text reader and
+  page layout composition, so it produces the same text as the synchronous route.
+  A paragraph running over a page break continues across a window and across a
+  resumed job; the page spans stay exact, because only the separator between two
+  pages changes. A chunk still lies inside one page.
   pdfjs-dist requires the raw byte buffer in memory to open a document — that is
   an upstream limitation, documented in §8 — but **useful work begins after the
   first window** and neither the extracted text, the chunk set, nor the

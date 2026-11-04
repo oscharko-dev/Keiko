@@ -17,8 +17,9 @@
 //     (`Code | Bedeutung`) defines none, and its identifier rows are counted as rejected.
 //   * A block ends at the next identifier, a heading or section boundary and, in flat text, at a
 //     blank line unless the next line is a key line (priority, criteria, metadata), the block has no
-//     body yet, the next paragraph leads into a key line, or an unfinished sentence goes on: a PDF
-//     page break is a blank line anywhere in a block. Wrapped lines of a paragraph are merged before
+//     body yet, the next paragraph leads into a key line, an unfinished sentence goes on, or criteria
+//     or prose of the unit run on ahead of the next unit: under the parsers' block contract the parts
+//     of one requirement are separate blocks. Wrapped lines of a paragraph are merged before
 //     sentences are read. A rule line ends a block with a body in every kind of text.
 //   * A record line joins fields with a middle dot or a pipe, or runs them together: every field is
 //     read for itself, a field no vocabulary names is presentation, and the sentence behind a value

@@ -10,6 +10,8 @@
 //     define nothing, however much their first cell looks like an identifier.
 //   * A table whose first row starts with an identifier has no header: the second cell is the title
 //     and a cell equal to a priority value is the priority.
+//   * A header that names a statement column but no identifier column gives rows without one: a row
+//     whose statement states an obligation is a derived unit, whatever else the table holds.
 
 import { ID_EXACT, collapse } from "./requirementText.js";
 import {

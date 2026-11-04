@@ -216,9 +216,13 @@ files, with the source location a citation points at: the paragraph or sheet row
 Images and other embedded objects are not read, and scanned documents are not recognized (no OCR).
 
 A PDF stores glyph runs, not paragraphs, so its pages are rebuilt from the layout: reading order
-of rows, columns and table cells, the paragraph a wrapped line belongs to, list items, headings as
-sections, and page headers and footers a document repeats are removed with a count. Where the
-layout gives no evidence, a line stays a line.
+of rows, columns and table cells, the paragraph a wrapped line belongs to, also across a page
+break, list items, headings as sections, and page headers and footers a document repeats are
+removed with a count. Where the layout gives no evidence, a line stays a line.
+
+Every format follows one block rule in the stored text: a blank line ends a block, and only the
+items of one list and the rows of one table stay on adjacent lines. Retrieval and the requirement
+inventory rely on this rule, so a new or changed parser has to keep it.
 
 Content a person does not see is reported, never silently dropped or passed off as visible: hidden
 Word text and unfilled placeholders are excluded with a count, Word comments are not indexed with
