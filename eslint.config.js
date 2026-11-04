@@ -162,6 +162,14 @@ export default defineConfig(
     files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.spec.ts", "**/*.spec.tsx"],
     rules: { "max-lines-per-function": "off" },
   },
+  // scripts/generate-op-catalog.mjs writes the activity-log operation registry as part factories of
+  // up to 200 operations, called only inside the registry's one pure call (TS7056 and the
+  // first-load UI chunk need both). Each factory is one generated literal table, not hand-written
+  // logic, so the function-length bar does not apply to that one generated file.
+  {
+    files: ["packages/keiko-contracts/src/activity-log-operations.generated.ts"],
+    rules: { "max-lines-per-function": "off" },
+  },
   // KEIKO-0761 shipped the exemption above, which makes any `// eslint-disable-next-line
   // max-lines-per-function` comment inside a spec file dead — ESLint reports each as unused
   // and the --max-warnings=0 lint fails. Removing those comments from
