@@ -909,15 +909,15 @@ function fileTruncationSummary(
   };
 }
 
-// eslint-disable-next-line max-lines-per-function
-function ingestFile(
+interface FileSourceRead {
+  readonly label: string;
+  readonly absFile: string;
+  readonly content: ReturnType<typeof readSingleFileContent>;
+}
+
+function readFileSource(
   source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
-  index: number,
-  registeredAt: string,
-  byteBudget: number,
-  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
-  signal: AbortSignal | undefined,
-): OneSource {
+): FileSourceRead {
   const label = sanitiseLabel(source.label);
   if (!isAbsolute(source.path)) {
     throw new QiIngestionError("QI_BAD_SOURCE", "File source paths must be absolute local paths.");
@@ -946,14 +946,21 @@ function ingestFile(
       `File "${label}" appears to be binary, not text.`,
     );
   }
-  const extractedFile = extractedSingleFileText(
-    absFile,
-    label,
-    content.text,
-    documentTextExtractor,
-    byteBudget,
-    signal,
-  );
+  return { label, absFile, content };
+}
+
+interface FilePlacement {
+  readonly index: number;
+  readonly registeredAt: string;
+  readonly byteBudget: number;
+}
+
+function oneFileSource(
+  read: FileSourceRead,
+  extractedFile: { readonly text: string; readonly truncated: boolean },
+  placement: FilePlacement,
+): OneSource {
+  const { label, absFile, content } = read;
   const sourceText = extractedFile.text;
   if (sourceText.trim().length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
@@ -962,15 +969,15 @@ function ingestFile(
   // budget so a large file cannot, alongside other connected sources, blow the model prompt cap and
   // fail the whole N+1 run (Epic #729). A lone connected file keeps the full budget unchanged
   // (byteBudget === EVIDENCE_BUDGET_BYTES, so boundedText === content.text).
-  const bounded = truncateToUtf8BytesDetailed(sourceText, byteBudget);
-  const envelopeId = envelopeIdFor(index, label, content.relativePath);
+  const bounded = truncateToUtf8BytesDetailed(sourceText, placement.byteBudget);
+  const envelopeId = envelopeIdFor(placement.index, label, content.relativePath);
   const envelope: QI.QualityIntelligenceSourceEnvelope = {
     id: envelopeId,
     kind: "repository-context",
     displayLabel: label,
     provenance: {
       origin: "file",
-      registeredAt,
+      registeredAt: placement.registeredAt,
       integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${bounded.text}`),
     },
     localRef: stableLocalRef("file", absFile),
@@ -986,7 +993,26 @@ function ingestFile(
   };
 }
 
-// eslint-disable-next-line max-lines-per-function
+function ingestFile(
+  source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
+  index: number,
+  registeredAt: string,
+  byteBudget: number,
+  documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
+  signal: AbortSignal | undefined,
+): OneSource {
+  const read = readFileSource(source);
+  const extractedFile = extractedSingleFileText(
+    read.absFile,
+    read.label,
+    read.content.text,
+    documentTextExtractor,
+    byteBudget,
+    signal,
+  );
+  return oneFileSource(read, extractedFile, { index, registeredAt, byteBudget });
+}
+
 async function ingestFileAsync(
   source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
   index: number,
@@ -995,63 +1021,16 @@ async function ingestFileAsync(
   documentTextExtractor: QiAsyncDocumentTextExtractor | undefined,
   signal: AbortSignal | undefined,
 ): Promise<OneSource> {
-  const label = sanitiseLabel(source.label);
-  if (!isAbsolute(source.path)) {
-    throw new QiIngestionError("QI_BAD_SOURCE", "File source paths must be absolute local paths.");
-  }
-  const absFile = resolve(source.path);
-  if (!isSupportedFilePath(absFile)) {
-    throw new QiIngestionError(
-      "QI_SOURCE_UNSUPPORTED",
-      `File "${label}" is not a supported single-file document.`,
-    );
-  }
-  assertNotDenied(absFile, label, "File");
-  const content = readSingleFileContent(
-    absFile,
-    label,
-    BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile) ? DOCUMENT_FILE_MAX_BYTES : SINGLE_FILE_MAX_BYTES,
-  );
-  if (requiresStrictTextGuard(absFile) && content.text.includes("\u0000")) {
-    throw new QiIngestionError(
-      "QI_SOURCE_UNSUPPORTED",
-      `File "${label}" appears to be binary, not text.`,
-    );
-  }
+  const read = readFileSource(source);
   const extractedFile = await extractedSingleFileTextAsync(
-    absFile,
-    label,
-    content.text,
+    read.absFile,
+    read.label,
+    read.content.text,
     documentTextExtractor,
     byteBudget,
     signal,
   );
-  const sourceText = extractedFile.text;
-  if (sourceText.trim().length === 0) {
-    throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
-  }
-  const bounded = truncateToUtf8BytesDetailed(sourceText, byteBudget);
-  const envelopeId = envelopeIdFor(index, label, content.relativePath);
-  const envelope: QI.QualityIntelligenceSourceEnvelope = {
-    id: envelopeId,
-    kind: "repository-context",
-    displayLabel: label,
-    provenance: {
-      origin: "file",
-      registeredAt,
-      integrityHashSha256Hex: sha256Hex(`${content.relativePath}|${bounded.text}`),
-    },
-    localRef: stableLocalRef("file", absFile),
-  };
-  const atoms = atomsForWorkspaceEntry(
-    { path: content.relativePath, excerpt: bounded.text },
-    envelopeId,
-  );
-  return {
-    envelope,
-    atoms,
-    ...fileTruncationSummary(bounded, extractedFile.truncated),
-  };
+  return oneFileSource(read, extractedFile, { index, registeredAt, byteBudget });
 }
 
 // A single capsule document may use the per-document byte budget; the whole capsule corpus is

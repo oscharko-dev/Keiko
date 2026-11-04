@@ -9,15 +9,13 @@
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 
 import {
-  binaryContentRefusal,
   decodeUtf8,
   diagnostic,
   emptyResult,
   encodingDiagnostic,
   limitSeverity,
-  oversizeDiagnostic,
-  textByteLimit,
   shouldStop,
+  textInputRefusal,
 } from "./_internal.js";
 import type {
   InternalParserResult,
@@ -553,14 +551,8 @@ export const codeParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => codeLanguage(input) !== undefined,
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    const byteLimit = textByteLimit(options);
-    if (input.bytes.byteLength > byteLimit) {
-      return emptyResult(codeParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
-      ]);
-    }
-    const binary = binaryContentRefusal(codeParser.capability, input, options);
-    if (binary !== undefined) return binary;
+    const refusal = textInputRefusal(codeParser.capability, input, options);
+    if (refusal !== undefined) return refusal;
     const startedAt = options.now();
     const decoded = decodeUtf8(input.bytes);
     const encoding = encodingDiagnostic(decoded, input.documentId);

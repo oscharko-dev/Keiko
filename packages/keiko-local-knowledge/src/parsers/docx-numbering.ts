@@ -233,7 +233,7 @@ function letters(value: number): string {
   let out = "";
   while (rest > 0) {
     const index = (rest - 1) % LETTER_COUNT;
-    out = String.fromCharCode(97 + index) + out;
+    out = String.fromCodePoint(97 + index) + out;
     rest = Math.floor((rest - 1) / LETTER_COUNT);
   }
   return out;

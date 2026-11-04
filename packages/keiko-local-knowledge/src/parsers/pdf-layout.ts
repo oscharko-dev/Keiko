@@ -67,92 +67,6 @@ export interface PdfSection {
   readonly characterEnd: number;
 }
 
-const BASELINE_TOLERANCE_RATIO = 0.5;
-const BASELINE_TOLERANCE_MIN = 2;
-const AXIS_TOLERANCE_DEGREES = 2;
-const WORD_GAP_RATIO = 0.12;
-const SEGMENT_GAP_RATIO = 1;
-const SEGMENT_GAP_MIN = 3;
-const DUPLICATE_DRAW_TOLERANCE = 1;
-const FULL_WIDTH_RATIO = 0.65;
-const MIN_GUTTER = 8;
-const MIN_COLUMN_LINES = 4;
-const MIN_UNMEASURED_COLUMN_LINES = 2;
-const COLUMN_BALANCE_RATIO = 0.6;
-const MAX_GUTTER_SHARE = 0.5;
-const MAX_COLUMNS = 4;
-const COLUMN_FILL_RATIO = 0.7;
-const COLUMN_FILLED_SHARE = 0.6;
-const COLUMN_ALIGN_TOLERANCE = 3;
-const SPACE_WIDTH_RATIO = 0.25;
-const WRAP_TOLERANCE = 1.5;
-/** A word's width is estimated from its line's average glyph, which can be this far off. */
-const WORD_WIDTH_UNCERTAINTY = 0.1;
-const CELL_EDGE_REACH_RATIO = 0.7;
-const FULL_LINE_RATIO = 0.8;
-const MIN_MARGIN_WIDTH_EMS = 20;
-const MIN_FULL_LINES = 2;
-const HEIGHT_CHANGE_RATIO = 1.1;
-const PARAGRAPH_PITCH_RATIO = 1.25;
-const PARAGRAPH_HEIGHT_RATIO = 1.45;
-const INDENT_TOLERANCE = 2;
-const TABLE_MIN_ROWS = 2;
-const TABLE_MAX_COLUMNS = 64;
-const TABLE_GAP_LIMIT_RATIO = 1.8;
-const TABLE_GAP_HEIGHT_RATIO = 2;
-const CELL_LINE_GAP_RATIO = 1.15;
-const BIMODAL_GAP_RATIO = 1.25;
-const HEADING_SIZE_RATIO = 1.12;
-const HEADING_MAX_CHARS = 160;
-const HEADING_MAX_LEVEL = 6;
-const HEADING_SIZE_BUCKET = 2;
-const EDGE_ROWS = 2;
-const FURNITURE_MIN_PAGES = 3;
-const FURNITURE_PAGE_SHARE = 0.4;
-const FURNITURE_Y_BUCKET = 3;
-const FURNITURE_ISOLATION_RATIO = 1.5;
-
-const LIST_MARKER_ONLY = /^(?:[-–—*•·▪◦‣]|\d{1,3}[.)]?|[a-z][.)])$/iu;
-const NOT_A_HEADING_END = /[.!?:;,]$/u;
-const BARE_NUMBER = /^\d+$/u;
-const HAS_LETTER = /\p{L}/u;
-// The glyphs Office exports draw from the Symbol and Wingdings faces as list bullets.
-const SYMBOL_FACE_BULLET = /^[\uF06C\uF06E\uF076\uF0A7\uF0A8\uF0B7\uF0D8\uF0FC]$/u;
-const SECOND_LEVEL_BULLET = "o";
-const BULLET_START = /^[-–—*•·▪◦‣](?:\s|$)/u;
-const ENUMERATOR_START = /^(?:\d+[.)]|[a-z][.)])\s/iu;
-const SENTENCE_END = /[.!?]$/u;
-const ABBREVIATION_TAIL_CHARS = 16;
-// "z.", "z.B." and "z. B.": a letter and its period abbreviate a word. A plain word cannot match.
-const LETTER_ABBREVIATION_END =
-  /(?:^|[^\p{L}\p{N}.])(?:\p{Ll}\.|\p{L}\.\p{L}\.(?:\p{L}\.)*|\p{Ll}\.\s\p{L}\.)$/u;
-// Words a sentence ends in only by accident. Open-ended ones such as "usw." are deliberately absent.
-const ABBREVIATIONS: ReadonlySet<string> = new Set(
-  (
-    "abb abs abzgl anh approx art bspw bzgl bzw ca cf dr evtl excl exkl fig fr gem ggf ggü hr " +
-    "incl inkl kap lt max min mio mr mrd mrs ms nr prof sec sog tab tsd vgl vs ziff zzgl"
-  ).split(" "),
-);
-const LEAD_IN_END = /[.!?:;]$/u;
-const UPPER_START = /^\p{Lu}/u;
-const HYPHENATED_END = /\p{L}-$/u;
-const LOWER_START = /^\p{Ll}/u;
-const WORD_CONTINUATION_START = /^[\p{Ll}\p{N}]/u;
-const COMPOUND_START = /^[\p{Lu}\p{N}]/u;
-// "Ein- und Auszahlung": a word that follows a suspended hyphen keeps it.
-const SUSPENDED_HYPHEN_NEXT = /^(?:und|oder|bzw|sowie|bis|and|or)\b/u;
-const WORD_CORE = /[\p{L}\p{N}](?:.*[\p{L}\p{N}])?/su;
-// Letters between optional opening and closing punctuation: "(Zahlungs-" and "verkehr)," are words.
-const PLAIN_WORD = /^[^\p{L}\p{N}]*\p{L}+(?:-\p{L}+)*[^\p{L}\p{N}/_@:\\]*$/u;
-const NUMBER_FRAGMENT_END = /[\p{N}-]$/u;
-const NUMBER_FRAGMENT_START = /^\p{N}/u;
-// Letters of the scripts written from right to left. pdf.js reports the text of a run in logical
-// order, but the runs of a line sit on the page from right to left.
-const RIGHT_TO_LEFT_LETTER =
-  /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
-const LEFT_TO_RIGHT_LETTER = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}]/u;
-const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/gu;
-
 // A page can hold more items than a call takes as arguments, so these never spread.
 function maxOf(values: Iterable<number>, floor = Number.NEGATIVE_INFINITY): number {
   let largest = floor;
@@ -199,6 +113,10 @@ function dominantAngle(items: readonly PositionedTextItem[]): number {
   return best.angle;
 }
 
+// The glyphs Office exports draw from the Symbol and Wingdings faces as list bullets.
+const SYMBOL_FACE_BULLET = /^[\uF06C\uF06E\uF076\uF0A7\uF0A8\uF0B7\uF0D8\uF0FC]$/u;
+const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/gu;
+
 function cleanItemText(raw: string): string {
   const cleaned = raw
     .replaceAll(ZERO_WIDTH, "")
@@ -237,9 +155,13 @@ function layoutItem(item: PositionedTextItem, angleDegrees: number): LayoutItem 
 
 // ─── Rows and segments ───────────────────────────────────────────────────────
 
+const DUPLICATE_DRAW_TOLERANCE = 1;
+
 function isDuplicateDraw(previous: LayoutItem | undefined, item: LayoutItem): boolean {
   return previous?.text === item.text && Math.abs(previous.x - item.x) <= DUPLICATE_DRAW_TOLERANCE;
 }
+
+const WORD_GAP_RATIO = 0.12;
 
 function needsWordSpace(previous: LayoutItem, item: LayoutItem): boolean {
   if (previous.width <= 0) return true;
@@ -252,9 +174,16 @@ function separatorBefore(items: readonly LayoutItem[], index: number): string {
   return previous !== undefined && item !== undefined && needsWordSpace(previous, item) ? " " : "";
 }
 
+// Letters of the scripts written from right to left. pdf.js reports the text of a run in logical
+// order, but the runs of a line sit on the page from right to left.
+const RIGHT_TO_LEFT_LETTER =
+  /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
+
 function isRightToLeftItem(item: LayoutItem): boolean {
   return RIGHT_TO_LEFT_LETTER.test(item.text);
 }
+
+const LEFT_TO_RIGHT_LETTER = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}]/u;
 
 /** A line is written from right to left when most of its letters are. */
 function isRightToLeftLine(items: readonly LayoutItem[]): boolean {
@@ -287,9 +216,9 @@ function logicalOrder(items: readonly LayoutItem[]): readonly number[] {
       runs.push([index]);
     }
   });
-  return runs.reverse().flatMap((run) => {
+  return [...runs].reverse().flatMap((run) => {
     const first = items[run[0] ?? 0];
-    return first !== undefined && isRightToLeftItem(first) ? run.reverse() : run;
+    return first !== undefined && isRightToLeftItem(first) ? [...run].reverse() : run;
   });
 }
 
@@ -323,6 +252,9 @@ function toSegment(items: readonly LayoutItem[], first: LayoutItem): Segment {
   };
 }
 
+const SEGMENT_GAP_RATIO = 1;
+const SEGMENT_GAP_MIN = 3;
+
 function segmentsOf(items: readonly LayoutItem[], height: number): readonly Segment[] {
   const threshold = Math.max(height * SEGMENT_GAP_RATIO, SEGMENT_GAP_MIN);
   const groups: LayoutItem[][] = [];
@@ -341,6 +273,11 @@ function segmentsOf(items: readonly LayoutItem[], height: number): readonly Segm
     return first === undefined ? [] : [toSegment(group, first)];
   });
 }
+
+const LIST_MARKER_ONLY = /^(?:[-–—*•·▪◦‣]|\d{1,3}[.)]?|[a-z][.)])$/iu;
+const BARE_NUMBER = /^\d+$/u;
+const HAS_LETTER = /\p{L}/u;
+const SECOND_LEVEL_BULLET = "o";
 
 /**
  * A marker drawn apart from its text starts a list item. A bare number is one only in front of
@@ -364,6 +301,9 @@ function withListMarkerJoined(segments: readonly Segment[]): readonly Segment[] 
   if (!isListMarker(marker, body)) return segments;
   return [{ ...body, text: `${markerLabel(marker)} ${body.text}`, x: marker.x }];
 }
+
+const BASELINE_TOLERANCE_RATIO = 0.5;
+const BASELINE_TOLERANCE_MIN = 2;
 
 /** The visual rows of a page, top to bottom, with their items in reading order. */
 function layoutRows(items: readonly LayoutItem[]): readonly LayoutRow[] {
@@ -397,6 +337,8 @@ function layoutRows(items: readonly LayoutItem[]): readonly LayoutRow[] {
     ),
   }));
 }
+
+const AXIS_TOLERANCE_DEGREES = 2;
 
 /** What pdf.js reported for one page, reduced to the evidence reading order is decided from. */
 export function pageLayoutOf(items: readonly PositionedTextItem[]): PageLayout {
@@ -440,6 +382,8 @@ function rowText(row: LayoutRow): string {
 
 // ─── Repeated page furniture ─────────────────────────────────────────────────
 
+const FURNITURE_Y_BUCKET = 3;
+
 function furnitureKey(row: LayoutRow): string {
   const text = rowText(row)
     .toLowerCase()
@@ -452,9 +396,13 @@ function offAxisKey(text: string): string {
   return `off-axis:${text.toLowerCase().replaceAll(/\p{N}+/gu, "#")}`;
 }
 
+const FURNITURE_ISOLATION_RATIO = 1.5;
+
 function isolatingGap(pitch: number): number {
   return pitch * FURNITURE_ISOLATION_RATIO;
 }
+
+const EDGE_ROWS = 2;
 
 /** The rows at a page edge that a clear gap separates from the body. A table header has no gap. */
 function edgeRows(rows: readonly LayoutRow[]): readonly LayoutRow[] {
@@ -477,6 +425,8 @@ function edgeRows(rows: readonly LayoutRow[]): readonly LayoutRow[] {
   return out;
 }
 
+const HEADING_SIZE_RATIO = 1.12;
+
 /** A line set larger than the body is a heading, which the page carries; furniture is body-sized. */
 function isHeadingSized(row: LayoutRow, bodyHeight: number): boolean {
   return bodyHeight > 0 && row.height >= bodyHeight * HEADING_SIZE_RATIO;
@@ -485,6 +435,9 @@ function isHeadingSized(row: LayoutRow, bodyHeight: number): boolean {
 function furnitureRows(page: PageLayout, bodyHeight: number): readonly LayoutRow[] {
   return edgeRows(page.rows).filter((row) => !isHeadingSized(row, bodyHeight));
 }
+
+const FURNITURE_MIN_PAGES = 3;
+const FURNITURE_PAGE_SHARE = 0.4;
 
 function repeatedFurniture(pages: readonly PageLayout[], bodyHeight: number): ReadonlySet<string> {
   if (pages.length < FURNITURE_MIN_PAGES) return new Set();
@@ -520,6 +473,8 @@ interface Gutter {
   readonly end: number;
 }
 
+const MIN_GUTTER = 8;
+
 function coverageGaps(segments: readonly Segment[]): readonly Gutter[] {
   const ordered = [...segments].sort((a, b) => a.x - b.x);
   const gaps: Gutter[] = [];
@@ -534,6 +489,9 @@ function coverageGaps(segments: readonly Segment[]): readonly Gutter[] {
 function isMeasured(segments: readonly Segment[]): boolean {
   return segments.some((segment) => segment.right > segment.x);
 }
+
+const COLUMN_FILL_RATIO = 0.7;
+const COLUMN_FILLED_SHARE = 0.6;
 
 /** Running text fills its column; table cells mostly do not. */
 function fillsColumn(segments: readonly Segment[], x: number, right: number): boolean {
@@ -581,6 +539,11 @@ function columnSpans(
   }));
 }
 
+const MIN_COLUMN_LINES = 4;
+const MIN_UNMEASURED_COLUMN_LINES = 2;
+const COLUMN_BALANCE_RATIO = 0.6;
+const MAX_GUTTER_SHARE = 0.5;
+
 function hasColumnEvidence(
   columns: readonly (readonly Segment[])[],
   gutters: readonly Gutter[],
@@ -602,12 +565,16 @@ function hasColumnEvidence(
   });
 }
 
+const FULL_WIDTH_RATIO = 0.65;
+
 /** Segments wider than this share of the text's width are running text, not part of a column. */
 function fullWidthLimit(segments: readonly Segment[]): number {
   const pageLeft = minOf(segments.map((segment) => segment.x));
   const pageRight = maxOf(segments.map((segment) => segment.right));
   return (pageRight - pageLeft) * FULL_WIDTH_RATIO;
 }
+
+const MAX_COLUMNS = 4;
 
 function guttersOf(rows: readonly LayoutRow[]): readonly Gutter[] {
   const all = rows.flatMap((row) => row.segments);
@@ -701,6 +668,8 @@ interface TableBlock {
   readonly rows: readonly LayoutRow[];
 }
 
+const COLUMN_ALIGN_TOLERANCE = 3;
+
 /** The last column that starts at or before `x`; the columns are sorted from left to right. */
 function columnIndex(columns: readonly number[], x: number): number {
   const limit = x + COLUMN_ALIGN_TOLERANCE;
@@ -718,6 +687,8 @@ function alignsToColumn(columns: readonly number[], x: number): boolean {
   const column = columns[columnIndex(columns, x)];
   return column !== undefined && Math.abs(column - x) <= COLUMN_ALIGN_TOLERANCE;
 }
+
+const TABLE_MAX_COLUMNS = 64;
 
 function withRowColumns(columns: readonly number[], row: LayoutRow): readonly number[] {
   const xs = row.segments.map((segment) => segment.x);
@@ -764,6 +735,10 @@ interface TableDraft {
   largestGap: number;
 }
 
+const TABLE_GAP_LIMIT_RATIO = 1.8;
+const TABLE_GAP_HEIGHT_RATIO = 2;
+const CELL_LINE_GAP_RATIO = 1.15;
+
 function extendsTable(row: LayoutRow, columns: readonly number[], draft: TableDraft): boolean {
   const previous = draft.rows.at(-1);
   if (previous === undefined || !fitsColumns(row, columns)) return false;
@@ -789,6 +764,8 @@ function growTable(draft: TableDraft, candidate: LayoutRow): boolean {
   return true;
 }
 
+const TABLE_MIN_ROWS = 2;
+
 function readTableBlock(rows: readonly LayoutRow[], start: number): TableBlock | undefined {
   const head = rows[start];
   if (head === undefined || head.segments.length < 2) return undefined;
@@ -810,6 +787,8 @@ function readTableBlock(rows: readonly LayoutRow[], start: number): TableBlock |
 
 /** Every word form a document uses, with how often. A broken fragment is not one of them. */
 type Vocabulary = ReadonlyMap<string, number>;
+
+const WORD_CORE = /[\p{L}\p{N}](?:.*[\p{L}\p{N}])?/su;
 
 function wordKey(raw: string): string {
   return WORD_CORE.exec(raw)?.[0].toLowerCase() ?? "";
@@ -846,6 +825,9 @@ function keepsWrapHyphen(left: string, right: string, vocabulary: Vocabulary): b
   );
 }
 
+// Letters between optional opening and closing punctuation: "(Zahlungs-" and "verkehr)," are words.
+const PLAIN_WORD = /^[^\p{L}\p{N}]*\p{L}+(?:-\p{L}+)*[^\p{L}\p{N}/_@:\\]*$/u;
+
 /** Only a plain word was hyphenated by the renderer; a URL, a path or an identifier was not. */
 function isPlainWord(word: string): boolean {
   return PLAIN_WORD.test(word);
@@ -856,6 +838,12 @@ interface WrapJoin {
   readonly dropHyphen: boolean;
   readonly separator: string;
 }
+
+const HYPHENATED_END = /\p{L}-$/u;
+const LOWER_START = /^\p{Ll}/u;
+const COMPOUND_START = /^[\p{Lu}\p{N}]/u;
+// "Ein- und Auszahlung": a word that follows a suspended hyphen keeps it.
+const SUSPENDED_HYPHEN_NEXT = /^(?:und|oder|bzw|sowie|bis|and|or)\b/u;
 
 /** How a wrapped line continues the text before it; only the end of that text matters. */
 function wrapJoinOf(tail: string, right: string, vocabulary: Vocabulary): WrapJoin {
@@ -914,6 +902,8 @@ class WrappedText {
   }
 }
 
+const SPACE_WIDTH_RATIO = 0.25;
+
 /** A word's share of its run, from the run's average glyph: spaces are narrower than letters. */
 function estimatedWordWidth(item: LayoutItem, word: string): number {
   const glyphs = item.text.replaceAll(/\s/gu, "").length;
@@ -939,6 +929,9 @@ interface CellLine {
   readonly vocabulary: Vocabulary;
 }
 
+const NUMBER_FRAGMENT_END = /[\p{N}-]$/u;
+const NUMBER_FRAGMENT_START = /^\p{N}/u;
+
 /** Layout cannot tell a long whole word from a fragment, because it defines the cell's edge itself. */
 function areFragmentsOfOneWord(head: string, tail: string, vocabulary: Vocabulary): boolean {
   // An identifier's digits are no words, so the document cannot use them on their own.
@@ -947,6 +940,10 @@ function areFragmentsOfOneWord(head: string, tail: string, vocabulary: Vocabular
   const usedAgain = (word: string): boolean => (vocabulary.get(wordKey(word)) ?? 0) > 1;
   return !usedAgain(head) && !usedAgain(tail);
 }
+
+const WRAP_TOLERANCE = 1.5;
+const CELL_EDGE_REACH_RATIO = 0.7;
+const WORD_CONTINUATION_START = /^[\p{Ll}\p{N}]/u;
 
 /**
  * A renderer breaks inside a word only when the word cannot fit a line of its cell at all: the line
@@ -985,6 +982,8 @@ function columnRightEdges(block: TableBlock): readonly number[] {
   }
   return edges;
 }
+
+const BIMODAL_GAP_RATIO = 1.25;
 
 /** A wrapped cell continues its logical row: it sits at the cell's line pitch, not the row pitch. */
 function logicalTableRows(
@@ -1089,6 +1088,10 @@ function firstWordWidth(line: TextLine): number | undefined {
   return estimatedWordWidth(first, firstWord(first.text));
 }
 
+/** A word's width is estimated from its line's average glyph, which can be this far off. */
+const WORD_WIDTH_UNCERTAINTY = 0.1;
+const MIN_MARGIN_WIDTH_EMS = 20;
+
 /** The break was forced: the next word would not have fit behind the previous line. */
 function wasForcedByWidth(last: TextLine, line: TextLine, context: ParagraphContext): boolean {
   const width = firstWordWidth(line);
@@ -1100,15 +1103,32 @@ function wasForcedByWidth(last: TextLine, line: TextLine, context: ParagraphCont
   return nextWordEnd > context.rightEdge - WRAP_TOLERANCE;
 }
 
+const HEIGHT_CHANGE_RATIO = 1.1;
+
 function sizesMatch(last: TextLine, line: TextLine): boolean {
   const larger = Math.max(last.height, line.height);
   const smaller = Math.max(Math.min(last.height, line.height), 1);
   return larger / smaller <= HEIGHT_CHANGE_RATIO;
 }
 
+const BULLET_START = /^[-–—*•·▪◦‣](?:\s|$)/u;
+const ENUMERATOR_START = /^(?:\d+[.)]|[a-z][.)])\s/iu;
+
 function isListItem(line: TextLine): boolean {
   return BULLET_START.test(line.text) || ENUMERATOR_START.test(line.text);
 }
+
+const ABBREVIATION_TAIL_CHARS = 16;
+// "z.", "z.B." and "z. B.": a letter and its period abbreviate a word. A plain word cannot match.
+const LETTER_ABBREVIATION_END =
+  /(?:^|[^\p{L}\p{N}.])(?:\p{Ll}\.|\p{L}\.\p{L}\.(?:\p{L}\.)*|\p{Ll}\.\s\p{L}\.)$/u;
+// Words a sentence ends in only by accident. Open-ended ones such as "usw." are deliberately absent.
+const ABBREVIATIONS: ReadonlySet<string> = new Set(
+  (
+    "abb abs abzgl anh approx art bspw bzgl bzw ca cf dr evtl excl exkl fig fr gem ggf ggü hr " +
+    "incl inkl kap lt max min mio mr mrd mrs ms nr prof sec sog tab tsd vgl vs ziff zzgl"
+  ).split(" "),
+);
 
 function endsInAbbreviation(text: string): boolean {
   if (!text.endsWith(".")) return false;
@@ -1126,6 +1146,8 @@ function usesMarkerInsideLine(head: TextLine, last: TextLine, line: TextLine): b
   return !BULLET_START.test(head.text) && last.text.includes(` ${line.text.charAt(0)} `);
 }
 
+const INDENT_TOLERANCE = 2;
+
 /** "16. April" is an enumerator only where the paragraph it would interrupt is one. */
 function startsListItem(head: TextLine, last: TextLine, line: TextLine): boolean {
   if (BULLET_START.test(line.text)) return !usesMarkerInsideLine(head, last, line);
@@ -1137,11 +1159,18 @@ function hangsUnderListItem(head: TextLine, line: TextLine): boolean {
   return isListItem(head) && line.x > head.x + INDENT_TOLERANCE;
 }
 
+const SENTENCE_END = /[.!?]$/u;
+const LEAD_IN_END = /[.!?:;]$/u;
+const UPPER_START = /^\p{Lu}/u;
+
 /** The margin forced this break, but the sense ends here anyway: a new sentence or a list. */
 function opensNewLineOfSense(last: TextLine, line: TextLine): boolean {
   if (SENTENCE_END.test(last.text) && UPPER_START.test(line.text)) return true;
   return LEAD_IN_END.test(last.text) && ENUMERATOR_START.test(line.text);
 }
+
+const PARAGRAPH_PITCH_RATIO = 1.25;
+const PARAGRAPH_HEIGHT_RATIO = 1.45;
 
 function isParagraphGap(last: TextLine, line: TextLine, context: ParagraphContext): boolean {
   const limit = Math.max(
@@ -1164,6 +1193,9 @@ function continuesParagraph(
   if (startsListItem(head, last, line)) return false;
   return hangsUnderListItem(head, line) || !opensNewLineOfSense(last, line);
 }
+
+const FULL_LINE_RATIO = 0.8;
+const MIN_FULL_LINES = 2;
 
 function paragraphContext(lines: readonly TextLine[], bodyRight: number): ParagraphContext {
   const rightEdge = maxOf(
@@ -1310,6 +1342,9 @@ function bodyStyleOf(pages: readonly PageLayout[]): BodyStyle {
   return ranked[0]?.style ?? { height: 0, font: "" };
 }
 
+const HEADING_MAX_CHARS = 160;
+const NOT_A_HEADING_END = /[.!?:;,]$/u;
+
 function headingSize(line: OutLine, body: BodyStyle): number | undefined {
   const { height, font } = line;
   if (height === undefined || body.height <= 0) return undefined;
@@ -1327,6 +1362,9 @@ function isHeadingLine(lines: readonly OutLine[], index: number, body: BodyStyle
   const before = lines[index - 1];
   return before === undefined || before.text.length === 0;
 }
+
+const HEADING_MAX_LEVEL = 6;
+const HEADING_SIZE_BUCKET = 2;
 
 function headingLevels(sizes: readonly number[]): ReadonlyMap<number, number> {
   const bucket = (size: number): number => Math.round(size * HEADING_SIZE_BUCKET);

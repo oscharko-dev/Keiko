@@ -14,15 +14,13 @@ import { LOCAL_KNOWLEDGE_TEXT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contra
 
 import {
   binaryContentReason,
-  binaryContentRefusal,
   decodeUtf8,
   diagnostic,
   emptyResult,
   encodingDiagnostic,
   limitSeverity,
-  oversizeDiagnostic,
-  textByteLimit,
   shouldStop,
+  textInputRefusal,
 } from "./_internal.js";
 import {
   isMarkdownTableSeparator,
@@ -337,14 +335,8 @@ export const textParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isTextLike(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    const byteLimit = textByteLimit(options);
-    if (input.bytes.byteLength > byteLimit) {
-      return emptyResult(textParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
-      ]);
-    }
-    const binary = binaryContentRefusal(textParser.capability, input, options);
-    if (binary !== undefined) return binary;
+    const refusal = textInputRefusal(textParser.capability, input, options);
+    if (refusal !== undefined) return refusal;
     const startedAt = options.now();
     const decoded = decodeUtf8(input.bytes);
     const encoding = encodingDiagnostic(decoded, input.documentId);

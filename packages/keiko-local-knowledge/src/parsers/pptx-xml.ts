@@ -23,23 +23,27 @@ const CDATA_CLOSE = "]]>";
 const BYTE_ORDER_MARK = "﻿";
 const NAMESPACE_DECLARATION = "xmlns";
 
+// The Strict namespaces of ISO/IEC 29500. They are identifiers that documents declare and the readers
+// compare; nothing ever fetches them, and `https` would name a different namespace.
+const STRICT_NAMESPACE = "http://purl.oclc.org/ooxml"; // NOSONAR typescript:S5332
+
 // The Transitional and Strict namespaces of every vocabulary the readers match by name.
 const CANONICAL_PREFIX_BY_NAMESPACE: ReadonlyMap<string, string> = new Map([
   ["http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w"],
-  ["http://purl.oclc.org/ooxml/wordprocessingml/main", "w"],
+  [`${STRICT_NAMESPACE}/wordprocessingml/main`, "w"],
   ["http://schemas.openxmlformats.org/drawingml/2006/main", "a"],
-  ["http://purl.oclc.org/ooxml/drawingml/main", "a"],
+  [`${STRICT_NAMESPACE}/drawingml/main`, "a"],
   ["http://schemas.openxmlformats.org/presentationml/2006/main", "p"],
-  ["http://purl.oclc.org/ooxml/presentationml/main", "p"],
+  [`${STRICT_NAMESPACE}/presentationml/main`, "p"],
   ["http://schemas.openxmlformats.org/officeDocument/2006/relationships", "r"],
-  ["http://purl.oclc.org/ooxml/officeDocument/relationships", "r"],
+  [`${STRICT_NAMESPACE}/officeDocument/relationships`, "r"],
   ["http://schemas.openxmlformats.org/markup-compatibility/2006", "mc"],
   ["http://schemas.openxmlformats.org/officeDocument/2006/math", "m"],
-  ["http://purl.oclc.org/ooxml/officeDocument/math", "m"],
+  [`${STRICT_NAMESPACE}/officeDocument/math`, "m"],
   ["http://schemas.openxmlformats.org/drawingml/2006/chart", "c"],
-  ["http://purl.oclc.org/ooxml/drawingml/chart", "c"],
+  [`${STRICT_NAMESPACE}/drawingml/chart`, "c"],
   ["http://schemas.openxmlformats.org/drawingml/2006/diagram", "dgm"],
-  ["http://purl.oclc.org/ooxml/drawingml/diagram", "dgm"],
+  [`${STRICT_NAMESPACE}/drawingml/diagram`, "dgm"],
 ]);
 const CANONICAL_PREFIXES: ReadonlySet<string> = new Set(CANONICAL_PREFIX_BY_NAMESPACE.values());
 

@@ -83,12 +83,8 @@ function setextLevel(line: string): number | undefined {
 // A wiki macro that closes on its own opening line (`{code}x = 1{code}`) is one line of text, not a
 // block: opening a fence for it would hide every heading after it.
 function wikiMacroOpening(text: string): boolean {
-  const macro = text.startsWith("{code")
-    ? "{code"
-    : text.startsWith("{noformat")
-      ? "{noformat"
-      : "";
-  if (macro === "") return false;
+  const macro = ["{code", "{noformat"].find((marker) => text.startsWith(marker));
+  if (macro === undefined) return false;
   const afterMarker = text.slice(text.indexOf("}") + 1);
   return !afterMarker.includes(macro);
 }

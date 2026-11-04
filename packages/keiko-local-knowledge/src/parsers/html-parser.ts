@@ -24,16 +24,14 @@
 // unit span remain markup-free (GRD-003).
 
 import {
-  binaryContentRefusal,
   decodeBytes,
   diagnostic,
   emptyResult,
   encodingDiagnostic,
   limitSeverity,
-  oversizeDiagnostic,
   readAttribute,
   shouldStop,
-  textByteLimit,
+  textInputRefusal,
 } from "./_internal.js";
 import { decodeHtmlEntities } from "@oscharko-dev/keiko-workspace";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
@@ -942,6 +940,10 @@ function tableGrid(state: ScanState, tableHtml: string): TableGrid {
   return { rows, theadRows: theadRowCount(tableHtml) };
 }
 
+function neutralColumnLabel(index: number): string {
+  return `Column ${String(index + 1)}`;
+}
+
 function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
   const seen = new Map<string, number>();
   return Array.from({ length: count }, (_, index) => {
@@ -1030,7 +1032,7 @@ function rowCells(row: LaidOutRow, layout: TableLayout, headers: readonly string
     return `${label ?? ""}=${values.join(" | ")}`;
   }
   return row.cells
-    .map((cell, index) => `${headers[index] ?? `Column ${String(index + 1)}`}=${cell.text}`)
+    .map((cell, index) => `${headers[index] ?? neutralColumnLabel(index)}=${cell.text}`)
     .join(" | ");
 }
 
@@ -1523,7 +1525,8 @@ function listItemMarker(state: ScanState): string {
   const list = state.lists.at(-1);
   if (list !== undefined) list.count += 1;
   const indent = "  ".repeat(Math.max(0, state.lists.length - 1));
-  return `${indent}${list?.ordered === true ? `${String(list.count)}. ` : "- "}`;
+  const marker = list?.ordered === true ? `${String(list.count)}. ` : "- ";
+  return `${indent}${marker}`;
 }
 
 // Block-level elements end the current block, so neighbouring paragraphs, items and lines are
@@ -1645,14 +1648,8 @@ export const htmlParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isHtml(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    const byteLimit = textByteLimit(options);
-    if (input.bytes.byteLength > byteLimit) {
-      return emptyResult(htmlParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
-      ]);
-    }
-    const binary = binaryContentRefusal(htmlParser.capability, input, options);
-    if (binary !== undefined) return binary;
+    const refusal = textInputRefusal(htmlParser.capability, input, options);
+    if (refusal !== undefined) return refusal;
     // Cross-check any declared <meta charset> against the byte-shape decode: the declared charset
     // only steers the fallback codec (strict UTF-8/BOM still win), and a genuine disagreement is
     // surfaced as a body-safe HTML_CHARSET_MISMATCH warning rather than silently corrupting text.

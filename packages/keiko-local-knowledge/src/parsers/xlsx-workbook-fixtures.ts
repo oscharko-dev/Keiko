@@ -38,7 +38,8 @@ export function sheetXml(
 
 /** `<row r="N">` with the given cell XML; extra attributes go in `attributes`. */
 export function rowXml(rowNumber: number, cells: string, attributes = ""): string {
-  return `<row r="${String(rowNumber)}"${attributes === "" ? "" : ` ${attributes}`}>${cells}</row>`;
+  const extra = attributes === "" ? "" : ` ${attributes}`;
+  return `<row r="${String(rowNumber)}"${extra}>${cells}</row>`;
 }
 
 /** An inline-string cell, the form that needs no shared-string table. */

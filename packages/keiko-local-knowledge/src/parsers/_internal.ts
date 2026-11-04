@@ -615,6 +615,21 @@ export function binaryContentRefusal(
 // entities. Operates on a single `<tag …>` string, never the whole document, so it does not
 // participate in tag filtering and preserves the parser's CodeQL `js/bad-tag-filter` posture. The
 // `name` argument is always a hard-coded literal at call sites, so the interpolation is safe.
+/** What a text-like parser refuses before it decodes anything: an oversized file, binary content. */
+export function textInputRefusal(
+  capability: ParserCapability,
+  input: ParserSelectionInput,
+  options: ParserOptions,
+): ParserResult | undefined {
+  const byteLimit = textByteLimit(options);
+  if (input.bytes.byteLength > byteLimit) {
+    return emptyResult(capability, input.documentId, options, [
+      oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
+    ]);
+  }
+  return binaryContentRefusal(capability, input, options);
+}
+
 export function readAttribute(tagRaw: string, name: string): string | undefined {
   const pattern = new RegExp(String.raw`(?:^|\s)${name}\s*=\s*(?:"([^"]*)"|'([^']*)')`, "iu");
   const match = pattern.exec(tagRaw);

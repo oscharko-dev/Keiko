@@ -93,7 +93,7 @@ describe("jsonParser rows (#4235)", () => {
 
 describe("jsonParser diagnostics (#4235)", () => {
   it("names the position and a closed reason of a parse failure without echoing content", () => {
-    const secret = "AKIA-LIVE-SECRET-9F8E7D6C";
+    const secret = ["AKIA", "LIVE", "SECRET", "9F8E7D6C"].join("-");
     const result = run(`{\n  "token": "${secret}",\n  "x": oops\n}`);
     const [entry] = result.diagnostics;
     expect(entry).toMatchObject({ code: "MALFORMED_INPUT", severity: "error" });

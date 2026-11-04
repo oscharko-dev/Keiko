@@ -66,7 +66,7 @@ interface Cursor {
 }
 
 function code(cursor: Cursor): number {
-  return cursor.text.charCodeAt(cursor.position);
+  return cursor.text.codePointAt(cursor.position) ?? Number.NaN;
 }
 
 function skipWhitespace(cursor: Cursor): void {
@@ -96,7 +96,7 @@ function readString(cursor: Cursor): string {
   let index = start;
   let escaped = false;
   for (;;) {
-    const current = cursor.text.charCodeAt(index);
+    const current = cursor.text.codePointAt(index) ?? Number.NaN;
     if (Number.isNaN(current)) throw new JsonReadError("unexpected-end", index);
     if (current === 0x22) break;
     if (current < 0x20) throw new JsonReadError("invalid-string", index);

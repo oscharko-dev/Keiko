@@ -10,7 +10,7 @@ import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
 
 const MAX_HEADER_CHARACTERS = 60;
 const MAX_HEADER_WORDS = 6;
-const ID_CODE_PATTERN = /^[\p{Lu}]{1,6}[-_ ]?\d+[\w.-]*$/u;
+const ID_CODE_PATTERN = /^\p{Lu}{1,6}[-_ ]?\d[\w.-]*$/u;
 const NUMERIC_PATTERN = /^[\p{N}\s.,:;/%+()€$-]+$/u;
 
 interface GridCell {

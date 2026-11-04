@@ -98,7 +98,7 @@ interface ScanContext {
 
 // A line break inside a string value would split the line-oriented projection (and every unit span
 // is a line), so line breaks read as one space.
-const LINE_BREAKS = new RegExp("[\\r\\n\\u2028\\u2029]+", "gu");
+const LINE_BREAKS = /[\r\n\u2028\u2029]+/gu;
 
 function scalarText(value: Exclude<JsonValue, JsonArray | JsonObject>): string {
   if (typeof value === "string") return value.replaceAll(LINE_BREAKS, " ");

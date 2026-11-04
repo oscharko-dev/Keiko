@@ -151,7 +151,7 @@ function xlsxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
 
 const SPREADSHEET_NAMESPACES: ReadonlySet<string> = new Set([
   "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
-  "http://purl.oclc.org/ooxml/spreadsheetml/main",
+  "http://purl.oclc.org/ooxml/spreadsheetml/main", // NOSONAR typescript:S5332 an identifier, never fetched
   "http://schemas.openxmlformats.org/package/2006/relationships",
 ]);
 const NAMESPACE_DECLARATION = /xmlns:([A-Za-z_][\w.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu;
@@ -205,7 +205,7 @@ function decodeXml(value: string): string {
 // so `_x005F_x000D_` stays the text `_x000D_`.
 function decodeXstring(value: string): string {
   return value.replaceAll(/_x([0-9A-Fa-f]{4})_/gu, (_match, hex: string) =>
-    String.fromCharCode(Number.parseInt(hex, 16)),
+    String.fromCodePoint(Number.parseInt(hex, 16)),
   );
 }
 

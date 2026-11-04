@@ -356,14 +356,30 @@ export function foldTerm(value: string): string {
 
 const MAX_HEADER_CHARS = 200;
 
+/** The text without its closed parenthesized or bracketed qualifiers, nested ones included. */
+function withoutQualifiers(value: string): string {
+  const kept: string[] = [];
+  const opened: number[] = [];
+  for (const character of value) {
+    const start = character === ")" || character === "]" ? opened.pop() : undefined;
+    if (start === undefined) {
+      if (character === "(" || character === "[") opened.push(kept.length);
+      kept.push(character);
+    } else {
+      kept.length = start;
+      kept.push(" ");
+    }
+  }
+  return kept.join("");
+}
+
 /**
  * A table header folded for role lookup: case, diacritics, decoration and punctuation removed
  * (`Priorität *` and `Prio.` fold to `prioritat` and `prio`), a parenthesized qualifier dropped
  * (`Akzeptanzkriterien (Gegeben/Wenn/Dann)`), words separated by single spaces.
  */
 export function foldHeader(value: string): string {
-  // A header name is short; the bound keeps the qualifier scan linear on a hostile cell.
-  return foldTerm(value.slice(0, MAX_HEADER_CHARS).replaceAll(/\([^)]*\)|\[[^\]]*\]/gu, " "))
+  return foldTerm(withoutQualifiers(value.slice(0, MAX_HEADER_CHARS)))
     .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
     .trim();
 }

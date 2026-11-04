@@ -121,7 +121,7 @@ function bareFormat(section: string): string {
     .replaceAll(/\\./gu, "")
     .replaceAll(/_./gu, "")
     .replaceAll(/\*./gu, "")
-    .replaceAll(/\[[^\]]*\]/gu, "");
+    .replaceAll(/\[[^[\]]*\]/gu, "");
 }
 
 const ELAPSED_BRACKETS = /\[(h+|m+|s+)\]/giu;
@@ -138,7 +138,7 @@ function elapsedUnitOf(section: string): ElapsedUnit | undefined {
 
 // `m` is a minute only next to an hour or a second token; otherwise it is a month.
 function hasMinuteToken(bare: string): boolean {
-  return /h[^dmys]*m|m[^dmyh]*s/iu.test(bare);
+  return /hm|ms/u.test(bare.toLowerCase().replaceAll(/[^dhmsy]/gu, ""));
 }
 
 function dateTimeShape(section: string): DateTimeShape | undefined {
@@ -173,7 +173,8 @@ function isoDate(days: number, date1904: boolean): string {
   if (!date1904 && days === 60) return "1900-02-29";
   // Excel's 1900 system counts a leap day that never existed: from serial 61 on, day 1 is
   // 1899-12-31 + 1, before it the epoch sits one day later.
-  const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, days < 60 ? 31 : 30);
+  const lastDayOf1899 = days < 60 ? 31 : 30;
+  const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, lastDayOf1899);
   const date = new Date(epoch + days * MS_PER_DAY);
   return `${String(date.getUTCFullYear()).padStart(4, "0")}-${pad2(date.getUTCMonth() + 1)}-${pad2(
     date.getUTCDate(),
@@ -363,8 +364,9 @@ function scanSymbol(scan: LayoutScan, section: string, index: number): number {
 
 function scanSection(section: string): NumberLayout | undefined {
   const scan = newScan();
-  for (let index = 0; index < section.length; index += 1) {
-    index = scanQuotedOrEscaped(scan, section, index) ?? scanSymbol(scan, section, index);
+  let index = 0;
+  while (index < section.length) {
+    index = (scanQuotedOrEscaped(scan, section, index) ?? scanSymbol(scan, section, index)) + 1;
   }
   if (scan.unsupported) return undefined;
   if (scan.seenPlaceholder) return { ...scan, literalOnly: false };
@@ -406,6 +408,12 @@ function scaledInteger(value: Decimal, shift: number, decimals: number): bigint 
   return (value.digits + divisor / TWO) / divisor;
 }
 
+function withoutTrailingZeros(digits: string): string {
+  let end = digits.length;
+  while (end > 0 && digits.charAt(end - 1) === "0") end -= 1;
+  return digits.slice(0, end);
+}
+
 function fixedText(value: Decimal, shift: number, layout: NumberLayout): string {
   const { minDecimals, maxDecimals, integerDigits } = layout;
   const integer = scaledInteger(value, shift, maxDecimals)
@@ -414,7 +422,7 @@ function fixedText(value: Decimal, shift: number, layout: NumberLayout): string 
   const whole = integer.slice(0, integer.length - maxDecimals).padStart(integerDigits, "0");
   const fraction = integer.slice(integer.length - maxDecimals);
   const kept =
-    maxDecimals > minDecimals ? fraction.replace(/0+$/u, "").padEnd(minDecimals, "0") : fraction;
+    maxDecimals > minDecimals ? withoutTrailingZeros(fraction).padEnd(minDecimals, "0") : fraction;
   return kept.length > 0 ? `${whole}.${kept}` : whole;
 }
 
@@ -443,9 +451,8 @@ function scientificText(
   const leading = isZero
     ? { text: "0".repeat(significant), carried: false }
     : leadingDigits(value.digits, significant);
-  const exponent = isZero
-    ? 0
-    : value.scale + SIGNIFICANT_DIGITS - 1 + shift + (leading.carried ? 1 : 0);
+  const carry = leading.carried ? 1 : 0;
+  const exponent = isZero ? 0 : value.scale + SIGNIFICANT_DIGITS - 1 + shift + carry;
   const mantissa =
     layout.maxDecimals > 0 ? `${leading.text.slice(0, 1)}.${leading.text.slice(1)}` : leading.text;
   const sign = exponent < 0 ? "-" : "+";
@@ -511,7 +518,7 @@ function conditionalSection(
   let index = conditions.findIndex(
     (condition) => condition !== undefined && holds(condition, value),
   );
-  if (index < 0) index = conditions.findIndex((condition) => condition === undefined);
+  if (index < 0) index = conditions.indexOf(undefined);
   if (index < 0) index = conditions.length - 1;
   const condition = conditions[index];
   const negativeRange =

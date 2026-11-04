@@ -15,6 +15,8 @@
 // requirement reads the same whether it arrives from a connector or as an `adf` tree. Text is
 // normalised with the audit-ledger rules in untrustedContentNormalisation.ts.
 
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+
 import { normaliseUntrustedContent } from "./untrustedContentNormalisation.js";
 
 const DEFAULT_MAX_NODES = 5_000;
@@ -289,7 +291,8 @@ const textNodeText = (node: Node, state: ParserState): string => {
 
 const dateText = (node: Node): string => {
   const raw = attrsOf(node).timestamp;
-  const ms = typeof raw === "number" ? raw : Number(typeof raw === "string" ? raw : Number.NaN);
+  const text = typeof raw === "string" ? raw : Number.NaN;
+  const ms = typeof raw === "number" ? raw : Number(text);
   if (!Number.isFinite(ms) || Math.abs(ms) > 8.64e15) return "";
   return civilDate(Math.floor(ms / 86_400_000));
 };
@@ -740,7 +743,7 @@ export const parseAdfDocument = (
       nodes: state.nodeCount,
       maxDepthReached: state.maxDepthReached,
       truncatedBlocks: state.clampedCount,
-      unknownNodeTypes: [...state.unknownTypes].sort(),
+      unknownNodeTypes: [...state.unknownTypes].sort((left, right) => compareStrings(left, right)),
     },
   };
 };
@@ -753,7 +756,12 @@ const joinRuns = (runs: readonly IngestedTextRun[]): string =>
     .join("")
     .trim();
 
-const flatten = (text: string): string => text.replace(/\s*\n\s*/gu, " ").trim();
+const flatten = (text: string): string =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .join(" ");
 
 const renderContent = (content: readonly IngestedBlock[]): readonly string[] =>
   content.flatMap((inner) => renderBlock(inner));

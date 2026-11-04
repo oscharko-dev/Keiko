@@ -36,13 +36,15 @@ export interface ParagraphOptions {
   readonly extra?: string;
 }
 
+function numPrXml(numId: string | undefined, ilvl: number | undefined): string {
+  if (numId === undefined && ilvl === undefined) return "";
+  const level = ilvl === undefined ? "" : `<w:ilvl w:val="${String(ilvl)}"/>`;
+  const id = numId === undefined ? "" : `<w:numId w:val="${numId}"/>`;
+  return `<w:numPr>${level}${id}</w:numPr>`;
+}
+
 export function paraXml(content: string, options: ParagraphOptions = {}): string {
-  const numbering =
-    options.numId === undefined && options.ilvl === undefined
-      ? ""
-      : `<w:numPr>${options.ilvl === undefined ? "" : `<w:ilvl w:val="${String(options.ilvl)}"/>`}${
-          options.numId === undefined ? "" : `<w:numId w:val="${options.numId}"/>`
-        }</w:numPr>`;
+  const numbering = numPrXml(options.numId, options.ilvl);
   const properties = [
     options.style === undefined ? "" : `<w:pStyle w:val="${options.style}"/>`,
     numbering,
@@ -102,10 +104,7 @@ export interface StyleOptions {
 }
 
 export function styleXml(id: string, options: StyleOptions = {}): string {
-  const numbering =
-    options.numId === undefined
-      ? ""
-      : `<w:numPr>${options.ilvl === undefined ? "" : `<w:ilvl w:val="${String(options.ilvl)}"/>`}<w:numId w:val="${options.numId}"/></w:numPr>`;
+  const numbering = options.numId === undefined ? "" : numPrXml(options.numId, options.ilvl);
   const outline =
     options.outline === undefined ? "" : `<w:outlineLvl w:val="${String(options.outline)}"/>`;
   const pPr = numbering + outline;
@@ -157,10 +156,10 @@ export function notesXml(
   notes: readonly { readonly id: string; readonly text: string; readonly type?: string }[],
 ): string {
   const body = notes
-    .map(
-      (note) =>
-        `<w:${kind} w:id="${note.id}"${note.type === undefined ? "" : ` w:type="${note.type}"`}>${textPara(note.text)}</w:${kind}>`,
-    )
+    .map((note) => {
+      const type = note.type === undefined ? "" : ` w:type="${note.type}"`;
+      return `<w:${kind} w:id="${note.id}"${type}>${textPara(note.text)}</w:${kind}>`;
+    })
     .join("");
   return `<?xml version="1.0" encoding="UTF-8"?><w:${kind}s ${NAMESPACES}>${body}</w:${kind}s>`;
 }
