@@ -39,6 +39,19 @@ describe("extractManualLinks", () => {
     expect(extractManualLinks(bytes(html), 64)).toEqual(["a&#x2f;b"]);
   });
 
+  it("decodes every named reference an attribute may carry, as a browser does", () => {
+    const html = `<a href="a&sol;b.html?x=1&ampy=2&amp=3&amp;z">x</a>`;
+    expect(extractManualLinks(bytes(html), 64)).toEqual(["a/b.html?x=1&ampy=2&amp=3&z"]);
+  });
+
+  it("treats <!--> and <!---> as empty comments and --!> as a comment end", () => {
+    for (const opener of ["<!-->", "<!--->", "<!-- text --!>"]) {
+      expect(
+        extractManualLinks(bytes(`${opener}<a href="after.html">x</a><!-- real -->`), 64),
+      ).toEqual(["after.html"]);
+    }
+  });
+
   it("bounds the sample to maxLinks", () => {
     const html = Array.from({ length: 10 }, (_, i) => `<a href="p${String(i)}.html">x</a>`).join(
       "",

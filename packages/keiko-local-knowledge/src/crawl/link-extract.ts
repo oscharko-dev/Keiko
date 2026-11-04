@@ -14,7 +14,11 @@
 // Every step moves forward with `indexOf` or a single cursor, so the scan is linear in the
 // document and no backtracking regex ever runs on document input (js/polynomial-redos).
 
-import { decodeHtmlEntities, decodeTextFileBytes } from "@oscharko-dev/keiko-workspace";
+import {
+  decodeHtmlAttributeEntities,
+  decodeHtmlEntities,
+  decodeTextFileBytes,
+} from "@oscharko-dev/keiko-workspace";
 
 const TAG_NAME_RE = /(\/?)([a-z][a-z0-9:-]*)/iuy;
 
@@ -31,46 +35,12 @@ const NAVIGATION_ATTRIBUTE: ReadonlyMap<string, string> = new Map([
 
 const MAX_TITLE_CHARS = 200;
 
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-};
-
-// One entity token: a hex numeric reference, a decimal numeric reference, or a named reference.
-const ENTITY_RE = /&(#x[0-9a-f]+|#\d+|[a-z]+);/giu;
-
 // The page's own byte-order mark or declared charset decides the decoding (a Windows-1252 page
 // would otherwise turn every umlaut into U+FFFD); bytes no declared encoding explains fall back to
 // lossy UTF-8.
 function decodeBytes(bytes: Uint8Array): string {
   const decoded = decodeTextFileBytes(bytes, { scopePath: "page.html" });
   return decoded?.text ?? new TextDecoder("utf-8", { fatal: false }).decode(bytes);
-}
-
-function decodeEntityBody(body: string): string | undefined {
-  const lower = body.toLowerCase();
-  if (lower.startsWith("#")) {
-    const isHex = lower.startsWith("#x");
-    const code = Number.parseInt(lower.slice(isHex ? 2 : 1), isHex ? 16 : 10);
-    if (!Number.isInteger(code) || code < 1 || code > 0x10ffff) return undefined;
-    try {
-      return String.fromCodePoint(code);
-    } catch {
-      return undefined;
-    }
-  }
-  return NAMED_ENTITIES[lower];
-}
-
-// Decode HTML entities in a SINGLE pass. `String.prototype.replace` scans the ORIGINAL string once
-// and never re-scans replacement output, so an encoded sequence like `&amp;#x2f;` decodes to the
-// literal text `&#x2f;`, never double-unescaped to `/` (js/double-escaping). Unknown entities are
-// left verbatim.
-function decodeAttributeEntities(value: string): string {
-  return value.replace(ENTITY_RE, (match: string, body: string) => decodeEntityBody(body) ?? match);
 }
 
 // ─── Tag scanner ───────────────────────────────────────────────────────────────
@@ -169,13 +139,22 @@ function closingTagStart(html: string, name: string, from: number): number {
   return -1;
 }
 
+const COMMENT_END_RE = /--!?>/gu;
+
+// Index after the comment opened at `lt`. Per the HTML standard `<!-->` and `<!--->` are complete
+// empty comments and `--!>` ends a comment like `-->` does; an unterminated comment runs to the end.
+function commentEnd(html: string, lt: number): number {
+  if (html.startsWith(">", lt + 4)) return lt + 5;
+  if (html.startsWith("->", lt + 4)) return lt + 6;
+  COMMENT_END_RE.lastIndex = lt + 4;
+  const close = COMMENT_END_RE.exec(html);
+  return close === null ? html.length : close.index + close[0].length;
+}
+
 // Index after a comment, declaration or processing instruction starting at `lt`, or undefined when
 // `lt` starts an ordinary tag.
 function markupDeclarationEnd(html: string, lt: number): number | undefined {
-  if (html.startsWith("<!--", lt)) {
-    const close = html.indexOf("-->", lt + 4);
-    return close === -1 ? html.length : close + 3;
-  }
+  if (html.startsWith("<!--", lt)) return commentEnd(html, lt);
   if (html.startsWith("<!", lt) || html.startsWith("<?", lt)) {
     const close = html.indexOf(">", lt + 2);
     return close === -1 ? html.length : close + 1;
@@ -235,7 +214,10 @@ export function extractManualLinks(bytes: Uint8Array, maxLinks: number): readonl
   for (const tag of scanTags(decodeBytes(bytes))) {
     const raw = navigationValue(tag);
     if (raw === undefined) continue;
-    const value = decodeAttributeEntities(raw).trim();
+    // Single pass over the original text with the HTML attribute-value rules: the whole named
+    // table, no legacy semicolon-less reference before `=` or an alphanumeric, and `&amp;#x2f;`
+    // stays the literal `&#x2f;` (js/double-escaping).
+    const value = decodeHtmlAttributeEntities(raw).trim();
     if (value.length === 0 || value.startsWith("#") || seen.has(value)) continue;
     seen.add(value);
     links.push(value);
