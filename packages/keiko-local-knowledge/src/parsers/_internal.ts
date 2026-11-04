@@ -570,18 +570,20 @@ function isBinaryControlByte(byte: number): boolean {
  * a container or image signature, or a NUL byte (or mostly control bytes) at the start of content
  * that is not UTF-16 text. Never reads past the first {@link BINARY_SAMPLE_BYTES} bytes.
  */
-export function binaryContentReason(bytes: Uint8Array): string | undefined {
+export function binaryContentReason(bytes: Uint8Array, nulIsText = false): string | undefined {
   const signature = signatureReason(bytes);
   if (signature !== undefined) return signature;
   if (utf16CodecForBom(bytes) !== undefined || utf16CodecForNulPattern(bytes) !== undefined)
     return undefined;
   const sample = bytes.subarray(0, BINARY_SAMPLE_BYTES);
-  if (sample.includes(0)) return "binary-not-supported";
+  if (!nulIsText && sample.includes(0)) return "binary-not-supported";
+  return isMostlyControlBytes(sample) ? "binary-not-supported" : undefined;
+}
+
+function isMostlyControlBytes(sample: Uint8Array): boolean {
   let controls = 0;
   for (const byte of sample) if (isBinaryControlByte(byte)) controls += 1;
-  return sample.length > 0 && controls / sample.length > BINARY_CONTROL_RATIO
-    ? "binary-not-supported"
-    : undefined;
+  return sample.length > 0 && controls / sample.length > BINARY_CONTROL_RATIO;
 }
 
 /**
@@ -593,8 +595,9 @@ export function binaryContentRefusal(
   capability: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
+  nulIsText = false,
 ): ParserResult | undefined {
-  const reason = binaryContentReason(input.bytes);
+  const reason = binaryContentReason(input.bytes, nulIsText);
   if (reason === undefined) return undefined;
   return emptyResult(
     capability,
@@ -621,6 +624,7 @@ export function textInputRefusal(
   capability: ParserCapability,
   input: ParserSelectionInput,
   options: ParserOptions,
+  nulIsText = false,
 ): ParserResult | undefined {
   const byteLimit = textByteLimit(options);
   if (input.bytes.byteLength > byteLimit) {
@@ -628,7 +632,7 @@ export function textInputRefusal(
       oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
     ]);
   }
-  return binaryContentRefusal(capability, input, options);
+  return binaryContentRefusal(capability, input, options, nulIsText);
 }
 
 /** An admitted text input, and the one clock its whole document is read on. */
@@ -643,13 +647,14 @@ export interface AdmittedTextInput {
 export function textParserAdapter(
   capability: ParserCapability,
   read: (admitted: AdmittedTextInput) => ParserResult,
+  nulIsText?: (bytes: Uint8Array) => boolean,
 ): ParserAdapter {
   const frozen = Object.freeze(capability);
   return Object.freeze({
     capability: frozen,
     parse: (input: ParserSelectionInput, options: ParserOptions): ParserResult => {
       const startedAt = options.now();
-      const refusal = textInputRefusal(frozen, input, options);
+      const refusal = textInputRefusal(frozen, input, options, nulIsText?.(input.bytes) === true);
       return refusal ?? read({ capability: frozen, input, options, startedAt });
     },
   });

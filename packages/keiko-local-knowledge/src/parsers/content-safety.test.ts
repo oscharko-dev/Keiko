@@ -130,6 +130,21 @@ describe("binary content is not indexed as text (#4235 F12)", () => {
     expect(result.normalizedText).toBeUndefined();
   });
 
+  it("reads on past a NUL inside markup, as the HTML standard does", () => {
+    const bytes = encode("\uFEFF \n<p>a\u0000b</p>");
+    const result = parseWith(htmlParser, selectionFromBytes(bytes, { extension: "html" }));
+
+    expect(result.units.map((unit) => unit.kind)).not.toContain("unsupported-media");
+    expect(result.normalizedText).toBe("a b");
+  });
+
+  it("still refuses mostly control bytes that merely begin with a tag", () => {
+    const bytes = concat(encode("<a>"), new Uint8Array(40));
+    const result = parseWith(htmlParser, selectionFromBytes(bytes, { extension: "html" }));
+
+    expect(result.units.map((unit) => unit.kind)).toEqual(["unsupported-media"]);
+  });
+
   it("does not mistake UTF-16 text (NUL bytes by construction) for binary", () => {
     const bom = Uint8Array.of(0xff, 0xfe);
     const body = new Uint8Array(Array.from("Anforderung").flatMap((c) => [c.charCodeAt(0), 0]));

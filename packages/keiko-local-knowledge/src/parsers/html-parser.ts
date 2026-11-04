@@ -1897,6 +1897,23 @@ function emitHtml(
   };
 }
 
+// A control character is no text and joins no words: it reads as a space, so stored text never holds
+// one and two words around it stay two. Tab, line feed, form feed and carriage return are white space.
+function withoutControlCharacters(text: string): string {
+  return text.replaceAll(/[^\P{Cc}\t\n\f\r]/gu, " ");
+}
+
+// The first thing in the document, past a UTF-8 byte order mark and white space, is a tag. Then the
+// bytes are markup, and a NUL among them is what the HTML standard calls a parse error and reads on,
+// not evidence of a binary file. Content without that start keeps the shared binary rule.
+const HTML_WHITESPACE_BYTES: ReadonlySet<number> = new Set([0x09, 0x0a, 0x0c, 0x0d, 0x20]);
+
+function startsWithMarkup(bytes: Uint8Array): boolean {
+  const bom = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? 3 : 0;
+  const first = bytes.subarray(bom).find((byte) => !HTML_WHITESPACE_BYTES.has(byte));
+  return first === 0x3c;
+}
+
 export const htmlParser: ParserAdapter = textParserAdapter(
   {
     parserId: PARSER_ID,
@@ -1909,7 +1926,7 @@ export const htmlParser: ParserAdapter = textParserAdapter(
     // surfaced as a body-safe HTML_CHARSET_MISMATCH warning rather than silently corrupting text.
     const declaredCharset = readMetaCharset(input.bytes);
     const decoded = decodeBytes(input.bytes, declaredCharset);
-    const emission = emitHtml(decoded.text, input, options, startedAt);
+    const emission = emitHtml(withoutControlCharacters(decoded.text), input, options, startedAt);
     const charsetDiag = charsetMismatchDiagnostic(declaredCharset, decoded.codec, input.documentId);
     const repairDiag =
       decoded.repairedBytes === undefined
@@ -1928,4 +1945,5 @@ export const htmlParser: ParserAdapter = textParserAdapter(
     };
     return result;
   },
+  startsWithMarkup,
 );
