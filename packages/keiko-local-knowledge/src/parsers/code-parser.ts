@@ -17,6 +17,7 @@ import {
   shouldStop,
   textInputRefusal,
 } from "./_internal.js";
+import { sourceLines } from "./text-structure.js";
 import type {
   InternalParserResult,
   ParserAdapter,
@@ -332,15 +333,7 @@ function codeLanguage(input: ParserSelectionInput): string | undefined {
 
 function codeLines(text: string): readonly CodeLine[] {
   if (text.length === 0) return [];
-  const lines: CodeLine[] = [];
-  let start = 0;
-  while (start < text.length) {
-    const newline = text.indexOf("\n", start);
-    const end = newline === -1 ? text.length : newline;
-    lines.push({ start, text: text.slice(start, end).replace(/\r$/u, "") });
-    start = end + 1;
-  }
-  return lines;
+  return sourceLines(text).map((line) => ({ start: line.start, text: line.text }));
 }
 
 export function codeSymbolLabel(line: string, extension = ""): string | undefined {
