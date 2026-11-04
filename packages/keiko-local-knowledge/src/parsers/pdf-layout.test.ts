@@ -5,6 +5,7 @@ import {
   composePages,
   pageLayoutOf,
   sectionsFromHeadings,
+  type ComposedPages,
   type PageLayout,
   type PositionedTextItem,
 } from "./pdf-layout.js";
@@ -626,6 +627,59 @@ describe("repeated page furniture", () => {
     expect(composed.texts[1]).toBe(
       "Seite 2 Zeile 700\nSeite 2 Zeile 688\nSeite 2 Zeile 676\nSeite 2 Zeile 664",
     );
+  });
+
+  // Only a page counter changes from page to page and is still the same line. `FR-1`, `FR-2` at the
+  // top of three pages are three requirements, and `Kapitel 2` is a chapter (review of #4238).
+  const atTheTopOfThreePages = (line: (page: number) => string): ComposedPages =>
+    composePages(
+      [1, 2, 3].map((page) => pageWith(bodyLines(page), [drawn(line(page), LEFT, 780)])),
+    );
+
+  it.each([
+    ["a requirement identifier", (page: number) => `FR-${String(page)}`],
+    ["a numbered chapter", (page: number) => `Kapitel ${String(page)}`],
+    ["a numbered section title", (page: number) => `${String(page)}. Schnittstellen`],
+    ["an identifier with a title", (page: number) => `REQ-${String(page)} Export`],
+    ["a stamp with a number", (page: number) => `Version ${String(page)}`],
+  ])("keeps %s that changes from page to page", (_name, line) => {
+    const composed = atTheTopOfThreePages(line);
+    expect(composed.removedRows).toBe(0);
+    [1, 2, 3].forEach((page, index) => {
+      expect(composed.texts[index]?.startsWith(line(page))).toBe(true);
+    });
+  });
+
+  it.each([
+    ["a bare number", (page: number) => String(page)],
+    ["a number between dashes", (page: number) => `- ${String(page)} -`],
+    ["a count of pages", (page: number) => `${String(page)} / 3`],
+    ["a German page word", (page: number) => `Seite ${String(page)} von 3`],
+    ["an abbreviated German page word", (page: number) => `S. ${String(page)}`],
+    ["an English page word", (page: number) => `Page ${String(page)} of 3`],
+    ["an abbreviated English page word", (page: number) => `p. ${String(page)}`],
+    ["a title in front of the counter", (page: number) => `Lastenheft 2.0 - Seite ${String(page)}`],
+    ["an Italian page word", (page: number) => `Pagina ${String(page)}`],
+    ["a Spanish page word", (page: number) => `Página ${String(page)}`],
+  ])("removes %s, which only counts the pages", (_name, line) => {
+    expect(atTheTopOfThreePages(line).removedRows).toBe(3);
+  });
+
+  it("removes a line repeated unchanged, a number in it included", () => {
+    expect(atTheTopOfThreePages(() => "Lastenheft 2.0 Stand 04.11.2026").removedRows).toBe(3);
+  });
+
+  it("reads a rotated stamp by the same rule", () => {
+    const stamp = (str: string): PositionedTextItem => ({
+      str,
+      transform: [7, 7, -7, 7, 200, 300],
+      width: 100,
+      height: 10,
+    });
+    const pagesWithStamp = (line: (page: number) => string): readonly PageLayout[] =>
+      [1, 2, 3].map((page) => pageWith(bodyLines(page), [stamp(line(page))]));
+    expect(composePages(pagesWithStamp((page) => `FR-${String(page)}`)).removedRows).toBe(0);
+    expect(composePages(pagesWithStamp((page) => `Seite ${String(page)}`)).removedRows).toBe(3);
   });
 
   it("keeps a table header repeated at the top of each page, which has no gap below it", () => {

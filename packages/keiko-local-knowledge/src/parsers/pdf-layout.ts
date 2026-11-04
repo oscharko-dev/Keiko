@@ -394,16 +394,25 @@ function rowText(row: LayoutRow): string {
 
 const FURNITURE_Y_BUCKET = 3;
 
+// A word that names a page, straight in front of its number (`Seite 3`, `p. 3`, `Pág. 3`).
+const PAGE_COUNTER =
+  /(?:^|[^\p{L}])(?:seite|s\.|page|pag\.?|pg\.?|p\.|pagina|página|pág\.?|folio|folie|slide|blatt|bl\.|hoja|feuille|foglio)\s*:?\s*#/u;
+
+// The same line on every page, unless a number in it counts the pages. It does so alone (`12`,
+// `- 12 -`, `3 / 10`) or behind a word naming a page. In any other line a number is content: `FR-1`,
+// `FR-2` at the top of three pages are three requirements, and `Kapitel 2` is a chapter.
+function repeatedLineKey(text: string): string {
+  const folded = text.toLowerCase().replaceAll(/\s+/gu, " ");
+  const masked = folded.replaceAll(/\p{N}+/gu, "#");
+  return !/\p{L}/u.test(masked) || PAGE_COUNTER.test(masked) ? masked : folded;
+}
+
 function furnitureKey(row: LayoutRow): string {
-  const text = rowText(row)
-    .toLowerCase()
-    .replaceAll(/\p{N}+/gu, "#")
-    .replaceAll(/\s+/gu, " ");
-  return `${text}@${String(Math.round(row.y / FURNITURE_Y_BUCKET))}`;
+  return `${repeatedLineKey(rowText(row))}@${String(Math.round(row.y / FURNITURE_Y_BUCKET))}`;
 }
 
 function offAxisKey(text: string): string {
-  return `off-axis:${text.toLowerCase().replaceAll(/\p{N}+/gu, "#")}`;
+  return `off-axis:${repeatedLineKey(text)}`;
 }
 
 const FURNITURE_ISOLATION_RATIO = 1.5;

@@ -28,6 +28,11 @@ import {
   selectionFromBytes,
   selectionFromText,
 } from "../../packages/keiko-local-knowledge/src/parsers/parser-test-fixtures.js";
+import {
+  composePages,
+  pageLayoutOf,
+  type PositionedTextItem,
+} from "../../packages/keiko-local-knowledge/src/parsers/pdf-layout.js";
 import { pptxParser } from "../../packages/keiko-local-knowledge/src/parsers/pptx-parser.js";
 import {
   PPTX_EXTENSION_INPUT,
@@ -249,5 +254,45 @@ describe("a requirement catalog in JSON", () => {
     const text = json({ errors: [{ code: "E-1", message: "Limit" }] });
 
     expect(inventoryOf(text).entries).toEqual([]);
+  });
+});
+
+describe("a requirement identifier repeated at the top of each PDF page", () => {
+  const drawn = (str: string, y: number): PositionedTextItem => ({
+    str,
+    transform: [10, 0, 0, 10, 50, y],
+    width: str.length * 5,
+    height: 10,
+    fontName: "body",
+  });
+  const page = (number: number, head: string): ReturnType<typeof pageLayoutOf> =>
+    pageLayoutOf([
+      drawn(head, 750),
+      drawn(`Das System muss den Vorgang ${String(number)} speichern.`, 700),
+      drawn("Akzeptanzkriterien:", 685),
+      drawn(`- Vorgang ${String(number)} ist gespeichert.`, 670),
+      drawn("Priorität: Hoch", 655),
+    ]);
+
+  it("keeps every identifier with its own body", () => {
+    const { texts, removedRows } = composePages([1, 2, 3].map((n) => page(n, `FR-${String(n)}`)));
+    expect(removedRows).toBe(0);
+    const { entries } = deriveRequirementInventory({
+      text: texts.join("\n\n"),
+      documentKey: "doc:furniture",
+    });
+    expect(entries.map(({ id, statement }) => [id, statement])).toEqual([
+      ["FR-1", "Das System muss den Vorgang 1 speichern."],
+      ["FR-2", "Das System muss den Vorgang 2 speichern."],
+      ["FR-3", "Das System muss den Vorgang 3 speichern."],
+    ]);
+  });
+
+  it("still removes a page counter there", () => {
+    const { texts, removedRows } = composePages(
+      [1, 2, 3].map((n) => page(n, `Seite ${String(n)}`)),
+    );
+    expect(removedRows).toBe(3);
+    expect(texts[1]?.startsWith("Das System muss den Vorgang 2 speichern.")).toBe(true);
   });
 });
