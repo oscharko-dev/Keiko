@@ -267,16 +267,28 @@ function renderHeading(node: AdfNode, state: ConversionState, depth: number): st
   const raw = attrsOf(node).level;
   const level =
     typeof raw === "number" && Number.isInteger(raw) ? Math.min(6, Math.max(1, raw)) : 1;
-  const text = renderChildren(node, state, depth + 1, "");
+  const text = renderChildren(node, state, depth + 1, "").replace(/\n+/gu, " ");
   const prefix = `${"#".repeat(level)} `;
   return chargePrefixed(state, `${prefix}${text}`, text.length);
 }
 
+// A language that is not one word would end the fence line and start text of its own.
+const CODE_LANGUAGE_PATTERN = /^[A-Za-z0-9+#.-]{1,32}$/u;
+
+// The fence is longer than any backtick run in the body, so a body that holds a fence line cannot
+// end the block early and promote the rest to document text.
+function fenceFor(body: string): string {
+  let longest = 0;
+  for (const run of body.match(/`+/gu) ?? []) longest = Math.max(longest, run.length);
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
 function renderCodeBlock(node: AdfNode, state: ConversionState, depth: number): string {
-  const language = asString(attrsOf(node).language) ?? "";
+  const declared = asString(attrsOf(node).language) ?? "";
+  const language = CODE_LANGUAGE_PATTERN.test(declared) ? declared : "";
   const body = renderChildren(node, state, depth + 1, "");
-  const fenced = `\`\`\`${language}\n${body}\n\`\`\``;
-  return chargePrefixed(state, fenced, body.length);
+  const fence = fenceFor(body);
+  return chargePrefixed(state, `${fence}${language}\n${body}\n${fence}`, body.length);
 }
 
 function prefixAllLines(text: string, prefix: string): string {
@@ -392,8 +404,11 @@ function renderDecisionList(node: AdfNode, state: ConversionState, depth: number
 }
 
 // ─── Tables (linearized: one row per line, cells separated by ` | `) ───────────
+// A pipe in a cell is escaped so it cannot read as the boundary of another cell.
 function renderTableCell(node: AdfNode, state: ConversionState, depth: number): string {
-  return renderChildren(node, state, depth + 1, "\n").replace(/\n+/gu, " ");
+  return renderChildren(node, state, depth + 1, "\n")
+    .replace(/\n+/gu, " ")
+    .replaceAll("|", "\\|");
 }
 
 function renderTableRow(node: AdfNode, state: ConversionState, depth: number): string {
@@ -408,12 +423,24 @@ function renderTableRow(node: AdfNode, state: ConversionState, depth: number): s
   return cells.join(" | ");
 }
 
+// The width of a first row made only of header cells, or 0: the row a marker line goes under.
+function headerRowWidth(row: unknown): number {
+  const cells = asArray(asRecord(row)?.content);
+  const headers = cells.every((cell) => asString(asRecord(cell)?.type) === "tableHeader");
+  return headers ? cells.length : 0;
+}
+
 function renderTable(node: AdfNode, state: ConversionState, depth: number): string {
+  const children = asArray(node.content);
   const rows: string[] = [];
-  for (const row of asArray(node.content)) {
+  for (const row of children) {
     if (budgetTripped(state)) break;
     const rendered = renderNode(row, state, depth + 1);
     if (rendered.length > 0) rows.push(rendered);
+    // The marker keeps the column names a header, as in a Markdown table; its cost is charged.
+    if (row === children[0] && rendered.length > 0 && headerRowWidth(row) > 0) {
+      rows.push(emit(state, Array.from({ length: headerRowWidth(row) }, () => "---").join(" | ")));
+    }
   }
   return rows.join("\n");
 }
