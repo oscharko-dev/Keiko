@@ -402,6 +402,28 @@ pull request #3066, fixed by Issue #4132 from the recorded baseline
 (`docs/qa/review-agent-baseline-2026-10-30.md`); the replay refuses a run that tunes on the holdout.
 Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
 
+Offline scoring (owner decisions of 2026-11-04 on the epic branch review, fixed before anyone read
+the holdout rate):
+
+- The gated actionable rate is hits / (hits + false alarms + undecided) over the replayed findings
+  matched to historical threads (R4130-006). A finding matched to a thread that nobody answered or
+  acted on counts against the agent. Hits / (hits + false alarms) is reported as the acceptance
+  rate and never gated.
+- A matched thread credits one hit per pull request (R4130-014). Further findings on that thread
+  are duplicates: they add no hit, count in the actionable rate's denominator and are reported as a
+  duplicate count.
+- Replayed findings sit at the pull request's head commit, so they are matched only against
+  right-side anchors carried to that commit (R4130-007). The harvest stores the carried head range
+  in dataset schema 2; an anchor that cannot be carried is unmeasured.
+- The loader recomputes the dataset's content digest and refuses a mismatch with its stored field
+  (R4130-010).
+- The verdict counts only for a holdout evaluation over the default selection; any other run is
+  `unmeasured` (R4130-011). The gate fails when more than the manifest's `maximumNotCompleteShare`
+  (20 %) of the reviews settle other than `complete`.
+
+The 50 % threshold, the Wilson interval reported next to every rate and the limit of three findings
+per pull request are unchanged.
+
 ### D10 — Publication boundary
 
 Nothing leaves Keiko without an explicit human action. Publication arrives only in phase 3, after
