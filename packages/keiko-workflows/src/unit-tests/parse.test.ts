@@ -60,6 +60,40 @@ describe("parseModelOutput (model-output contract, steering note B)", () => {
     expect(parsed.diff).not.toContain("```");
   });
 
+  it("keeps a Markdown fence line that sits inside the diff as context", () => {
+    const content = [
+      "```diff",
+      "--- a/R.md",
+      "+++ b/R.md",
+      "@@ -1,3 +1,3 @@",
+      " ```bash",
+      "-old",
+      "+new",
+      "```",
+      "## Known gaps",
+      "g",
+    ].join("\n");
+    const parsed = parseModelOutput(content);
+    expect(parsed.diff).toContain("+new");
+    expect(parsed.knownGaps).toBe("g");
+  });
+
+  it("closes a four-backtick fence only on a fence at least as long", () => {
+    const content = [
+      "````diff",
+      "--- a/R.md",
+      "+++ b/R.md",
+      "+```",
+      "+x",
+      "````",
+      "## Known gaps",
+      "g",
+    ].join("\n");
+    const parsed = parseModelOutput(content);
+    expect(parsed.diff).toContain("+x");
+    expect(parsed.knownGaps).toBe("g");
+  });
+
   it("is case-insensitive on section headings", () => {
     const content = ["```diff", DIFF_BODY.trimEnd(), "```", "", "## KNOWN GAPS", "none"].join("\n");
     expect(parseModelOutput(content).knownGaps).toBe("none");
