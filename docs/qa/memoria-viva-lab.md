@@ -738,7 +738,7 @@ on every model. Candidate: a scratch checkout of the subject commit with the gat
 bigrams, so that word order counts; built and measured with the lab, never committed, because step 1
 waits for the owner's go. Measured offline on the curated set (twenty-one scenarios), product arm, Full
 access configuration, three repetitions each, subject head `7bbca2e34`, instrument digest
-`d6a8fc897eb030a1…`:
+`08e48b226f629e7e…`:
 
 |           | Precision | Recall | Answer accuracy | Hard counters (per repetition) |
 | --------- | --------- | ------ | --------------- | ------------------------------ |
