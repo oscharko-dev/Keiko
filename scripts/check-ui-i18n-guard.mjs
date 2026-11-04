@@ -5,6 +5,11 @@ import { pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import ts from "typescript";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import {
+  catalogContentProblems,
+  readCatalogPairs,
+  readIdenticalTerms,
+} from "./lib/ui-i18n-catalog-content.mjs";
 
 export const EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.en.ts";
 export const DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.de.ts";
@@ -24,6 +29,10 @@ export const OPTIONAL_WIDGET_EN_CATALOG = "packages/keiko-ui/src/lib/i18n-messag
 export const OPTIONAL_WIDGET_DE_CATALOG = "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts";
 
 const UI_SOURCE_PREFIXES = ["packages/keiko-ui/src/app/", "packages/keiko-ui/src/lib/"];
+// The editor renders copy too, but owns no catalog: a host passes it translated labels as props. So
+// its literals are held to the ledger while the catalog-update and "must use the i18n API" rules,
+// which describe `keiko-ui`, do not apply to it.
+const LITERAL_ONLY_SOURCE_PREFIXES = ["packages/keiko-editor/src/"];
 // ONE table answers both questions the guard asks about the i18n API — "does this added line use
 // it?" (relevance) and "which usage did this patch introduce?" (the `api:<name>` change signature).
 // They were two hand-maintained lists once, and the lists drifted: a diff adding only
@@ -132,8 +141,26 @@ function quotedValuesAfter(line, nameRe) {
 // menus and agent picker are all driven by object literals whose `label`/`description`/`title`/
 // `scope`/`cta` fields render verbatim, which is how a whole German-locale surface can be English
 // without a single JSX literal in sight (issue: `AGENT_WORKFLOWS`, `WIN_TYPES`).
-const LABEL_FIELD_NAME_RE =
-  /\b(?:label|labelText|description|desc|title|cta|scope|group|menuTitle|ariaLabel|tip|hint|placeholder|summary)\s*:\s*/gu;
+const LABEL_FIELD_NAMES = new Set([
+  "label",
+  "labelText",
+  "description",
+  "desc",
+  "title",
+  "cta",
+  "scope",
+  "group",
+  "menuTitle",
+  "ariaLabel",
+  "tip",
+  "hint",
+  "placeholder",
+  "summary",
+]);
+const LABEL_FIELD_NAME_RE = new RegExp(
+  String.raw`\b(?:${[...LABEL_FIELD_NAMES].join("|")})\s*:\s*`,
+  "gu",
+);
 // This used to be a single alternation of `"[^"]*\s[A-Za-z][^"]*"`-shaped branches (and similarly
 // for '...' and `...`). Unlike USER_FACING_ATTRIBUTE_PATTERN's pivot (a single [A-Za-z] class),
 // this pivot is the two-character sequence `\s[A-Za-z]`, so excluding letters alone from the
@@ -453,7 +480,22 @@ function isI18nInfrastructure(normalized) {
 
 export function isUiProductionSource(file) {
   const normalized = normalizePath(file);
+  return (
+    isScannableProductionSource(normalized) &&
+    UI_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix))
+  );
+}
 
+export function isLiteralScanSource(file) {
+  const normalized = normalizePath(file);
+  return (
+    isUiProductionSource(normalized) ||
+    (isScannableProductionSource(normalized) &&
+      LITERAL_ONLY_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix)))
+  );
+}
+
+function isScannableProductionSource(normalized) {
   // Issue: German locale coverage. `.ts` used to be excluded outright, which is why the window-type
   // registry — the single table every window-launching surface renders its copy from — was never
   // examined by this gate. TypeScript files hold registries, command tables and message builders;
@@ -470,11 +512,7 @@ export function isUiProductionSource(file) {
     return false;
   }
 
-  if (isI18nInfrastructure(normalized)) {
-    return false;
-  }
-
-  return UI_SOURCE_PREFIXES.some((prefix) => normalized.startsWith(prefix));
+  return !isI18nInfrastructure(normalized);
 }
 
 // The indentation class is HORIZONTAL whitespace, not `\s`: under `m`, `^` already anchors at every
@@ -877,7 +915,55 @@ function jsxTextResult(node, sourceFile) {
   const text = node.text;
   if (text.trim().length === 0) return null;
   const line = ts.getLineAndCharacterOfPosition(sourceFile, node.getStart(sourceFile)).line + 1;
-  return { line, text: text.trim() };
+  return { line, text: text.trim(), soleChildText: isSoleTextOfElement(node, sourceFile) };
+}
+
+// Elements that show their content verbatim in every language: a token in `<kbd>` is a key name and
+// one in `<code>` an identifier, not a word to translate.
+const VERBATIM_TEXT_ELEMENTS = new Set(["code", "kbd", "pre", "samp"]);
+
+function isSoleTextOfElement(node, sourceFile) {
+  const parent = node.parent;
+  if (!ts.isJsxElement(parent)) return false;
+  if (VERBATIM_TEXT_ELEMENTS.has(parent.openingElement.tagName.getText(sourceFile))) return false;
+  return parent.children.every(
+    (child) => child === node || (ts.isJsxText(child) && child.text.trim().length === 0),
+  );
+}
+
+// `isTranslatableCopy` deliberately drops a lowercase single word because enum members and modes look
+// the same in attributes and registries. That reasoning has no force for the only text an element
+// renders: `<span>optional</span>` cannot be anything but copy.
+const RENDERED_LOWERCASE_WORD = /^\p{Ll}{2,}(?:-\p{Ll}+)*$/u;
+
+function isTranslatableJsxEntry(entry, normalized) {
+  return (
+    isTranslatableCopy(normalized) ||
+    (entry.soleChildText === true && RENDERED_LOWERCASE_WORD.test(normalized))
+  );
+}
+
+// The per-line pass reads a quoted registry value that starts on the field's own line. Everything
+// else in that position is invisible to it: a value the formatter moved to the next line, a
+// conditional, a quoted key. The AST pass covers exactly that remainder, so one value is never
+// reported twice.
+function isSeenByLinePass(property, value, sourceFile) {
+  return (
+    ts.isIdentifier(property.name) &&
+    (ts.isStringLiteralLike(value) || ts.isTemplateExpression(value)) &&
+    lineOfNode(property.name, sourceFile) === lineOfNode(value, sourceFile)
+  );
+}
+
+function registryFieldResults(property, sourceFile) {
+  const key = objectPropertyKey(property.name);
+  if (key === null || !LABEL_FIELD_NAMES.has(key)) return [];
+  const value = unwrapTransparent(property.initializer);
+  if (isSeenByLinePass(property, value, sourceFile)) return [];
+  const fieldLine = lineOfNode(property.name, sourceFile);
+  return jsxChildExpressionLiteralTexts(value, sourceFile)
+    .filter((entry) => entry.text.length > 0)
+    .map((entry) => ({ ...entry, fieldLine }));
 }
 
 // Codex 3793229704: `<p>open <code>settings</code></p>` splits the phrase "open settings" into
@@ -1374,13 +1460,20 @@ function collectJsxTextAndExpressions(source, filename) {
       results.push(...jsxSpreadAttributeResults(node, sourceFile));
     } else if (ts.isJsxElement(node) || ts.isJsxFragment(node)) {
       results.push(...jsxAggregatedTextResults(node, sourceFile));
-    } else if (ts.isCallExpression(node) && isReactCreateElementCall(node)) {
-      results.push(...reactCreateElementChildResults(node, sourceFile));
+    } else {
+      results.push(...nonJsxNodeResults(node, sourceFile));
     }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
   return results;
+}
+
+function nonJsxNodeResults(node, sourceFile) {
+  if (ts.isCallExpression(node) && isReactCreateElementCall(node)) {
+    return reactCreateElementChildResults(node, sourceFile);
+  }
+  return ts.isPropertyAssignment(node) ? registryFieldResults(node, sourceFile) : [];
 }
 
 // Codex 3793944206 on #3202: `React.createElement("button", null, "Delete account")` — the
@@ -1781,9 +1874,10 @@ export function untranslatedLiteralsInSource(source, filename) {
   const lines = source.split(/\r?\n/);
   const findings = [];
   const weakExemptions = [];
-  const reportOnLine = (index, texts) => {
+  // A multi-line registry value has two lines a marker may sit against: its own and its field's.
+  const reportOnLine = (index, texts, fieldIndex = index) => {
     if (texts.length === 0) return;
-    const reason = exemptReasonFor(lines, index);
+    const reason = exemptReasonFor(lines, index) ?? exemptReasonFor(lines, fieldIndex);
     if (reason === null) {
       for (const text of texts) findings.push({ line: index + 1, text });
       return;
@@ -1801,9 +1895,11 @@ export function untranslatedLiteralsInSource(source, filename) {
   // silently drop it. Whitespace inside the trimmed text is collapsed to single spaces so that
   // reindenting or rewrapping multi-line JSX copy does not churn the baseline ledger — the copy
   // renders identically to the user with any run of intra-node whitespace.
-  for (const { line, text } of collectJsxTextAndExpressions(source, filename)) {
-    const normalized = text.trim().replace(/\s+/gu, " ");
-    if (isTranslatableCopy(normalized)) reportOnLine(line - 1, [normalized]);
+  for (const entry of collectJsxTextAndExpressions(source, filename)) {
+    const normalized = entry.text.trim().replace(/\s+/gu, " ");
+    if (isTranslatableJsxEntry(entry, normalized)) {
+      reportOnLine(entry.line - 1, [normalized], (entry.fieldLine ?? entry.line) - 1);
+    }
   }
 
   // Per-line pass for the two non-JSX positions the AST does not cover: user-facing attribute
@@ -2115,6 +2211,77 @@ function symmetricDifference(left, right) {
 
 export const LITERAL_BASELINE = "docs/qa/ui-i18n-literal-baseline.json";
 
+// Raise this, in the same change as the scanner, only when the scanner starts seeing literals that
+// were already in the tree. It is the one sanctioned way for the ledger to grow: both the number and
+// the new entries appear in the diff a reviewer reads.
+export const LITERAL_LEDGER_GENERATION = 2;
+
+function ledgerGenerationOf(ledger) {
+  return ledger.scannerGeneration ?? 1;
+}
+
+function ledgerTextCounts(ledger) {
+  const counts = new Map();
+  for (const literals of Object.values(ledger.files)) {
+    for (const text of literals) counts.set(text, (counts.get(text) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// The rule the ledger always stated but nothing enforced: without this a new literal plus a
+// regenerated ledger is green, and the ratchet only ever turns the way nobody wanted. Counted per
+// text across files, so a file rename or a literal moving between files adds no debt.
+export function ledgerGrowthProblems(baseLedger, headLedger) {
+  const headGeneration = ledgerGenerationOf(headLedger);
+  if (headGeneration !== LITERAL_LEDGER_GENERATION) {
+    return [
+      `${LITERAL_BASELINE} declares scanner generation ${String(headGeneration)}, but the scanner is generation ${String(LITERAL_LEDGER_GENERATION)}. Regenerate the ledger with \`npm run check:ui-i18n:baseline\`.`,
+    ];
+  }
+  if (headGeneration > ledgerGenerationOf(baseLedger)) return [];
+  const baseCounts = ledgerTextCounts(baseLedger);
+  const grown = Array.from(ledgerTextCounts(headLedger))
+    .filter(([text, count]) => count > (baseCounts.get(text) ?? 0))
+    .map(([text]) => JSON.stringify(text));
+  return grown.length === 0
+    ? []
+    : [
+        `${LITERAL_BASELINE} grew by ${String(grown.length)} literal(s): ${grown.join(", ")}. The ledger only shrinks. Translate the text instead of listing it.`,
+      ];
+}
+
+function baseCommitOfRange(repoRoot, range) {
+  const [left, right] = range.split("...");
+  if (right === undefined) return range.split("..")[0];
+  const result = spawnSync(resolveHostExecutable("git"), ["merge-base", left, right], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function ledgerAtCommit(repoRoot, commit) {
+  const result = spawnSync(
+    resolveHostExecutable("git"),
+    ["show", `${commit}:${LITERAL_BASELINE}`],
+    { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return result.status === 0 ? JSON.parse(result.stdout) : null;
+}
+
+// Read at the fork point, not the base branch's tip: dev shrinking its ledger after this branch
+// forked must not read as this branch growing it. Fails closed, because a ledger with nothing to be
+// compared against would pass any growth.
+export function readBaseLiteralLedger(repoRoot, env = process.env) {
+  for (const range of diffRangesFromEnv(env)) {
+    const commit = baseCommitOfRange(repoRoot, range);
+    const ledger = commit === null ? null : ledgerAtCommit(repoRoot, commit);
+    if (ledger !== null) return ledger;
+  }
+  throw new Error("check:ui-i18n could not read the base ledger from git to compare against.");
+}
+
 // Fails LOUDLY when the ledger is missing or unreadable rather than defaulting to an empty object:
 // an empty baseline silently turns every pre-existing literal into a fresh failure, which is the kind
 // of noise that gets a gate switched off.
@@ -2190,15 +2357,15 @@ function trackedFiles(repoRoot) {
   return result.stdout.split(/\r?\n/).map(normalizePath).filter(Boolean);
 }
 
-export function allUiProductionSources(repoRoot) {
+export function allLiteralScanSources(repoRoot) {
   return trackedFiles(repoRoot)
-    .filter(isUiProductionSource)
+    .filter(isLiteralScanSource)
     .sort((left, right) => left.localeCompare(right));
 }
 
 export function buildLiteralBaseline(repoRoot) {
   const files = {};
-  for (const file of allUiProductionSources(repoRoot)) {
+  for (const file of allLiteralScanSources(repoRoot)) {
     const scan = literalScanForFile(repoRoot, file);
     if (scan === null || scan.findings.length === 0) continue;
     files[file] = Array.from(new Set(scan.findings.map((finding) => finding.text))).sort((a, b) =>
@@ -2234,16 +2401,17 @@ export function checkUiI18nGuard({
     .filter(Boolean);
   const changedFileSet = new Set(normalizedChangedFiles);
   const uiFiles = normalizedChangedFiles.filter(isUiProductionSource);
+  const literalFiles = normalizedChangedFiles.filter(isLiteralScanSource);
   const i18nRelevantFiles = uiFiles.filter((file) => hasI18nRelevantChange(repoRoot, file));
   const catalogChanged = hasChangedCatalogFile(changedFileSet, repoRoot);
   const problems = [];
 
-  // The literal ledger is evaluated for EVERY changed UI source, not only the ones the relevance
+  // The literal ledger is evaluated for EVERY changed source, not only the ones the relevance
   // heuristic flags: whether a diff "looks i18n-relevant" is a heuristic, whether a file currently
   // holds an untranslated user-facing literal is a fact.
-  if (uiFiles.length > 0) {
+  if (literalFiles.length > 0) {
     const baseline = literalBaseline ?? readLiteralBaseline(repoRoot);
-    problems.push(...untranslatedLiteralProblems(repoRoot, uiFiles, baseline));
+    problems.push(...untranslatedLiteralProblems(repoRoot, literalFiles, baseline));
   }
 
   if (i18nRelevantFiles.length === 0 && !catalogChanged) {
@@ -2304,7 +2472,7 @@ function catalogRequirementProblems(repoRoot, changedFileSet, i18nRelevantFiles)
 }
 
 const LITERAL_BASELINE_COMMENT =
-  "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per " +
+  "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI and editor, one entry per " +
   "file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n " +
   "gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with " +
   "`npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to " +
@@ -2316,7 +2484,11 @@ function writeBaselineMode(repoRoot) {
   const literalCount = Object.values(files).reduce((total, list) => total + list.length, 0);
   writeFileSync(
     resolve(repoRoot, LITERAL_BASELINE),
-    `${JSON.stringify({ $comment: LITERAL_BASELINE_COMMENT, files }, null, 2)}\n`,
+    `${JSON.stringify(
+      { $comment: LITERAL_BASELINE_COMMENT, scannerGeneration: LITERAL_LEDGER_GENERATION, files },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
   console.log(
@@ -2328,7 +2500,25 @@ function writeBaselineMode(repoRoot) {
 // This is what proves the gate is in sync with the tree, and what a `--write-baseline` run must leave
 // clean.
 function allScopeChangedFiles(repoRoot) {
-  return [...allUiProductionSources(repoRoot), EN_CATALOG, DE_CATALOG];
+  return [...allLiteralScanSources(repoRoot), EN_CATALOG, DE_CATALOG];
+}
+
+// What holds regardless of the diff, so these run in every mode. A catalog can drift, and a ledger can
+// be widened, in a change that touches no UI source and so never reaches the checks above.
+function wholeTreeProblems(repoRoot) {
+  const catalogSources = trackedFiles(repoRoot).filter(
+    (file) => file.startsWith("packages/keiko-ui/src/") && !/\.(?:test|spec)\./u.test(file),
+  );
+  return [
+    ...ledgerGrowthProblems(
+      readBaseLiteralLedger(repoRoot),
+      JSON.parse(readText(repoRoot, LITERAL_BASELINE)),
+    ),
+    ...catalogContentProblems(
+      readCatalogPairs(repoRoot, catalogSources),
+      readIdenticalTerms(repoRoot),
+    ),
+  ];
 }
 
 // The scanned-file list is context for a PR-sized diff; in `--all` mode it is the whole UI tree and
@@ -2362,9 +2552,11 @@ function main() {
       writeBaselineMode(repoRoot);
       return;
     }
-    result = flags.has("--all")
+    const scoped = flags.has("--all")
       ? checkUiI18nGuard({ repoRoot, changedFiles: allScopeChangedFiles(repoRoot) })
       : checkUiI18nGuard();
+    const problems = [...scoped.problems, ...wholeTreeProblems(repoRoot)];
+    result = { ...scoped, problems, ok: problems.length === 0 };
   } catch (error) {
     console.error("check:ui-i18n FAIL");
     console.error("");

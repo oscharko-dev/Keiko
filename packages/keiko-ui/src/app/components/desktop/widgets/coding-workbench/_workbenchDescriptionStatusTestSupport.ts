@@ -75,6 +75,7 @@ export function genericDescriptionArtifact(): PrDescriptionArtifact {
       omittedEvidenceCount: 0,
     },
     candidate: {
+      // i18n-exempt: test fixture standing in for model output, never shipped copy
       summary: [{ text: "Generic Workbench draft", evidenceIds: [evidenceId] }],
       keyChanges: [{ text: "One bounded change", evidenceIds: [evidenceId] }],
       risks: [],

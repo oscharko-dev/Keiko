@@ -2850,7 +2850,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "relationships.impact.failed": "Die Impact-Analyse konnte nicht geladen werden.",
   "relationships.impact.retry": "Impact erneut laden",
   "relationships.impact.cardAria": "Begrenzte Impact-Analyse",
-  "relationships.impact.loading": "Loading…",
+  "relationships.impact.loading": "Wird geladen…",
   "relationships.impact.none": "In dieser Richtung sind keine weiteren Objekte betroffen.",
   "relationships.impact.downstreamTitle": "Auswirkung nach unten",
   "relationships.impact.downstreamHelp":
