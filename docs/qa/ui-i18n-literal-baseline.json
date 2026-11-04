@@ -1,6 +1,113 @@
 {
-  "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
+  "$comment": "Ratcheted ledger of pre-existing untranslated user-facing literals in the Keiko UI and editor, one entry per file (see scripts/check-ui-i18n-guard.mjs). A literal listed here is known debt the check:ui-i18n gate tolerates; ANY literal not listed fails the gate. The ledger only shrinks - regenerate it with `npm run check:ui-i18n -- --write-baseline` after removing literals, and never add an entry to silence a new one. For a literal that is genuinely not user-facing, mark the source line `// i18n-exempt: <reason>` instead, so the claim is visible in the diff.",
+  "scannerGeneration": 2,
   "files": {
+    "packages/keiko-editor/src/commands.ts": [
+      "Accept Both",
+      "Accept Inline Completion",
+      "Accept Ours",
+      "Accept Theirs",
+      "Apply Patch",
+      "Cancel Verification",
+      "Debug: Continue",
+      "Debug: Edit Logpoint",
+      "Debug: Pause",
+      "Debug: Step Into",
+      "Debug: Step Out",
+      "Debug: Step Over",
+      "Debug: Stop",
+      "Debug: Toggle Breakpoint",
+      "Debug: Toggle Breakpoint Enabled",
+      "Debug: Toggle Conditional Breakpoint",
+      "Find",
+      "Format Document",
+      "Next Merge Conflict",
+      "Open Diff",
+      "Preview Patch",
+      "Previous Merge Conflict",
+      "Reject Patch",
+      "Reject Suggestion",
+      "Rename Symbol",
+      "Request Context",
+      "Run Build",
+      "Run Lint",
+      "Run Tests for File",
+      "Run Typecheck",
+      "Run Verification",
+      "Save Document",
+      "Toggle Blame",
+      "Trigger Completion",
+      "Trigger Inline Completion"
+    ],
+    "packages/keiko-editor/src/components/diagnostics-bridge.ts": ["Hint"],
+    "packages/keiko-editor/src/components/editor-options.ts": ["Editor:"],
+    "packages/keiko-editor/src/components/EditorStatusBar.tsx": ["Editor status"],
+    "packages/keiko-editor/src/components/KeikoCodeEditor.tsx": [
+      "diagnostic on :",
+      "Diagnostic overview",
+      "Editor failed to load:",
+      "File exceeds the -byte editor limit and is read-only."
+    ],
+    "packages/keiko-editor/src/components/KeikoDiffEditor.tsx": [
+      "Apply",
+      "Changed files",
+      "Diff review actions",
+      "Diff: ${file.displayPath}",
+      "Next change",
+      "No file selected.",
+      "Open",
+      "Open in the workspace",
+      "Previous change",
+      "Reject",
+      "Run verification",
+      "The diff editor could not be loaded.",
+      "This file cannot be previewed."
+    ],
+    "packages/keiko-editor/src/components/status-bar.ts": [
+      "All changes saved",
+      "Completions off",
+      "Completions on",
+      "Conflict",
+      "Cursor position unavailable",
+      "Debug paused",
+      "Debug paused: exception",
+      "Debug session paused",
+      "Debug session paused by an uncaught exception",
+      "Debug session stopped",
+      "Debug session stopping",
+      "Debug session unavailable",
+      "Debug stopped",
+      "Debug stopping",
+      "Debug unavailable",
+      "Document formatting available",
+      "Document formatting is unavailable for this language",
+      "Format ready",
+      "Format unavailable",
+      "Governed completions enabled",
+      "Governed completions unavailable for this file type",
+      "Language provider available",
+      "Language provider available:",
+      "Language provider unavailable",
+      "Language provider unavailable:",
+      "Language ready",
+      "Language: ${editorLanguageLabel(languageId)}",
+      "Large file mode",
+      "Large file mode: completions and analysis disabled",
+      "Line ${String(line)}, column ${String(column)}",
+      "Ln —, Col —",
+      "Ln ${String(line)}, Col ${String(column)}",
+      "LSP unavailable",
+      "No problems",
+      "Read-only",
+      "Read-only document",
+      "Save conflict: the file changed elsewhere",
+      "Save failed",
+      "Saved",
+      "Saving",
+      "Saving…",
+      "Unsaved",
+      "Unsaved changes"
+    ],
     "packages/keiko-ui/src/app/atlassian-connectors/page.tsx": ["Keiko | Atlassian connectors"],
     "packages/keiko-ui/src/app/components/desktop/AppShell.tsx": [
       "Connected",
@@ -20,6 +127,7 @@
       "Speech-to-text-only deployment (dictation, no spoken answer)"
     ],
     "packages/keiko-ui/src/app/components/desktop/LeftRail.tsx": ["Git"],
+    "packages/keiko-ui/src/app/components/desktop/modals/CommandPalette.tsx": ["esc"],
     "packages/keiko-ui/src/app/components/desktop/modals/GatewaySetupDialog.tsx": ["Authorization"],
     "packages/keiko-ui/src/app/components/desktop/modals/RelationshipCreateDialog.tsx": [
       "endpoint id"
@@ -67,7 +175,8 @@
       "this file"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/BranchSelector.tsx": [
-      "Branch:"
+      "Branch:",
+      "current"
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/ChangesPane.tsx": [
       "changes; the list is truncated.",
@@ -75,6 +184,7 @@
     ],
     "packages/keiko-ui/src/app/components/desktop/widgets/cards/git-client/DiffPane.tsx": [
       "bytes or",
+      "committed",
       "committed ·",
       "file changed",
       "files changed",
@@ -143,6 +253,11 @@
       "Figma export JSON",
       "Figma JSON source"
     ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ManagedLanguageSettings.tsx": [
+      "basic",
+      "standard",
+      "strict"
+    ],
     "packages/keiko-ui/src/app/components/desktop/widgets/panels/PluginsPanel.tsx": [
       "Browser automation",
       "Connected",
@@ -187,6 +302,7 @@
       "No active relationships yet. Create one with \"+ New relationship\", or connect a source — connections appear here automatically.",
       "No relationships match the current filter."
     ],
+    "packages/keiko-ui/src/app/components/desktop/widgets/panels/ResourcesPanel.tsx": ["resources"],
     "packages/keiko-ui/src/app/components/desktop/widgets/quality-intelligence/ExportBar.tsx": [
       "Jira (preview)",
       "Markdown",
@@ -204,6 +320,8 @@
       "( pods)",
       "Banking",
       "Browse local",
+      "Choose file source",
+      "Choose folder source",
       "File",
       "Folder",
       "Insurance",
@@ -231,6 +349,7 @@
       "src/app.ts README.md"
     ],
     "packages/keiko-ui/src/app/local-knowledge/capsule/page.tsx": ["Knowledge Pod Detail — Keiko"],
-    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"]
+    "packages/keiko-ui/src/app/memoriaviva/components/MemoryList.tsx": ["MemoriaViva"],
+    "packages/keiko-ui/src/lib/run-summary.ts": ["Run cancelled."]
   }
 }

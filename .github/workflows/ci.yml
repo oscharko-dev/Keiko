@@ -446,6 +446,7 @@ jobs:
             git fetch --no-tags --depth=100 origin "dev:refs/remotes/origin/dev"
           fi
           npm run check:ui-i18n
+          npm run check:ui-i18n:all
       - run: npm run check:adr-index
       - name: End-to-end suite wiring gate (#2629, #2955)
         # Runs after `npm run typecheck` (which builds packages) on purpose: since #2955 the gate
