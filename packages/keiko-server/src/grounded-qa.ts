@@ -1,7 +1,9 @@
+import { withToolResultsAsSource } from "./chat-tool-turn-ending.js";
 import {
   type ParsedDesktopChatSend,
   buildCanonicalTurnMemoryResult,
   buildMemoryResult,
+  catalogDispatchErrorResult,
   chatClosedResult,
   parseClientTurnId,
   parseMemoryRequest,
@@ -10,7 +12,12 @@ import {
   type CanonicalTurnMemoryRequest,
   type ParsedConversationMemoryRequest,
 } from "./chat-handlers.js";
-import { createChatToolTurn, scopeChatToolTurn } from "./chat-tool-runtime.js";
+import {
+  chatToolTurnCancellationSignal,
+  createChatToolTurn,
+  scopeChatToolTurn,
+} from "./chat-tool-runtime.js";
+import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import {
   callGroundedSynthesisModel,
   requiresObservedToolResult,
@@ -258,6 +265,7 @@ import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-l
 import { correlationIdOrUnknown } from "./correlation.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
+import { gatewayErrorStatus } from "./grounded-gateway-error-status.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
   buildPackCitations,
@@ -347,12 +355,7 @@ export function mappedContextPackValidationError(
 // enum and the fixed cancellation string carry no caller data and stay verbatim. Reading the LIVE
 // secrets via currentRedactionSecrets(deps) (not the startup snapshot) scrubs apiKey/baseUrl values
 // added through PATCH /api/gateway/config after process start (Epic #177).
-export function gatewayErrorStatus(error: GatewayError): number {
-  if (error.code === "GATEWAY_AUTHENTICATION") return 401;
-  if (error.code === "GATEWAY_ATTEMPT_ADMISSION_DENIED") return 403;
-  if (error.retryable) return 503;
-  return 502;
-}
+export { gatewayErrorStatus };
 
 // ADR-0173 D5 g25/g27 — mirrors the buffered desktop chat path (`chat-handlers.ts`): a GatewayError
 // mapped straight to an HTTP response used to leave no trace in the operator diagnostic sink, unlike
@@ -386,7 +389,13 @@ export function mappedGatewayError(
 ): RouteResult | undefined {
   return (
     mappedConversationReadinessError(error) ??
-    (error instanceof GatewayError ? gatewayErrorResult(error, deps, correlationId) : undefined)
+    (error instanceof GatewayError ? gatewayErrorResult(error, deps, correlationId) : undefined) ??
+    (error instanceof CatalogDispatchFault
+      ? catalogDispatchErrorResult(error, deps, correlationId, true, [
+          "POST /api/chats/messages/grounded",
+          "grounded.qa",
+        ])
+      : undefined)
   );
 }
 
@@ -1956,6 +1965,7 @@ function resolveGroundedAnswerModel(
     modelId,
     readinessAdmission,
     deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
 }
 
@@ -2548,22 +2558,25 @@ function finalizeGroundedAnswer(workerCtx: AskWorkerCtx, output: OrchestratorOut
     assistantContent,
     workerCtx.userMessage,
   );
-  const answer: GroundedAnswer = {
-    groundingKind: "connected-context",
-    userMessageId: userMessage.id,
-    assistantMessageId: assistantMessage.id,
-    ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
-    content: assistantContent,
-    ...singleAnswerEvidenceDeclaration(output),
-    citations,
-    uncertainty: buildUncertainty(output.pack, currentContentRedactor(deps)),
-    omittedCount: connectedContextOmittedCount(output.pack),
-    elapsedMs: output.elapsedMs,
-    contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
-    ...(modelInvoked && output.promptContext !== undefined
-      ? { promptContext: output.promptContext }
-      : {}),
-  };
+  const answer: GroundedAnswer = withToolResultsAsSource(
+    {
+      groundingKind: "connected-context",
+      userMessageId: userMessage.id,
+      assistantMessageId: assistantMessage.id,
+      ...(evidenceRunId === undefined ? {} : { evidenceRunId }),
+      content: assistantContent,
+      ...singleAnswerEvidenceDeclaration(output),
+      citations,
+      uncertainty: buildUncertainty(output.pack, currentContentRedactor(deps)),
+      omittedCount: connectedContextOmittedCount(output.pack),
+      elapsedMs: output.elapsedMs,
+      contextPack: singleAnswerContextSummary(workerCtx, output, citations.length),
+      ...(modelInvoked && output.promptContext !== undefined
+        ? { promptContext: output.promptContext }
+        : {}),
+    },
+    deps.store,
+  );
   deps.store.attachGroundedAnswer(assistantMessage.id, answer);
   if (sourceEvidenceAvailable) {
     registerSingleGroundedTurn(workerCtx, output, assistantMessage.id, evidenceRunId);
@@ -2719,6 +2732,7 @@ function resolveMultiSourceSeam(
     modelId,
     readinessAdmission,
     deps,
+    (id, correlationId) => awaitInitializedConversationReadiness(deps, id, correlationId),
   );
   return {
     retriever: defaultRetriever(signal, deps, correlationId),
@@ -3453,10 +3467,11 @@ async function executeGroundedAskInTurn(
         ? admitted
         : {
             ...admitted,
-            signal: AbortSignal.any([
-              toolTurn.signal,
-              AbortSignal.timeout(Math.max(0, toolTurn.deadlineAtMs - Date.now())),
-            ]),
+            signal: chatToolTurnCancellationSignal(
+              admitted.signal,
+              toolTurn,
+              admitted.correlationId,
+            ),
           },
       scoped,
       runner,

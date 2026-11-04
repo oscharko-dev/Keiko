@@ -15,6 +15,7 @@ export type {
   ScriptCatalog,
   ScriptMapping,
   VerificationKind,
+  VerificationPackageManager,
   VerificationPlan,
   VerificationReport,
   VerificationResourceLimits,
@@ -33,8 +34,22 @@ export { classifyScripts, detectScripts } from "./detect.js";
 export { classifyOutcome } from "./classify.js";
 export type { AbortReason, OutcomeInput } from "./classify.js";
 
-export { buildVerificationPlan, resolveTargetedTests, planDirectTargetedTests } from "./plan.js";
+export {
+  buildVerificationPlan,
+  resolveTargetedTests,
+  planDirectTargetedTests,
+  planPackageTargetedTests,
+  NATIVE_SHELL_SKIP_PREFIX,
+} from "./plan.js";
 export type { PlanOptions } from "./plan.js";
+
+export { detectPackageManager, resolveVerificationPackage } from "./package-dir.js";
+export type {
+  PackageRefusalReason,
+  PackageRequest,
+  PackageResolution,
+  VerificationPackage,
+} from "./package-dir.js";
 
 export { nodeResourceMonitor, readProcessTreeRssBytes } from "./monitor.js";
 export type { ResourceMonitor } from "./monitor.js";

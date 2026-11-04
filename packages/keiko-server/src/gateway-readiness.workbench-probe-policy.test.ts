@@ -260,7 +260,7 @@ function workbenchDeps(
   return { deps, calls: () => calls };
 }
 
-describe("automatic Workbench probes — inconclusive runs are retried soon", () => {
+describe("automatic Workbench probes — an unanswered run is retried when someone asks", () => {
   it.each([false, true])(
     "lifts a successful proof cooldown only for changed configuration: %s",
     async (changed) => {
@@ -288,10 +288,12 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
       });
       await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
       await codingWorkbenchProbesSettledForTests();
-      expect(calls()).toBe(2);
+      // A configuration that changed under a successful proof proves the model again at once and
+      // once: the change is the trigger, not a later read or a timer (customer 1.3.4).
+      expect(calls()).toBe(changed ? 4 : 2);
       const current = holder.current();
       if (current === undefined) throw new TypeError("Expected current gateway config");
-      expect(isCodingWorkbenchProbePending(current, "hosted-chat")).toBe(changed);
+      expect(isCodingWorkbenchProbePending(current, "hosted-chat")).toBe(false);
       await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
       await codingWorkbenchProbesSettledForTests();
       expect(calls()).toBe(changed ? 4 : 2);
@@ -323,7 +325,10 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     resetCodingWorkbenchContextWindowProbesForTests();
   });
 
-  it("re-probes one minute after a probe the gateway never answered, not six hours later", async () => {
+  // Customer 1.3.4: a Workbench that re-read its profile re-probed every unanswered model each
+  // minute. A passive read never retries one; a read that asks (the Workbench opening, a model chosen
+  // in its picker) does, after the quiet that absorbs a burst of such reads — not six hours later.
+  it("retries a probe the gateway never answered only when asked, not on a passive read", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
     const { deps, calls } = workbenchDeps(() => Promise.reject(new TimeoutError("synthetic")));
 
@@ -331,12 +336,16 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(1);
 
+    vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS * 10);
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(1);
 
-    vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
-    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", undefined, true);
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(2);
+
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", undefined, true);
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(2);
   });
@@ -349,7 +358,7 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
-    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", undefined, true);
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(2);
   });
@@ -369,7 +378,7 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
-    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", undefined, true);
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(2);
   });
@@ -388,15 +397,16 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(1);
     vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS * 10);
-    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat", undefined, true);
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(1);
   });
 
-  // Review of #3591: a Workbench that re-reads its profile only while the verification is open
-  // must not stop after an inconclusive probe — the server retries after a minute, and only a
-  // verdict from the gateway closes the verification.
-  it("keeps the verification open after an inconclusive probe until the gateway answers", async () => {
+  // Review of #3591 relocated (customer 1.3.4): an unanswered probe is still no verdict and keeps
+  // its short cooldown, but the verification it opened is closed once nothing runs, so the Workbench
+  // never shows a check that is not happening and never re-reads in a loop. Only a request that asks
+  // opens it again, and only a verdict from the gateway concludes it.
+  it("closes the verification once an unanswered probe settled and reopens it only on request", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
     let answers = 0;
     let releaseSecond: (() => void) | undefined;
@@ -420,21 +430,18 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(1);
-    // Settled without a verdict: still open, the retry is due after the short cooldown.
-    expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(true);
+    expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
 
     vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
-    const second = ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    const second = ensureCodingWorkbenchContextWindows(deps, "hosted-chat", undefined, true);
     await vi.waitFor(() => {
       expect(releaseSecond).toBeDefined();
     });
-    // The retry is in flight: still open.
     expect(calls()).toBe(2);
     expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(true);
     releaseSecond?.();
     await second;
     await codingWorkbenchProbesSettledForTests();
-    // The gateway answered and refused: a verdict closes the verification.
     expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
   });
 

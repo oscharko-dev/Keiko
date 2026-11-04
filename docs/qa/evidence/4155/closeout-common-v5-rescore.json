@@ -1,0 +1,5160 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-31T14:29:55.815Z",
+  "corpus": {
+    "version": "chat-continuity-v5",
+    "initialDigest": "669113b61c0b98b2634a04cc40bb7d9f93f1d93f5959c4bb82201f3b0710df95",
+    "correctionDigest": "674ea757fbf2ba9e74ac9da33eee084acf8918552282ab27ac973b0d4e2a9844",
+    "questionDigest": "b32dd1c0f320b29696961765602e5e2b2622d57a4f61683558f2d5a71aa3f3be",
+    "oracleDigest": "93257189da76ace95c7f4984dbffcede8ae0d151e42c4765b2ec1b54b704bf30",
+    "criticalFields": [
+      "projekt",
+      "verantwortlich",
+      "kennung",
+      "budget",
+      "termin",
+      "ersteEntscheidung",
+      "verworfeneAlternative",
+      "offenerSchritt",
+      "einschraenkung"
+    ]
+  },
+  "corpusModuleDigest": "583cd72d4280b100be29fb133707cea687cdaa1ecf780df6385493c3fb0f395b",
+  "scope": "common-oracle-rescore-only; no-configuration-waiver-or-product-gain",
+  "runs": [
+    {
+      "name": "historical-baseline",
+      "sourceStatus": "terminated",
+      "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+      "configurationDigest": "6c868a890589ae36e7a694f3a0aab547c1b188137d10a53d56ff9b29100b53f1",
+      "sourceLedgerDigest": "472e9f6764bd2fb37843494f6e4e56a9f26f08045decd0566237ffeef7288bf5",
+      "originalCorpus": {
+        "version": "chat-continuity-v2",
+        "initialDigest": "669113b61c0b98b2634a04cc40bb7d9f93f1d93f5959c4bb82201f3b0710df95",
+        "correctionDigest": "674ea757fbf2ba9e74ac9da33eee084acf8918552282ab27ac973b0d4e2a9844",
+        "questionDigest": "b32dd1c0f320b29696961765602e5e2b2622d57a4f61683558f2d5a71aa3f3be",
+        "oracleDigest": "3d3fddb018aa269c35fc71d6c68488a3461877b13207eca92a1a328183570f54",
+        "criticalFields": [
+          "projekt",
+          "verantwortlich",
+          "kennung",
+          "budget",
+          "termin",
+          "ersteEntscheidung",
+          "verworfeneAlternative",
+          "offenerSchritt",
+          "einschraenkung"
+        ]
+      },
+      "verifiedAnswers": 37,
+      "changedScores": 0,
+      "rows": [
+        {
+          "index": 3,
+          "id": "gemma-4-31b-it:plain:long:control",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 6,
+          "id": "gemma-4-31b-it:grounded:long:control",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 9,
+          "id": "qwen3.6-35b-a3b-8bit:plain:long:control",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "6cb8dd288a5e6ec4dea4d3117cb39a90a12c37c7f6894a65b08486c4b7c98f0b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 12,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:long:control",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "fee8b99c2a2621ccad15b4b45b2160e7c0e04138c5615e0ac825eb0c91dab58a",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 17,
+          "id": "gemma-4-31b-it:plain:cycle-1:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 22,
+          "id": "gemma-4-31b-it:grounded:cycle-1:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 27,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-1:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "6cb8dd288a5e6ec4dea4d3117cb39a90a12c37c7f6894a65b08486c4b7c98f0b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 32,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-1:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "d34cdb2af64b53502ea46529bf28ae4654b4e95ebae76bcbbaac53e192e43842",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 37,
+          "id": "gemma-4-31b-it:plain:cycle-2:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 43,
+          "id": "gemma-4-31b-it:grounded:cycle-2:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 48,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-2:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "d7c8aff23762fb4f385f77a08a402005f61a596f802fa9734b6f1e53e7f5a4f9",
+          "previousScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 54,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-2:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "fee8b99c2a2621ccad15b4b45b2160e7c0e04138c5615e0ac825eb0c91dab58a",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 59,
+          "id": "gemma-4-31b-it:grounded:cycle-3:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 63,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-3:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "9d96f1378991f8b687891bdcd856d8fdc24ba6b5800faa40288467a974465084",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 67,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-3:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 71,
+          "id": "gemma-4-31b-it:plain:cycle-3:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 77,
+          "id": "gemma-4-31b-it:grounded:cycle-4:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 82,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-4:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "55c5d7cc67e224b53df9895a3ee17e224b19862036735482ab43cdad384308bc",
+          "previousScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 88,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-4:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "caed086294baf1b41b36530fd4b11885417985e0fd875a64c5be597c5c13103d",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 95,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-5:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "61995650e52c60fcdf828dde4d7cf1e2bffcf12a0fe0f47df4fc8c151db18f0c",
+          "previousScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 99,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-5:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "d34cdb2af64b53502ea46529bf28ae4654b4e95ebae76bcbbaac53e192e43842",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 106,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-6:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "61995650e52c60fcdf828dde4d7cf1e2bffcf12a0fe0f47df4fc8c151db18f0c",
+          "previousScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 112,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-6:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "caed086294baf1b41b36530fd4b11885417985e0fd875a64c5be597c5c13103d",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 116,
+          "id": "gemma-4-31b-it:grounded:cycle-5:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 120,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-7:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "283f5d13afbc3f03ab36674a18e77dae24300e5f88a2b08b1c263341f050c0df",
+          "previousScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 124,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-7:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "e35f34725e9f0ff8b7b91f4e980cfd1f33ba2a7e3c0c82d83c9315635631987c",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 130,
+          "id": "gemma-4-31b-it:grounded:cycle-6:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 135,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-8:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "59334d4b42bb36cc55d117085edf78df39258ba9275bd3bd4fa9c68d7dfd48f8",
+          "previousScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 141,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-8:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "f714ec36475134e1b0d73da4252798da679a22da3420aaef24ab941363132429",
+          "previousScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 145,
+          "id": "gemma-4-31b-it:grounded:cycle-7:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 149,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-9:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "05d4a2b4c6a0483bd70a5cda3865d26445ce8cf56bc9dd4b202398dc12ec1aa8",
+          "previousScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 153,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-9:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "9d96f1378991f8b687891bdcd856d8fdc24ba6b5800faa40288467a974465084",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 159,
+          "id": "gemma-4-31b-it:grounded:cycle-8:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 164,
+          "id": "qwen3.6-35b-a3b-8bit:plain:cycle-10:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "e1e7abbda1a6ecbb06d71e2d3eb52534f97b4c9c3fdcea4250b3e07b77a53b6b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 2,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": false,
+                "unknown": true
+              },
+              "verantwortlich": {
+                "correct": false,
+                "unknown": true
+              },
+              "kennung": {
+                "correct": false,
+                "unknown": true
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": false,
+                "unknown": true
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": false,
+                "unknown": true
+              },
+              "einschraenkung": {
+                "correct": false,
+                "unknown": true
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 170,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:cycle-10:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "6cb8dd288a5e6ec4dea4d3117cb39a90a12c37c7f6894a65b08486c4b7c98f0b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 174,
+          "id": "gemma-4-31b-it:grounded:cycle-9:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 180,
+          "id": "gemma-4-31b-it:grounded:cycle-10:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        }
+      ]
+    },
+    {
+      "name": "owner-terminated-candidate",
+      "sourceStatus": "terminated",
+      "sourceHead": "c472621f55d43916c71ea46b69d8a888959d0b9e",
+      "configurationDigest": "2f7b312bdfcacea9215931a13b247e2a5e85a8e758c0d7d51c6f1bd85dc158cc",
+      "sourceLedgerDigest": "a7264c8c9515ac818369e452e4ac776135cd92c54e41ab26d6147f5455f3bd84",
+      "originalCorpus": {
+        "version": "chat-continuity-v4",
+        "initialDigest": "669113b61c0b98b2634a04cc40bb7d9f93f1d93f5959c4bb82201f3b0710df95",
+        "correctionDigest": "674ea757fbf2ba9e74ac9da33eee084acf8918552282ab27ac973b0d4e2a9844",
+        "questionDigest": "b32dd1c0f320b29696961765602e5e2b2622d57a4f61683558f2d5a71aa3f3be",
+        "oracleDigest": "cfb820915b45cd13d4ece85df6df04f47777930a517219e06bb45f464793cb84",
+        "criticalFields": [
+          "projekt",
+          "verantwortlich",
+          "kennung",
+          "budget",
+          "termin",
+          "ersteEntscheidung",
+          "verworfeneAlternative",
+          "offenerSchritt",
+          "einschraenkung"
+        ]
+      },
+      "verifiedAnswers": 17,
+      "changedScores": 0,
+      "rows": [
+        {
+          "index": 3,
+          "id": "gemma-4-31b-it:plain:long:control",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 6,
+          "id": "gemma-4-31b-it:grounded:long:control",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "cd77126c2d0ecf3806e00f26e86b1dda09aaa8b862cd39ed3f2a2c1dcc7428ec",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 9,
+          "id": "qwen3.6-35b-a3b-8bit:plain:long:control",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "9d96f1378991f8b687891bdcd856d8fdc24ba6b5800faa40288467a974465084",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 12,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:long:control",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "caed086294baf1b41b36530fd4b11885417985e0fd875a64c5be597c5c13103d",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 17,
+          "id": "gemma-4-31b-it:plain:long:cycle-1:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 22,
+          "id": "gemma-4-31b-it:grounded:long:cycle-1:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 27,
+          "id": "qwen3.6-35b-a3b-8bit:plain:long:cycle-1:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "1a6fb990ee47f2c002797c9e41eaaf6e6b93dcc12fa49dac42d56a638210342f",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 32,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:long:cycle-1:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "9d96f1378991f8b687891bdcd856d8fdc24ba6b5800faa40288467a974465084",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 37,
+          "id": "gemma-4-31b-it:plain:long:cycle-2:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 43,
+          "id": "gemma-4-31b-it:grounded:long:cycle-2:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 48,
+          "id": "qwen3.6-35b-a3b-8bit:plain:long:cycle-2:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "6cb8dd288a5e6ec4dea4d3117cb39a90a12c37c7f6894a65b08486c4b7c98f0b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 54,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:long:cycle-2:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "6cb8dd288a5e6ec4dea4d3117cb39a90a12c37c7f6894a65b08486c4b7c98f0b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 58,
+          "id": "gemma-4-31b-it:plain:long:cycle-3:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "b841f3459e5bb555a1ba043001610bb444eb06ab09b87d2a2019ca603e6344d7",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 62,
+          "id": "gemma-4-31b-it:grounded:long:cycle-3:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "grounded",
+          "answerDigest": "0632888610768734d00cb52939603c6d5c23dffefcd80e6ac462e52fe0991b68",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 66,
+          "id": "qwen3.6-35b-a3b-8bit:plain:long:cycle-3:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "plain",
+          "answerDigest": "6cb8dd288a5e6ec4dea4d3117cb39a90a12c37c7f6894a65b08486c4b7c98f0b",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 70,
+          "id": "qwen3.6-35b-a3b-8bit:grounded:long:cycle-3:recall",
+          "model": "qwen3.6-35b-a3b-8bit",
+          "kind": "grounded",
+          "answerDigest": "983323db31db0cf3c728c2dd6102e11a5799681ca68b0637905be45baa998cc4",
+          "previousScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 8,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": false,
+                "unknown": true
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        },
+        {
+          "index": 75,
+          "id": "gemma-4-31b-it:plain:long:cycle-4:recall",
+          "model": "gemma-4-31b-it",
+          "kind": "plain",
+          "answerDigest": "cd77126c2d0ecf3806e00f26e86b1dda09aaa8b862cd39ed3f2a2c1dcc7428ec",
+          "previousScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "currentScore": {
+            "validJson": true,
+            "correct": 9,
+            "total": 9,
+            "fields": {
+              "projekt": {
+                "correct": true,
+                "unknown": false
+              },
+              "verantwortlich": {
+                "correct": true,
+                "unknown": false
+              },
+              "kennung": {
+                "correct": true,
+                "unknown": false
+              },
+              "budget": {
+                "correct": true,
+                "unknown": false
+              },
+              "termin": {
+                "correct": true,
+                "unknown": false
+              },
+              "ersteEntscheidung": {
+                "correct": true,
+                "unknown": false
+              },
+              "verworfeneAlternative": {
+                "correct": true,
+                "unknown": false
+              },
+              "offenerSchritt": {
+                "correct": true,
+                "unknown": false
+              },
+              "einschraenkung": {
+                "correct": true,
+                "unknown": false
+              }
+            }
+          },
+          "changed": false
+        }
+      ]
+    }
+  ]
+}

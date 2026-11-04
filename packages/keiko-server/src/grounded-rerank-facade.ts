@@ -24,6 +24,7 @@ import { currentGatewayConfig } from "./deps.js";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 import { getServerLogger, startLogTimer } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 export type RerankFallbackMode = "slice-topN" | "identity";
 
@@ -284,6 +285,12 @@ function buildRerankRequest(
     ...(egress === undefined ? {} : { egress }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
+    // Wired so a failing reranker leaves `http.gateway.fetch.failed` / TLS-trust lines in the
+    // Activity Log instead of counting them as `port-unwired` loss.
+    log: input.deps.activityLog ?? processServerLogSink(),
+    ...(input.correlationId === undefined
+      ? {}
+      : { logContext: { correlationId: input.correlationId } }),
   };
 }
 

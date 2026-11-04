@@ -2,7 +2,11 @@
 
 import { useId } from "react";
 import type { ReactNode } from "react";
-import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+import {
+  useOptionalWidgetTranslate,
+  type OptionalWidgetTranslate,
+} from "@/lib/optional-widget-i18n";
+import { OPTIONAL_WIDGET_EN_MESSAGES } from "@/lib/i18n-messages.optional.en";
 import type { GitRepositorySummary, GitRepositorySummaryRemote } from "@/lib/types";
 import { Icons } from "../../../Icons";
 import { PRIMARY_BTN, SECONDARY_BTN, SUBTLE_TEXT_STYLE, disabledStyle } from "./git-client-styles";
@@ -18,6 +22,7 @@ export interface GitSyncView {
   readonly label: string;
   readonly description: string;
   readonly disabled: boolean;
+  readonly diverged?: boolean | undefined;
   readonly remoteAlias?: string | undefined;
   readonly remoteBranchName?: string | undefined;
   readonly sourceBranchName?: string | undefined;
@@ -28,47 +33,57 @@ function preferredRemote(summary: GitRepositorySummary): GitRepositorySummaryRem
   return summary.remotes.find((remote) => remote.name === "origin") ?? summary.remotes[0];
 }
 
+function englishSyncTranslate(
+  key: Parameters<OptionalWidgetTranslate>[0],
+  values?: Record<string, string | number>,
+): string {
+  const catalog: Readonly<Record<string, string>> = OPTIONAL_WIDGET_EN_MESSAGES;
+  const template = catalog[key] ?? key;
+  return template.replace(/\{(\w+)\}/gu, (_m, name: string) => String(values?.[name] ?? ""));
+}
+
 export function deriveSyncView(
   summary: GitRepositorySummary | null,
   loading: boolean,
+  t: OptionalWidgetTranslate = englishSyncTranslate,
 ): GitSyncView {
   if (loading && summary === null) {
     return {
       action: "blocked",
-      label: "Sync",
-      description: "Checking repository sync state.",
+      label: t("gitClientWindow.sync.sync"),
+      description: t("gitClientWindow.sync.checking"),
       disabled: true,
     };
   }
   if (summary === null) {
     return {
       action: "blocked",
-      label: "Sync",
-      description: "Select a repository to sync.",
+      label: t("gitClientWindow.sync.sync"),
+      description: t("gitClientWindow.sync.selectRepo"),
       disabled: true,
     };
   }
   if (!summary.available) {
     return {
       action: "blocked",
-      label: "Sync unavailable",
-      description: "Open a Git repository before syncing.",
+      label: t("gitClientWindow.sync.unavailable"),
+      description: t("gitClientWindow.sync.openRepo"),
       disabled: true,
     };
   }
   if (summary.detached) {
     return {
       action: "blocked",
-      label: "Detached HEAD",
-      description: "Switch to a branch or create a branch before syncing.",
+      label: t("gitClientWindow.sync.detached"),
+      description: t("gitClientWindow.sync.switchBranch"),
       disabled: true,
     };
   }
   if (summary.conflictedCount > 0) {
     return {
       action: "blocked",
-      label: "Resolve conflicts",
-      description: "Resolve conflicted files in Changes before syncing.",
+      label: t("gitClientWindow.sync.conflicts"),
+      description: t("gitClientWindow.sync.resolveConflicts"),
       disabled: true,
     };
   }
@@ -76,8 +91,8 @@ export function deriveSyncView(
   if (branch.length === 0) {
     return {
       action: "blocked",
-      label: "No branch",
-      description: "Create or switch to a branch before syncing.",
+      label: t("gitClientWindow.sync.noBranch"),
+      description: t("gitClientWindow.sync.createBranch"),
       disabled: true,
     };
   }
@@ -85,16 +100,16 @@ export function deriveSyncView(
   if (remote === undefined) {
     return {
       action: "blocked",
-      label: "No remote",
-      description: "Add a Git remote before fetching, pulling, or pushing.",
+      label: t("gitClientWindow.sync.noRemote"),
+      description: t("gitClientWindow.sync.addRemote"),
       disabled: true,
     };
   }
   if (summary.upstream === undefined) {
     return {
       action: "publish-upstream",
-      label: "Publish upstream",
-      description: `Publish ${branch} to ${remote.name} and set upstream tracking.`,
+      label: t("gitClientWindow.sync.publish"),
+      description: t("gitClientWindow.sync.publishDesc", { branch, remote: remote.name }),
       disabled: false,
       remoteAlias: remote.name,
       remoteBranchName: branch,
@@ -107,8 +122,12 @@ export function deriveSyncView(
   if (summary.ahead > 0 && summary.behind > 0) {
     return {
       action: "fetch",
-      label: "Fetch",
-      description: `Diverged: ${summary.ahead.toString()} ahead, ${summary.behind.toString()} behind. Fetch latest, then use Merge to reconcile.`,
+      label: t("gitClientWindow.sync.fetch"),
+      diverged: true,
+      description: t("gitClientWindow.sync.divergedDesc", {
+        ahead: summary.ahead.toString(),
+        behind: summary.behind.toString(),
+      }),
       disabled: false,
       remoteAlias,
     };
@@ -116,8 +135,11 @@ export function deriveSyncView(
   if (summary.behind > 0) {
     return {
       action: "pull",
-      label: "Pull",
-      description: `${summary.behind.toString()} behind ${summary.upstream.ref}. Pull fast-forward changes.`,
+      label: t("gitClientWindow.sync.pull"),
+      description: t("gitClientWindow.sync.behindDesc", {
+        behind: summary.behind.toString(),
+        ref: summary.upstream.ref,
+      }),
       disabled: false,
       remoteAlias,
     };
@@ -125,8 +147,11 @@ export function deriveSyncView(
   if (summary.ahead > 0) {
     return {
       action: "push",
-      label: "Push",
-      description: `${summary.ahead.toString()} ahead of ${summary.upstream.ref}. Push local commits.`,
+      label: t("gitClientWindow.sync.push"),
+      description: t("gitClientWindow.sync.aheadDesc", {
+        ahead: summary.ahead.toString(),
+        ref: summary.upstream.ref,
+      }),
       disabled: false,
       remoteAlias,
       remoteBranchName,
@@ -136,8 +161,8 @@ export function deriveSyncView(
   }
   return {
     action: "fetch",
-    label: "Fetch",
-    description: `Up to date with ${summary.upstream.ref}. Fetch checks for remote updates.`,
+    label: t("gitClientWindow.sync.fetch"),
+    description: t("gitClientWindow.sync.upToDateDesc", { ref: summary.upstream.ref }),
     disabled: false,
     remoteAlias,
   };
@@ -184,7 +209,9 @@ export function SyncControl({
           padding: "0 12px",
           ...disabledStyle(disabled),
         }}
-        aria-label={`Run sync: ${busy ? "syncing" : view.label}`}
+        aria-label={t("gitClientWindow.sync.run", {
+          state: busy ? t("gitClientWindow.sync.syncing") : view.label,
+        })}
         aria-describedby={descriptionId}
         onClick={onRun}
       >
@@ -223,9 +250,9 @@ export function SyncControl({
           {t("gitDelivery.action.retry")}
         </button>
       ) : null}
-      {view.action === "fetch" && view.description.startsWith("Diverged") ? (
+      {view.diverged === true ? (
         <span style={{ ...SUBTLE_TEXT_STYLE, maxWidth: 320 }}>
-          Use the Merge entry point after fetching to reconcile diverged branches.
+          {t("gitClientWindow.sync.mergeHint")}
         </span>
       ) : null}
     </div>

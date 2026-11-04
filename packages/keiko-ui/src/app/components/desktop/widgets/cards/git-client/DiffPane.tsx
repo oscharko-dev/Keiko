@@ -249,12 +249,13 @@ function DiffBody({
   readonly selectedCommit: GitHistoryEntry | null;
   readonly state: DiffState;
 }): ReactNode {
+  const t = useTranslate();
   if (selectedCommit !== null) return <CommitDetailMeta entry={selectedCommit} />;
   if (selectedChangePath === null) {
     return (
-      <div className="rv-empty" aria-label="Diff">
-        <h2 className="rv-empty-h">Diff</h2>
-        <p className="rv-empty-p">Select a change to view its diff.</p>
+      <div className="rv-empty" aria-label={t("gitClientWindow.ui.diff")}>
+        <h2 className="rv-empty-h">{t("gitClientWindow.ui.diff")}</h2>
+        <p className="rv-empty-p">{t("gitClientWindow.ui.selectChange")}</p>
       </div>
     );
   }
@@ -268,7 +269,7 @@ function DiffBody({
   if (state.loading) {
     return (
       <output className="rv-empty" style={LOADING_STATE_STYLE}>
-        Loading diff…
+        {t("gitClientWindow.ui.loadingDiff")}
       </output>
     );
   }
@@ -276,7 +277,7 @@ function DiffBody({
     return (
       <div className="rv-empty">
         <p className="rv-empty-p" style={SUBTLE_TEXT_STYLE}>
-          No diff content for this change.
+          {t("gitClientWindow.ui.noDiff")}
         </p>
       </div>
     );

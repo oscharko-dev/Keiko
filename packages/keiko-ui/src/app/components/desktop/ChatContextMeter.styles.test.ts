@@ -40,3 +40,18 @@ describe("context capacity visual encoding", () => {
     },
   );
 });
+
+describe("tool definitions visual encoding", () => {
+  it.each(["cmpSwatch", "cmpBarSegment"] as const)(
+    "draws the tools share solid in a categorical colour, apart from the hatched reserve: %s",
+    (kind) => {
+      const tools = segmentStyles(kind, "tools");
+      expect(tools.background).toMatch(/^var\(--viz-[1-6]\)$/u);
+      expect(tools["background-image"]).toBeUndefined();
+      for (const segment of ["system", "skill", "summary", "messages", "knowledge"]) {
+        expect(tools.background).not.toBe(segmentStyles(kind, segment).background);
+      }
+      expect(segmentStyles(kind, "output-reserve")["background-image"]).toBeDefined();
+    },
+  );
+});

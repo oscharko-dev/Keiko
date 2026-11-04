@@ -1,3 +1,4 @@
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 /**
  * ResourceLimitDecisionsTable — shared, accessible table of per-dimension
  * resource-limit decisions from a VerificationAuditSummary result entry.
@@ -25,6 +26,7 @@ function limitCellClasses(enforced: boolean, breached: boolean | undefined): str
 }
 
 export function ResourceLimitDecisionsTable({ results }: Props): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   // Only show the table when at least one result has limits.
   const hasLimits = results.some((r) => r.appliedLimits.length > 0);
   if (!hasLimits) return null;
@@ -33,24 +35,24 @@ export function ResourceLimitDecisionsTable({ results }: Props): ReactNode {
     <div className="mt-4 overflow-x-auto">
       <table className="w-full text-xs">
         <caption className="mb-2 text-left text-xs font-medium text-ink-muted">
-          Resource-limit decisions
+          {tUi("resourceLimits.ui.resourceLimitDecisions")}
         </caption>
         <thead>
           <tr className="border-b border-ink/10 text-left">
             <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
-              Step
+              {tUi("resourceLimits.ui.step")}
             </th>
             <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
-              Dimension
+              {tUi("resourceLimits.ui.dimension")}
             </th>
             <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
-              Limit
+              {tUi("resourceLimits.ui.limit")}
             </th>
             <th scope="col" className="pb-1.5 pr-4 font-medium text-ink-muted">
-              Enforced
+              {tUi("resourceLimits.ui.enforced")}
             </th>
             <th scope="col" className="pb-1.5 font-medium text-ink-muted">
-              Breached
+              {tUi("resourceLimits.ui.breached")}
             </th>
           </tr>
         </thead>
@@ -68,10 +70,10 @@ export function ResourceLimitDecisionsTable({ results }: Props): ReactNode {
                   <td className="py-1.5 pr-4 font-mono">{lim.dimension}</td>
                   <td className="py-1.5 pr-4 font-mono">{lim.limit.toString()}</td>
                   <td className={`py-1.5 pr-4 ${limitCellClasses(lim.enforced, lim.breached)}`}>
-                    {lim.enforced ? "Yes" : "No"}
+                    {tUi(lim.enforced ? "resourceLimits.ui.yes" : "resourceLimits.ui.no")}
                   </td>
                   <td className={`py-1.5 ${limitCellClasses(lim.enforced, lim.breached)}`}>
-                    {breached ? "Yes (breached)" : "No"}
+                    {tUi(breached ? "resourceLimits.ui.yesBreached" : "resourceLimits.ui.no")}
                     {lim.note !== undefined && lim.note !== "" && (
                       <span className="ml-1 text-ink-muted">— {lim.note}</span>
                     )}

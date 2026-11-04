@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 import {
+  KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
+  resolveKnowledgePodModelUsePolicy,
+  sealedLocalPodModelUsePolicy,
+  type KnowledgePodModelUseOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import {
   MANUAL_REFRESH_REASON_CODES,
   MANUAL_REFRESH_REASON_GUIDANCE,
 } from "@oscharko-dev/keiko-contracts/runtime/html-manual-refresh";
@@ -312,5 +318,73 @@ describe("HTML manual refresh reason copy", () => {
       german.add(text);
     }
     expect(german).toHaveLength(MANUAL_REFRESH_REASON_CODES.length);
+  });
+});
+
+// Sealed local is not "no model at all": the policy matrix allows local embedding and reranking and
+// denies external ones, answer synthesis and raw release. The help text the human reads when choosing
+// how sensitive documents are processed is pinned to that resolved matrix, so a change to either
+// side fails here instead of promising a stronger assurance than the submitted policy supplies.
+describe("Sealed local help text states the resolved operation matrix", () => {
+  type Wording = Readonly<Record<"allow" | "deny", RegExp>>;
+  const WORDING: Readonly<
+    Record<
+      Exclude<KnowledgePodModelUseOperation, "evidencePersistence">,
+      Record<"en" | "de", Wording>
+    >
+  > = {
+    externalEmbeddings: {
+      en: {
+        allow: /(?<!never )sent to an external model/iu,
+        deny: /never sent to an external model/iu,
+      },
+      de: { allow: /(?<!nie )an ein externes Modell/iu, deny: /nie an ein externes Modell/iu },
+    },
+    externalReranking: {
+      en: {
+        allow: /(?<!never )sent to an external model/iu,
+        deny: /never sent to an external model/iu,
+      },
+      de: { allow: /(?<!nie )an ein externes Modell/iu, deny: /nie an ein externes Modell/iu },
+    },
+    localEmbeddings: {
+      en: { allow: /local, on-device embedding/iu, deny: /no local embedding/iu },
+      de: { allow: /lokales Embedding/iu, deny: /kein lokales Embedding/iu },
+    },
+    localReranking: {
+      en: { allow: /and reranking are permitted/iu, deny: /no local reranking/iu },
+      de: { allow: /Reranking auf diesem Gerät/iu, deny: /kein lokales Reranking/iu },
+    },
+    answerSynthesis: {
+      en: { allow: /(?<!never )used to write answers/iu, deny: /never used to write answers/iu },
+      de: { allow: /(?<!nie )zum Formulieren/iu, deny: /nie zum Formulieren/iu },
+    },
+    rawContentRelease: {
+      en: { allow: /(?<!never )released as raw text/iu, deny: /never released as raw text/iu },
+      de: { allow: /(?<!nie )als Rohtext/iu, deny: /nie als Rohtext freigegeben/iu },
+    },
+  };
+  const { operations } = resolveKnowledgePodModelUsePolicy(sealedLocalPodModelUsePolicy());
+
+  it("has wording for every operation of the matrix except body-free evidence persistence", () => {
+    expect(Object.keys(WORDING).sort()).toEqual(
+      KNOWLEDGE_POD_MODEL_USE_OPERATIONS.filter(
+        (operation) => operation !== "evidencePersistence",
+      ).sort(),
+    );
+  });
+
+  it.each(["en", "de"] as const)("says what the matrix allows and denies in %s", (locale) => {
+    const text = translateLocalKnowledge(
+      locale,
+      "localKnowledge.create.policy.sealedLocalDescription",
+    );
+    for (const [operation, wording] of Object.entries(WORDING)) {
+      const decision = operations[operation as keyof typeof WORDING];
+      const opposite = decision === "allow" ? "deny" : "allow";
+      expect(text, `${operation}: ${decision}`).toMatch(wording[locale][decision]);
+      expect(text, `${operation}: not ${opposite}`).not.toMatch(wording[locale][opposite]);
+    }
+    expect(text).not.toMatch(/never released to any model|nie an ein Modell weitergegeben/iu);
   });
 });

@@ -3,7 +3,7 @@
   "epic": 3403,
   "verdict": "PASS",
   "tool": "axe-core 4.12.1",
-  "cssSha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2",
+  "cssSha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c",
   "sourceProvenanceVersion": 2,
   "sourceFiles": [
     {
@@ -80,27 +80,27 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2"
+      "sha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c"
     },
     {
       "path": "packages/keiko-ui/src/lib/api.ts",
-      "sha256": "af2858b377f22f5d37677d4dbd317148bc50362be24b736646c37d48eea4fb2c"
+      "sha256": "31aecc46bbb800db4b81ccdff556f5c3b53eddd8778ceab5e299bf42dbc89749"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "e4b9029bffe25896be92d77bbd28d9acd96535f46e96e9d13a2d282064a4951b"
+      "sha256": "e279816b756888bebc08ef2d6aa6e6c7f1fc4981ddacc9866050d884991bd521"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "042480b654c698acc64a41a7be9f67e53fd7d8294989a0be03ba3256df439006"
+      "sha256": "925686e43ea8a5a4f295e7bdf871d7f58778aa6c419c07f0f61df869d7cbc17a"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "28443452492f32901a9659e26ba22a49ed58ff6dc81e18111c1cfedbbd8b8bfa"
+      "sha256": "04ba09f7c857ac0debe170dc419b6e495773c346c6139b9cc92c8ad994cf3525"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "77956fa300cda18ffacf54176875d2898a8af4cd1b5efd94da5c5a65659b9ddc"
+      "sha256": "11da7c61746fbefc6e7d140fda1f77c98e8f26c75de0392983ed5f3c8ed267a7"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",

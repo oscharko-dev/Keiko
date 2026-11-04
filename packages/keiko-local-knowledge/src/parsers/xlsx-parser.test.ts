@@ -4,7 +4,12 @@ import { deflateRawSync } from "node:zlib";
 import { describe, expect, it } from "vitest";
 
 import { buildParserOptions } from "./registry.js";
-import { selectionFromBytes, selectionFromText, XLSX_SIMPLE } from "./parser-test-fixtures.js";
+import {
+  oleEncryptedPackage,
+  selectionFromBytes,
+  selectionFromText,
+  XLSX_SIMPLE,
+} from "./parser-test-fixtures.js";
 import {
   columnIndexFromName,
   parseSharedStrings,
@@ -266,6 +271,20 @@ describe("xlsxParser", () => {
       buildParserOptions(),
     );
     expect(result.diagnostics[0]?.code).toBe("MALFORMED_INPUT");
+  });
+
+  it("refuses a password-protected XLSX with the closed encrypted code and no text", async () => {
+    const result = await xlsxParser.parseAsync(
+      selectionFromBytes(oleEncryptedPackage(), { extension: "xlsx" }),
+      buildParserOptions(),
+    );
+    expect(result.diagnostics.map((entry) => [entry.code, entry.severity])).toEqual([
+      ["ENCRYPTED_DOCUMENT", "error"],
+    ]);
+    expect(result.diagnostics[0]?.message).toBe(
+      "xlsx is password-protected; remove the password and reindex",
+    );
+    expect(result.units).toEqual([]);
   });
 
   it("rejects inflated XML entries that exceed parser limits", async () => {

@@ -59,6 +59,9 @@ async function close() {
 }
 process.on("SIGTERM", () => void close());
 process.on("SIGINT", () => void close());
+// The parent's IPC channel closes when the parent dies, however it died; a server nobody can stop any
+// more must not stay behind holding a port and a state directory.
+process.on("disconnect", () => void close());
 process.on("message", (message) => {
   if (message === "stop") void close();
 });

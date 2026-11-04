@@ -183,4 +183,80 @@ describe("contextBreakdown", () => {
     expect(breakdown.usedTokens).toBe(PROFILE.effectiveInputBudget);
     expect(total(breakdown)).toBe(16_384);
   });
+
+  describe("connector tool definitions", () => {
+    it("places the tools share after the skill and keeps the window sum exact", () => {
+      const breakdown = contextBreakdown({
+        profile: PROFILE,
+        conversation: CONVERSATION,
+        protectedSkillTokens: 100,
+        toolDefinitions: { tokens: 700, count: 12 },
+      });
+      expect(breakdown.segments.map((segment) => segment.id).slice(0, 4)).toEqual([
+        "system",
+        "skill",
+        "tools",
+        "summary",
+      ]);
+      expect(breakdown.segments.find((segment) => segment.id === "tools")).toEqual({
+        id: "tools",
+        tokens: 700,
+        count: 12,
+      });
+      expect(breakdown.usedTokens).toBe(180 + 100 + 700 + 1_200);
+      expect(total(breakdown)).toBe(PROFILE.maxInputTokens);
+    });
+
+    it("draws no tools share without tool tokens", () => {
+      for (const toolDefinitions of [undefined, { tokens: 0, count: 0 }]) {
+        const breakdown = contextBreakdown({
+          profile: PROFILE,
+          conversation: CONVERSATION,
+          toolDefinitions,
+        });
+        expect(breakdown.segments.some((segment) => segment.id === "tools")).toBe(false);
+      }
+    });
+
+    it("never scales the tools down: only the sources of a grounded chat give way", () => {
+      const breakdown = contextBreakdown({
+        profile: PROFILE,
+        conversation: CONVERSATION,
+        toolDefinitions: { tokens: 2_000, count: 30 },
+        grounded: {
+          historyLaneTokens: 3_925,
+          lastPrompt: { ...LAST_PROMPT, sourceTokens: 80_000 },
+        },
+      });
+      const byId = new Map(breakdown.segments.map((segment) => [segment.id, segment.tokens]));
+      expect(byId.get("tools")).toBe(2_000);
+      expect(byId.get("messages")).toBe(1_200);
+      expect(byId.get("knowledge")).toBe(PROFILE.effectiveInputBudget - 310 - 2_000 - 1_200);
+      expect(breakdown.usedTokens).toBe(PROFILE.effectiveInputBudget);
+      expect(total(breakdown)).toBe(PROFILE.maxInputTokens);
+    });
+
+    it("keeps a tools share larger than the budget whole, like the skill", () => {
+      const tokens = PROFILE.effectiveInputBudget + 50;
+      const breakdown = contextBreakdown({
+        profile: PROFILE,
+        conversation: CONVERSATION,
+        toolDefinitions: { tokens, count: 99 },
+      });
+      expect(breakdown.segments.find((segment) => segment.id === "tools")?.tokens).toBe(tokens);
+      expect(breakdown.segments.every((segment) => segment.tokens >= 0)).toBe(true);
+    });
+
+    it("counts the tools beside a grounded chat's lane when it starts compaction", () => {
+      const grounded = { historyLaneTokens: 3_925, lastPrompt: LAST_PROMPT };
+      const base = contextBreakdown({ profile: PROFILE, conversation: CONVERSATION, grounded });
+      const withTools = contextBreakdown({
+        profile: PROFILE,
+        conversation: CONVERSATION,
+        grounded,
+        toolDefinitions: { tokens: 500, count: 5 },
+      });
+      expect(withTools.autoCompactionAtTokens).toBe(base.autoCompactionAtTokens + 500);
+    });
+  });
 });

@@ -148,7 +148,7 @@ describe("observeWorktreeRecency", () => {
     const initialized = await defaultGitProcessRunner(["init", "--quiet", root], {
       cwd: root,
       maxBytes: 16_384,
-      timeoutMs: 1_500,
+      timeoutMs: 60_000,
     });
     expect(initialized.exitCode).toBe(0);
     file("src/live.ts");

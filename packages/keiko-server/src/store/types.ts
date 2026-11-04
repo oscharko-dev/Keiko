@@ -31,6 +31,7 @@ import type {
   ChatGitChangeScope,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type {
+  ContextCompactionRecord,
   CodingWorkbenchMode,
   StoredPdfCitationPreviewCitation,
   WorkspaceManifest,
@@ -124,6 +125,34 @@ export type ChatTurnCompletion =
     }
   | { readonly kind: "conflict" };
 
+export interface ChatContinuityCheckpoint {
+  readonly generation: number;
+  /** Undefined means a damaged payload; its generation still permits an explicit rebuild. */
+  readonly record: ContextCompactionRecord | undefined;
+}
+
+export interface GatewayHistoryOrder {
+  readonly timestamp: number;
+  readonly rowid: number;
+}
+
+export interface GatewayHistorySearchTerm {
+  readonly value: string;
+  readonly kind: "word-prefix" | "identifier";
+}
+
+export interface GatewayHistorySearchResult {
+  readonly candidateRows: number;
+  readonly eligibleUnits: number;
+  readonly indexLimitReached: boolean;
+  readonly visitStopped: boolean;
+}
+
+export type GatewayHistoryVisitor = (
+  messages: readonly ChatMessage[],
+  order?: GatewayHistoryOrder,
+) => boolean | undefined;
+
 export interface UiStore {
   readonly chatToolReadGrants?: ChatReadGrantStore;
   readonly chatToolMutations?: ChatToolMutationStore;
@@ -175,9 +204,22 @@ export interface UiStore {
   readonly visitGatewayMessageUnits: (
     chatId: string,
     currentUserMessageId: string,
-    visit: (messages: readonly ChatMessage[]) => boolean | undefined,
+    visit: GatewayHistoryVisitor,
   ) => void;
+  /** Indexed preselection never admits a turn that the canonical history visitor would exclude. */
+  readonly searchGatewayMessageUnits: (
+    chatId: string,
+    terms: readonly GatewayHistorySearchTerm[],
+    visit: GatewayHistoryVisitor,
+  ) => GatewayHistorySearchResult;
   readonly chatHistoryRevision: (chatId: string) => number;
+  readonly readChatContinuityCheckpoint: (chatId: string) => ChatContinuityCheckpoint | undefined;
+  /** Compare and swap inside the private database; undefined expects no existing checkpoint. */
+  readonly writeChatContinuityCheckpoint: (
+    chatId: string,
+    record: ContextCompactionRecord,
+    expectedGeneration: number | undefined,
+  ) => boolean;
   readonly countMessages: (chatId: string) => number;
   readonly findMessageById: (id: string) => ChatMessage | undefined;
   readonly updateChatToolTranscript: (

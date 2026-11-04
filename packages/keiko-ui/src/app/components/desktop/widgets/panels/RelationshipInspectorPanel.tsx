@@ -141,6 +141,7 @@ function SectionLabel({
 // ─── Section 1: Type + display name ───────────────────────────────────────────
 
 function TypeSection({ rel }: { readonly rel: ApiRelationship }): ReactNode {
+  const tUi = useTranslate();
   const def = RELATIONSHIP_TYPE_DEFINITIONS[rel.type];
   const displayName = `${rel.source.kind} ${rel.type} ${rel.target.kind}`;
   return (
@@ -154,11 +155,11 @@ function TypeSection({ rel }: { readonly rel: ApiRelationship }): ReactNode {
       </div>
       <div className="rb-rows">
         <div className="rb-row">
-          <span className="rb-row-k">Semantics</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.semantics")}</span>
           <span className="rb-row-v">{def.semantics}</span>
         </div>
         <div className="rb-row">
-          <span className="rb-row-k">Cardinality</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.cardinality")}</span>
           <span className="rb-row-v mono">{def.cardinality}</span>
         </div>
       </div>
@@ -176,22 +177,26 @@ function EndpointSection({
   kind,
   id,
 }: {
-  readonly label: "Source" | "Target";
+  readonly label: string;
   readonly kind: string;
   readonly id: string;
 }): ReactNode {
+  const tUi = useTranslate();
   return (
     <>
-      <SectionLabel>{label} endpoint</SectionLabel>
+      <SectionLabel>{label}</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
-          <span className="rb-row-k">Kind</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.kind")}</span>
           <span className="rb-row-v mono">{kind}</span>
         </div>
         <div className="rb-row">
-          <span className="rb-row-k">Reference</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.reference")}</span>
           {/* id is already server-redacted; no Reveal affordance per inspector-spec.md §2 */}
-          <span className="rb-row-v mono" aria-label={`Reference id: ${id}`}>
+          <span
+            className="rb-row-v mono"
+            aria-label={tUi("relationshipPanel.ui.referenceId", { id })}
+          >
             {id}
           </span>
         </div>
@@ -207,14 +212,15 @@ function LifecycleSection({
 }: {
   readonly lifecycle: RelationshipLifecycleState;
 }): ReactNode {
+  const tUi = useTranslate();
   const descId = `lifecycle-desc-${lifecycle}`;
   const style = LIFECYCLE_CHIP_STYLES[lifecycle] ?? LIFECYCLE_CHIP_STYLES.draft;
   return (
     <>
-      <SectionLabel>Lifecycle status</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.lifecycleStatus")}</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
-          <span className="rb-row-k">State</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.state")}</span>
           <span className="rb-row-v">
             <span
               className="chip"
@@ -269,6 +275,7 @@ function ActivitySection({
   readonly transitions: readonly TransitionRow[];
   readonly densityMode: DensityMode;
 }): ReactNode {
+  const tUi = useTranslate();
   const t = useTranslate();
   const trackingLabel = t("relationships.tracking.label");
   const trackingEvictedLong = t("relationships.tracking.evicted.long");
@@ -278,10 +285,10 @@ function ActivitySection({
 
   return (
     <>
-      <SectionLabel>Activity</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.activity")}</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
-          <span className="rb-row-k">Current state</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.currentState")}</span>
           <span className="rb-row-v">
             {/* role="status" aria-live="polite" per activity-visualization.md §"Per-state ARIA wiring" */}
             <RelationshipEdgeBadge
@@ -313,7 +320,7 @@ function ActivitySection({
             style={{ flexDirection: "column", gap: "var(--space-2)", alignItems: "flex-start" }}
           >
             <span className="rb-row-k" style={{ marginBottom: 4 }}>
-              Recent transitions
+              {tUi("relationshipPanel.ui.recentTransitions")}
             </span>
             {visibleTransitions.map((t) => (
               <div
@@ -346,9 +353,10 @@ function ActivitySection({
 // ─── Section 6: Authority disclaimer (verbatim) ───────────────────────────────
 
 function AuthoritySection(): ReactNode {
+  const tUi = useTranslate();
   return (
     <>
-      <SectionLabel>Authority status</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.authorityStatus")}</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row" data-testid="authority-disclaimer">
           {/* Verbatim string per inspector-spec.md §6 */}
@@ -384,16 +392,17 @@ function AuditSection({
   readonly onLoadMore: () => void;
   readonly hasMore: boolean;
 }): ReactNode {
+  const tUi = useTranslate();
   return (
     <>
-      <SectionLabel>Audit history</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.auditHistory")}</SectionLabel>
       {loading && <SkeletonBlock lines={3} />}
       {error !== null && (
         <div className="lk-alert" role="alert" aria-live="assertive">
           <span>{error}</span>
           {/* lk-alert-retry reuses globals.css:5898 */}
           <button type="button" className="lk-alert-retry" onClick={onRetry}>
-            Retry
+            {tUi("relationshipPanel.ui.retry")}
           </button>
         </div>
       )}
@@ -401,7 +410,7 @@ function AuditSection({
         <div className="rb-rows">
           <div className="rb-row">
             <span className="rb-row-v" style={{ color: "var(--fg-muted)" }}>
-              No audit events for this relationship yet.
+              {tUi("relationshipPanel.ui.noAuditEventsForThis")}
             </span>
           </div>
         </div>
@@ -441,9 +450,9 @@ function AuditSection({
                   minWidth: 24,
                 }}
                 onClick={onLoadMore}
-                aria-label="Load more audit events"
+                aria-label={tUi("relationshipPanel.ui.loadMoreAuditEvents")}
               >
-                Load more
+                {tUi("relationshipPanel.ui.loadMore")}
               </button>
             </div>
           )}
@@ -468,25 +477,26 @@ function evidenceReferenceIds(rel: ApiRelationship): readonly string[] {
 }
 
 function EvidenceSection({ rel }: { readonly rel: ApiRelationship }): ReactNode {
+  const tUi = useTranslate();
   const refs = evidenceReferenceIds(rel);
   return (
     <>
-      <SectionLabel>Evidence references</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.evidenceReferences")}</SectionLabel>
       {refs.length === 0 ? (
         <p
           style={{ fontSize: 12, color: "var(--fg-muted)", margin: "0 0 4px" }}
           data-testid="evidence-empty"
         >
-          No evidence references for this relationship.
+          {tUi("relationshipPanel.ui.noEvidenceReferencesForThis")}
         </p>
       ) : (
         <div className="rb-rows">
           {refs.map((runId) => (
             <div className="rb-row" key={runId}>
-              <span className="rb-row-k">Evidence run</span>
+              <span className="rb-row-k">{tUi("relationshipPanel.ui.evidenceRun")}</span>
               <span
                 className="rb-row-v mono"
-                aria-label={`Evidence run reference ${runId}`}
+                aria-label={tUi("relationshipPanel.ui.evidenceRunReference", { runId })}
                 title={runId}
               >
                 {runId}
@@ -534,18 +544,19 @@ function ImpactSection({
   readonly onToggle: () => void;
   readonly onSelectRelationship: (id: string) => void;
 }): ReactNode {
+  const tUi = useTranslate();
   const t = useTranslate();
   const failed = impactError !== null;
   return (
     <>
-      <SectionLabel>Impact summary</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.impactSummary")}</SectionLabel>
       <div className="rb-rows">
         <div className="rb-row">
-          <span className="rb-row-k">Forward dependencies</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.forwardDependencies")}</span>
           <span className="rb-row-v mono">{dependencyFigure(forwardCount, failed, t)}</span>
         </div>
         <div className="rb-row">
-          <span className="rb-row-k">Reverse dependencies</span>
+          <span className="rb-row-k">{tUi("relationshipPanel.ui.reverseDependencies")}</span>
           <span className="rb-row-v mono">{dependencyFigure(reverseCount, failed, t)}</span>
         </div>
         <div className="rb-row">
@@ -558,12 +569,14 @@ function ImpactSection({
             aria-controls="rb-impact-detail"
             aria-label={
               expanded
-                ? `Hide impact for relationship ${relationshipId}`
-                : `View impact for relationship ${relationshipId}`
+                ? tUi("relationshipPanel.ui.hideImpactFor", { relationshipId })
+                : tUi("relationshipPanel.ui.viewImpactFor", { relationshipId })
             }
             data-testid="view-impact-btn"
           >
-            {expanded ? "Hide impact" : "View impact"}
+            {expanded
+              ? tUi("relationshipPanel.ui.hideImpact")
+              : tUi("relationshipPanel.ui.viewImpact")}
           </button>
         </div>
       </div>
@@ -594,11 +607,12 @@ function DenialSection({
   readonly messages: readonly string[];
   readonly deniedAt?: string;
 }): ReactNode {
+  const tUi = useTranslate();
   if (codes.length === 0) return null;
   // role="status" aria-live="polite" per inspector-spec.md §10 (steady-state denial)
   return (
     <>
-      <SectionLabel>Denial reason</SectionLabel>
+      <SectionLabel>{tUi("relationshipPanel.ui.denialReason")}</SectionLabel>
       <div className="lk-alert" role="status" aria-live="polite" data-testid="denial-section">
         {codes.map((code, i) => (
           <div key={code} style={{ marginBottom: i < codes.length - 1 ? 8 : 0 }}>
@@ -618,7 +632,7 @@ function DenialSection({
         ))}
         {deniedAt !== undefined && (
           <div style={{ fontSize: 11, color: "var(--fg-faint)", marginTop: 6 }}>
-            Denied at <time dateTime={deniedAt}>{deniedAt}</time>
+            {tUi("relationshipPanel.ui.deniedAt")} <time dateTime={deniedAt}>{deniedAt}</time>
           </div>
         )}
       </div>
@@ -688,6 +702,7 @@ function ActionRow({
   onViewEvidence,
   mutating,
 }: ActionRowProps): ReactNode {
+  const tUi = useTranslate();
   const lc = rel.lifecycle;
   const canReconnect = lc === "blocked";
   const canArchive = lc === "active";
@@ -700,7 +715,7 @@ function ActionRow({
         type="button"
         className={`arun-btn${canReconnect ? " primary" : ""}`}
         aria-disabled={!canReconnect || mutating}
-        aria-label="Reconnect — only available for blocked relationships"
+        aria-label={tUi("relationshipPanel.ui.reconnectOnlyAvailableForBlocked")}
         title={
           canReconnect
             ? "Reconnect this relationship"
@@ -709,38 +724,38 @@ function ActionRow({
         disabled={!canReconnect || mutating}
         onClick={canReconnect ? onReconnect : undefined}
       >
-        Reconnect
+        {tUi("relationshipPanel.ui.reconnect")}
       </button>
       <button
         type="button"
         className="arun-btn"
         aria-disabled={!canArchive || mutating}
-        aria-label="Archive — only available for active relationships"
+        aria-label={tUi("relationshipPanel.ui.archiveOnlyAvailableForActive")}
         title={
           canArchive ? "Archive this relationship" : "Only active relationships can be archived."
         }
         disabled={!canArchive || mutating}
         onClick={canArchive ? onArchive : undefined}
       >
-        Archive
+        {tUi("relationshipPanel.ui.archive")}
       </button>
       <button
         type="button"
         className="arun-btn"
         aria-disabled={!canRevoke || mutating}
-        aria-label="Revoke relationship"
+        aria-label={tUi("relationshipPanel.ui.revokeRelationship")}
         title={canRevoke ? "Revoke this relationship" : "Already revoked or superseded."}
         disabled={!canRevoke || mutating}
         onClick={canRevoke ? onRevoke : undefined}
         style={{ color: canRevoke ? "var(--danger)" : undefined }}
       >
-        Revoke
+        {tUi("relationshipPanel.ui.revoke")}
       </button>
       <button
         type="button"
         className="arun-btn"
         aria-disabled={!canViewImpact}
-        aria-label="View impact analysis"
+        aria-label={tUi("relationshipPanel.ui.viewImpactAnalysis")}
         title={
           canViewImpact
             ? "Toggle the impact analysis card"
@@ -749,16 +764,16 @@ function ActionRow({
         disabled={!canViewImpact}
         onClick={canViewImpact ? onViewImpact : undefined}
       >
-        View impact
+        {tUi("relationshipPanel.ui.viewImpact")}
       </button>
       <button
         type="button"
         className="arun-btn"
-        aria-label="View evidence references"
-        title="Jump to the evidence references section"
+        aria-label={tUi("relationshipPanel.ui.viewEvidenceReferences")}
+        title={tUi("relationshipPanel.ui.jumpToTheEvidenceReferences")}
         onClick={onViewEvidence}
       >
-        View evidence
+        {tUi("relationshipPanel.ui.viewEvidence")}
       </button>
     </div>
   );
@@ -803,6 +818,7 @@ export function RelationshipInspectorPanel({
   animateBadges = true,
   highContrast = false,
 }: RelationshipInspectorPanelProps): ReactNode {
+  const tUi = useTranslate();
   const t = useTranslate();
   const [rel, setRel] = useState<ApiRelationship | null>(null);
   const [explain, setExplain] = useState<ExplainResult | null>(null);
@@ -1002,7 +1018,7 @@ export function RelationshipInspectorPanel({
     }
   }, [rel]);
 
-  // "View impact" now expands the bounded dependency walk inline (#542) instead of being a no-op.
+  // tUi("relationshipPanel.ui.viewImpact") now expands the bounded dependency walk inline (#542) instead of being a no-op.
   const handleViewImpact = useCallback(() => {
     setImpactExpanded((v) => !v);
   }, []);
@@ -1022,7 +1038,7 @@ export function RelationshipInspectorPanel({
     [onViewImpact],
   );
 
-  // "View Evidence" scrolls to the in-panel "Evidence references" section. There is no
+  // "View Evidence" scrolls to the in-panel tUi("relationshipPanel.ui.evidenceReferences") section. There is no
   // /evidence route in the app, and navigating away would destroy the Workspace window
   // context (see evidenceReferenceIds above), so the action stays inside the inspector.
   const evidenceSectionRef = useRef<HTMLDivElement | null>(null);
@@ -1038,12 +1054,14 @@ export function RelationshipInspectorPanel({
     // the entire right column is a blank surface on first open.
     return (
       <div className="tw-pad" data-testid="relationship-inspector-panel">
-        <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
+        <SectionLabel style={{ marginTop: 0 }}>
+          {tUi("relationshipPanel.ui.relationship")}
+        </SectionLabel>
         <div className="insp-empty" data-testid="inspector-empty">
-          Select a relationship from the list to inspect it.
+          {tUi("relationshipPanel.ui.selectARelationshipFromThe")}
         </div>
         <div style={{ fontSize: 12, color: "var(--fg-muted)", marginTop: 4 }}>
-          If the list is empty, use “+ New relationship” in the toolbar to create one.
+          {tUi("relationshipPanel.ui.ifTheListIsEmpty")}
         </div>
       </div>
     );
@@ -1076,7 +1094,7 @@ export function RelationshipInspectorPanel({
             className="lk-alert-retry"
             onClick={() => void fetchRel(relationshipId)}
           >
-            Retry
+            {tUi("relationshipPanel.ui.retry")}
           </button>
         </div>
       )}
@@ -1085,7 +1103,7 @@ export function RelationshipInspectorPanel({
         <div className="lk-alert" role="alert" aria-live="assertive">
           <span>{mutationError}</span>
           <button type="button" className="lk-alert-retry" onClick={() => setMutationError(null)}>
-            Dismiss
+            {tUi("relationshipPanel.ui.dismiss")}
           </button>
         </div>
       )}
@@ -1093,7 +1111,9 @@ export function RelationshipInspectorPanel({
       {/* Loading skeleton (500 ms threshold) */}
       {loading && showSkeleton && (
         <>
-          <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
+          <SectionLabel style={{ marginTop: 0 }}>
+            {tUi("relationshipPanel.ui.relationship")}
+          </SectionLabel>
           <SkeletonBlock lines={4} />
           <SkeletonBlock lines={3} />
         </>
@@ -1102,12 +1122,14 @@ export function RelationshipInspectorPanel({
       {/* Not-found / deleted empty state */}
       {!loading && error === null && rel === null && (
         <>
-          <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
+          <SectionLabel style={{ marginTop: 0 }}>
+            {tUi("relationshipPanel.ui.relationship")}
+          </SectionLabel>
           <div className="insp-empty" data-testid="inspector-not-found">
-            This relationship is no longer available.
+            {tUi("relationshipPanel.ui.thisRelationshipIsNoLonger")}
           </div>
           <div style={{ fontSize: 12, color: "var(--fg-muted)", marginTop: 4 }}>
-            It may have been deleted, retired by retention, or it never existed in this workspace.
+            {tUi("relationshipPanel.ui.itMayHaveBeenDeleted")}
           </div>
           {onClearFocus !== undefined && (
             <button
@@ -1116,7 +1138,7 @@ export function RelationshipInspectorPanel({
               style={{ marginTop: 8 }}
               onClick={onClearFocus}
             >
-              Clear focus
+              {tUi("relationshipPanel.ui.clearFocus")}
             </button>
           )}
         </>
@@ -1126,14 +1148,24 @@ export function RelationshipInspectorPanel({
       {!loading && rel !== null && (
         <>
           {/* Section 1: Type and display name */}
-          <SectionLabel style={{ marginTop: 0 }}>Relationship</SectionLabel>
+          <SectionLabel style={{ marginTop: 0 }}>
+            {tUi("relationshipPanel.ui.relationship")}
+          </SectionLabel>
           <TypeSection rel={rel} />
 
           {/* Section 2: Source endpoint */}
-          <EndpointSection label="Source" kind={rel.source.kind} id={rel.source.id} />
+          <EndpointSection
+            label={tUi("relationshipPanel.ui.sourceEndpoint")}
+            kind={rel.source.kind}
+            id={rel.source.id}
+          />
 
           {/* Section 3: Target endpoint */}
-          <EndpointSection label="Target" kind={rel.target.kind} id={rel.target.id} />
+          <EndpointSection
+            label={tUi("relationshipPanel.ui.targetEndpoint")}
+            kind={rel.target.kind}
+            id={rel.target.id}
+          />
 
           {/* Section 4: Lifecycle status */}
           <LifecycleSection lifecycle={rel.lifecycle} />

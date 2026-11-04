@@ -33,6 +33,11 @@ import {
   handleReadMarkdownSkillSelection,
   handleSelectMarkdownSkill,
 } from "./markdown-skill-routes.js";
+import {
+  handleListJiraTemplates,
+  handleProposeJiraTemplates,
+  handleValidateJiraTemplate,
+} from "./markdown-skill-jira-template-routes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
@@ -441,7 +446,8 @@ import {
   handleListAtlassianConnectorActionApprovals,
   handleRejectAtlassianConnectorActionApproval,
 } from "./atlassian/writeActionRoutes.js";
-import { CHAT_READ_CONSENT_ROUTE_GROUP } from "./atlassian/chatReadConsentRoutes.js";
+import { JIRA_DRAFT_ROUTE_GROUP } from "./atlassian/jiraDraftRoutes.js";
+import { JIRA_REPORT_ROUTE_GROUP } from "./atlassian/jiraReportRoutes.js";
 import { CHAT_WRITE_APPROVAL_ROUTE_GROUP } from "./atlassian/chatWriteApprovalRoutes.js";
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
@@ -738,6 +744,21 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
   { method: "GET", pattern: "/api/chats/context", handler: handleChatContextStatus },
   { method: "GET", pattern: "/api/skills", handler: handleListMarkdownSkills },
   { method: "POST", pattern: "/api/skills", handler: handleImportMarkdownSkill },
+  {
+    method: "GET",
+    pattern: "/api/skills/jira-templates",
+    handler: handleListJiraTemplates,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/validate",
+    handler: handleValidateJiraTemplate,
+  },
+  {
+    method: "POST",
+    pattern: "/api/skills/jira-templates/propose",
+    handler: handleProposeJiraTemplates,
+  },
   { method: "GET", pattern: "/api/skills/:id", handler: handleReadMarkdownSkill },
   { method: "PUT", pattern: "/api/skills/:id", handler: handleReplaceMarkdownSkill },
   { method: "DELETE", pattern: "/api/skills/:id", handler: handleDeleteMarkdownSkill },
@@ -1782,10 +1803,11 @@ const REGISTERED_API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/diagnostics/report/download/:downloadId",
     handler: handleDownloadSupportReport,
   },
-  ...CHAT_READ_CONSENT_ROUTE_GROUP,
   ...CHAT_WRITE_APPROVAL_ROUTE_GROUP,
   // Issue #4137 (ADR-0182 D8) — the review model policy, review settings and pair qualification.
   ...REVIEW_POLICY_ROUTE_GROUP,
+  ...JIRA_REPORT_ROUTE_GROUP,
+  ...JIRA_DRAFT_ROUTE_GROUP,
 ];
 
 // Issue #4137: every `/api/git-review/*` route, wherever it is registered, sits behind the

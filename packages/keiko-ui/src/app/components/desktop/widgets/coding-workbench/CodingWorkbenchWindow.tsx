@@ -200,7 +200,7 @@ import { offeredSavedCodingModel, rememberCodingModel } from "./codingModelPrefe
 import { agentSelectionLocked, reportAgentSelection } from "./codingWorkbenchAgent";
 import { useCodingWorkbenchIssueIntake } from "./useCodingWorkbenchIssueIntake";
 import { useTaskComposerActions } from "./useCodingWorkbenchTaskActions";
-import { useCodingWorkbenchJiraPod } from "./useCodingWorkbenchJiraPod";
+import { useCodingWorkbenchConnectors } from "./useCodingWorkbenchConnectors";
 import { CodingWorkbenchIssueIntake } from "./CodingWorkbenchIssueIntake";
 import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
@@ -919,7 +919,6 @@ export function CodingWorkbenchWindow({
   historySelection,
   onHistorySelectionHandled,
   onOpenHistory = (): void => undefined,
-  onOpenMcpSettings,
 }: {
   readonly selectedRoot?: string | undefined;
   readonly selectedBranch?: string | undefined;
@@ -927,7 +926,6 @@ export function CodingWorkbenchWindow({
   readonly historySelection?: string | undefined;
   readonly onHistorySelectionHandled?: (() => void) | undefined;
   readonly onOpenHistory?: (() => void) | undefined;
-  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly onOpenGit?: ((target: CodingWorkbenchGitTarget) => void) | undefined;
   /** Persists the Workbench's repository selection in its own window configuration. */
   readonly onSelectRepository?: ((root: string) => void) | undefined;
@@ -962,7 +960,7 @@ export function CodingWorkbenchWindow({
   );
   // Subscribed before the refresh below is requested, so that refresh's own outcome is observed.
   const catalogSettled = useGatewayModelCatalogSettled();
-  useEffect(() => requestGatewayModelCatalogRefresh(), []);
+  useEffect(() => requestGatewayModelCatalogRefresh({ check: true }), []);
   const modelSelection = useCodingModelSelection(
     state,
     actions,
@@ -1035,7 +1033,6 @@ export function CodingWorkbenchWindow({
     <WorkbenchContent
       history={history}
       onOpenHistory={onOpenHistory}
-      onOpenMcpSettings={onOpenMcpSettings}
       state={state}
       actions={actions}
       activeWorkspace={activeWorkspace}
@@ -1085,7 +1082,7 @@ function selectedConversationReadiness(
 ): CodingWorkbenchRuntimeState {
   if (state.runtimePreference !== "managed-gateway" || state.selectedModelId === null) return state;
   const selected = catalog?.models.find((model) => model.id === state.selectedModelId);
-  if (isFreshSelectedCodingModel(selected)) return state;
+  if (isUsableSelectedCodingModel(selected)) return state;
   return {
     ...state,
     canStart: false,
@@ -1093,8 +1090,10 @@ function selectedConversationReadiness(
   };
 }
 
-function isFreshSelectedCodingModel(selected: ModelCapability | undefined): boolean {
-  return selected?.conversationReady === true && isCodingWorkbenchModel(selected);
+// Usable as Chat judges its picker: a coding-capable model nobody observed failing. A model whose
+// answer expired or that nobody checked yet is usable, because its run's start checks it first.
+function isUsableSelectedCodingModel(selected: ModelCapability | undefined): boolean {
+  return selected !== undefined && isCodingWorkbenchModel(selected);
 }
 
 function pendingSelectedSource(
@@ -1129,13 +1128,10 @@ function pendingCodingModelIds(catalog: ChatSessionCatalog | null): readonly str
 }
 
 // The default a Workbench elects when no human choice remains is the one Chat elects: a gateway-
-// declared chat model first, a special-purpose engine only when nothing else is ready. Only freshly
-// ready models are candidates here, so wire order never decides it (#3905).
+// declared chat model first, a special-purpose engine only when nothing else is ready, and within a
+// tier a ready model before one whose answer is unknown, so wire order never decides it (#3905).
 function electedCodingDefault(models: readonly ModelCapability[]): ModelCapability | undefined {
-  return electConversationDefault(
-    models.filter((model) => model.conversationReady === true),
-    (model) => model.conversationReady,
-  );
+  return electConversationDefault(models, (model) => model.conversationReady);
 }
 
 function useCodingModelSelection(
@@ -1239,7 +1235,7 @@ function workbenchCatalogEvidenceSnapshot(
   human: boolean,
 ): WorkbenchCatalogEvidenceSnapshot {
   const selected = read.capabilities.find((model) => model.id === selectedId);
-  const fresh = isFreshSelectedCodingModel(selected);
+  const fresh = isUsableSelectedCodingModel(selected);
   const selectionDigest = selectedId === null ? undefined : sha256Hex(selectedId);
   const held = selected !== undefined && isOfferedOrRenewing(selected) && !fresh;
   const catalogDigest = sha256Hex(JSON.stringify(read.capabilities));
@@ -1256,7 +1252,7 @@ function workbenchCatalogEvidenceSnapshot(
       surface: "coding-workbench",
       source: read.source,
       configuredModelCount: read.capabilities.length,
-      usableModelCount: read.capabilities.filter(isFreshSelectedCodingModel).length,
+      usableModelCount: read.capabilities.filter(isUsableSelectedCodingModel).length,
     },
   };
 }
@@ -1306,7 +1302,6 @@ function useWorkbenchCatalogEvidence(
 }
 
 interface WorkbenchContentProps {
-  readonly onOpenMcpSettings?: (() => void) | undefined;
   readonly history: CodingTaskSession;
   readonly onOpenHistory: () => void;
   readonly state: CodingWorkbenchRuntimeState;
@@ -1471,7 +1466,6 @@ function WorkbenchHeader({
   readonly columns: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">;
 }): ReactNode {
   const { repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
-  const t = useCodingWorkbenchTranslate();
   return (
     <header className={styles["cmp-workbench-header"]}>
       <div className={styles.cmpHeaderRow}>
@@ -1486,11 +1480,6 @@ function WorkbenchHeader({
           active={runIsActive}
           onHistory={columns.onOpenHistory}
         />
-        {columns.onOpenMcpSettings !== undefined && (
-          <button type="button" onClick={columns.onOpenMcpSettings}>
-            {t("codingWorkbench.mcp.manage")}
-          </button>
-        )}
       </div>
       <CodingWorkbenchTrustAffordance
         binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -1600,10 +1589,10 @@ function WorkbenchColumns({
   runWorkspace,
   repositoryRoot,
   runIsActive,
-}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel" | "onOpenMcpSettings">): ReactNode {
+}: Omit<WorkbenchContentProps, "alert" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
-  const jiraPod = useCodingWorkbenchJiraPod();
+  const connectors = useCodingWorkbenchConnectors();
   const issueIntake = useCodingWorkbenchIssueIntake(
     repositoryRoot ?? "",
     `${activeWorkspace.activeBinding?.workspaceId ?? ""}:${history.conversationId ?? ""}`,
@@ -1714,7 +1703,8 @@ function WorkbenchColumns({
     promptDelivery,
     taskIntent,
     projectMemoryEnabled,
-    jiraPodId: jiraPod.podId,
+    jiraPodId: connectors.jiraPodId,
+    mcpServers: connectors.mcpServers,
     conversationId: history.conversationId,
     fork: history.fork,
     resumeMode,
@@ -1739,7 +1729,7 @@ function WorkbenchColumns({
       startBlockedReason={startBlocker}
       projectMemoryEnabled={projectMemoryEnabled}
       onProjectMemoryEnabledChange={setProjectMemoryEnabled}
-      jiraPod={jiraPod.selection}
+      connectors={connectors.menu}
       autonomyMode={confirmedMode(state)}
       autonomyLabel={confirmedModeLabel(state, t)}
       activeRunMode={activeRunMode(state)}

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "id": "preference-tables-de",
+  "language": "de",
+  "class": "preference",
+  "difficulty": "plain",
+  "description": "One German preference stated plainly. The next chat must follow it, also for a question that shares no word with it, an unrelated question must receive no memory, and an unknown question must be answered with an abstention.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]]
+      }
+    },
+    {
+      "id": "related-no-overlap",
+      "question": "Fasse mir das Quartal zusammen: Umsatz 120, Kosten 80, Gewinn 40.",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*"]],
+        "format": "table"
+      }
+    },
+    {
+      "id": "unrelated",
+      "question": "Was ist Apache Kafka?",
+      "expect": {
+        "kind": "no-memory"
+      }
+    },
+    {
+      "id": "unknown",
+      "question": "Welche Farbe mag ich am liebsten?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}

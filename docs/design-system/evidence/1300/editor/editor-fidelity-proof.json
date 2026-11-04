@@ -45,7 +45,7 @@
     },
     {
       "path": "docs/design-system/evidence/1300/browser/capture.mjs",
-      "sha256": "3cf3ccc97476901a7270ecd64c099e8e356b2495194ffae0ffe46ad4c462fe87"
+      "sha256": "0cf20a8782eeb190ac35ca193d162b127c92b377abcdc3af67db74bea7b55f45"
     },
     {
       "path": "docs/design-system/evidence/1300/component-fixture-data.json",
@@ -65,11 +65,11 @@
     },
     {
       "path": "package-lock.json",
-      "sha256": "31c9f84b7d2880757f0f6f0b69388329d535013010444265e421707809caf5b1"
+      "sha256": "b056fbca3054e53f328c14e3ea4643b1acf8f3968dadc0aaafb31826d62a072a"
     },
     {
       "path": "package.json",
-      "sha256": "fdf6ff8df9b0dff327faa8324416f71785ed4ce8506e94414aee021c14f89863"
+      "sha256": "6ebc1e3a379b4e06f0a1c4ebec971915a04f02797f07fe49bc7659a0d2e95ef1"
     },
     {
       "path": "packages/keiko-ui/design-tokens.mjs",
@@ -81,7 +81,7 @@
     },
     {
       "path": "packages/keiko-ui/package.json",
-      "sha256": "16e432236a410ca1f099140c8fe86cc5fde22f67b20ccdae883f0c40d9218b9a"
+      "sha256": "404dd2aba3ec24b4e16dac535d9f84ad71e30fd47760c5d8138a99fae9559900"
     },
     {
       "path": "packages/keiko-ui/read-stylesheet.mjs",
@@ -97,7 +97,7 @@
     },
     {
       "path": "packages/keiko-ui/src/app/globals.css",
-      "sha256": "83c8add9e6649d843ea177a7279b1014bb046881af7afb781d3365f0d25248e2"
+      "sha256": "299b807fe42bc6069a49ac28c4a5195c016739335b5c375be5c73f216ca9471c"
     },
     {
       "path": "scripts/lib/css-rendered-evidence.mjs",
@@ -120,7 +120,7 @@
       "sha256": "def885e0621a21a7d998dbedce5c5994c5391a3c8a0c1d1fb4070502d1ff0d7f"
     }
   ],
-  "postCssSha256": "ec4cf7c88ede7534c4ee76c0dfcc81be9fdbc40a5139d97d8baf9c14de4ec7f4",
+  "postCssSha256": "a75653326a80e3d3ca9212fe75c233744952b1129d216cbb11741b094da870c2",
   "referenceFiles": [
     "keiko-tokens.css",
     "keiko-semantic-tokens.css",
@@ -132,8 +132,8 @@
     "keiko-editor-tokens.css": "f6003eb2fbbad9ac0f4e4cb6fff2476d63e7a1e33e48ec218e7bef8df2e3cffc"
   },
   "run": {
-    "generatedAt": "2026-10-31T00:21:52.911Z",
-    "repoHeadSha": "03310922459fa3ca7dce4070d2434506161ecf6c"
+    "generatedAt": "2026-11-03T20:54:12.739Z",
+    "repoHeadSha": "298e939febfcc0f2959bfeffb9f377acaf9f5999"
   },
   "tolerance": "≤1 LSB per sRGB channel (canvas-normalised)",
   "tokenFidelity": {
