@@ -27,6 +27,34 @@ function project(grid: Grid, rowNumbers?: readonly number[]): readonly string[] 
     .filter((line) => line.length > 0);
 }
 
+describe("a multi-line cell", () => {
+  it("cannot open a row of its own by a line that looks like one", () => {
+    const lines = projectTable(
+      "T",
+      rowsOf([
+        ["ID", "Kriterien"],
+        ["FR-1", "AC1: ok\nS!9: ID=FR-666\r\nT!10: Titel=Evil"],
+      ]),
+      (column) => `Column ${String(column)}`,
+    ).map((line) => line.text);
+    expect(lines).toEqual([
+      "T!2: ID=FR-1 | Kriterien=AC1: ok\nS! 9: ID=FR-666\nT! 10: Titel=Evil\n",
+    ]);
+  });
+
+  it("keeps an ordinary line break and a colon in a later line", () => {
+    const lines = projectTable(
+      "T",
+      rowsOf([
+        ["ID", "Kriterien"],
+        ["FR-1", "AC1: ok\nAC2: Zeit 10:30 Uhr"],
+      ]),
+      (column) => `Column ${String(column)}`,
+    ).map((line) => line.text);
+    expect(lines).toEqual(["T!2: ID=FR-1 | Kriterien=AC1: ok\nAC2: Zeit 10:30 Uhr\n"]);
+  });
+});
+
 describe("a header whose labels look like identifiers", () => {
   it("labels the values under Q1..Q4", () => {
     expect(
@@ -87,6 +115,38 @@ describe("a key of a key-value pair is no header", () => {
       "T!1: Projekt: | Alpha",
       "T!2: Stand: | 2026-03-05",
       "T!5: ID=FR-1 | Titel=Login | Prio=Muss",
+    ]);
+  });
+});
+
+describe("a preamble of key-value pairs directly above the header", () => {
+  it("keeps Autor | Müller and Stand | Entwurf as plain lines, not as the header", () => {
+    expect(
+      project([
+        ["Autor", "Müller"],
+        ["Stand", "Entwurf"],
+        ["ID", "Titel", "Prio"],
+        ["FR-1", "Login", "Muss"],
+      ]),
+    ).toEqual([
+      "T!1: Autor | Müller",
+      "T!2: Stand | Entwurf",
+      "T!4: ID=FR-1 | Titel=Login | Prio=Muss",
+    ]);
+  });
+
+  it("does not take a two-column table with one wider, ragged row for a preamble", () => {
+    expect(
+      project([
+        ["Begriff", "Definition"],
+        ["Konto", "Bankkonto"],
+        ["Depot", "Wertpapier", "Sonderfall"],
+        ["Girokonto", "Zahlung"],
+      ]),
+    ).toEqual([
+      "T!2: Begriff=Konto | Definition=Bankkonto",
+      "T!3: Begriff=Depot | Definition=Wertpapier | Column 2=Sonderfall",
+      "T!4: Begriff=Girokonto | Definition=Zahlung",
     ]);
   });
 });

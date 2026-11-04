@@ -58,12 +58,21 @@ export function cleanHeaderLabel(value: string): string {
     .trim();
 }
 
+// A line inside a cell that opens like a projected row (`Sheet!9: ID=FR-1`); group 1 is the part up
+// to and including the `!`.
+const ROW_PREFIX_AT_LINE_START = /\n([^\n:]{1,120}!)(?=\d{1,9}:)/gu;
+
 /**
- * A cell value that cannot be read as the start of another cell, with one kind of line break
- * (a Windows or old-Mac break inside a cell would otherwise leave a bare `\r` in the text).
+ * A cell value that cannot be read as the start of another cell or of another row, with one kind
+ * of line break (a Windows or old-Mac break inside a cell would otherwise leave a bare `\r` in the
+ * text). A line of a multi-line cell that looks like a row (`Sheet!9: ID=FR-1`) gets a space after
+ * the `!`: no indentation helps, the sheet part of a row prefix may itself start with spaces.
  */
 export function neutraliseValue(value: string): string {
-  return value.replaceAll(/\r\n?/gu, "\n").replaceAll(" | ", " ¦ ");
+  return value
+    .replaceAll(/\r\n?/gu, "\n")
+    .replaceAll(" | ", " ¦ ")
+    .replaceAll(ROW_PREFIX_AT_LINE_START, "\n$1 ");
 }
 
 // Text a header can be made of: it has a letter and is no formula, no number written with an
@@ -111,6 +120,41 @@ function isHeaderRow(rows: readonly TabularRow[], index: number, atStart: boolea
   if (atStart) return true;
   // A later table starts after a blank row and is followed directly by its first data row.
   return next !== undefined && next.rowNumber - row.rowNumber === 1;
+}
+
+function followsBlankRow(rows: readonly TabularRow[], index: number): boolean {
+  return (rows[index]?.rowNumber ?? 0) - (rows[index - 1]?.rowNumber ?? 0) > 1;
+}
+
+// How far below a pair of cells a wider header may start and still make the pair a preamble.
+const PREAMBLE_LOOKAHEAD = 8;
+
+// A wider header that is stable: the rows right below it are as wide as it is.
+function isStableHeader(rows: readonly TabularRow[], index: number, narrower: number): boolean {
+  const row = rows[index];
+  if (row === undefined || row.cells.length <= narrower || !isHeaderRow(rows, index, true)) {
+    return false;
+  }
+  return [rows[index + 1], rows[index + 2]].some(
+    (next) => next !== undefined && next.cells.length >= row.cells.length,
+  );
+}
+
+/**
+ * Whether the row is a preamble, not the header: one or two cells (`Autor | Müller`) directly
+ * above, with no blank row between, a wider header whose data rows keep that width. A two-column
+ * header whose data is wider and ragged is not mistaken for one, the wider row has to be a header
+ * itself.
+ */
+function isPreamble(rows: readonly TabularRow[], index: number): boolean {
+  const width = rows[index]?.cells.length ?? 0;
+  if (width > 2) return false;
+  const end = Math.min(rows.length, index + 1 + PREAMBLE_LOOKAHEAD);
+  for (let next = index + 1; next < end; next += 1) {
+    if (followsBlankRow(rows, next)) return false;
+    if (isStableHeader(rows, next, width)) return true;
+  }
+  return false;
 }
 
 function buildHeaders(row: TabularRow): ReadonlyMap<number, string> {
@@ -200,7 +244,9 @@ export function projectTable(
   fallbackLabel: (columnIndex: number) => string,
 ): readonly ProjectedLine[] {
   const lines: ProjectedLine[] = [];
-  const firstHeader = rows.findIndex((_row, index) => isHeaderRow(rows, index, true));
+  const firstHeader = rows.findIndex(
+    (_row, index) => isHeaderRow(rows, index, true) && !isPreamble(rows, index),
+  );
   const state: TableState = { headers: new Map(), pendingHeader: undefined };
   rows.forEach((row, index) => {
     const role = roleOf(rows, index, firstHeader, state);
