@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { compileFunction } from "node:vm";
+import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -12,6 +14,30 @@ import {
 } from "../check-update-ui-evidence.mjs";
 
 const roots = [];
+const repoRoot = resolve(import.meta.dirname, "../..");
+
+/** Execute the browser producer's real helpers without collecting its Playwright journeys. */
+function browserProducedHarnessHashes() {
+  const path = join(repoRoot, "tests/e2e/update-ui-1696.spec.ts");
+  const source = ts.createSourceFile(
+    path,
+    readFileSync(path, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+  );
+  const helpers = ["sourceSha256", "harnessProvenanceHashes"].map((name) => {
+    const declaration = source.statements.find(
+      (statement) => ts.isFunctionDeclaration(statement) && statement.name?.text === name,
+    );
+    if (declaration === undefined) throw new Error(`Missing browser evidence helper ${name}`);
+    return declaration.getText(source);
+  });
+  const emitted = ts.transpileModule(`${helpers.join("\n")}\nreturn harnessProvenanceHashes();`, {
+    compilerOptions: { target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const produce = compileFunction(emitted, ["createHash", "readFileSync", "resolve", "REPO_ROOT"]);
+  return produce(createHash, readFileSync, resolve, repoRoot);
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -45,6 +71,12 @@ afterEach(() => {
 });
 
 describe("updater UI evidence freshness", () => {
+  it("binds the actual browser producer's complete harness hashes to the canonical checker", () => {
+    expect(browserProducedHarnessHashes()).toEqual(
+      measureUpdateUiEvidenceInputs(repoRoot).harnessProvenanceSha256,
+    );
+  });
+
   it.each([
     "scripts/lib/d12-baseline.mjs",
     "scripts/lib/workspace-storage-fixture.mjs",
