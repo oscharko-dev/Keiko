@@ -156,6 +156,21 @@ describe("parseFailureEvidence (AC #4 / AC #9 failure-output handling)", () => {
     expect(out.messages).toEqual(["TypeError: boom"]);
   });
 
+  it("reads a location that follows its message on one line", () => {
+    const out = parseFailureEvidence({ failingOutput: "AssertionError at src/buggy.ts:1:40" });
+    expect(out.frames).toEqual([{ file: "src/buggy.ts", line: 1 }]);
+  });
+
+  it("does not read the clock time or date after an inline `at` as a location", () => {
+    for (const failingOutput of [
+      "request failed at 12:30:45",
+      "stopped at 2026-11-04T12:30:05Z",
+      "connection refused at gateway:3000",
+    ]) {
+      expect(parseFailureEvidence({ failingOutput }).frames).toEqual([]);
+    }
+  });
+
   it("rejects a location whose file contains a NUL", () => {
     expect(parseFailureEvidence({ stackTrace: "at f (src/a\u0000b.ts:1:1)" }).frames).toEqual([]);
   });

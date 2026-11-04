@@ -143,7 +143,10 @@ function locationToken(line: string): LocationToken {
     const rest = trimmed.slice(at.length).trim();
     return { text: rest.startsWith("async ") ? rest.slice(6).trim() : rest, delimited: true };
   }
-  return { text: trimmed, delimited: false };
+  // `AssertionError at src/x.ts:1:2` names its location after the message. The text after the last
+  // ` at ` is judged like a bare line, so `failed at 12:30:45` stays a clock time.
+  const inlineAt = trimmed.lastIndexOf(" at ");
+  return { text: inlineAt === -1 ? trimmed : trimmed.slice(inlineAt + 4), delimited: false };
 }
 
 function isControlSequenceEnd(code: number | undefined): boolean {

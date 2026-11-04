@@ -14,7 +14,10 @@ import {
   type JiraManagedReadToolName,
   type JiraMutationOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
-import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  TOOL_CATALOG_LIMITS,
+  type CatalogJsonObject,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type {
   ManagedMcpInvocationContext,
   ManagedMcpProvider,
@@ -56,13 +59,17 @@ const FIELD = object(
   },
   ["id", "name", "required", "hasDefaultValue", "kind", "richText", "operations"],
 );
+// A value read from Jira is bounded by the catalog string limit the connector already judges it by,
+// not by Jira's default field length: an instance may allow more, and a longer text must read as
+// itself or as a named bounds failure, never as a failed tool.
+const READ_TEXT = text(TOOL_CATALOG_LIMITS.maxStringBytes);
 const FIELD_VALUE = object(
   {
     id: text(64),
     name: text(255),
     kind: { type: "string", enum: JIRA_FIELD_KINDS },
     state: { type: "string", enum: ["value", "empty", "unsupported", "unavailable"] },
-    text: text(32768),
+    text: READ_TEXT,
     number: { type: "number", minimum: -Number.MAX_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER },
     strings: { type: "array", maxItems: 100, items: text(255) },
     references: { type: "array", maxItems: 100, items: REFERENCE },
@@ -166,7 +173,7 @@ const DEFINITIONS: Readonly<
     item: object(
       {
         ...ISSUE_SUMMARY,
-        description: text(32768),
+        description: READ_TEXT,
         fieldValues: { type: "array", maxItems: JIRA_FIELD_READ_MAX, items: FIELD_VALUE },
       },
       ["id", "key", "summary"],
@@ -176,10 +183,11 @@ const DEFINITIONS: Readonly<
     description: "Read a bounded page of issue comments as untrusted plain text.",
     arguments: { issueKey: text(128) },
     required: ["issueKey"],
-    item: object(
-      { id: text(128), body: text(32768), created: text(64), author: DISPLAY_REFERENCE },
-      ["id", "body", "created"],
-    ),
+    item: object({ id: text(128), body: READ_TEXT, created: text(64), author: DISPLAY_REFERENCE }, [
+      "id",
+      "body",
+      "created",
+    ]),
   },
   "jira.transitions": {
     description:
