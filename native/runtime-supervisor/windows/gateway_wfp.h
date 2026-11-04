@@ -20,6 +20,20 @@ struct keiko_gateway_filters {
   int guard_installed;
 };
 
+/* These keys contain no handles. The broker must durably persist them together with its
+ * authenticated tree/job/SID binding BEFORE open_prepared can change WFP state. */
+struct keiko_gateway_guard_keys {
+  GUID sublayer;
+  GUID deny[2];
+};
+
+/* Generates fresh keys without opening the filtering engine or changing network policy. */
+DWORD keiko_gateway_guard_prepare(struct keiko_gateway_guard_keys *keys);
+int keiko_gateway_guard_keys_valid(const struct keiko_gateway_guard_keys *keys);
+DWORD keiko_gateway_filters_open_prepared(PSID package_sid, UINT16 family, UINT16 port,
+                                         HANDLE job, const struct keiko_gateway_guard_keys *keys,
+                                         struct keiko_gateway_filters *filters);
+
 /* family is AF_INET or AF_INET6; the only accepted destination is that family's loopback.
  * No caller-controlled address, filter action, executable identity or filter layer is accepted. */
 DWORD keiko_gateway_filters_open(PSID package_sid, UINT16 family, UINT16 port,

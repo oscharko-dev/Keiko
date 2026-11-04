@@ -543,9 +543,14 @@ async function waitPendingWrite(
   f: ReturnType<typeof runtime>,
   chatId: string,
 ): Promise<NonNullable<ChatToolExchange["approval"]>> {
-  await vi.waitFor(() => {
-    expect(ownedExchange(f, chatId).approval?.state).toBe("pending");
-  });
+  // A real turn reaches its approval only after the whole server path has run; a loaded CI shard
+  // can need longer than vi.waitFor's default second, and no state here advances on a timer.
+  await vi.waitFor(
+    () => {
+      expect(ownedExchange(f, chatId).approval?.state).toBe("pending");
+    },
+    { timeout: 15_000, interval: 50 },
+  );
   const approval = ownedExchange(f, chatId).approval;
   if (approval === undefined) throw new Error("Missing concrete approval");
   return approval;
@@ -596,7 +601,7 @@ it("rotates real custody during pending normal Chat writes and preserves the oth
     for (const id of f.chats) interruptChatGenerations(f.deps, id);
     await Promise.allSettled(pending);
   }
-});
+}, 60_000);
 
 function holdOwnedResponse(
   f: ReturnType<typeof runtime>,

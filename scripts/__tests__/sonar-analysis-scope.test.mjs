@@ -296,8 +296,18 @@ describe("Sonar analysis scope", () => {
   it("uses absolute system Git paths on every platform", () => {
     expect(systemGitExecutable("darwin")).toBe("/usr/bin/git");
     expect(systemGitExecutable("linux")).toBe("/usr/bin/git");
-    expect(systemGitExecutable("win32")).toMatch(/^[A-Za-z]:[\\/]/u);
-    expect(systemGitExecutable("win32").endsWith("/Git/cmd/git.exe")).toBe(true);
+    const resolveExecutable = vi.fn(() => "D:/Tools/Git/cmd/git.exe");
+    expect(systemGitExecutable("win32", resolveExecutable)).toBe("D:/Tools/Git/cmd/git.exe");
+    expect(resolveExecutable).toHaveBeenCalledExactlyOnceWith("git", { platform: "win32" });
+  });
+
+  it("refuses an unavailable trusted Windows Git instead of using a guessed install path", () => {
+    const unavailable = () => {
+      throw new Error("trusted host executable is unavailable: git");
+    };
+    expect(() => systemGitExecutable("win32", unavailable)).toThrow(
+      "trusted host executable is unavailable: git",
+    );
   });
 
   it("rejects missing CLI option values and following flags", () => {
