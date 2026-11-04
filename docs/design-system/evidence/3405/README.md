@@ -100,6 +100,13 @@ were inspected. The three JSON records bind the current sources, and the freshne
 is macOS browser and fixture qualification; it does not claim Linux execution. It remains updater
 fixture evidence.
 
+The dev 1.4.0 cutoff sync brought dev's message catalogs together with this slice's `api.ts`, so
+neither side's records bound the merged sources. The original nine-case producer regenerated the
+set on 2026-11-04 (UTC) on macOS arm64 with Node 24.18.0. All nine Chromium cases passed in 1.4
+minutes, including the real-BFF outage case. One capture (`11-progress-state.png`) changed bytes,
+and the three JSON records rebind every declared source. The freshness gate passes. No updater
+behavior, baseline or numerical ceiling changed. This remains updater fixture evidence.
+
 ## Reproduce
 
 Use the supported Node 24 runtime and the checkout's own dependencies:
