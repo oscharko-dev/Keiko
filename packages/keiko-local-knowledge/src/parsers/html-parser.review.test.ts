@@ -1,4 +1,4 @@
-// Findings of the fourth independent review of the HTML parser (#4235). Synthetic documents only.
+// Findings of an independent review of the HTML parser (#4235). Synthetic documents only.
 
 import { describe, expect, it } from "vitest";
 
@@ -131,5 +131,46 @@ describe("content a reader does not see inside a table or a list", () => {
 
   it("does not show the inert content of a template", () => {
     expect(textOf("<template><p>tpl</p></template><p>x</p>")).toBe("x");
+  });
+});
+
+describe("a two-column table without header cells", () => {
+  const table = (...rows: readonly (readonly [string, string])[]): string =>
+    `<table>${rows.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("")}</table>`;
+
+  it("reads a row of labels above rows of data as the header", () => {
+    expect(textOf(table(["ID", "Anforderung"], ["FR-1", "Export"], ["FR-2", "Import"]))).toBe(
+      "Table!2: ID=FR-1 | Anforderung=Export\nTable!3: ID=FR-2 | Anforderung=Import",
+    );
+  });
+
+  it("keeps rows of data apart when no row names the columns", () => {
+    expect(textOf(table(["FR-1", "Export"], ["FR-2", "Import"]))).toBe(
+      "Table!1: Column 1=FR-1 | Column 2=Export\nTable!2: Column 1=FR-2 | Column 2=Import",
+    );
+  });
+
+  it("keeps numbered rows apart and does not read a number as a label", () => {
+    expect(textOf(table(["1", "Export"], ["2", "Import"]))).toBe(
+      "Table!1: Column 1=1 | Column 2=Export\nTable!2: Column 1=2 | Column 2=Import",
+    );
+  });
+
+  it("reads an identifier of several parts as an identifier", () => {
+    expect(textOf(table(["SYS-REQ-1", "Export"], ["SYS-REQ-2", "Import"]))).toBe(
+      "Table!1: Column 1=SYS-REQ-1 | Column 2=Export\nTable!2: Column 1=SYS-REQ-2 | Column 2=Import",
+    );
+  });
+
+  it("still reads rows of labels and values as one record", () => {
+    expect(textOf(table(["ID", "FR-1"], ["Titel", "Export"], ["Priorität", "Hoch"]))).toBe(
+      "Table!1: ID=FR-1 | Titel=Export | Priorität=Hoch",
+    );
+  });
+
+  it("still reads a label holding a digit in a record of labels and values", () => {
+    expect(textOf(table(["Version", "2.0"], ["ISO 20022", "ja"], ["Titel", "Export"]))).toBe(
+      "Table!1: Version=2.0 | ISO 20022=ja | Titel=Export",
+    );
   });
 });

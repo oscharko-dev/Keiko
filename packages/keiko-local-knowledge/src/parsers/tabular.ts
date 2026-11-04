@@ -47,8 +47,8 @@ const WIDTH_WINDOW = 12;
 // A header must span at least this share of the widest nearby row.
 const HEADER_COVERAGE = 0.5;
 const MAX_HEADER_CELL_CHARS = 120;
-// `FR-1`, `REQ_12`, `NFR 3.1`: an identifier-shaped cell marks a data row, never a header.
-const IDENTIFIER_SHAPE = /^\p{Lu}{1,8}[-_ ]?\d+(?:\.\d+)*$/u;
+// `FR-1`, `REQ_12`, `NFR 3.1`, `SYS-REQ-12`: an identifier-shaped cell marks a data row, never a header.
+const IDENTIFIER_SHAPE = /^\p{Lu}{1,8}(?:[-_ ]\p{Lu}{1,8})*[-_ ]?\d+(?:\.\d+)*$/u;
 
 /** Header text without line breaks, hyphenated breaks joined, and without projection syntax. */
 export function cleanHeaderLabel(value: string): string {
@@ -88,6 +88,12 @@ function hasLabelShape(text: string): boolean {
   if (text.length === 0 || text.length > MAX_HEADER_CELL_CHARS) return false;
   if (!/\p{L}/u.test(text) || text.startsWith("=") || text.endsWith(":")) return false;
   return !Number.isFinite(Number(text));
+}
+
+/** A cell that identifies, counts or dates its row (`FR-1`, `12`, `01.02.2026`) labels no value. */
+export function identifiesRow(value: string): boolean {
+  const text = value.trim();
+  return text.length > 0 && (IDENTIFIER_SHAPE.test(text) || !/\p{L}/u.test(text));
 }
 
 function isLabelLike(value: string): boolean {

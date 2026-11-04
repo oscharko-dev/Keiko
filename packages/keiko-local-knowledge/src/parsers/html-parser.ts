@@ -33,7 +33,7 @@ import {
   textInputRefusal,
 } from "./_internal.js";
 import { LIST_GROUP, breakBetween, joinedLines } from "./block-text.js";
-import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
+import { cleanHeaderLabel, identifiesRow, neutraliseValue } from "./tabular.js";
 import { decodeHtmlEntities } from "@oscharko-dev/keiko-workspace";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
@@ -342,14 +342,6 @@ function skipSpecialMarker(text: string, after: number): number | null {
   return null;
 }
 
-// The position of the last `>` of the document being scanned, found once per document.
-let lastTagEnd: { readonly text: string; readonly at: number } | undefined;
-
-function lastTagEndOf(text: string): number {
-  if (lastTagEnd?.text !== text) lastTagEnd = { text, at: text.lastIndexOf(">") };
-  return lastTagEnd.at;
-}
-
 // Quote-aware scan for a tag's terminating `>`. A single- or double-quoted attribute value may
 // contain a literal `>` (e.g. `title="Section > Details"`); a bare `indexOf(">", from)` would
 // mis-terminate the tag there, corrupting `tag.raw` and desynchronizing the scanner cursor for
@@ -380,9 +372,6 @@ function findQuotedTagEnd(text: string, from: number): number {
 // just this one tag by falling back to a plain `>` search (ignoring quote state) so the scanner
 // re-synchronizes on the next tag boundary instead of corrupting everything that follows.
 function findTagEnd(text: string, from: number): number {
-  // Past the last `>` of the document no tag can end: answering that at once keeps a document made
-  // of thousands of tag openings and no `>` linear instead of scanning to its end for each.
-  if (from > lastTagEndOf(text)) return -1;
   const quoted = findQuotedTagEnd(text, from);
   if (quoted !== -1) return quoted;
   return text.indexOf(">", from);
@@ -394,14 +383,14 @@ export function resolveTagKind(isClose: boolean, selfClosing: boolean): TagKind 
   return "open";
 }
 
-function readTagAt(text: string, lt: number): Tag | null {
+function readTagAt(text: string, lt: number): Tag | "not-a-tag" | "unterminated" {
   const after = lt + 1;
   const isClose = text.codePointAt(after) === 0x2f; /* / */
   const nameStart = isClose ? after + 1 : after;
-  if (!isAlpha(text.codePointAt(nameStart) ?? 0)) return null;
+  if (!isAlpha(text.codePointAt(nameStart) ?? 0)) return "not-a-tag";
   const { name, after: afterName } = readTagName(text, nameStart);
   const gt = findTagEnd(text, afterName);
-  if (gt === -1) return null;
+  if (gt === -1) return "unterminated";
   const selfClosing = !isClose && text.codePointAt(gt - 1) === 0x2f;
   const kind = resolveTagKind(isClose, selfClosing);
   return { name, kind, start: lt, end: gt + 1, raw: text.slice(lt, gt + 1) };
@@ -425,8 +414,12 @@ function nextEvent(text: string, from: number): ScanEvent {
   const marker = skipSpecialMarker(text, lt + 1);
   if (marker !== null) return { kind: "marker", next: marker };
   const tag = readTagAt(text, lt);
-  if (tag !== null) return { kind: "tag", tag, next: tag.end };
-  return { kind: "text", start: lt, end: lt + 1, next: lt + 1 };
+  // No `>` is left, so no later tag can end either: the rest is text, read once instead of being
+  // scanned to its end again for every tag opening in it.
+  if (tag === "unterminated")
+    return { kind: "text", start: lt, end: text.length, next: text.length };
+  if (tag === "not-a-tag") return { kind: "text", start: lt, end: lt + 1, next: lt + 1 };
+  return { kind: "tag", tag, next: tag.end };
 }
 
 // For a raw-text tag we MUST skip until the matching close tag with the same name, without
@@ -1229,6 +1222,16 @@ function hasHeaderCells(rows: readonly LaidOutRow[]): boolean {
   return rows.some((row) => row.cells.some((cell) => cell.header));
 }
 
+// Two plain columns are label and value, unless the first column of the rows below the first
+// identifies them: then that column holds data, and a first row that does not identify itself names
+// the columns.
+function plainTwoColumnLayout(rows: readonly LaidOutRow[]): TableLayout {
+  const identifies = (row: LaidOutRow | undefined): boolean =>
+    identifiesRow(row?.cells[0]?.text ?? "");
+  if (!rows.slice(1).every(identifies)) return { kind: "rows" };
+  return identifies(rows[0]) ? { kind: "none" } : { kind: "columns", headerRows: 1 };
+}
+
 // What the table says about its own orientation, in order of evidence: header rows (a `thead`, or
 // rows made of `th`), a `th` in the first column of every row (row headers), a plain two-column
 // table without any `th` (label and value), and only then the weak guess that a first row with
@@ -1240,7 +1243,9 @@ function tableLayout(grid: TableGrid): TableLayout {
     return lead < rows.length ? { kind: "columns", headerRows: lead } : { kind: "none" };
   if (rows.length < 2) return { kind: "none" };
   if (rows.every((row) => row.cells[0]?.header === true)) return { kind: "rows" };
-  if (!hasHeaderCells(rows) && rows.every((row) => row.cells.length === 2)) return { kind: "rows" };
+  if (!hasHeaderCells(rows) && rows.every((row) => row.cells.length === 2)) {
+    return plainTwoColumnLayout(rows);
+  }
   const first = rows[0]?.cells ?? [];
   return first.some((cell) => cell.header || LETTER.test(cell.text))
     ? { kind: "columns", headerRows: 1 }
