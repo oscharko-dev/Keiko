@@ -4,10 +4,10 @@
 // confirmation flag because it may happen exactly once (ADR-0182 D9). `--resume-since` continues
 // an interrupted replay from the reviews the original run stored since that instant.
 
-export const GATE_SETS = ["development", "holdout", "seeds"] as const;
-export type GateSet = (typeof GATE_SETS)[number];
+const GATE_SETS = ["development", "holdout", "seeds"] as const;
+type GateSet = (typeof GATE_SETS)[number];
 
-export const GATE_VARIANTS = ["product", "roles-swapped", "counter-check-off"] as const;
+const GATE_VARIANTS = ["product", "roles-swapped", "counter-check-off"] as const;
 export type GateVariant = (typeof GATE_VARIANTS)[number];
 
 export interface GateArguments {

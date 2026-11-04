@@ -76,7 +76,7 @@ export function gateConfiguration(
   };
 }
 
-export interface RoleCostSummary {
+interface RoleCostSummary {
   readonly total: RoleCost;
   readonly meanPerReview: RoleCost | null;
 }

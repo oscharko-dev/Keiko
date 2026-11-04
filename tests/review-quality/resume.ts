@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { GateModels } from "./ports.js";
 
-export interface ReviewCommits {
+interface ReviewCommits {
   readonly baseSha: string;
   readonly headSha: string;
 }

@@ -20,7 +20,7 @@ const SEED_IDENTITY = {
   GIT_COMMITTER_DATE: "2026-10-30T00:00:00Z",
 } as const;
 
-export class EvaluationRepositoryError extends Error {
+class EvaluationRepositoryError extends Error {
   public constructor(step: string, detail: string) {
     super(`evaluation repository: ${step} failed (${detail})`);
     this.name = "EvaluationRepositoryError";

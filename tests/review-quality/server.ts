@@ -46,7 +46,7 @@ const SWITCHES: Readonly<
 };
 
 /** The environment of the composition: the dev lane's runtime discovery on the server's port. */
-export function gateServerEnv(options: GateServerOptions): Record<string, string | undefined> {
+function gateServerEnv(options: GateServerOptions): Record<string, string | undefined> {
   return {
     ...options.env,
     KEIKO_STATE_DIR: options.stateDir,
