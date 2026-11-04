@@ -39,14 +39,14 @@ describe("html block structure (#4235 F1)", () => {
     const result = parse(
       "<p>Alpha</p><p>Beta</p><ul><li>eins</li><li>zwei</li></ul>Zeile1<br>Zeile2",
     );
-    expect(result.text).toBe("Alpha\nBeta\n- eins\n- zwei\nZeile1\nZeile2");
+    expect(result.text).toBe("Alpha\n\nBeta\n\n- eins\n- zwei\n\nZeile1\n\nZeile2");
   });
 
   it("keeps inline elements inline and splits only at block boundaries", () => {
     const result = parse(
       "<p>Ge<b>sch</b>&auml;ft <i>und</i> <a href='#'>mehr</a></p><div>zwei</div>",
     );
-    expect(result.text).toBe("Geschäft und mehr\nzwei");
+    expect(result.text).toBe("Geschäft und mehr\n\nzwei");
   });
 
   it("numbers ordered lists and indents nested items", () => {
@@ -66,14 +66,14 @@ describe("html block structure (#4235 F1)", () => {
 
   it("splits blocks that omit their end tags", () => {
     const result = parse("<p>eins<p>zwei<ul><li>drei<li>vier</ul>");
-    expect(result.text).toBe("eins\nzwei\n- drei\n- vier");
+    expect(result.text).toBe("eins\n\nzwei\n\n- drei\n- vier");
   });
 
   it("reads a minified requirement page so each identifier line stands alone", () => {
     const result = parse(
       "<h2>REQ-1: Login</h2><p>Der Nutzer muss sich anmelden.</p><h2>REQ-2: Logout</h2><p>x</p>",
     );
-    expect(result.text.split("\n")).toEqual([
+    expect(result.text.split("\n\n")).toEqual([
       "REQ-1: Login",
       "Der Nutzer muss sich anmelden.",
       "REQ-2: Logout",
@@ -85,7 +85,7 @@ describe("html block structure (#4235 F1)", () => {
 describe("html headings are part of the text (#4235 F2)", () => {
   it("emits the heading text, owned by its own section path", () => {
     const result = parse("<h1 id='top'>Titel</h1><p>x</p><h2>Unter</h2><p>y</p>");
-    expect(result.text).toBe("Titel\nx\nUnter\ny");
+    expect(result.text).toBe("Titel\n\nx\n\nUnter\n\ny");
     expect(unitTexts(result)).toEqual(["Titel", "x", "Unter", "y"]);
     expect(result.units.map((unit) => pathOf(unit))).toEqual([
       ["Titel"],
@@ -98,12 +98,12 @@ describe("html headings are part of the text (#4235 F2)", () => {
 
   it("joins heading words across inline tags and line breaks", () => {
     const result = parse("<h2>Kredit<br>antrag <em>online</em></h2><p>x</p>");
-    expect(result.text).toBe("Kredit antrag online\nx");
+    expect(result.text).toBe("Kredit antrag online\n\nx");
   });
 
   it("closes an unterminated heading at the next block instead of swallowing the page", () => {
     const result = parse("<h2>Offen<p>Text danach</p>");
-    expect(result.text).toBe("Offen\nText danach");
+    expect(result.text).toBe("Offen\n\nText danach");
   });
 
   it("keeps every word of a heading findable in the text a chunk is cut from", () => {
@@ -174,7 +174,7 @@ describe("html tables: orientation and spans (#4235 F5)", () => {
       "<table><tr><th>A</th></tr><tr><td>1</td></tr></table><p>danach</p>" +
         "<table><tr><th>B</th></tr><tr><td>2</td></tr></table>",
     );
-    expect(result.text).toBe("Table!2: A=1\n\ndanach\nTable 2!2: B=2");
+    expect(result.text).toBe("Table!2: A=1\n\ndanach\n\nTable 2!2: B=2");
   });
 
   it("keeps a long label/value table as one row per line instead of one record", () => {
@@ -208,7 +208,7 @@ describe("html wrappers and boilerplate (#4235 F6)", () => {
     const result = parse(
       '<section data-track="consent-manager"><h2>Inhalt</h2><p>sichtbar</p></section>',
     );
-    expect(result.text).toBe("Inhalt\nsichtbar");
+    expect(result.text).toBe("Inhalt\n\nsichtbar");
     expect(result.diagnostics).toEqual([]);
   });
 

@@ -26,7 +26,7 @@ async function parse(bytes: Uint8Array): Promise<ParserResult> {
 
 function linesOf(result: ParserResult): readonly string[] {
   return "normalizedText" in result && typeof result.normalizedText === "string"
-    ? result.normalizedText.split("\n")
+    ? result.normalizedText.split("\n").filter((line) => line.length > 0)
     : [];
 }
 

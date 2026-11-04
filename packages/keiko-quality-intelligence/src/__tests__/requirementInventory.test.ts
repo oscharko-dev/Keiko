@@ -441,10 +441,11 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
       });
     });
 
-    it("keeps every criterion of a cell that holds a blank line", () => {
+    // The parsers keep a row whole: tests/integration/requirement-parser-contract proves that a
+    // cell with a blank line reaches the inventory without one and loses nothing.
+    it("keeps every criterion of a multi-line cell", () => {
       const [entry] = detect([
         "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
-        "",
         "Second criterion",
         "Sheet1!3: ID=FR-5 | Titel=Import",
       ]).entries;
@@ -455,10 +456,9 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
       ]);
     });
 
-    it("keeps every paragraph of a statement cell and the cells that follow it", () => {
+    it("keeps every line of a statement cell and the cells that follow it", () => {
       const [entry] = detect([
         "Sheet1!2: ID=FR-4 | Titel=Export | Anforderung=Der Export liefert CSV.",
-        "",
         "Er liefert UTF-8. | Priorität=Muss",
       ]).entries;
 
@@ -468,18 +468,15 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
       });
     });
 
-    it("matches the single-newline cell exactly", () => {
-      const blank = detect([
+    it("ends a row at a blank line, whatever its last cell holds", () => {
+      const [entry] = detect([
         "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
         "",
-        "Second criterion",
-      ]).entries[0];
-      const single = detect([
-        "Sheet1!2: ID=FR-4 | Titel=Export | Abnahmekriterien=First criterion",
-        "Second criterion",
-      ]).entries[0];
+        "Der Folgeabsatz gehört nicht zur Tabelle.",
+      ]).entries;
 
-      expect(blank?.digest).toBe(single?.digest);
+      expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual(["First criterion"]);
+      expect(entry?.statement).not.toContain("Folgeabsatz");
     });
 
     it("ends the row at a recorded section boundary, never inside a free-text cell", () => {

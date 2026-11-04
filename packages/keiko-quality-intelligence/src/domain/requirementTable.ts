@@ -231,8 +231,6 @@ export interface ProjectedRow {
   /** What the row belongs to: the worksheet or pointer of a workbook row, nothing in a document. */
   readonly table: string;
   readonly number: number;
-  /** A document table ends at a blank line; a workbook row knows blank lines inside a cell. */
-  readonly inDocument: boolean;
 }
 
 // A worksheet name may hold `=`, `|` and `!` but never `:` (Excel forbids `\ / ? * [ ] :`), so the
@@ -279,14 +277,12 @@ export function openProjectedRow(
 ): ProjectedRow | undefined {
   const prefix = PROJECTION_PREFIX.exec(raw);
   if (prefix === null) return undefined;
-  const inDocument = prefix.groups?.rowInDocument !== undefined;
   const row: ProjectedRow = {
     cells: [],
     roles: [],
     labels: [],
     table: prefix.groups?.table ?? "",
     number: Number(prefix.groups?.rowInDocument ?? prefix.groups?.rowInTable),
-    inDocument,
   };
   const parts = raw.slice(prefix[0].length).split(PROJECTED_CELL_BREAK);
   return appendProjectedCells(row, parts, vocabulary) ? row : undefined;
@@ -294,9 +290,7 @@ export function openProjectedRow(
 
 /** Whether the next row belongs to the same table: the same sheet, with a later row number. */
 export function continuesProjectedTable(last: ProjectedRow, next: ProjectedRow): boolean {
-  return (
-    last.inDocument === next.inDocument && last.table === next.table && next.number > last.number
-  );
+  return last.table === next.table && next.number > last.number;
 }
 
 /** A line that ends the row above it because it is a record of its own. */
@@ -321,16 +315,6 @@ export function readingOfProjectedTable(
   if (labels.every((label) => NEUTRAL_LABEL.test(label))) return { kind: "positional" };
   const roles = labels.map((label) => tableRoleOf(vocabulary, label));
   return namesRequirementColumns(roles) ? { kind: "roles", roles } : { kind: "foreign" };
-}
-
-const PARAGRAPH_ROLES: ReadonlySet<TableColumnRole | undefined> = new Set([
-  "criteria",
-  "statement",
-]);
-
-/** Whether the row's last cell is free text, so a blank line is a paragraph break inside it. */
-export function endsInParagraphCell(row: ProjectedRow): boolean {
-  return PARAGRAPH_ROLES.has(row.roles.at(-1));
 }
 
 /** A line inside a multi-line cell: it completes the last cell, then may open further cells. */

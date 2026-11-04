@@ -15,6 +15,7 @@ import {
   parserIdentity,
   shouldStop,
 } from "./_internal.js";
+import { joinBlocks, layoutOfBlocks } from "./block-text.js";
 import { projectBody, unreferencedNotes, type Paragraph } from "./docx-blocks.js";
 import {
   createNumberingTracker,
@@ -325,19 +326,6 @@ interface HeadingEntry {
   readonly index: number;
 }
 
-function paragraphStarts(paragraphs: readonly Paragraph[]): {
-  readonly starts: readonly number[];
-  readonly end: number;
-} {
-  const starts: number[] = [];
-  let cursor = 0;
-  for (const paragraph of paragraphs) {
-    starts.push(cursor);
-    cursor += paragraph.text.length + 1;
-  }
-  return { starts, end: Math.max(0, cursor - 1) };
-}
-
 function isHeadingEntry(entry: {
   readonly paragraph: Paragraph;
   readonly index: number;
@@ -536,7 +524,7 @@ function buildSections(
   const sections: SectionRecord[] = [];
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  const offsets = paragraphStarts(paragraphs);
+  const offsets = layoutOfBlocks(paragraphs);
   const headings = collectHeadings(paragraphs);
 
   if (headings.length === 0) {
@@ -596,7 +584,7 @@ function docxParseResult(
   startedAt: number,
 ): InternalParserResult {
   const built = buildSections(paragraphs, input, options, startedAt);
-  const normalizedText = paragraphs.map((paragraph) => paragraph.text).join("\n");
+  const normalizedText = joinBlocks(paragraphs);
   return {
     documentId: input.documentId,
     parser: parserIdentity(capability),

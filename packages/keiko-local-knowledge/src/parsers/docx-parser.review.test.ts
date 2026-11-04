@@ -128,7 +128,8 @@ describe("docx lists inside table cells", () => {
     const cell = cellXml(item("eins", "1") + item("zwei", "1"));
     const document = documentXml(tableXml(rowXml([cell, textCell("x")])));
     expect(linesOf(await parseDocx({ document, numbering }))).toEqual([
-      "Table row 1: Column 1=1. eins 2. zwei | Column 2=x",
+      "Table row 1: Column 1=1. eins",
+      "2. zwei | Column 2=x",
     ]);
   });
 

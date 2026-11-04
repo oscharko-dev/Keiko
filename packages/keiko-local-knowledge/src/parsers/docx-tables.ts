@@ -5,6 +5,7 @@
 // authoritative) or when its cells read as labels over data of a different shape or weight; a
 // table whose first row looks like any other row keeps neutral `Column N` labels.
 
+import { ROW_BREAK } from "./block-text.js";
 import type { RawBlock, RawCell, RawRow, RawTable } from "./docx-xml.js";
 import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
 
@@ -63,7 +64,8 @@ function normalizeHeaders(cells: readonly string[]): readonly string[] {
 
 function gridCellOf(cell: RawCell, col: number, carry: Map<number, string>): GridCell {
   const paragraphs = cellParagraphs(cell);
-  const own = paragraphs.map((paragraph) => paragraph.text).join(" ");
+  // Every paragraph of a cell stays its own line, so a list in a cell stays a list.
+  const own = paragraphs.map((paragraph) => paragraph.text).join(ROW_BREAK);
   if (cell.vMerge === "continue") {
     return { col, span: cell.span, text: carry.get(col) ?? own, bold: false, source: cell };
   }
@@ -221,11 +223,11 @@ function nestedRowLines(
         if (text.length > 0) parts.push(text);
         continue;
       }
-      if (parts.length > 0) pending.push({ col: cell.col, text: parts.splice(0).join(" ") });
+      if (parts.length > 0) pending.push({ col: cell.col, text: parts.splice(0).join(ROW_BREAK) });
       flushCells(out, pending, rowNumber, labels);
       out.push(...tableLines(block.table));
     }
-    if (parts.length > 0) pending.push({ col: cell.col, text: parts.join(" ") });
+    if (parts.length > 0) pending.push({ col: cell.col, text: parts.join(ROW_BREAK) });
   }
   flushCells(out, pending, rowNumber, labels);
   return out;

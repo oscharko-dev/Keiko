@@ -6,6 +6,7 @@
 // cell it continues, a paragraph keeps its bullet level, and the `show` flag of the slide is
 // reported. Placement of chart and SmartArt text is left to the caller, who owns the package.
 
+import { joinedLines } from "./block-text.js";
 import { attributeOf, plainSpaces, scanXmlTokens, type XmlTag } from "./pptx-xml.js";
 
 const SKIPPED_FIELD_TYPES: readonly string[] = ["slidenum", "datetime"];
@@ -182,7 +183,8 @@ function closeCell(state: WalkState): void {
   state.cell = undefined;
   state.objectCount += 1;
   if (cell === undefined || state.row === undefined) return;
-  const own = cell.join(" ").replaceAll(/\s+/gu, " ").trim();
+  // Every paragraph of a cell stays its own line, so a list in a cell stays a list.
+  const own = joinedLines(cell.map((paragraph) => paragraph.replaceAll(/\s+/gu, " ")).join("\n"));
   const column = state.row.length;
   const carry = state.table?.carry;
   // A vertically merged cell continues the value above it; any other cell starts a new value.

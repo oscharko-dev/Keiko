@@ -32,6 +32,7 @@ import {
   readOoxmlZipEntries,
   type OoxmlZipReadPlan,
 } from "./ooxml-zip.js";
+import { BLOCK_BREAK, joinBlocks, type TextBlock } from "./block-text.js";
 import { readChartLines, readDiagramLines, type EmbeddedRead } from "./pptx-embedded.js";
 import { attributeOf, scanXmlTags } from "./pptx-xml.js";
 import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
@@ -185,7 +186,7 @@ function notesPartOf(relationships: ReadonlyMap<string, Relationship>): string |
 
 interface SlideText {
   readonly label: string;
-  readonly lines: readonly string[];
+  readonly blocks: readonly TextBlock[];
 }
 
 function normalizeHeaders(cells: readonly string[]): readonly string[] {
@@ -240,20 +241,25 @@ function titleOf(items: readonly PartItem[]): SlideTitle {
   };
 }
 
-function bodyLines(items: readonly PartItem[]): readonly string[] {
-  const lines: string[] = [];
-  for (const item of items) {
+/**
+ * Every paragraph is a block of its own: what makes a paragraph a bullet usually lives in the slide
+ * layout, so nothing here can tell a list from separate statements. Only table rows stay together.
+ */
+function bodyBlocks(items: readonly PartItem[]): readonly TextBlock[] {
+  const blocks: TextBlock[] = [];
+  items.forEach((item, index) => {
     if (item.kind === "table") {
-      lines.push(...projectTable(item));
+      const group = `table:${String(index)}`;
+      blocks.push(...projectTable(item).map((text) => ({ text, group })));
     } else if (
       item.kind === "shape" &&
       !TITLE_PLACEHOLDERS.has(item.placeholder ?? "") &&
       !isChrome(item.placeholder)
     ) {
-      lines.push(...item.paragraphs);
+      blocks.push(...item.paragraphs.map((text) => ({ text })));
     }
-  }
-  return lines;
+  });
+  return blocks;
 }
 
 function isChrome(placeholder: string | undefined): boolean {
@@ -261,18 +267,19 @@ function isChrome(placeholder: string | undefined): boolean {
 }
 
 /**
- * The first note paragraph carries the label; every paragraph stays its own line. A placeholder
+ * The first note paragraph carries the label; every paragraph stays its own block. A placeholder
  * that names no type is an object placeholder by default (`obj`), which on a notes page holds the
  * notes text just as `body` does.
  */
-function noteLines(items: readonly PartItem[]): readonly string[] {
+function noteBlocks(items: readonly PartItem[]): readonly TextBlock[] {
   const paragraphs = items.flatMap((item) =>
     item.kind === "shape" && NOTES_TEXT_PLACEHOLDERS.has(item.placeholder ?? "")
       ? item.paragraphs
       : [],
   );
   const [first, ...rest] = paragraphs;
-  return first === undefined ? [] : [`Speaker notes: ${first}`, ...rest];
+  if (first === undefined) return [];
+  return [`Speaker notes: ${first}`, ...rest].map((text) => ({ text }));
 }
 
 // ─── Reading order ───────────────────────────────────────────────────────────
@@ -315,13 +322,17 @@ function slideTextOf(
   notesItems: readonly PartItem[],
 ): SlideText | undefined {
   const title = titleOf(slideItems);
-  const lines = [...title.overflow, ...bodyLines(slideItems), ...noteLines(notesItems)];
-  if (title.label.length === 0 && lines.length === 0) return undefined;
+  const blocks = [
+    ...title.overflow.map((text) => ({ text })),
+    ...bodyBlocks(slideItems),
+    ...noteBlocks(notesItems),
+  ];
+  if (title.label.length === 0 && blocks.length === 0) return undefined;
   const label =
     title.label.length === 0
       ? `Slide ${String(number)}`
       : `Slide ${String(number)}: ${title.label}`;
-  return { label, lines };
+  return { label, blocks };
 }
 
 // ─── Deck assembly ───────────────────────────────────────────────────────────
@@ -565,7 +576,7 @@ function slideSections(
   const sections: SectionRecord[] = [];
   const units: ParsedUnit[] = [];
   const diagnostics: ParserDiagnostic[] = [];
-  const total = texts.join("\n").length;
+  const total = texts.join(BLOCK_BREAK).length;
   let start = 0;
   for (const [index, text] of texts.entries()) {
     const stop = shouldStop(context.startedAt, context.options, units.length);
@@ -574,7 +585,7 @@ function slideSections(
       diagnostics.push(diagnostic(stop.code, stop.message, context.input.documentId, severity));
       break;
     }
-    const end = index === texts.length - 1 ? total : start + text.length + 1;
+    const end = index === texts.length - 1 ? total : start + text.length + BLOCK_BREAK.length;
     const section: SectionRecord = {
       documentId: context.input.documentId,
       sectionPath: [slides[index]?.label ?? ""],
@@ -616,7 +627,7 @@ function deckResult(
   context: DeckContext,
   deck: DeckRead,
 ): InternalParserResult {
-  const texts = deck.slides.map((slide) => [slide.label, ...slide.lines].join("\n"));
+  const texts = deck.slides.map((slide) => joinBlocks([{ text: slide.label }, ...slide.blocks]));
   const built = slideSections(texts, deck.slides, context);
   return {
     documentId: context.input.documentId,
@@ -626,7 +637,7 @@ function deckResult(
     units: built.units,
     diagnostics: [...deck.diagnostics, ...built.diagnostics],
     extractedAt: context.options.now(),
-    normalizedText: texts.join("\n"),
+    normalizedText: texts.join(BLOCK_BREAK),
   };
 }
 

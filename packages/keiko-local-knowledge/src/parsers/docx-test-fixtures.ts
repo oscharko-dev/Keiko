@@ -196,9 +196,11 @@ export function textOf(result: ParserResult): string {
     : "";
 }
 
+/** The lines of the text, without the blank lines that separate its blocks. */
 export function linesOf(result: ParserResult): readonly string[] {
-  const text = textOf(result);
-  return text.length === 0 ? [] : text.split("\n");
+  return textOf(result)
+    .split("\n")
+    .filter((line) => line.length > 0);
 }
 
 export function pathsOf(result: ParserResult): readonly string[] {

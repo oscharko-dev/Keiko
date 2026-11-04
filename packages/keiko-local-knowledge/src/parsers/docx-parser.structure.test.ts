@@ -131,7 +131,11 @@ describe("docx section paths follow heading levels", () => {
     const slices = result.sections.map((section) =>
       text.slice(section.characterStart, section.characterEnd),
     );
-    expect(slices).toEqual(["Vorspann\n", "Kapitel\nInhalt eins\n", "Unterkapitel\nInhalt zwei"]);
+    expect(slices).toEqual([
+      "Vorspann\n\n",
+      "Kapitel\n\nInhalt eins\n\n",
+      "Unterkapitel\n\nInhalt zwei",
+    ]);
   });
 
   it("resolves a localized style id through its English style name", async () => {

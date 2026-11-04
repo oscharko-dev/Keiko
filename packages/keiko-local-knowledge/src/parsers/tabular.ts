@@ -22,6 +22,7 @@
 import type { ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 
 import { diagnostic, shouldStop } from "./_internal.js";
+import { joinedLines } from "./block-text.js";
 import type { ParserOptions, ParserSelectionInput } from "./types.js";
 
 export interface TabularCell {
@@ -61,18 +62,20 @@ export function cleanHeaderLabel(value: string): string {
 // A line inside a cell that opens like a projected row (`Sheet!9: ID=FR-1`); group 1 is the part up
 // to and including the `!`.
 const ROW_PREFIX_AT_LINE_START = /\n([^\n:]{1,120}!)(?=\d{1,9}:)/gu;
+const DOCUMENT_ROW_AT_LINE_START = /\n(Table row )(?=\d{1,9}:)/gu;
 
 /**
- * A cell value that cannot be read as the start of another cell or of another row, with one kind
- * of line break (a Windows or old-Mac break inside a cell would otherwise leave a bare `\r` in the
- * text). A line of a multi-line cell that looks like a row (`Sheet!9: ID=FR-1`) gets a space after
- * the `!`: no indentation helps, the sheet part of a row prefix may itself start with spaces.
+ * A cell value that cannot be read as the start of another cell or of another row, and that keeps
+ * its row whole: every line of the cell stays, one kind of line break, and no blank line, which
+ * would end the row. A line of a multi-line cell that looks like a row (`Sheet!9: ID=FR-1`,
+ * `Table row 9: ID=FR-1`) is told apart by one more space: no indentation helps, the sheet part of a
+ * row prefix may itself start with spaces.
  */
 export function neutraliseValue(value: string): string {
-  return value
-    .replaceAll(/\r\n?/gu, "\n")
+  return joinedLines(value)
     .replaceAll(" | ", " ¦ ")
-    .replaceAll(ROW_PREFIX_AT_LINE_START, "\n$1 ");
+    .replaceAll(ROW_PREFIX_AT_LINE_START, "\n$1 ")
+    .replaceAll(DOCUMENT_ROW_AT_LINE_START, "\n$1 ");
 }
 
 // Text a header can be made of: it has a letter and is no formula, no number written with an

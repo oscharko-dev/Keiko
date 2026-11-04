@@ -218,10 +218,27 @@ function descendArray(ctx: ScanContext, value: JsonArray, pointer: string, depth
   }
 }
 
-function objectScalarFields(value: JsonObject): readonly string[] {
-  return value.entries
-    .filter(([, child]) => isScalarOrEmpty(child))
-    .map(([key, child]) => `${key}=${projectionOf(child)}`);
+function isValueList(value: JsonValue): value is JsonArray {
+  return (
+    isContainer(value) &&
+    value.kind === "array" &&
+    value.items.length > 0 &&
+    value.items.every((item) => isScalarOrEmpty(item))
+  );
+}
+
+/** Whether the child's values read in the row of an array element instead of a record of its own. */
+function staysInRow(child: JsonValue, row: RowRef | undefined): boolean {
+  return isScalarOrEmpty(child) || (row !== undefined && isValueList(child));
+}
+
+/** The fields of a record; a list of values in a row repeats its label, one field per value. */
+function objectScalarFields(value: JsonObject, row: RowRef | undefined): readonly string[] {
+  return value.entries.flatMap(([key, child]) => {
+    if (!staysInRow(child, row)) return [];
+    const values = isValueList(child) ? child.items : [child];
+    return values.map((item) => `${key}=${projectionOf(item)}`);
+  });
 }
 
 function descendObject(
@@ -235,14 +252,14 @@ function descendObject(
     pushRecord(ctx, pointer, "{}");
     return;
   }
-  const fields = objectScalarFields(value);
+  const fields = objectScalarFields(value, row);
   if (fields.length > 0) {
     pushRecord(ctx, pointer, fields.join(" | "), row);
     if (ctx.stopped || ctx.nestingStopped) return;
   }
   for (const [key, child] of value.entries) {
     if (ctx.stopped || ctx.nestingStopped) return;
-    if (isScalarOrEmpty(child)) continue;
+    if (staysInRow(child, row)) continue;
     walk(ctx, child, joinPointer(pointer, encodePointerSegment(key)), depth + 1);
   }
 }

@@ -33,6 +33,8 @@ import {
   shouldStop,
   textInputRefusal,
 } from "./_internal.js";
+import { LIST_GROUP, breakBetween, joinedLines } from "./block-text.js";
+import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
 import { decodeHtmlEntities } from "@oscharko-dev/keiko-workspace";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
@@ -592,7 +594,9 @@ interface ScanState {
   // Tables rendered so far (names the next table's rows) and whether the next block must be set off
   // from a table's last row by an empty line, which is what ends a projected row.
   tableCount: number;
-  blankBeforeNext: boolean;
+  // The group of the block written last; only blocks of one group stay on adjacent lines.
+  blockGroup: string | undefined;
+  blockGroupCount: number;
   // GRD-003: build a cleaned, tag/script/style-free normalizedText projection and re-base
   // unit offsets onto it (mirrors the xlsx parser). The raw bytes — including <script> bodies
   // and embedded secrets — must NEVER become the persisted normalized_text / LLM excerpt.
@@ -631,14 +635,20 @@ function recordScanLimit(state: ScanState): boolean {
   return true;
 }
 
-// A single newline between blocks (a gap not covered by any unit range); an empty line after a table.
-function pushSeparator(state: ScanState): void {
+// The break between two blocks is a gap not covered by any unit range: a blank line, except between
+// the items of a list and the rows of a table or definition list (block-text.ts).
+function pushSeparator(state: ScanState, group: string | undefined): void {
   if (state.cleanedParts.length > 0) {
-    const separator = state.blankBeforeNext ? "\n\n" : "\n";
+    const separator = breakBetween(state.blockGroup, group);
     state.cleanedParts.push(separator);
     state.cleanedOffset += separator.length;
   }
-  state.blankBeforeNext = false;
+  state.blockGroup = group;
+}
+
+function nextBlockGroup(state: ScanState): string {
+  state.blockGroupCount += 1;
+  return `group:${String(state.blockGroupCount)}`;
 }
 
 function flushBlock(state: ScanState, end: number): void {
@@ -662,8 +672,9 @@ function flushBlock(state: ScanState, end: number): void {
   }
   // A list item's marker leads the first block with text and is spent with it.
   const cleaned = `${state.pendingMarker ?? ""}${collapsed}`;
+  const group = state.pendingMarker === undefined ? undefined : LIST_GROUP;
   state.pendingMarker = undefined;
-  pushSeparator(state);
+  pushSeparator(state, group);
   const start = state.cleanedOffset;
   state.cleanedParts.push(cleaned);
   state.cleanedOffset += cleaned.length;
@@ -681,10 +692,10 @@ function flushBlock(state: ScanState, end: number): void {
 // Push a fully-rendered block (already collapsed or verbatim) onto the cleaned projection and emit
 // the matching html-block unit. Shared by the collapsed (`pushCleanedBlock`) and verbatim
 // (`pushVerbatimBlock`) paths so offset math and anchor stamping stay identical.
-function pushRenderedBlock(state: ScanState, rendered: string): void {
+function pushRenderedBlock(state: ScanState, rendered: string, group?: string): void {
   if (rendered.length === 0) return;
   if (recordScanLimit(state)) return;
-  pushSeparator(state);
+  pushSeparator(state, group);
   const start = state.cleanedOffset;
   state.cleanedParts.push(rendered);
   state.cleanedOffset += rendered.length;
@@ -698,8 +709,8 @@ function pushRenderedBlock(state: ScanState, rendered: string): void {
   });
 }
 
-function pushCleanedBlock(state: ScanState, text: string): void {
-  pushRenderedBlock(state, collapseWhitespace(text));
+function pushCleanedBlock(state: ScanState, text: string, group?: string): void {
+  pushRenderedBlock(state, collapseWhitespace(text), group);
 }
 
 // Verbatim variant for <pre>/<code> so code indentation, line breaks, and exact identifiers are
@@ -718,15 +729,18 @@ function pushVerbatimBlock(state: ScanState, text: string): void {
 // `<script>`/`<style>`/`<noscript>` subtree the same way the top-level body scanner does — a
 // script/style body must never survive tag-stripping into the persisted normalizedText (GRD-003),
 // regardless of which container element it happens to be nested inside.
-function fragmentTextRaw(fragment: string): string {
+function walkFragment(
+  fragment: string,
+  onText: (text: string) => void,
+  onTag: (name: string) => void,
+): void {
   const fragmentLower = fragment.toLowerCase();
-  let out = "";
   let cursor = 0;
   while (cursor < fragment.length) {
     const event = nextEvent(fragment, cursor);
     if (event.kind === "eof") break;
     if (event.kind === "text") {
-      out += fragment.slice(event.start, event.end);
+      onText(fragment.slice(event.start, event.end));
       cursor = event.next;
       continue;
     }
@@ -734,13 +748,41 @@ function fragmentTextRaw(fragment: string): string {
       cursor = skipRawText(fragment, fragmentLower, event.tag.name, event.tag.end);
       continue;
     }
+    if (event.kind === "tag") onTag(event.tag.name);
     cursor = event.next;
   }
+}
+
+function fragmentTextRaw(fragment: string): string {
+  let out = "";
+  walkFragment(
+    fragment,
+    (text) => {
+      out += text;
+    },
+    () => undefined,
+  );
   return visibleText(out);
 }
 
+// What a table cell shows, line by line: a line break in the source is white space, a block tag or
+// `<br>` starts a new line, so a list or the paragraphs in a cell stay apart.
+function fragmentLines(fragment: string): string {
+  const parts: string[] = [];
+  walkFragment(
+    fragment,
+    (text) => {
+      parts.push(visibleText(text).replaceAll(/[ \t\r\n]+/gu, " "));
+    },
+    (name) => {
+      if (BLOCK_TAGS.has(name)) parts.push("\n");
+    },
+  );
+  return joinedLines(parts.join("").replaceAll(/ {2,}/gu, " "));
+}
+
 function htmlFragmentText(fragment: string): string {
-  return fragmentTextRaw(fragment).trim();
+  return fragmentLines(fragment).replaceAll("\n", " ");
 }
 
 interface ElementSpan {
@@ -812,7 +854,7 @@ interface TableCell {
 function tableCells(rowHtml: string): readonly TableCell[] {
   return extractElements(rowHtml, CELL_TAGS).map((cell) => ({
     header: cell.name === "th",
-    text: htmlFragmentText(cell.innerHtml),
+    text: fragmentLines(cell.innerHtml),
     colspan: readSpanCount(cell.tagRaw, "colspan"),
     rowspan: readSpanCount(cell.tagRaw, "rowspan"),
   }));
@@ -947,8 +989,8 @@ function neutralColumnLabel(index: number): string {
 function normalizeHeaders(headers: readonly string[], count: number): readonly string[] {
   const seen = new Map<string, number>();
   return Array.from({ length: count }, (_, index) => {
-    const raw = headers[index] ?? "";
-    const base = raw.trim().length > 0 ? raw.trim() : `Column ${String(index + 1)}`;
+    const label = cleanHeaderLabel(headers[index] ?? "");
+    const base = label.length > 0 ? label : `Column ${String(index + 1)}`;
     const seenCount = seen.get(base) ?? 0;
     seen.set(base, seenCount + 1);
     return seenCount === 0 ? base : `${base} ${String(seenCount + 1)}`;
@@ -962,12 +1004,12 @@ const CAPTION_TAGS: ReadonlySet<string> = new Set(["caption"]);
 // surfacing it separately here, the one span of text that LABELS the table is silently lost, even
 // though every other table cell is preserved. Emitted as its own block (not folded into a row) so
 // exact-match retrieval on the caption text is not diluted by cell data.
-function appendTableCaption(state: ScanState, tableHtml: string): void {
+function appendTableCaption(state: ScanState, tableHtml: string, group: string): void {
   const caption = extractElements(tableHtml, CAPTION_TAGS)[0];
   if (caption === undefined) return;
   const text = htmlFragmentText(caption.innerHtml);
   if (text.length === 0) return;
-  pushCleanedBlock(state, `Table caption: ${text}`);
+  pushCleanedBlock(state, `Table caption: ${text}`, group);
 }
 
 type TableLayout =
@@ -1029,10 +1071,13 @@ function isEmptyRow(row: LaidOutRow): boolean {
 function rowCells(row: LaidOutRow, layout: TableLayout, headers: readonly string[]): string {
   if (layout.kind === "rows") {
     const [label, ...values] = row.cells.map((cell) => cell.text);
-    return `${label ?? ""}=${values.join(" | ")}`;
+    return `${cleanHeaderLabel(label ?? "")}=${values.map((value) => neutraliseValue(value)).join(" | ")}`;
   }
   return row.cells
-    .map((cell, index) => `${headers[index] ?? neutralColumnLabel(index)}=${cell.text}`)
+    .map(
+      (cell, index) =>
+        `${headers[index] ?? neutralColumnLabel(index)}=${neutraliseValue(cell.text)}`,
+    )
     .join(" | ");
 }
 
@@ -1084,7 +1129,8 @@ function tableLines(grid: TableGrid, layout: TableLayout): readonly TableLine[] 
 }
 
 function appendTableRows(state: ScanState, tableHtml: string): void {
-  appendTableCaption(state, tableHtml);
+  const group = nextBlockGroup(state);
+  appendTableCaption(state, tableHtml, group);
   const grid = tableGrid(state, tableHtml);
   if (grid.rows.length === 0) return;
   const name = tableName(state);
@@ -1095,9 +1141,8 @@ function appendTableRows(state: ScanState, tableHtml: string): void {
     : lines;
   for (const line of emitted) {
     if (state.stopped) break;
-    pushCleanedBlock(state, `${name}!${String(line.number)}: ${line.text}`);
+    pushRenderedBlock(state, `${name}!${String(line.number)}: ${line.text}`, group);
   }
-  state.blankBeforeNext = true;
 }
 
 // ─── Definition lists ────────────────────────────────────────────────────────
@@ -1125,11 +1170,12 @@ function definitionEntries(
 }
 
 function appendDefinitionList(state: ScanState, dlHtml: string): void {
+  const group = nextBlockGroup(state);
   for (const entry of definitionEntries(dlHtml)) {
     if (state.stopped) return;
     // "Term: definition" keeps the term attached to its definition for exact + semantic lookup,
     // instead of flattening a definition list into undifferentiated prose.
-    pushCleanedBlock(state, `${entry.term}: ${entry.definition}`);
+    pushCleanedBlock(state, `${entry.term}: ${entry.definition}`, group);
   }
 }
 
@@ -1620,7 +1666,8 @@ function emitHtml(rawText: string, input: ParserSelectionInput, options: ParserO
     excludedHidden: 0,
     exclusionBudget: text.length * EXCLUSION_BUDGET_FACTOR,
     tableCount: 0,
-    blankBeforeNext: false,
+    blockGroup: undefined,
+    blockGroupCount: 0,
     blockText: "",
     cleanedParts: [],
     cleanedOffset: 0,

@@ -43,7 +43,6 @@ import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
   continueProjectedRow,
   continuesProjectedTable,
-  endsInParagraphCell,
   extendedRow,
   isPlainProjection,
   isPointerRecord,
@@ -431,11 +430,11 @@ function endsProjectedRow(raw: string): boolean {
 }
 
 function afterRowLine(open: OpenRow, line: Line, index: number, context: Context): RowLineEffect {
-  const blank = collapse(line.text).length === 0;
-  if (blank && open.row.inDocument) return "ends-table";
-  if (blank ? !endsInParagraphCell(open.row) : endsProjectedRow(line.text)) return "ends-row";
+  // The parsers keep a row whole: a blank line is never inside a cell, it ends the table.
+  if (collapse(line.text).length === 0) return "ends-table";
+  if (endsProjectedRow(line.text)) return "ends-row";
   continueProjectedRow(open.row, line.text, context.vocabulary);
-  if (!blank) open.lastLine = index;
+  open.lastLine = index;
   return "goes-on";
 }
 

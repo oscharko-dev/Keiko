@@ -3,6 +3,7 @@
 // it is numbered), a table becomes its `Table row` lines, and a note appears where it is
 // referenced, so a footnote stays in the section whose text cites it.
 
+import { LIST_GROUP, type TextBlock } from "./block-text.js";
 import { bulletMarker, type ListMarker, type NumberingTracker } from "./docx-numbering.js";
 import {
   resolveHeadingLevel,
@@ -14,8 +15,7 @@ import { normalizeLine, projectTable } from "./docx-tables.js";
 import type { NoteRef, RawBlock, RawParagraph, RawTable } from "./docx-xml.js";
 import { plainSpaces } from "./pptx-xml.js";
 
-export interface Paragraph {
-  readonly text: string;
+export interface Paragraph extends TextBlock {
   readonly headingLevel?: number;
 }
 
@@ -80,7 +80,8 @@ function paragraphEntry(paragraph: RawParagraph, context: ProjectionContext): Pa
     ? undefined
     : resolveHeadingLevel(context.styles, paragraph.styleId, paragraph.outlineLvl);
   if (headingLevel !== undefined) return [{ text: normalizeLine(text), headingLevel }];
-  return [{ text: withMarker(text, marker) }];
+  const marked = withMarker(text, marker);
+  return [marked === text ? { text } : { text: marked, group: LIST_GROUP }];
 }
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -175,13 +176,16 @@ export function projectBody(
   context: ProjectionContext,
 ): readonly Paragraph[] {
   const out: Paragraph[] = [];
+  let tables = 0;
   for (const block of blocks) {
     if (block.kind === "p") {
       out.push(...paragraphEntry(block.paragraph, context));
       for (const ref of block.paragraph.noteRefs) out.push(...noteEntry(ref, context));
       continue;
     }
-    for (const line of tableLines(block.table, context)) out.push({ text: line });
+    tables += 1;
+    const group = `table:${String(tables)}`;
+    for (const line of tableLines(block.table, context)) out.push({ text: line, group });
     for (const ref of tableNoteRefs(block.table)) out.push(...noteEntry(ref, context));
   }
   return out;

@@ -36,7 +36,9 @@ function textOf(result: ParserResult): string {
 }
 
 function linesOf(result: ParserResult): readonly string[] {
-  return textOf(result).split("\n");
+  return textOf(result)
+    .split("\n")
+    .filter((line) => line.length > 0);
 }
 
 const C_NS = 'xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"';
