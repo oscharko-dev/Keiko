@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5f47678bb0c04015246eef352ff3362f62f0b84cc83d02c6eab009974f8f40ce"
+    "catalogDigest": "7e15a01fe7db2d54110e1a594cb7c9ad8574674b4a0e64f8d281afd20f870429"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -67,10 +67,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 629,
-    "proofCount": 651,
-    "resolvedProofCount": 651,
-    "failureClassCount": 388,
+    "operationCount": 634,
+    "proofCount": 656,
+    "resolvedProofCount": 656,
+    "failureClassCount": 390,
     "scenarioCount": 30,
     "resolvedScenarioCount": 30
   },
@@ -382,6 +382,7 @@
         "coding-runtime.mentions.listed",
         "coding-runtime.native-external-roots.resolved",
         "coding-runtime.native-formatter.bound",
+        "coding-runtime.native-mcp-local.refused",
         "coding-runtime.native-narrowing.refused",
         "coding-runtime.native-policy.decided",
         "coding-runtime.native-question.observed",
@@ -436,6 +437,7 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.websearch.performed",
+        "coding-runtime.windows-gateway-service",
         "coding-runtime.workspace-discovery",
         "coding-runtime.workspace-read",
         "coding-sidecar.gateway.outcome",
@@ -750,6 +752,9 @@
         "cli.audit.completed",
         "cli.audit.failed",
         "cli.audit.started",
+        "cli.gateway-service.completed",
+        "cli.gateway-service.failed",
+        "cli.gateway-service.started",
         "cli.install-layout.normalized",
         "cli.support.export.failed",
         "cli.uninstall.completed",
@@ -848,6 +853,8 @@
     "chat-admission": ["bff.rejection"],
     "chat-turn": ["bff.dependency-failure"],
     "cli-audit": ["runtime-packages.dependency-failure"],
+    "cli-gateway-service": ["runtime-packages.dependency-failure"],
+    "windows-gateway-service": ["tools-workflows.dependency-failure"],
     "cli-install-layout-normalization": ["runtime-packages.dependency-failure"],
     "cli-support-export": ["runtime-packages.dependency-failure"],
     "cli-uninstall": ["runtime-packages.dependency-failure"],
@@ -1381,6 +1388,13 @@
     "cli.audit.completed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.failed.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
     "cli.audit.started.real-sink-line": ["packages/keiko-cli/src/audit.test.ts"],
+    "cli.gateway-service.completed.real-sink-line": [
+      "packages/keiko-cli/src/gateway-service.test.ts"
+    ],
+    "cli.gateway-service.failed.real-sink-line": ["packages/keiko-cli/src/gateway-service.test.ts"],
+    "cli.gateway-service.started.real-sink-line": [
+      "packages/keiko-cli/src/gateway-service.test.ts"
+    ],
     "cli.install-layout.normalized.before-support-snapshot": [
       "packages/keiko-cli/src/install-layout.activity-log-proof.test.ts"
     ],
@@ -1693,6 +1707,9 @@
     "coding-runtime.native-formatter.bound.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
+    "coding-runtime.native-mcp-local.refused.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
+    ],
     "coding-runtime.native-narrowing.refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.test.ts"
     ],
@@ -1862,6 +1879,9 @@
     ],
     "coding-runtime.websearch.performed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/nativeWebSearch.test.ts"
+    ],
+    "coding-runtime.windows-gateway-service.real-sink-line": [
+      "packages/keiko-server/src/coding-runtime/windowsGatewayServiceProbe.test.ts"
     ],
     "coding-runtime.workspace-discovery.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolDiscoveryLifecycle.test.ts",

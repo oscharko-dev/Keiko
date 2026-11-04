@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "releaseExpectation": "100%-complete",
-  "supportedClassCount": 388,
-  "completeClassCount": 388,
+  "supportedClassCount": 390,
+  "completeClassCount": 390,
   "completeness": "complete",
   "classes": [
     {
@@ -4328,6 +4328,148 @@
             "causeChain": false
           },
           "proofIds": ["cli.audit.started.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "cli-gateway-service",
+      "requirementContract": "cli-gateway-service",
+      "productSurfaces": ["keiko-cli"],
+      "lifecycleTransitions": ["end", "failure", "start"],
+      "lifecycleOperations": {
+        "start": ["cli.gateway-service.started"],
+        "state": [],
+        "end": ["cli.gateway-service.completed"],
+        "failure": ["cli.gateway-service.failed"],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "cli.gateway-service.completed",
+          "mode": "correlation"
+        },
+        {
+          "op": "cli.gateway-service.failed",
+          "mode": "correlation"
+        },
+        {
+          "op": "cli.gateway-service.started",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["cli.gateway-service.completed", "cli.gateway-service.started"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "cli.gateway-service.completed",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "end",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "duration", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.gateway-service.completed.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.gateway-service.failed",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "failure",
+          "causal": "correlation",
+          "analyzerProjection": "failure-cluster",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            },
+            {
+              "name": "durationMs",
+              "type": "integer",
+              "dataClass": "duration",
+              "required": true
+            },
+            {
+              "name": "failureKind",
+              "type": "string",
+              "dataClass": "error-kind",
+              "required": true
+            },
+            {
+              "name": "reason",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": [
+            "closed-enum",
+            "completeness-state",
+            "duration",
+            "error-kind",
+            "loss-state"
+          ],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.gateway-service.failed.real-sink-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        },
+        {
+          "op": "cli.gateway-service.started",
+          "owner": "keiko-cli",
+          "category": "diagnostic",
+          "lifecycle": "start",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "action",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["cli.gateway-service.started.real-sink-line"],
           "replayReferences": [],
           "missingObligations": []
         }
@@ -47958,6 +48100,56 @@
             "causeChain": false
           },
           "proofIds": ["portable.windows-authenticode.system-binary-refused.emitted-line"],
+          "replayReferences": [],
+          "missingObligations": []
+        }
+      ],
+      "missingObligations": [],
+      "completeness": "complete"
+    },
+    {
+      "failureClass": "windows-gateway-service",
+      "requirementContract": "windows-gateway-service",
+      "productSurfaces": ["keiko-server"],
+      "lifecycleTransitions": ["state"],
+      "lifecycleOperations": {
+        "start": [],
+        "state": ["coding-runtime.windows-gateway-service"],
+        "end": [],
+        "failure": [],
+        "loss": []
+      },
+      "causalEdges": [
+        {
+          "op": "coding-runtime.windows-gateway-service",
+          "mode": "correlation"
+        }
+      ],
+      "lossSignals": [],
+      "resourceSignals": ["coding-runtime.windows-gateway-service"],
+      "replayReferences": [],
+      "operations": [
+        {
+          "op": "coding-runtime.windows-gateway-service",
+          "owner": "keiko-server",
+          "category": "diagnostic",
+          "lifecycle": "state",
+          "causal": "correlation",
+          "analyzerProjection": "timeline",
+          "safeContextFields": [
+            {
+              "name": "state",
+              "type": "string",
+              "dataClass": "closed-enum",
+              "required": true
+            }
+          ],
+          "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+          "frameCauseEvidence": {
+            "frames": false,
+            "causeChain": false
+          },
+          "proofIds": ["coding-runtime.windows-gateway-service.real-sink-line"],
           "replayReferences": [],
           "missingObligations": []
         }
