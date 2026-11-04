@@ -254,6 +254,39 @@ describe("createReviewFindingIntake", () => {
     expect(intake.candidates()).toHaveLength(1);
   });
 
+  // R4130-013: an aborted or timed-out head read was cached for the whole run as a refusal, so one
+  // cancelled tool call poisoned the path and every later report citing it was rejected.
+  it("does not keep a transient head-read failure for later reports", async () => {
+    const intake = intakeFor(createBufferedServerLogSink());
+    const aborted = new AbortController();
+    aborted.abort();
+
+    await expect(intake.submit(report(), aborted.signal)).resolves.toMatchObject({
+      status: "rejected",
+    });
+    await expect(intake.submit(report())).resolves.toMatchObject({ status: "accepted" });
+  });
+
+  it("keeps a deterministic head-read refusal for the run", async () => {
+    const intake = intakeFor(createBufferedServerLogSink());
+    const missing = report({
+      file: "src/missing.ts",
+      evidence: [{ file: "src/missing.ts", startLine: 1, endLine: 1, role: "defect" }],
+    });
+
+    await expect(intake.submit(missing)).resolves.toEqual({
+      status: "rejected",
+      reason: "path-outside-worktree",
+    });
+    const aborted = new AbortController();
+    aborted.abort();
+    // The cached refusal answers without a Git read, so the aborted signal changes nothing.
+    await expect(intake.submit(missing, aborted.signal)).resolves.toEqual({
+      status: "rejected",
+      reason: "path-outside-worktree",
+    });
+  });
+
   it("logs every report body-free: no prose, path, line or code (AC7)", async () => {
     const log = createBufferedServerLogSink();
     const intake = intakeFor(log);

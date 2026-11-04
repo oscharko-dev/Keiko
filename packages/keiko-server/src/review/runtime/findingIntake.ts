@@ -64,7 +64,22 @@ export interface ReviewFindingIntake {
 
 type HeadFile =
   | { readonly kind: "lines"; readonly lines: readonly string[] }
-  | { readonly kind: "refused"; readonly reason: "path-outside-worktree" | "range-invalid" };
+  | {
+      readonly kind: "refused";
+      readonly reason: "path-outside-worktree" | "range-invalid";
+      /**
+       * A Git read that did not answer (an abort, a timeout or a process failure), not a fact about
+       * the head commit. It is never cached: the next read of the path tries Git again (R4130-013).
+       */
+      readonly transient?: true;
+    };
+
+const TRANSIENT_OUTSIDE: HeadFile = {
+  kind: "refused",
+  reason: "path-outside-worktree",
+  transient: true,
+};
+const TRANSIENT_RANGE: HeadFile = { kind: "refused", reason: "range-invalid", transient: true };
 
 type Verdict =
   | { readonly ok: true; readonly candidate: ReviewCandidateFinding }
@@ -102,7 +117,13 @@ class HeadFileReader {
     if (this.files.size >= MAX_CACHED_FILES) {
       return Promise.resolve({ kind: "refused", reason: "range-invalid" });
     }
-    const pending = this.load(path, signal);
+    const pending: Promise<HeadFile> = this.load(path, signal).then((file) => {
+      // Only successful loads and deterministic refusals stay cached for the run.
+      if (file.kind === "refused" && file.transient === true && this.files.get(path) === pending) {
+        this.files.delete(path);
+      }
+      return file;
+    });
     this.files.set(path, pending);
     return pending;
   }
@@ -112,16 +133,16 @@ class HeadFileReader {
     const ctx = { runner: this.input.runner, timeoutMs: HEAD_READ_TIMEOUT_MS, abortSignal: signal };
     const cwd = this.input.worktreeRoot;
     const object = await readGitReviewPathObject(ctx, { cwd, sha: this.input.headSha, path });
-    if (!object.ok || object.value?.type !== "blob") {
-      return { kind: "refused", reason: "path-outside-worktree" };
-    }
+    // The head commit is held by the worktree's object store, so a failed lookup did not answer.
+    if (!object.ok) return TRANSIENT_OUTSIDE;
+    if (object.value?.type !== "blob") return { kind: "refused", reason: "path-outside-worktree" };
     // A file too large to verify cannot back a finding: its ranges are unverifiable.
     if (object.value.size > REVIEW_WORKTREE_DEFAULT_BLOB_LIMIT_BYTES) {
       return { kind: "refused", reason: "range-invalid" };
     }
     const maxBytes = Math.max(1, object.value.size);
     const blob = await readGitReviewBlob({ ...ctx, maxBytes }, { cwd, oid: object.value.oid });
-    if (!blob.ok) return { kind: "refused", reason: "range-invalid" };
+    if (!blob.ok) return TRANSIENT_RANGE;
     return { kind: "lines", lines: splitLines(blob.value) };
   }
 }
