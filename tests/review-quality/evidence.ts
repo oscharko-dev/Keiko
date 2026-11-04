@@ -23,7 +23,7 @@ export const CONFIGURATION_PATHS = [
 ] as const;
 
 /** The workspace packages whose dependency closure the composed pipeline runs. */
-export const COMPOSITION_ROOTS = [
+const COMPOSITION_ROOTS = [
   "@oscharko-dev/keiko-server",
   "@oscharko-dev/keiko-evaluations",
 ] as const;
