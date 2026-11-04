@@ -5,9 +5,7 @@
 //
 // The evaluation family owns the holdout discipline, the scoring and the verdicts; this composition
 // only supplies the review ports, the evaluation repository and the evidence. It runs one review at
-// a time and stops the composed server when it is done. A replay probes both models again once its
-// pull requests are prepared, because preparing the holdout takes minutes and the gateway closes
-// idle connections in that time, and stops before its first review when a model still fails. A
+// a time and stops the composed server when it is done. Readiness probing is in readiness.ts. A
 // holdout replay refuses to start when any holdout pull request cannot be prepared, so its verdict
 // always covers the whole holdout. `--resume-since` continues an interrupted replay (resume.ts).
 
@@ -41,14 +39,10 @@ import {
   UNUSED_EVALUATION_MODEL,
 } from "./ports.js";
 import { fileAt, git, hasCommit, prepareOverlay, preparePullRequest } from "./repository.js";
+import { preparedReadiness, type ReadinessOutcomes, startReadiness } from "./readiness.js";
 import { type GateResume, openGateResume } from "./resume.js";
 import { developmentSample, holdoutPullRequests } from "./selection.js";
 import { type GateServer, startGateServer } from "./server.js";
-
-const READINESS_TIMEOUT_MS = 900_000;
-const READINESS_ATTEMPTS = 5;
-const READINESS_RETRY_MS = 30_000;
-const PROBE_PASSED = /^200\/(ready|partial)$/;
 
 interface GateContext {
   readonly args: GateArguments;
@@ -60,42 +54,6 @@ interface GateContext {
 
 function modelOptions(args: GateArguments): ReviewEval.ReviewModelOptions {
   return { mode: "live", modelId: args.reviewerModelId, factory: () => UNUSED_EVALUATION_MODEL };
-}
-
-/** Probes both models through the composition's readiness route, as an operator's start would. */
-async function probeReadiness(args: GateArguments): Promise<Record<string, string>> {
-  const outcomes: Record<string, string> = {};
-  for (const modelId of [args.reviewerModelId, args.counterCheckerModelId]) {
-    const response = await fetch(`http://127.0.0.1:${String(args.port)}/api/gateway/readiness`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-keiko-csrf": "1" },
-      body: JSON.stringify({ modelId }),
-      signal: AbortSignal.timeout(READINESS_TIMEOUT_MS),
-    });
-    const body = (await response.json()) as { readonly overallStatus?: string };
-    outcomes[modelId] = `${String(response.status)}/${body.overallStatus ?? "unknown"}`;
-  }
-  return outcomes;
-}
-
-function allPassed(outcomes: Record<string, string>): boolean {
-  return Object.values(outcomes).every((outcome) => PROBE_PASSED.test(outcome));
-}
-
-/** Probes until every model passes; throws after the final failed attempt. */
-async function probeUntilReady(args: GateArguments): Promise<Record<string, string>> {
-  for (let attempt = 1; attempt < READINESS_ATTEMPTS; attempt += 1) {
-    const outcomes = await probeReadiness(args);
-    if (allPassed(outcomes)) return outcomes;
-    await new Promise((settle) => setTimeout(settle, READINESS_RETRY_MS));
-  }
-  const outcomes = await probeReadiness(args);
-  if (!allPassed(outcomes)) {
-    throw new Error(
-      `a model failed readiness after preparation (${Object.values(outcomes).join(", ")}); no review ran`,
-    );
-  }
-  return outcomes;
 }
 
 function reuseOf(resume: GateResume, rescoreOnly: boolean): GateReuse {
@@ -140,7 +98,7 @@ async function runReplay(ctx: GateContext): Promise<Record<string, unknown>> {
       `${String(unavailable.length)} holdout pull requests could not be prepared; the holdout runs whole or not at all`,
     );
   }
-  const readinessAfterPreparation = await probeUntilReady(args);
+  const readinessAfterPreparation = await preparedReadiness(args);
   const run = await ReviewEval.runReviewReplay({
     dataset,
     split: holdout ? "holdout" : "development",
@@ -239,7 +197,7 @@ async function runSeeds(ctx: GateContext): Promise<Record<string, unknown>> {
 
 function writeEvidence(
   ctx: GateContext,
-  readiness: Record<string, string>,
+  readiness: ReadinessOutcomes | null,
   result: Record<string, unknown>,
 ): string {
   const dir = resolve(ctx.args.outDir, `${ctx.args.iteration}-${ctx.args.variant}`);
@@ -317,7 +275,7 @@ async function main(argv: readonly string[]): Promise<void> {
   });
   const resume = openResume(args, configuration);
   try {
-    const readiness = await probeReadiness(args);
+    const readiness = await startReadiness(args);
     const ctx: GateContext = {
       args,
       server,

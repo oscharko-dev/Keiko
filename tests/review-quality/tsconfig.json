@@ -14,6 +14,7 @@
     "evidence.ts",
     "gate.ts",
     "ports.ts",
+    "readiness.ts",
     "repository.ts",
     "resume.ts",
     "selection.ts",
