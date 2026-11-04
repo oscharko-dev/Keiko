@@ -1,12 +1,15 @@
 // Requirement rows of a table (#4179, Epic #4173): `| FR-2 | Bar | Soll |`.
 //
-// A row defines a requirement when its first cell is exactly an identifier. A header row that names
-// the columns (any language in the vocabulary) assigns the roles; without one the second cell is the
-// title and a cell equal to a priority value is the priority.
+// A row defines a requirement when its identifier cell is exactly an identifier: the first column
+// whose header role is id (`Lfd. Nr. | ID | Titel`), or the first cell when the header names no id
+// column or there is no header (#4235). A header row that names the columns (any language in the
+// vocabulary) assigns the roles; without one the second cell is the title and a cell equal to a
+// priority value is the priority.
 
 import { ID_EXACT, collapse } from "./requirementText.js";
 import {
   foldTerm,
+  tableRoleOf,
   type CompiledVocabulary,
   type TableColumnRole,
 } from "./requirementVocabulary.js";
@@ -41,13 +44,34 @@ export function parseTableHeader(
   cells: readonly string[],
   vocabulary: CompiledVocabulary,
 ): ColumnRoles | undefined {
-  const roles = cells.map((cell) => vocabulary.tableRoles.get(foldTerm(cell)));
+  const roles = cells.map((cell) => tableRoleOf(vocabulary, cell));
   return roles.filter((role) => role !== undefined).length >= 2 ? roles : undefined;
 }
 
-function firstIdCell(cells: readonly string[]): string | undefined {
-  const match = ID_EXACT.exec(collapse((cells[0] ?? "").replaceAll("*", "")));
-  return match?.[1];
+function identifierIn(cell: string | undefined): string | undefined {
+  return ID_EXACT.exec(collapse((cell ?? "").replaceAll("*", "")))?.[1];
+}
+
+interface IdentifierCell {
+  readonly id: string;
+  readonly index: number;
+}
+
+/**
+ * The identifier of a row and the column it is in. With a header, the first column whose role is
+ * id and whose cell is an identifier (`Lfd. Nr. | ID | Titel`: the counter is not one); without
+ * an id column in the header, or without a header, the first cell.
+ */
+function identifierCell(
+  cells: readonly string[],
+  roles: ColumnRoles | undefined,
+): IdentifierCell | undefined {
+  const idColumns = (roles ?? []).flatMap((role, index) => (role === "id" ? [index] : []));
+  for (const index of idColumns.length > 0 ? idColumns : [0]) {
+    const id = identifierIn(cells[index]);
+    if (id !== undefined) return { id, index };
+  }
+  return undefined;
 }
 
 interface RowParts {
@@ -57,10 +81,15 @@ interface RowParts {
   criteria: string[];
 }
 
-function assignByRole(cells: readonly string[], roles: ColumnRoles, parts: RowParts): void {
+function assignByRole(
+  cells: readonly string[],
+  roles: ColumnRoles,
+  idIndex: number,
+  parts: RowParts,
+): void {
   cells.forEach((cell, index) => {
     const role = roles[index];
-    if (cell.length === 0 || index === 0) return;
+    if (cell.length === 0 || index === idIndex) return;
     if (role === "title") parts.title = cell;
     else if (role === "priority") parts.priority = cell;
     else if (role === "criteria") parts.criteria.push(cell);
@@ -82,19 +111,19 @@ function assignByPosition(
   });
 }
 
-/** The requirement a table row defines, or undefined when its first cell is not an identifier. */
+/** The requirement a table row defines, or undefined when the row holds no identifier. */
 export function parseTableRow(
   cells: readonly string[],
   roles: ColumnRoles | undefined,
   vocabulary: CompiledVocabulary,
 ): TableRow | undefined {
-  const id = firstIdCell(cells);
-  if (id === undefined || isSeparatorRow(cells)) return undefined;
+  const identifier = identifierCell(cells, roles);
+  if (identifier === undefined || isSeparatorRow(cells)) return undefined;
   const parts: RowParts = { title: "", priority: undefined, statement: [], criteria: [] };
   if (roles === undefined) assignByPosition(cells, vocabulary, parts);
-  else assignByRole(cells, roles, parts);
+  else assignByRole(cells, roles, identifier.index, parts);
   return {
-    id,
+    id: identifier.id,
     title: parts.title,
     ...(parts.priority === undefined ? {} : { priority: parts.priority }),
     statement: parts.statement.join(" "),
@@ -105,8 +134,8 @@ export function parseTableRow(
 // ─── Spreadsheet projection ──────────────────────────────────────────────────
 
 /**
- * The text a workbook extraction stores for one row: `Sheet!2: ID=FR-1 | Titel=Foo | Priorität=Muss`
- * (the xlsx parser labels every cell with its column header). A cell that holds line breaks (a list
+ * The text a table extraction stores for one row: `Sheet!2: ID=FR-1 | Titel=Foo | Priorität=Muss`
+ * (the xlsx and CSV parsers label every cell with its column header; a CSV row reads `csv!2:`). A cell that holds line breaks (a list
  * of acceptance criteria) continues on the lines that follow, up to the next row. A blank line
  * inside a free-text cell (criteria, statement) is a paragraph break of that cell; it ends any
  * other row, whose cells are single labels.
@@ -129,7 +158,7 @@ function appendProjectedCells(
   for (const part of parts) {
     const equals = part.indexOf("=");
     if (equals < 1) return false;
-    row.roles.push(vocabulary.tableRoles.get(foldTerm(part.slice(0, equals))));
+    row.roles.push(tableRoleOf(vocabulary, part.slice(0, equals)));
     row.cells.push(part.slice(equals + 1));
   }
   return true;

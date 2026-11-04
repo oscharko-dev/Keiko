@@ -402,12 +402,15 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
       expect(middle?.priority).toBe("Soll");
     });
 
-    it("ends a row at the blank line and defines nothing without an identifier in the first cell", () => {
+    // #4235: the identifier is the cell under the header whose role is id, not the first cell.
+    // A row that holds an identifier under no id header (here a `Notiz` column) still defines
+    // nothing, so the guard against an identifier-shaped word in a free-text cell is intact.
+    it("ends a row at the blank line and defines nothing without an identifier under an id header", () => {
       const inventory = detect([
         "Sheet1!2: ID=FR-4 | Titel=Export",
         "",
         "Eine Zeile, die keine Zelle ist.",
-        "Sheet1!3: Titel=Import | ID=FR-5",
+        "Sheet1!3: Titel=Import | Notiz=FR-5",
         "Seite!3: Notiz ohne Zellen",
       ]);
 

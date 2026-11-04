@@ -1,4 +1,4 @@
-import type { ParsedUnit, ParserDiagnostic, ParserResult } from "@oscharko-dev/keiko-contracts";
+import type { ParserDiagnostic, ParserResult } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 
 import {
@@ -16,6 +16,14 @@ import {
   readOoxmlZipEntries,
   type OoxmlZipReadPlan,
 } from "./ooxml-zip.js";
+import { emitProjectedLines, projectTable, type ProjectedLine } from "./tabular.js";
+import {
+  applyMergedCells,
+  type MergeCell,
+  type MergeRange,
+  type MergeRow,
+} from "./xlsx-merged-cells.js";
+import { formatNumericCell } from "./xlsx-number-format.js";
 import type {
   AsyncParserAdapter,
   InternalParserResult,
@@ -26,7 +34,7 @@ import type {
 } from "./types.js";
 
 const PARSER_ID = "xlsx";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 const DEPENDENCY_VERSIONS = Object.freeze([
   Object.freeze({ packageName: "yauzl", version: "3.4.0" }),
 ]);
@@ -43,6 +51,12 @@ interface XlsxEntry {
 interface WorkbookSheet {
   readonly name: string;
   readonly entryName: string;
+  readonly hidden: boolean;
+}
+
+interface WorkbookInfo {
+  readonly sheets: readonly WorkbookSheet[];
+  readonly date1904: boolean;
 }
 
 interface CellValue {
@@ -57,17 +71,24 @@ interface SheetRow {
   readonly cells: readonly CellValue[];
 }
 
-interface RowProjection {
-  readonly sheetName: string;
-  readonly rowNumber: number;
-  readonly text: string;
-}
-
 // Exported (module-local only — not re-exported from the package barrel) so the S8786
 // regression tests can build a minimal `XlsxStyles` value for `readSheetRows` directly.
 export interface XlsxStyles {
   readonly cellFormatNumFmtIds: readonly number[];
   readonly customNumFmts: ReadonlyMap<number, string>;
+}
+
+interface CellContext {
+  readonly sharedStrings: readonly string[];
+  readonly styles: XlsxStyles;
+  readonly date1904: boolean;
+}
+
+interface SheetReadResult {
+  readonly rows: readonly SheetRow[];
+  readonly hiddenRowCount: number;
+  readonly hiddenColumnCount: number;
+  readonly uncachedFormulaCount: number;
 }
 
 function isXlsx(input: ParserSelectionInput): boolean {
@@ -138,6 +159,19 @@ function decodeXml(value: string): string {
   return decodeXmlEntities(value);
 }
 
+// ST_Xstring escapes a character XML cannot carry as `_xHHHH_` (`_x000D_` for a carriage return).
+// One pass: `_x005F_` decodes to a literal underscore and what follows it is never decoded again,
+// so `_x005F_x000D_` stays the text `_x000D_`.
+function decodeXstring(value: string): string {
+  return value.replaceAll(/_x([0-9A-Fa-f]{4})_/gu, (_match, hex: string) =>
+    String.fromCharCode(Number.parseInt(hex, 16)),
+  );
+}
+
+function decodeText(value: string): string {
+  return decodeXstring(decodeXml(value));
+}
+
 // Delegates to the shared `readAttribute` (Epic #1855 promoted the single-tag attribute reader to
 // `_internal.ts` so the HTML and XLSX parsers share one implementation instead of two regexes).
 function attribute(tag: string, name: string): string | undefined {
@@ -158,7 +192,7 @@ function xmlTextContent(value: string): string {
     }
     out += char;
   }
-  return decodeXml(out);
+  return decodeText(out);
 }
 
 // --- S8786-safe XML element scanning -----------------------------------------------------
@@ -178,11 +212,14 @@ function xmlTextContent(value: string): string {
 // scan would silently drop or corrupt real spreadsheet content. Instead these scan the input
 // exactly once: each `indexOf` call starts where the previous one finished, so total work is
 // O(n) regardless of how many unmatched "<tag" occurrences a hostile document contains. When a
-// candidate's closing token genuinely does not exist anywhere in the remainder, the scan stops
-// there rather than manufacturing an ever-growing "element" out of the rest of the document —
-// which is also the only situation where a regex-based scan could not have found a further,
-// later element either (a later element's own close token would have to live in that same,
-// entirely-empty remainder).
+// candidate's tag end or closing token genuinely does not exist anywhere in the remainder, the
+// scan stops there rather than manufacturing an ever-growing "element" out of the rest of the
+// document.
+//
+// An element is either paired (`<c ...>...</c>`) or self-closing (`<c .../>`). Excel writes an
+// empty cell, an empty shared string, an empty row and a shared formula as the self-closing
+// form; treating it as paired made the element swallow its next sibling (#4235).
+//
 // ASCII-only case fold: uppercase A-Z to lowercase, everything else (including any non-ASCII
 // character) unchanged. XML tag/attribute names in an XLSX part are always ASCII, so matching
 // them never needs `String#toLowerCase()`'s general Unicode case fold -- which is exactly what a
@@ -227,11 +264,30 @@ function isTagNameContinuation(xml: string, index: number): boolean {
   return (lowerCh >= "a" && lowerCh <= "z") || (ch >= "0" && ch <= "9") || ch === "_";
 }
 
-function findOpenTag(
-  xml: string,
-  tagNameLower: string,
-  fromIndex: number,
-): { readonly openIndex: number; readonly afterOpen: number } | undefined {
+// The `>` that ends the tag whose attributes start at `fromIndex`, skipping a `>` inside a quoted
+// attribute value; -1 when the tag never ends.
+function findTagEnd(xml: string, fromIndex: number): number {
+  let quote = "";
+  for (let index = fromIndex; index < xml.length; index += 1) {
+    const ch = xml.charAt(index);
+    if (quote !== "") {
+      if (ch === quote) quote = "";
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (ch === ">") {
+      return index;
+    }
+  }
+  return -1;
+}
+
+interface OpenTag {
+  readonly openIndex: number;
+  readonly tagEnd: number;
+  readonly selfClosing: boolean;
+}
+
+function readOpenTag(xml: string, tagNameLower: string, fromIndex: number): OpenTag | undefined {
   const openNeedle = `<${tagNameLower}`;
   let cursor = fromIndex;
   while (cursor < xml.length) {
@@ -242,20 +298,27 @@ function findOpenTag(
       cursor = openIndex + 1;
       continue;
     }
-    return { openIndex, afterOpen };
+    const tagEnd = findTagEnd(xml, afterOpen);
+    if (tagEnd === -1) return undefined;
+    return { openIndex, tagEnd, selfClosing: xml.charAt(tagEnd - 1) === "/" };
   }
   return undefined;
 }
 
 // Replacement for `/<tag\b[\s\S]*?<\/tag>/gi`: yields each full `<tag ...>...</tag>` element
-// (open tag through close tag, inclusive) in document order.
+// (open tag through close tag, inclusive) or self-closing `<tag .../>` in document order.
 function* iterateXmlElements(xml: string, tagNameLower: string): Generator<string, void, unknown> {
   const closeNeedle = `</${tagNameLower}>`;
   let cursor = 0;
   for (;;) {
-    const open = findOpenTag(xml, tagNameLower, cursor);
+    const open = readOpenTag(xml, tagNameLower, cursor);
     if (open === undefined) return;
-    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, open.afterOpen);
+    if (open.selfClosing) {
+      yield xml.slice(open.openIndex, open.tagEnd + 1);
+      cursor = open.tagEnd + 1;
+      continue;
+    }
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, open.tagEnd + 1);
     if (closeIndex === -1) return;
     const elementEnd = closeIndex + closeNeedle.length;
     yield xml.slice(open.openIndex, elementEnd);
@@ -264,7 +327,7 @@ function* iterateXmlElements(xml: string, tagNameLower: string): Generator<strin
 }
 
 // Replacement for `/<tag\b[^>]*>([\s\S]*?)<\/tag>/gi`: yields each element's inner content
-// (between the open tag's `>` and the matching `</tag>`) in document order.
+// (between the open tag's `>` and the matching `</tag>`; empty for a self-closing element).
 function* iterateXmlElementContents(
   xml: string,
   tagNameLower: string,
@@ -272,13 +335,16 @@ function* iterateXmlElementContents(
   const closeNeedle = `</${tagNameLower}>`;
   let cursor = 0;
   for (;;) {
-    const open = findOpenTag(xml, tagNameLower, cursor);
+    const open = readOpenTag(xml, tagNameLower, cursor);
     if (open === undefined) return;
-    const openTagEnd = xml.indexOf(">", open.afterOpen);
-    if (openTagEnd === -1) return;
-    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, openTagEnd + 1);
+    if (open.selfClosing) {
+      yield "";
+      cursor = open.tagEnd + 1;
+      continue;
+    }
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, open.tagEnd + 1);
     if (closeIndex === -1) return;
-    yield xml.slice(openTagEnd + 1, closeIndex);
+    yield xml.slice(open.tagEnd + 1, closeIndex);
     cursor = closeIndex + closeNeedle.length;
   }
 }
@@ -288,13 +354,31 @@ function* iterateXmlElementContents(
 function* iterateXmlStartTags(xml: string, tagNameLower: string): Generator<string, void, unknown> {
   let cursor = 0;
   for (;;) {
-    const open = findOpenTag(xml, tagNameLower, cursor);
+    const open = readOpenTag(xml, tagNameLower, cursor);
     if (open === undefined) return;
-    const tagEnd = xml.indexOf(">", open.afterOpen);
-    if (tagEnd === -1) return;
-    yield xml.slice(open.openIndex, tagEnd + 1);
-    cursor = tagEnd + 1;
+    yield xml.slice(open.openIndex, open.tagEnd + 1);
+    cursor = open.tagEnd + 1;
   }
+}
+
+// The element text without every `<tag>` element (paired or self-closing) of that name.
+function withoutXmlElements(xml: string, tagNameLower: string): string {
+  const closeNeedle = `</${tagNameLower}>`;
+  const kept: string[] = [];
+  let cursor = 0;
+  for (;;) {
+    const open = readOpenTag(xml, tagNameLower, cursor);
+    if (open === undefined) break;
+    kept.push(xml.slice(cursor, open.openIndex));
+    if (open.selfClosing) {
+      cursor = open.tagEnd + 1;
+      continue;
+    }
+    const closeIndex = indexOfAsciiCaseInsensitive(xml, closeNeedle, open.tagEnd + 1);
+    cursor = closeIndex === -1 ? xml.length : closeIndex + closeNeedle.length;
+  }
+  kept.push(xml.slice(cursor));
+  return kept.join("");
 }
 
 function firstXmlElement(xml: string, tagNameLower: string): string | undefined {
@@ -303,6 +387,20 @@ function firstXmlElement(xml: string, tagNameLower: string): string | undefined 
 
 function firstXmlElementContent(xml: string, tagNameLower: string): string | undefined {
   return iterateXmlElementContents(xml, tagNameLower).next().value ?? undefined;
+}
+
+// The text of a rich-text container (`<si>`, `<is>`): its `<t>` runs, without the phonetic guide
+// (`<rPh>`, furigana) a viewer shows above the text and not as part of it.
+function richTextParts(xml: string): readonly string[] {
+  return [...iterateXmlElementContents(withoutXmlElements(xml, "rph"), "t")].map((part) =>
+    decodeText(part),
+  );
+}
+
+// The opening tag of an element string, e.g. `<c r="A1" t="s">`.
+function leadingTag(elementXml: string): string {
+  const end = findTagEnd(elementXml, 0);
+  return end === -1 ? elementXml : elementXml.slice(0, end + 1);
 }
 
 // Exported (module-local only — not re-exported from the package barrel) so the S8786
@@ -330,7 +428,7 @@ export function parseSharedStrings(
       diagnostics.push(objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument));
       break;
     }
-    const parts = [...iterateXmlElementContents(itemXml, "t")].map((part) => decodeXml(part));
+    const parts = richTextParts(itemXml);
     strings.push(parts.length > 0 ? parts.join("") : xmlTextContent(itemXml));
   }
   return { strings, diagnostics };
@@ -347,33 +445,46 @@ function parseRelationships(xml: string): ReadonlyMap<string, string> {
   return rels;
 }
 
-function parseWorkbookSheets(
+function isTrue(value: string | undefined): boolean {
+  return value === "1" || value?.toLowerCase() === "true";
+}
+
+function parseWorkbookInfo(
   workbookXml: string | undefined,
   relsXml: string | undefined,
   worksheetEntries: readonly XlsxEntry[],
-): readonly WorkbookSheet[] {
+): WorkbookInfo {
   const rels = relsXml === undefined ? new Map<string, string>() : parseRelationships(relsXml);
   const sheets: WorkbookSheet[] = [];
+  let date1904 = false;
   if (workbookXml !== undefined) {
+    const properties = firstXmlElement(workbookXml, "workbookpr");
+    date1904 = properties !== undefined && isTrue(attribute(properties, "date1904"));
     for (const tag of iterateXmlStartTags(workbookXml, "sheet")) {
       const name = attribute(tag, "name") ?? "Sheet";
       const relId = attribute(tag, "r:id");
       const entryName = relId === undefined ? undefined : rels.get(relId);
-      if (entryName !== undefined) sheets.push({ name, entryName });
+      const state = attribute(tag, "state");
+      if (entryName !== undefined) {
+        sheets.push({ name, entryName, hidden: state === "hidden" || state === "veryHidden" });
+      }
     }
   }
-  if (sheets.length > 0) return sheets;
-  return worksheetEntries
-    .map((entry, index) => ({ name: `Sheet${String(index + 1)}`, entryName: entry.name }))
-    .sort((a, b) => a.entryName.localeCompare(b.entryName));
+  if (sheets.length > 0) return { sheets, date1904 };
+  return {
+    date1904,
+    sheets: worksheetEntries
+      .map((entry, index) => ({
+        name: `Sheet${String(index + 1)}`,
+        entryName: entry.name,
+        hidden: false,
+      }))
+      .sort((a, b) => a.entryName.localeCompare(b.entryName)),
+  };
 }
 
-function columnName(ref: string | undefined, fallbackIndex: number): string {
-  if (ref !== undefined) {
-    const match = /^([A-Z]+)/iu.exec(ref);
-    if (match?.[1] !== undefined) return match[1].toUpperCase();
-  }
-  let n = fallbackIndex + 1;
+function columnLetters(index: number): string {
+  let n = index + 1;
   let out = "";
   while (n > 0) {
     const rem = (n - 1) % 26;
@@ -381,6 +492,14 @@ function columnName(ref: string | undefined, fallbackIndex: number): string {
     n = Math.floor((n - 1) / 26);
   }
   return out;
+}
+
+function columnName(ref: string | undefined, fallbackIndex: number): string {
+  if (ref !== undefined) {
+    const match = /^([A-Z]+)/iu.exec(ref);
+    if (match?.[1] !== undefined) return match[1].toUpperCase();
+  }
+  return columnLetters(fallbackIndex);
 }
 
 // Exported (module-local only — not re-exported from the package barrel) so it can be unit
@@ -408,31 +527,16 @@ function rowNumber(rowTag: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function inlineStringValue(cellXml: string): string {
-  const inline = firstXmlElement(cellXml, "is");
-  if (inline === undefined) return "";
-  return [...iterateXmlElementContents(inline, "t")].map((part) => decodeXml(part)).join("");
-}
-
 function rawCellValue(
   type: string | undefined,
   raw: string,
   sharedStrings: readonly string[],
 ): string {
-  const decoded = decodeXml(raw);
+  const decoded = decodeText(raw);
   if (type !== "s") return decoded;
   const index = Number.parseInt(decoded, 10);
   return Number.isFinite(index) ? (sharedStrings[index] ?? "") : "";
 }
-
-function formulaCellValue(cellXml: string): string {
-  const formula = firstXmlElementContent(cellXml, "f");
-  return formula === undefined ? "" : `=${decodeXml(formula)}`;
-}
-
-const BUILT_IN_DATE_NUM_FORMATS: ReadonlySet<number> = new Set([
-  14, 15, 16, 17, 18, 19, 20, 21, 22, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 45, 46, 47, 50, 57,
-]);
 
 function parseStyles(xml: string | undefined): XlsxStyles {
   if (xml === undefined) return { cellFormatNumFmtIds: [], customNumFmts: new Map() };
@@ -458,82 +562,159 @@ function styleNumFmtId(styleIndex: string | undefined, styles: XlsxStyles): numb
   return styles.cellFormatNumFmtIds[index];
 }
 
-function removeBracketedNumberFormatSections(value: string): string {
-  const retained: string[] = [];
-  let cursor = 0;
-  while (cursor < value.length) {
-    const open = value.indexOf("[", cursor);
-    if (open < 0) {
-      retained.push(value.slice(cursor));
-      break;
-    }
-    const close = value.indexOf("]", open + 1);
-    if (close < 0) {
-      retained.push(value.slice(cursor));
-      break;
-    }
-    retained.push(value.slice(cursor, open));
-    cursor = close + 1;
-  }
-  return retained.join("");
+interface CellRead {
+  readonly value: string;
+  // A formula cell whose workbook stored no result: its displayed value is unknown.
+  readonly uncachedFormula: boolean;
 }
 
-function isDateNumFmt(numFmtId: number | undefined, styles: XlsxStyles): boolean {
-  if (numFmtId === undefined) return false;
-  if (BUILT_IN_DATE_NUM_FORMATS.has(numFmtId)) return true;
-  const custom = styles.customNumFmts.get(numFmtId);
-  if (custom === undefined) return false;
-  const stripped = removeBracketedNumberFormatSections(
-    custom.replaceAll(/"[^"]*"/g, ""),
-  ).replaceAll(/\\./g, "");
-  return /[ymdhHs]/.test(stripped);
+function typedCellValue(
+  type: string | undefined,
+  raw: string,
+  tag: string,
+  context: CellContext,
+): string {
+  if (type === "b") return raw.trim() === "0" ? "FALSE" : "TRUE";
+  if (type !== undefined && type !== "n") return rawCellValue(type, raw, context.sharedStrings);
+  return formatNumericCell({
+    raw: decodeText(raw),
+    numFmtId: styleNumFmtId(attribute(tag, "s"), context.styles),
+    customNumFmts: context.styles.customNumFmts,
+    date1904: context.date1904,
+  });
 }
 
-function pad2(value: number): string {
-  return value.toString().padStart(2, "0");
-}
-
-function excelSerialDate(serial: number): Date {
-  const millis = Math.round(serial * 86_400_000);
-  return new Date(Date.UTC(1899, 11, 30) + millis);
-}
-
-// eslint-disable-next-line complexity
-function formatExcelDate(raw: string, numFmtId: number | undefined, styles: XlsxStyles): string {
-  const serial = Number(raw);
-  if (!Number.isFinite(serial)) return decodeXml(raw);
-  const date = excelSerialDate(serial);
-  const custom = numFmtId === undefined ? undefined : styles.customNumFmts.get(numFmtId);
-  const wantsTime =
-    numFmtId === 18 ||
-    numFmtId === 19 ||
-    numFmtId === 20 ||
-    numFmtId === 21 ||
-    numFmtId === 22 ||
-    numFmtId === 45 ||
-    numFmtId === 46 ||
-    numFmtId === 47 ||
-    (custom !== undefined && /[hHs]/.test(custom));
-  const datePart = `${String(date.getUTCFullYear())}-${pad2(date.getUTCMonth() + 1)}-${pad2(
-    date.getUTCDate(),
-  )}`;
-  if (!wantsTime) return datePart;
-  return `${datePart} ${pad2(date.getUTCHours())}:${pad2(date.getUTCMinutes())}`;
-}
-
-function cellValue(cellXml: string, sharedStrings: readonly string[], styles: XlsxStyles): string {
-  const tag = /^<c\b[^>]*>/iu.exec(cellXml)?.[0] ?? "";
+function readCell(cellXml: string, context: CellContext): CellRead {
+  const tag = leadingTag(cellXml);
   const type = attribute(tag, "t");
-  if (type === "inlineStr") return inlineStringValue(cellXml);
+  if (type === "inlineStr") {
+    const inline = firstXmlElement(cellXml, "is");
+    return {
+      value: inline === undefined ? "" : richTextParts(inline).join(""),
+      uncachedFormula: false,
+    };
+  }
   const raw = firstXmlElementContent(cellXml, "v");
   if (raw !== undefined) {
-    const numFmtId = styleNumFmtId(attribute(tag, "s"), styles);
-    if (type === undefined && isDateNumFmt(numFmtId, styles)) {
-      return formatExcelDate(raw, numFmtId, styles);
-    }
-    return rawCellValue(type, raw, sharedStrings);
+    return { value: typedCellValue(type, raw, tag, context), uncachedFormula: false };
   }
-  return formulaCellValue(cellXml);
+  return { value: "", uncachedFormula: firstXmlElementContent(cellXml, "f") !== undefined };
+}
+
+// ─── Merged cells ──────────────────────────────────────────────────────────────
+
+function parseMergeRanges(xml: string): readonly MergeRange[] {
+  const ranges: MergeRange[] = [];
+  for (const tag of iterateXmlStartTags(xml, "mergecell")) {
+    const match = /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/iu.exec(attribute(tag, "ref") ?? "");
+    if (match === null) continue;
+    const [, firstCol = "", firstRow = "", lastCol = "", lastRow = ""] = match;
+    ranges.push({
+      firstRow: Number.parseInt(firstRow, 10),
+      lastRow: Number.parseInt(lastRow, 10),
+      firstColumn: columnIndexFromName(firstCol),
+      lastColumn: columnIndexFromName(lastCol),
+    });
+  }
+  return ranges;
+}
+
+interface MutableCell extends MergeCell {
+  readonly column: string;
+}
+
+interface MutableRow extends MergeRow<MutableCell> {
+  readonly hidden: boolean;
+}
+
+function mutableCell(columnIndex: number, value: string): MutableCell {
+  return { column: columnLetters(columnIndex), columnIndex, value };
+}
+
+// ─── Hidden columns ─────────────────────────────────────────────────────────────
+
+function hiddenColumnRanges(xml: string): readonly (readonly [number, number])[] {
+  const ranges: (readonly [number, number])[] = [];
+  for (const tag of iterateXmlStartTags(xml, "col")) {
+    if (!isTrue(attribute(tag, "hidden"))) continue;
+    const min = Number.parseInt(attribute(tag, "min") ?? "", 10);
+    const max = Number.parseInt(attribute(tag, "max") ?? "", 10);
+    if (Number.isFinite(min) && Number.isFinite(max)) ranges.push([min - 1, max - 1]);
+  }
+  return ranges;
+}
+
+function countHiddenColumns(
+  rows: readonly MutableRow[],
+  ranges: readonly (readonly [number, number])[],
+): number {
+  if (ranges.length === 0) return 0;
+  const seen = new Set<number>();
+  for (const row of rows) {
+    for (const cell of row.cells) {
+      if (ranges.some(([min, max]) => cell.columnIndex >= min && cell.columnIndex <= max)) {
+        seen.add(cell.columnIndex);
+      }
+    }
+  }
+  return seen.size;
+}
+
+// ─── Rows ───────────────────────────────────────────────────────────────────────
+
+interface RowRead {
+  readonly cells: MutableCell[];
+  readonly uncachedFormulaCount: number;
+}
+
+function readRowCells(rowXml: string, context: CellContext): RowRead {
+  const cells: MutableCell[] = [];
+  let uncachedFormulaCount = 0;
+  let fallbackCol = 0;
+  for (const cellXml of iterateXmlElements(rowXml, "c")) {
+    const ref = attribute(leadingTag(cellXml), "r");
+    const column = columnName(ref, fallbackCol);
+    const columnIndex = columnIndexFromName(column);
+    fallbackCol = columnIndex + 1;
+    const read = readCell(cellXml, context);
+    if (read.uncachedFormula) uncachedFormulaCount += 1;
+    const value = read.value.trim();
+    if (value.length > 0) cells.push({ column, columnIndex, value });
+  }
+  return { cells, uncachedFormulaCount };
+}
+
+function readSheet(sheetName: string, xml: string, context: CellContext): SheetReadResult {
+  const rows: MutableRow[] = [];
+  let fallbackRow = 1;
+  let uncachedFormulaCount = 0;
+  for (const rowXml of iterateXmlElements(xml, "row")) {
+    const rowTag = leadingTag(rowXml);
+    const number = rowNumber(rowTag, fallbackRow);
+    fallbackRow = number + 1;
+    const read = readRowCells(rowXml, context);
+    uncachedFormulaCount += read.uncachedFormulaCount;
+    if (read.cells.length > 0) {
+      rows.push({
+        rowNumber: number,
+        hidden: isTrue(attribute(rowTag, "hidden")),
+        cells: read.cells,
+        folded: false,
+      });
+    }
+  }
+  rows.sort((a, b) => a.rowNumber - b.rowNumber);
+  const hiddenRowCount = rows.filter((row) => row.hidden).length;
+  const hiddenColumnCount = countHiddenColumns(rows, hiddenColumnRanges(xml));
+  applyMergedCells(rows, parseMergeRanges(xml), mutableCell);
+  return {
+    rows: rows
+      .filter((row) => !row.folded)
+      .map((row) => ({ sheetName, rowNumber: row.rowNumber, cells: row.cells })),
+    hiddenRowCount,
+    hiddenColumnCount,
+    uncachedFormulaCount,
+  };
 }
 
 // Exported (module-local only — not re-exported from the package barrel) so the S8786
@@ -545,115 +726,81 @@ export function readSheetRows(
   xml: string,
   sharedStrings: readonly string[],
   styles: XlsxStyles,
+  date1904 = false,
 ): readonly SheetRow[] {
-  const rows: SheetRow[] = [];
-  let fallbackRow = 1;
-  for (const rowXml of iterateXmlElements(xml, "row")) {
-    const rowTag = /^<row\b[^>]*>/iu.exec(rowXml)?.[0] ?? "";
-    const number = rowNumber(rowTag, fallbackRow);
-    fallbackRow = number + 1;
-    const cells: CellValue[] = [];
-    let fallbackCol = 0;
-    for (const cellXml of iterateXmlElements(rowXml, "c")) {
-      const cellTag = /^<c\b[^>]*>/iu.exec(cellXml)?.[0] ?? "";
-      const column = columnName(attribute(cellTag, "r"), fallbackCol);
-      const value = cellValue(cellXml, sharedStrings, styles).trim();
-      if (value.length === 0) {
-        fallbackCol += 1;
-        continue;
-      }
-      cells.push({ column, columnIndex: columnIndexFromName(column), value });
-      fallbackCol += 1;
-    }
-    if (cells.length === 0) continue;
-    rows.push({
-      sheetName,
-      rowNumber: number,
-      cells,
-    });
-  }
-  return rows;
+  return readSheet(sheetName, xml, { sharedStrings, styles, date1904 }).rows;
 }
 
-function normalizeHeaderLabel(value: string, fallback: string): string {
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : fallback;
+// ─── Workbook ───────────────────────────────────────────────────────────────────
+
+interface WorkbookTotals {
+  hiddenSheets: number;
+  hiddenRows: number;
+  hiddenColumns: number;
+  uncachedFormulas: number;
 }
 
-function normalizeSheetHeaders(headerCells: readonly CellValue[]): ReadonlyMap<number, string> {
-  const headers = new Map<number, string>();
-  const seen = new Map<string, number>();
-  for (const cell of headerCells) {
-    const base = normalizeHeaderLabel(cell.value, `Column ${cell.column}`);
-    const count = seen.get(base) ?? 0;
-    seen.set(base, count + 1);
-    headers.set(cell.columnIndex, count === 0 ? base : `${base} ${String(count + 1)}`);
-  }
-  return headers;
-}
-
-function hasPlausibleHeader(rows: readonly SheetRow[]): boolean {
-  if (rows.length < 2) return false;
-  const first = rows[0];
-  if (first === undefined) return false;
-  return first.cells.some((cell) => /[A-Za-z_ÄÖÜäöüß]/u.test(cell.value));
-}
-
-function projectSheetRows(rows: readonly SheetRow[]): readonly RowProjection[] {
-  if (rows.length === 0) return [];
-  const headerIsSchema = hasPlausibleHeader(rows);
-  const headers: ReadonlyMap<number, string> = headerIsSchema
-    ? normalizeSheetHeaders(rows[0]?.cells ?? [])
-    : new Map<number, string>();
-  const dataRows = headerIsSchema ? rows.slice(1) : rows;
-  return dataRows.map((row) => {
-    const cellsText = row.cells
-      .map((cell) => {
-        const headerLabel = headers.get(cell.columnIndex) ?? `Column ${cell.column}`;
-        return `${headerLabel}=${cell.value}`;
-      })
-      .join(" | ");
-    return {
-      sheetName: row.sheetName,
-      rowNumber: row.rowNumber,
-      text: `${row.sheetName}!${String(row.rowNumber)}: ${cellsText}\n`,
-    };
-  });
-}
-
-function emitUnits(
-  rows: readonly RowProjection[],
+function totalsDiagnostics(
+  totals: WorkbookTotals,
   input: ParserSelectionInput,
-  options: ParserOptions,
-): {
-  readonly units: readonly ParsedUnit[];
-  readonly diagnostics: readonly ParserDiagnostic[];
-  readonly normalizedText: string;
-} {
-  const units: ParsedUnit[] = [];
-  const diagnostics: ParserDiagnostic[] = [];
-  const parts: string[] = [];
-  let offset = 0;
-  const startedAt = options.now();
-  for (const row of rows) {
-    const limit = shouldStop(startedAt, options, units.length);
-    if (limit.stop && limit.code !== undefined && limit.message !== undefined) {
-      diagnostics.push(diagnostic(limit.code, limit.message, input.documentId, "info"));
-      break;
-    }
-    const start = offset;
-    parts.push(row.text);
-    offset += row.text.length;
-    units.push({
-      kind: "csv-row",
-      documentId: input.documentId,
-      tableName: row.sheetName,
-      rowIndex: Math.max(0, row.rowNumber - 1),
-      characterStart: start,
-      characterEnd: offset,
-    });
+): readonly ParserDiagnostic[] {
+  const found: ParserDiagnostic[] = [];
+  if (totals.hiddenSheets + totals.hiddenRows + totals.hiddenColumns > 0) {
+    found.push(
+      diagnostic(
+        "TABLE_HIDDEN_CONTENT",
+        `hidden content indexed: sheets=${String(totals.hiddenSheets)} rows=${String(
+          totals.hiddenRows,
+        )} columns=${String(totals.hiddenColumns)}`,
+        input.documentId,
+        "info",
+      ),
+    );
   }
-  return { units, diagnostics, normalizedText: parts.join("") };
+  if (totals.uncachedFormulas > 0) {
+    found.push(
+      diagnostic(
+        "TABLE_FORMULA_UNCACHED",
+        `formula cells without cached value: ${String(totals.uncachedFormulas)}`,
+        input.documentId,
+        "info",
+      ),
+    );
+  }
+  return found;
+}
+
+function readWorkbookSheets(
+  workbook: WorkbookInfo,
+  byName: ReadonlyMap<string, string>,
+  context: CellContext,
+  maxLines: number,
+): { readonly lines: readonly ProjectedLine[]; readonly totals: WorkbookTotals } | undefined {
+  const totals: WorkbookTotals = {
+    hiddenSheets: 0,
+    hiddenRows: 0,
+    hiddenColumns: 0,
+    uncachedFormulas: 0,
+  };
+  const lines: ProjectedLine[] = [];
+  for (const sheet of workbook.sheets) {
+    const xml = byName.get(sheet.entryName);
+    if (xml === undefined) continue;
+    const read = readSheet(sheet.name, xml, context);
+    if (sheet.hidden && read.rows.length > 0) totals.hiddenSheets += 1;
+    totals.hiddenRows += read.hiddenRowCount;
+    totals.hiddenColumns += read.hiddenColumnCount;
+    totals.uncachedFormulas += read.uncachedFormulaCount;
+    lines.push(
+      ...projectTable(
+        sheet.name,
+        read.rows,
+        (columnIndex) => `Column ${columnLetters(columnIndex)}`,
+      ),
+    );
+    if (lines.length > maxLines) return undefined;
+  }
+  return { lines, totals };
 }
 
 function parseWorkbook(
@@ -670,31 +817,33 @@ function parseWorkbook(
   if (sharedResult.diagnostics.some((entry) => entry.severity === "error")) {
     return emptyResult(xlsxParser.capability, input.documentId, options, sharedResult.diagnostics);
   }
-  const worksheetEntries = entries.filter((entry) => entry.name.startsWith(SHEET_ENTRY_PREFIX));
-  const styles = parseStyles(byName.get("xl/styles.xml"));
-  const workbookSheets = parseWorkbookSheets(
+  const workbook = parseWorkbookInfo(
     byName.get("xl/workbook.xml"),
     byName.get("xl/_rels/workbook.xml.rels"),
-    worksheetEntries,
+    entries.filter((entry) => entry.name.startsWith(SHEET_ENTRY_PREFIX)),
   );
-  const rows: RowProjection[] = [];
-  for (const sheet of workbookSheets) {
-    const xml = byName.get(sheet.entryName);
-    if (xml === undefined) continue;
-    rows.push(...projectSheetRows(readSheetRows(sheet.name, xml, sharedResult.strings, styles)));
-    if (rows.length > options.maxObjectsPerDocument) {
-      return emptyResult(xlsxParser.capability, input.documentId, options, [
-        objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument),
-      ]);
-    }
+  const context: CellContext = {
+    sharedStrings: sharedResult.strings,
+    styles: parseStyles(byName.get("xl/styles.xml")),
+    date1904: workbook.date1904,
+  };
+  const read = readWorkbookSheets(workbook, byName, context, options.maxObjectsPerDocument);
+  if (read === undefined) {
+    return emptyResult(xlsxParser.capability, input.documentId, options, [
+      objectLimitDiagnostic(input.documentId, options.maxObjectsPerDocument),
+    ]);
   }
-  const emitted = emitUnits(rows, input, options);
+  const emitted = emitProjectedLines(read.lines, input, options);
   return {
     ...emptyResult(
       xlsxParser.capability,
       input.documentId,
       options,
-      [...sharedResult.diagnostics, ...emitted.diagnostics],
+      [
+        ...sharedResult.diagnostics,
+        ...totalsDiagnostics(read.totals, input),
+        ...emitted.diagnostics,
+      ],
       emitted.units,
     ),
     normalizedText: emitted.normalizedText,
