@@ -107,9 +107,11 @@ export interface ReviewThreadLabelling {
 
 /**
  * A replayed finding's outcome. `unmatched` means no historical thread overlaps it: it belongs to
- * the hand-graded sample and is never counted as a hit.
+ * the hand-graded sample and is never counted as a hit. `duplicate` is a finding that would be a hit
+ * on threads an earlier finding of the same pull request was already credited for (R4130-014): it
+ * adds no hit and counts against the actionable rate.
  */
-export const REVIEW_FINDING_OUTCOMES = [...REVIEW_THREAD_LABELS, "unmatched"] as const;
+export const REVIEW_FINDING_OUTCOMES = [...REVIEW_THREAD_LABELS, "unmatched", "duplicate"] as const;
 export type ReviewFindingOutcome = (typeof REVIEW_FINDING_OUTCOMES)[number];
 
 // ─── Holdout discipline and replay ───────────────────────────────────────────
@@ -119,6 +121,14 @@ export type ReviewEvaluationSplit = (typeof REVIEW_EVALUATION_SPLITS)[number];
 
 export const REVIEW_REPLAY_PURPOSES = ["tuning", "evaluation"] as const;
 export type ReviewReplayPurpose = (typeof REVIEW_REPLAY_PURPOSES)[number];
+
+/**
+ * Which pull requests a run reviewed (R4130-011). `default`: exactly every pull request of the
+ * split that carries a thread, the replay's default. `subset`: any other choice. Only a default
+ * holdout evaluation is evidence for the offline gate.
+ */
+export const REVIEW_REPLAY_SELECTIONS = ["default", "subset"] as const;
+export type ReviewReplaySelection = (typeof REVIEW_REPLAY_SELECTIONS)[number];
 
 export interface ReviewEvaluationManifest {
   readonly schemaVersion: 1;
@@ -131,6 +141,11 @@ export interface ReviewEvaluationManifest {
   /** ADR-0182 D9 offline thresholds. */
   readonly minimumActionableRate: number;
   readonly maximumFindingsPerPullRequest: number;
+  /**
+   * The largest share of a run's reviews that may settle other than `complete` (R4130-011). Above
+   * it the gate fails: the rate would describe only the reviews that finished.
+   */
+  readonly maximumNotCompleteShare: number;
 }
 
 export interface ReviewRunCost {
@@ -161,6 +176,7 @@ export interface ReviewReplayRun {
   readonly holdoutFromPullRequest: number;
   readonly split: ReviewEvaluationSplit;
   readonly purpose: ReviewReplayPurpose;
+  readonly selection: ReviewReplaySelection;
   readonly tuningInputs: readonly number[];
   readonly modelId: string;
   readonly pullRequests: readonly ReviewReplayPullRequestResult[];
@@ -173,10 +189,17 @@ export interface ReviewOutcomeCounts {
   readonly hit: number;
   readonly falseAlarm: number;
   readonly undecided: number;
+  readonly duplicate: number;
   readonly unmeasured: number;
   readonly unmatched: number;
-  /** Hits over decided findings (hits plus false alarms), with its Wilson interval. */
+  /**
+   * The gated rate (owner decision 2026-11-04, R4130-006): hits over hits, false alarms, undecided
+   * and duplicate findings, with its Wilson interval. A finding nobody answered or acted on counts
+   * against the agent.
+   */
   readonly actionableRate: WilsonInterval;
+  /** Reported, never gated: hits over hits plus false alarms, with its Wilson interval. */
+  readonly acceptanceRate: WilsonInterval;
 }
 
 export interface ReviewCostSummary {
@@ -187,6 +210,7 @@ export interface ReviewCostSummary {
 export interface ReviewPrecisionSummary {
   readonly split: ReviewEvaluationSplit;
   readonly purpose: ReviewReplayPurpose;
+  readonly selection: ReviewReplaySelection;
   readonly holdoutFromPullRequest: number;
   readonly modelId: string;
   readonly pullRequests: number;

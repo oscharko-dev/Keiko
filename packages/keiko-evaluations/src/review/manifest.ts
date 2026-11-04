@@ -17,4 +17,5 @@ export const REVIEW_EVALUATION_MANIFEST: ReviewEvaluationManifest = Object.freez
     "carrying at least one review thread are held out, fixed on 2026-10-30.",
   minimumActionableRate: 0.5,
   maximumFindingsPerPullRequest: REVIEW_PRESENTED_FINDINGS_MAX,
+  maximumNotCompleteShare: 0.2,
 });

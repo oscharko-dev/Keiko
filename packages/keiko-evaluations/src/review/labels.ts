@@ -54,6 +54,36 @@ export interface ReviewFindingMatch {
   readonly matchedThreadIds: readonly string[];
 }
 
+function hitThreadIds(
+  match: ReviewFindingMatch,
+  threads: readonly ReviewHarvestThread[],
+): readonly string[] {
+  const matched = new Set(match.matchedThreadIds);
+  return threads
+    .filter((thread) => matched.has(thread.id) && labelReviewThread(thread).label === "hit")
+    .map((thread) => thread.id);
+}
+
+/**
+ * Scores one pull request's presented findings in order. A matched thread credits one hit per pull
+ * request (R4130-014): a later finding whose hit threads were all credited already is a
+ * `duplicate`, which adds no hit and still counts against the actionable rate.
+ */
+export function scoreReviewFindings(
+  findings: readonly ReviewCodeLocation[],
+  threads: readonly ReviewHarvestThread[],
+): readonly ReviewFindingMatch[] {
+  const credited = new Set<string>();
+  return findings.map((finding) => {
+    const match = matchReviewFinding(finding, threads);
+    if (match.outcome !== "hit") return match;
+    const hits = hitThreadIds(match, threads);
+    if (hits.every((id) => credited.has(id))) return { ...match, outcome: "duplicate" };
+    for (const id of hits) credited.add(id);
+    return match;
+  });
+}
+
 /** Scores one replayed finding against one pull request's labeled threads. */
 export function matchReviewFinding(
   finding: ReviewCodeLocation,

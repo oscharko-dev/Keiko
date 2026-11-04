@@ -3,7 +3,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { findingOverlapsThread, labelReviewThread, matchReviewFinding } from "./labels.js";
+import {
+  findingOverlapsThread,
+  labelReviewThread,
+  matchReviewFinding,
+  scoreReviewFindings,
+} from "./labels.js";
 import { thread } from "./_support.js";
 
 const refuted = { classification: "refuted", producer: "human" } as const;
@@ -112,5 +117,49 @@ describe("matchReviewFinding", () => {
     expect(findingOverlapsThread({ file: "src/a.ts", startLine: 9, endLine: 9 }, thread())).toBe(
       false,
     );
+  });
+});
+
+describe("scoreReviewFindings", () => {
+  // R4130-014: a matched thread credits one hit per pull request; restatements are duplicates.
+  const threads = [
+    thread({ id: "hit", regionChange: "changed", startLine: 10, endLine: 12 }),
+    thread({ id: "hit-2", regionChange: "changed", startLine: 40, endLine: 41 }),
+    thread({ id: "open", regionChange: "unchanged", startLine: 60, endLine: 60 }),
+  ];
+
+  it("credits a hit once per matched thread and marks later findings on it as duplicates", () => {
+    const outcomes = scoreReviewFindings(
+      [
+        { file: "src/a.ts", startLine: 10, endLine: 10 },
+        { file: "src/a.ts", startLine: 11, endLine: 11 },
+        { file: "src/a.ts", startLine: 12, endLine: 13 },
+      ],
+      threads,
+    );
+    expect(outcomes.map((entry) => entry.outcome)).toEqual(["hit", "duplicate", "duplicate"]);
+    expect(outcomes[1]?.matchedThreadIds).toEqual(["hit"]);
+  });
+
+  it("credits a finding that reaches a thread no earlier finding was credited for", () => {
+    const outcomes = scoreReviewFindings(
+      [
+        { file: "src/a.ts", startLine: 10, endLine: 10 },
+        { file: "src/a.ts", startLine: 12, endLine: 40 },
+      ],
+      threads,
+    );
+    expect(outcomes.map((entry) => entry.outcome)).toEqual(["hit", "hit"]);
+  });
+
+  it("leaves repeated undecided matches undecided, so each still counts against the rate", () => {
+    const outcomes = scoreReviewFindings(
+      [
+        { file: "src/a.ts", startLine: 60, endLine: 60 },
+        { file: "src/a.ts", startLine: 59, endLine: 61 },
+      ],
+      threads,
+    );
+    expect(outcomes.map((entry) => entry.outcome)).toEqual(["undecided", "undecided"]);
   });
 });
