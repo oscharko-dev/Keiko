@@ -13,9 +13,14 @@ import { createCatalogToolBinder } from "../tool-catalog/catalogToolDispatch.js"
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import { createBufferedServerLogSink } from "../../../../tests/support/buffered-server-log.js";
 import { createJiraProviderForCatalog } from "./jiraManagedProvider.js";
+import { JIRA_MANAGED_READ_TOOLS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import type { UiHandlerDeps } from "../deps.js";
+import { KNOWLEDGE_CHAT_TOOLS } from "../requirementsToolName.js";
+import { createKnowledgeRequirementsProvider } from "../requirementsTool.js";
 import {
   createJiraChatCatalogAdmission,
   jiraChatCatalogConsumerPort,
+  jiraChatCatalogRoutes,
   jiraChatReadCatalogRoutes,
   type JiraChatCatalogConsumer,
   type JiraChatCatalogContext,
@@ -82,7 +87,7 @@ beforeEach(() => {
   const created = store.createChat(project, "Jira", "model");
   chat = store.updateChat(
     created.id,
-    { jiraPodId: POD },
+    { jiraPodId: POD, toolMode: "governed-assist" },
     { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
   );
   metadata = [
@@ -222,7 +227,7 @@ describe("accepted ordinary Chat turn authority", () => {
         first.reference,
         first.envelope.subject,
         "autonomous-delivery",
-        { toolCalls: 30, promptTokens: 0, patchBytes: 0 },
+        { toolCalls: first.envelope.budget.maxToolCalls, promptTokens: 0, patchBytes: 0 },
         CHAT_AUTHORITY_TEST_NOW,
       ).ok,
     ).toBe(true);
@@ -396,6 +401,43 @@ describe("current ordinary Chat Jira authority facts", () => {
     deps = { ...deps, autonomousDeliveryDeploymentCeiling: "governed-assist" };
     expect(resolve().ok).toBe(false);
   });
+});
+
+it("writes an unchanged allowed decision once however many requests a tool makes (S11 of #4173)", () => {
+  const sink = createFileServerLogSink(project, { level: "debug" });
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  try {
+    for (let request = 0; request < 40; request += 1) expect(resolve().ok).toBe(true);
+    updatePod({ verificationInProgress: true });
+    for (let request = 0; request < 2; request += 1) expect(resolve().ok).toBe(false);
+    updatePod({ verificationInProgress: false });
+    for (let request = 0; request < 2; request += 1) expect(resolve().ok).toBe(true);
+    // Another operation under the same chat has its own record of what it was allowed.
+    resolveCurrentJiraChatAuthority(
+      deps,
+      chat.id,
+      reference,
+      CHAT_AUTHORITY_TEST_NOW,
+      "other-state-proof",
+    );
+    sink.close?.();
+    const current = persistedActivityLogLines(
+      readPersistedActivityLog(project),
+      "chat.tool-authority.operation",
+    )
+      .map((line) => expectActivityLogProof("chat.tool-authority.operation.current-state", line))
+      .filter((entry) => entry.phase === "current-state");
+    expect(current.map((entry) => [entry.correlationId, entry.readiness])).toEqual([
+      ["fresh-state-proof", "ready"],
+      // A refusal is never folded: each one denied a real request.
+      ["fresh-state-proof", "verification-required"],
+      ["fresh-state-proof", "verification-required"],
+      ["fresh-state-proof", "ready"],
+      ["other-state-proof", "ready"],
+    ]);
+  } finally {
+    resetServerLogger();
+  }
 });
 
 it("records closed current-state reasons through the real Activity Log without private metadata", () => {
@@ -782,6 +824,7 @@ describe("ordinary Chat catalog read admission", () => {
   async function catalogFixture(
     maxToolCalls = 3,
     primary: import("@oscharko-dev/keiko-activity-log").ServerLogSink = createBufferedServerLogSink(),
+    withKnowledge = false,
   ): Promise<{
     binder: ReturnType<typeof createCatalogToolBinder>;
     budget: ReturnType<typeof createHarnessCatalogBudget>;
@@ -833,12 +876,16 @@ describe("ordinary Chat catalog read admission", () => {
       },
     );
     const managed = await createManagedProviderCatalog<JiraChatCatalogConsumer>({
-      providers: [provider],
+      providers: withKnowledge
+        ? [provider, createKnowledgeRequirementsProvider(deps as unknown as UiHandlerDeps)]
+        : [provider],
       profile: { id: "jira-chat", version: 1 },
       log,
       correlationId: current.correlationId,
       now: () => now,
-      routes: jiraChatReadCatalogRoutes(),
+      routes: withKnowledge
+        ? jiraChatCatalogRoutes([...JIRA_MANAGED_READ_TOOLS, ...KNOWLEDGE_CHAT_TOOLS])
+        : jiraChatReadCatalogRoutes(),
     });
     hosts.push(managed);
     const admission = createJiraChatCatalogAdmission({
@@ -880,10 +927,11 @@ describe("ordinary Chat catalog read admission", () => {
     f: Awaited<ReturnType<typeof catalogFixture>>,
     suffix: string,
     args: unknown = {},
+    tool = "keiko.jira.projects",
   ): Promise<Awaited<ReturnType<typeof f.binder.dispatch>>> {
     const offered = f.binder.offer();
     const descriptor = f.managed.catalog.descriptors.find(
-      (entry) => entry.toolRef.canonicalId === "keiko.jira.projects",
+      (entry) => entry.toolRef.canonicalId === tool,
     );
     if (descriptor === undefined) throw new Error("Expected project descriptor");
     const result = await f.binder.dispatch(
@@ -906,7 +954,7 @@ describe("ordinary Chat catalog read admission", () => {
       store.updateChat(chat.id, { toolMode: mode });
       registerCurrentAuthority();
       const f = await catalogFixture();
-      expect(f.binder.offer().toolRefs).toHaveLength(9);
+      expect(f.binder.offer().toolRefs).toHaveLength(11);
       expect(notifications).toBe(0);
       expect(await dispatch(f, "first")).toMatchObject({
         kind: "settled",
@@ -966,6 +1014,36 @@ describe("ordinary Chat catalog read admission", () => {
       }
     },
   );
+
+  it("hosts the requirements read on the same catalog without a Jira read grant (#4179)", async () => {
+    registerCurrentAuthority();
+    const f = await catalogFixture(3, undefined, true);
+
+    // The eleven Jira reads plus knowledge.requirements.
+    expect(f.binder.offer().toolRefs).toHaveLength(12);
+    const result = await dispatch(f, "knowledge", {}, "keiko.knowledge.requirements");
+
+    // The Chat has no Knowledge Pod: the handler is entered and answers with a closed reason.
+    expect(result).toMatchObject({
+      kind: "settled",
+      result: { status: "failed", data: { outcome: "failed", reason: "no-knowledge-pod" } },
+    });
+    expect(notifications).toBe(0);
+    expect(requests).toBe(0);
+    expect(f.handlers.filter((handler) => handler.execute.mock.calls.length > 0)).toHaveLength(1);
+  });
+
+  it("refuses the requirements read once the Chat's Jira binding is gone (#4179)", async () => {
+    registerCurrentAuthority();
+    const f = await catalogFixture(3, undefined, true);
+    store.updateChat(chat.id, { jiraPodId: null });
+
+    const result = await dispatch(f, "no-authority", {}, "keiko.knowledge.requirements");
+
+    expect(result).toMatchObject({ kind: "settled" });
+    expect(result).not.toMatchObject({ result: { status: "completed" } });
+    for (const handler of f.handlers) expect(handler.execute).not.toHaveBeenCalled();
+  });
 
   it("does not treat a completed notification as human consent", async () => {
     consent = (): void => undefined;
@@ -1159,6 +1237,42 @@ describe("ordinary Chat exact-action write approval admission", () => {
     if (entry === undefined) throw new Error("Expected retained write approval");
     return entry;
   }
+
+  it("gives the human the full decision time however little of the read grant is left", () => {
+    let clock = now;
+    approvals = new AtlassianActionApprovalRegistry(() => clock);
+    store.updateChat(chat.id, { toolMode: "governed-assist" });
+    registerCurrentAuthority({
+      expiresAt: new Date(now + 3 * ATLASSIAN_ACTION_APPROVAL_TTL_MS).toISOString(),
+      budget: {
+        maxRuntimeMs: 3 * ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+        maxToolCalls: 20,
+        maxPromptTokens: 10_000,
+        maxPatchBytes: 0,
+      },
+    });
+    const grantId = grantRead();
+    clock = now + ATLASSIAN_ACTION_APPROVAL_TTL_MS - 1_000;
+    const requested = requestJiraChatWriteApproval(
+      { ...deps, atlassianActionApprovalRegistry: approvals },
+      chat.id,
+      reference,
+      action,
+      new Date(clock).toISOString(),
+      "write-admission",
+    );
+    if (requested.kind !== "review-required") throw new Error("Expected a review");
+    expect(requested.approval.expiresAt).toBe(clock + ATLASSIAN_ACTION_APPROVAL_TTL_MS);
+    const grant = approvals.getChatReadGrant(grantId)?.grant;
+    expect(grant?.state).toBe("granted");
+    expect(grant?.expiresAt).toBe(requested.approval.expiresAt);
+    // Past the original grant's end the decision is still open, and the grant still current.
+    clock = now + ATLASSIAN_ACTION_APPROVAL_TTL_MS + 1_000;
+    expect(approvals.getChatWriteApproval(requested.approval.approvalId)?.approval.state).toBe(
+      "pending",
+    );
+    expect(approvals.getChatReadGrant(grantId)?.grant.state).toBe("granted");
+  });
 
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(
     "requires current read consent before writes and obeys the %s policy",

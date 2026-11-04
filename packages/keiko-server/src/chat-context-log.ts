@@ -112,6 +112,13 @@ const CHAT_CONTEXT_MANAGEMENT = defineActivityLogOperation({
     sentReferenceCount: { type: "integer", dataClass: "count", required: false },
     availableReferenceCount: { type: "integer", dataClass: "count", required: false },
     systemTokens: { type: "integer", dataClass: "count", required: false },
+    // The connectors a Chat offers its model and the tool definitions they add to each request:
+    // counts only. Connectors without known tools are the ones not connected yet, which is why a
+    // listed connector can still contribute zero tokens.
+    toolDefinitionTokens: { type: "integer", dataClass: "count", required: false },
+    connectorCount: { type: "integer", dataClass: "count", required: false },
+    connectorToolCount: { type: "integer", dataClass: "count", required: false },
+    connectorUnknownCount: { type: "integer", dataClass: "count", required: false },
     summaryTokens: { type: "integer", dataClass: "count", required: false },
     messageTokens: { type: "integer", dataClass: "count", required: false },
     contextWindowProbePending: { type: "boolean", dataClass: "closed-enum", required: false },
@@ -171,6 +178,7 @@ type ContextManagementStatus = Pick<
       | "lastRequest"
       | "segments"
       | "contextWindowProbePending"
+      | "connectors"
       | "contextWindowTokens"
       | "inputLimitTokens"
     >
@@ -191,6 +199,7 @@ function contextStatusEvidence(status: ContextManagementStatus): Evidence {
     ...declaredWindowEvidence(status),
     ...knowledgeEvidence(status),
     ...segmentEvidence(status.segments),
+    ...connectorEvidence(status.connectors),
     ...(status.contextWindowAssumed === true ? { contextWindowAssumed: true } : {}),
     ...(status.contextWindowProbePending === true ? { contextWindowProbePending: true } : {}),
     ...(status.conversationInputBudgetTokens === undefined
@@ -227,6 +236,7 @@ function knowledgeEvidence(status: ContextManagementStatus): Evidence {
 
 const SEGMENT_EVIDENCE_FIELDS = new Map([
   ["system", "systemTokens"],
+  ["tools", "toolDefinitionTokens"],
   ["summary", "summaryTokens"],
   ["messages", "messageTokens"],
   ["source-capacity", "sourceCapacityTokens"],
@@ -234,6 +244,16 @@ const SEGMENT_EVIDENCE_FIELDS = new Map([
   ["output-reserve", "reservedOutputTokens"],
   ["safety-margin", "safetyMarginTokens"],
 ]);
+
+function connectorEvidence(connectors: ContextManagementStatus["connectors"]): Evidence {
+  if (connectors === undefined || connectors.length === 0) return {};
+  const known = connectors.filter((connector) => connector.toolCount !== undefined);
+  return {
+    connectorCount: connectors.length,
+    connectorToolCount: known.reduce((sum, connector) => sum + (connector.toolCount ?? 0), 0),
+    connectorUnknownCount: connectors.length - known.length,
+  };
+}
 
 function segmentEvidence(segments: ContextManagementStatus["segments"]): Evidence {
   const evidence: Evidence = {};

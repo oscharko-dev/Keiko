@@ -1,20 +1,29 @@
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { JiraMutationOperation } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { CatalogJsonObject } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import type { AtlassianHttpBodyPort, AtlassianHttpBodyResult } from "./atlassian-http-port.js";
 import { executeJiraManagedMutation } from "./jira-managed-mutations.js";
+import type { JiraAttachmentSource } from "./jira-attachments.js";
+import { jiraEditAlreadyHeld } from "./jira-mutation-confirmation.js";
 
 import {
   field,
   REQUIRED_CUSTOM,
   FIELDS,
+  LINKS_FIELD,
   response,
   fixtureRead,
   fixtureWrite,
   type SyntheticJira,
 } from "../../../tests/support/jira-managed-remote.js";
 
-function fixture(): {
+const ALREADY_HELD = {
+  ok: false,
+  reason: "conflict",
+  receipt: { issueKey: "SYN-1" },
+  detail: { messages: ["SYN-1 already holds this. Nothing was written."] },
+};
+function fixture(attachmentSource?: JiraAttachmentSource): {
   controller: AbortController;
   beforeEffect: ReturnType<typeof vi.fn<() => boolean>>;
   http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
@@ -37,7 +46,7 @@ function fixture(): {
     return Promise.resolve(
       request.method === "GET"
         ? fixtureRead(path, state)
-        : fixtureWrite(path, request.bodyJson, state),
+        : fixtureWrite(path, request.bodyJson, state, request.upload),
     );
   });
   const controller = new AbortController();
@@ -56,20 +65,83 @@ function fixture(): {
           signal: controller.signal,
           beforeEffect,
         },
-        { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http },
+        {
+          deployment: "data-center",
+          baseUrl: "https://jira.example.invalid/context",
+          http,
+          ...(attachmentSource === undefined ? {} : { attachmentSource }),
+        },
       ),
   };
 }
 it.each(["project", "issuetype"])("rejects a caller routing override in fields.%s", async (id) => {
   const f = fixture();
+  // A routing override is refused before HTTP and named; it moved here from the malformed-argument
+  // table, which asserts refusals without detail.
+  for (const override of [
+    { id: "10002" },
+    { id: "999" },
+    { key: "OTHER" },
+    { id: "10000", key: "SYN" },
+    "10000",
+  ]) {
+    expect(
+      await f.run("jira.create", {
+        projectId: "10000",
+        issueTypeId: "10000",
+        fields: { summary: "Synthetic", customfield_10000: "Required", [id]: override },
+      }),
+    ).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: id, validation: "invalid-field" },
+    });
+  }
+  expect(f.http).not.toHaveBeenCalled();
+});
+it("creates once when fields only restate projectId and issueTypeId (Qwen, 2026-11-01)", async () => {
+  const f = fixture();
   expect(
     await f.run("jira.create", {
       projectId: "10000",
       issueTypeId: "10001",
-      fields: { summary: "Synthetic", customfield_10000: "Required", [id]: { id: "10002" } },
+      fields: {
+        summary: "Synthetic",
+        customfield_10000: "Required",
+        project: { id: "10000" },
+        issuetype: { id: "10001" },
+      },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
-  expect(f.http).not.toHaveBeenCalled();
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
+  const posted = f.http.mock.calls.filter(([request]) => request.method === "POST");
+  expect(posted).toHaveLength(1);
+  const body = JSON.parse(posted[0]?.[0].bodyJson ?? "null") as { readonly fields?: unknown };
+  expect(body.fields).toEqual({
+    project: { id: "10000" },
+    issuetype: { id: "10001" },
+    summary: "Synthetic",
+    customfield_10000: "Required",
+  });
+});
+
+it("accepts a restated issue type in another letter case, as one create (S17 of #4173)", async () => {
+  // Qwen wrote `issueType: { id }` beside issueTypeId into every item; Jira has no such field.
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", issueType: { id: "10001" } },
+    }),
+  ).toEqual({ ok: true, receipt: { issueKey: "SYN-1", issueId: "10001" } });
+  const posted = f.http.mock.calls.filter(([request]) => request.method === "POST");
+  const body = JSON.parse(posted[0]?.[0].bodyJson ?? "null") as { readonly fields?: unknown };
+  expect(body.fields).toEqual({
+    project: { id: "10000" },
+    issuetype: { id: "10001" },
+    summary: "Synthetic",
+    customfield_10000: "Required",
+  });
 });
 
 it.each(["summary", "customfield_10000"])(
@@ -93,7 +165,11 @@ it.each(["summary", "customfield_10000"])(
         issueTypeId: "10001",
         fields: { summary: "Synthetic", customfield_10000: "Required" },
       }),
-    ).toEqual({ ok: false, reason: "field-validation" });
+    ).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: id, validation: "invalid-operation" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -119,7 +195,11 @@ it("keeps selected routing references inside current metadata allowed values", a
       issueTypeId: "10001",
       fields: { summary: "Synthetic", customfield_10000: "Required" },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "issuetype", validation: "invalid-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 it.each(["legacy", "current", "immutable-current"])(
@@ -198,15 +278,15 @@ it("confirms changed label membership while preserving unrelated labels", async 
   ).toEqual({ ok: true, receipt: { issueKey: "SYN-1" } });
   expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });
-it("does not attribute a label operation whose final membership already held", async () => {
+it("writes nothing for a label operation whose final membership already holds", async () => {
   const f = fixture();
   expect(
     await f.run("jira.edit", {
       issueKey: "SYN-1",
       updates: [{ fieldId: "labels", operation: "add", value: "initial" }],
     }),
-  ).toEqual({ ok: false, reason: "conflict" });
-  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+  ).toEqual(ALREADY_HELD);
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(0);
 });
 it("compares replaced label sets independently of their returned order", async () => {
   const f = fixture();
@@ -309,32 +389,88 @@ it.each(["jira.create", "jira.transition"] as const)(
       operation === "jira.create"
         ? { projectId: "10000", issueTypeId: "10001", fields: { summary: "Synthetic" } }
         : { issueKey: "SYN-1", transitionId: "31", fields: {} };
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "field-validation" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: "customfield_10000", validation: "required-field" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
+// Each refusal names the argument and how to send it again (#4173): a bare `field-validation`
+// left Qwen retrying the same create; the refusal still happens before any HTTP.
+type ArgumentRefusalRow = [
+  JiraMutationOperation,
+  CatalogJsonObject,
+  { readonly fieldId?: string; readonly validation: string },
+];
+const UNSUPPORTED = { validation: "unsupported-field" } as const;
 it.each([
-  ["jira.create", { projectId: "10000/other", issueTypeId: "10001", fields: {} }],
-  ["jira.create", { projectId: "10000", issueTypeId: "10001", fields: { project: { id: "999" } } }],
-  ["jira.edit", { issueKey: "SYN-1", fields: { project: { id: "999" } } }],
-  ["jira.edit", { issueKey: "SYN-1", fields: {} }],
-  ["jira.edit", { issueKey: "SYN-1", fields: { summary: "Allowed" }, credentials: "forbidden" }],
-  ["jira.transition", { issueKey: "SYN-1", transitionId: "31?extra", fields: {} }],
-  ["jira.transition", { issueKey: "SYN-1", transitionId: "31", worklog: {} }],
-  ["jira.comment", { issueKey: "SYN-1", body: { type: "doc" } }],
-  ["jira.comment", { issueKey: "SYN-1", body: " " }],
-  ["jira.comment", { issueKey: "SYN-1", body: "x".repeat(32769) }],
-  ["jira.comment", { issueKey: "../outside", body: "Synthetic" }],
-  ["jira.assign", { issueKey: "SYN-1", assigneeName: "" }],
+  [
+    "jira.create",
+    { projectId: "10000/other", issueTypeId: "10001", fields: {} },
+    { fieldId: "projectId", validation: "required-field" },
+  ],
+  [
+    "jira.edit",
+    { issueKey: "SYN-1", fields: { project: { id: "999" } } },
+    { fieldId: "fields", validation: "invalid-field" },
+  ],
+  [
+    "jira.edit",
+    { issueKey: "SYN-1", fields: {} },
+    { fieldId: "fields", validation: "required-field" },
+  ],
+  [
+    "jira.edit",
+    { issueKey: "SYN-1", fields: { summary: "Allowed" }, credentials: "forbidden" },
+    UNSUPPORTED,
+  ],
+  [
+    "jira.transition",
+    { issueKey: "SYN-1", transitionId: "31?extra", fields: {} },
+    { fieldId: "transitionId", validation: "required-field" },
+  ],
+  ["jira.transition", { issueKey: "SYN-1", transitionId: "31", worklog: {} }, UNSUPPORTED],
+  [
+    "jira.comment",
+    { issueKey: "SYN-1", body: { type: "doc" } },
+    { fieldId: "body", validation: "required-field" },
+  ],
+  [
+    "jira.comment",
+    { issueKey: "SYN-1", body: " " },
+    { fieldId: "body", validation: "required-field" },
+  ],
+  [
+    "jira.comment",
+    { issueKey: "SYN-1", body: "x".repeat(32769) },
+    { fieldId: "body", validation: "required-field" },
+  ],
+  [
+    "jira.comment",
+    { issueKey: "../outside", body: "Synthetic" },
+    { fieldId: "issueKey", validation: "required-field" },
+  ],
+  [
+    "jira.assign",
+    { issueKey: "SYN-1", assigneeName: "" },
+    { fieldId: "assigneeName", validation: "required-field" },
+  ],
   [
     "jira.assign",
     { issueKey: "SYN-1", assigneeName: "synthetic-user", baseUrl: "https://other.invalid" },
+    UNSUPPORTED,
   ],
-] satisfies [JiraMutationOperation, CatalogJsonObject][])(
-  "rejects malformed/routing/compound %s arguments before HTTP (%#)",
-  async (operation, args) => {
+] satisfies ArgumentRefusalRow[])(
+  "rejects malformed/routing/compound %s arguments before HTTP, naming the argument (%#)",
+  async (operation, args, named) => {
     const f = fixture();
-    expect(await f.run(operation, args)).toEqual({ ok: false, reason: "field-validation" });
+    expect(await f.run(operation, args)).toEqual({
+      ok: false,
+      reason: "field-validation",
+      detail: { ...named, messages: [expect.stringMatching(/\S\. Nothing was changed\.$/u)] },
+    });
     expect(f.http).not.toHaveBeenCalled();
   },
 );
@@ -353,7 +489,11 @@ it("collects all create pages before validating a required field on a later page
       issueTypeId: "10001",
       fields: { summary: "Synthetic" },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "customfield_10000", validation: "required-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET", "GET"]);
   expect(f.http.mock.calls[1]?.[0].url).toContain("startAt=2");
 });
@@ -411,7 +551,11 @@ it("does not fabricate a required unsupported plugin field", async () => {
       issueTypeId: "10001",
       fields: { summary: "Synthetic", customfield_10000: "Required" },
     }),
-  ).toEqual({ ok: false, reason: "field-validation" });
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "required-field", fieldId: "customfield_10001" },
+  });
   expect(f.http).toHaveBeenCalledOnce();
 });
 it("revalidates metadata when edit operations change between actions", async () => {
@@ -421,7 +565,11 @@ it("revalidates metadata when edit operations change between actions", async () 
   f.http.mockResolvedValueOnce(
     response({ fields: { summary: { ...field("summary", "string"), operations: [] } } }),
   );
-  expect(await f.run("jira.edit", args)).toEqual({ ok: false, reason: "field-validation" });
+  expect(await f.run("jira.edit", args)).toEqual({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "summary", validation: "invalid-operation" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual([
     "GET",
     "GET",
@@ -467,7 +615,14 @@ it.each(["inactive", "unassign-forbidden"] as const)(
         issueKey: "SYN-1",
         ...(kind === "inactive" ? { assigneeName: "synthetic-user" } : { clearAssignee: true }),
       }),
-    ).toEqual({ ok: false, reason: "field-validation" });
+    ).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail:
+        kind === "inactive"
+          ? { fieldId: "assigneeName", validation: "invalid-field", messages: [expect.any(String)] }
+          : { fieldId: "assignee", validation: "required-field" },
+    });
     expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
   },
 );
@@ -570,9 +725,13 @@ it("refuses contradictory duplicate assignment identities before PUT", async () 
       { name: "synthetic-user", active: false },
     ]),
   );
-  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" })).toEqual(
-    { ok: false, reason: "field-validation" },
-  );
+  expect(
+    await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "synthetic-user" }),
+  ).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: { fieldId: "assigneeName", validation: "invalid-field" },
+  });
   expect(f.http.mock.calls.map(([request]) => request.method)).toEqual(["GET"]);
 });
 
@@ -646,22 +805,29 @@ it.each(CONFIRMED_OPERATIONS)(
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
-it("does not attribute an unchanged pre-existing summary to a newly acknowledged edit", async () => {
+it("writes nothing and claims no effect when the summary already holds", async () => {
   const f = fixture();
-  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Original" } })).toEqual({
-    ok: false,
-    reason: "conflict",
-  });
-  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", fields: { summary: "Original" } })).toEqual(
+    ALREADY_HELD,
+  );
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(0);
 });
-it("does not attribute a pre-existing assignee to a newly acknowledged assignment", async () => {
+it("writes nothing and claims no effect when the assignee already holds", async () => {
   const f = fixture();
   f.http.mockResolvedValueOnce(response([{ name: "previous-user", active: true }]));
-  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "previous-user" })).toEqual({
-    ok: false,
-    reason: "conflict",
+  expect(await f.run("jira.assign", { issueKey: "SYN-1", assigneeName: "previous-user" })).toEqual(
+    ALREADY_HELD,
+  );
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(0);
+});
+it("still writes when only part of an edit already holds", async () => {
+  const f = fixture();
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { summary: "Original" },
+    updates: [{ fieldId: "labels", operation: "add", value: "triage" }],
   });
-  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
 });
 it("does not attribute an already-held target status to a transition from matching fields alone", async () => {
   const f = fixture();
@@ -756,3 +922,794 @@ it.each(["jira.create", "jira.comment"] as const)(
     expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(1);
   },
 );
+it("forwards an opaque plugin value and returns Jira's field error when it refuses it (#4176)", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [
+        ...FIELDS,
+        {
+          ...field("customfield_10105", "array"),
+          schema: { type: "array", items: "string", custom: "vendor.agile:sprint" },
+        },
+      ],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  f.http.mockResolvedValueOnce({
+    kind: "response",
+    status: 400,
+    bodyText: JSON.stringify({ errorMessages: [], errors: { customfield_10105: "Sprint id" } }),
+    bodyBytes: 64,
+    truncated: false,
+  });
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", customfield_10105: "S1" },
+    }),
+  ).toEqual({
+    ok: false,
+    reason: "field-validation",
+    // The request's metadata names the field a person would recognise.
+    detail: {
+      fieldErrors: [
+        { fieldId: "customfield_10105", fieldName: "customfield_10105", message: "Sprint id" },
+      ],
+    },
+  });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    fields: { customfield_10105: "S1" },
+  });
+});
+
+function writes(f: ReturnType<typeof fixture>): { method: string; path: string; body: unknown }[] {
+  return f.http.mock.calls
+    .filter(([request]) => request.method !== "GET")
+    .map(([request]) => ({
+      method: request.method,
+      path: new URL(request.url).pathname.replace(/^.*\/rest\/api\/2\//u, ""),
+      body: JSON.parse(request.bodyJson ?? "null") as unknown,
+    }));
+}
+it("sends one issuelinks operation on the edit and each further link as its own call (#4176)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [
+        { type: "Blocks", direction: "outward", issueKey: "SYN-2" },
+        { type: "blocks", direction: "outward", issueKey: "syn-2" },
+        { type: "Relates", direction: "inward", issueKey: "SYN-3" },
+        { type: "Relates", direction: "outward", issueKey: "SYN-4" },
+      ],
+    }),
+  ).toEqual({
+    ok: true,
+    receipt: { issueKey: "SYN-1" },
+    links: { requested: 3, created: 3, missing: [], unconfirmed: false },
+  });
+  expect(writes(f)).toEqual([
+    {
+      method: "PUT",
+      path: "issue/SYN-1",
+      body: {
+        fields: {},
+        update: {
+          issuelinks: [{ add: { type: { name: "blocks" }, outwardIssue: { key: "syn-2" } } }],
+        },
+      },
+    },
+    {
+      method: "POST",
+      path: "issueLink",
+      body: {
+        type: { name: "Relates" },
+        inwardIssue: { key: "SYN-3" },
+        outwardIssue: { key: "SYN-1" },
+      },
+    },
+    {
+      method: "POST",
+      path: "issueLink",
+      body: {
+        type: { name: "Relates" },
+        inwardIssue: { key: "SYN-1" },
+        outwardIssue: { key: "SYN-4" },
+      },
+    },
+  ]);
+});
+it("never sends two issuelinks operations in one request, as real Jira refuses them (#4176)", async () => {
+  const f = fixture();
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { summary: "Changed" },
+    links: Array.from({ length: 6 }, (_, index) => ({
+      type: "Relates",
+      direction: "outward",
+      issueKey: `SYN-${String(index + 2)}`,
+    })),
+  });
+  const operations = writes(f).map(
+    ({ body }) => (body as { update?: { issuelinks?: unknown[] } }).update?.issuelinks?.length ?? 0,
+  );
+  expect(Math.max(...operations)).toBe(1);
+  expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(5);
+});
+it("reports an edit whose third link failed as a partial effect, never as success (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  let linkCalls = 0;
+  f.http.mockImplementation((request) => {
+    if (request.url.endsWith("/issueLink") && ++linkCalls === 2)
+      return Promise.resolve(
+        response({ errorMessages: ["Issue Does Not Exist"], errors: {} }, 404),
+      );
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  const result = await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    links: [1, 2, 3, 4, 5].map((n) => ({
+      type: "Relates",
+      direction: "outward" as const,
+      issueKey: `SYN-${String(n + 1)}`,
+    })),
+  });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "not-found",
+    receipt: { issueKey: "SYN-1" },
+    links: { requested: 5, created: 2, unconfirmed: false },
+  });
+  expect(result.ok ? [] : result.links?.missing.map(({ issueKey }) => issueKey)).toEqual([
+    "SYN-4",
+    "SYN-5",
+    "SYN-6",
+  ]);
+  // The failing call is not repeated and the links after it are not tried.
+  expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(2);
+});
+it("keeps a lost link answer unconfirmed when the issue cannot be read back (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  let lost = false;
+  f.http.mockImplementation((request) => {
+    if (request.url.endsWith("/issueLink")) {
+      lost = true;
+      return Promise.resolve({ kind: "timeout" });
+    }
+    if (lost && request.method === "GET" && request.url.includes("fields=issuelinks"))
+      return Promise.resolve({ kind: "network-error" });
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [
+        { type: "Relates", direction: "outward", issueKey: "SYN-2" },
+        { type: "Relates", direction: "outward", issueKey: "SYN-3" },
+      ],
+    }),
+  ).toMatchObject({
+    ok: false,
+    receipt: { issueKey: "SYN-1" },
+    links: {
+      requested: 2,
+      created: 1,
+      unconfirmed: true,
+      missing: [{ type: "Relates", direction: "outward", issueKey: "SYN-3" }],
+    },
+  });
+  expect(writes(f).filter(({ path }) => path === "issueLink")).toHaveLength(1);
+});
+describe("an edit the issue verifiably already holds", () => {
+  const opaque = {
+    id: "customfield_10105",
+    name: "Sprint",
+    required: false,
+    hasDefaultValue: false,
+    kind: "opaque",
+    richText: false,
+    operations: ["set"],
+  } as const;
+  const held = (requested: CatalogJsonObject, current: Record<string, unknown>): boolean =>
+    jiraEditAlreadyHeld([opaque], { ok: true, fields: requested, update: {} }, current);
+
+  it("accepts an identical opaque value", () => {
+    expect(held({ customfield_10105: 7 }, { customfield_10105: 7 })).toBe(true);
+  });
+  it.each([
+    ["a value Jira may have reshaped", { customfield_10105: [{ id: 7, state: "active" }] }],
+    ["a different value", { customfield_10105: 8 }],
+    ["a field the read did not return", {}],
+  ])("does not accept %s", (_label, current) => {
+    expect(held({ customfield_10105: 7 }, current)).toBe(false);
+  });
+  it("does not accept a request that asks for nothing", () => {
+    expect(held({}, {})).toBe(false);
+  });
+  it("does not accept a field it has no metadata for", () => {
+    expect(held({ customfield_1: 7 }, { customfield_1: 7 })).toBe(false);
+  });
+});
+it("writes nothing when every requested link is already on the issue", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  f.http.mockImplementation((request) => {
+    if (request.method === "GET" && request.url.includes("/issue/SYN-1?"))
+      return Promise.resolve(
+        response({
+          id: "10001",
+          key: "SYN-1",
+          fields: {
+            issuelinks: [{ id: "1", type: { name: "Relates" }, outwardIssue: { key: "SYN-2" } }],
+          },
+        }),
+      );
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-2" }],
+    }),
+  ).toEqual(ALREADY_HELD);
+  expect(writes(f)).toEqual([]);
+});
+it("does not write a link the issue already has (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  f.http.mockImplementation((request) => {
+    if (request.method === "GET" && request.url.includes("/issue/SYN-1?"))
+      return Promise.resolve(
+        response({
+          id: "10001",
+          key: "SYN-1",
+          fields: {
+            summary: "Original",
+            issuelinks: [{ id: "1", type: { name: "Relates" }, outwardIssue: { key: "SYN-2" } }],
+          },
+        }),
+      );
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    links: [
+      { type: "Relates", direction: "outward", issueKey: "SYN-2" },
+      { type: "Relates", direction: "outward", issueKey: "SYN-3" },
+    ],
+  });
+  expect(writes(f)).toEqual([
+    {
+      method: "PUT",
+      path: "issue/SYN-1",
+      body: {
+        fields: {},
+        update: {
+          issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-3" } } }],
+        },
+      },
+    },
+  ]);
+});
+// #4176 lab (S05): a model that names the reporter by user name must not be refused for the shape.
+it("sends a bare reporter name to Jira as the user reference the deployment expects", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, field("reporter", "user")],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", reporter: "keiko-admin" },
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    fields: { reporter: { name: "keiko-admin" } },
+  });
+});
+// #4176 lab (S17): Jira assigns the caller as reporter, so a create without one is not refused.
+it("creates without the reporter that create metadata lists as required, and sends none", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, field("reporter", "user", true)],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    fields: { summary: "Synthetic" },
+  });
+  expect(dispatched?.bodyJson).not.toContain("reporter");
+});
+it("still refuses a create that omits another required field or supplies an invalid reporter", async () => {
+  const f = fixture();
+  const metadata = (): ReturnType<typeof response> =>
+    response({
+      values: [...FIELDS, field("reporter", "user", true)],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    });
+  f.http.mockResolvedValueOnce(metadata());
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic" },
+    }),
+  ).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: { validation: "required-field", fieldId: "customfield_10000" },
+  });
+  f.http.mockResolvedValueOnce(metadata());
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required", reporter: "x".repeat(257) },
+    }),
+  ).toMatchObject({ ok: false, detail: { validation: "invalid-field", fieldId: "reporter" } });
+  expect(f.http.mock.calls.every(([request]) => request.method === "GET")).toBe(true);
+});
+it("creates an issue with links when create metadata offers them (#4176)", async () => {
+  const f = fixture();
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, LINKS_FIELD],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+      links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+    }),
+  ).toMatchObject({ ok: true, receipt: { issueKey: "SYN-1" } });
+  const dispatched = f.http.mock.calls.find(([request]) => request.method === "POST")?.[0];
+  expect(JSON.parse(dispatched?.bodyJson ?? "null")).toMatchObject({
+    update: {
+      issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-9" } } }],
+    },
+  });
+});
+function createWithLinksMetadata(f: ReturnType<typeof fixture>): void {
+  f.http.mockResolvedValueOnce(
+    response({
+      values: [...FIELDS, LINKS_FIELD],
+      startAt: 0,
+      maxResults: 100,
+      isLast: true,
+      total: FIELDS.length + 1,
+    }),
+  );
+}
+const THREE_LINKS = ["SYN-7", "SYN-8", "SYN-9"].map((issueKey) => ({
+  type: "Relates",
+  direction: "outward" as const,
+  issueKey,
+}));
+const CREATE_WITH_LINKS = {
+  projectId: "10000",
+  issueTypeId: "10001",
+  fields: { summary: "Synthetic", customfield_10000: "Required" },
+  links: THREE_LINKS,
+};
+it("creates an issue with its first link and adds every further link separately (#4176)", async () => {
+  const f = fixture();
+  createWithLinksMetadata(f);
+  expect(await f.run("jira.create", CREATE_WITH_LINKS)).toMatchObject({
+    ok: true,
+    receipt: { issueKey: "SYN-1", issueId: "10001" },
+    links: { requested: 3, created: 3, missing: [], unconfirmed: false },
+  });
+  expect(writes(f).map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "POST issue",
+    "POST issueLink",
+    "POST issueLink",
+  ]);
+  expect(writes(f)[0]?.body).toMatchObject({
+    update: {
+      issuelinks: [{ add: { type: { name: "Relates" }, outwardIssue: { key: "SYN-7" } } }],
+    },
+  });
+  expect(writes(f)[2]?.body).toEqual({
+    type: { name: "Relates" },
+    inwardIssue: { key: "SYN-1" },
+    outwardIssue: { key: "SYN-9" },
+  });
+});
+it("says the issue exists and which links are missing when a create's link fails (#4176)", async () => {
+  const f = fixture();
+  const dispatch = f.http.getMockImplementation();
+  createWithLinksMetadata(f);
+  f.http.mockImplementation((request) =>
+    request.url.endsWith("/issueLink")
+      ? Promise.resolve(response({ errorMessages: ["No permission"], errors: {} }, 403))
+      : (dispatch?.(request) ?? Promise.resolve(response({}, 404))),
+  );
+  const result = await f.run("jira.create", CREATE_WITH_LINKS);
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "permission-denied",
+    receipt: { issueKey: "SYN-1", issueId: "10001" },
+    links: {
+      requested: 3,
+      created: 1,
+      unconfirmed: false,
+      missing: [
+        { type: "Relates", direction: "outward", issueKey: "SYN-8" },
+        { type: "Relates", direction: "outward", issueKey: "SYN-9" },
+      ],
+    },
+  });
+  // The issue is created once: neither the failed link nor the create is ever sent again.
+  expect(writes(f).map(({ path }) => path)).toEqual(["issue", "issueLink"]);
+});
+const RELATES_SYN_9 = { type: "Relates", direction: "outward", issueKey: "SYN-9" };
+/** The default Jira edit screen has no Linked Issues field; `linkAnswer` answers the link call. */
+function editScreenWithoutLinks(
+  f: ReturnType<typeof fixture>,
+  linkAnswer?: Awaited<ReturnType<AtlassianHttpBodyPort>>,
+): void {
+  const dispatch = f.http.getMockImplementation();
+  f.http.mockImplementation((request) => {
+    if (request.url.endsWith("/editmeta"))
+      return Promise.resolve(response({ fields: { summary: field("summary", "string") } }));
+    if (linkAnswer !== undefined && request.url.endsWith("/issueLink"))
+      return Promise.resolve(linkAnswer);
+    return dispatch?.(request) ?? Promise.resolve(response({}, 404));
+  });
+}
+it("sends no empty edit and uses Jira's link action where the edit screen has no links (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f);
+  const result = await f.run("jira.edit", { issueKey: "SYN-1", links: [RELATES_SYN_9] });
+  expect(result).toMatchObject({ ok: true, links: { requested: 1, created: 1, missing: [] } });
+  expect(writes(f).map(({ method, path }) => `${method} ${path}`)).toEqual(["POST issueLink"]);
+  expect(writes(f)[0]?.body).toEqual({
+    type: { name: "Relates" },
+    inwardIssue: { key: "SYN-1" },
+    outwardIssue: { key: "SYN-9" },
+  });
+});
+it("still sends the fields of an edit whose link takes Jira's link action (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f);
+  await f.run("jira.edit", {
+    issueKey: "SYN-1",
+    fields: { summary: "Changed" },
+    links: [RELATES_SYN_9],
+  });
+  expect(writes(f).map(({ method, path }) => `${method} ${path}`)).toEqual([
+    "PUT issue/SYN-1",
+    "POST issueLink",
+  ]);
+});
+it("keeps a link-only edit a plain refusal when Jira refuses the link (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f, response({ errorMessages: ["No permission"], errors: {} }, 403));
+  const result = await f.run("jira.edit", { issueKey: "SYN-1", links: [RELATES_SYN_9] });
+  expect(result).toMatchObject({ ok: false, reason: "permission-denied" });
+  expect(result).not.toHaveProperty("receipt");
+  expect(result).not.toHaveProperty("links");
+});
+it("keeps a link-only edit open when Jira's answer to the link was lost (#4176)", async () => {
+  const f = fixture();
+  editScreenWithoutLinks(f, response({}, 503));
+  const result = await f.run("jira.edit", { issueKey: "SYN-1", links: [RELATES_SYN_9] });
+  expect(result).toMatchObject({
+    ok: false,
+    reason: "unavailable",
+    receipt: { issueKey: "SYN-1" },
+    links: { missing: [RELATES_SYN_9] },
+  });
+});
+it("links through Jira's link action where the create screen does not offer links (#4176)", async () => {
+  const f = fixture();
+  await f.run("jira.create", {
+    projectId: "10000",
+    issueTypeId: "10001",
+    fields: { summary: "Synthetic", customfield_10000: "Required" },
+    links: [{ type: "Relates", direction: "outward", issueKey: "SYN-9" }],
+  });
+  const [create, link] = writes(f);
+  expect(create?.path).toBe("issue");
+  expect(create?.body).not.toHaveProperty("update.issuelinks");
+  expect(link?.path).toBe("issueLink");
+});
+it.each([
+  [{ type: "Blocks", direction: "sideways", issueKey: "SYN-2" }],
+  [{ type: "Blocks", direction: "outward", issueKey: "not a key" }],
+  [{ type: "Blocks\n", direction: "outward", issueKey: "SYN-2" }],
+  [{ type: "Blocks", direction: "outward", issueKey: "SYN-2", extra: true }],
+  Array.from({ length: 21 }, (_, index) => ({
+    type: "Relates",
+    direction: "outward",
+    issueKey: `SYN-${String(index + 2)}`,
+  })),
+])("refuses malformed links without contacting Jira (#4176)", async (...links) => {
+  const f = fixture();
+  expect(await f.run("jira.edit", { issueKey: "SYN-1", links })).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+  });
+  expect(f.http).not.toHaveBeenCalled();
+});
+it.each([
+  ["jira.create", { projectId: "10000", issueTypeId: "10001", fields: { summary: "S" } }],
+  ["jira.edit", { issueKey: "SYN-1", fields: { summary: "S" } }],
+] as const)(
+  "refuses requirementIds on %s when the consumer supplies no trace resolver (review)",
+  async (operation, args) => {
+    const f = fixture();
+    expect(await f.run(operation, { ...args, requirementIds: ["UNKNOWN-999"] })).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      detail: { fieldId: "requirementIds", messages: [expect.stringContaining("requirementIds")] },
+    });
+    expect(f.http).not.toHaveBeenCalled();
+  },
+);
+it("says where requirementIds belong when they arrive among the fields", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.edit", { issueKey: "SYN-1", fields: { requirementIds: ["LH-001"] } }),
+  ).toMatchObject({
+    ok: false,
+    reason: "field-validation",
+    detail: {
+      fieldId: "requirementIds",
+      messages: ["requirementIds goes beside fields, not inside them."],
+    },
+  });
+  expect(f.http.mock.calls.filter(([request]) => request.method !== "GET")).toHaveLength(0);
+});
+it("still writes an ordinary untraced create without requirementIds (review)", async () => {
+  const f = fixture();
+  expect(
+    await f.run("jira.create", {
+      projectId: "10000",
+      issueTypeId: "10001",
+      fields: { summary: "Synthetic", customfield_10000: "Required" },
+    }),
+  ).toMatchObject({ ok: true });
+});
+it("does not confirm an edit whose requested link is missing on readback (#4176)", async () => {
+  const f = fixture();
+  f.http.mockImplementation((request) => {
+    const path = new URL(request.url).pathname;
+    if (request.method !== "GET") return Promise.resolve(response(undefined, 204));
+    return Promise.resolve(
+      fixtureRead(path, { fields: { summary: "Original", issuelinks: [] }, comment: "" }),
+    );
+  });
+  expect(
+    await f.run("jira.edit", {
+      issueKey: "SYN-1",
+      links: [{ type: "Blocks", direction: "outward", issueKey: "SYN-2" }],
+    }),
+  ).toEqual({
+    ok: false,
+    reason: "conflict",
+    receipt: { issueKey: "SYN-1" },
+    links: {
+      requested: 1,
+      created: 0,
+      unconfirmed: false,
+      missing: [{ type: "Blocks", direction: "outward", issueKey: "SYN-2" }],
+    },
+  });
+  expect(f.http.mock.calls.filter(([request]) => request.method === "PUT")).toHaveLength(1);
+});
+
+// S19 of epic #4173: the draft recognised both epics as existing and said not to create them again;
+// Gemma then created both with jira.create. A create that repeats an issue a Keiko draft created
+// (same project, type and summary, hanging from nothing) is refused and names the existing key.
+function twinFixture(found: readonly { key: string; id: string }[]): {
+  http: ReturnType<typeof vi.fn<AtlassianHttpBodyPort>>;
+  run: (args: CatalogJsonObject) => ReturnType<typeof executeJiraManagedMutation>;
+  searches: () => readonly string[];
+  created: () => Readonly<Record<string, unknown>>;
+} {
+  const labels = {
+    ...field("labels", "array"),
+    operations: ["set", "add", "remove"],
+    schema: { type: "array", items: "string", system: "labels" },
+  };
+  const epicLink = {
+    ...field("customfield_10001", "any"),
+    schema: { type: "any", custom: "com.pyxis.greenhopper.jira:gh-epic-link" },
+  };
+  let posted: Readonly<Record<string, unknown>> = {};
+  const http = vi.fn<AtlassianHttpBodyPort>((request) => {
+    const url = new URL(request.url);
+    if (request.method === "POST") {
+      posted = (JSON.parse(request.bodyJson ?? "{}") as { fields: Record<string, unknown> }).fields;
+      return Promise.resolve(response({ id: "10009", key: "SYN-9" }, 201));
+    }
+    if (url.pathname.includes("createmeta"))
+      return Promise.resolve(
+        response({
+          values: [...FIELDS, labels, epicLink],
+          start: 0,
+          size: 100,
+          last: true,
+          total: 6,
+        }),
+      );
+    if (url.pathname.endsWith("/search"))
+      return Promise.resolve(
+        response({
+          startAt: 0,
+          maxResults: 50,
+          total: found.length,
+          issues: found.map((issue) => ({
+            ...issue,
+            fields: { summary: "[LH-019] Nachreichung" },
+          })),
+        }),
+      );
+    if (url.pathname.endsWith("/issue/SYN-9"))
+      return Promise.resolve(response({ id: "10009", key: "SYN-9", fields: posted }));
+    return Promise.resolve(response({}, 404));
+  });
+  const run = (args: CatalogJsonObject): ReturnType<typeof executeJiraManagedMutation> =>
+    executeJiraManagedMutation(
+      "jira.create",
+      args,
+      {
+        invocationId: "synthetic",
+        correlationId: "synthetic",
+        signal: new AbortController().signal,
+        beforeEffect: () => true,
+      },
+      { deployment: "data-center", baseUrl: "https://jira.example.invalid/context", http },
+    );
+  const created = (): Readonly<Record<string, unknown>> => posted;
+  const searches = (): readonly string[] =>
+    http.mock.calls
+      .map(([request]) => new URL(request.url))
+      .filter((url) => url.pathname.endsWith("/search"))
+      .map((url) => url.searchParams.get("jql") ?? "");
+  return { http, run, searches, created };
+}
+const TWIN_CREATE = {
+  projectId: "10000",
+  issueTypeId: "10001",
+  fields: { summary: "[LH-019] Nachreichung", customfield_10000: "Epic", labels: ["anforderung"] },
+};
+
+it("refuses a create a Keiko draft already made, naming the existing key (S19 of #4173)", async () => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  expect(await f.run(TWIN_CREATE)).toEqual({
+    ok: false,
+    reason: "conflict",
+    receipt: { issueKey: "SYN-4", issueId: "10004" },
+    detail: {
+      messages: [
+        "SYN-4 already exists as this issue: a Keiko draft created it in this project with this type and summary. Nothing was created. Report SYN-4 as the result; do not create it again.",
+      ],
+    },
+  });
+  expect(f.searches()).toEqual([
+    expect.stringMatching(/^project = 10000 AND issuetype = 10001 AND labels = "keiko-draft-/u),
+  ]);
+  expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+});
+
+it("creates when no draft made this issue, carrying the identity a draft of it would find", async () => {
+  const f = twinFixture([]);
+  expect(await f.run(TWIN_CREATE)).toMatchObject({ ok: true, receipt: { issueKey: "SYN-9" } });
+  const [search] = f.searches();
+  const identity = /labels = "(keiko-draft-[0-9a-f]{20})"/u.exec(search ?? "")?.[1];
+  expect(identity).toBeDefined();
+  // S19 of #4173 (Qwen): a later draft of the same epic searches for this label and reconciles.
+  expect(f.created().labels).toEqual(["anforderung", identity]);
+});
+
+it("refuses a create when two issues carry its draft identity, sending nothing", async () => {
+  const f = twinFixture([
+    { key: "SYN-4", id: "10004" },
+    { key: "SYN-5", id: "10005" },
+  ]);
+  expect(await f.run(TWIN_CREATE)).toMatchObject({ ok: false, reason: "conflict" });
+  expect(f.searches()).toHaveLength(1);
+  expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+});
+
+it("still creates once when the identity search cannot be completed", async () => {
+  const f = twinFixture([]);
+  const base = f.http.getMockImplementation();
+  f.http.mockImplementation((request) =>
+    new URL(request.url).pathname.endsWith("/search")
+      ? Promise.resolve(response({}, 500))
+      : (base?.(request) ?? Promise.resolve(response({}, 404))),
+  );
+  expect(await f.run(TWIN_CREATE)).toMatchObject({ ok: true, receipt: { issueKey: "SYN-9" } });
+  expect(f.created().labels).toEqual(["anforderung"]);
+});
+
+it.each([
+  ["a string", "anforderung"],
+  ["a number", 7],
+  ["an object", { name: "anforderung" }],
+])(
+  "refuses malformed labels (%s) instead of replacing them with the identity",
+  async (_name, labels) => {
+    const f = twinFixture([]);
+    expect(
+      await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, labels } }),
+    ).toMatchObject({ ok: false, reason: "field-validation" });
+    expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+  },
+);
+
+it("leaves a create that hangs from an epic link without a draft identity", async () => {
+  const f = twinFixture([]);
+  await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, customfield_10001: "SYN-2" } });
+  expect(f.created().labels).toEqual(["anforderung"]);
+});
+
+it.each([
+  ["a parent", { parent: { key: "SYN-2" } }],
+  ["an epic link", { customfield_10001: "SYN-2" }],
+])("never reconciles a create that hangs from %s", async (_name, extra) => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  await f.run({ ...TWIN_CREATE, fields: { ...TWIN_CREATE.fields, ...extra } });
+  expect(f.searches()).toEqual([]);
+});
+
+// S19 of #4173, Qwen: a requirement id in a text field reads like an issue key, and the re-run
+// through jira.create made both epics a second time.
+it("recognises a draft's issue although a text field holds a value shaped like a key", async () => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  const repeat = await f.run({
+    ...TWIN_CREATE,
+    fields: { ...TWIN_CREATE.fields, customfield_10000: "LH-019" },
+  });
+  expect(repeat).toMatchObject({ ok: false, reason: "conflict", receipt: { issueKey: "SYN-4" } });
+  expect(f.http.mock.calls.some(([request]) => request.method === "POST")).toBe(false);
+});
+
+it("never reconciles a create with links", async () => {
+  const f = twinFixture([{ key: "SYN-4", id: "10004" }]);
+  await f.run({
+    ...TWIN_CREATE,
+    links: [{ type: "Relates", direction: "outward", issueKey: "SYN-2" }],
+  });
+  expect(f.searches()).toEqual([]);
+});

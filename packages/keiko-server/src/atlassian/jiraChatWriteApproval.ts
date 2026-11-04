@@ -28,12 +28,14 @@ function pendingApproval(
   authority: EditorAgentGovernedAuthorityReference,
   action: JiraChatWriteActionIdentity,
   now: number,
+  draftItemRefs?: readonly string[],
 ): ChatWriteApprovalEntry {
   const subject = facts.envelope.subject;
   return {
     subject,
     authority,
     approvalProofDigest: null,
+    ...(draftItemRefs === undefined ? {} : { draftItemRefs }),
     approval: {
       kind: "jira-chat-write",
       chatId: subject.chatId,

@@ -580,6 +580,45 @@ describe("coding tool IPC targeted verification", () => {
       ),
     ).toEqual({ ...request, verifierId: "test" });
   });
+
+  describe("packageDir", () => {
+    const ordinary = { ...request, verifierId: "test" };
+
+    it("carries one contained package folder on any verifier", () => {
+      expect(
+        parseCodingToolRequest(
+          JSON.stringify({ ...ordinary, targetPath: "", packageDir: "web/src/app" }),
+          262_144,
+        ),
+      ).toEqual({ ...ordinary, packageDir: "web/src/app" });
+      expect(
+        parseCodingToolRequest(
+          JSON.stringify({
+            ...request,
+            targetPath: "web/app/a.test.ts",
+            packageDir: "web/app",
+          }),
+          262_144,
+        ),
+      ).toEqual({ ...request, targetPath: "web/app/a.test.ts", packageDir: "web/app" });
+    });
+
+    it("reads the provider wire's empty sentinel and an absent field as no package folder", () => {
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...ordinary, packageDir: "" }), 262_144),
+      ).toEqual(ordinary);
+      expect(parseCodingToolRequest(JSON.stringify(ordinary), 262_144)).toEqual(ordinary);
+    });
+
+    it.each(["/tmp/app", "../app", "a/../../b", ".env", "secrets/.env", 7, null])(
+      "rejects the escaping, absolute, sensitive or mistyped package folder %j",
+      (packageDir) => {
+        expect(
+          parseCodingToolRequest(JSON.stringify({ ...ordinary, packageDir }), 262_144),
+        ).toBeUndefined();
+      },
+    );
+  });
 });
 
 /**

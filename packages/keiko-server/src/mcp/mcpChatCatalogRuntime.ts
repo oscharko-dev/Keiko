@@ -1,5 +1,7 @@
+import { mcpChatConfigurationDigest, selectedMcpServers } from "./mcpChatSelection.js";
 import type {
   ExternalMcpConnection,
+  ExternalMcpTool,
   ManagedMcpProvider,
   ManagedMcpTool,
   ManagedMcpToolResult,
@@ -31,7 +33,10 @@ export interface McpChatCatalog extends ManagedProviderCatalog<McpChatCatalogCon
   readonly signal: AbortSignal;
 }
 export interface McpChatCatalogRuntime {
-  readonly get: (correlationId: string) => Promise<McpChatCatalog | undefined>;
+  readonly get: (
+    correlationId: string,
+    selection?: readonly string[],
+  ) => Promise<McpChatCatalog | undefined>;
   readonly close: () => Promise<void>;
 }
 export interface McpChatCatalogOptions {
@@ -64,6 +69,16 @@ function catalogDiagnostic(
 function diagnostic(options: McpChatCatalogOptions, correlationId: string, error: unknown): void {
   emitServerDiagnostic(options.log.diagnostics, catalogDiagnostic(correlationId, error));
 }
+export const MCP_CHAT_PROFILE = { id: "configured-mcp-chat", version: 1 } as const;
+/** The tools of a connected server a Chat offers: all when discovery is automatic, else the declared. */
+export function mcpChatServerDeclarations(
+  server: McpServerDefinition,
+  tools: readonly ExternalMcpTool[],
+): readonly McpChatDeclaration[] {
+  return tools
+    .filter((tool) => server.discovery === "automatic" || Object.hasOwn(server.tools, tool.name))
+    .map((tool) => mcpChatDeclaration(server, tool));
+}
 async function discover(
   options: McpChatCatalogOptions,
   server: McpServerDefinition,
@@ -80,9 +95,7 @@ async function discover(
     const connection = await mcpConnections.connect(server.name, correlationId);
     const signal = AbortSignal.any([generation, connection.signal]);
     requireDispatch(!signal.aborted, "denied", "consumer-stale");
-    const tools = connection.tools
-      .filter((tool) => server.discovery === "automatic" || Object.hasOwn(server.tools, tool.name))
-      .map((tool) => mcpChatDeclaration(server, tool));
+    const tools = mcpChatServerDeclarations(server, connection.tools);
     return { connection, tools, signal };
   } catch (error) {
     emitServerDiagnostic(options.log.diagnostics, catalogDiagnostic(correlationId, error));
@@ -122,6 +135,7 @@ async function initialize(
   options: McpChatCatalogOptions,
   discovered: readonly Discovered[],
   snapshot: McpSettingsSnapshot,
+  configurationDigest: string,
   correlationId: string,
 ): Promise<McpChatCatalog> {
   const revisionSignal = options.deps.mcpSettings?.revisionSignal(snapshot.revision, correlationId);
@@ -131,14 +145,14 @@ async function initialize(
   const managed = await createManagedProviderCatalog<McpChatCatalogConsumer>({
     providers: [provider],
     routes: mcpChatCatalogRoutes(tools),
-    profile: { id: "configured-mcp-chat", version: 1 },
+    profile: MCP_CHAT_PROFILE,
     log: options.log,
     correlationId,
     now: Date.now,
   });
   return {
     ...managed,
-    configurationDigest: snapshot.revision,
+    configurationDigest,
     tools,
     signal: AbortSignal.any([revisionSignal, ...discovered.map((entry) => entry.signal)]),
   };
@@ -171,15 +185,18 @@ class McpChatCatalogManager implements McpChatCatalogRuntime {
       },
     );
   }
-  async get(correlationId: string): Promise<McpChatCatalog | undefined> {
+  async get(
+    correlationId: string,
+    selection?: readonly string[],
+  ): Promise<McpChatCatalog | undefined> {
     requireDispatch(this.isOpen(), "failed", "handler-unavailable");
     const settings = this.options.deps.mcpSettings;
     if (settings === undefined || this.options.deps.mcpConnections === undefined) return undefined;
     const snapshot = settings.read(correlationId);
     const results = await Promise.all(
-      snapshot.servers
-        .filter((server) => server.enabled)
-        .map((server) => discover(this.options, server, correlationId)),
+      selectedMcpServers(snapshot.servers, selection).map((server) =>
+        discover(this.options, server, correlationId),
+      ),
     );
     const discovered = results.filter((entry): entry is Discovered => entry !== undefined);
     requireDispatch(
@@ -189,10 +206,11 @@ class McpChatCatalogManager implements McpChatCatalogRuntime {
     );
     const tools = discovered.flatMap((entry) => entry.tools);
     if (tools.length === 0) return undefined;
-    const key = sha256Hex(canonicalise({ revision: snapshot.revision, tools }));
+    const configurationDigest = mcpChatConfigurationDigest(snapshot.revision, selection);
+    const key = sha256Hex(canonicalise({ configurationDigest, tools }));
     let pending = this.catalogs.get(key);
     if (pending === undefined) {
-      pending = initialize(this.options, discovered, snapshot, correlationId);
+      pending = initialize(this.options, discovered, snapshot, configurationDigest, correlationId);
       this.remember(key, pending, correlationId);
     }
     const catalog = await pending;
