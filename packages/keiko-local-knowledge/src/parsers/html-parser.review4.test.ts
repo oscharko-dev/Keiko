@@ -44,3 +44,27 @@ describe("attribute values written without quotes", () => {
     ).toBe("Table!2: A=1 | B=2\nTable!3: A=3 | B=4");
   });
 });
+
+describe("a table whose end tags are left out", () => {
+  it("reads rows and cells that end where the next one starts", () => {
+    expect(
+      textOf("<table><tr><th>ID<th>Text<tr><td>1<td>a<tr><td>2<td>b</table><p>after</p>"),
+    ).toBe("Table!2: ID=1 | Text=a\nTable!3: ID=2 | Text=b\n\nafter");
+  });
+
+  it("keeps a nested table inside its cell", () => {
+    expect(
+      textOf("<table><tr><th>A<th>B<tr><td>x<table><tr><td>in1<td>in2</table><td>y</table>"),
+    ).toBe("Table!2: A=x\nin1\nin2 | B=y");
+  });
+
+  it("ends a head that is left open at the body", () => {
+    expect(
+      textOf("<table><thead><tr><td>ID<td>Text<tbody><tr><td>1<td>a<tr><td>2<td>b</table>"),
+    ).toBe("Table!2: ID=1 | Text=a\nTable!3: ID=2 | Text=b");
+  });
+
+  it("reads the terms and definitions of a list without end tags", () => {
+    expect(textOf("<dl><dt>Term<dd>Def one<dt>T2<dd>D2</dl>")).toBe("Term: Def one\nT2: D2");
+  });
+});

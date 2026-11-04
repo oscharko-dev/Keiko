@@ -834,8 +834,109 @@ function extractElements(html: string, tagNames: ReadonlySet<string>): readonly 
   return spans;
 }
 
-const ROW_TAGS: ReadonlySet<string> = new Set(["tr"]);
-const CELL_TAGS: ReadonlySet<string> = new Set(["td", "th"]);
+// The items of a table or a definition list, with the end tags HTML lets a document leave out: a row
+// ends where the next row or section starts, a cell where the next cell or its row ends, a term or
+// definition where the next one starts. Only items of the container itself count; the rows of a table
+// nested in a cell and the terms of a list nested in a definition belong to that inner container.
+interface ImpliedSpec {
+  readonly container: string;
+  readonly items: ReadonlySet<string>;
+  /** Other opening tags that end the open item. */
+  readonly ends: ReadonlySet<string>;
+  /** Closing tags that end the open item. */
+  readonly closes: ReadonlySet<string>;
+}
+
+interface ImpliedSpan extends ElementSpan {
+  /** The item sits in a `<thead>`. */
+  readonly inHead: boolean;
+}
+
+interface OpenItem {
+  readonly name: string;
+  readonly tagRaw: string;
+  readonly from: number;
+  readonly inHead: boolean;
+}
+
+const TABLE_SECTIONS: ReadonlySet<string> = new Set(["thead", "tbody", "tfoot"]);
+const ROW_SPEC: ImpliedSpec = {
+  container: "table",
+  items: new Set(["tr"]),
+  ends: TABLE_SECTIONS,
+  closes: new Set(["tr", ...TABLE_SECTIONS]),
+};
+const CELL_SPEC: ImpliedSpec = {
+  container: "table",
+  items: new Set(["td", "th"]),
+  ends: new Set(["tr", ...TABLE_SECTIONS]),
+  closes: new Set(["td", "th", "tr", ...TABLE_SECTIONS]),
+};
+const DEFINITION_SPEC: ImpliedSpec = {
+  container: "dl",
+  items: new Set(["dt", "dd"]),
+  ends: new Set(),
+  closes: new Set(["dt", "dd"]),
+};
+
+// `baseDepth` is how many containers are already open at the start of `html`: 1 when the fragment
+// still carries its own container tags, 0 when it is the container's content.
+function extractImplied(
+  html: string,
+  spec: ImpliedSpec,
+  baseDepth: number,
+): readonly ImpliedSpan[] {
+  const htmlLower = html.toLowerCase();
+  const spans: ImpliedSpan[] = [];
+  let open: OpenItem | undefined;
+  let depth = 0;
+  let inHead = false;
+  const finish = (at: number): void => {
+    if (open === undefined) return;
+    spans.push({
+      name: open.name,
+      innerHtml: html.slice(open.from, at),
+      tagRaw: open.tagRaw,
+      inHead: open.inHead,
+    });
+    open = undefined;
+  };
+  let cursor = 0;
+  while (cursor < html.length) {
+    const event = nextEvent(html, cursor);
+    if (event.kind === "eof") break;
+    if (event.kind !== "tag") {
+      cursor = event.next;
+      continue;
+    }
+    const { tag } = event;
+    if (RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open") {
+      cursor = skipRawText(html, htmlLower, tag.name, tag.end);
+      continue;
+    }
+    cursor = event.next;
+    if (tag.name === spec.container) {
+      if (tag.kind === "open") depth += 1;
+      if (tag.kind === "close") {
+        if (depth - 1 < baseDepth) finish(tag.start);
+        depth = Math.max(0, depth - 1);
+      }
+      continue;
+    }
+    if (depth !== baseDepth) continue;
+    const opens = tag.kind !== "close";
+    if (opens && spec.items.has(tag.name)) {
+      finish(tag.start);
+      open = { name: tag.name, tagRaw: tag.raw, from: tag.end, inHead };
+    } else if ((opens && spec.ends.has(tag.name)) || (!opens && spec.closes.has(tag.name))) {
+      finish(tag.start);
+    }
+    if (tag.name === "thead") inHead = opens;
+    else if (opens && TABLE_SECTIONS.has(tag.name)) inHead = false;
+  }
+  finish(html.length);
+  return spans;
+}
 
 // Bounds a `colspan`/`rowspan` attribute value to a sane positive integer so a malformed or
 // hostile table (e.g. `colspan="999999999"`) cannot force an unbounded column-expansion loop.
@@ -858,7 +959,7 @@ interface TableCell {
 }
 
 function tableCells(rowHtml: string): readonly TableCell[] {
-  return extractElements(rowHtml, CELL_TAGS).map((cell) => ({
+  return extractImplied(rowHtml, CELL_SPEC, 0).map((cell) => ({
     header: cell.name === "th",
     text: fragmentLines(cell.innerHtml),
     colspan: readSpanCount(cell.tagRaw, "colspan"),
@@ -959,18 +1060,12 @@ interface TableGrid {
   readonly theadRows: number;
 }
 
-const THEAD_TAGS: ReadonlySet<string> = new Set(["thead"]);
-
-function theadRowCount(tableHtml: string): number {
-  const thead = extractElements(tableHtml, THEAD_TAGS)[0];
-  return thead === undefined ? 0 : extractElements(thead.innerHtml, ROW_TAGS).length;
-}
-
 function tableGrid(state: ScanState, tableHtml: string): TableGrid {
   const budget: TableExpansionBudget = { remaining: MAX_EXPANDED_CELLS_PER_TABLE };
   const held = new Map<number, HeldCell>();
   const rows: LaidOutRow[] = [];
-  for (const row of extractElements(tableHtml, ROW_TAGS)) {
+  const sourceRows = extractImplied(tableHtml, ROW_SPEC, 1);
+  for (const row of sourceRows) {
     if (recordScanLimit(state)) break;
     const laidOut = layoutRow(tableCells(row.innerHtml), held, budget);
     rows.push(laidOut);
@@ -985,7 +1080,7 @@ function tableGrid(state: ScanState, tableHtml: string): TableGrid {
     );
     break;
   }
-  return { rows, theadRows: theadRowCount(tableHtml) };
+  return { rows, theadRows: sourceRows.filter((row) => row.inHead).length };
 }
 
 function neutralColumnLabel(index: number): string {
@@ -1157,14 +1252,13 @@ function appendTableRows(state: ScanState, tableHtml: string): void {
 // Depth-aware TOP-LEVEL `<dt>`/`<dd>` walk via `extractElements` (not a non-greedy regex — a
 // `<dd>` containing its own nested `<dl>` would otherwise truncate at the INNER list's first
 // `</dd>`/`</dt>`, silently dropping every sibling term/definition that follows the nested list).
-const DEFINITION_TAGS: ReadonlySet<string> = new Set(["dt", "dd"]);
 
 function definitionEntries(
   dlHtml: string,
 ): readonly { readonly term: string; readonly definition: string }[] {
   const entries: { term: string; definition: string }[] = [];
   let term: string | undefined;
-  for (const element of extractElements(dlHtml, DEFINITION_TAGS)) {
+  for (const element of extractImplied(dlHtml, DEFINITION_SPEC, 1)) {
     const text = htmlFragmentText(element.innerHtml);
     if (element.name === "dt") {
       term = text;
