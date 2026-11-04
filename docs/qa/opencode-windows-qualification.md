@@ -1062,9 +1062,14 @@ directory (`EPERM`), and all four fail identically on the unchanged base `53fca1
 ## W1 and W11 boundary proof on 2026-11-03
 
 This section does not close W1 or W11. Native process and socket results come from a **hosted
-disposable Windows Server 2025 runner, not Windows 11 hardware**. The runs below predate the merge
-with #4090 (`gateway_journal.c` and 10 conflicting files), so this proof must run again on the merged
-tree.
+disposable Windows Server 2025 runner, not Windows 11 hardware**. The runs detailed below predate the
+merge with #4090 (`gateway_journal.c` and 10 conflicting files).
+
+The same lane then ran on the merged tree on 2026-11-04, with every step successful:
+[run 41870725658](https://github.com/oscharko-dev/Keiko/actions/runs/41870725658) on `de7b742d6` and
+[run 41910688109](https://github.com/oscharko-dev/Keiko/actions/runs/41910688109) on `ae406cc69`. Both
+report `runtime boundary: PASS`, `allowed: 0` and `hostile: 10013` for the attested and hostile
+gateway connections. They use the same hosted runner and no model, so W1 and W11 stay PARTIAL.
 
 `native/runtime-supervisor/windows/runtime_boundary.test.c` launches one probe unconfined and then
 inside a per-tree AppContainer. A denial counts only when the same operation succeeds in the
