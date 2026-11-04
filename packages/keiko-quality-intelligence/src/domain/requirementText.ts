@@ -35,9 +35,21 @@ export function lineAt(lines: readonly Line[], index: number): Line {
   return line;
 }
 
-/** NFKC, invisible characters removed, whitespace collapsed. */
+/** Zero-width characters, the soft hyphen and the byte order mark: no reader sees them. */
+const INVISIBLE = /[­​-‍⁠﻿]/gu;
+/**
+ * The look-alikes of the hyphen-minus a word processor types into an identifier (`FR‑1` with a
+ * non-breaking hyphen): hyphen, non-breaking hyphen, figure dash and minus sign.
+ */
+const HYPHEN_LOOKALIKES = /[‐-‒−]/gu;
+
+/** NFKC, invisible characters removed, hyphen look-alikes unified, whitespace collapsed. */
 export function collapse(value: string): string {
-  return normaliseText(value).replaceAll(/\s+/gu, " ").trim();
+  return normaliseText(value)
+    .replaceAll(INVISIBLE, "")
+    .replaceAll(HYPHEN_LOOKALIKES, "-")
+    .replaceAll(/\s+/gu, " ")
+    .trim();
 }
 
 export const MARKDOWN_HEADING = /^\s{0,3}#{1,6}\s+/u;

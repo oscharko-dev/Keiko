@@ -23,3 +23,37 @@ describe("a line break written as a lone carriage return", () => {
     ).toEqual(["FR-1: Das System muss X tun.", "FR-2: Das System muss Y tun."]);
   });
 });
+
+describe("a typographic hyphen in an identifier", () => {
+  it.each([
+    ["non-breaking hyphen", "‑"],
+    ["hyphen", "‐"],
+    ["figure dash", "‒"],
+    ["minus sign", "−"],
+  ])("reads %s as the hyphen of the identifier", (_name, hyphen) => {
+    const inventory = derive(
+      `FR${hyphen}1: Das System muss X tun.\nFR${hyphen}2: Das System muss Y tun.\n`,
+    );
+    expect(inventory.entries.map((entry) => [entry.id, entry.idOrigin])).toEqual([
+      ["FR-1", "explicit"],
+      ["FR-2", "explicit"],
+    ]);
+  });
+
+  it("reads the identifier cell of a projected table row", () => {
+    const inventory = derive(
+      [
+        "Table!2: ID=FR‑1 | Text=Das System muss X tun.",
+        "Table!3: ID=FR‑2 | Text=Das System muss Y tun.",
+      ].join("\n"),
+    );
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-1", "FR-2"]);
+  });
+});
+
+describe("invisible characters in a requirement", () => {
+  it("do not reach the title", () => {
+    const inventory = derive("FR-1: Das System muss​ X tun.­\nFR-2: Das System muss Y tun.");
+    expect(inventory.entries[0]?.title).toBe("Das System muss X tun.");
+  });
+});
