@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "id": "project-decision-en",
+  "language": "en",
+  "class": "project-decision",
+  "difficulty": "plain",
+  "description": "A decision the team took, not a private preference; project scope is where it belongs.",
+  "truth": [
+    {
+      "key": "release-day",
+      "seed": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
+      "must": true,
+      "private": false,
+      "terms": [["Tuesday*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
+      "learner": [
+        {
+          "body": "We decided as a team to release only on Tuesdays, because support is fully staffed then.",
+          "type": "decision"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "On which weekday do we ship new versions?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tuesday*"]]
+      }
+    }
+  ]
+}

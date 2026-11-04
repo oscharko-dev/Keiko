@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "contradiction-en",
+  "language": "en",
+  "class": "contradiction",
+  "difficulty": "plain",
+  "description": "One message says a thing and its opposite without settling it. Neither side is a fact about the person.",
+  "truth": [],
+  "forbidden": [
+    {
+      "class": "contradiction",
+      "terms": [["Word"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "For minutes I always use Word, although no, I never use Word for that, I honestly do not know.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "tool",
+      "question": "Which program do I use for meeting notes?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}
