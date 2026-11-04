@@ -207,6 +207,7 @@ interface AdmissionOptions {
     signal: AbortSignal,
   ) => Promise<void>;
   readonly reviewableWrite: (action: SourceAction) => boolean;
+  readonly draftItemRefs?: (action: SourceAction) => readonly string[] | undefined;
 }
 function jointGuard(
   guard: ChatSourcesConsumer["guard"],

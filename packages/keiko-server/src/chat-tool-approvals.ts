@@ -10,6 +10,7 @@ import type {
   ChatToolWriteApprovalView,
 } from "@oscharko-dev/keiko-contracts";
 import { randomUUID } from "node:crypto";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { validateChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts/runtime/chat-tool-authority";
 import { ATLASSIAN_ACTION_APPROVAL_TTL_MS } from "./atlassian/actionApprovals.js";
 import {
@@ -36,29 +37,47 @@ export interface ChatToolApprovalContext {
   readonly publish: () => Promise<void>;
   readonly writeExchange: (invocationId: string) => ChatToolExchange | undefined;
 }
-export async function waitForChatToolReadConsent(
-  input: ChatToolApprovalContext,
+/**
+ * Accepts the read grant a Chat tool source requested (owner decision 2026-11-02). The person
+ * connected the Jira Pod or configured the MCP server for this Chat; that connection is the consent,
+ * so a read never waits for a separate approval. The grant keeps its lifecycle: a Pod switch, a
+ * token or configuration change, or expiry revokes it and the next read requests a new one.
+ */
+export async function acceptChatToolReadGrant(
+  input: Pick<ChatToolApprovalContext, "deps" | "message" | "correlationId" | "publish">,
   grant: ChatToolReadGrantView,
 ): Promise<void> {
-  const { deps, message, correlationId, signal } = input;
+  const { deps, message, correlationId } = input;
   const registry = deps.atlassianActionApprovalRegistry;
   requireDispatch(registry !== undefined, "denied", "approval-required");
-  deps.store.updateChatToolTranscript(message.id, { kind: "read-consent", grant }, correlationId);
-  await input.publish();
-  await registry.waitForChatReadGrant(grant.grantId, signal);
-  if (
-    signal.aborted &&
-    registry.getChatReadGrant(grant.grantId, correlationId)?.grant.state === "pending"
-  )
-    registry.revokeChatReadGrant(grant.grantId, correlationId);
-  const current = registry.getChatReadGrant(grant.grantId, correlationId);
-  const view =
-    current === undefined
-      ? { ...grant, state: "expired" as const }
-      : projectChatReadGrant(current.grant);
+  const entry = registry.getChatReadGrant(grant.grantId, correlationId);
+  requireDispatch(entry !== undefined, "denied", "approval-required");
+  const proof = sha256Hex(
+    canonicalise({
+      kind:
+        entry.grant.kind === "mcp-chat-read-grant"
+          ? "mcp-chat-read-binding"
+          : "jira-chat-read-binding",
+      grantId: entry.grant.grantId,
+      subject: entry.grant.subject,
+      authority: entry.authority,
+      disclosureVersion: entry.grant.disclosureVersion,
+      acceptedAt: new Date().toISOString(),
+    }),
+  );
+  const accepted = registry.acceptChatReadGrant(
+    entry.grant.grantId,
+    entry.grant.subject,
+    entry.authority,
+    proof,
+    correlationId,
+  );
+  requireDispatch(accepted.ok, "denied", "approval-required");
+  // The granted grant is the turn's evidence of what it was allowed to read. No card shows it: the
+  // Chat renders nothing for a granted read.
   deps.store.updateChatToolTranscript(
     message.id,
-    { kind: "read-consent", grant: view },
+    { kind: "read-consent", grant: projectChatReadGrant(accepted.grant) },
     correlationId,
   );
   await input.publish();
@@ -167,6 +186,26 @@ export function chatWriteApprovalTiming(
       now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
     ),
   };
+}
+/** A review gets the full approval lifetime, whatever is left of the automatic read grant. */
+function withFullDecisionTime<Envelope extends ChatToolAuthorityEnvelope>(
+  registry: NonNullable<ApprovalRegistry>,
+  facts: ChatWriteFacts<Envelope>,
+  now: number,
+  correlationId: string,
+): ChatWriteFacts<Envelope> {
+  const expiresAt = Math.min(
+    Date.parse(facts.envelope.expiresAt),
+    now + ATLASSIAN_ACTION_APPROVAL_TTL_MS,
+  );
+  if (facts.readExpiresAt >= expiresAt) return facts;
+  const renewed = registry.renewChatReadGrant(
+    facts.envelope.subject,
+    now,
+    expiresAt,
+    correlationId,
+  );
+  return renewed === undefined ? facts : { ...facts, readExpiresAt: renewed.expiresAt };
 }
 function chatWriteApprovalWithinBounds(
   entry: ChatWriteApprovalEntry,
@@ -303,6 +342,7 @@ interface ChatWriteApprovalOwnerConfiguration<
     authority: EditorAgentGovernedAuthorityReference,
     action: Action,
     now: number,
+    draftItemRefs?: readonly string[],
   ) => ChatWriteApprovalEntry;
 }
 interface ChatWriteApprovalOwner<Deps, Action extends ChatToolWriteActionIdentity> {
@@ -319,6 +359,7 @@ interface ChatWriteApprovalOwner<Deps, Action extends ChatToolWriteActionIdentit
     action: Action,
     nowIso: string,
     correlationId: string,
+    draftItemRefs?: readonly string[],
   ) => ChatToolWriteApprovalAdmission;
 }
 
@@ -351,20 +392,15 @@ function chatWriteFactsResolver<
 }
 
 /** Source-specific adapters retain policy and validation; this existing owner retains the workflow. */
-export function createChatWriteApprovalOwner<
+function chatWriteApprovalCurrency<
   Deps extends Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">,
   Envelope extends ChatToolAuthorityEnvelope,
   Action extends ChatToolWriteActionIdentity,
 >(
   owner: ChatWriteApprovalOwnerConfiguration<Deps, Envelope, Action>,
-): ChatWriteApprovalOwner<Deps, Action> {
-  const factsFor = chatWriteFactsResolver(owner);
-  const isCurrent = (
-    deps: Deps,
-    entry: ChatWriteApprovalEntry,
-    nowIso: string,
-    correlationId: string,
-  ): boolean => {
+  factsFor: ReturnType<typeof chatWriteFactsResolver<Deps, Envelope, Action>>,
+): ChatWriteApprovalOwner<Deps, Action>["isCurrent"] {
+  return (deps, entry, nowIso, correlationId) => {
     if (!owner.matchesEntry(entry)) return false;
     const facts = factsFor(deps, entry.subject.chatId, entry.authority, nowIso, correlationId);
     if (facts === undefined || !sameReadGrantSubject(entry, facts.envelope.subject)) return false;
@@ -373,6 +409,16 @@ export function createChatWriteApprovalOwner<
       chatWriteApprovalWithinBounds(entry, facts, Date.parse(nowIso))
     );
   };
+}
+export function createChatWriteApprovalOwner<
+  Deps extends Pick<UiHandlerDeps, "atlassianActionApprovalRegistry">,
+  Envelope extends ChatToolAuthorityEnvelope,
+  Action extends ChatToolWriteActionIdentity,
+>(
+  owner: ChatWriteApprovalOwnerConfiguration<Deps, Envelope, Action>,
+): ChatWriteApprovalOwner<Deps, Action> {
+  const factsFor = chatWriteFactsResolver(owner);
+  const isCurrent = chatWriteApprovalCurrency(owner, factsFor);
   return {
     isCurrent,
     request: (
@@ -382,12 +428,24 @@ export function createChatWriteApprovalOwner<
       action,
       nowIso,
       correlationId,
+      draftItemRefs,
     ): ChatToolWriteApprovalAdmission => {
       const facts = factsFor(deps, chatId, authority, nowIso, correlationId);
       const registry = deps.atlassianActionApprovalRegistry;
       if (facts === undefined || registry === undefined)
         return denyChatToolWriteApproval("authority-denied", chatId, correlationId);
-      const entry = owner.pending(facts, authority, action, Date.parse(nowIso));
+      const now = Date.parse(nowIso);
+      const first = owner.pending(facts, authority, action, now, draftItemRefs);
+      const entry =
+        owner.policy(first, facts.envelope) === "review-required"
+          ? owner.pending(
+              withFullDecisionTime(registry, facts, now, correlationId),
+              authority,
+              action,
+              now,
+              draftItemRefs,
+            )
+          : first;
       return requestRetainedChatWriteApproval(
         registry,
         entry,

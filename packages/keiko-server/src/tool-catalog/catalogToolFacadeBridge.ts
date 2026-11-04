@@ -248,6 +248,7 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
             arguments: {
               verifierId: request.verifierId,
               targetPath: request.targetPath ?? "",
+              packageDir: request.packageDir ?? "",
             },
           }
         : undefined;

@@ -15,4 +15,5 @@ export type {
   ScriptCatalog,
   ScriptMapping,
 } from "@oscharko-dev/keiko-contracts";
+export type { VerificationPackageManager } from "@oscharko-dev/keiko-contracts/runtime/verification";
 export { DEFAULT_VERIFICATION_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";

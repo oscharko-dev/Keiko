@@ -3861,3 +3861,22 @@ The old loop's coverage/report defect and original CI scanner warning remain ret
 Fresh full scripts coverage, the exact scanner-log validator and delivered-head Cloud
 analysis determine the final reporting verdict; the archive format and all admission/safety
 checks remain unchanged.
+
+## Owner decision 2026-11-02 — reads without consent, Full access default, Connectors menu
+
+This supersedes the read-consent and Tool-access statements above for current behaviour; the
+earlier sections remain the record of what was qualified at that time.
+
+- Reads through a Jira Pod or an MCP server never ask the person. The server establishes the read
+  grant when the first read is admitted; the `chat-read-consent` route and the Chat read card are
+  retired. Grants keep their subject binding, expiry and revalidation at every use.
+- An unselected Chat (no stored row) resolves to Full access within the deployment ceiling; every
+  stored mode, a version-1 Ask row included, is a saved selection and is kept.
+- The Chat composer's **Connectors** menu replaces the **Tool access** popover: one switch per
+  centrally configured MCP server and per Jira Pod, plus the Access mode. A switched-off connector
+  gives the model no tools and no context. The Coding Workbench composer offers the same menu per
+  run (`mcpServers`, `jiraPodId`).
+- The Jira Pod card shows name, address, a status chip and one primary action; secondary actions
+  sit in a **⋯** menu.
+- The 4081 accessibility evidence under `docs/design-system/evidence/4081/` must be regenerated on
+  Linux for the Connectors surface; the pending-read-consent captures no longer exist.

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { JiraFieldMetadata } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { parseJiraFieldMetadata, validateJiraFieldChanges } from "./jira-field-metadata.js";
 
 function field(
@@ -83,17 +84,140 @@ describe("bounded Jira metadata field/operation matrix", () => {
     ).toMatchObject({ ok: false, reason: "required-field" });
   });
 
+  // Owner decision 2026-10-31 (#4176, ADR-0128 bounded field validation): plugin fields are writable, but their meaning
+  // is still never guessed from a familiar base type. The value stays opaque — no text semantics,
+  // no rich-text conversion, no read-back equality claim — and Jira's validation decides.
   it("never guesses unknown plugin types from a familiar base type", () => {
     const result = parseJiraFieldMetadata([
       field("customfield_9", "string", {
         schema: { type: "string", custom: "external.plugin:script" },
       }),
     ]);
-    expect(result).toMatchObject({ ok: true, fields: [{ kind: "unsupported" }] });
+    expect(result).toMatchObject({
+      ok: true,
+      fields: [{ kind: "opaque", richText: false, schemaType: "string" }],
+    });
     if (!result.ok) throw new Error("Invalid fixture");
     expect(
       validateJiraFieldChanges(result.fields, { customfield_9: "value" }, "edit", "data-center"),
-    ).toMatchObject({ ok: false, reason: "unsupported-field" });
+    ).toEqual({ ok: true, fields: { customfield_9: "value" }, update: {} });
+    expect(
+      validateJiraFieldChanges(result.fields, { customfield_9: "value" }, "edit", "cloud"),
+    ).toEqual({ ok: true, fields: { customfield_9: "value" }, update: {} });
+  });
+
+  it.each([
+    { customfield_9: JSON.parse('{"__proto__":{"polluted":true}}') as unknown },
+    { customfield_9: "x".repeat(4097) },
+    { customfield_9: [[[[["too deep"]]]]] },
+    { customfield_9: Array.from({ length: 101 }, (_, index) => index) },
+    { customfield_9: "control\u0000character" },
+    { customfield_9: Number.POSITIVE_INFINITY },
+    {
+      customfield_9: Object.fromEntries(
+        Array.from({ length: 51 }, (_, index) => [`k${String(index)}`, index]),
+      ),
+    },
+    // Each string is within the scalar bound; together they pass the 16 KiB serialized bound.
+    { customfield_9: Array.from({ length: 5 }, () => "x".repeat(4000)) },
+  ])("bounds an opaque plugin value: %j", (changes) => {
+    const result = parseJiraFieldMetadata([
+      field("customfield_9", "any", { schema: { type: "any", custom: "vendor:link" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(validateJiraFieldChanges(result.fields, changes, "edit", "data-center")).toMatchObject({
+      ok: false,
+      reason: "invalid-field",
+      fieldId: "customfield_9",
+    });
+  });
+
+  it.each([
+    { customfield_9: "x".repeat(4096) },
+    { customfield_9: Array.from({ length: 100 }, (_, index) => index) },
+    {
+      customfield_9: Object.fromEntries(
+        Array.from({ length: 50 }, (_, index) => [`k${String(index)}`, index]),
+      ),
+    },
+    { customfield_9: [[["at depth"]]] },
+    { customfield_9: Array.from({ length: 3 }, () => "x".repeat(4000)) },
+  ])("accepts an opaque plugin value exactly at its bounds: %j", (changes) => {
+    const result = parseJiraFieldMetadata([
+      field("customfield_9", "any", { schema: { type: "any", custom: "vendor:link" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(validateJiraFieldChanges(result.fields, changes, "edit", "data-center")).toEqual({
+      ok: true,
+      fields: changes,
+      update: {},
+    });
+  });
+
+  it("writes a parent issue reference only as one canonical key or id", () => {
+    const result = parseJiraFieldMetadata([
+      field("parent", "issuelink", { schema: { type: "issuelink", system: "parent" } }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(result.fields[0]).toMatchObject({ kind: "issue", operations: ["set"] });
+    const write = (parent: unknown): unknown =>
+      validateJiraFieldChanges(result.fields, { parent }, "edit", "data-center");
+    expect(write("REQ-12")).toMatchObject({ ok: true, fields: { parent: { key: "REQ-12" } } });
+    expect(write({ id: "10001" })).toMatchObject({ ok: true, fields: { parent: { id: "10001" } } });
+    for (const invalid of ["REQ", "12", { key: "REQ-1", id: "1" }, { key: "REQ 1" }])
+      expect(write(invalid)).toMatchObject({ ok: false, reason: "invalid-field" });
+  });
+
+  it("keeps dedicated system fields out of plain field writes", () => {
+    const result = parseJiraFieldMetadata([
+      field("attachment", "array", {
+        schema: { type: "array", items: "attachment", system: "attachment" },
+      }),
+      field("issuelinks", "array", {
+        schema: { type: "array", items: "issuelinks", system: "issuelinks" },
+        operations: ["add"],
+      }),
+      field("timetracking", "timetracking", {
+        schema: { type: "timetracking", system: "timetracking" },
+      }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(result.fields.map((item) => [item.id, item.kind, item.operations])).toEqual([
+      ["attachment", "unsupported", []],
+      ["issuelinks", "links", ["add"]],
+      ["timetracking", "opaque", ["set"]],
+    ]);
+    // Links travel only on the dedicated links argument (#4176), never as a plain field write.
+    expect(
+      validateJiraFieldChanges(
+        result.fields,
+        { issuelinks: [{ type: { name: "Blocks" }, outwardIssue: { key: "REQ-2" } }] },
+        "edit",
+        "data-center",
+      ),
+    ).toEqual({ ok: false, reason: "invalid-operation", fieldId: "issuelinks" });
+    expect(
+      validateJiraFieldChanges(result.fields, { attachment: [] }, "edit", "data-center"),
+    ).toEqual({ ok: false, reason: "unsupported-field", fieldId: "attachment" });
+  });
+
+  it("offers issue links only with an add operation on the canonical schema", () => {
+    const result = parseJiraFieldMetadata([
+      field("issuelinks", "array", {
+        schema: { type: "array", items: "issuelinks", system: "issuelinks" },
+        operations: ["set"],
+      }),
+    ]);
+    if (!result.ok) throw new Error("Invalid fixture");
+    expect(result.fields.map((item) => [item.kind, item.operations])).toEqual([["links", []]]);
+    const malformed = parseJiraFieldMetadata([
+      field("issuelinks", "array", {
+        schema: { type: "array", items: "string", system: "issuelinks" },
+        operations: ["add"],
+      }),
+    ]);
+    if (!malformed.ok) throw new Error("Invalid fixture");
+    expect(malformed.fields[0]?.kind).toBe("unsupported");
   });
 
   it.each([
@@ -187,6 +311,207 @@ describe("Jira scalar, reference and metadata edge cases", () => {
     expect(validateJiraFieldChanges(meta.fields, {}, "transition", "data-center")).toMatchObject({
       ok: false,
       reason: "required-field",
+    });
+  });
+
+  // #4176 lab (S17): Jira sets the reporter to the caller when it is absent, although create
+  // metadata lists it as required without a default. No other required field gets that grace.
+  describe("the reporter of a new issue", () => {
+    const meta = (): readonly JiraFieldMetadata[] => {
+      const result = parseJiraFieldMetadata([
+        field("summary", "string", { required: true }),
+        field("reporter", "user", { required: true, hasDefaultValue: false }),
+      ]);
+      if (!result.ok) throw new Error("Invalid fixture");
+      return result.fields;
+    };
+    it("may be omitted on create and is then not sent", () => {
+      expect(validateJiraFieldChanges(meta(), { summary: "S" }, "create", "data-center")).toEqual({
+        ok: true,
+        fields: { summary: "S" },
+        update: {},
+      });
+    });
+    it("is still required for a transition and any other required field is still refused", () => {
+      expect(validateJiraFieldChanges(meta(), {}, "create", "data-center")).toMatchObject({
+        ok: false,
+        reason: "required-field",
+        fieldId: "summary",
+      });
+      expect(
+        validateJiraFieldChanges(meta(), { summary: "S" }, "transition", "data-center"),
+      ).toMatchObject({ ok: false, reason: "required-field", fieldId: "reporter" });
+    });
+    it("is validated like any user when supplied", () => {
+      const supplied = (reporter: unknown): unknown =>
+        validateJiraFieldChanges(meta(), { summary: "S", reporter }, "create", "data-center");
+      expect(supplied("x".repeat(257))).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "reporter",
+      });
+      expect(supplied("")).toMatchObject({ ok: false, fieldId: "reporter" });
+      expect(supplied(null)).toMatchObject({ ok: false, fieldId: "reporter" });
+      expect(supplied("keiko-admin")).toMatchObject({
+        ok: true,
+        fields: { reporter: { name: "keiko-admin" } },
+      });
+    });
+  });
+
+  // #4176 lab (S05): models send the user or choice itself, not Jira's reference object. A bare
+  // string is canonicalized to the one reference the deployment and the offered choices admit.
+  describe("bare user and option values", () => {
+    const parse = (...fields: Record<string, unknown>[]): readonly JiraFieldMetadata[] => {
+      const result = parseJiraFieldMetadata(fields);
+      if (!result.ok) throw new Error("Invalid fixture");
+      return result.fields;
+    };
+    const check = (
+      fields: readonly JiraFieldMetadata[],
+      value: unknown,
+      id: string,
+      deployment: "data-center" | "cloud" = "data-center",
+    ): unknown => validateJiraFieldChanges(fields, { [id]: value }, "edit", deployment);
+    const OPTIONS = [
+      { id: "10", value: "Blue" },
+      { id: "11", value: "Green" },
+      { id: "12", value: "Green" },
+      { id: "Green-id", value: "Other" },
+    ];
+    const choice = (allowedValues?: unknown[]): readonly JiraFieldMetadata[] =>
+      parse(
+        field("customfield_5", "option", {
+          schema: {
+            type: "option",
+            custom: "com.atlassian.jira.plugin.system.customfieldtypes:select",
+          },
+          ...(allowedValues === undefined ? {} : { allowedValues }),
+        }),
+      );
+    it("turns a bare user name into the deployment's user key", () => {
+      const fields = parse(field("reporter", "user"));
+      expect(check(fields, "keiko-admin", "reporter")).toMatchObject({
+        ok: true,
+        fields: { reporter: { name: "keiko-admin" } },
+      });
+      expect(check(fields, "5b10ac8d82e05b22cc7d4ef5", "reporter", "cloud")).toMatchObject({
+        ok: true,
+        fields: { reporter: { accountId: "5b10ac8d82e05b22cc7d4ef5" } },
+      });
+      expect(check(fields, { name: "keiko-admin" }, "reporter")).toMatchObject({ ok: true });
+    });
+    it.each(["", " ", "x".repeat(257), "line\nbreak"])("refuses the bare user %j", (value) => {
+      expect(check(parse(field("reporter", "user")), value, "reporter")).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+      });
+    });
+    it("keeps a bare user inside the offered users", () => {
+      const fields = parse(
+        field("reporter", "user", { allowedValues: [{ name: "alice", accountId: "cloud-a" }] }),
+      );
+      expect(check(fields, "alice", "reporter")).toMatchObject({ ok: true });
+      expect(check(fields, "bob", "reporter")).toMatchObject({ ok: false });
+      expect(check(fields, "cloud-a", "reporter", "cloud")).toMatchObject({ ok: true });
+      expect(check(fields, "alice", "reporter", "cloud")).toMatchObject({ ok: false });
+    });
+    it("accepts bare users in a user list", () => {
+      const fields = parse(
+        field("customfield_6", "array", {
+          schema: {
+            type: "array",
+            items: "user",
+            custom: "com.atlassian.jira.plugin.system.customfieldtypes:multiuserpicker",
+          },
+        }),
+      );
+      expect(check(fields, ["alice", { name: "bob" }], "customfield_6")).toMatchObject({
+        ok: true,
+        fields: { customfield_6: [{ name: "alice" }, { name: "bob" }] },
+      });
+    });
+    it("matches a bare option by id, then by exact value, and canonicalizes to the id", () => {
+      const fields = choice(OPTIONS);
+      expect(check(fields, "10", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "10" } },
+      });
+      expect(check(fields, "Blue", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "10" } },
+      });
+      // An id match wins over a value match: "Green-id" is an id, "Other" its value.
+      expect(check(fields, "Green-id", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "Green-id" } },
+      });
+    });
+    it("refuses a string that is one choice's id and another choice's name, with a message", () => {
+      const fields = choice([
+        { id: "10", value: "Blue" },
+        { id: "11", value: "10" },
+      ]);
+      const ambiguous = check(fields, "10", "customfield_5") as { message?: string };
+      expect(ambiguous).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "customfield_5",
+      });
+      expect(ambiguous.message).toContain("more than one offered choice");
+      expect(check(fields, "Blue", "customfield_5")).toMatchObject({ ok: true });
+      const unknown = check(fields, "nothing", "customfield_5") as { message?: string };
+      expect(unknown).toMatchObject({ ok: false });
+      expect(unknown.message).toContain("none of the offered choices");
+    });
+    it.each([
+      ["an ambiguous value", "Green"],
+      ["a value that is not offered", "Purple"],
+      ["a different case", "blue"],
+    ])("refuses a bare option with %s", (_label, value) => {
+      expect(check(choice(OPTIONS), value, "customfield_5")).toMatchObject({
+        ok: false,
+        reason: "invalid-field",
+      });
+    });
+    it("takes only a numeric id when no choices are listed", () => {
+      const fields = choice();
+      expect(check(fields, "10", "customfield_5")).toMatchObject({
+        ok: true,
+        fields: { customfield_5: { id: "10" } },
+      });
+      expect(check(fields, "Blue", "customfield_5")).toMatchObject({ ok: false });
+      expect(check(fields, "10; drop", "customfield_5")).toMatchObject({ ok: false });
+    });
+    it("accepts bare choices in an option list and keeps the object form", () => {
+      const fields = parse(
+        field("components", "array", {
+          schema: { type: "array", items: "component", system: "components" },
+          allowedValues: [
+            { id: "1", name: "Backend" },
+            { id: "2", name: "Frontend" },
+          ],
+        }),
+      );
+      expect(check(fields, ["Backend", "2", { id: "1" }], "components")).toMatchObject({
+        ok: true,
+        fields: { components: [{ id: "1" }, { id: "2" }, { id: "1" }] },
+      });
+      expect(check(fields, ["Missing"], "components")).toMatchObject({ ok: false });
+    });
+    it("matches a bare priority or issue type by its name", () => {
+      const fields = parse(
+        field("priority", "priority", {
+          allowedValues: [
+            { id: "1", name: "High" },
+            { id: "2", name: "Low" },
+          ],
+        }),
+      );
+      expect(check(fields, "High", "priority")).toMatchObject({
+        ok: true,
+        fields: { priority: { id: "1" } },
+      });
     });
   });
 
@@ -297,7 +622,8 @@ it("does not parse plugin-specific choice structures for unsupported field kinds
   ]);
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error("Unrelated field lost");
-  expect(result.fields[1]).toMatchObject({ kind: "unsupported", operations: [] });
+  // The plugin value stays opaque: its choice structure is never parsed and only "set" exists.
+  expect(result.fields[1]).toMatchObject({ kind: "opaque", operations: ["set"] });
   expect(result.fields[1]).not.toHaveProperty("allowedValues");
 });
 
@@ -353,4 +679,181 @@ it("retains human choice labels without admitting labels as write identities", (
       "data-center",
     ).ok,
   ).toBe(true);
+});
+
+describe("escaped line breaks in rich text (#4178)", () => {
+  const fields = (): readonly JiraFieldMetadata[] => {
+    const result = parsed();
+    if (!result.ok) throw new Error("Invalid fixture");
+    return result.fields;
+  };
+  const check = (
+    description: string,
+    deployment: "data-center" | "cloud" = "data-center",
+  ): ReturnType<typeof validateJiraFieldChanges> =>
+    validateJiraFieldChanges(fields(), { description }, "edit", deployment);
+  const ESCAPED = String.raw`### Steps\n1. Build.\n\n### Definition of Done\n- Tested.`;
+
+  it.each(["data-center", "cloud"] as const)(
+    "refuses a description whose line breaks all arrive escaped (%s)",
+    (deployment) => {
+      expect(check(ESCAPED, deployment)).toEqual({
+        ok: false,
+        reason: "invalid-field",
+        fieldId: "description",
+        message:
+          "The text contains escaped line breaks (\\n) and no real line break; send real line breaks instead.",
+      });
+    },
+  );
+
+  it("accepts real line breaks, one literal escape and an escape beside real breaks", () => {
+    expect(check(ESCAPED.replaceAll(String.raw`\n`, "\n"))).toMatchObject({ ok: true });
+    expect(check(String.raw`Split the CSV on \n before parsing.`)).toMatchObject({ ok: true });
+    expect(check(`Regex:\n${String.raw`split on \n and \n again`}`)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    String.raw`Split paragraphs with /\n\n/; preserve that regular expression literally.`,
+    String.raw`Replace \n with a space, then \n again at the end.`,
+    String.raw`Use "\n\n" as the separator and "\n" inside a record.`,
+  ])("keeps intentional backslash text with several escapes (%s)", (description) => {
+    for (const deployment of ["data-center", "cloud"] as const)
+      expect(check(description, deployment)).toMatchObject({ ok: true });
+  });
+
+  it("still refuses an encoded document with headings or list items, whatever the escapes between", () => {
+    for (const encoded of [
+      String.raw`## Context\nWhy\n## Acceptance criteria\n* works`,
+      String.raw`h2. Context\nWhy\nh2. Done\nTested`,
+      String.raw`Steps\n- build\n- test`,
+      String.raw`Intro\n\n1. First\n2. Second`,
+    ])
+      expect(check(encoded), encoded).toMatchObject({ ok: false, reason: "invalid-field" });
+  });
+
+  it("leaves single-line text fields alone", () => {
+    expect(
+      validateJiraFieldChanges(fields(), { summary: String.raw`a\nb\nc` }, "edit", "data-center"),
+    ).toMatchObject({ ok: true });
+  });
+});
+
+// #4176 AC5: every schema type the projection knows, an unknown custom type, missing metadata and
+// a field without the requested operation, each against one accepted and one refused value.
+describe("schema-type matrix (#4176)", () => {
+  const PREFIX = "com.atlassian.jira.plugin.system.customfieldtypes:";
+  const CHOICES = [{ id: "1", name: "High" }];
+  const SAMPLES = {
+    text: ["Ziel der Anforderung", 42],
+    number: [2.5, "2.5"],
+    date: ["2026-03-01", "01.03.2026"],
+    datetime: ["2026-03-01T10:00:00Z", "2026-03-01"],
+    option: [{ id: "1" }, { id: "9" }],
+    options: [[{ id: "1" }], [{ id: "9" }]],
+    user: [{ name: "jdoe" }, 42],
+    users: [[{ name: "jdoe" }], [42]],
+    strings: [["anforderung"], ["zwei worte"]],
+    opaque: [{ any: ["shape", 1] }, "control\u0000character"],
+  } as const;
+  // Users are never listed as choices: Jira offers them through a user search.
+  const choicesFor = (schema: Record<string, unknown>): Record<string, unknown> =>
+    schema.type === "user" || schema.items === "user" ? {} : { allowedValues: CHOICES };
+  const system = (id: string, schema: Record<string, unknown>): Record<string, unknown> =>
+    field(id, String(schema.type), { schema: { ...schema, system: id }, ...choicesFor(schema) });
+  const custom = (type: string, schema: Record<string, unknown>): Record<string, unknown> =>
+    field("customfield_10500", String(schema.type), {
+      schema: { ...schema, custom: type },
+      ...choicesFor(schema),
+    });
+  const CASES: readonly (readonly [string, Record<string, unknown>, keyof typeof SAMPLES])[] = [
+    ["summary", system("summary", { type: "string" }), "text"],
+    ["description", system("description", { type: "string" }), "text"],
+    ["environment", system("environment", { type: "string" }), "text"],
+    ["labels", system("labels", { type: "array", items: "string" }), "strings"],
+    ["priority", system("priority", { type: "priority" }), "option"],
+    ["assignee", system("assignee", { type: "user" }), "user"],
+    ["reporter", system("reporter", { type: "user" }), "user"],
+    ["duedate", system("duedate", { type: "date" }), "date"],
+    ["components", system("components", { type: "array", items: "component" }), "options"],
+    ["versions", system("versions", { type: "array", items: "version" }), "options"],
+    ["fixVersions", system("fixVersions", { type: "array", items: "version" }), "options"],
+    ["textfield", custom(`${PREFIX}textfield`, { type: "string" }), "text"],
+    ["textarea", custom(`${PREFIX}textarea`, { type: "string" }), "text"],
+    ["float", custom(`${PREFIX}float`, { type: "number" }), "number"],
+    ["datepicker", custom(`${PREFIX}datepicker`, { type: "date" }), "date"],
+    ["datetime", custom(`${PREFIX}datetime`, { type: "datetime" }), "datetime"],
+    ["select", custom(`${PREFIX}select`, { type: "option" }), "option"],
+    ["radiobuttons", custom(`${PREFIX}radiobuttons`, { type: "option" }), "option"],
+    ["multiselect", custom(`${PREFIX}multiselect`, { type: "array", items: "option" }), "options"],
+    [
+      "multicheckboxes",
+      custom(`${PREFIX}multicheckboxes`, { type: "array", items: "option" }),
+      "options",
+    ],
+    ["userpicker", custom(`${PREFIX}userpicker`, { type: "user" }), "user"],
+    [
+      "multiuserpicker",
+      custom(`${PREFIX}multiuserpicker`, { type: "array", items: "user" }),
+      "users",
+    ],
+    // An unmapped system custom type keeps a scalar schema type and stays opaque otherwise.
+    ["system custom, number schema", custom(`${PREFIX}importid`, { type: "number" }), "number"],
+    ["system custom, option schema", custom(`${PREFIX}other`, { type: "option" }), "opaque"],
+    // An unknown app type is never guessed from its familiar base type: Jira decides.
+    ["unknown app type", custom("vendor.app:estimate", { type: "string" }), "opaque"],
+    [
+      "unknown app array",
+      custom("vendor.app:sprint", { type: "array", items: "string" }),
+      "opaque",
+    ],
+  ];
+
+  it.each(CASES)("%s validates its values", (_name, raw, kind) => {
+    const parsed = parseJiraFieldMetadata([raw]);
+    if (!parsed.ok) throw new Error("Invalid fixture");
+    const [projected] = parsed.fields;
+    expect(projected?.kind).toBe(kind);
+    const id = String(raw.fieldId);
+    const [accepted, refused] = SAMPLES[kind];
+    expect(
+      validateJiraFieldChanges(parsed.fields, { [id]: accepted }, "edit", "data-center").ok,
+    ).toBe(true);
+    expect(
+      validateJiraFieldChanges(parsed.fields, { [id]: refused }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, fieldId: id });
+  });
+
+  it("refuses a field the metadata does not offer, and metadata that is missing", () => {
+    const parsed = parseJiraFieldMetadata([field("summary", "string")]);
+    if (!parsed.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(parsed.fields, { customfield_10500: "x" }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, reason: "invalid-field", fieldId: "customfield_10500" });
+    expect(validateJiraFieldChanges([], { summary: "x" }, "create", "data-center")).toMatchObject({
+      ok: false,
+      fieldId: "summary",
+    });
+    expect(parseJiraFieldMetadata(undefined)).toEqual({ ok: false, reason: "malformed-metadata" });
+    expect(parseJiraFieldMetadata({ values: [] })).toEqual({
+      ok: false,
+      reason: "malformed-metadata",
+    });
+  });
+
+  it.each([
+    ["only add", ["add"]],
+    ["no operation", []],
+  ])("refuses a set write to a field with %s", (_name, operations) => {
+    const parsed = parseJiraFieldMetadata([
+      field("customfield_10500", "string", {
+        operations,
+        schema: { type: "string", custom: `${PREFIX}textfield` },
+      }),
+    ]);
+    if (!parsed.ok) throw new Error("Invalid fixture");
+    expect(
+      validateJiraFieldChanges(parsed.fields, { customfield_10500: "x" }, "edit", "data-center"),
+    ).toMatchObject({ ok: false, fieldId: "customfield_10500" });
+  });
 });

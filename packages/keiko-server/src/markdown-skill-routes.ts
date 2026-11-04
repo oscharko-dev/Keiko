@@ -21,7 +21,7 @@ function outcomePhase(status: number): "completed" | "rejected" | "failed" {
   return status >= 400 ? "rejected" : "completed";
 }
 
-async function readMutation(
+export async function readMutation(
   ctx: RouteContext,
   deps: SkillRouteDeps,
   maxBytes: number,
@@ -32,7 +32,7 @@ async function readMutation(
   return body;
 }
 
-async function withSkillAccess(
+export async function withSkillAccess(
   ctx: RouteContext,
   deps: SkillRouteDeps,
   action: MarkdownSkillAction,

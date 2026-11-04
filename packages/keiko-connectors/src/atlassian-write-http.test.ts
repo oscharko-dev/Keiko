@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES,
+  ATLASSIAN_HTTP_UPLOAD_MAX_BYTES,
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
@@ -90,6 +91,49 @@ describe("executeAtlassianWriteRequest — classification", () => {
     expect(outcome).toEqual({ ok: false, reason, httpStatus: status });
     expect(requests).toHaveLength(1);
     expect(delays).toEqual([]);
+  });
+
+  it("returns Jira's own bounded client-error explanation with the closed reason (#4176)", async () => {
+    const body = JSON.stringify({
+      errorMessages: ["Issue does not exist", "  ", 7],
+      errors: {
+        customfield_10105: "Number value expected as the Sprint id.",
+        summary: `bad\u0000value ${"x".repeat(400)}`,
+        "not a field": "dropped",
+      },
+    });
+    const outcome = await executeAtlassianWriteRequest(
+      { http: scriptedPort([response(400, body)]).port },
+      request({ method: "POST" }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      reason: "field-validation",
+      httpStatus: 400,
+      remote: {
+        fieldErrors: [
+          { fieldId: "customfield_10105", message: "Number value expected as the Sprint id." },
+          { fieldId: "summary" },
+        ],
+        messages: ["Issue does not exist"],
+      },
+    });
+    if (outcome.ok || outcome.remote?.fieldErrors === undefined) throw new Error("Expected detail");
+    expect(outcome.remote.fieldErrors[1]?.message).toMatch(/^bad value x+…$/u);
+    expect(outcome.remote.fieldErrors[1]?.message).toHaveLength(198);
+  });
+
+  it.each([
+    response(400, "not json"),
+    response(400, '{"errors":{}}'),
+    response(400, '{"errorMessages":["x"]}', { truncated: true }),
+    response(503, '{"errorMessages":["server side"]}'),
+  ])("omits an absent, empty, truncated or server-side explanation", async (result) => {
+    const outcome = await executeAtlassianWriteRequest(
+      { http: scriptedPort([result]).port },
+      request(),
+    );
+    expect(outcome).not.toHaveProperty("remote");
   });
 
   it("classifies transport failures as typed timeout/unavailable", async () => {
@@ -350,6 +394,52 @@ it.each([{ items: [] }, { items: [{ id: "10000", key: "KEIKO" }] }])(
     expect(fixture.requests).toHaveLength(1);
   },
 );
+
+describe("governed uploads (#4176)", () => {
+  const upload = {
+    contentType: "multipart/form-data; boundary=keiko-test",
+    bytes: new Uint8Array(8),
+  };
+  it("sends one multipart POST with the upload's own request budget and never retries it", async () => {
+    const fixture = scriptedPort([response(503), response(200, "[]")]);
+    const outcome = await executeAtlassianWriteRequest(
+      { http: fixture.port },
+      { method: "POST", url: URL, expect: "json-array", upload },
+    );
+    expect(outcome).toMatchObject({ ok: false, reason: "unavailable" });
+    expect(fixture.requests).toHaveLength(1);
+    expect(fixture.requests[0]).toMatchObject({ method: "POST", upload, timeoutMs: 60_000 });
+    expect(fixture.requests[0]?.bodyJson).toBeUndefined();
+  });
+  it.each([
+    ["PUT", { method: "PUT" as const, upload }],
+    ["POST with a JSON body", { method: "POST" as const, upload, bodyJson: "{}" }],
+  ])("refuses an upload on %s before the port is called", async (_label, extra) => {
+    const fixture = scriptedPort([response(200, "[]")]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        { url: URL, expect: "json-array", ...extra },
+      ),
+    ).resolves.toEqual({ ok: false, reason: "malformed-payload" });
+    expect(fixture.requests).toHaveLength(0);
+  });
+  it("refuses an upload past the transport ceiling before the port is called", async () => {
+    const fixture = scriptedPort([response(200, "[]")]);
+    await expect(
+      executeAtlassianWriteRequest(
+        { http: fixture.port },
+        {
+          method: "POST",
+          url: URL,
+          expect: "json-array",
+          upload: { ...upload, bytes: new Uint8Array(ATLASSIAN_HTTP_UPLOAD_MAX_BYTES + 1) },
+        },
+      ),
+    ).resolves.toEqual({ ok: false, reason: "bounds-exceeded" });
+    expect(fixture.requests).toHaveLength(0);
+  });
+});
 
 it.each([response(200, "{}"), response(200, "["), response(200, "[]", { truncated: true })])(
   "refuses malformed or truncated collection responses",

@@ -37,3 +37,30 @@ export function deepFreeze<T>(value: T): T {
   freezeInto(value, new WeakSet());
   return value;
 }
+
+function frozenFrom(value: unknown, seen: WeakSet<object>): boolean {
+  if (typeof value !== "object" || value === null) return typeof value !== "function";
+  if (seen.has(value)) return true;
+  seen.add(value);
+  if (!Object.isFrozen(value)) return false;
+  return Reflect.ownKeys(value).every((key) => {
+    const property = Object.getOwnPropertyDescriptor(value, key);
+    return property !== undefined && "value" in property && frozenFrom(property.value, seen);
+  });
+}
+
+/**
+ * True only for a value no reference holder can change: every reachable object is frozen and holds
+ * data properties only. An accessor or a function could still yield a different value later, so
+ * either makes the answer false. A caller may then treat "the same object" as "the same content".
+ */
+export function isDeepFrozen(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return frozenFrom(value, new WeakSet());
+  if (CONFIRMED_DEEP_FROZEN.has(value)) return true;
+  const frozen = frozenFrom(value, new WeakSet());
+  if (frozen) CONFIRMED_DEEP_FROZEN.add(value);
+  return frozen;
+}
+
+// Freezing cannot be undone, so a root once confirmed stays confirmed and need not be walked again.
+const CONFIRMED_DEEP_FROZEN = new WeakSet();

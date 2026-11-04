@@ -91,6 +91,7 @@ export {
   htmlParser,
   jsonParser,
   pdfParser,
+  pptxParser,
   registerParser,
   resolveParser,
   textParser,
@@ -147,6 +148,13 @@ export {
   type BoundedDocumentExtractionResult,
   type BoundedDocumentFormat,
 } from "./bounded-document-extraction.js";
+
+// Every part of an OOXML package as raw bytes, for callers that must vouch for a whole package.
+export {
+  readBoundedOoxmlPackage,
+  type BoundedOoxmlPackageOptions,
+  type BoundedOoxmlPackageResult,
+} from "./bounded-ooxml-package.js";
 
 export {
   DEFAULT_DISCOVERY_OPTIONS,

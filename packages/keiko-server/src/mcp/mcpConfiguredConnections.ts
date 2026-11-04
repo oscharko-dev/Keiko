@@ -3,6 +3,7 @@ import { join } from "node:path";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import type {
   ExternalMcpConnection,
+  ExternalMcpTool,
   ManagedMcpInvocationContext,
 } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
@@ -34,6 +35,15 @@ export interface ConfiguredMcpConnections {
   /** Current shared runtime facts only; inspection never starts a transport or executes a tool. */
   readonly inspect: (correlationId: string) => readonly McpServerConnectionView[];
   readonly connect: (name: string, correlationId: string) => Promise<ExternalMcpConnection>;
+  /**
+   * The tools an already connected server advertised, or undefined while it is idle, connecting,
+   * failed, unsupported or revoked. A peek: it never starts a transport or awaits one. Absent on a
+   * port that cannot peek, which a reader treats as "not connected".
+   */
+  readonly connectedTools?: (
+    name: string,
+    correlationId: string,
+  ) => readonly ExternalMcpTool[] | undefined;
   readonly generation: (server: McpServerDefinition, correlationId: string) => AbortSignal;
   readonly serve: (
     name: string,
@@ -334,6 +344,17 @@ function connectionView(
     ? { name: server.name, state: "connecting", toolCount: null }
     : { name: server.name, state: "connected", toolCount: entry.client.tools.length };
 }
+function connectedToolsOf(
+  options: Options,
+  connections: ReadonlyMap<string, ConnectionEntry>,
+  name: string,
+  correlationId: string,
+): readonly ExternalMcpTool[] | undefined {
+  const server = options.settings.read(correlationId).servers.find((entry) => entry.name === name);
+  if (server === undefined) return undefined;
+  const view = connectionView(options, connections, server, correlationId);
+  return view.state === "connected" ? connections.get(name)?.client?.tools : undefined;
+}
 async function openConnection(
   options: Options,
   server: McpServerDefinition,
@@ -406,6 +427,8 @@ export function createConfiguredMcpConnections(options: Options): ConfiguredMcpC
       options.settings
         .read(correlationId)
         .servers.map((server) => connectionView(options, connections, server, correlationId)),
+    connectedTools: (name, correlationId) =>
+      connectedToolsOf(options, connections, name, correlationId),
     generation: (server, correlationId) => currentGeneration(options, server, correlationId),
     serve: async (name, request, context): Promise<Response> => {
       const pending = manager.connect(name, context.correlationId);
