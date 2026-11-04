@@ -289,6 +289,43 @@ async function extractPdfWindow(
   return window;
 }
 
+// A checkpoint carries no page furniture, so a resumed run would otherwise start knowing nothing
+// and keep the headers of a short last window that a continuous run removes. The run before the
+// resume point is read again, text layer only and without emitting anything, to learn it back.
+async function furnitureBeforeResume(
+  doc: PdfDocumentLike,
+  args: {
+    readonly ctx: PdfExtractContext;
+    readonly parserOptions: ParserOptions;
+    readonly startedAt: number;
+    readonly resumeFromPage: number;
+    readonly windowPages: number;
+  },
+): Promise<ReadonlySet<string>> {
+  const first = Math.max(1, args.resumeFromPage - args.windowPages + 1);
+  const pageNumbers = Array.from(
+    { length: args.resumeFromPage - first + 1 },
+    (_, index) => first + index,
+  );
+  const read = async (pageNumber: number): Promise<PageLayout | undefined> => {
+    try {
+      const result = await readPageLayout(await doc.getPage(pageNumber), {
+        input: selectionInput(args.ctx.documentId),
+        options: args.parserOptions,
+        startedAt: args.startedAt,
+        emittedUnits: 0,
+        scannedObjects: 0,
+      });
+      return hasPageContent(result.layout) ? result.layout : undefined;
+    } catch {
+      // A page that cannot be read teaches nothing; the window itself reports it when it is read.
+      return undefined;
+    }
+  };
+  const layouts = await Promise.all(pageNumbers.map((pageNumber) => read(pageNumber)));
+  return composePages(layouts.filter((layout) => layout !== undefined)).furniture;
+}
+
 async function* pdfExtractWindows(
   loadDocument: (source: ProgressiveExtractionSource) => Promise<PdfDocumentLike>,
   ctx: PdfExtractContext,
@@ -312,6 +349,15 @@ async function* pdfExtractWindows(
     windowIndex: options.resumeWindowIndex ?? 0,
     furniture: new Set(),
   };
+  if (resumeFromPage > 0) {
+    state.furniture = await furnitureBeforeResume(doc, {
+      ctx,
+      parserOptions,
+      startedAt,
+      resumeFromPage,
+      windowPages,
+    });
+  }
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;
     const lastPage = Math.min(firstPage + windowPages - 1, doc.numPages);

@@ -300,6 +300,29 @@ describe("progressive and full-buffer extraction of one document", () => {
     expect(sink.windows.flatMap((w) => w.pages)).toEqual(full.pages);
   });
 
+  it("removes the furniture a resumed run already knew from its short last window (review #4235)", async () => {
+    const doc = positionedPdf(20, 1);
+    const run = async (
+      overrides: Partial<ProgressiveExtractionOptions>,
+    ): Promise<ReturnType<typeof collectingSink>> => {
+      const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+      const sink = collectingSink();
+      await runProgressiveExtraction(extractor, SOURCE, options(3, overrides), sink);
+      return sink;
+    };
+    const continuous = await run({});
+    const cut =
+      continuous.windows.flatMap((w) => w.pages).find((page) => page.pageNumber === 18)
+        ?.characterEnd ?? 0;
+    const resumed = await run({
+      resumeFromPage: 18,
+      resumeCharacterStart: cut,
+      resumeAnyPageEmitted: true,
+    });
+    expect(continuous.text()).not.toContain("Kopf Nur Hinten");
+    expect(resumed.text()).toBe(continuous.text().slice(cut));
+  });
+
   it("keeps extracting after a page whose text cannot be read (review #4235)", async () => {
     const good = positionedPdf(3, 99);
     const doc: PdfDocumentLike = {
