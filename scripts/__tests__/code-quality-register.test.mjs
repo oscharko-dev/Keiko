@@ -322,7 +322,14 @@ describe("code-quality register review against the base commit (#4145)", () => {
         baseIncreases: history,
         increases: history,
       }),
-    ).toEqual({ raises: [], unreviewed: [], stale: [], rewritten: [], outcome: "passed" });
+    ).toEqual({
+      raises: [],
+      unreviewed: [],
+      stale: [],
+      rewritten: [],
+      closed: [],
+      outcome: "passed",
+    });
   });
 
   it("passes lowered counts without ledger entries", () => {
@@ -357,6 +364,30 @@ describe("code-quality register review against the base commit (#4145)", () => {
     });
     expect(result).toMatchObject({ outcome: "failed", stale: [] });
     expect(result.unreviewed).toEqual([{ path: "a.ts", rule: "x/one", before: 2, after: 3 }]);
+  });
+
+  it("accepts the dev cutoff sync once and closes the reason after it", () => {
+    const cutoff = reviewed.map((entry) => ({ ...entry, reason: "dev-cutoff-sync" }));
+    expect(parseIncreases(ledgerText(cutoff))).toEqual(cutoff);
+    const first = reviewRegisterRaises({
+      baseRegister: base,
+      register: raised,
+      baseIncreases: history,
+      increases: [...history, ...cutoff],
+    });
+    expect(first).toMatchObject({ outcome: "passed", unreviewed: [], stale: [], closed: [] });
+    const later = register([
+      ...[1, 2, 3].map((line) => finding("a.ts", "x/one", line)),
+      ...[1, 2].map((line) => finding("b.ts", "x/one", line)),
+    ]);
+    const again = increase("b.ts", "x/one", 1, 2, { reason: "dev-cutoff-sync" });
+    const second = reviewRegisterRaises({
+      baseRegister: raised,
+      register: later,
+      baseIncreases: [...history, ...cutoff],
+      increases: [...history, ...cutoff, again],
+    });
+    expect(second).toMatchObject({ outcome: "failed", unreviewed: [], stale: [], closed: [again] });
   });
 
   it("fails a raise that only a base entry names, so history cannot be reused", () => {

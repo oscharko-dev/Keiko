@@ -54,7 +54,7 @@ The second output line reports the total before and after, for example `register
   absorb a new finding. A renamed file with findings therefore needs those findings fixed, not
   re-registered.
 
-**Reviewed increases.** The owner allows a count to rise in four cases, and only through a
+**Reviewed increases.** The owner allows a count to rise in five cases, and only through a
 reviewed entry in `scripts/code-quality-register-increases.json`:
 
 | `reason`                     | Use it for                                                                                                                             |
@@ -63,11 +63,17 @@ reviewed entry in `scripts/code-quality-register-increases.json`:
 | `pending-boundary-migration` | A boundary check that a later reviewed migration moves (see below)                                                                     |
 | `test-witness`               | A test or test fixture that exercises hostile input, or a binder-mandated witness                                                      |
 | `proof-fixture`              | A test helper, typed fixture or type-level assertion that builds or checks the expected value of a proof and receives no hostile input |
+| `dev-cutoff-sync`            | A finding that the last `dev` sync (release 1.4.0) brings in unchanged from `dev`; usable once                                         |
 
 `pending-boundary-migration` covers findings of the four boundary rules (no-runtime-typeof,
 no-unknown-parameters, no-unsafe-dictionary-type and no-known-value-widening) while those rules are
 not yet active for the file's package. No responsibility record adapts these checks yet, so
 `qualified-boundary` would be untrue for them.
+
+`dev-cutoff-sync` exists for one change. Release 1.4.0 is the `dev` cutoff and code freeze (owner
+decision 2026-11-04), so the epic branch syncs `dev` one last time and takes its findings as they
+are. The ratchet refuses a new `dev-cutoff-sync` entry when the base ledger already holds one, so
+no later change can use the reason.
 
 `test-witness` and `proof-fixture` do not overlap. Code that receives hostile input is a test
 witness, even when it sits in a fixture file. A proof fixture only builds or checks an expected

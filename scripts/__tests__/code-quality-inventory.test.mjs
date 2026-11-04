@@ -293,6 +293,23 @@ describe("actual tracked/build/workspace inventory (#3915)", () => {
     await expect(collectPolicyInventory(htmlRoot)).rejects.toThrow("unclassified-html-source");
   });
 
+  it("records e2e fixture HTML as non-shipped and still refuses other test HTML", async () => {
+    const root = trackedRepository();
+    mkdirSync(join(root, "tests/e2e/support/layout"), { recursive: true });
+    writeFileSync(join(root, "tests/e2e/support/layout/index.html"), "<main></main>");
+    expect((await collectPolicyInventory(root)).html).toEqual([
+      expect.objectContaining({
+        path: "tests/e2e/support/layout/index.html",
+        reason: "non-shipped-e2e-fixture",
+        production: false,
+      }),
+    ]);
+    const otherRoot = trackedRepository();
+    mkdirSync(join(otherRoot, "tests/unit"), { recursive: true });
+    writeFileSync(join(otherRoot, "tests/unit/page.html"), "<main></main>");
+    await expect(collectPolicyInventory(otherRoot)).rejects.toThrow("unclassified-html-source");
+  });
+
   it("rejects a regular leaf behind an external parent symlink", async () => {
     const root = trackedRepository();
     const outside = mkdtempSync(join(tmpdir(), "keiko-policy-outside-"));

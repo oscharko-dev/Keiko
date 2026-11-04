@@ -143,11 +143,16 @@ export function compareRegister(register, current, scannedPaths) {
 // entries but never remove or change one.
 export const REGISTER_INCREASES_PATH = "scripts/code-quality-register-increases.json";
 const INCREASE_KEYS = ["path", "rule", "from", "to", "reason", "issue"];
+// `dev-cutoff-sync` admits the findings that the last dev sync (release 1.4.0, the dev cutoff and
+// code freeze; owner decision 2026-11-04) brings in. It is usable once: a change whose base ledger
+// already holds such an entry cannot add another.
+const DEV_CUTOFF_SYNC_REASON = "dev-cutoff-sync";
 const INCREASE_REASONS = new Set([
   "qualified-boundary",
   "pending-boundary-migration",
   "test-witness",
   "proof-fixture",
+  DEV_CUTOFF_SYNC_REASON,
 ]);
 
 function validIncreaseIdentity(entry) {
@@ -252,6 +257,8 @@ export function reviewRegisterRaises({ baseRegister, register, baseIncreases, in
   const keys = new Set(increases.map(increaseKey));
   const added = increases.filter((entry) => !baseKeys.has(increaseKey(entry)));
   const rewritten = baseIncreases.filter((entry) => !keys.has(increaseKey(entry)));
+  const cutoffUsed = baseIncreases.some((entry) => entry.reason === DEV_CUTOFF_SYNC_REASON);
+  const closed = cutoffUsed ? added.filter((entry) => entry.reason === DEV_CUTOFF_SYNC_REASON) : [];
   const unreviewed = [];
   for (const raise of raises) {
     const index = added.findIndex((entry) => matchesRaise(entry, raise));
@@ -263,6 +270,10 @@ export function reviewRegisterRaises({ baseRegister, register, baseIncreases, in
     unreviewed,
     stale: added,
     rewritten,
-    outcome: unreviewed.length + added.length + rewritten.length === 0 ? "passed" : "failed",
+    closed,
+    outcome:
+      unreviewed.length + added.length + rewritten.length + closed.length === 0
+        ? "passed"
+        : "failed",
   };
 }
