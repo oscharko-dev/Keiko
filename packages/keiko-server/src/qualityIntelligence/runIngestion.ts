@@ -376,7 +376,7 @@ interface OneSource {
 export interface QiDocumentTextExtractionInput {
   readonly path: string;
   readonly label: string;
-  readonly format: "pdf" | "docx";
+  readonly format: "pdf" | "docx" | "html";
   /** UTF-8 best-effort text from the workspace reader; exposed only to test/local parser seams. */
   readonly decodedText: string;
   /** Maximum raw input bytes admitted for parser-backed document formats. */
@@ -387,10 +387,46 @@ export interface QiDocumentTextExtractionInput {
   readonly signal?: AbortSignal | undefined;
 }
 
-export type QiDocumentTextExtractor = (input: QiDocumentTextExtractionInput) => string | undefined;
+/** Why a parser-backed document could not be read; closed and body-free. */
+export type QiDocumentFailure =
+  | "oversized"
+  | "unreadable"
+  | "unsupported-format"
+  | "no-text-layer"
+  | "malformed"
+  | "encrypted"
+  | "empty"
+  | "timed-out";
+
+/**
+ * What an extractor may return: plain text (legacy seam), text with the signal that the parser cut
+ * it at the output cap, or the closed reason it failed. `undefined` is an unexplained failure.
+ */
+export type QiDocumentTextResult =
+  | string
+  | undefined
+  | { readonly text: string; readonly truncated: boolean }
+  | { readonly failure: QiDocumentFailure };
+
+export type QiDocumentTextExtractor = (
+  input: QiDocumentTextExtractionInput,
+) => QiDocumentTextResult;
 export type QiAsyncDocumentTextExtractor = (
   input: QiDocumentTextExtractionInput,
-) => string | undefined | Promise<string | undefined>;
+) => QiDocumentTextResult | Promise<QiDocumentTextResult>;
+
+// Closed, body-free notices for an ADF source: it was normalised, some node types were degraded
+// to their child text, or some text was cut at the per-run limit.
+function adfNoticesFor(stats: {
+  readonly unknownNodeTypes: readonly string[];
+  readonly truncatedBlocks: number;
+}): readonly string[] {
+  return [
+    "adf-normalized",
+    ...(stats.unknownNodeTypes.length > 0 ? ["adf-unknown-node-types-degraded"] : []),
+    ...(stats.truncatedBlocks > 0 ? ["adf-text-truncated"] : []),
+  ];
+}
 
 // eslint-disable-next-line max-lines-per-function
 function ingestRequirements(
@@ -404,10 +440,9 @@ function ingestRequirements(
   let adfNotice: readonly string[] = [];
   if (source.adf !== undefined) {
     try {
-      text = QualityIntelligenceIngestion.renderAdfDocumentText(
-        QualityIntelligenceIngestion.parseAdfDocument(source.adf),
-      );
-      adfNotice = ["adf-normalized"];
+      const parsed = QualityIntelligenceIngestion.parseAdfDocument(source.adf);
+      text = QualityIntelligenceIngestion.renderAdfDocumentText(parsed);
+      adfNotice = adfNoticesFor(parsed.stats);
     } catch (error) {
       if (!(error instanceof QualityIntelligenceIngestion.AdfParserError)) throw error;
       throw new QiIngestionError(
@@ -635,6 +670,9 @@ const DOC_TEXT_EXTENSION_PATTERNS: readonly RegExp[] = [
 // extractor. The workspace reader's UTF-8 best-effort text is not truthful for compressed PDF/DOCX
 // bodies and must never be treated as the document prose.
 const BEST_EFFORT_DOCUMENT_EXTENSION = /\.(?:pdf|docx)$/iu;
+// HTML is ordinary text for the workspace reader, but its markup, scripts and styles are not the
+// document's prose: when a parser-backed extractor is configured it reads the visible text.
+const HTML_EXTENSION = /\.html?$/iu;
 
 const hasDocumentTextExtension = (path: string): boolean =>
   DOC_TEXT_EXTENSION_PATTERNS.some((pattern) => pattern.test(path));
@@ -647,17 +685,98 @@ const isSupportedFilePath = (path: string): boolean =>
 const requiresStrictTextGuard = (path: string): boolean =>
   hasCodeExtension(path) || hasDocumentTextExtension(path);
 
-const documentFormatLabel = (path: string): string => (/\.pdf$/iu.test(path) ? "PDF" : "Word");
+const documentFormatLabel = (path: string): string => {
+  if (/\.pdf$/iu.test(path)) return "PDF";
+  return HTML_EXTENSION.test(path) ? "HTML" : "Word";
+};
 
-const documentFormatKind = (path: string): "pdf" | "docx" =>
-  /\.pdf$/iu.test(path) ? "pdf" : "docx";
+const documentFormatKind = (path: string): "pdf" | "docx" | "html" => {
+  if (/\.pdf$/iu.test(path)) return "pdf";
+  return HTML_EXTENSION.test(path) ? "html" : "docx";
+};
 
-function unsupportedDocumentTextError(absFile: string, label: string): QiIngestionError {
+const DOCUMENT_FAILURE_REASON: Readonly<Record<QiDocumentFailure, string>> = {
+  oversized: "is larger than the size limit for documents",
+  unreadable: "could not be read from disk",
+  "unsupported-format": "is not in a format Keiko can read",
+  "no-text-layer":
+    "has no text layer (a scan or images only), and OCR is not applied to connected files",
+  malformed: "is damaged or incomplete and could not be opened",
+  encrypted: "is password-protected",
+  empty: "contains no text",
+  "timed-out": "took too long to read",
+};
+
+function unsupportedDocumentTextError(
+  absFile: string,
+  label: string,
+  failure?: QiDocumentFailure,
+): QiIngestionError {
+  const reason =
+    failure === undefined ? "whose text could not be extracted" : DOCUMENT_FAILURE_REASON[failure];
   return new QiIngestionError(
     "QI_SOURCE_UNSUPPORTED",
-    `File "${label}" is a ${documentFormatLabel(absFile)} document whose text could not be ` +
-      `extracted. Export it to Markdown or plain text and connect that instead.`,
+    `File "${label}" is a ${documentFormatLabel(absFile)} document ${reason}. ` +
+      `Export it to Markdown or plain text and connect that instead.`,
   );
+}
+
+interface ExtractedFileText {
+  readonly text: string;
+  /** The parser cut the document at the byte budget it was given. */
+  readonly truncated: boolean;
+}
+
+// One reading of an extractor result, shared by the sync and async routes: a failure keeps its
+// closed reason, and a cut keeps its signal (the text is already within budget, so the later byte
+// bound would otherwise see nothing to report).
+function resolveExtractedText(
+  extracted: unknown,
+  absFile: string,
+  label: string,
+): ExtractedFileText {
+  let text = "";
+  let truncated = false;
+  if (typeof extracted === "string") {
+    text = extracted;
+  } else if (typeof extracted === "object" && extracted !== null) {
+    if ("failure" in extracted) {
+      throw unsupportedDocumentTextError(absFile, label, extracted.failure as QiDocumentFailure);
+    }
+    if ("text" in extracted && typeof extracted.text === "string") {
+      text = extracted.text;
+      truncated = "truncated" in extracted && extracted.truncated === true;
+    }
+  }
+  const safeText = redact(stripUnsafeFormatChars(text));
+  if (safeText.trim().length === 0) throw unsupportedDocumentTextError(absFile, label);
+  return { text: safeText, truncated };
+}
+
+// Documents that go through the extractor: PDF and Word always; HTML only when one is configured.
+const usesDocumentExtractor = (
+  absFile: string,
+  extractor: QiAsyncDocumentTextExtractor | undefined,
+): boolean =>
+  BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile) ||
+  (extractor !== undefined && HTML_EXTENSION.test(absFile));
+
+function extractionRequest(
+  absFile: string,
+  label: string,
+  decodedText: string,
+  byteBudget: number,
+  signal: AbortSignal | undefined,
+): QiDocumentTextExtractionInput {
+  return {
+    path: absFile,
+    label,
+    format: documentFormatKind(absFile),
+    decodedText,
+    maxInputBytes: DOCUMENT_FILE_MAX_BYTES,
+    maxExtractedBytes: byteBudget,
+    ...(signal === undefined ? {} : { signal }),
+  };
 }
 
 function extractedSingleFileText(
@@ -667,24 +786,16 @@ function extractedSingleFileText(
   extractor: QiAsyncDocumentTextExtractor | undefined,
   byteBudget: number,
   signal: AbortSignal | undefined,
-): string {
-  if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile)) return decodedText;
+): ExtractedFileText {
+  if (!usesDocumentExtractor(absFile, extractor)) return { text: decodedText, truncated: false };
   if (extractor === undefined) throw unsupportedDocumentTextError(absFile, label);
-  const extracted: unknown = extractor({
-    path: absFile,
-    label,
-    format: documentFormatKind(absFile),
-    decodedText,
-    maxInputBytes: DOCUMENT_FILE_MAX_BYTES,
-    maxExtractedBytes: byteBudget,
-    ...(signal === undefined ? {} : { signal }),
-  });
+  const extracted: unknown = extractor(
+    extractionRequest(absFile, label, decodedText, byteBudget, signal),
+  );
   if (typeof extracted === "object" && extracted !== null && "then" in extracted) {
     throw unsupportedDocumentTextError(absFile, label);
   }
-  const safeText = redact(stripUnsafeFormatChars(typeof extracted === "string" ? extracted : ""));
-  if (safeText.trim().length === 0) throw unsupportedDocumentTextError(absFile, label);
-  return safeText;
+  return resolveExtractedText(extracted, absFile, label);
 }
 
 async function extractedSingleFileTextAsync(
@@ -694,21 +805,13 @@ async function extractedSingleFileTextAsync(
   extractor: QiAsyncDocumentTextExtractor | undefined,
   byteBudget: number,
   signal: AbortSignal | undefined,
-): Promise<string> {
-  if (!BEST_EFFORT_DOCUMENT_EXTENSION.test(absFile)) return decodedText;
+): Promise<ExtractedFileText> {
+  if (!usesDocumentExtractor(absFile, extractor)) return { text: decodedText, truncated: false };
   if (extractor === undefined) throw unsupportedDocumentTextError(absFile, label);
-  const extracted = await extractor({
-    path: absFile,
-    label,
-    format: documentFormatKind(absFile),
-    decodedText,
-    maxInputBytes: DOCUMENT_FILE_MAX_BYTES,
-    maxExtractedBytes: byteBudget,
-    ...(signal === undefined ? {} : { signal }),
-  });
-  const safeText = redact(stripUnsafeFormatChars(typeof extracted === "string" ? extracted : ""));
-  if (safeText.trim().length === 0) throw unsupportedDocumentTextError(absFile, label);
-  return safeText;
+  const extracted = await extractor(
+    extractionRequest(absFile, label, decodedText, byteBudget, signal),
+  );
+  return resolveExtractedText(extracted, absFile, label);
 }
 
 // Resolve a single file's workspace root and read it through the keiko-workspace boundary-checked
@@ -777,6 +880,35 @@ function readSingleFileContent(
 // independent file reader is added (Issue #713 stop condition). The same protections that guard the
 // folder path apply identically to the single file; binary / unsupported / oversized / denied /
 // empty inputs each fail with a safe, user-actionable code before any model prompt.
+// The summary of a single file cut to the source budget, whether by the byte bound here or by the
+// parser at the budget it was handed.
+function fileTruncationSummary(
+  bounded: Utf8TruncationResult,
+  parserTruncated: boolean,
+): { readonly summary?: Omit<QiSourceSummary, "label" | "kind" | "atomCount"> } {
+  if (bounded.truncated) {
+    return {
+      summary: {
+        truncated: true,
+        originalBytes: bounded.originalBytes,
+        retainedBytes: bounded.retainedBytes,
+        droppedBytes: bounded.droppedBytes,
+        byteLimit: bounded.byteLimit,
+        notices: ["source-truncated-to-byte-budget"],
+      },
+    };
+  }
+  if (!parserTruncated) return {};
+  return {
+    summary: {
+      truncated: true,
+      retainedBytes: bounded.retainedBytes,
+      byteLimit: bounded.byteLimit,
+      notices: ["source-truncated-to-byte-budget"],
+    },
+  };
+}
+
 // eslint-disable-next-line max-lines-per-function
 function ingestFile(
   source: Extract<QualityIntelligenceInlineSource, { kind: "file" }>,
@@ -814,7 +946,7 @@ function ingestFile(
       `File "${label}" appears to be binary, not text.`,
     );
   }
-  const sourceText = extractedSingleFileText(
+  const extractedFile = extractedSingleFileText(
     absFile,
     label,
     content.text,
@@ -822,6 +954,7 @@ function ingestFile(
     byteBudget,
     signal,
   );
+  const sourceText = extractedFile.text;
   if (sourceText.trim().length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
   }
@@ -849,18 +982,7 @@ function ingestFile(
   return {
     envelope,
     atoms,
-    ...(bounded.truncated
-      ? {
-          summary: {
-            truncated: true,
-            originalBytes: bounded.originalBytes,
-            retainedBytes: bounded.retainedBytes,
-            droppedBytes: bounded.droppedBytes,
-            byteLimit: bounded.byteLimit,
-            notices: ["source-truncated-to-byte-budget"],
-          },
-        }
-      : {}),
+    ...fileTruncationSummary(bounded, extractedFile.truncated),
   };
 }
 
@@ -896,7 +1018,7 @@ async function ingestFileAsync(
       `File "${label}" appears to be binary, not text.`,
     );
   }
-  const sourceText = await extractedSingleFileTextAsync(
+  const extractedFile = await extractedSingleFileTextAsync(
     absFile,
     label,
     content.text,
@@ -904,6 +1026,7 @@ async function ingestFileAsync(
     byteBudget,
     signal,
   );
+  const sourceText = extractedFile.text;
   if (sourceText.trim().length === 0) {
     throw new QiIngestionError("QI_SOURCE_EMPTY", `File "${label}" produced no usable content.`);
   }
@@ -927,18 +1050,7 @@ async function ingestFileAsync(
   return {
     envelope,
     atoms,
-    ...(bounded.truncated
-      ? {
-          summary: {
-            truncated: true,
-            originalBytes: bounded.originalBytes,
-            retainedBytes: bounded.retainedBytes,
-            droppedBytes: bounded.droppedBytes,
-            byteLimit: bounded.byteLimit,
-            notices: ["source-truncated-to-byte-budget"],
-          },
-        }
-      : {}),
+    ...fileTruncationSummary(bounded, extractedFile.truncated),
   };
 }
 

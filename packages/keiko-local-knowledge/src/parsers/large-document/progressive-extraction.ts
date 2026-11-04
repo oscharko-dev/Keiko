@@ -215,6 +215,16 @@ function appendDiagnostics(
   target.push(...diagnostics);
 }
 
+// An extractor that sees the abort between pages ends its stream without another window, which
+// would read as a finished document. An abort observed once the stream is over means pages may be
+// missing, so the run is reported cancelled (partial), never complete.
+function settledStopReason(
+  stopReason: ProgressiveStopReason,
+  signal: AbortSignal | undefined,
+): ProgressiveStopReason {
+  return stopReason === "completed" && isAborted(signal) ? "cancelled" : stopReason;
+}
+
 // Pulls windows one at a time, enforces the resource policy between windows, and flushes each
 // window through the sink. Returns a content-free summary. The driver never holds more than one
 // window's text in memory.
@@ -256,6 +266,8 @@ export async function runProgressiveExtraction(
       break;
     }
   }
+
+  stopReason = settledStopReason(stopReason, options.signal);
 
   const stopDiag = stopDiagnostic(stopReason, options.documentId);
   if (stopDiag !== undefined) diagnostics.push(stopDiag);
