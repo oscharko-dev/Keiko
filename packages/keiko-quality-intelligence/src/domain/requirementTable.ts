@@ -146,9 +146,20 @@ export interface ProjectedRow {
 }
 
 // A worksheet name may hold `=`, `|` and `!` but never `:` (Excel forbids `\ / ? * [ ] :`), so the
-// first colon ends the `Sheet!Row:` prefix.
-const PROJECTION_PREFIX = /^[^\n:]{1,120}!\d{1,9}:[ \t]+(?=[^=|\n]{1,80}=)/u;
-const PROJECTED_CELL_BREAK = / \| (?=[^=|\n]{1,80}=)/u;
+// first colon ends the `Sheet!Row:` prefix. A header label is at most 120 characters in the
+// projection (plus the ` 2` of a repeated one); the bound here stays above that, so no header the
+// projection labels a cell with is too long to be read as a label.
+const MAX_LABEL_CHARS = 160;
+const PROJECTION_PREFIX = new RegExp(
+  String.raw`^[^\n:]{1,120}!\d{1,9}:[ \t]+(?=[^=|\n]{1,${String(MAX_LABEL_CHARS)}}=)`,
+  "u",
+);
+const PROJECTED_CELL_BREAK = new RegExp(
+  String.raw` \| (?=[^=|\n]{1,${String(MAX_LABEL_CHARS)}}=)`,
+  "u",
+);
+// A projected line that holds no labelled cell (a title, a note, a header-only table).
+const PLAIN_PROJECTION_PREFIX = /^[^\n:]{1,120}!\d{1,9}:(?:[ \t]|$)/u;
 
 function appendProjectedCells(
   row: ProjectedRow,
@@ -164,16 +175,22 @@ function appendProjectedCells(
   return true;
 }
 
-/** The row a projected line starts, or undefined when the line is not one. */
+/**
+ * The row a projected line starts, or undefined when the line is not one. A projected line with no
+ * labelled cell is a row without cells: it ends the row before it (the title of the next sheet is
+ * no further criterion of the last requirement) and defines nothing.
+ */
 export function openProjectedRow(
   raw: string,
   vocabulary: CompiledVocabulary,
 ): ProjectedRow | undefined {
   const prefix = PROJECTION_PREFIX.exec(raw);
-  if (prefix === null) return undefined;
+  if (prefix === null) {
+    return PLAIN_PROJECTION_PREFIX.test(raw) ? { cells: [], roles: [] } : undefined;
+  }
   const row: ProjectedRow = { cells: [], roles: [] };
   const parts = raw.slice(prefix[0].length).split(PROJECTED_CELL_BREAK);
-  return appendProjectedCells(row, parts, vocabulary) ? row : undefined;
+  return appendProjectedCells(row, parts, vocabulary) ? row : { cells: [], roles: [] };
 }
 
 const PARAGRAPH_ROLES: ReadonlySet<TableColumnRole | undefined> = new Set([
@@ -192,8 +209,9 @@ export function continueProjectedRow(
   raw: string,
   vocabulary: CompiledVocabulary,
 ): void {
-  const [first = "", ...rest] = raw.split(PROJECTED_CELL_BREAK);
   const last = row.cells.length - 1;
+  if (last < 0) return;
+  const [first = "", ...rest] = raw.split(PROJECTED_CELL_BREAK);
   row.cells[last] = `${row.cells[last] ?? ""}\n${first}`;
   appendProjectedCells(row, rest, vocabulary);
 }
@@ -212,5 +230,8 @@ export function parseProjectedRow(
       roles.push(role);
     }
   });
-  return parseTableRow(cells, roles, vocabulary);
+  // A table whose headers name no role the reader knows is read by position, like a pipe table
+  // without a header, instead of defining a requirement with no title and no text.
+  const named = roles.some((role) => role !== undefined);
+  return parseTableRow(cells, named ? roles : undefined, vocabulary);
 }

@@ -364,15 +364,28 @@ function compact(folded: string): string {
   return folded.replaceAll(" ", "");
 }
 
-/** The role a table header names, or undefined when it names none. */
+const NUMBERED_HEADER = /\s\d{1,3}$/u;
+
+function exactRoleOf(vocabulary: CompiledVocabulary, folded: string): TableColumnRole | undefined {
+  return vocabulary.tableRoles.get(folded) ?? vocabulary.compactTableRoles.get(compact(folded));
+}
+
+/**
+ * The role a table header names, or undefined when it names none. A header numbered `Kriterium 2`
+ * (a repeated column header, which the table extraction numbers) names the role of `Kriterium`
+ * when that role takes several cells; a second title or priority would overwrite the first.
+ */
 export function tableRoleOf(
   vocabulary: CompiledVocabulary,
   header: string,
 ): TableColumnRole | undefined {
   const folded = foldHeader(header);
-  const exact =
-    vocabulary.tableRoles.get(folded) ?? vocabulary.compactTableRoles.get(compact(folded));
+  const exact = exactRoleOf(vocabulary, folded);
   if (exact !== undefined) return exact;
+  const numbered = NUMBERED_HEADER.test(folded)
+    ? exactRoleOf(vocabulary, folded.replace(NUMBERED_HEADER, ""))
+    : undefined;
+  if (numbered === "criteria" || numbered === "statement") return numbered;
   const words = folded.split(" ");
   return words.length > 1 && vocabulary.idHeadWords.has(words.at(-1) ?? "") ? "id" : undefined;
 }
