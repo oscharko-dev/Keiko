@@ -1062,8 +1062,9 @@ directory (`EPERM`), and all four fail identically on the unchanged base `53fca1
 ## W1 and W11 boundary proof on 2026-11-03
 
 This section does not close W1 or W11. Native process and socket results come from a **hosted
-disposable Windows Server 2025 runner, not Windows 11 hardware**. These branches do not yet contain
-#4090 (`gateway_journal.c` and 10 conflicting files), so this proof must run again after that merge.
+disposable Windows Server 2025 runner, not Windows 11 hardware**. The runs below predate the merge
+with #4090 (`gateway_journal.c` and 10 conflicting files), so this proof must run again on the merged
+tree.
 
 `native/runtime-supervisor/windows/runtime_boundary.test.c` launches one probe unconfined and then
 inside a per-tree AppContainer. A denial counts only when the same operation succeeds in the
