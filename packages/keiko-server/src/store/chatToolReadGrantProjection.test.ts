@@ -200,3 +200,29 @@ it("does not replace a terminal historical rejection with a granted projection",
   );
   expect(f.store.findMessageById(f.messageId)?.toolTranscript?.readGrant?.state).toBe("rejected");
 });
+
+function readGrantObservations(
+  f: ReturnType<typeof fixture>,
+  grantState: string,
+): readonly unknown[] {
+  return f.logs.events.filter(
+    (event) =>
+      event.op === "chat.tool-authority.operation" &&
+      event.correlationId === sha256Hex(f.messageId) &&
+      event.extra?.grantState === grantState,
+  );
+}
+
+it("records an unpersisted read-grant transition once however often the message is read", () => {
+  const f = fixture();
+  for (let read = 0; read < 25; read++) {
+    expect(f.store.findMessageById(f.messageId)?.toolTranscript?.readGrant?.state).toBe("granted");
+  }
+  expect(readGrantObservations(f, "granted")).toHaveLength(1);
+  vi.spyOn(Date, "now").mockReturnValue(f.entry.grant.expiresAt);
+  for (let read = 0; read < 25; read++) {
+    expect(f.store.findMessageById(f.messageId)?.toolTranscript?.readGrant?.state).toBe("expired");
+  }
+  expect(readGrantObservations(f, "expired")).toHaveLength(1);
+  expect(readGrantObservations(f, "granted")).toHaveLength(1);
+});

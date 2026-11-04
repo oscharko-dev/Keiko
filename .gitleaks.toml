@@ -228,3 +228,10 @@ paths = ['''scripts/__tests__/memory-lab-corpus-focused\.test\.mjs''']
 targetRules = ["generic-api-key"]
 regexTarget = "line"
 regexes = ['''^\s*const secret = "a1b2c3d4e5f6[a-f0-9]{30}";$''']
+
+[[allowlists]]
+description = "PR #4182 (#4176): synthetic credential-shaped fixtures (a truncated RSA PEM block, a JWT with the literal sample signature, a password/api_key line) in one immutable checkpoint of the attachment content-policy test. They prove the policy refuses such content and are not credentials. The PR branch is never force-pushed, so this pushed commit cannot be rewritten; later commits assemble the same values at runtime. Scoped to this one commit, this test path and these three rules; every other commit and file stays scanned."
+condition = "AND"
+commits = ["1b5b2525320e00b9db16b66063999837c9264013"]
+paths = ['''^packages/keiko-server/src/atlassian/jiraAttachmentContentPolicy\.test\.ts$''']
+targetRules = ["jwt", "private-key", "generic-api-key"]

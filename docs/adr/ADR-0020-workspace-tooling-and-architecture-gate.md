@@ -139,7 +139,7 @@ Root scripts preserve their current semantics exactly:
 | Existing script | Behaviour after this PR |
 | --- | --- |
 | `npm run typecheck` | Unchanged: `tsc -p tsconfig.json --noEmit`. Root tsconfig adds `packages/*/src/**/*.ts` to its `include` glob (per D3 — direct include, not `references`, to avoid TS6305 under `--noEmit`). |
-| `npm run lint` | Unchanged: `eslint . --max-warnings=0`. ESLint flat config un-ignores `packages/*/src` as packages are extracted; `ui/` continues to be ignored (unchanged). |
+| `npm run lint` | `eslint --max-warnings=0` over the whole repository, run by `scripts/lint-repository.mjs` as one ESLint process per workspace package plus one for the rest, one after another, so the type-aware heap is bounded by the largest package rather than the whole monorepo (2026-11-02: a single `eslint .` exhausted the 12 GiB ceiling of a 16 GiB runner). ESLint flat config un-ignores `packages/*/src` as packages are extracted; `ui/` continues to be ignored (unchanged). |
 | `npm test` | Unchanged: `vitest run`. Root vitest config `include` gains `packages/*/src/**/*.test.ts`. |
 | `npm run build` | Unchanged this sprint: `tsc -p tsconfig.build.json`. Updated to `tsc -b` when first real extraction makes project references load-bearing. |
 | `npm run prepack` | Chain unchanged in full, including the `ui:ci` step which continues to use `npm --prefix ui`. |

@@ -319,8 +319,15 @@ describe("OpenCode visible tool contract", () => {
           minLength: 0,
           maxLength: 4096,
         },
+        // Every declared V2 tool argument is required on the wire, so the optional package folder
+        // is a bounded string with an empty-string sentinel, exactly like targetPath.
+        packageDir: {
+          type: "string",
+          minLength: 0,
+          maxLength: 4096,
+        },
       },
-      required: ["targetPath", "verifierId"],
+      required: ["packageDir", "targetPath", "verifierId"],
     });
   });
 

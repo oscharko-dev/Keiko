@@ -10,6 +10,10 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  sealedLocalPodModelUsePolicy,
+  standardPodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import { ConnectorGraph } from "./connector-graph";
 import {
   LOCAL_KNOWLEDGE_CONNECTOR_DROP_EVENT,
@@ -211,6 +215,18 @@ describe("ConnectorGraph — empty state", () => {
 });
 
 describe("ConnectorGraph — with capsules", () => {
+  // 1.3.5 field report: the Jira Live Pods section came first and filled the page's height, so a
+  // newly created Knowledge Pod appeared a screen below it. The person's own pods come first.
+  it("lists the Knowledge Pods before the Jira Live Pods section", async () => {
+    render(
+      <ConnectorGraph fetchCapsulesImpl={fetchWith([makeCapsule({ displayName: "Policy" })])} />,
+    );
+    const list = await screen.findByRole("list", { name: "Knowledge Pod list" });
+    const jira = screen.getByTestId("acx-panel");
+    expect(list.compareDocumentPosition(jira) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(jira.className).toMatch(/cmpEmbedded/);
+  });
+
   it("renders one row per capsule with the correct display name", async () => {
     const capsules = [
       makeCapsule({ id: makeCapsuleId("1"), displayName: "Alpha Docs" }),
@@ -945,7 +961,7 @@ describe("ConnectorGraph — LK-02 keyboard add-to-workspace", () => {
 });
 
 describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
-  it("submits a trimmed display name without a create-time model-use policy", async () => {
+  it("submits a trimmed display name with the searchable standard model-use policy by default", async () => {
     const createCapsuleImpl = vi
       .fn()
       .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
@@ -968,6 +984,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({
         displayName: "Treasury Docs",
+        modelUsePolicy: standardPodModelUsePolicy(),
       });
     });
   });
@@ -1002,6 +1019,7 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
     await waitFor(() => {
       expect(createCapsuleImpl).toHaveBeenCalledWith({
         displayName: "Local Docs",
+        modelUsePolicy: standardPodModelUsePolicy(),
       });
     });
   });
@@ -1028,6 +1046,42 @@ describe("ConnectorGraph — action buttons fire correct fetch calls", () => {
 
     expect(screen.getByRole("tooltip")).toHaveTextContent(/local keeps it private/i);
     expect(helpButton).toHaveAccessibleDescription(/shareable will allow trusted sharing later/i);
+  });
+
+  it("states what each model-use policy allows and submits a sealed-local pod only on request", async () => {
+    const createCapsuleImpl = vi
+      .fn()
+      .mockResolvedValue({ ok: true, capsuleId: makeCapsuleId("create") });
+    const user = userEvent.setup();
+
+    render(<ConnectorGraph fetchCapsulesImpl={emptyFetch} createCapsuleImpl={createCapsuleImpl} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /^create Knowledge Pod$/i })).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByRole("button", { name: /^create Knowledge Pod$/i }));
+    const dialog = screen.getByRole("dialog", { name: /create Knowledge Pod/i });
+    const standard = within(dialog).getByRole("radio", { name: /use configured models/i });
+    const sealed = within(dialog).getByRole("radio", { name: /sealed local/i });
+
+    expect(standard).toBeChecked();
+    expect(sealed).not.toBeChecked();
+    expect(standard).toHaveAccessibleDescription(
+      /searchable and citable as soon as it is indexed/i,
+    );
+    expect(sealed).toHaveAccessibleDescription(/never sent to an external model/i);
+
+    await user.click(sealed);
+    await user.type(within(dialog).getByLabelText(/pod display name/i), "Sealed Docs");
+    await user.click(within(dialog).getByRole("button", { name: /^create Knowledge Pod$/i }));
+
+    await waitFor(() => {
+      expect(createCapsuleImpl).toHaveBeenCalledWith({
+        displayName: "Sealed Docs",
+        modelUsePolicy: sealedLocalPodModelUsePolicy(),
+      });
+    });
   });
 
   it("explains the disabled future sharing option on hover", async () => {

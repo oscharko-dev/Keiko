@@ -13,9 +13,11 @@ import {
 export function JiraPodWorkspaceAction({
   connector,
   disabled = false,
+  primary = false,
 }: {
   readonly connector: AtlassianConnectorMetadata;
   readonly disabled?: boolean;
+  readonly primary?: boolean;
 }): ReactNode {
   const t = useOptionalWidgetTranslate();
   if (connector.deployment !== "data-center" || connector.livePod === undefined) return null;
@@ -27,7 +29,7 @@ export function JiraPodWorkspaceAction({
   return (
     <button
       type="button"
-      className="lk-btn"
+      className={primary ? "lk-btn lk-btn-primary" : "lk-btn lk-btn-ghost"}
       disabled={disabled}
       draggable={!disabled}
       title={t("chat.jira.workspaceHint")}

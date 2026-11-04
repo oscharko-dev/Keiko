@@ -151,7 +151,9 @@ it.each([
   { phase: "settled", outcome: "succeeded", httpStatus: null },
   { phase: "settled", outcome: "succeeded-unconfirmed", httpStatus: 500 },
   { phase: "settled", outcome: "unknown", httpStatus: 204 },
-  { phase: "settled", outcome: "rejected", httpStatus: 400 },
+  { phase: "settled", outcome: "rejected", httpStatus: 201 },
+  { phase: "settled", outcome: "rejected", httpStatus: 429 },
+  { phase: "settled", outcome: "rejected", httpStatus: 503 },
   { phase: "settled", outcome: "not-dispatched", httpStatus: 201 },
   { phase: "dispatched", outcome: null, httpStatus: 99 },
   { phase: "dispatched", outcome: null, httpStatus: 600 },
@@ -164,6 +166,18 @@ it.each([
     ).toBeUndefined();
   },
 );
+
+// #4176: a settled rejection with a definitive client-error response is Jira's own refusal. The
+// journal only admits it with the error document as proof (chatToolMutations.test.ts).
+it.each([400, 404, 422])("projects a rejection Jira answered with HTTP %i", (httpStatus) => {
+  expect(
+    jiraChatMutationOutcome({
+      result: RESULT,
+      record: record({ phase: "settled", outcome: "rejected", httpStatus }),
+      expected: EXPECTED,
+    }),
+  ).toBe("rejected");
+});
 
 // The catalog can settle while consent is pending, before the mutation handler creates a journal.
 it.each([

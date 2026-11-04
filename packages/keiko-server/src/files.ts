@@ -2743,6 +2743,47 @@ export async function copyFilesEntry(args: {
   };
 }
 
+/**
+ * The exact bytes of one file inside a root the human connected (#4176). It is admitted like every
+ * other Files read — realpath containment, the deny list, no managed-task root, and a descriptor
+ * bound to the admitted file — but the content is raw, bounded and never redacted or decoded: it
+ * is what the human reviewed by name, size and digest, and what Jira would store.
+ *
+ * `name` is the last segment of the path the caller asked for; `realRelativePath` is where the
+ * bytes actually came from once symbolic links are resolved, so a caller can re-check the real
+ * location against a selection (a link inside a selection may point outside it).
+ */
+export async function readConnectedFileBytes(
+  deps: Pick<UiHandlerDeps, "store" | "redactor" | "managedTaskWorkspaceRoot">,
+  rootInput: string,
+  pathInput: string,
+  maxBytes: number,
+): Promise<{
+  readonly bytes: Buffer;
+  readonly name: string;
+  readonly realRelativePath: string;
+}> {
+  if (requiresConfiguredManagedWorkspaceAuthority(deps, rootInput)) {
+    throw new FilesError(403, "DENIED", DENIED_MESSAGE);
+  }
+  const target = await resolveInsideRoot(deps.store, rootInput, pathInput, deps.redactor);
+  if (!target.stats.isFile()) {
+    throw new FilesError(400, "NOT_FILE", "The requested path is not a file.");
+  }
+  if (target.identity.size > maxBytes) {
+    throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The file exceeds the size limit.");
+  }
+  const read = await readContainedPrefixOrStale(target.path, target.fs, target.identity, maxBytes);
+  if (read.truncated) {
+    throw new FilesError(413, "PAYLOAD_TOO_LARGE", "The file exceeds the size limit.");
+  }
+  return {
+    bytes: read.buffer,
+    name: basename(target.relativePath),
+    realRelativePath: rootRelativePosixPath(target.realRoot, target.path),
+  };
+}
+
 export async function readFilesPreview(
   store: UiStore,
   rootInput: string | null,

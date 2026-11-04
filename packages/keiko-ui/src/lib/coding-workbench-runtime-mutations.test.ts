@@ -259,6 +259,27 @@ describe("createStartMutation", () => {
     expect(bare?.[0]).not.toHaveProperty("jiraPodId");
   });
 
+  it("sends the MCP servers the person selected, keeps an empty selection, and no key when none was", async () => {
+    const state = stateWithRun(null, { canStart: true });
+
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+      mcpServers: ["alpha", "wiki"],
+    }).run(SIGNAL);
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+      mcpServers: [],
+    }).run(SIGNAL);
+    await createStartMutation("implement the ticket", state, {
+      projectMemoryEnabled: true,
+    }).run(SIGNAL);
+
+    const [narrowed, none, all] = apiMocks.startCodingWorkbenchRuntime.mock.calls.slice(-3);
+    expect(narrowed?.[0]).toMatchObject({ mcpServers: ["alpha", "wiki"] });
+    expect(none?.[0]).toMatchObject({ mcpServers: [] });
+    expect(all?.[0]).not.toHaveProperty("mcpServers");
+  });
+
   it("sends the selected model settings for the managed gateway", async () => {
     const state = stateWithRun(null, {
       canStart: true,

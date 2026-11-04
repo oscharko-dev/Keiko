@@ -65,25 +65,12 @@ function pendingTurn(current, signal) {
     });
   });
 }
-function consentReply(id, method, state, options) {
-  const owner = id === "existing-grant" ? state.previous : state.current;
-  const view = owner.toolTranscript.readGrant;
-  if (method === "POST") view.state = "granted";
-  if (method === "GET") state.grantReads += 1;
-  return json({
-    approval: {
-      ...view,
-      ...options.grantPatch,
-      ...(options.revokeBeforeWrite && state.grantReads > 1 ? { state: "revoked" } : {}),
-    },
-  });
-}
 function fixtureFetch(state, options) {
   return vi.fn(async (url, init) => {
     const path = new URL(url).pathname;
     if (path === "/api/chats/messages") {
       const admitted = options.ambiguous
-        ? [state.current, row("other", grant("other-grant", "pending"))]
+        ? [state.current, row("other", grant("other-grant", "granted"))]
         : [state.current];
       return json({ messages: state.sent ? [state.previous, ...admitted] : [state.previous] });
     }
@@ -93,7 +80,11 @@ function fixtureFetch(state, options) {
     }
     const id = path.split("/").at(-2);
     if (init.method === "POST") state.posts.push(id);
-    if (path.endsWith("/chat-read-consent")) return consentReply(id, init.method, state, options);
+    // The read-consent route is retired: no call may ever reach it.
+    if (path.endsWith("/chat-read-consent")) {
+      state.consentCalls.push(id);
+      return new globalThis.Response("{}", { status: 404 });
+    }
     const owner = id === "previous-approval" ? state.previous : state.current;
     const approval = owner.toolTranscript.exchanges[0].approval;
     return json({
@@ -103,12 +94,14 @@ function fixtureFetch(state, options) {
 }
 function fixture(options = {}) {
   const reuse = options.reuse === true;
-  const previous = row("previous", grant("existing-grant", reuse ? "granted" : "pending"), !reuse);
+  const previous = row("previous", grant("existing-grant", "granted"), !reuse);
   const current = row(
     "current",
-    reuse && !options.unexpectedGrant ? undefined : grant("new-grant", "pending"),
+    (reuse && !options.unexpectedGrant) || options.noGrant
+      ? undefined
+      : grant("new-grant", options.pendingGrant ? "pending" : "granted"),
   );
-  const state = { previous, current, sent: false, grantReads: 0, posts: [] };
+  const state = { previous, current, sent: false, consentCalls: [], posts: [] };
   const fetch = fixtureFetch(state, options);
   vi.stubGlobal("fetch", fetch);
   vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -119,45 +112,74 @@ function fixture(options = {}) {
     operation: "jira.comment",
     arguments: args,
     assertUnchanged: async () => undefined,
-    ...(reuse ? { expectedReadGrants: 0, reusedReadGrantId: "existing-grant" } : {}),
+    ...(reuse
+      ? {
+          expectedReadGrants: 0,
+          reusedReadGrant: { ...previous.toolTranscript.readGrant, ...options.grantPatch },
+        }
+      : {}),
   };
-  return { intent, posts: state.posts, fetch };
+  return { intent, posts: state.posts, consentCalls: state.consentCalls, fetch };
 }
 
-describe("live Chat consent follows the admitted canonical turn", () => {
-  it("ignores old pending grants and approvals while observing the new user row", async () => {
+describe("live Chat reads on a server-established grant and approves only the write", () => {
+  it("ignores old approvals while observing the new user row and never decides a read", async () => {
     const f = fixture();
     const observed = await runObservedChatTurn(context, chat, f.intent);
-    expect(f.posts).toEqual(["new-grant", "current-approval"]);
+    expect(f.posts).toEqual(["current-approval"]);
+    expect(f.consentCalls).toEqual([]);
     expect(observed.decisions).toEqual({ grants: 1, approvals: 1 });
   });
 
-  it("reuses a verified existing grant for a later concrete approval", async () => {
+  it("reuses the verified existing grant for a later concrete approval", async () => {
     const f = fixture({ reuse: true });
     const observed = await runObservedChatTurn(context, chat, f.intent);
     expect(f.posts).toEqual(["current-approval"]);
+    expect(f.consentCalls).toEqual([]);
     expect(observed.decisions).toEqual({ grants: 0, approvals: 1 });
-    expect(
-      f.fetch.mock.calls.filter(
-        ([url, init]) => url.endsWith("existing-grant/chat-read-consent") && init.method === "GET",
-      ),
-    ).toHaveLength(2);
   });
 
-  it("never silently grants fresh disclosure during a consent-reuse proof", async () => {
+  it("requires a fresh disclosure to leave a server-established grant on the transcript", async () => {
+    const f = fixture({ noGrant: true });
+    await expect(runObservedChatTurn(context, chat, f.intent)).rejects.toThrow();
+    expect(f.consentCalls).toEqual([]);
+  });
+
+  it("refuses a grant-reuse proof that names no exact grant", async () => {
+    const f = fixture({ reuse: true });
+    delete f.intent.reusedReadGrant;
+    await expect(runObservedChatTurn(context, chat, f.intent)).rejects.toThrow();
+    expect(f.posts).toEqual([]);
+  });
+
+  it("refuses a read grant that still waits for a person and never calls the retired route", async () => {
+    const f = fixture({ pendingGrant: true });
+    await expect(runObservedChatTurn(context, chat, f.intent)).rejects.toThrow();
+    expect(f.posts).toEqual([]);
+    expect(f.consentCalls).toEqual([]);
+  });
+
+  it("never silently accepts a fresh disclosure during a grant-reuse proof", async () => {
     const f = fixture({ reuse: true, unexpectedGrant: true });
     await expect(runObservedChatTurn(context, chat, f.intent)).rejects.toThrow();
     expect(f.posts).toEqual([]);
   });
 
-  it("refuses concurrent new user rows before granting or approving either action", async () => {
+  it("refuses concurrent new user rows before approving either action", async () => {
     const f = fixture({ ambiguous: true });
     await expect(runObservedChatTurn(context, chat, f.intent)).rejects.toThrow();
     expect(f.posts).toEqual([]);
   });
 
-  it("rechecks reused consent before the concrete write approval", async () => {
-    const f = fixture({ reuse: true, revokeBeforeWrite: true });
+  it("rechecks the reused grant's lifetime before the concrete write approval", async () => {
+    const f = fixture({ reuse: true });
+    const lifetimes = [Date.now() + 60_000, 0];
+    const reused = { ...f.intent.reusedReadGrant };
+    Object.defineProperty(reused, "expiresAt", {
+      get: () => lifetimes.shift() ?? 0,
+      enumerable: true,
+    });
+    f.intent.reusedReadGrant = reused;
     await expect(runObservedChatTurn(context, chat, f.intent)).rejects.toThrow();
     expect(f.posts).toEqual([]);
   });

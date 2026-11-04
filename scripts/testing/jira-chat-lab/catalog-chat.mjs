@@ -33,6 +33,8 @@ async function runCase(context, group, operation, args, before) {
     context.session,
     context.projectPath,
     context.modelId,
+    "api",
+    "governed-assist",
   );
   const observed = await runChatToolTurn(context, chat, {
     ...intent,
