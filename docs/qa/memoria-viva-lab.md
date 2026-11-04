@@ -170,7 +170,7 @@ never says the word. `expect.forbiddenFormat` counts against the answer exactly 
 **The language of an answer.** Keiko's chat prompt answers in German unless the user asks for another
 language, and an English probe's terms are English. Measured unasked, all 42 answers to English probes
 of a Gemma dry run came back in German and were scored against words they could not contain. So an
-English probe sends its question with ` (in English)` appended, the way a user would ask, in the fewest
+English probe sends its question with `(in English)` appended after a space, the way a user would ask, in the fewest
 words because the same text is the query the product's retrieval sees: on the curated set offline the
 suffix changed neither the number of memories supplied nor which probes passed, on any of 60 probes. A
 generated conversation in the `mixed` language carries the blueprint's language on each probe
@@ -202,6 +202,11 @@ kind): the explicit route stores in project scope today, which is why the oracle
   file is read again before every instance and must still be the file whose digest the manifest
   records, so a provider added half way through a long run ends it. Everything a run reads and
   writes stays on the machine.
+- The same configuration may name no chat model the run does not measure, so every model gets its own
+  file. The product checks each configured chat model at every start, and a lab run starts one instance
+  per unit: a second model stayed loaded beside the measured one (39 GB in the run that found this) and
+  took the GPU from it, in every timing of the run and in no line of its evidence. A provider of another
+  kind, such as an embedding model, is not affected.
 - Every instance reads a **private copy** of that file (`<state>/gateway.json`, mode 0600), never the
   operator's file: the product writes its configuration back (credentials it persists at start, a
   context window it adopts), which would otherwise change the operator's file and end the run at the
@@ -731,24 +736,24 @@ Defect: a reversal (`I prefer spaces over tabs.` after `I prefer tabs over space
 duplicate by the character-bigram gate (#4212). Classification: code defect, deterministic, the same
 on every model. Candidate: a scratch checkout of the subject commit with the gate changed to word
 bigrams, so that word order counts; built and measured with the lab, never committed, because step 1
-waits for the owner's go. Measured offline on the curated set (thirteen scenarios), product arm, Full
-access configuration, three repetitions each, head `7bbca2e34`:
+waits for the owner's go. Measured offline on the curated set (twenty-one scenarios), product arm, Full
+access configuration, three repetitions each, subject head `7bbca2e34`, instrument digest
+`d6a8fc897eb030a1…`:
 
 |           | Precision | Recall | Answer accuracy | Hard counters (per repetition) |
 | --------- | --------- | ------ | --------------- | ------------------------------ |
-| Subject   | 0.6875    | 0.8571 | 0.7             | forgotten-returned=1           |
-| Candidate | 0.75      | 1      | 0.7             | forgotten-returned=1           |
+| Subject   | 0.7727    | 0.8182 | 0.6667          | forgotten-returned=1           |
+| Candidate | 0.8182    | 0.9091 | 0.6667          | forgotten-returned=1           |
 
-`compare` reports both gains **within the one-unit floor**: precision +0.0625 against a floor of
-0.125 (one unit of the eight that have a precision), recall +0.1429 against a floor of 0.1429 (one
-fact of seven). The whole difference is the one reversal scenario, now stored (`product/reversal`
-precision 0 to 0.5, recall 0 to 1), and a change that one scenario alone can produce is not progress
-on a thirteen-scenario set; the focused corpus, with its thirty units per class, is where such a
-repair has to show. Answer accuracy is unchanged because the older fact is not superseded, so both are
-supplied and the answer stays wrong, which is exactly the supersession half of #4212. `judge` returns
-`NO PROGRESS`: the forgotten fact of the forget scenario still returns, there is no holdout
-comparison, and nothing improved beyond the floor; the candidate was discarded. The example shows the
-loop and its rule, not a product improvement.
+`compare` reports both gains **within the one-unit floor**: precision +0.0455 and recall +0.0909 against
+a floor of 0.0909 (one unit of the eleven that carry each metric). The whole difference is the one
+reversal scenario, now stored (`product/reversal` precision 0 to 0.5, recall 0 to 1), and a change that
+one scenario alone can produce is not progress on this set; the focused corpus, with its thirty units per
+class, is where such a repair has to show. Answer accuracy is unchanged because the older fact is not
+superseded, so both are supplied and the answer stays wrong, which is exactly the supersession half of
+#4212. `judge` returns `NO PROGRESS`: the forgotten fact of the forget scenario still returns, there is no
+holdout comparison, and nothing improved beyond the floor; the candidate was discarded. The example shows
+the loop and its rule, not a product improvement.
 
 ## Trend ledger
 

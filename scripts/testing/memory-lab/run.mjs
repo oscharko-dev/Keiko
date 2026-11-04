@@ -33,6 +33,7 @@ import {
   assertGatewayConfigUnchanged,
   assertKeepAllowed,
   assertLoopbackGatewayConfig,
+  assertOnlyMeasuredChatModels,
   isAnchorScenario,
   retainBodiesFor,
 } from "./isolation.mjs";
@@ -529,10 +530,13 @@ function loadCorpus(options) {
 }
 
 // A live run points the product at the gateway configuration the operator named, which must keep
-// every conversation on this machine; its digest goes into the manifest. An offline run has none.
+// every conversation on this machine and name no chat model the run does not measure; its digest goes
+// into the manifest. An offline run has none.
 function gatewayEvidence(options) {
   if (options.mode !== "live") return { digest: "offline" };
-  return assertLoopbackGatewayConfig(options.configPath);
+  const evidence = assertLoopbackGatewayConfig(options.configPath);
+  assertOnlyMeasuredChatModels(options.configPath, [options.answerModelId, options.learnModelId]);
+  return evidence;
 }
 
 // A unit that fails costs that unit, not the run: it is recorded with its error name (and, where the

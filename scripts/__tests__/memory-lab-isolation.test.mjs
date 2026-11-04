@@ -11,6 +11,7 @@ import {
   assertGatewayConfigUnchanged,
   assertKeepAllowed,
   assertLoopbackGatewayConfig,
+  assertOnlyMeasuredChatModels,
   isAnchorScenario,
   retainBodiesFor,
 } from "../testing/memory-lab/isolation.mjs";
@@ -163,6 +164,51 @@ describe("a gateway configuration that keeps everything on this machine", () => 
     expect(error).toBeInstanceOf(LabConfigurationError);
     expect(error.message).toContain("outside this machine");
     expect(existsSync(join(root, "out"))).toBe(false);
+  });
+});
+
+describe("the chat models a gateway configuration names", () => {
+  let root;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "memory-lab-measured-models-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function write(providers) {
+    const file = join(root, "gateway.json");
+    writeFileSync(file, JSON.stringify({ providers }));
+    return file;
+  }
+
+  it("accepts the measured models, one or two, and a provider of another kind", () => {
+    const file = write([
+      { modelId: "answers", capability: { kind: "chat" } },
+      { modelId: "learns", capability: { kind: "chat" } },
+      { modelId: "embeds", capability: { kind: "embedding" } },
+    ]);
+    expect(() => {
+      assertOnlyMeasuredChatModels(file, ["answers", "learns"]);
+    }).not.toThrow();
+    const single = write([{ modelId: "both", capability: { kind: "chat" } }]);
+    expect(() => {
+      assertOnlyMeasuredChatModels(single, ["both", "both"]);
+    }).not.toThrow();
+  });
+
+  it.each([
+    ["a second chat model", { modelId: "other", capability: { kind: "chat" } }, /other/u],
+    ["a provider that states no kind", { modelId: "plain" }, /plain/u],
+    ["a provider without a model id", { capability: { kind: "chat" } }, /unnamed/u],
+  ])("refuses %s, which the product would check at every start", (_name, extra, pattern) => {
+    const file = write([{ modelId: "measured", capability: { kind: "chat" } }, extra]);
+    expect(() => {
+      assertOnlyMeasuredChatModels(file, ["measured", "measured"]);
+    }).toThrow(LabConfigurationError);
+    expect(() => {
+      assertOnlyMeasuredChatModels(file, ["measured", "measured"]);
+    }).toThrow(pattern);
   });
 });
 
@@ -390,6 +436,21 @@ describe("a live run", () => {
     },
     RUN_TIMEOUT_MS,
   );
+
+  it("refuses a chat model it does not measure before an instance starts", async () => {
+    const extra = { modelId: "not-measured", baseUrl: server.baseUrl, timeoutMs: 1000 };
+    const config = gatewayFile();
+    const parsed = JSON.parse(readFileSync(config, "utf8"));
+    writeFileSync(config, JSON.stringify({ ...parsed, providers: [...parsed.providers, extra] }));
+    const lines = [];
+    const error = await runLab(liveOptions(config), (line) => lines.push(line)).catch(
+      (caught) => caught,
+    );
+    expect(error).toBeInstanceOf(LabConfigurationError);
+    expect(error.message).toContain("not-measured");
+    expect(lines).toEqual([]);
+    expect(existsSync(join(root, "out", "manifest.json"))).toBe(false);
+  });
 
   it(
     "ends when the configuration changes between two instances",

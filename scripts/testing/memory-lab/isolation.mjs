@@ -98,6 +98,28 @@ export function assertLoopbackGatewayConfig(path) {
 }
 
 /**
+ * The product checks every configured chat model at each start. In a lab that starts one instance per
+ * unit, a chat model the run does not measure would be called and stay loaded beside the measured
+ * one, so its load would be in every timing of the run while its name is in none of the evidence. A
+ * provider of another kind (an embedding model) is what a run may need and is left alone; one that
+ * states no kind counts as a chat model. Called after the configuration passed the loopback check.
+ */
+export function assertOnlyMeasuredChatModels(path, measuredModelIds) {
+  const measured = new Set(measuredModelIds);
+  const { providers } = parseConfig(readConfigText(path));
+  const others = providers.filter(
+    (provider) =>
+      (provider?.capability?.kind ?? "chat") === "chat" && !measured.has(provider?.modelId),
+  );
+  if (others.length > 0) {
+    const names = others.map((provider) => String(provider?.modelId ?? "unnamed")).join(", ");
+    throw new LabConfigurationError(
+      `the gateway configuration names ${String(others.length)} chat model(s) this run does not measure (${names}); the product would call each at every start, so give every model its own configuration file`,
+    );
+  }
+}
+
+/**
  * A long live run starts one instance per unit, and each reads the configuration file afresh. The
  * file is therefore checked again before every instance: it must still be loopback-only and still
  * the file whose digest the manifest records, or a provider added half way through would receive the
