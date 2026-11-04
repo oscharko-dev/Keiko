@@ -1,4 +1,4 @@
-// Findings of the fourth independent review of the text parser (#4235). Synthetic documents only.
+// Findings of the independent review of the text parser (#4235). Synthetic documents only.
 
 import { describe, expect, it } from "vitest";
 

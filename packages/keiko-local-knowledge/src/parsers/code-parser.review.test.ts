@@ -1,4 +1,4 @@
-// Findings of the fourth independent review of the code parser (#4235). Synthetic sources only.
+// Findings of the independent review of the code parser (#4235). Synthetic sources only.
 
 import { describe, expect, it } from "vitest";
 
