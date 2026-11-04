@@ -13,8 +13,9 @@ import {
 } from "../../native/runtime-supervisor/protocol-harness.mjs";
 import { resolveWindowsMsvcEnv, windowsToolFromPath } from "../lib/windows-msvc.mjs";
 
-const [operation, helper] = process.argv.slice(2);
-const root = dirname(helper);
+// The probe may live apart from the helper: the product installer owns the helper's directory.
+const [operation, helper, probeRoot = dirname(helper)] = process.argv.slice(2);
+const root = probeRoot;
 const probe = join(root, "gateway-service-probe.exe");
 const observe = promisify(execFile);
 

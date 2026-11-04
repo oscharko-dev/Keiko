@@ -712,9 +712,26 @@ function standingConditionAlert(
     state.runtime.status === "ready" &&
     state.runtime.value?.runtimeAvailable === false
   ) {
-    return t("codingWorkbench.alert.runtimeUnqualified");
+    return t(
+      gatewayServiceMessageKey(state.runtime.value.runtimeUnavailableReason) ??
+        "codingWorkbench.alert.runtimeUnqualified",
+    );
   }
   return null;
+}
+
+const GATEWAY_SERVICE_MESSAGE_KEYS: ReadonlyMap<string, CodingWorkbenchMessageKey> = new Map([
+  ["gateway-service-absent", "codingWorkbench.gatewayService.absent"],
+  ["gateway-service-stopped", "codingWorkbench.gatewayService.stopped"],
+  ["gateway-service-stale", "codingWorkbench.gatewayService.stale"],
+  ["gateway-service-unknown", "codingWorkbench.gatewayService.unknown"],
+]);
+
+/** The sentence naming what the human can do about the Windows broker, when that is the cause. */
+export function gatewayServiceMessageKey(
+  reason: string | undefined,
+): CodingWorkbenchMessageKey | undefined {
+  return reason === undefined ? undefined : GATEWAY_SERVICE_MESSAGE_KEYS.get(reason);
 }
 
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that

@@ -31,6 +31,7 @@ import {
   startBlockedReason,
   visibleAlert,
   visibleAlertFailure,
+  gatewayServiceMessageKey,
 } from "./codingWorkbenchLabels";
 import type { CodingWorkbenchRunPhase } from "./codingWorkbenchRunFacts";
 
@@ -1184,5 +1185,25 @@ describe("readinessFacts runtime assurance", () => {
     expect(
       visibleAlert(runtimeState(true, "functional-not-platform-qualified"), t, false),
     ).toBeNull();
+  });
+});
+
+describe("gatewayServiceMessageKey", () => {
+  it("names a sentence only for the Windows broker reasons", () => {
+    expect(gatewayServiceMessageKey("gateway-service-absent")).toBe(
+      "codingWorkbench.gatewayService.absent",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-stopped")).toBe(
+      "codingWorkbench.gatewayService.stopped",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-stale")).toBe(
+      "codingWorkbench.gatewayService.stale",
+    );
+    expect(gatewayServiceMessageKey("gateway-service-unknown")).toBe(
+      "codingWorkbench.gatewayService.unknown",
+    );
+    expect(gatewayServiceMessageKey("runtime-unqualified")).toBeUndefined();
+    expect(gatewayServiceMessageKey("constructor")).toBeUndefined();
+    expect(gatewayServiceMessageKey(undefined)).toBeUndefined();
   });
 });

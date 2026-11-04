@@ -1674,6 +1674,49 @@ describe("coding runtime routes", () => {
     expect(validateCodingWorkbenchRuntimeReadiness(unavailable)).toMatchObject({ ok: true });
   });
 
+  it("reports a qualified Windows host unavailable until its gateway broker is ready", () => {
+    const read = (
+      reason: "gateway-service-absent" | "gateway-service-stale" | undefined,
+    ): unknown =>
+      handleCodingRuntimeReadiness(
+        context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+        runtime({
+          codingRuntimeHostQualified: true,
+          codingRuntimeOrchestrator: undefined,
+          codingRuntimeGatewayService: { unavailableReason: () => reason },
+        }),
+      );
+    expect(read("gateway-service-absent")).toMatchObject({
+      status: 200,
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "gateway-service-absent" },
+    });
+    expect(read("gateway-service-stale")).toMatchObject({
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "gateway-service-stale" },
+    });
+    expect(read(undefined)).toMatchObject({ body: { runtimeAvailable: true } });
+    const body = (read("gateway-service-absent") as { body: unknown }).body;
+    expect(validateCodingWorkbenchRuntimeReadiness(body)).toMatchObject({ ok: true });
+  });
+
+  it("does not ask the broker when the host itself is unqualified", () => {
+    const unavailable = handleCodingRuntimeReadiness(
+      context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),
+      runtime({
+        codingRuntimeHostQualified: false,
+        codingRuntimeUnavailableReason: "payload-tampered",
+        codingRuntimeOrchestrator: undefined,
+        codingRuntimeGatewayService: {
+          unavailableReason: () => {
+            throw new Error("must not read the broker");
+          },
+        },
+      }),
+    );
+    expect(unavailable).toMatchObject({
+      body: { runtimeAvailable: false, runtimeUnavailableReason: "payload-tampered" },
+    });
+  });
+
   it("names the precise unavailable reason exactly while the runtime host is unqualified", () => {
     const unavailable = handleCodingRuntimeReadiness(
       context("", {}, "/api/coding-workbench/runtime/readiness?requestedMode=supervised-coding"),

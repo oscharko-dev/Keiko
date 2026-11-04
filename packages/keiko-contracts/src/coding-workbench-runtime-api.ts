@@ -561,7 +561,11 @@ export type CodingWorkbenchRuntimeUnavailableReason =
   | "payload-tampered"
   | "secure-read-unavailable"
   | "loopback-unavailable"
-  | "runtime-unqualified";
+  | "runtime-unqualified"
+  | "gateway-service-absent"
+  | "gateway-service-stopped"
+  | "gateway-service-stale"
+  | "gateway-service-unknown";
 
 export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbenchRuntimeUnavailableReason[] =
   Object.freeze([
@@ -574,6 +578,10 @@ export const CODING_WORKBENCH_RUNTIME_UNAVAILABLE_REASONS: readonly CodingWorkbe
     "secure-read-unavailable",
     "loopback-unavailable",
     "runtime-unqualified",
+    "gateway-service-absent",
+    "gateway-service-stopped",
+    "gateway-service-stale",
+    "gateway-service-unknown",
   ] as const);
 
 /**

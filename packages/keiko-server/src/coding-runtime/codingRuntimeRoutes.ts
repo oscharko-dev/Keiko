@@ -542,6 +542,35 @@ function composedProfileReadiness(
   };
 }
 
+// Both branches name themselves. The available branch's `??` is the fail-closed default: an
+// unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified claim
+// (audit F-01). A released Windows runtime is available only while its broker is ready (#4068).
+function runtimeAvailabilityFacts(
+  deps: UiHandlerDeps,
+): Pick<
+  CodingWorkbenchRuntimeReadiness,
+  "runtimeAvailable" | "runtimeEvidenceClass" | "runtimeVersion" | "runtimeUnavailableReason"
+> {
+  if (deps.codingRuntimeHostQualified !== true) {
+    return {
+      runtimeAvailable: false,
+      runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
+    };
+  }
+  const gatewayServiceReason = deps.codingRuntimeGatewayService?.unavailableReason();
+  if (gatewayServiceReason !== undefined) {
+    return { runtimeAvailable: false, runtimeUnavailableReason: gatewayServiceReason };
+  }
+  return {
+    runtimeAvailable: true,
+    runtimeEvidenceClass: deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
+    // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
+    ...(deps.codingRuntimeVersion === undefined
+      ? {}
+      : { runtimeVersion: deps.codingRuntimeVersion }),
+  };
+}
+
 export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const values = ctx.url.searchParams.getAll("requestedMode");
   const parsed = parseCodingWorkbenchRuntimeReadinessRequest({ requestedMode: values[0] });
@@ -555,7 +584,6 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
   // The readiness projection must report the same ceiling the coding-runtime mint clamp
   // enforces; the autonomous-delivery ceiling is a separate authority knob (#2475).
   const deploymentCeiling = deps.codingRuntimeDeploymentCeiling ?? "governed-assist";
-  const runtimeAvailable = deps.codingRuntimeHostQualified === true;
   return {
     status: 200,
     body: {
@@ -563,22 +591,7 @@ export function handleCodingRuntimeReadiness(ctx: RouteContext, deps: UiHandlerD
       requestedMode: parsed.value.requestedMode,
       deploymentCeiling,
       effectiveMode: confirmedEffectiveMode(deps, parsed.value.requestedMode, deploymentCeiling),
-      runtimeAvailable,
-      // Both branches name themselves. The available branch's `??` is the fail-closed default: an
-      // unthreaded dep yields `undefined`, and `undefined` must never serialize into a verified
-      // claim (audit F-01).
-      ...(runtimeAvailable
-        ? {
-            runtimeEvidenceClass:
-              deps.codingRuntimeEvidenceClass ?? "functional-not-platform-qualified",
-            // #3904 AC4: only what the activation verified; an unthreaded value is not reported.
-            ...(deps.codingRuntimeVersion === undefined
-              ? {}
-              : { runtimeVersion: deps.codingRuntimeVersion }),
-          }
-        : {
-            runtimeUnavailableReason: deps.codingRuntimeUnavailableReason ?? "runtime-unqualified",
-          }),
+      ...runtimeAvailabilityFacts(deps),
       ...composedProfileReadiness(deps),
     },
   };

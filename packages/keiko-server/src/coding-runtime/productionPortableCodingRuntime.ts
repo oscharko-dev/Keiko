@@ -178,6 +178,40 @@ interface CandidateRuntimeBindings {
  * (unreadable or malformed manifests, partial tree, attestation errors) emits the redacted
  * discovery diagnostic (audit finding F-12c).
  */
+export function releasedWindowsGatewayHelperPin(runtime: {
+  readonly target: UpdatePortableTarget;
+  readonly platformAssurance: PortableRuntimeLane;
+  readonly nativeHelperSha256?: string;
+}): string | undefined {
+  return runtime.target === "windows-x64" && runtime.platformAssurance === "release-qualified"
+    ? runtime.nativeHelperSha256
+    : undefined;
+}
+
+/** Asks the attested helper for the broker state; null when it did not run to an exit (#4068). */
+export function readWindowsGatewayServiceStatus(
+  helperPath: string,
+  helperSha256: string,
+): number | null {
+  return spawnSync(helperPath, ["--gateway-service-status", helperSha256], {
+    stdio: "ignore",
+    windowsHide: true,
+    shell: false,
+    timeout: 2_000,
+  }).status;
+}
+
+/** The helper `keiko gateway-service` may install: only the bytes a launch would accept (#4068). */
+export function discoverReleasedWindowsGatewayHelper(
+  input: PortableOpenCodeDiscoveryInput,
+): { readonly helperPath: string; readonly helperSha256: string } | undefined {
+  const runtime = discoverQualifiedPortableOpenCode(input);
+  const helperSha256 = runtime === undefined ? undefined : releasedWindowsGatewayHelperPin(runtime);
+  return runtime === undefined || helperSha256 === undefined
+    ? undefined
+    : { helperPath: runtime.nativeHelperPath, helperSha256 };
+}
+
 export function discoverQualifiedPortableOpenCode(
   input: PortableOpenCodeDiscoveryInput,
 ): QualifiedPortableOpenCodeRuntime | undefined {

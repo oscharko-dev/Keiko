@@ -51,7 +51,10 @@ export {
 // and the launch surface consuming this probe needs only the function (reviewer finding on
 // #3026 — cross-package types belong in contracts, and this seam is not a cross-package
 // contract).
-export { portableInstallCarriesReleaseSignature } from "./coding-runtime/productionPortableCodingRuntime.js";
+export {
+  discoverReleasedWindowsGatewayHelper,
+  portableInstallCarriesReleaseSignature,
+} from "./coding-runtime/productionPortableCodingRuntime.js";
 export { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 export {
   createUpdateLocalStateManager,

@@ -6,9 +6,10 @@
 #include <process.h>
 #include <stdlib.h>
 #include <wchar.h>
+#include "gateway_install.h"
 #include "../../portable-launcher/keiko-portable-sha256.h"
 
-static BOOL digest_matches(HANDLE image, const wchar_t *pin) {
+BOOL keiko_gateway_image_matches(HANDLE image, const wchar_t *pin) {
   BYTE bytes[4096], digest[32];
   char hex[65];
   DWORD count;
@@ -27,7 +28,7 @@ static BOOL digest_matches(HANDLE image, const wchar_t *pin) {
   return TRUE;
 }
 
-static BOOL protected_image_path(const wchar_t *path) {
+BOOL keiko_gateway_protected_image_path(const wchar_t *path) {
   wchar_t *program_files = NULL;
   if (FAILED(SHGetKnownFolderPath(&FOLDERID_ProgramFiles, 0, NULL, &program_files))) return FALSE;
   size_t prefix = wcslen(program_files);
@@ -39,9 +40,9 @@ static BOOL protected_image_path(const wchar_t *path) {
   return ok;
 }
 
-static BOOL running_image(wchar_t *path, DWORD length) {
+BOOL keiko_gateway_running_image(wchar_t *path, DWORD length) {
   SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
-  SC_HANDLE service = manager ? OpenServiceW(manager, L"KeikoRuntimeGateway", SERVICE_QUERY_STATUS) : NULL;
+  SC_HANDLE service = manager ? OpenServiceW(manager, KEIKO_GATEWAY_SERVICE_NAME, SERVICE_QUERY_STATUS) : NULL;
   SERVICE_STATUS_PROCESS status;
   DWORD bytes;
   BOOL ok = FALSE;
@@ -67,7 +68,7 @@ int keiko_gateway_launch_installed(const wchar_t *pin) {
   intptr_t child = -1;
   DWORD code = 1;
   const wchar_t *args[] = {L"keiko-runtime-supervisor", L"--gateway-supervised", NULL};
-  if (!path || !running_image(path, 32768) || !protected_image_path(path) ||
+  if (!path || !keiko_gateway_running_image(path, 32768) || !keiko_gateway_protected_image_path(path) ||
       path[1] != L':' || path[2] != L'\\' || GetDriveTypeW((wchar_t[]){path[0],L':',L'\\',0}) != DRIVE_FIXED)
     goto done;
   /* Lock each directory entry against replacement/reparse mutation until CreateProcess
@@ -90,7 +91,7 @@ int keiko_gateway_launch_installed(const wchar_t *pin) {
   FILE_ATTRIBUTE_TAG_INFO info;
   if (image == INVALID_HANDLE_VALUE || !GetFileInformationByHandleEx(image, FileAttributeTagInfo,
       &info, sizeof(info)) || (info.FileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY)) ||
-      !digest_matches(image, pin)) goto done;
+      !keiko_gateway_image_matches(image, pin)) goto done;
   /* The CRT passes the numbered KRP control/response descriptors as well as stdio. */
   child = _wspawnv(_P_NOWAIT, path, args);
 done:

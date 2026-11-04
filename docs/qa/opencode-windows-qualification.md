@@ -979,6 +979,34 @@ native profile and its seatbelt/kernel allowlist remain macOS/Linux-only by owne
 helper-source approval pin and D12 reference evidence were later released without a rebuild (see
 "Evidence pins released on 2026-11-02").
 
+### Gateway service lifecycle on 2026-11-02 (W1/W3/W13 components)
+
+`keiko gateway-service` now owns install, repair, status and removal (ADR-0043 D19). On the Windows
+11 host, without administrator rights: the status command reports `absent` (exit 10) and a malformed
+pin is refused (exit 27) for status and install; the install rules test passes, and the supervisor
+builds under the production flags.
+
+[Windows Server 2025 run 41499437534](https://github.com/oscharko-dev/Keiko/actions/runs/41499437534)
+on head `86b594c20` installed through the product path in an elevated context. A foreign pin was
+refused without creating the service; install and repeated install succeeded; status reported ready,
+image mismatch against another pin, and stopped; repair recovered a stopped service; the service
+configuration, image digest and protected folder rules matched. The installed broker then admitted
+and refused WFP requests, the adapter refused a mismatched image, and the confined root reached the
+permitted port with the hostile port refused (10013). Uninstall, repeated uninstall and status after
+removal passed their step's checks; the step prints no separate line for them.
+
+Not exercised: the UAC relaunch (the runner is already elevated), repair during a live run, removal
+with a remaining durable deny guard, and a real package or model-backed task. This host has not run
+the elevated path, and no customer installation is qualified.
+
+Readiness now names a missing, stopped, stale or unreadable broker through closed
+`gateway-service-*` reasons, and the Workbench shows the command to run. These are unit and route
+proofs with a stubbed helper result; no released Windows runtime has shown them in the real Workbench.
+
+Known limits: uninstall refuses while a durable deny guard remains; `keiko uninstall` names the
+service but does not remove it; a published release is still `evaluation-unqualified`, so the command
+refuses it with `helper-not-qualified`.
+
 ## Workbench qualification pass on 2026-11-03 (W6/W8/W12/W15)
 
 Host: Windows 11 Home x64 10.0.26200, NTFS, Node 24.21.0 / npm 11.19.0, standard user without symlink
@@ -1024,7 +1052,7 @@ directory (`EPERM`), and all four fail identically on the unchanged base `53fca1
 1. Prove authenticated host-to-sidecar control and concurrent tree isolation on the
    installed path. The application-isolation drop on the gateway listener's receive path is
    resolved (ADR-0043 D18). These are prerequisites for a successful task (W1/W11).
-2. Qualify standard-user service setup, crash recovery, stale installation refusal and
+2. Qualify the gateway service lifecycle above, crash recovery, stale installation refusal and
    upgrade/rollback. The release owner must approve the Windows runtime/helper inputs
    before a customer npm launch can be qualified (W3/W4/W9/W13).
 3. Run the standalone and Workbench task suites in all three modes with an approved

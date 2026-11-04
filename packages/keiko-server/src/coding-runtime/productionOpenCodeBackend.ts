@@ -103,7 +103,10 @@ import type {
   ProductionRuntimeBackendResolver,
   QualifiedProductionRuntimeRun,
 } from "./productionCodingRuntimeResolver.js";
-import type { QualifiedPortableOpenCodeRuntime } from "./productionPortableCodingRuntime.js";
+import {
+  releasedWindowsGatewayHelperPin,
+  type QualifiedPortableOpenCodeRuntime,
+} from "./productionPortableCodingRuntime.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessSupervisor,
@@ -1317,11 +1320,7 @@ function runtimeSupervisor(
 }
 
 function releasedWindowsHelperPin(portable: ResolvedPortableOpenCodeRuntime): string | undefined {
-  return portable.target === "windows-x64" &&
-    "platformAssurance" in portable &&
-    portable.platformAssurance === "release-qualified"
-    ? portable.nativeHelperSha256
-    : undefined;
+  return "platformAssurance" in portable ? releasedWindowsGatewayHelperPin(portable) : undefined;
 }
 
 function linuxNamespaceGatewaySupervisor(

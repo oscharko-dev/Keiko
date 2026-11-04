@@ -1,5 +1,6 @@
 /* LocalSystem broker. The SCM image and supervisor are the same protected installed file. */
 #include "gateway_service.h"
+#include "gateway_install.h"
 #include "gateway_loopback.h"
 #include "gateway_peer.h"
 #include "gateway_wfp.h"
@@ -8,7 +9,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define SERVICE_NAME L"KeikoRuntimeGateway"
 #define PIPE_NAME L"\\\\.\\pipe\\KeikoRuntimeGateway-v1"
 #define IO_TIMEOUT_MS 5000
 #define CHALLENGE_SIZE KEIKO_GATEWAY_CHALLENGE_BYTES
@@ -55,7 +55,7 @@ static void tree_name(const BYTE *nonce, wchar_t name[48]) {
  * the process through acknowledgement so Windows cannot recycle its PID. */
 static HANDLE scm_peer(HANDLE pipe) {
   SC_HANDLE manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
-  SC_HANDLE service = manager ? OpenServiceW(manager, SERVICE_NAME, SERVICE_QUERY_STATUS) : NULL;
+  SC_HANDLE service = manager ? OpenServiceW(manager, KEIKO_GATEWAY_SERVICE_NAME, SERVICE_QUERY_STATUS) : NULL;
   SERVICE_STATUS_PROCESS status;
   DWORD bytes, pid;
   HANDLE server = NULL;
@@ -269,7 +269,7 @@ static void WINAPI service_main(DWORD argc, LPWSTR *argv) {
   HANDLE image = INVALID_HANDLE_VALUE, pipe = INVALID_HANDLE_VALUE;
   DWORD error = ERROR_SUCCESS;
   (void)argc; (void)argv;
-  registration = RegisterServiceCtrlHandlerExW(SERVICE_NAME, control, NULL);
+  registration = RegisterServiceCtrlHandlerExW(KEIKO_GATEWAY_SERVICE_NAME, control, NULL);
   if (!registration) return;
   report(SERVICE_START_PENDING, ERROR_SUCCESS);
   path = calloc(32768, sizeof(wchar_t));
@@ -300,6 +300,6 @@ done:
 }
 
 int keiko_gateway_dispatch(void) {
-  SERVICE_TABLE_ENTRYW services[] = {{SERVICE_NAME, service_main}, {NULL, NULL}};
+  SERVICE_TABLE_ENTRYW services[] = {{KEIKO_GATEWAY_SERVICE_NAME, service_main}, {NULL, NULL}};
   return StartServiceCtrlDispatcherW(services) ? 0 : 1;
 }
