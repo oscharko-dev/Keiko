@@ -12,6 +12,7 @@
 
 import type {
   CheckpointFingerprint,
+  CheckpointIncompatibilityReason,
   CoverageQuality,
   DocumentId,
   DocumentRecord,
@@ -31,6 +32,7 @@ import {
 import { getCapsule } from "../capsule-lifecycle.js";
 import {
   runProgressiveExtraction,
+  type ProgressiveExtractionLog,
   type ProgressiveExtractionOptions,
   type ProgressiveExtractionSource,
   type ProgressiveExtractionSummary,
@@ -41,6 +43,7 @@ import {
   selectExtractionCheckpoint,
   upsertExtractionCheckpoint,
 } from "../indexing/checkpoint-persist.js";
+import { pageReadDocumentDigest } from "../indexing/page-read-activity.js";
 import type { KnowledgeStore } from "../store.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import {
@@ -95,6 +98,7 @@ interface SinkState {
   objectCursor: number;
   characterCursor: number;
   extractedTextBytes: number;
+  learnedFurniture: readonly string[];
 }
 
 function checkpointFor(
@@ -121,6 +125,7 @@ function checkpointFor(
     coverage,
     fingerprint: deps.fingerprint,
     terminalDiagnostics: diagnostics,
+    learnedFurniture: state.learnedFurniture,
     createdAt: deps.createdAt,
     updatedAt: at,
   });
@@ -160,6 +165,7 @@ function persistWindow(
     state.objectCursor = window.objectCursor;
     state.characterCursor = window.characterStart + window.text.length;
     state.extractedTextBytes += Buffer.byteLength(window.text, "utf8");
+    state.learnedFurniture = window.learnedFurniture ?? [];
     checkpointFor(deps, state, "extracting", "partial", []);
     db.exec("COMMIT");
   } catch (cause) {
@@ -168,8 +174,15 @@ function persistWindow(
   }
 }
 
+// A resumed run finishes what a stopped one began, so what the stopped one reported at its end is
+// replaced, not added to: its numbering starts over, and "cancelled" is no longer true.
 function persistDiagnostics(deps: SinkDeps, diagnostics: readonly ParserDiagnostic[]): void {
   const db = deps.store._internal.db;
+  const prefix = `${String(deps.documentId)}#d`;
+  db.prepare(
+    "DELETE FROM parser_diagnostics WHERE capsule_id = :capsule AND document_id = :document " +
+      "AND substr(id, 1, length(:prefix)) = :prefix",
+  ).run({ capsule: String(deps.capsuleId), document: String(deps.documentId), prefix });
   diagnostics.forEach((diagnostic, index) => {
     insertDiagnosticRow(db, {
       id: `${String(deps.documentId)}#d${String(index)}`,
@@ -615,6 +628,7 @@ function extractionOptionsFor(
   now: () => number,
   state: SinkState,
   resume: boolean,
+  log: ProgressiveExtractionLog | undefined,
 ): ProgressiveExtractionOptions {
   const extension = extensionOf(params.file.relativePath);
   return {
@@ -640,9 +654,20 @@ function extractionOptionsFor(
           // an all-textless pre-resume prefix leaves the flag false, matching a continuous
           // single-pass extraction of the same source.
           resumeAnyPageEmitted: state.extractedTextBytes > 0,
+          resumeLearnedFurniture: state.learnedFurniture,
         }
       : {}),
+    ...(log === undefined ? {} : { log }),
   };
+}
+
+function progressiveLogFor(
+  deps: ExtractDocumentDeps,
+  documentId: DocumentId,
+): ProgressiveExtractionLog | undefined {
+  if (deps.logSink === undefined || deps.logContext === undefined) return undefined;
+  const documentIdDigest = pageReadDocumentDigest(String(documentId));
+  return { sink: deps.logSink, context: { ...deps.logContext, documentIdDigest } };
 }
 
 interface BuildSinkDepsOptions {
@@ -696,6 +721,7 @@ function emptySinkState(): SinkState {
     objectCursor: 0,
     characterCursor: 0,
     extractedTextBytes: 0,
+    learnedFurniture: [],
   };
 }
 
@@ -712,6 +738,7 @@ function checkpointSinkState(
     objectCursor: checkpoint?.objectCursor ?? 0,
     characterCursor: maxWindowCharacterEnd(store, params.capsuleId, documentId),
     extractedTextBytes: checkpoint?.extractedTextBytes ?? 0,
+    learnedFurniture: checkpoint?.learnedFurniture ?? [],
   };
 }
 
@@ -776,6 +803,17 @@ function retryExceededPlan(options: RetryExceededPlanOptions): ExistingCheckpoin
   };
 }
 
+// Learned state that cannot be read refuses the resume: a run that starts over reads the document
+// right, and one that goes on without it keeps lines a continuous run removes.
+function checkpointRefusals(
+  existing: NonNullable<ReturnType<typeof selectExtractionCheckpoint>>,
+  fingerprint: CheckpointFingerprint,
+): readonly CheckpointIncompatibilityReason[] {
+  const compat = checkpointCompatibility(existing.fingerprint, fingerprint);
+  const reasons = compat.compatible ? [] : compat.reasons;
+  return existing.learnedFurniture === undefined ? [...reasons, "learned-state"] : reasons;
+}
+
 function planForExistingCheckpoint(
   deps: ExtractDocumentDeps,
   params: ExtractDocumentParams,
@@ -785,13 +823,11 @@ function planForExistingCheckpoint(
   provisional: SinkDeps,
   existing: NonNullable<ReturnType<typeof selectExtractionCheckpoint>>,
 ): ExistingCheckpointPlan {
-  const compat = checkpointCompatibility(existing.fingerprint, provisional.fingerprint);
-  if (!compat.compatible) {
+  const reasons = checkpointRefusals(existing, provisional.fingerprint);
+  if (reasons.length > 0) {
     return {
       ...planForMissingCheckpoint(provisional.createdAt),
-      startupDiagnostics: [
-        checkpointIncompatibleDiagnostic(provisional.documentId, compat.reasons),
-      ],
+      startupDiagnostics: [checkpointIncompatibleDiagnostic(provisional.documentId, reasons)],
     };
   }
   if (
@@ -1032,6 +1068,7 @@ function finalizeProgressiveSuccess(
 }
 
 async function runPlannedProgressiveExtraction(
+  log: ProgressiveExtractionLog | undefined,
   sinkDeps: SinkDeps,
   params: ExtractDocumentParams,
   context: ProgressiveExtractContext,
@@ -1051,6 +1088,7 @@ async function runPlannedProgressiveExtraction(
       sinkDeps.now,
       plan.state,
       plan.resume,
+      log,
     ),
     sinkDeps,
     plan.state,
@@ -1090,8 +1128,10 @@ export async function extractDocumentProgressive(
 ): Promise<ExtractionResult> {
   const start = buildProgressiveStart(deps, params, context, contentHash, extractor);
   if (start.plan.failure !== undefined) return start.plan.failure;
+  const sinkDeps = sinkDepsForPlan(deps, params, context, extractor, contentHash, start);
   return await runPlannedProgressiveExtraction(
-    sinkDepsForPlan(deps, params, context, extractor, contentHash, start),
+    progressiveLogFor(deps, sinkDeps.documentId),
+    sinkDeps,
     params,
     context,
     source,

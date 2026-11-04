@@ -1,3 +1,4 @@
+import { MAX_LEARNED_FURNITURE } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -601,6 +602,10 @@ describe("columns", () => {
   });
 });
 
+function rotatedStamp(str: string, index: number): PositionedTextItem {
+  return { str, transform: [0, 10, -10, 0, 20, 100 + index], width: str.length, height: 10 };
+}
+
 function pageWith(
   body: readonly PositionedTextItem[],
   furniture: readonly PositionedTextItem[],
@@ -615,6 +620,33 @@ function bodyLines(page: number): PositionedTextItem[] {
 }
 
 describe("repeated page furniture", () => {
+  it("hands on a bounded part of what a window found and removes all of it", () => {
+    const stamps = Array.from({ length: MAX_LEARNED_FURNITURE + 40 }, (_, index) =>
+      rotatedStamp(`Stempel ${String(index)}x`, index),
+    );
+    // The body outnumbers the stamps, or the stamps would set the page's reading direction.
+    const body = (page: number): PositionedTextItem[] =>
+      Array.from({ length: stamps.length + 10 }, (_, line) =>
+        drawn(`Absatz ${String(page)} Satz ${String(line)}`, LEFT, 9000 - line * 12),
+      );
+    const composed = composePages([1, 2, 3].map((page) => pageWith(body(page), stamps)));
+
+    expect(composed.furniture.size).toBe(MAX_LEARNED_FURNITURE);
+    expect(composed.removedRows).toBe(stamps.length * 3);
+  });
+
+  it("composes a window the same when what it hands on is known already", () => {
+    const pages = [1, 2, 3].map((page) =>
+      pageWith(bodyLines(page), [drawn("Lastenheft Kernbank", LEFT, 780)]),
+    );
+    const first = composePages(pages);
+    const again = composePages(pages, first.furniture);
+
+    expect(again.texts).toEqual(first.texts);
+    expect(again.edges).toEqual(first.edges);
+    expect([...again.furniture]).toEqual([...first.furniture]);
+  });
+
   it("removes a running header and a footer whose page number changes", () => {
     const pages = [1, 2, 3, 4].map((page) =>
       pageWith(bodyLines(page), [

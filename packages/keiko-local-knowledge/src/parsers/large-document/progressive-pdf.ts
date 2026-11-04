@@ -20,6 +20,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
+import { emitPageReadFailure } from "../../indexing/page-read-activity.js";
+import { knowledgeErrorKind } from "../../knowledge-log.js";
 import { buildParserOptions } from "../registry.js";
 import {
   loadPdfDocumentFromSource,
@@ -40,6 +42,7 @@ import type { ParserOptions, ParserSelectionInput } from "../types.js";
 
 import { largeDocumentDiagnostic } from "./diagnostics.js";
 import type {
+  ProgressiveExtractionLog,
   ProgressiveExtractionOptions,
   ProgressiveExtractionSource,
   ProgressiveExtractionWindow,
@@ -141,9 +144,33 @@ interface PageReadOutcome {
   readonly diagnostics: readonly ParserDiagnostic[];
 }
 
-// Internal extraction context: the public deps plus the per-run document id.
+// Internal extraction context: the public deps plus the per-run document id and log port.
 interface PdfExtractContext extends ProgressivePdfExtractorDeps {
   readonly documentId: DocumentId;
+  readonly log: ProgressiveExtractionLog | undefined;
+}
+
+// Without a wired port the line is lost and counted as lost; these values never reach a file.
+const UNWIRED_LOG_CONTEXT: ProgressiveExtractionLog["context"] = {
+  jobId: "unwired",
+  capsuleIdDigest: "0000000000000000",
+  documentIdDigest: "0000000000000000",
+};
+
+// One broken page never ends the document, so nothing above this layer learns of the failure. This
+// line keeps its classified cause under the job's correlation; never its message or the page text.
+function recordPageReadFailure(
+  ctx: PdfExtractContext,
+  stage: "window" | "resume",
+  pageNumber: number,
+  cause: unknown,
+): void {
+  emitPageReadFailure(ctx.log?.sink, {
+    context: ctx.log?.context ?? UNWIRED_LOG_CONTEXT,
+    stage,
+    pageNumber,
+    failureKind: knowledgeErrorKind(cause),
+  });
 }
 
 // Reads a single page's text layer, falling back to the injected OCR capability for no-text-layer
@@ -168,7 +195,8 @@ async function readOrOcrPage(
       emittedUnits,
       scannedObjects,
     });
-  } catch {
+  } catch (cause) {
+    recordPageReadFailure(ctx, "window", pageNumber, cause);
     return {
       scannedObjects,
       diagnostics: [unreadablePageDiagnostic(ctx.documentId, pageNumber)],
@@ -184,6 +212,21 @@ async function readOrOcrPage(
   return ocr.text === undefined
     ? { scannedObjects: read.scannedObjects, diagnostics }
     : { text: ocr.text, scannedObjects: read.scannedObjects, diagnostics };
+}
+
+// A page before the resume point that cannot be read again costs no text: its text is stored. All a
+// run can lose is that the paragraph going on behind the resume point starts a new block.
+function unreadableBeforeResumeDiagnostic(
+  documentId: DocumentId,
+  pageNumber: number,
+): ParserDiagnostic {
+  return largeDocumentDiagnostic(
+    LARGE_DOCUMENT_DIAGNOSTIC_CODES.PARTIAL_COVERAGE,
+    "page before the resume point could not be read again; a paragraph over the resume point may be split",
+    documentId,
+    "info",
+    pageNumber,
+  );
 }
 
 function unreadablePageDiagnostic(documentId: DocumentId, pageNumber: number): ParserDiagnostic {
@@ -206,6 +249,8 @@ interface PdfDriveState {
   furniture: ReadonlySet<string>;
   // How the last page of the window before ended, for a paragraph that goes on behind it.
   lastEdge: PageEdge | undefined;
+  // What the extractor has to say about pages it read again before the first window it emits.
+  pendingDiagnostics: readonly ParserDiagnostic[];
 }
 
 async function pageLabelsFor(doc: PdfDocumentLike): Promise<readonly (string | null)[]> {
@@ -278,7 +323,8 @@ async function extractPdfWindow(
 ): Promise<ProgressiveExtractionWindow> {
   const { firstPage, lastPage, state, ctx, parserOptions, startedAt, pageLabels } = options;
   const builder = new WindowTextBuilder(ctx.documentId, state.cursor, state.anyPageEmitted);
-  const diagnostics: ParserDiagnostic[] = [];
+  const diagnostics: ParserDiagnostic[] = [...state.pendingDiagnostics];
+  state.pendingDiagnostics = [];
   const outcomes: PageReadOutcome[] = [];
   for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber += 1) {
     const outcome = await readOrOcrPage(
@@ -307,16 +353,16 @@ async function extractPdfWindow(
     objectCursor: state.scannedObjects,
     lastPageNumber: lastPage,
     diagnostics,
+    learnedFurniture: [...state.furniture],
   };
   state.windowIndex += 1;
   return window;
 }
 
-// A checkpoint carries no page furniture and no page edge, so a resumed run would otherwise start
-// knowing nothing: it would keep the headers of a short last window that a continuous run removes,
-// and end a paragraph at the resume point. The run before it is read again, text layer only and
-// without emitting anything, to learn both back.
-async function learnedBeforeResume(
+// A checkpoint carries what earlier windows learned, but no page edge: how a page ended is made of
+// its text. The last window is read again, text layer only and emitting nothing, and composed with
+// what it knew, which gives the edge a continuous run would hand on.
+async function edgeBeforeResume(
   doc: PdfDocumentLike,
   args: {
     readonly ctx: PdfExtractContext;
@@ -324,13 +370,18 @@ async function learnedBeforeResume(
     readonly startedAt: number;
     readonly resumeFromPage: number;
     readonly windowPages: number;
+    readonly furniture: ReadonlySet<string>;
   },
-): Promise<{ readonly furniture: ReadonlySet<string>; readonly lastEdge: PageEdge | undefined }> {
+): Promise<{
+  readonly lastEdge: PageEdge | undefined;
+  readonly diagnostics: readonly ParserDiagnostic[];
+}> {
   const first = Math.max(1, args.resumeFromPage - args.windowPages + 1);
   const pageNumbers = Array.from(
     { length: args.resumeFromPage - first + 1 },
     (_, index) => first + index,
   );
+  const diagnostics: ParserDiagnostic[] = [];
   const read = async (pageNumber: number): Promise<PageLayout | undefined> => {
     try {
       const result = await readPageLayout(await doc.getPage(pageNumber), {
@@ -341,17 +392,41 @@ async function learnedBeforeResume(
         scannedObjects: 0,
       });
       return hasPageContent(result.layout) ? result.layout : undefined;
-    } catch {
-      // A page that cannot be read teaches nothing; the window itself reports it when it is read.
+    } catch (cause) {
+      recordPageReadFailure(args.ctx, "resume", pageNumber, cause);
+      diagnostics.push(unreadableBeforeResumeDiagnostic(args.ctx.documentId, pageNumber));
       return undefined;
     }
   };
   const layouts = await Promise.all(pageNumbers.map((pageNumber) => read(pageNumber)));
-  const composed = composePages(layouts.filter((layout) => layout !== undefined));
+  const composed = composePages(
+    layouts.filter((layout) => layout !== undefined),
+    args.furniture,
+  );
   return {
-    furniture: composed.furniture,
     // The page right before the resume point has an edge only if it has text.
     lastEdge: layouts.at(-1) === undefined ? undefined : composed.edges.at(-1),
+    diagnostics,
+  };
+}
+
+function initialDriveState(
+  options: ProgressiveExtractionOptions,
+  resumeFromPage: number,
+): PdfDriveState {
+  return {
+    cursor: options.resumeCharacterStart ?? 0,
+    // KEIKO-0172: seed from the caller-supplied prior-emitted flag when available; fall back
+    // to the `resumeFromPage > 0` proxy for pre-migration checkpoints that do not carry it.
+    // See ProgressiveExtractionOptions.resumeAnyPageEmitted for the full rationale.
+    anyPageEmitted: options.resumeAnyPageEmitted ?? resumeFromPage > 0,
+    scannedObjects: options.resumeObjectCursor ?? 0,
+    // Every page counts one unit in a continuous run, so the pages before the resume point do too.
+    emittedUnits: resumeFromPage,
+    windowIndex: options.resumeWindowIndex ?? 0,
+    furniture: new Set(options.resumeLearnedFurniture ?? []),
+    lastEdge: undefined,
+    pendingDiagnostics: [],
   };
 }
 
@@ -367,28 +442,18 @@ async function* pdfExtractWindows(
   const resumeFromPage = options.resumeFromPage ?? 0;
   const windowPages = Math.max(1, options.policy.extractionWindowPages);
   const startedAt = options.now();
-  const state: PdfDriveState = {
-    cursor: options.resumeCharacterStart ?? 0,
-    // KEIKO-0172: seed from the caller-supplied prior-emitted flag when available; fall back
-    // to the `resumeFromPage > 0` proxy for pre-migration checkpoints that do not carry it.
-    // See ProgressiveExtractionOptions.resumeAnyPageEmitted for the full rationale.
-    anyPageEmitted: options.resumeAnyPageEmitted ?? resumeFromPage > 0,
-    scannedObjects: options.resumeObjectCursor ?? 0,
-    emittedUnits: 0,
-    windowIndex: options.resumeWindowIndex ?? 0,
-    furniture: new Set(),
-    lastEdge: undefined,
-  };
+  const state = initialDriveState(options, resumeFromPage);
   if (resumeFromPage > 0) {
-    const learned = await learnedBeforeResume(doc, {
+    const before = await edgeBeforeResume(doc, {
       ctx,
       parserOptions,
       startedAt,
       resumeFromPage,
       windowPages,
+      furniture: state.furniture,
     });
-    state.furniture = learned.furniture;
-    state.lastEdge = learned.lastEdge;
+    state.lastEdge = before.lastEdge;
+    state.pendingDiagnostics = before.diagnostics;
   }
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;
@@ -417,7 +482,12 @@ export function createProgressivePdfExtractor(
       input.extension.toLowerCase() === "pdf" ||
       input.mediaType.toLowerCase() === "application/pdf",
     extractWindows: (source, options) =>
-      pdfExtractWindows(loadDocument, { ...deps, documentId: options.documentId }, source, options),
+      pdfExtractWindows(
+        loadDocument,
+        { ...deps, documentId: options.documentId, log: options.log },
+        source,
+        options,
+      ),
   };
 }
 

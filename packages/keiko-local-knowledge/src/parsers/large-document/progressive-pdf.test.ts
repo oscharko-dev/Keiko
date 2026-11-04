@@ -2,12 +2,14 @@ import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-cont
 import type { DocumentId, LargeDocumentResourcePolicy } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 
+import type { KnowledgeLogEvent } from "../../knowledge-log.js";
 import { buildParserOptions } from "../registry.js";
 import { extractPages, type PdfDocumentLike, type PdfTextContentChunk } from "../pdf-parser.js";
 import type { OcrPageResult } from "../ocr/types.js";
 import { createProgressivePdfExtractor, runProgressiveExtraction } from "./index.js";
 import type {
   OcrPageFn,
+  ProgressiveExtractionLog,
   ProgressiveExtractionOptions,
   ProgressiveExtractionSource,
   ProgressiveExtractionWindow,
@@ -306,6 +308,30 @@ function runningTextPdf(pageCount: number): PdfDocumentLike {
   };
 }
 
+function resumeCharacterStartOf(windows: readonly ProgressiveExtractionWindow[]): number {
+  const last = windows.at(-1);
+  return last === undefined ? 0 : last.characterStart + last.text.length;
+}
+
+/** What the checkpoint behind these windows hands to the next run. */
+function resumeBehind(
+  windows: readonly ProgressiveExtractionWindow[],
+): Partial<ProgressiveExtractionOptions> {
+  const last = windows.at(-1);
+  return {
+    resumeFromPage: last?.lastPageNumber ?? 0,
+    resumeCharacterStart: resumeCharacterStartOf(windows),
+    resumeWindowIndex: windows.length,
+    resumeObjectCursor: last?.objectCursor ?? 0,
+    resumeExtractedTextBytes: windows.reduce(
+      (sum, window) => sum + Buffer.byteLength(window.text, "utf8"),
+      0,
+    ),
+    resumeAnyPageEmitted: true,
+    resumeLearnedFurniture: last?.learnedFurniture ?? [],
+  };
+}
+
 describe("progressive and full-buffer extraction of one document", () => {
   it("carry a paragraph over a page and a window the same way (#4235)", async () => {
     const doc = runningTextPdf(20);
@@ -381,16 +407,11 @@ describe("progressive and full-buffer extraction of one document", () => {
       return sink;
     };
     const continuous = await run({});
-    const cut =
-      continuous.windows.flatMap((w) => w.pages).find((page) => page.pageNumber === 18)
-        ?.characterEnd ?? 0;
-    const resumed = await run({
-      resumeFromPage: 18,
-      resumeCharacterStart: cut,
-      resumeAnyPageEmitted: true,
-    });
+    const before = continuous.windows.filter((window) => window.lastPageNumber <= 18);
+    const resumed = await run(resumeBehind(before));
     expect(continuous.text()).not.toContain("Kopf Nur Hinten");
-    expect(resumed.text()).toBe(continuous.text().slice(cut));
+    expect(resumed.text()).toBe(continuous.text().slice(resumeCharacterStartOf(before)));
+    expect(resumed.windows).toEqual(continuous.windows.slice(before.length));
   });
 
   it("keeps extracting after a page whose text cannot be read (review #4235)", async () => {
@@ -417,5 +438,157 @@ describe("progressive and full-buffer extraction of one document", () => {
     expect(sink.text()).toContain("Seite 3 Zeile 700");
     const unreadable = summary.diagnostics.find((d) => d.pageNumber === 2);
     expect(unreadable?.severity).toBe("warning");
+  });
+});
+
+/** `Manual header` on pages 1 to 3 and 7, four body lines on every page (review of #4238). */
+function returningHeaderPdf(): PdfDocumentLike {
+  return {
+    numPages: 7,
+    getPage: (pageNumber: number) =>
+      Promise.resolve({
+        streamTextContent: () =>
+          new ReadableStream<PdfTextContentChunk>({
+            start(controller): void {
+              const body = [700, 685, 670, 655].map((y) =>
+                positionedItem(`Page ${String(pageNumber)} line ${String(y)}`, y),
+              );
+              const shown = pageNumber <= 3 || pageNumber === 7;
+              const header = shown ? [positionedItem("Manual header", 780)] : [];
+              controller.enqueue({ items: [...header, ...body] });
+              controller.close();
+            },
+          }),
+      }),
+  };
+}
+
+async function windowsOf(
+  doc: PdfDocumentLike,
+  overrides: Partial<ProgressiveExtractionOptions> = {},
+  limits: Partial<LargeDocumentResourcePolicy> = {},
+): Promise<readonly ProgressiveExtractionWindow[]> {
+  const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+  const windows: ProgressiveExtractionWindow[] = [];
+  const run = { ...options(3, overrides), policy: { ...policy(3), ...limits } };
+  for await (const window of extractor.extractWindows(SOURCE, run)) windows.push(window);
+  return windows;
+}
+
+describe("a resumed progressive extraction", () => {
+  it("removes a header only the earlier windows proved, byte for byte", async () => {
+    const doc = returningHeaderPdf();
+    const continuous = await windowsOf(doc);
+    const resumed = await windowsOf(doc, resumeBehind(continuous.slice(0, 2)));
+
+    expect(continuous.map((window) => window.text).join("")).not.toContain("Manual header");
+    expect(resumed).toEqual(continuous.slice(2));
+  });
+
+  it("ends in the same state as a continuous run", async () => {
+    const doc = returningHeaderPdf();
+    const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+    const collected = collectingSink();
+    const whole = await runProgressiveExtraction(extractor, SOURCE, options(3), collected);
+    const resumed = await runProgressiveExtraction(
+      extractor,
+      SOURCE,
+      options(3, resumeBehind(collected.windows.slice(0, 2))),
+      collectingSink(),
+    );
+
+    const { diagnostics: wholeDiagnostics, ...wholeState } = whole;
+    const { diagnostics: resumedDiagnostics, ...resumedState } = resumed;
+    expect(resumedState).toEqual(wholeState);
+    expect(resumedDiagnostics).toEqual(collected.windows[2]?.diagnostics);
+    expect(wholeDiagnostics).toEqual(collected.windows.flatMap((window) => window.diagnostics));
+  });
+
+  it("counts the pages before the resume point against the unit limit", async () => {
+    const doc = returningHeaderPdf();
+    const limits = { maxParserUnits: 6 };
+    const continuous = await windowsOf(doc, {}, limits);
+    const resumed = await windowsOf(doc, resumeBehind(continuous.slice(0, 2)), limits);
+
+    expect(resumed).toEqual(continuous.slice(2));
+  });
+
+  it("reports what it learned as digests, never as the repeated text", async () => {
+    const [first] = await windowsOf(returningHeaderPdf());
+
+    expect(first?.learnedFurniture?.length).toBeGreaterThan(0);
+    expect(JSON.stringify(first?.learnedFurniture)).not.toContain("Manual");
+    for (const digest of first?.learnedFurniture ?? []) {
+      expect(digest).toMatch(/^[A-Za-z0-9_-]{22}$/u);
+    }
+  });
+});
+
+describe("a page that cannot be read", () => {
+  const DIGEST = "0123456789abcdef";
+  const JOB = "page-read-proof-job";
+
+  function capture(): {
+    readonly events: KnowledgeLogEvent[];
+    readonly log: ProgressiveExtractionLog;
+  } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      events,
+      log: {
+        sink: { write: (event): void => void events.push(event) },
+        context: { jobId: JOB, capsuleIdDigest: DIGEST, documentIdDigest: DIGEST },
+      },
+    };
+  }
+
+  function brokenAt(page: number): PdfDocumentLike {
+    const good = returningHeaderPdf();
+    const broken = Object.assign(new Error("secret page text"), { code: "PDF_BROKEN" });
+    return {
+      numPages: good.numPages,
+      getPage: (pageNumber: number) =>
+        pageNumber === page ? Promise.reject(broken) : good.getPage(pageNumber),
+    };
+  }
+
+  it("leaves evidence when it breaks in a window", async () => {
+    const { events, log } = capture();
+    const windows = await windowsOf(brokenAt(2), { log });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "indexing.document.page-read-failed",
+      level: "warn",
+      correlationId: JOB,
+      extra: { stage: "window", pageNumber: 2, failureKind: "PDF_BROKEN" },
+    });
+    expect(JSON.stringify(events)).not.toContain("secret");
+    const reported = windows.flatMap((window) => window.diagnostics);
+    expect(reported.find((diagnostic) => diagnostic.pageNumber === 2)?.severity).toBe("warning");
+  });
+
+  it("leaves evidence when it breaks while read again before a resume", async () => {
+    const { events, log } = capture();
+    const doc = brokenAt(2);
+    const continuous = await windowsOf(doc);
+    const [next] = await windowsOf(doc, { ...resumeBehind(continuous.slice(0, 1)), log });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "indexing.document.page-read-failed",
+      correlationId: JOB,
+      extra: { stage: "resume", pageNumber: 2, failureKind: "PDF_BROKEN" },
+    });
+    expect(JSON.stringify(events)).not.toContain("secret");
+    const notice = next?.diagnostics.find((diagnostic) => diagnostic.pageNumber === 2);
+    expect(notice?.severity).toBe("info");
+    expect(next?.text).toBe(continuous[1]?.text);
+  });
+
+  it("does not stop a run when no log is wired", async () => {
+    const windows = await windowsOf(brokenAt(2));
+
+    expect(windows.map((window) => window.lastPageNumber)).toEqual([3, 6, 7]);
   });
 });

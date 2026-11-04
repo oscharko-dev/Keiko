@@ -224,13 +224,36 @@ export interface ExtractionCheckpointRecord {
   readonly coverage: CoverageQuality;
   readonly fingerprint: CheckpointFingerprint;
   readonly terminalDiagnostics: readonly ParserDiagnostic[];
+  // What the windows so far proved to be repeated page furniture, as digests in the order they
+  // were learned. A resumed run needs it: a header missing from the last window is not learned
+  // back by reading that window again. Absent when the stored value cannot be read, which makes the
+  // checkpoint unusable for a resume, never a run that knows nothing.
+  readonly learnedFurniture?: readonly string[] | undefined;
   readonly createdAt: number;
   readonly updatedAt: number;
 }
 
+/** How many furniture digests a run carries from window to window, and so a checkpoint stores. */
+export const MAX_LEARNED_FURNITURE = 256;
+
+// A JSON list of digests exactly as a run writes it. Nothing else is read as learned state.
+const LEARNED_FURNITURE_JSON = /^\[(?:"[A-Za-z0-9_-]{22}"(?:,"[A-Za-z0-9_-]{22}")*)?\]$/u;
+
+/** The stored form of learned furniture, or undefined when it is not what a run writes. */
+export function parseLearnedFurniture(json: string): readonly string[] | undefined {
+  if (!LEARNED_FURNITURE_JSON.test(json)) return undefined;
+  const digests = json === "[]" ? [] : json.slice(2, -2).split('","');
+  return digests.length > MAX_LEARNED_FURNITURE ? undefined : digests;
+}
+
 // ─── Checkpoint compatibility ─────────────────────────────────────────────────
 export type CheckpointIncompatibilityReason =
-  "source-hash" | "parser-version" | "resource-policy" | "chunking-strategy" | "embedding-identity";
+  | "source-hash"
+  | "parser-version"
+  | "resource-policy"
+  | "chunking-strategy"
+  | "embedding-identity"
+  | "learned-state";
 
 export const CHECKPOINT_INCOMPATIBILITY_REASONS: readonly CheckpointIncompatibilityReason[] = [
   "source-hash",
@@ -238,6 +261,7 @@ export const CHECKPOINT_INCOMPATIBILITY_REASONS: readonly CheckpointIncompatibil
   "resource-policy",
   "chunking-strategy",
   "embedding-identity",
+  "learned-state",
 ] as const;
 
 export type CheckpointCompatibility =

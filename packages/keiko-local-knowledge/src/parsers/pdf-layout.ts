@@ -4,6 +4,10 @@
 // wrapped line belongs to, and the page furniture a document repeats. Everything is decided from
 // layout evidence. Where the evidence is missing, a line stays a line.
 
+import { createHash } from "node:crypto";
+
+import { MAX_LEARNED_FURNITURE } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
+
 export interface PositionedTextItem {
   readonly str?: string;
   readonly transform?: readonly number[];
@@ -443,12 +447,20 @@ function repeatedLineKey(text: string): string {
   return !/\p{L}/u.test(masked) || namesPageCounter(masked) ? masked : folded;
 }
 
+// What a run knows about a repeated line is a digest of it: a checkpoint stores what it learned, and
+// a checkpoint holds no document text.
+function furnitureDigest(key: string): string {
+  return createHash("sha256").update(key).digest("base64url").slice(0, 22);
+}
+
 function furnitureKey(row: LayoutRow): string {
-  return `${repeatedLineKey(rowText(row))}@${String(Math.round(row.y / FURNITURE_Y_BUCKET))}`;
+  return furnitureDigest(
+    `${repeatedLineKey(rowText(row))}@${String(Math.round(row.y / FURNITURE_Y_BUCKET))}`,
+  );
 }
 
 function offAxisKey(text: string): string {
-  return `off-axis:${repeatedLineKey(text)}`;
+  return furnitureDigest(`off-axis:${repeatedLineKey(text)}`);
 }
 
 const FURNITURE_ISOLATION_RATIO = 1.5;
@@ -1704,7 +1716,9 @@ function composeWindow(
       })),
     ),
     removedRows: rowCount(pages) - rowCount(cleaned),
-    furniture,
+    // A window uses all it found, and hands on a bounded part. What comes first stays, so a resumed
+    // run that restores this set composes its pages as a continuous run does.
+    furniture: new Set([...furniture].slice(0, MAX_LEARNED_FURNITURE)),
   };
 }
 

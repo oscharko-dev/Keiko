@@ -24,6 +24,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { LARGE_DOCUMENT_DIAGNOSTIC_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
+import type { IndexingLogContext } from "../../indexing/types.js";
+import type { KnowledgeLogSink } from "../../knowledge-log.js";
+
 import { largeDocumentDiagnostic } from "./diagnostics.js";
 
 // ─── Byte source ──────────────────────────────────────────────────────────────
@@ -53,6 +56,9 @@ export interface ProgressiveExtractionWindow {
   // The 1-based page number of the last page in this window (resume cursor anchor).
   readonly lastPageNumber: number;
   readonly diagnostics: readonly ParserDiagnostic[];
+  // What the extractor has learned about the document so far and needs back to resume behind this
+  // window. Digests only; an extractor that learns nothing leaves it out.
+  readonly learnedFurniture?: readonly string[];
 }
 
 // ─── Options ──────────────────────────────────────────────────────────────────
@@ -82,6 +88,16 @@ export interface ProgressiveExtractionOptions {
   // extract-progressive.ts, from the already-persisted `extracted_text_bytes` cursor) should
   // pass it explicitly so resume is byte-identical to a continuous single-pass run.
   readonly resumeAnyPageEmitted?: boolean;
+  // What the last persisted window reported as `learnedFurniture`.
+  readonly resumeLearnedFurniture?: readonly string[];
+  // Where evidence goes that nothing above the extractor would see.
+  readonly log?: ProgressiveExtractionLog;
+}
+
+/** The port and the job and document a progressive extraction's Activity Log lines belong to. */
+export interface ProgressiveExtractionLog {
+  readonly sink: KnowledgeLogSink;
+  readonly context: IndexingLogContext & { readonly documentIdDigest: string };
 }
 
 // ─── Extractor ────────────────────────────────────────────────────────────────

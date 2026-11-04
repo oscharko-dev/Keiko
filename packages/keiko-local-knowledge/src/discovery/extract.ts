@@ -82,6 +82,8 @@ import { redactDiagnosticMessage } from "../privacy/diagnostic-redactor.js";
 import type { KnowledgeStore } from "../store.js";
 import { getCapsule } from "../capsule-lifecycle.js";
 import { upsertExtractionCheckpoint } from "../indexing/checkpoint-persist.js";
+import type { IndexingLogContext } from "../indexing/types.js";
+import type { KnowledgeLogSink } from "../knowledge-log.js";
 import { basenameOf, extensionOf, mediaTypeFor } from "./media-type.js";
 import { compileGlobList, matchesAny, type CompiledGlob } from "./glob.js";
 import {
@@ -126,6 +128,9 @@ export interface ExtractDocumentDeps {
   // The chunking strategy key the orchestrator will use; pinned into the checkpoint fingerprint so
   // resume refuses a checkpoint produced under a different chunking strategy.
   readonly chunkingStrategyVersion?: string;
+  // Where the progressive route reports what it recovers from without failing the document.
+  readonly logSink?: KnowledgeLogSink;
+  readonly logContext?: IndexingLogContext;
 }
 
 // ─── Path helpers (re-derived to keep extract.ts self-contained for the realpath gate) ──
