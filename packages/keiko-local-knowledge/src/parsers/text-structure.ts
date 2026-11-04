@@ -24,13 +24,20 @@ export function sourceLines(text: string): readonly SourceLine[] {
   const lines: SourceLine[] = [];
   let cursor = 0;
   while (cursor < text.length) {
-    const newline = text.indexOf("\n", cursor);
-    const lineEnd = newline === -1 ? text.length : newline;
-    const end = lineEnd > cursor && text[lineEnd - 1] === "\r" ? lineEnd - 1 : lineEnd;
+    const end = lineEndAt(text, cursor);
     lines.push({ text: text.slice(cursor, end), start: cursor, end });
-    cursor = lineEnd + 1;
+    cursor = text[end] === "\r" && text[end + 1] === "\n" ? end + 2 : end + 1;
   }
   return lines;
+}
+
+// A line ends before `\n`, `\r\n` or a lone `\r` (a text from an old Mac editor).
+function lineEndAt(text: string, from: number): number {
+  for (let index = from; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\n" || char === "\r") return index;
+  }
+  return text.length;
 }
 
 const SPACE = 0x20;
@@ -221,10 +228,18 @@ export function splitMarkdownTableRow(line: string): readonly string[] {
   return body.split("|").map((part) => part.trim());
 }
 
+// A single column is a table only when both outer pipes say so (`| --- |`).
+function hasOuterPipes(line: string): boolean {
+  const trimmed = line.trim();
+  return trimmed.length > 1 && trimmed.startsWith("|") && trimmed.endsWith("|");
+}
+
 export function isMarkdownTableSeparator(line: string): boolean {
   if (!line.includes("|")) return false;
   const cells = splitMarkdownTableRow(line);
-  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/u.test(cell));
+  return (
+    (cells.length > 1 || hasOuterPipes(line)) && cells.every((cell) => /^:?-{3,}:?$/u.test(cell))
+  );
 }
 
 const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:\s|$)/u;
