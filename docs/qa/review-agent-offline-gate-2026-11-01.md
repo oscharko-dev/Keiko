@@ -197,6 +197,14 @@ The single holdout run started at 17:36 UTC on 2026-11-02 with the product confi
   digest constant in `packages/keiko-contracts/src/activity-log-identity.generated.ts`, and
   `package-lock.json` is unchanged. Every review in the state directory since the holdout start
   is a holdout review.
+- R4130-027 widened the composition digest to the workspace dependency closure of `keiko-server`
+  and `keiko-evaluations` (25 packages), the gate's non-test sources, `tsconfig.base.json` and
+  `scripts/stage-dev-coding-runtime.mjs`. Over that whole set, `git diff --stat 0edb7387a` to this
+  head shows two kinds of change. Under `packages/`, it shows only the generated catalog digest
+  constant. Under `tests/review-quality/`, it shows the resume, evidence, argument and re-score
+  handling of this PR, plus two removed `export` keywords in `repository.ts` and `server.ts`. None
+  of them changes how a review runs or is scored, so the legacy reviews and the resumed reviews ran
+  the same review code.
 - No finding, match or rate of the holdout was read before the stops. Only settlement counts and
   kinds and the Activity Log entries around the first review were read, to find the cause of the
   17 refusals and to watch progress.
