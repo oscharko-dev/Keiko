@@ -14,6 +14,7 @@ import type {
 
 import type { RouteResult } from "../../routes.js";
 import { defaultServerDiagnosticSink } from "../../diagnostics-log.js";
+import { reviewEvidenceDigest } from "../activity-log.js";
 import { commitFile, git } from "../reviewFixtures.test-support.js";
 import {
   handleReviewRunCancel,
@@ -801,6 +802,11 @@ describe("review run service: fault injection", () => {
     await h.service.whenSettled(first.runId);
     expect(h.store.get(first.runId)?.phase).toBe("settling");
     failing.settle = false;
+    const firstDigest = reviewEvidenceDigest("run", first.runId);
+    const settledLines = (): number =>
+      h.log.withOp("review.run.settled").filter((line) => line.extra?.runDigest === firstDigest)
+        .length;
+    const beforeRecovery = settledLines();
     const cancelled = handleReviewRunCancel(
       h.ctx(`/api/git-review/runs/${first.runId}/cancel`, { params: { runId: first.runId } }),
       h.deps(),
@@ -810,6 +816,7 @@ describe("review run service: fault injection", () => {
       kind: "abandoned",
       reason: "interrupted",
     });
+    expect(settledLines()).toBe(beforeRecovery + 1);
     failing.settle = true;
     const stuck = runOf(await start(h, startBody({ clientRequestId: "client-request-2" })));
     await h.service.whenSettled(stuck.runId);
