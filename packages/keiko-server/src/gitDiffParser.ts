@@ -27,6 +27,7 @@ import {
   GIT_EDITOR_DIFF_MAX_LINE_CHARS,
   GIT_EDITOR_DIFF_MAX_LINES_PER_HUNK,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { decodeGitQuotedPath } from "@oscharko-dev/keiko-contracts/runtime/unified-diff";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 
 export interface GitUnifiedDiffParseOptions {
@@ -89,58 +90,14 @@ export interface UnifiedDiffFileHeader {
 }
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:.*)$/u;
-const OCTAL_ESCAPE = /^[0-7]{3}$/u;
 const MODE_RECORD = /^(new file|deleted file|old|new) mode ([0-7]{6})$/u;
 const SIMILARITY_RECORD = /^(?:dis)?similarity index (\d{1,3})%$/u;
 const INDEX_RECORD = /^index [0-9a-f]+\.\.[0-9a-f]+(?: ([0-7]{6}))?$/u;
 const GITLINK_MODE = "160000";
 
-function decodeQuotedPath(raw: string): string | undefined {
-  if (!raw.startsWith('"') || !raw.endsWith('"')) return undefined;
-  const bytes: number[] = [];
-  const encoder = new TextEncoder();
-  const content = raw.slice(1, -1);
-  let index = 0;
-  while (index < content.length) {
-    const value = String.fromCodePoint(content.codePointAt(index) ?? 0);
-    if (value !== "\\") {
-      bytes.push(...encoder.encode(value));
-      index += value.length;
-      continue;
-    }
-    const escape = content[index + 1];
-    if (escape === undefined) return undefined;
-    const octal = content.slice(index + 1, index + 4);
-    if (OCTAL_ESCAPE.test(octal)) {
-      bytes.push(Number.parseInt(octal, 8));
-      index += 4;
-      continue;
-    }
-    const escaped = new Map([
-      ["a", 7],
-      ["b", 8],
-      ["t", 9],
-      ["n", 10],
-      ["v", 11],
-      ["f", 12],
-      ["r", 13],
-      ['"', 34],
-      ["\\", 92],
-    ]).get(escape);
-    if (escaped === undefined) return undefined;
-    bytes.push(escaped);
-    index += 2;
-  }
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(bytes));
-  } catch {
-    return undefined;
-  }
-}
-
 function decodePath(raw: string): string | undefined {
   if (raw.includes("\uFFFD")) return undefined;
-  return raw.startsWith('"') ? decodeQuotedPath(raw) : raw;
+  return raw.startsWith('"') ? decodeGitQuotedPath(raw) : raw;
 }
 
 function withoutDiffPrefix(path: string): string {
