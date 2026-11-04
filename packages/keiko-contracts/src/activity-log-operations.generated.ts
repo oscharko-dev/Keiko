@@ -154,7 +154,7 @@ const sharedOperationFields8 = () =>
     frames: fieldContracts.activityLogBoundedStringArrayField(false, "safe-platform-class", 512, 8),
     causeChain: fieldContracts.activityLogBoundedStringArrayField(false, "error-kind", 128, 5),
   }) as const;
-const activityLogOperationPart0 = () =>
+const activityLogOperationPart0 = /*#__PURE__*/ (() =>
   [
     {
       contractKind: "activity-log-operation",
@@ -7537,8 +7537,8 @@ const activityLogOperationPart0 = () =>
       proofIds: ["coding-runtime.tool-authority.denied.emitted-line"],
       releaseImpact: "patch",
     },
-  ] as const;
-const activityLogOperationPart1 = () =>
+  ] as const)();
+const activityLogOperationPart1 = /*#__PURE__*/ (() =>
   [
     {
       contractKind: "activity-log-operation",
@@ -13952,8 +13952,8 @@ const activityLogOperationPart1 = () =>
       proofIds: ["git.snapshot.reserved.line"],
       releaseImpact: "patch",
     },
-  ] as const;
-const activityLogOperationPart2 = () =>
+  ] as const)();
+const activityLogOperationPart2 = /*#__PURE__*/ (() =>
   [
     {
       contractKind: "activity-log-operation",
@@ -20571,8 +20571,8 @@ const activityLogOperationPart2 = () =>
       proofIds: ["tool-catalog.invocation-started.emitted-line"],
       releaseImpact: "patch",
     },
-  ] as const;
-const activityLogOperationPart3 = () =>
+  ] as const)();
+const activityLogOperationPart3 = /*#__PURE__*/ (() =>
   [
     {
       contractKind: "activity-log-operation",
@@ -21492,17 +21492,17 @@ const activityLogOperationPart3 = () =>
       proofIds: ["workspace.root.denied.line"],
       releaseImpact: "patch",
     },
-  ] as const;
+  ] as const)();
 // The registry only calls side-effect-free field constructors.
 export const ACTIVITY_LOG_OPERATION_REGISTRY: readonly [
-  ...ReturnType<typeof activityLogOperationPart0>,
-  ...ReturnType<typeof activityLogOperationPart1>,
-  ...ReturnType<typeof activityLogOperationPart2>,
-  ...ReturnType<typeof activityLogOperationPart3>,
+  ...typeof activityLogOperationPart0,
+  ...typeof activityLogOperationPart1,
+  ...typeof activityLogOperationPart2,
+  ...typeof activityLogOperationPart3,
 ] = /*#__PURE__*/ (() =>
   [
-    ...activityLogOperationPart0(),
-    ...activityLogOperationPart1(),
-    ...activityLogOperationPart2(),
-    ...activityLogOperationPart3(),
+    ...activityLogOperationPart0,
+    ...activityLogOperationPart1,
+    ...activityLogOperationPart2,
+    ...activityLogOperationPart3,
   ] as const)();
