@@ -62,6 +62,20 @@ describe("paragraph reflow", () => {
     );
   });
 
+  it("keeps an address whole when the margin broke it behind its scheme", () => {
+    const first = fullLineEndingIn("https://");
+    expect(bodyText([drawn(first, LEFT, 700), drawn("www.example.com/lizenz", LEFT, 688)])).toBe(
+      `${first}www.example.com/lizenz`,
+    );
+  });
+
+  it("keeps a word apart from an address that closed at the margin", () => {
+    const first = fullLineEndingIn("https://www.example.com/");
+    expect(bodyText([drawn(first, LEFT, 700), drawn("und weiter.", LEFT, 688)])).toBe(
+      `${first} und weiter.`,
+    );
+  });
+
   it("keeps a line that would have fit behind the previous one", () => {
     expect(bodyText([drawn("Titel kurz", LEFT, 700), drawn("Statement.", LEFT, 688)])).toBe(
       "Titel kurz\nStatement.",

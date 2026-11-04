@@ -850,6 +850,8 @@ interface WrapJoin {
 }
 
 const HYPHENATED_END = /\p{L}-$/u;
+// Nothing but the rest of the address can follow a URL scheme.
+const URL_SCHEME_END = /\p{L}[\p{L}\p{N}+.-]*:\/\/$/u;
 const LOWER_START = /^\p{Ll}/u;
 const COMPOUND_START = /^[\p{Lu}\p{N}]/u;
 // "Ein- und Auszahlung": a word that follows a suspended hyphen keeps it.
@@ -857,6 +859,7 @@ const SUSPENDED_HYPHEN_NEXT = /^(?:und|oder|bzw|sowie|bis|and|or)\b/u;
 
 /** How a wrapped line continues the text before it; only the end of that text matters. */
 function wrapJoinOf(tail: string, right: string, vocabulary: Vocabulary): WrapJoin {
+  if (URL_SCHEME_END.test(tail)) return { dropHyphen: false, separator: "" };
   if (!HYPHENATED_END.test(tail)) return { dropHyphen: false, separator: " " };
   if (LOWER_START.test(right) && !SUSPENDED_HYPHEN_NEXT.test(right)) {
     const repairable = isPlainWord(lastWord(tail)) && isPlainWord(firstWord(right));
