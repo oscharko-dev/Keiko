@@ -52,7 +52,107 @@ const PERSONAL_IDENTIFIER_PATTERNS: readonly RegExp[] = [
   /(?:^|[^\d+])\+\d[\d ()./-]{6,}/,
   // A national identification number written in the common grouped form (e.g. a US SSN).
   /(?:^|[^\d-])\d{3}-\d{2}-\d{4}(?:[^\d-]|$)/,
+  // A bank account of any country, compact or grouped (IBAN).
+  /(?:^|[^A-Za-z0-9])[A-Z]{2}\d{2}(?:[ -]?[A-Z0-9]){11,30}(?:[^A-Za-z0-9]|$)/,
+  // The same written lowercase, at the German length. Other countries are recognised by their
+  // checksum in `containsLowercaseIban`: two letters and two digits also start a short hex digest.
+  /(?:^|[^a-z0-9])de\d{20}(?:[^a-z0-9]|$)/,
+  // A run of seven to nineteen digits, compact or grouped: a telephone number without its country
+  // code, a card or account number, a tax id, a date of birth written year first. A longer run is
+  // no number a person holds; it is a digest. A run that continues an identifier (`corr-root-00000001`)
+  // is that identifier's own counter.
+  /(?:^|[^\dA-Za-z._-])\d(?:[ /-]?\d){6,18}(?:[^\dA-Za-z_]|$)/,
+  // A telephone number inside an identifier: announced by its name (`tel-491711234567`), or in the
+  // national form (`contact_01711234567`): a mobile prefix or an area code. A counter or a fixture id
+  // counts from zero (`corr-0123456789`).
+  /(?:^|[^A-Za-z])(?:tel|telefon|phone|mobil|mobile|handy|fax)[-_.:=]?\+?\d[\d ()./-]{5,}/i,
+  /[-_.]0(?:1[5-7]|[2-9])\d{7,12}(?:[^\dA-Za-z_]|$)/,
+  // A URL names a machine and often its owner (`https://jane.doe.example`). Only a local one is
+  // nobody's.
+  /(?:^|[^a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/(?!(?:localhost|127\.\d|0\.0\.0\.0|\[::1\])(?:[:/?#]|$))[^\s/:]/i,
+  // A date with a four-digit year, as a birth date is written in a form or a contract.
+  /(?:^|[^\d.])\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}(?:[^\d.]|$)/,
+  // An IPv4 address, which identifies a person's machine.
+  /(?:^|[^\d.])\d{1,3}(?:\.\d{1,3}){3}(?:[^\d.]|$)/,
+  // A single capitalised word, which is how a surname stands alone (`Aydogan`, `Hans-Peter`).
+  /^[A-Z][a-z]+(?:-[A-Z][a-z]+)?$/,
 ];
+
+// Machine shapes that legitimately hold digit runs and are never personal: they are taken out of
+// the value before the personal shapes are judged, and only the whole shape counts.
+const NON_PERSONAL_DIGIT_SHAPES: readonly RegExp[] = [
+  // A UUID.
+  /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
+  // An instant with its time of day. A bare date stays personal: it may be a date of birth.
+  /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?/g,
+  // The loopback and unspecified addresses a local server binds. They identify no one's machine.
+  /\b(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0)\b/g,
+  // A measurement by its name (`responseBudgetBytes=114819072`). A name that says what the number
+  // measures leaves no room for an account or a telephone number.
+  /\b[A-Za-z]+(?:Bytes|Ms|Count|Tokens)=\d+\b/g,
+];
+
+// The name of the base error class is the one capitalised word a log line carries by design.
+const NON_PERSONAL_WORDS: ReadonlySet<string> = new Set(["Error"]);
+
+const LOWERCASE_IBAN = /(?:^|[^a-z0-9])([a-z]{2}\d{2}[a-z0-9]{11,30})(?![a-z0-9])/g;
+
+// ISO 7064 mod 97-10, the check every IBAN carries: the first four characters move to the end,
+// letters count as 10 to 35, and the number leaves a remainder of 1.
+function ibanChecksumHolds(iban: string): boolean {
+  let remainder = 0;
+  for (const char of iban.slice(4) + iban.slice(0, 4)) {
+    const digit = Number.parseInt(char, 36);
+    remainder = (remainder * (digit < 10 ? 10 : 100) + digit) % 97;
+  }
+  return remainder === 1;
+}
+
+// The length ISO 13616 fixes per country, with the countries that use the form outside the registry.
+// One random value in 97 passes the checksum, so a generated hex id would read as an IBAN without it.
+const IBAN_COUNTRIES_BY_LENGTH: readonly (readonly [number, string])[] = [
+  [15, "no"],
+  [16, "be"],
+  [18, "dk fi fk fo gl nl sd"],
+  [19, "mk si"],
+  [20, "at ba ee kz lt lu mn xk"],
+  [21, "ch hr li lv"],
+  [22, "bg bh cr de gb ge ie me rs va"],
+  [23, "ae gi il iq om so tl"],
+  [24, "ad cz es md pk ro sa se sk tn vg"],
+  [25, "ao cv ly mz pt st"],
+  [26, "dz ir is tr"],
+  [27, "bi cm dj fr ga gr it mc mg mr sm"],
+  [28, "al az bf bj by ci cy do gt hn hu lb ml ni pl sn sv"],
+  [29, "br eg ps qa ua"],
+  [30, "jo kw mu ye"],
+  [31, "mt sc"],
+  [32, "lc"],
+  [33, "ru"],
+];
+
+const IBAN_LENGTHS: ReadonlyMap<string, number> = new Map(
+  IBAN_COUNTRIES_BY_LENGTH.flatMap(([length, countries]) =>
+    countries.split(" ").map((country) => [country, length] as const),
+  ),
+);
+
+function isLowercaseIban(candidate: string): boolean {
+  return (
+    IBAN_LENGTHS.get(candidate.slice(0, 2)) === candidate.length && ibanChecksumHolds(candidate)
+  );
+}
+
+function containsLowercaseIban(value: string): boolean {
+  for (const match of value.matchAll(LOWERCASE_IBAN)) {
+    if (isLowercaseIban(match[1] ?? "")) return true;
+  }
+  return false;
+}
+
+function withoutNonPersonalDigitShapes(value: string): string {
+  return NON_PERSONAL_DIGIT_SHAPES.reduce((text, shape) => text.replace(shape, ""), value);
+}
 
 // A single run drawn from more than one alphabet. See OPAQUE_TOKEN_RUN_PATTERN for why both halves
 // of this test are needed and what each one lets through on purpose.
@@ -129,5 +229,10 @@ function hasDottedDomain(value: string, start: number): boolean {
 
 export function looksLikePersonalIdentifier(value: string): boolean {
   if (containsEmailAddress(value)) return true;
-  return PERSONAL_IDENTIFIER_PATTERNS.some((pattern) => pattern.test(value));
+  if (NON_PERSONAL_WORDS.has(value)) return false;
+  const judged = withoutNonPersonalDigitShapes(value);
+  return (
+    containsLowercaseIban(judged) ||
+    PERSONAL_IDENTIFIER_PATTERNS.some((pattern) => pattern.test(judged))
+  );
 }
