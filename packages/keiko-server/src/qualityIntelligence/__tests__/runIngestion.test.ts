@@ -363,6 +363,73 @@ describe("ingestInlineSources — single file (Issue #713)", () => {
     }
   });
 
+  it("reports a parser-side cut of a document in the source summary", async () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "long.pdf", "%PDF-1.7 binary-ish");
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("PDF", path)]),
+      documentTextExtractor: () => ({
+        text: "Fachkonzept: erster Teil des Dokuments.",
+        truncated: true,
+      }),
+    });
+    expect(result.sourceSummaries[0]?.truncated).toBe(true);
+    expect(result.sourceSummaries[0]?.notices).toContain("source-truncated-to-byte-budget");
+  });
+
+  it("reports no truncation when the parser did not cut the document", async () => {
+    const dir = makeDir();
+    const path = writeFile(dir, "whole.pdf", "%PDF-1.7 binary-ish");
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("PDF", path)]),
+      documentTextExtractor: () => ({ text: "Fachkonzept: ganzes Dokument.", truncated: false }),
+    });
+    expect(result.sourceSummaries[0]?.truncated).toBeUndefined();
+  });
+
+  it.each([
+    ["encrypted", "is password-protected"],
+    ["no-text-layer", "has no text layer"],
+    ["malformed", "is damaged or incomplete"],
+    ["timed-out", "took too long to read"],
+    ["oversized", "is larger than the size limit"],
+  ] as const)(
+    "names the %s failure of a document instead of a generic message",
+    async (failure, words) => {
+      const dir = makeDir();
+      const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");
+      const error = await ingestInlineSourcesAsync({
+        ...input([fileSource("PDF", path)]),
+        documentTextExtractor: () => ({ failure }),
+      }).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(QiIngestionError);
+      expect((error as QiIngestionError).code).toBe("QI_SOURCE_UNSUPPORTED");
+      expect((error as QiIngestionError).message).toContain(words);
+    },
+  );
+
+  it("reads an HTML file through the extractor when one is configured, not as raw markup", async () => {
+    const dir = makeDir();
+    const path = writeFile(
+      dir,
+      "spec.html",
+      "<html><script>track()</script><p>The system must validate every transfer.</p></html>",
+    );
+    const result = await ingestInlineSourcesAsync({
+      ...input([fileSource("Spec", path)]),
+      documentTextExtractor: ({ format }) =>
+        format === "html"
+          ? { text: "The system must validate every transfer.", truncated: false }
+          : undefined,
+    });
+    const text = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(text).toContain("The system must validate every transfer.");
+    expect(text).not.toContain("track()");
+  });
+
   it("awaits an async PDF extractor and passes parser budgets", async () => {
     const dir = makeDir();
     const path = writeFile(dir, "spec.pdf", "%PDF-1.7 binary-ish");
