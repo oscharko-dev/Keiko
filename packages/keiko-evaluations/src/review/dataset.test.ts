@@ -1,8 +1,8 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { gzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
@@ -10,6 +10,7 @@ import {
   loadReviewHarvestDataset,
   parseReviewHarvestDataset,
   ReviewDatasetError,
+  reviewHarvestDatasetDigest,
 } from "./dataset.js";
 import { REVIEW_EVALUATION_MANIFEST } from "./manifest.js";
 import { reviewSplitOf } from "./replay.js";
@@ -144,17 +145,52 @@ describe("parseReviewHarvestDataset", () => {
   });
 });
 
+function withTempDir<T>(use: (dir: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "review-dataset-"));
+  try {
+    return use(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function digestError(load: () => unknown): unknown {
+  try {
+    load();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
 describe("loadReviewHarvestDataset", () => {
   it("reads plain and gzip-compressed files", () => {
-    const dir = mkdtempSync(join(tmpdir(), "review-dataset-"));
-    try {
+    withTempDir((dir) => {
       writeFileSync(join(dir, "d.json"), JSON.stringify(valid));
       writeFileSync(join(dir, "d.json.gz"), gzipSync(JSON.stringify(valid)));
       expect(loadReviewHarvestDataset(join(dir, "d.json"))).toEqual(valid);
       expect(loadReviewHarvestDataset(join(dir, "d.json.gz"))).toEqual(valid);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    });
+  });
+
+  it("recomputes the content digest independently of key order", () => {
+    const { digest, ...content } = valid;
+    expect(reviewHarvestDatasetDigest(content)).toBe(digest);
+    const reordered = Object.fromEntries(Object.entries(content).reverse());
+    expect(reviewHarvestDatasetDigest(reordered)).toBe(digest);
+  });
+
+  it("refuses a file whose content no longer matches its stored digest", () => {
+    // R4130-010: one changed field with the digest left alone must not load.
+    const edited = mutate((value) => {
+      firstThread(value).regionChange = "changed";
+    });
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "d.json"), JSON.stringify(edited));
+      const error = digestError(() => loadReviewHarvestDataset(join(dir, "d.json")));
+      expect(error).toBeInstanceOf(ReviewDatasetError);
+      expect(error).toMatchObject({ path: "digest" });
+    });
   });
 });
 
@@ -163,11 +199,29 @@ describe("the committed harvest dataset", () => {
     join(REPOSITORY_ROOT, REVIEW_EVALUATION_MANIFEST.datasetPath),
   );
 
-  it("is the dataset the manifest pins", () => {
-    // The digest is computed by the harvest script that owns it (scripts/review-harvest.mjs
-    // --verify); this side only checks that the manifest names the committed file's digest.
-    expect(committed.digest).toBe(REVIEW_EVALUATION_MANIFEST.datasetDigest);
+  it("is the dataset the manifest pins, by its recomputed content digest", () => {
+    const { digest, ...content } = committed;
+    expect(reviewHarvestDatasetDigest(content)).toBe(REVIEW_EVALUATION_MANIFEST.datasetDigest);
+    expect(digest).toBe(REVIEW_EVALUATION_MANIFEST.datasetDigest);
     expect(committed.repository).toBe("oscharko-dev/Keiko");
+  });
+
+  it("does not load once one field of the committed file changes", () => {
+    // R4130-010: the stored digest field alone cannot vouch for edited content.
+    const raw = JSON.parse(
+      gunzipSync(
+        readFileSync(join(REPOSITORY_ROOT, REVIEW_EVALUATION_MANIFEST.datasetPath)),
+      ).toString("utf8"),
+    ) as Record<string, unknown>;
+    const prs = raw.pullRequests as { threads: Record<string, unknown>[] }[];
+    const target = prs.find((entry) => entry.threads.length > 0)?.threads[0];
+    if (target === undefined) throw new Error("the committed dataset has no thread");
+    target.regionChange = target.regionChange === "changed" ? "unchanged" : "changed";
+    withTempDir((dir) => {
+      writeFileSync(join(dir, "edited.json.gz"), gzipSync(JSON.stringify(raw)));
+      const error = digestError(() => loadReviewHarvestDataset(join(dir, "edited.json.gz")));
+      expect(error).toMatchObject({ path: "digest" });
+    });
   });
 
   it("has labeled threads on both sides of the holdout boundary", () => {

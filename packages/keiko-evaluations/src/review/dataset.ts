@@ -1,10 +1,15 @@
 // Loading the review harvest dataset (Issue #4132). The dataset is written by
-// `scripts/review-harvest.mjs`, which owns its digest; this side only checks the shape, fail closed,
-// before any replay or baseline reads it. A dataset that carries an unknown key, a body or a login
-// is rejected rather than silently ignored: the closed key set is what keeps it body-free.
+// `scripts/review-harvest.mjs`; this side checks the shape, fail closed, before any replay or
+// baseline reads it. A dataset that carries an unknown key, a body or a login is rejected rather
+// than silently ignored: the closed key set is what keeps it body-free. The loader also recomputes
+// the canonical-JSON content digest (the harvest's own rule) and refuses a file whose stored
+// `digest` no longer matches its content (R4130-010), so an edited label cannot pass as the dataset
+// the manifest pins.
 
 import { readFileSync } from "node:fs";
 import { gunzipSync } from "node:zlib";
+
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 
 import {
   REVIEW_PRODUCERS,
@@ -243,9 +248,32 @@ export function parseReviewHarvestDataset(value: unknown): ReviewHarvestDataset 
   };
 }
 
-/** Reads and validates a dataset file; a `.gz` name is decompressed first. */
+/**
+ * The content digest of a dataset body (every field except `digest`): SHA-256 over canonical JSON,
+ * the same rule as `reviewHarvestDatasetDigest` in `scripts/lib/review-harvest-records.mjs`.
+ */
+export function reviewHarvestDatasetDigest(content: unknown): string {
+  return `sha256:${sha256Hex(canonicalise(content))}`;
+}
+
+function assertContentDigest(value: unknown, recorded: string): void {
+  const content = Object.fromEntries(
+    Object.entries(value as Fields).filter(([key]) => key !== "digest"),
+  );
+  if (reviewHarvestDatasetDigest(content) !== recorded) {
+    throw new ReviewDatasetError("digest", "does not match the dataset content");
+  }
+}
+
+/**
+ * Reads and validates a dataset file; a `.gz` name is decompressed first. The stored digest must
+ * equal the recomputed content digest.
+ */
 export function loadReviewHarvestDataset(path: string): ReviewHarvestDataset {
   const bytes = readFileSync(path);
   const textContent = (path.endsWith(".gz") ? gunzipSync(bytes) : bytes).toString("utf8");
-  return parseReviewHarvestDataset(JSON.parse(textContent) as unknown);
+  const value = JSON.parse(textContent) as unknown;
+  const dataset = parseReviewHarvestDataset(value);
+  assertContentDigest(value, dataset.digest);
+  return dataset;
 }

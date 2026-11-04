@@ -7,6 +7,7 @@ export {
   loadReviewHarvestDataset,
   parseReviewHarvestDataset,
   ReviewDatasetError,
+  reviewHarvestDatasetDigest,
 } from "./dataset.js";
 export { findingOverlapsThread, labelReviewThread, matchReviewFinding } from "./labels.js";
 export type { ReviewFindingMatch } from "./labels.js";

@@ -15,6 +15,7 @@ import { validateReviewFindingReport } from "@oscharko-dev/keiko-contracts/runti
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 
+import { reviewHarvestDatasetDigest } from "./dataset.js";
 import type { ReviewReplayPort, ReviewReplayPortResult } from "./replay.js";
 import type { ReviewSeedPort, ReviewSeedPortResult } from "./seed-gate.js";
 import type {
@@ -62,9 +63,10 @@ export function pullRequest(
   };
 }
 
+/** A dataset whose `digest` is the real content digest, so the loader accepts it. */
 export function dataset(pullRequests: readonly ReviewHarvestPullRequest[]): ReviewHarvestDataset {
-  return {
-    schemaVersion: 1,
+  const content = {
+    schemaVersion: 1 as const,
     repository: "example/repo",
     rules: { regionChange: "fixture" },
     population: {
@@ -82,8 +84,8 @@ export function dataset(pullRequests: readonly ReviewHarvestPullRequest[]): Revi
       other: 0,
     },
     pullRequests,
-    digest: DIGEST,
   };
+  return { ...content, digest: reviewHarvestDatasetDigest(content) };
 }
 
 export function finding(
