@@ -234,26 +234,55 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
       "reference",
       "identifier",
       "req id",
+      "key",
+      "schlüssel",
+      "anforderungs id",
+      "anforderungsnummer",
+      "anforderungs nr",
     ],
-    title: ["titel", "title", "name", "bezeichnung", "titre", "título", "titolo", "nom", "nombre"],
+    title: [
+      "titel",
+      "title",
+      "name",
+      "bezeichnung",
+      "kurztitel",
+      "überschrift",
+      "zusammenfassung",
+      "summary",
+      "titre",
+      "título",
+      "titolo",
+      "nom",
+      "nombre",
+    ],
     statement: [
       "beschreibung",
       "description",
       "anforderung",
+      "anforderungstext",
       "requirement",
-      "text",
+      "requirement text",
       "statement",
+      "text",
       "descripción",
       "descrizione",
     ],
     priority: ["priorität", "prioritaet", "priority", "prio", "priorité", "prioridad", "priorità"],
     criteria: [
       "abnahmekriterien",
+      "abnahmekriterium",
       "akzeptanzkriterien",
+      "akzeptanzkriterium",
+      "kriterien",
+      "kriterium",
       "acceptance criteria",
+      "acceptance criterion",
       "critères d'acceptation",
+      "critère d'acceptation",
       "criterios de aceptación",
+      "criterio de aceptación",
       "criteri di accettazione",
+      "criterio di accettazione",
     ],
   },
 });
@@ -283,7 +312,12 @@ export interface CompiledVocabulary {
   readonly priorityTag: RegExp;
   readonly priorityValues: ReadonlySet<string>;
   readonly reservedPrefixes: ReadonlySet<string>;
+  /** Table header roles, keyed by the header folded with `foldHeader`. */
   readonly tableRoles: ReadonlyMap<string, TableColumnRole>;
+  /** The same keys with their spaces removed, so a hyphenated line break still matches. */
+  readonly compactTableRoles: ReadonlyMap<string, TableColumnRole>;
+  /** Single-word names of the id role; a header that ends in one (`Anforderungs-ID`) is an id. */
+  readonly idHeadWords: ReadonlySet<string>;
 }
 
 const LETTER_BEFORE = String.raw`(?<![\p{L}\p{N}])`;
@@ -310,6 +344,34 @@ export function foldTerm(value: string): string {
     .toLowerCase()
     .replaceAll(/\s+/gu, " ")
     .trim();
+}
+
+/**
+ * A table header folded for role lookup: case, diacritics, decoration and punctuation removed
+ * (`Priorität *` and `Prio.` fold to `prioritat` and `prio`), a parenthesized qualifier dropped
+ * (`Akzeptanzkriterien (Gegeben/Wenn/Dann)`), words separated by single spaces.
+ */
+export function foldHeader(value: string): string {
+  return foldTerm(value.replaceAll(/\([^)]*\)|\[[^\]]*\]/gu, " "))
+    .replaceAll(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function compact(folded: string): string {
+  return folded.replaceAll(" ", "");
+}
+
+/** The role a table header names, or undefined when it names none. */
+export function tableRoleOf(
+  vocabulary: CompiledVocabulary,
+  header: string,
+): TableColumnRole | undefined {
+  const folded = foldHeader(header);
+  const exact =
+    vocabulary.tableRoles.get(folded) ?? vocabulary.compactTableRoles.get(compact(folded));
+  if (exact !== undefined) return exact;
+  const words = folded.split(" ");
+  return words.length > 1 && vocabulary.idHeadWords.has(words.at(-1) ?? "") ? "id" : undefined;
 }
 
 function merge(base: readonly string[], extra: readonly string[] | undefined): readonly string[] {
@@ -343,13 +405,16 @@ export function mergeRequirementVocabulary(
   };
 }
 
-function tableRoleMap(vocabulary: RequirementVocabulary): ReadonlyMap<string, TableColumnRole> {
+function tableRoleMap(
+  vocabulary: RequirementVocabulary,
+  key: (name: string) => string,
+): ReadonlyMap<string, TableColumnRole> {
   const roles = new Map<string, TableColumnRole>();
   for (const [role, names] of Object.entries(vocabulary.tableColumns) as [
     TableColumnRole,
     readonly string[],
   ][])
-    for (const name of names) roles.set(foldTerm(name), role);
+    for (const name of names) roles.set(key(foldHeader(name)), role);
   return roles;
 }
 
@@ -387,6 +452,12 @@ export function compileRequirementVocabulary(
     priorityTag: new RegExp(String.raw`[(\[]\s*(${values})\s*[)\]]`, "iu"),
     priorityValues: new Set(vocabulary.priorityValues.map((value) => foldTerm(value))),
     reservedPrefixes: new Set(vocabulary.reservedPrefixes.map((prefix) => prefix.toUpperCase())),
-    tableRoles: tableRoleMap(vocabulary),
+    tableRoles: tableRoleMap(vocabulary, (folded) => folded),
+    compactTableRoles: tableRoleMap(vocabulary, compact),
+    idHeadWords: new Set(
+      vocabulary.tableColumns.id
+        .map((name) => foldHeader(name))
+        .filter((name) => !name.includes(" ")),
+    ),
   };
 }
