@@ -2,13 +2,18 @@
 // identity-validated inbox PowerShell resolver rather than a candidate-provided helper: evaluation
 // archives do not carry the production attestor and an archive must never vouch for its own root.
 import { spawnSync } from "node:child_process";
-import { win32 as win32Path } from "node:path";
 import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
+import {
+  commandOutputText,
+  encodePowerShellProgram,
+  kernel32PInvokePrelude,
+  trustedPowerShellEnvironment,
+} from "./windows-powershell-program.js";
 import { resolveWindowsPowerShellExecutable } from "./windows-system-directory.js";
 
 export const WINDOWS_LOCAL_VOLUME_TIMEOUT_MS = 10_000;
@@ -80,16 +85,7 @@ while (-not [IO.Directory]::Exists($p)) {
   $p = $parent
 }
 try {
-  $assembly = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('KeikoLocalVolume'), [Reflection.Emit.AssemblyBuilderAccess]::Run)
-  $module = $assembly.DefineDynamicModule('KeikoLocalVolume')
-  $type = $module.DefineType('KeikoLocalVolumeApi', [Reflection.TypeAttributes]'Public, Abstract, Sealed')
-  $attributes = [Reflection.MethodAttributes]'Public, Static, PinvokeImpl'
-  function pinvoke($name, $returnType, $parameters) {
-    $method = $type.DefinePInvokeMethod($name, 'kernel32.dll', $name, $attributes, [Reflection.CallingConventions]::Standard, $returnType, [type[]]$parameters, [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Unicode)
-    $method.SetImplementationFlags([Reflection.MethodImplAttributes]::PreserveSig)
-    return $method
-  }
-  $create = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
+${kernel32PInvokePrelude("KeikoLocalVolume")}  $create = pinvoke 'CreateFileW' ([Microsoft.Win32.SafeHandles.SafeFileHandle]) @([string], [uint32], [uint32], [IntPtr], [uint32], [uint32], [IntPtr])
   $tagInfo = pinvoke 'GetFileInformationByHandleEx' ([bool]) @([Microsoft.Win32.SafeHandles.SafeFileHandle], [int], [IntPtr], [uint32])
   $finalName = pinvoke 'GetFinalPathNameByHandleW' ([uint32]) @([Microsoft.Win32.SafeHandles.SafeFileHandle], [Text.StringBuilder], [uint32], [uint32])
   $volumePath = pinvoke 'GetVolumePathNameW' ([bool]) @([string], [Text.StringBuilder], [uint32])
@@ -121,26 +117,6 @@ try {
   } finally { $handle.Dispose() }
 } catch { exit 1 }`;
 
-function encodedQuery(): string {
-  return Buffer.from(QUERY, "utf16le").toString("base64");
-}
-
-function trustedEnvironment(executable: string): NodeJS.ProcessEnv {
-  const root = win32Path.dirname(
-    win32Path.dirname(win32Path.dirname(win32Path.dirname(executable))),
-  );
-  return {
-    SystemRoot: root,
-    WINDIR: root,
-    SystemDrive: root.slice(0, 2),
-  };
-}
-
-function text(value: string | Buffer | null): string {
-  if (value === null) return "";
-  return Buffer.isBuffer(value) ? value.toString("utf8") : value;
-}
-
 function assertUsablePath(path: string): void {
   if (path.length === 0 || /[\0\r\n]/u.test(path)) {
     throw new Error("Windows managed root locality is unavailable");
@@ -151,8 +127,8 @@ function commandFailed(result: ReturnType<WindowsLocalVolumeRunner>): boolean {
   return [
     result.error !== undefined,
     result.status !== 0,
-    text(result.stderr) !== "",
-    text(result.stdout) !== SUCCESS,
+    commandOutputText(result.stderr) !== "",
+    commandOutputText(result.stdout) !== SUCCESS,
   ].some(Boolean);
 }
 
@@ -176,10 +152,16 @@ export function assertWindowsLocalVolume(
     phase = "verify";
     const result = runner(
       executable,
-      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedQuery()],
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-EncodedCommand",
+        encodePowerShellProgram(QUERY),
+      ],
       {
         encoding: "utf8",
-        env: trustedEnvironment(executable),
+        env: trustedPowerShellEnvironment(executable),
         input: `${Buffer.from(path, "utf8").toString("base64")}\n`,
         maxBuffer: WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
         shell: false,

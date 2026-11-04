@@ -773,8 +773,20 @@ function realPortableRoots(
 // ONLY a genuinely missing path is an expected absence. ENOTDIR deliberately does NOT belong here:
 // it means a path component exists but is the wrong kind (e.g. `.portable` is a regular file), which
 // is a malformed installation and must keep reaching the corruption diagnostic (#2843 review).
+// Windows reports that same case as ENOENT, so an ENOENT whose nearest existing ancestor is not a
+// directory is classified as malformed too (#4068).
 function isAbsentPathError(error: unknown): boolean {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT";
+  if (!(error instanceof Error)) return false;
+  const { code, path } = error as NodeJS.ErrnoException;
+  return code === "ENOENT" && (path === undefined || !blockedByNonDirectoryAncestor(path));
+}
+
+function blockedByNonDirectoryAncestor(path: string): boolean {
+  for (let current = dirname(path); ; current = dirname(current)) {
+    const entry = lstatSync(current, { throwIfNoEntry: false });
+    if (entry !== undefined) return !entry.isDirectory() && !entry.isSymbolicLink();
+    if (dirname(current) === current) return false;
+  }
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {

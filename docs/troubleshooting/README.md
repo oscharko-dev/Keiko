@@ -881,6 +881,64 @@ the sole live writer: it republishes the record, and later `adopted` lines stop.
 
 ---
 
+### 13. Windows refuses an operator file as not owner-private
+
+| Field             | Value                                                                            |
+| ----------------- | -------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                           |
+| Surface           | Local UI / Run engine                                                            |
+| Stable identifier | `owner-private-file-not-owner-private`, `security.windows-owner-private.refused` |
+
+**Symptom**
+
+On Windows, Central Settings shows no MCP servers, or a Coding Workbench run reports a native
+plugin, plugin package, remote skill, global OpenCode configuration document or external
+instruction source as unreadable or invalid, although the file exists and is valid. The Activity
+Log may contain `security.windows-owner-private.refused` with a `phase` of `resolve` or `inspect`.
+
+**Root Cause**
+
+These inputs are trusted only when they are owned by the user Keiko runs as and no other principal
+may modify them ([ADR-0182](../adr/ADR-0182-windows-owner-private-files-via-handle-bound-dacl-inspection.md)).
+On Windows this is decided from the file's ACL. Only the user, SYSTEM and Administrators may hold
+write, delete or permission rights. A directory with a broad inherited ACL — a non-system drive,
+where Authenticated Users have Modify by default, or a profile directory to which other local
+accounts were added — makes every file inside it fail this check. A `resolve` or `inspect` phase
+means the check itself could not run (Windows PowerShell missing or blocked by AppLocker or
+Constrained Language Mode); then every such file is refused.
+
+**Diagnostic Steps**
+
+In Windows PowerShell, list the file's owner and the principals with write rights, by SID:
+
+```powershell
+$acl = Get-Acl -LiteralPath '<path-to-file>'
+$acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
+$acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]) |
+  Where-Object { $_.AccessControlType -eq 'Allow' } |
+  ForEach-Object { '{0} {1}' -f $_.IdentityReference.Value, $_.FileSystemRights }
+[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+```
+
+Any write-capable entry for a SID other than your own (last line), `S-1-5-18` or `S-1-5-32-544`
+explains the refusal.
+
+**Resolution**
+
+Restrict the file to its owner, SYSTEM and Administrators, removing inherited entries:
+
+```powershell
+$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+icacls '<path-to-file>' /inheritance:r /grant:r "*${me}:(F)" '*S-1-5-18:(F)' '*S-1-5-32-544:(F)'
+```
+
+For a plugin package directory, apply the same command to the directory with `(OI)(CI)(F)` grants
+and `/T`. Keiko itself writes its private state files with this ACL. If the phase is `resolve` or
+`inspect`, ask your administrator to allow inbox Windows PowerShell 5.1 for Keiko; Keiko does not
+fall back to a weaker check.
+
+---
+
 ## HTML Manual Knowledge Pod refresh
 
 Common failures and operational guidance for explicit refresh of an indexed HTML manual

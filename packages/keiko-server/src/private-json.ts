@@ -21,6 +21,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { protectWindowsOwnerPrivateFile } from "@oscharko-dev/keiko-security/windows-owner-private";
 
 function writeDurableTextFile(path: string, content: string, mode: number): void {
   const fd = openSync(path, "wx", mode);
@@ -66,7 +67,12 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
   );
   try {
     writeDurableTextFile(tempPath, `${JSON.stringify(raw, null, 2)}\n`, 0o600);
-    if (process.platform !== "win32") {
+    if (process.platform === "win32") {
+      // Mode bits mean nothing on Windows: give the file a protected owner-only DACL before it is
+      // published, so it never inherits a profile or drive ACL that lets other accounts modify it.
+      // A same-volume rename keeps the descriptor; a file that cannot be protected is not written.
+      protectWindowsOwnerPrivateFile(tempPath);
+    } else {
       chmodSync(tempPath, 0o600);
     }
     atomicPublishRename(tempPath, resolvedPath, { rename: renameSync });

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f68b39e1c6b0ab9d72b10b7de225ad9236c9c8c1da3aa86c3cad892a7e4adeaf",
+    "catalogDigest": "5f47678bb0c04015246eef352ff3362f62f0b84cc83d02c6eab009974f8f40ce",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -8772,9 +8772,9 @@
         "failureClasses": ["coding-runtime-context-usage"],
         "proofIds": ["coding-runtime.context-usage.observed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:141",
+        "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:142",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1596"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:1610"
         ]
       },
       {
@@ -11824,8 +11824,8 @@
         "failureClasses": ["coding-runtime-operator-plugins"],
         "proofIds": ["coding-runtime.operator-plugins.admitted.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:427",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:492"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:432",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:497"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -35100,7 +35100,7 @@
           "packages/keiko-server/src/coding-runtime/runtimeProcessSupervisor.ts:280",
           "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:532",
           "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:604",
-          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:231"
+          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:265"
         ]
       },
       {
@@ -35278,7 +35278,7 @@
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:197",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:580",
-          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:257"
+          "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:291"
         ]
       },
       {
@@ -38642,8 +38642,51 @@
         "failureClasses": ["windows-local-volume"],
         "proofIds": ["security.windows-local-volume.refused.phase"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:18",
-        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:196"]
+        "registrationSite": "packages/keiko-security/src/windows-local-volume.ts:23",
+        "emitterSites": ["packages/keiko-security/src/windows-local-volume.ts:178"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "security.windows-owner-private.refused",
+        "category": "security",
+        "owner": "keiko-security",
+        "emitter": "windows-owner-private.inspectWindowsOwnerPrivateFiles",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "phase": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["input", "resolve", "inspect", "protect"]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["windows-owner-private"],
+        "proofIds": ["security.windows-owner-private.refused.phase"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-security/src/windows-owner-private.ts:41",
+        "emitterSites": [
+          "packages/keiko-security/src/windows-owner-private.ts:269",
+          "packages/keiko-security/src/windows-owner-private.ts:341"
+        ]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55340,6 +55383,32 @@
       {
         "contractKind": "activity-log-failure-class",
         "schemaVersion": 1,
+        "failureClass": "windows-owner-private",
+        "requiredProductSurfaces": ["keiko-security"],
+        "requiredLifecycleOperations": {
+          "start": [],
+          "state": [],
+          "end": [],
+          "failure": ["security.windows-owner-private.refused"],
+          "loss": []
+        },
+        "requiredCausalOperations": [],
+        "requiredLossOperations": [],
+        "requiredProofOperations": ["security.windows-owner-private.refused"],
+        "requiredReplayProofIds": [],
+        "requiredResourceOperations": [],
+        "requiredEvidenceClasses": [
+          "closed-enum",
+          "completeness-state",
+          "error-kind",
+          "loss-state"
+        ],
+        "requiredFrameOperations": [],
+        "requiredCauseOperations": []
+      },
+      {
+        "contractKind": "activity-log-failure-class",
+        "schemaVersion": 1,
         "failureClass": "windows-shortcut-system-binary",
         "requiredProductSurfaces": ["keiko-security"],
         "requiredLifecycleOperations": {
@@ -55727,8 +55796,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 387,
-      "completeClassCount": 387,
+      "supportedClassCount": 388,
+      "completeClassCount": 388,
       "completeness": "complete",
       "classes": [
         {
@@ -104035,6 +104104,62 @@
           "completeness": "complete"
         },
         {
+          "failureClass": "windows-owner-private",
+          "requirementContract": "windows-owner-private",
+          "productSurfaces": ["keiko-security"],
+          "lifecycleTransitions": ["failure"],
+          "lifecycleOperations": {
+            "start": [],
+            "state": [],
+            "end": [],
+            "failure": ["security.windows-owner-private.refused"],
+            "loss": []
+          },
+          "causalEdges": [
+            {
+              "op": "security.windows-owner-private.refused",
+              "mode": "none"
+            }
+          ],
+          "lossSignals": [],
+          "resourceSignals": [],
+          "replayReferences": [],
+          "operations": [
+            {
+              "op": "security.windows-owner-private.refused",
+              "owner": "keiko-security",
+              "category": "security",
+              "lifecycle": "failure",
+              "causal": "none",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": true
+                },
+                {
+                  "name": "phase",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "error-kind", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["security.windows-owner-private.refused.phase"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
           "failureClass": "windows-shortcut-system-binary",
           "requirementContract": "windows-shortcut-system-binary",
           "productSurfaces": ["keiko-security"],
@@ -106930,7 +107055,13 @@
     {
       "op": "security.windows-local-volume.refused",
       "category": "security",
-      "site": "packages/keiko-security/src/windows-local-volume.ts:21",
+      "site": "packages/keiko-security/src/windows-local-volume.ts:26",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.windows-owner-private.refused",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-owner-private.ts:44",
       "package": "keiko-security"
     },
     {
@@ -108159,7 +108290,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:144",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:145",
       "package": "keiko-server"
     },
     {
@@ -108478,7 +108609,7 @@
     {
       "op": "coding-runtime.operator-plugins.admitted",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:430",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeOperatorPlugins.ts:435",
       "package": "keiko-server"
     },
     {
@@ -112045,6 +112176,7 @@
     "security.windows-lifecycle-opener.system-binary-missing",
     "security.windows-lifecycle-opener.system-root-refused",
     "security.windows-local-volume.refused",
+    "security.windows-owner-private.refused",
     "security.windows-portable-alert.system-binary-missing",
     "security.windows-portable-alert.system-root-refused",
     "security.windows-portable-legacy-launcher.system-binary-missing",

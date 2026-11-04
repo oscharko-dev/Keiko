@@ -86,6 +86,14 @@ describe("debug launch Layer-2 policy", () => {
   it("executes the selected script with distinct empty configs and the approved shell", ({
     skip,
   }) => {
+    // The governed debug capsule is POSIX-only by design: the server's launch plan refuses win32
+    // before any artifact is admitted (debugLaunchPlan.ts validateArtifacts), and this proof's
+    // approved shell is a `#!/bin/sh` script run by an npm spawned without a shell.
+    if (process.platform === "win32") {
+      skip(
+        "The governed debug launch capsule refuses win32 by design; this npm proof is POSIX-only",
+      );
+    }
     const gate = exactToolchainGate(process.env, exactToolchainCheckStatus());
     if (gate.kind === "skip") skip(gate.reason);
     const root = mkdtempSync(join(tmpdir(), "keiko-debug-npm-policy-"));

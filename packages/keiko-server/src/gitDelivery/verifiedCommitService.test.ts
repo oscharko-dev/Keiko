@@ -248,6 +248,10 @@ beforeEach(() => {
   git(["init", "-qb", "dev"]);
   git(["config", "user.name", "Keiko Test"]);
   git(["config", "user.email", "keiko@example.test"]);
+  // The governed Git lane reads the host's SYSTEM scope (it carries credential helpers), and Git
+  // for Windows sets `core.autocrlf=true` there. Exact staging is refused while a conversion is in
+  // effect, so the repository declares its own line-ending policy instead of inheriting the host's.
+  git(["config", "core.autocrlf", "false"]);
   configureSshCommitSigning(root, signingRoot, "keiko@example.test");
   writeFileSync(join(root, "code.js"), "export const value = 1;\n");
   git(["add", "code.js"]);

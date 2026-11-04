@@ -781,3 +781,42 @@ and cursors, which declare no budget.
 D13 still holds: no D1–D10 denial is relaxed for any step that executes code. The bootstrap is a new,
 narrower kind of command — network I/O by a trusted host tool over declarations, with execution of
 the fetched code deferred to the confined steps — and it is admitted only under that shape.
+
+## Addendum — Windows gateway confinement lifts AppContainer loopback isolation per run (2026-11-01)
+
+### D18 — The SCM broker exempts the confined tree from loopback isolation, inside Keiko's filters
+
+Issue #4068 qualifies the Windows enforcement of D11/D12. The confined root runs in a per-tree
+AppContainer; the LocalSystem SCM broker (`native/runtime-supervisor/windows/gateway_service.c`)
+installs Keiko's WFP filters for that SID at `ALE_AUTH_CONNECT`: block every destination, permit
+only the attested gateway port on loopback, with a durable deny guard that outlives the broker.
+The installed transport proof showed that this alone cannot reach the gateway: Windows'
+application-isolation sublayer drops loopback traffic from an AppContainer at the listener
+(`ALE_AUTH_RECV_ACCEPT`) unless the AppContainer is loopback-exempt, and filters at the connect
+layer cannot lift that. Only a test fixture that installed a temporary exemption passed.
+
+Owner decision (2026-11-01): the broker adds the per-tree SID to the machine's loopback exemption
+list through the documented `NetworkIsolationSetAppContainerConfig` API
+(`gateway_loopback.c`), with these constraints:
+
+- **Order.** The exemption is added only after the guarded filters are installed and read back,
+  while the child is still suspended (the broker's acknowledgement is what lets it resume), and it
+  is revoked before the filters are closed. Exemption failure refuses the run.
+- **Scope.** The exemption lifts only the OS isolation. Keiko's connect-layer filters remain the
+  confinement, so every destination other than the attested gateway port stays denied for the
+  tree; the hostile-port denial of the transport proof is unchanged.
+- **Shared list.** The list is machine-wide and replaced as a whole. The broker reads, modifies and
+  writes it under one process-wide lock, adds its SID at most once, removes only its SID, and
+  carries every other entry over unchanged. Another tool editing the list concurrently can still
+  race with that write; the broker never removes entries it did not add.
+- **Crash.** A broker crash can leave an entry for a per-tree SID. That SID is derived from a
+  per-run nonce no later process can obtain, and the durable deny guard keeps blocking it, so a
+  stale entry grants nothing. At broker start, before serving,
+  the broker revokes the exemption of every SID that still carries a persistent durable deny
+  guard; the guards themselves stay, and their recovery remains open work.
+
+D13 still holds: no D1–D10 denial is relaxed, and no endpoint beyond D11's attested gateway becomes
+reachable. The installed Windows transport proof (`test-windows-gateway-scm.ps1 -VerifyTransport`)
+is the qualification evidence for this decision. It passed on 2026-11-01 (head `9b851924a`, Windows Server 2025): the confined root connected to
+the permitted gateway port and the hostile port stayed refused (10013), where the same probe had
+timed out (10060) before the exemption.

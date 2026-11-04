@@ -17,7 +17,6 @@ import {
   realpathSync,
   rmSync,
   linkSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -69,6 +68,13 @@ import type { ProductionRuntimeBackendInput } from "./productionCodingRuntimeRes
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import type { OperatorPluginRegistry } from "./opencodeOperatorPlugins.js";
+import { plantDirectoryRedirect, WINDOWS_HOST } from "../../../../tests/support/symlink-fixture.js";
+
+// The native filesystem capability describes the POSIX Seatbelt/namespace backends and validates
+// its roots with `path.posix` (keiko-sandbox seatbelt-execution-root), so a native macOS or Linux
+// run composed on a Windows host's drive-letter temp roots is refused as
+// `runtime-gateway-policy-invalid` before anything under test runs; those cases run on POSIX hosts.
+const itWithPosixNativeRoots = it.skipIf(WINDOWS_HOST);
 
 describe("production OpenCode backend composition", () => {
   it("captures the trusted registry profile once without changing the default runtime", () => {
@@ -142,7 +148,7 @@ describe("production OpenCode backend composition", () => {
     }
   });
 
-  it.each(["canonical", "alias", "missing"] as const)(
+  itWithPosixNativeRoots.each(["canonical", "alias", "missing"] as const)(
     "binds native filesystem and launch state to the same %s root",
     async (kind) => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-service-roots-")));
@@ -584,7 +590,7 @@ describe("production OpenCode backend composition", () => {
 
   // #3897: the native profile's kernel network disposition follows the run's EFFECTIVE mode, and
   // the Linux native run receives the same accepted filesystem the macOS run does.
-  it.each([
+  itWithPosixNativeRoots.each([
     ["governed-assist", "loopback-only"],
     ["supervised-coding", "loopback-only"],
     ["autonomous-delivery", "inherited"],
@@ -674,70 +680,79 @@ describe("production OpenCode backend composition", () => {
       return compose.mock.calls.at(-1)?.[0].repositoryItems;
     }
 
-    it("reads through the host's secure read and writes the sanitized copy", async () => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
-      try {
-        const { source, readText } = agentSource();
-        const port = nativeRun(root, { secureWorkspaceTextRead: source });
-        const discovery = join(root, "discovery");
-        mkdirSync(discovery);
+    itWithPosixNativeRoots(
+      "reads through the host's secure read and writes the sanitized copy",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+        try {
+          const { source, readText } = agentSource();
+          const port = nativeRun(root, { secureWorkspaceTextRead: source });
+          const discovery = join(root, "discovery");
+          mkdirSync(discovery);
 
-        await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        // The agent, then the project's own configuration files (#3903 AC2), each read once.
-        expect(readText.mock.calls.map(([request]) => request.relativePath).sort()).toEqual([
-          ".opencode/agents/helper.md",
-          ".opencode/opencode.json",
-          ".opencode/opencode.jsonc",
-          "opencode.json",
-          "opencode.jsonc",
-        ]);
-        expect(readFileSync(join(discovery, "agents", "helper.md"), "utf8")).toBe(
-          '---\ndescription: "d"\nmode: subagent\n---\nPrompt\n',
-        );
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    });
+          // The agent, then the project's own configuration files (#3903 AC2), each read once.
+          expect(readText.mock.calls.map(([request]) => request.relativePath).sort()).toEqual([
+            ".opencode/agents/helper.md",
+            ".opencode/opencode.json",
+            ".opencode/opencode.jsonc",
+            "opencode.json",
+            "opencode.jsonc",
+          ]);
+          expect(readFileSync(join(discovery, "agents", "helper.md"), "utf8")).toBe(
+            '---\ndescription: "d"\nmode: subagent\n---\nPrompt\n',
+          );
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
 
-    it("reads nothing once the run's workspace is no longer the active one", async () => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
-      try {
-        const { source, readText } = agentSource();
-        const port = nativeRun(root, { secureWorkspaceTextRead: source }, () => false);
-        const discovery = join(root, "discovery");
-        mkdirSync(discovery);
+    itWithPosixNativeRoots(
+      "reads nothing once the run's workspace is no longer the active one",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+        try {
+          const { source, readText } = agentSource();
+          const port = nativeRun(root, { secureWorkspaceTextRead: source }, () => false);
+          const discovery = join(root, "discovery");
+          mkdirSync(discovery);
 
-        await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await port?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        expect(readText).not.toHaveBeenCalled();
-        expect(existsSync(join(discovery, "agents"))).toBe(false);
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    });
+          expect(readText).not.toHaveBeenCalled();
+          expect(existsSync(join(discovery, "agents"))).toBe(false);
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
 
-    it("honours the operator's switch and an unqualified host without reading", async () => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
-      try {
-        const { source, readText } = agentSource();
-        const off = nativeRun(root, {
-          secureWorkspaceTextRead: source,
-          repositoryItemsEnabled: false,
-        });
-        const missing = nativeRun(root, {});
-        const discovery = join(root, "discovery");
-        mkdirSync(discovery);
+    itWithPosixNativeRoots(
+      "honours the operator's switch and an unqualified host without reading",
+      async () => {
+        const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
+        try {
+          const { source, readText } = agentSource();
+          const off = nativeRun(root, {
+            secureWorkspaceTextRead: source,
+            repositoryItemsEnabled: false,
+          });
+          const missing = nativeRun(root, {});
+          const discovery = join(root, "discovery");
+          mkdirSync(discovery);
 
-        await off?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
-        await missing?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await off?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
+          await missing?.admitForRun({ runId: "run-windows", discoveryRoot: discovery });
 
-        expect(readText).not.toHaveBeenCalled();
-        expect(existsSync(join(discovery, "agents"))).toBe(false);
-      } finally {
-        rmSync(root, { force: true, recursive: true });
-      }
-    });
+          expect(readText).not.toHaveBeenCalled();
+          expect(existsSync(join(discovery, "agents"))).toBe(false);
+        } finally {
+          rmSync(root, { force: true, recursive: true });
+        }
+      },
+    );
 
     it("hands the mapped profiles no admission at all", () => {
       const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-repository-items-backend-")));
@@ -784,7 +799,7 @@ describe("production OpenCode backend composition", () => {
       return compose.mock.calls.at(-1)?.[0].operatorPlugins;
     }
 
-    it.each([
+    itWithPosixNativeRoots.each([
       [true, 1, true],
       [false, 0, false],
     ] as const)(
@@ -825,24 +840,27 @@ describe("production OpenCode backend composition", () => {
     });
   });
 
-  it("binds the mode-derived egress into the policy digest so a different mode cannot replay it", () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-digest-")));
-    try {
-      const digests = (["governed-assist", "autonomous-delivery"] as const).map((mode) => {
-        const factory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
-        const request = runInput(root);
-        createProductionOpenCodeBackend({
-          ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
-          gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
-        }).createRun({ ...request, minted: { ...request.minted, effectiveMode: mode } });
-        return factory.mock.calls.at(-1)?.[0].gatewayConfinement?.policyDigest;
-      });
-      expect(digests[0]).toBeDefined();
-      expect(digests[0]).not.toBe(digests[1]);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+  itWithPosixNativeRoots(
+    "binds the mode-derived egress into the policy digest so a different mode cannot replay it",
+    () => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-native-egress-digest-")));
+      try {
+        const digests = (["governed-assist", "autonomous-delivery"] as const).map((mode) => {
+          const factory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
+          const request = runInput(root);
+          createProductionOpenCodeBackend({
+            ...backendInput(root, releaseQualifiedLinuxRuntime(root)),
+            gatewayReadiness: createOpenCodeGatewayReadinessRegistry("native"),
+          }).createRun({ ...request, minted: { ...request.minted, effectiveMode: mode } });
+          return factory.mock.calls.at(-1)?.[0].gatewayConfinement?.policyDigest;
+        });
+        expect(digests[0]).toBeDefined();
+        expect(digests[0]).not.toBe(digests[1]);
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });
 
 /**
@@ -988,7 +1006,7 @@ function createNativeStateRoot(root: string, kind: "canonical" | "alias" | "miss
   if (kind !== "missing") mkdirSync(stateRoot, { mode: 0o700 });
   if (kind !== "alias") return stateRoot;
   const alias = join(root, "state-alias");
-  symlinkSync(stateRoot, alias, "dir");
+  plantDirectoryRedirect(stateRoot, alias);
   return alias;
 }
 
@@ -1779,85 +1797,91 @@ describe("ripgrep on the OpenCode launch", () => {
     return value === undefined ? {} : { externalReadRoots: value };
   }
 
-  it("puts only the verified directory in front of the native child PATH and opens exactly it", () => {
-    const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      const directory = stage(join(root, "install", "runtime", "native", "rg"));
-      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "linux-x64",
-      });
+  itWithPosixNativeRoots(
+    "puts only the verified directory in front of the native child PATH and opens exactly it",
+    () => {
+      const root = tmpRoot();
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        const directory = stage(join(root, "install", "runtime", "native", "rg"));
+        const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "linux-x64",
+        });
 
-      expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
-      expect(result.allowlist).toContain("PATH");
-      // What the manager really hands the child: the allowlisted names of this very environment.
-      const child = buildSandboxEnv(result.processEnv ?? {}, result.allowlist);
-      expect(child.PATH?.split(delimiter)[0]).toBe(directory);
-      expect(child.SECRET_TOKEN).toBeUndefined();
-      expect(result.processEnv?.SECRET_TOKEN).toBe("t0k3n-value");
-      expect(result.toolchainReadRoots).toEqual([directory]);
-      // The launch also records where the workspace's Git metadata lives (#3897 review).
-      expect(result.events.map((event) => event.op)).toEqual([
-        "coding-runtime.ripgrep.resolved",
-        "coding-runtime.native-external-roots.resolved",
-        "coding-runtime.git-metadata.resolved",
-      ]);
-      expect(result.events[0]).toMatchObject({
-        op: "coding-runtime.ripgrep.resolved",
-        level: "info",
-        correlationId: "run-windows",
-        extra: {
-          targetKey: "linux-x64",
-          outcome: "verified",
-          layout: "portable",
-          toolProfile: "native",
-          digestSource: "pinned",
-          version: "0.0.0-test",
-        },
-      });
-      expect(JSON.stringify(result.events)).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
+        expect(result.allowlist).toContain("PATH");
+        // What the manager really hands the child: the allowlisted names of this very environment.
+        const child = buildSandboxEnv(result.processEnv ?? {}, result.allowlist);
+        expect(child.PATH?.split(delimiter)[0]).toBe(directory);
+        expect(child.SECRET_TOKEN).toBeUndefined();
+        expect(result.processEnv?.SECRET_TOKEN).toBe("t0k3n-value");
+        expect(result.toolchainReadRoots).toEqual([directory]);
+        // The launch also records where the workspace's Git metadata lives (#3897 review).
+        expect(result.events.map((event) => event.op)).toEqual([
+          "coding-runtime.ripgrep.resolved",
+          "coding-runtime.native-external-roots.resolved",
+          "coding-runtime.git-metadata.resolved",
+        ]);
+        expect(result.events[0]).toMatchObject({
+          op: "coding-runtime.ripgrep.resolved",
+          level: "info",
+          correlationId: "run-windows",
+          extra: {
+            targetKey: "linux-x64",
+            outcome: "verified",
+            layout: "portable",
+            toolProfile: "native",
+            digestSource: "pinned",
+            version: "0.0.0-test",
+          },
+        });
+        expect(JSON.stringify(result.events)).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   // Stress ledger F5 (2026-10-28): an unverified pinned ripgrep used to leave PATH untouched, so a
   // host `rg` ran unverified in its place. The run still starts with search degraded, but every
   // PATH entry that provides an `rg` is gone and the composition places the refusing placeholder.
-  it("starts the run without any rg-providing PATH entry when the executable does not verify", () => {
-    const root = tmpRoot();
-    const hostRipgrep = stage(join(root, "host-bin", "rg"), "an unverified host ripgrep");
-    const toolchain = join(root, "toolchain-bin");
-    mkdirSync(toolchain, { recursive: true });
-    const processEnv = { ...CONTENT_ENV, PATH: [hostRipgrep, toolchain].join(delimiter) };
-    vi.stubEnv("PATH", processEnv.PATH);
-    try {
-      stage(join(root, "install", "runtime", "native", "rg"), "not the pinned bytes");
-      const result = launch(root, releaseQualifiedLinuxRuntime(root), {
-        native: true,
-        processEnv,
-        key: "linux-x64",
-      });
+  itWithPosixNativeRoots(
+    "starts the run without any rg-providing PATH entry when the executable does not verify",
+    () => {
+      const root = tmpRoot();
+      const hostRipgrep = stage(join(root, "host-bin", "rg"), "an unverified host ripgrep");
+      const toolchain = join(root, "toolchain-bin");
+      mkdirSync(toolchain, { recursive: true });
+      const processEnv = { ...CONTENT_ENV, PATH: [hostRipgrep, toolchain].join(delimiter) };
+      vi.stubEnv("PATH", processEnv.PATH);
+      try {
+        stage(join(root, "install", "runtime", "native", "rg"), "not the pinned bytes");
+        const result = launch(root, releaseQualifiedLinuxRuntime(root), {
+          native: true,
+          processEnv,
+          key: "linux-x64",
+        });
 
-      expect(result.processEnv).toEqual({ ...CONTENT_ENV, PATH: toolchain });
-      expect(result.ripgrepVerified).toBe(false);
-      // The read allowlist follows the same PATH: the host ripgrep's directory is not readable.
-      expect(
-        (result.toolchainReadRoots ?? []).some((readRoot) => readRoot.endsWith("host-bin")),
-      ).toBe(false);
-      expect(result.events[0]).toMatchObject({
-        level: "warn",
-        extra: { outcome: "unverified", layout: "portable", reason: "digest-mismatch" },
-      });
-      expect(JSON.stringify(result.events)).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.processEnv).toEqual({ ...CONTENT_ENV, PATH: toolchain });
+        expect(result.ripgrepVerified).toBe(false);
+        // The read allowlist follows the same PATH: the host ripgrep's directory is not readable.
+        expect(
+          (result.toolchainReadRoots ?? []).some((readRoot) => readRoot.endsWith("host-bin")),
+        ).toBe(false);
+        expect(result.events[0]).toMatchObject({
+          level: "warn",
+          extra: { outcome: "unverified", layout: "portable", reason: "digest-mismatch" },
+        });
+        expect(JSON.stringify(result.events)).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("gives a mapped profile the verified directory alone and no inherited entry", () => {
     const root = tmpRoot();
@@ -1898,7 +1922,7 @@ describe("ripgrep on the OpenCode launch", () => {
     }
   });
 
-  it("ignores an environment override in a packaged runtime", () => {
+  itWithPosixNativeRoots("ignores an environment override in a packaged runtime", () => {
     const root = tmpRoot();
     try {
       const named = stage(join(root, "elsewhere", "rg"));
@@ -1949,153 +1973,165 @@ describe("ripgrep on the OpenCode launch", () => {
 
   // #3900 AC5: one resolution per run binds the kernel allowlist and the composition's policy
   // alike, and is recorded once; without the operator's setting neither names a root.
-  it("binds the operator's accepted external roots to the kernel and the composition once", () => {
-    const root = tmpRoot();
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-external-reference-")));
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      stage(join(root, "npm-package", "runtime", "native", "rg"));
-      const reference = join(outside, "reference", "docs");
-      mkdirSync(reference, { recursive: true });
-      const accepted = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-        externalReadRoots: reference,
-      });
-      expect(accepted.externalReadRoots).toEqual([reference]);
-      expect(accepted.composedExternalReadRoots).toEqual([reference]);
-      expect(
-        accepted.events.filter(
-          (event) => event.op === "coding-runtime.native-external-roots.resolved",
-        ),
-      ).toMatchObject([{ extra: { state: "admitted", rootCount: 1 } }]);
-      const none = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
-      expect(none.externalReadRoots).toBeUndefined();
-      expect(none.composedExternalReadRoots).toEqual([]);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-      rmSync(outside, { force: true, recursive: true });
-    }
-  });
+  itWithPosixNativeRoots(
+    "binds the operator's accepted external roots to the kernel and the composition once",
+    () => {
+      const root = tmpRoot();
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-external-reference-")));
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        stage(join(root, "npm-package", "runtime", "native", "rg"));
+        const reference = join(outside, "reference", "docs");
+        mkdirSync(reference, { recursive: true });
+        const accepted = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+          externalReadRoots: reference,
+        });
+        expect(accepted.externalReadRoots).toEqual([reference]);
+        expect(accepted.composedExternalReadRoots).toEqual([reference]);
+        expect(
+          accepted.events.filter(
+            (event) => event.op === "coding-runtime.native-external-roots.resolved",
+          ),
+        ).toMatchObject([{ extra: { state: "admitted", rootCount: 1 } }]);
+        const none = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
+        expect(none.externalReadRoots).toBeUndefined();
+        expect(none.composedExternalReadRoots).toEqual([]);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+        rmSync(outside, { force: true, recursive: true });
+      }
+    },
+  );
 
   // PR #4064 review (#3900 AC2/AC5): the launch scans the workspace and every accepted reference,
   // and the kernel profile it builds names each hard-linked file there.
-  it("names the workspace's and the accepted references' hard links in the kernel profile", () => {
-    const root = tmpRoot();
-    const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-launch-")));
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      stage(join(root, "npm-package", "runtime", "native", "rg"));
-      const reference = join(outside, "reference");
-      mkdirSync(reference);
-      writeFileSync(join(outside, "secret.txt"), "OUTSIDE\n");
-      linkSync(join(outside, "secret.txt"), join(root, "linked.txt"));
-      linkSync(join(outside, "secret.txt"), join(reference, "aliased.txt"));
-      const result = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-        externalReadRoots: reference,
-      });
-      expect(result.linkedFiles).toEqual(
-        [join(reference, "aliased.txt"), join(root, "linked.txt")].sort(),
-      );
-      expect(
-        result.events.filter((event) => event.op === "coding-runtime.linked-files.resolved"),
-      ).toMatchObject([
-        { level: "info", extra: { outcome: "complete", rootCount: 2, linkedFileCount: 2 } },
-      ]);
-      expect(JSON.stringify(result.events)).not.toContain("aliased.txt");
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-      rmSync(outside, { force: true, recursive: true });
-    }
-  });
+  itWithPosixNativeRoots(
+    "names the workspace's and the accepted references' hard links in the kernel profile",
+    () => {
+      const root = tmpRoot();
+      const outside = realpathSync(mkdtempSync(join(tmpdir(), "keiko-linked-launch-")));
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        stage(join(root, "npm-package", "runtime", "native", "rg"));
+        const reference = join(outside, "reference");
+        mkdirSync(reference);
+        writeFileSync(join(outside, "secret.txt"), "OUTSIDE\n");
+        linkSync(join(outside, "secret.txt"), join(root, "linked.txt"));
+        linkSync(join(outside, "secret.txt"), join(reference, "aliased.txt"));
+        const result = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+          externalReadRoots: reference,
+        });
+        expect(result.linkedFiles).toEqual(
+          [join(reference, "aliased.txt"), join(root, "linked.txt")].sort(),
+        );
+        expect(
+          result.events.filter((event) => event.op === "coding-runtime.linked-files.resolved"),
+        ).toMatchObject([
+          { level: "info", extra: { outcome: "complete", rootCount: 2, linkedFileCount: 2 } },
+        ]);
+        expect(JSON.stringify(result.events)).not.toContain("aliased.txt");
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+        rmSync(outside, { force: true, recursive: true });
+      }
+    },
+  );
 
   // The clean npm installation (#4064): no override, no ripgrep on the launcher's PATH. The runtime
   // package installed next to Keiko carries the executable, and the launch finds it normally.
-  it("verifies the ripgrep an npm runtime package ships and opens exactly its directory", () => {
-    const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      const directory = stage(join(root, "npm-package", "runtime", "native", "rg"));
-      const result = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
+  itWithPosixNativeRoots(
+    "verifies the ripgrep an npm runtime package ships and opens exactly its directory",
+    () => {
+      const root = tmpRoot();
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        const directory = stage(join(root, "npm-package", "runtime", "native", "rg"));
+        const result = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
 
-      expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
-      expect(
-        buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
-      ).toBe(directory);
-      expect(result.toolchainReadRoots).toEqual([directory]);
-      // The launch also records where the workspace's Git metadata lives (#3897 review) and the
-      // hard links its scan found (PR #4064 review, none here).
-      expect(result.events.map((event) => event.op)).toEqual([
-        "coding-runtime.ripgrep.resolved",
-        "coding-runtime.native-external-roots.resolved",
-        "coding-runtime.git-metadata.resolved",
-        "coding-runtime.linked-files.resolved",
-      ]);
-      expect(result.linkedFiles).toBeUndefined();
-      expect(result.events[0]).toMatchObject({
-        op: "coding-runtime.ripgrep.resolved",
-        level: "info",
-        extra: {
-          targetKey: "darwin-arm64",
-          outcome: "verified",
-          layout: "npm-package",
-          digestSource: "pinned",
-        },
-      });
-      expect(JSON.stringify(result.events)).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(result.processEnv?.PATH).toBe(`${directory}${delimiter}/usr/bin${delimiter}/bin`);
+        expect(
+          buildSandboxEnv(result.processEnv ?? {}, result.allowlist).PATH?.split(delimiter)[0],
+        ).toBe(directory);
+        expect(result.toolchainReadRoots).toEqual([directory]);
+        // The launch also records where the workspace's Git metadata lives (#3897 review) and the
+        // hard links its scan found (PR #4064 review, none here).
+        expect(result.events.map((event) => event.op)).toEqual([
+          "coding-runtime.ripgrep.resolved",
+          "coding-runtime.native-external-roots.resolved",
+          "coding-runtime.git-metadata.resolved",
+          "coding-runtime.linked-files.resolved",
+        ]);
+        expect(result.linkedFiles).toBeUndefined();
+        expect(result.events[0]).toMatchObject({
+          op: "coding-runtime.ripgrep.resolved",
+          level: "info",
+          extra: {
+            targetKey: "darwin-arm64",
+            outcome: "verified",
+            layout: "npm-package",
+            digestSource: "pinned",
+          },
+        });
+        expect(JSON.stringify(result.events)).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
-  it("starts the run with search degraded when the npm runtime package has no verified ripgrep", () => {
-    const root = tmpRoot();
-    vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
-    try {
-      const absent = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
-      expect(absent.processEnv).toEqual(CONTENT_ENV);
-      expect(absent.ripgrepVerified).toBe(false);
-      expect(absent.toolchainReadRoots).toEqual([]);
-      expect(absent.events[0]).toMatchObject({
-        level: "warn",
-        extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },
-      });
+  itWithPosixNativeRoots(
+    "starts the run with search degraded when the npm runtime package has no verified ripgrep",
+    () => {
+      const root = tmpRoot();
+      vi.stubEnv("PATH", `/usr/bin${delimiter}/bin`);
+      try {
+        const absent = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
+        expect(absent.processEnv).toEqual(CONTENT_ENV);
+        expect(absent.ripgrepVerified).toBe(false);
+        expect(absent.toolchainReadRoots).toEqual([]);
+        expect(absent.events[0]).toMatchObject({
+          level: "warn",
+          extra: { outcome: "unverified", layout: "npm-package", reason: "missing" },
+        });
 
-      stage(join(root, "npm-package", "runtime", "native", "rg"), "not the pinned bytes");
-      const tampered = launch(root, npmLaneMacRuntime(root), {
-        native: true,
-        processEnv: CONTENT_ENV,
-        key: "darwin-arm64",
-      });
-      expect(tampered.processEnv).toEqual(CONTENT_ENV);
-      expect(tampered.ripgrepVerified).toBe(false);
-      expect(tampered.events[0]).toMatchObject({
-        level: "warn",
-        extra: { outcome: "unverified", layout: "npm-package", reason: "digest-mismatch" },
-      });
-      expect(JSON.stringify([absent.events, tampered.events])).not.toContain(root);
-    } finally {
-      vi.unstubAllEnvs();
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        stage(join(root, "npm-package", "runtime", "native", "rg"), "not the pinned bytes");
+        const tampered = launch(root, npmLaneMacRuntime(root), {
+          native: true,
+          processEnv: CONTENT_ENV,
+          key: "darwin-arm64",
+        });
+        expect(tampered.processEnv).toEqual(CONTENT_ENV);
+        expect(tampered.ripgrepVerified).toBe(false);
+        expect(tampered.events[0]).toMatchObject({
+          level: "warn",
+          extra: { outcome: "unverified", layout: "npm-package", reason: "digest-mismatch" },
+        });
+        expect(JSON.stringify([absent.events, tampered.events])).not.toContain(root);
+      } finally {
+        vi.unstubAllEnvs();
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 });

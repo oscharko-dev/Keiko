@@ -1,14 +1,10 @@
-import {
-  existsSync,
-  linkSync,
-  mkdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../tests/support/symlink-fixture.js";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { GOVERNED_PATCH_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
@@ -635,20 +631,30 @@ describe("validatePatch — rejections", () => {
     expect(v.normalizedDiff).toBeUndefined();
   });
 
-  it("rejects an in-workspace symlink alias before it can rewrite the real target", () => {
-    write("src/add.ts", "export const add = () => 1;\n");
-    symlinkSync(join(root, "src"), join(root, "tests"));
-    const diff =
-      "--- a/tests/add.ts\n+++ b/tests/add.ts\n@@ -1,1 +1,2 @@\n export const add = () => 1;\n+export const injected = true;\n";
-    const validation = validatePatch(info, diff);
-    expect(validation.ok).toBe(false);
-    expect(validation.reasons.map((reason) => reason.code)).toContain("path-denied");
-    expect(JSON.stringify(validation)).not.toContain(root);
-    expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
-      PatchValidationError,
-    );
-    expect(read("src/add.ts")).toBe("export const add = () => 1;\n");
-  });
+  // The directory symlink is skipped with a reason on a Windows host without symlink privilege; the
+  // directory redirect is a junction there (a directory symlink elsewhere), so the alias boundary
+  // is still exercised on every host.
+  it.for([{ link: "directory symlink" }, { link: "directory redirect" }] as const)(
+    "rejects an in-workspace symlink alias before it can rewrite the real target ($link)",
+    ({ link }, context) => {
+      write("src/add.ts", "export const add = () => 1;\n");
+      if (link === "directory symlink") {
+        plantSymlinkOrSkip(context, join(root, "src"), join(root, "tests"), "dir");
+      } else {
+        plantDirectoryRedirect(join(root, "src"), join(root, "tests"));
+      }
+      const diff =
+        "--- a/tests/add.ts\n+++ b/tests/add.ts\n@@ -1,1 +1,2 @@\n export const add = () => 1;\n+export const injected = true;\n";
+      const validation = validatePatch(info, diff);
+      expect(validation.ok).toBe(false);
+      expect(validation.reasons.map((reason) => reason.code)).toContain("path-denied");
+      expect(JSON.stringify(validation)).not.toContain(root);
+      expect(() => applyPatch(info, diff, { applyEnabled: true, signal: liveSignal() })).toThrow(
+        PatchValidationError,
+      );
+      expect(read("src/add.ts")).toBe("export const add = () => 1;\n");
+    },
+  );
 
   it("rejects a hard-linked alias before it can rewrite a denied workspace target", () => {
     write(".env", "SECRET=1\n");

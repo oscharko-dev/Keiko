@@ -1,7 +1,7 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runRuntimeSupervisorBuild } from "../build-runtime-supervisor.mjs";
@@ -135,6 +135,35 @@ describe("runtime supervisor build", () => {
         resolveCompilerImpl: (_envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(1);
+  });
+
+  it("keeps Windows object files out of the staged native helper directory", async () => {
+    const root = await temporaryRoot();
+    const output = join(root, "native", "keiko-runtime-supervisor.exe");
+    let objectDirectory;
+    const spawnSyncImpl = vi.fn((_compiler, args) => {
+      const objectFlag = args.find((arg) => arg.startsWith("/Fo:"));
+      objectDirectory = objectFlag?.slice("/Fo:".length, -1);
+      expect(objectFlag?.endsWith("\\")).toBe(true);
+      expect(existsSync(objectDirectory)).toBe(true);
+      return { status: 0 };
+    });
+    await expect(
+      runRuntimeSupervisorBuild({
+        argv: ["node", "script", "windows-x64", output],
+        environment: {
+          PATH: String.raw`C:\Program Files\MSVC\bin`,
+          INCLUDE: String.raw`C:\Program Files\MSVC\include`,
+          LIB: String.raw`C:\Program Files\MSVC\lib`,
+          LIBPATH: String.raw`C:\Program Files\MSVC\libpath`,
+        },
+        spawnSyncImpl,
+        resolveCompilerImpl: () => "cl.exe",
+      }),
+    ).resolves.toBe(0);
+    expect(spawnSyncImpl).toHaveBeenCalledOnce();
+    expect(dirname(objectDirectory)).not.toBe(dirname(output));
+    expect(existsSync(objectDirectory)).toBe(false);
   });
 
   it.each([

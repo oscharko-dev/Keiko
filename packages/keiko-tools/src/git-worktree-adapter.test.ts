@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { isCommandAllowed } from "./sandbox.js";
 import {
@@ -279,7 +279,10 @@ describe("real git worktree lifecycle (EV2)", () => {
       (candidate) => realpathSync(candidate.path) === worktreeReal,
     );
 
-    expect(entry?.path).toBe(worktreeReal);
+    // Git for Windows reports `C:/…` with forward slashes, and the adapter's consumers normalize
+    // with resolve()/realpath. resolve() is the identity on an absolute POSIX path, so the exact
+    // equality still holds there; on every host a redacted path can never resolve to the real one.
+    expect(resolve(entry?.path ?? "")).toBe(worktreeReal);
     expect(entry?.head).toMatch(/^[0-9a-f]{40}$/u);
   });
 

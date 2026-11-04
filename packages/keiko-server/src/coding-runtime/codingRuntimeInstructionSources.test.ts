@@ -15,6 +15,10 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  grantOthersWrite,
+  makeOwnerPrivateDirectory,
+} from "../test-support/owner-private-fixture.js";
+import {
   configuredInstructionEntries,
   discoverInstructionSources,
   globalOpenCodeConfigDirectory,
@@ -78,6 +82,7 @@ describe("discoverInstructionSources", () => {
   } {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-instruction-sources-")));
     created.push(root);
+    makeOwnerPrivateDirectory(root);
     const home = join(root, "home");
     const config = join(home, ".config", "opencode");
     const repository = join(home, "projects", "repo");
@@ -145,7 +150,8 @@ describe("discoverInstructionSources", () => {
     writeFileSync(join(home, "outside.txt"), "ALIASED\n");
     linkSync(join(home, "outside.txt"), join(repository, "AGENTS.md"));
     writeFileSync(join(config, "AGENTS.md"), "WORLD-WRITABLE\n");
-    chmodSync(join(config, "AGENTS.md"), 0o666);
+    if (process.platform === "win32") grantOthersWrite(join(config, "AGENTS.md"));
+    else chmodSync(join(config, "AGENTS.md"), 0o666);
     writeFileSync(join(home, "AGENTS.md"), Buffer.from([0xff, 0xfe, 0x00]));
     const found = await discoverInstructionSources({
       workspaceRoot: workspace,
@@ -181,12 +187,14 @@ describe("instruction discovery bounds", () => {
   });
 
   it("resolves the global configuration directory as the producer does", () => {
-    expect(globalOpenCodeConfigDirectory({}, "/Users/me")).toBe("/Users/me/.config/opencode");
+    expect(globalOpenCodeConfigDirectory({}, "/Users/me")).toBe(
+      join("/Users/me", ".config", "opencode"),
+    );
     expect(globalOpenCodeConfigDirectory({ XDG_CONFIG_HOME: "/x/config" }, "/Users/me")).toBe(
-      "/x/config/opencode",
+      join("/x/config", "opencode"),
     );
     expect(globalOpenCodeConfigDirectory({ XDG_CONFIG_HOME: "relative" }, "/Users/me")).toBe(
-      "/Users/me/.config/opencode",
+      join("/Users/me", ".config", "opencode"),
     );
   });
 

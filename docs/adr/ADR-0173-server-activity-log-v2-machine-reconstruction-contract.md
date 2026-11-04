@@ -492,7 +492,11 @@ rule of `check:error-observability`: it scans every production file on every run
 paths that predate the full-tree rule sit in a committed register that may only shrink
 (`docs/observability/legacy-failure-path-register.json`); nothing adds to it. The exemption validator also
 requires the record's owner to be the operation's owning package and its expiry to lie at most 180
-days ahead, so no record is unowned or permanent.
+days ahead, so no record is unowned or permanent. The gate starts npm without a shell. On Windows,
+the host-executable owner resolves the installed `npm-cli.js` beside the selected npm launcher and
+runs it with the current Node executable; workspace-local or redirected CLI targets outside that
+npm installation are refused. All constituent scripts and their exit-status requirements remain
+identical across hosts.
 
 **Every production process has a writer, and a missing one is visible (#3532).** The registry is
 authoritative only when every production emitter reaches the sink that enforces it. The

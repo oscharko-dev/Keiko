@@ -51,6 +51,37 @@ function buildRuntimeGatewaySeatbeltCommand(
 }
 
 describe("long-lived gateway network confinement", () => {
+  it("validates POSIX filesystem policy independently of the inspecting host", () => {
+    const filesystem = {
+      workspaceRoot: "/accepted/workspace",
+      workspaceAccess: "read-write" as const,
+      privateStateRoot: "/private/state",
+      runtimeReadRoot: "/immutable/runtime",
+    };
+    expect(copyRuntimeGatewayFilesystem(filesystem)).toEqual(filesystem);
+    for (const workspaceRoot of [
+      "C:\\accepted\\workspace",
+      "C:/accepted/workspace",
+      "\\\\server\\share\\workspace",
+      "\\\\?\\C:\\accepted\\workspace",
+      "/accepted/../workspace",
+      "/accepted//workspace",
+      "/",
+    ])
+      expect(copyRuntimeGatewayFilesystem({ ...filesystem, workspaceRoot })).toBeUndefined();
+    for (const protectedWriteRoots of [
+      ["/accepted/workspace-other"],
+      ["/accepted/workspace/../outside"],
+    ])
+      expect(copyRuntimeGatewayFilesystem({ ...filesystem, protectedWriteRoots })).toBeUndefined();
+    expect(
+      copyRuntimeGatewayFilesystem({
+        ...filesystem,
+        protectedWriteRoots: ["/accepted/workspace/.keiko"],
+      })?.protectedWriteRoots,
+    ).toEqual(["/accepted/workspace/.keiko"]);
+  });
+
   it.each(["object", "array"])("refuses a revoked %s filesystem", (kind) => {
     const revoked = Proxy.revocable(kind === "object" ? {} : [], {});
     revoked.revoke();

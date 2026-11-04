@@ -359,11 +359,12 @@ describe("seeding a run's database from a task's retained entry", () => {
       sessionId: SESSION,
       messageCount: 1,
     });
-    expect(
-      new DatabaseSync(join(resumed, "state", "opencode.db"), { readOnly: true })
-        .prepare("SELECT COUNT(*) AS n FROM session_message")
-        .get(),
-    ).toEqual({ n: 1 });
+    const database = new DatabaseSync(join(resumed, "state", "opencode.db"), { readOnly: true });
+    try {
+      expect(database.prepare("SELECT COUNT(*) AS n FROM session_message").get()).toEqual({ n: 1 });
+    } finally {
+      database.close();
+    }
 
     const elsewhere = harness({ store: real, workspaceId: "another-workspace" });
     elsewhere.service.declare(RUN, RESUME);

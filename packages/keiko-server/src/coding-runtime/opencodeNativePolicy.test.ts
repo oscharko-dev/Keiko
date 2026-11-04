@@ -1,12 +1,4 @@
-import {
-  linkSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { linkSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -26,6 +18,10 @@ import {
   openCodeNativeVerificationKind,
 } from "./opencodeNativePolicy.js";
 import { openCodeNativeMcpAdmission } from "./opencodeNativeMcp.js";
+import {
+  plantDirectoryRedirect,
+  plantSymlinkOrSkip,
+} from "../../../../tests/support/symlink-fixture.js";
 import { codingJiraServerDefinition } from "./codingJiraPodBinding.js";
 import { mcpToolAction } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import {
@@ -574,7 +570,8 @@ describe("Code Mode management tools (#3897, #3903 AC4)", () => {
     const workspace = join(root, "workspace");
     mkdirSync(join(workspace, "src", "deep"), { recursive: true });
     mkdirSync(join(root, "outside"));
-    symlinkSync(join(root, "outside"), join(workspace, "escape"));
+    // A junction on Windows (no privilege needed), a directory symlink elsewhere (#4068).
+    plantDirectoryRedirect(join(root, "outside"), join(workspace, "escape"));
     writeFileSync(join(workspace, "file.txt"), "x");
     return { root, workspace };
   }
@@ -748,7 +745,9 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
 
   // #3897 review: a note path that resolves outside the plan directory (a symbolic link, a hard
   // link or a replaced ancestor naming a workspace file) is an ordinary edit, not a private note.
-  it("exempts only notes that are physically inside the plan directory", () => {
+  // Each link form plants its own tree, so a host that cannot create a file symlink still runs the
+  // hard-link and directory-link controls (#4068).
+  function withPlan(body: (root: string, plan: string, workspaceFile: string) => void): void {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-plan-note-")));
     try {
       const plan = join(root, "run-1", "home", ".opencode", "plan");
@@ -756,23 +755,46 @@ describe("plan agent notes in the run-private plan directory (#3897)", () => {
       const workspaceFile = join(root, "README.md");
       writeFileSync(workspaceFile, "readme");
       writeFileSync(join(plan, "note.md"), "note");
-      symlinkSync(workspaceFile, join(plan, "link.md"));
-      linkSync(workspaceFile, join(plan, "hard.md"));
-      const ask = (resource: string): string =>
-        decideWithPlan("governed-assist", "edit", [resource], plan);
-      expect(ask(join(plan, "note.md"))).toBe("allow");
-      expect(ask(join(plan, "new.md"))).toBe("allow");
-      expect(ask(join(plan, "link.md"))).toBe("ask");
-      expect(ask(join(plan, "hard.md"))).toBe("ask");
-      // A replaced ancestor: the plan path now runs through a link into another tree.
-      const elsewhere = join(root, "elsewhere", ".opencode");
-      mkdirSync(join(elsewhere, "plan"), { recursive: true });
-      rmSync(join(root, "run-1", "home", ".opencode"), { recursive: true });
-      symlinkSync(elsewhere, join(root, "run-1", "home", ".opencode"));
-      expect(ask(join(plan, "note.md"))).toBe("ask");
+      body(root, plan, workspaceFile);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  }
+
+  const askNote = (plan: string, resource: string): string =>
+    decideWithPlan("governed-assist", "edit", [resource], plan);
+
+  it("exempts only notes that are physically inside the plan directory", () => {
+    withPlan((_root, plan, workspaceFile) => {
+      linkSync(workspaceFile, join(plan, "hard.md"));
+      expect(askNote(plan, join(plan, "note.md"))).toBe("allow");
+      expect(askNote(plan, join(plan, "new.md"))).toBe("allow");
+      expect(askNote(plan, join(plan, "hard.md"))).toBe("ask");
+    });
+  });
+
+  it("asks for a note that is a symbolic link to a workspace file", (testContext) => {
+    withPlan((_root, plan, workspaceFile) => {
+      plantSymlinkOrSkip(testContext, workspaceFile, join(plan, "link.md"));
+      expect(askNote(plan, join(plan, "link.md"))).toBe("ask");
+    });
+  });
+
+  it("asks for a note reached through a directory link out of the plan directory", () => {
+    withPlan((root, plan) => {
+      plantDirectoryRedirect(root, join(plan, "linked"));
+      expect(askNote(plan, join(plan, "linked", "README.md"))).toBe("ask");
+    });
+  });
+
+  it("asks once an ancestor of the plan directory is replaced by a link into another tree", () => {
+    withPlan((root, plan) => {
+      const elsewhere = join(root, "elsewhere", ".opencode");
+      mkdirSync(join(elsewhere, "plan"), { recursive: true });
+      rmSync(join(root, "run-1", "home", ".opencode"), { recursive: true });
+      plantDirectoryRedirect(elsewhere, join(root, "run-1", "home", ".opencode"));
+      expect(askNote(plan, join(plan, "note.md"))).toBe("ask");
+    });
   });
 });
 

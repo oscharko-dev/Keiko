@@ -7,8 +7,29 @@
 #include <stdlib.h>
 
 int gateway_socket_proof(void);
+int gateway_peer_tests(void);
+int gateway_peer_client(const char *pipe_name, int anonymous);
 int gateway_socket_child(int family, UINT16 gateway, UINT16 hostile);
 int gateway_socket_leaf(int family, UINT16 gateway, UINT16 hostile);
+
+static int rejects_unsafe_job(PSID package, DWORD flags) {
+  HANDLE job = CreateJobObjectW(NULL, NULL);
+  JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits = {0};
+  struct keiko_gateway_filters filters = {0};
+  GUID sublayer = {0}, keys[2] = {0};
+  int ok;
+  if (job == NULL) return 0;
+  limits.BasicLimitInformation.LimitFlags = flags;
+  ok = SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) &&
+       keiko_gateway_filters_open_guarded(package, AF_INET, 1983, job, &filters) ==
+           ERROR_INVALID_PARAMETER &&
+       keiko_gateway_filters_recover_guard(package, job, &sublayer, keys, &filters) ==
+           ERROR_INVALID_PARAMETER &&
+       filters.engine == NULL && filters.guard_engine == NULL && filters.job == NULL;
+  (void)keiko_gateway_filters_close(&filters);
+  CloseHandle(job);
+  return ok;
+}
 
 static int validation_tests(void) {
   struct keiko_gateway_filters filters = {0};
@@ -36,6 +57,9 @@ static int validation_tests(void) {
   ok = ok && keiko_gateway_filters_open(package, AF_INET, 1983, &filters) ==
                  ERROR_INVALID_PARAMETER && filters.engine == (HANDLE)(ULONG_PTR)1;
   filters.engine = NULL;
+  ok = ok && rejects_unsafe_job(package, 0) &&
+       rejects_unsafe_job(package, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK) &&
+       rejects_unsafe_job(package, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK);
   LocalFree(broad);
   LocalFree(package);
   LocalFree(capability);
@@ -170,7 +194,9 @@ static int guarded_lifecycle_test(UINT16 family) {
 }
 
 int main(int argc, char **argv) {
-  if (argc == 1) return validation_tests();
+  if (argc == 1) return validation_tests() || gateway_peer_tests();
+  if (argc == 4 && strcmp(argv[1], "--peer-client") == 0)
+    return gateway_peer_client(argv[2], atoi(argv[3]));
   if (argc == 2 && strcmp(argv[1], "--guard-held") == 0) return guarded_child();
   if (argc == 2 && strcmp(argv[1], "--socket-proof") == 0) return gateway_socket_proof();
   if (argc == 5 && strcmp(argv[1], "--socket-child") == 0) {

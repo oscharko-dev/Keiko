@@ -7,6 +7,11 @@ model complete real coding tasks through the Workbench? This guide lets another 
 the lab (the same deployment shape, fixture repository, drivers and task texts) so that a run can be
 compared with the evidence ledger, [`coding-workbench-gemma-litellm-lab.md`](../coding-workbench-gemma-litellm-lab.md).
 
+Native Windows component results, the explicit decision to retain the mapped profile and the
+remaining W1–W15 blockers are tracked in the
+[Windows qualification record](../opencode-windows-qualification.md). They do not certify this
+live-model lab on Windows.
+
 ## What the repository provides
 
 | Provided in the repository                                                                       | Where                                                                                              |

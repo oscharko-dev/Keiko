@@ -31,6 +31,7 @@ import {
   readLocalVaultReferences,
   resolveLocalVaultKey,
 } from "./secret-vault.js";
+import { plantDirectoryRedirect } from "../../../tests/support/symlink-fixture.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -1407,8 +1408,7 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     },
   );
 
-  it("writes one 0600 file per entry into a 0700 directory and never plaintext", () => {
-    const storeDir = join(dir, "sharded");
+  function writeTwoShards(storeDir: string): readonly string[] {
     const vault = shardedVaultAt(storeDir);
     vault.set("cred:a", "plaintext-marker-A");
     vault.set("cred:b", "plaintext-marker-B");
@@ -1419,10 +1419,27 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
       const filePath = join(storeDir, name);
       expect(readFileSync(filePath, "utf8")).not.toContain("plaintext-marker");
       expect(readFileSync(filePath, "utf8").startsWith("kv1.")).toBe(true);
-      expect(statSync(filePath).mode & 0o777).toBe(0o600);
     }
-    expect(statSync(storeDir).mode & 0o777).toBe(0o700);
+    return files.map((name) => join(storeDir, name));
+  }
+
+  it("writes one sealed file per entry and never plaintext", () => {
+    writeTwoShards(join(dir, "sharded"));
   });
+
+  // The modes are POSIX permission bits the vault itself set. Windows synthesizes st_mode from the
+  // read-only attribute (0o666 / 0o444), so these exact bits are only observable on a POSIX host;
+  // the content assertions above run everywhere.
+  it.skipIf(process.platform === "win32")(
+    "writes one 0600 file per entry into a 0700 directory and never plaintext",
+    () => {
+      const storeDir = join(dir, "sharded");
+      for (const filePath of writeTwoShards(storeDir)) {
+        expect(statSync(filePath).mode & 0o777).toBe(0o600);
+      }
+      expect(statSync(storeDir).mode & 0o777).toBe(0o700);
+    },
+  );
 
   it("ignores foreign and malformed filenames instead of reporting them as references", () => {
     const storeDir = join(dir, "sharded");
@@ -1554,8 +1571,9 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
   });
 
   // EACCES specifically, as distinct proof from the EISDIR case above — skipped only when the
-  // worker itself runs as root (uid 0), where a permission bit never actually refuses a read.
-  it.skipIf(process.getuid?.() === 0)(
+  // worker itself runs as root (uid 0), where a permission bit never actually refuses a read, and on
+  // Windows, where chmod only toggles the read-only attribute and can never refuse the owner a read.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     "emits security.vault.shard-unreadable for an EACCES shard, and never breaks the read when the sink throws",
     () => {
       const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
@@ -1621,11 +1639,13 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
     expect(vault.list()).toEqual(["cred:a"]);
   });
 
+  // The redirect is a directory symlink on POSIX and a junction on Windows, which needs no symlink
+  // privilege; the vault refuses both as a symlinked path.
   it("refuses to enumerate through a symlinked store directory", () => {
     const storeDir = join(dir, "sharded-list");
     mkdirSync(join(dir, "foreign"), { recursive: true });
     shardedVaultAt(join(dir, "foreign")).set("cred:foreign", "not mine");
-    symlinkSync(join(dir, "foreign"), storeDir);
+    plantDirectoryRedirect(join(dir, "foreign"), storeDir);
 
     // The single-file list() reads through readStore, which refuses a symlinked path; the sharded
     // one must not become the one operation a hostile redirect can enumerate.
@@ -1650,7 +1670,7 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
   it("refuses to write through a symlinked path segment", () => {
     const storeDir = join(dir, "sharded");
     mkdirSync(join(dir, "elsewhere"), { recursive: true });
-    symlinkSync(join(dir, "elsewhere"), storeDir);
+    plantDirectoryRedirect(join(dir, "elsewhere"), storeDir);
 
     expect(() => {
       shardedVaultAt(storeDir).set("cred:a", "secret-A");

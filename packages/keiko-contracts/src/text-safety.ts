@@ -143,6 +143,14 @@ export function containsAbsolutePath(value: string): boolean {
   return redactAbsolutePaths(value) !== value;
 }
 
+/**
+ * A local absolute path on either supported host: POSIX-rooted or a Windows drive path. UNC shares,
+ * POSIX `//` roots and Windows device namespaces (`\\?\`, `\\.\`) remain refused.
+ */
+export function isLocalAbsolutePath(value: string): boolean {
+  return (value.startsWith("/") && !value.startsWith("//")) || /^[A-Za-z]:[\\/]/u.test(value);
+}
+
 export function containsPseudoRoleMarker(value: string): boolean {
   let lineStart = 0;
   for (let cursor = 0; cursor <= value.length; cursor += 1) {

@@ -350,6 +350,10 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
     git(root, ["init", "-qb", "dev"]);
     git(root, ["config", "user.name", "Keiko Test"]);
     git(root, ["config", "user.email", "keiko@example.test"]);
+    // The governed Git lane reads the host's SYSTEM scope (it carries credential helpers), and Git
+    // for Windows sets `core.autocrlf=true` there. Exact staging is refused while a conversion is in
+    // effect, so the repository declares its own line-ending policy instead of inheriting the host's.
+    git(root, ["config", "core.autocrlf", "false"]);
     configureSshCommitSigning(root, signingRoot, "keiko@example.test");
     writeFileSync(join(root, "code.js"), "export const value = 1;\n");
     git(root, ["add", "code.js"]);

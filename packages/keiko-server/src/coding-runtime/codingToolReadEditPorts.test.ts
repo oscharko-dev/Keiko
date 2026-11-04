@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it, vi, type Mock } from "vitest";
 
@@ -86,7 +86,8 @@ function streamingDiscoveryFixture(files: Readonly<Record<string, string>>): {
   readonly fs: WorkspaceFs;
   readonly events: readonly ServerLogEvent[];
 } {
-  const root = "/streaming-discovery-fixture";
+  // Host-native root: the producer resolves it, adding a drive on Windows; POSIX is unchanged.
+  const root = resolve("/streaming-discovery-fixture");
   const fs = memFs(root, { "package.json": '{"name":"fixture"}', ...files });
   const events: ServerLogEvent[] = [];
   return {
@@ -421,8 +422,8 @@ describe("production Coding Workbench scoped streaming discovery", () => {
       },
     });
     expect(iterate.mock.calls.map(([path]) => path)).toEqual([
-      "/streaming-discovery-fixture/packages/ui",
-      "/streaming-discovery-fixture/packages/ui/deep",
+      join(resolve("/streaming-discovery-fixture"), "packages", "ui"),
+      join(resolve("/streaming-discovery-fixture"), "packages", "ui", "deep"),
     ]);
     expect(events.at(-1)?.extra).toMatchObject({
       discovered: 1,
@@ -1049,40 +1050,44 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     },
   );
 
-  it("counts returned discovery paths independently of lines inside a filename", async () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-count-"));
-    try {
-      writeFileSync(join(root, "one\nfilename.ts"), "export {};\n");
-      writeFileSync(join(root, "second.ts"), "export {};\n");
-      const ports = createCodingToolReadEditPorts({
-        secureWorkspaceTextRead: { readText: vi.fn() },
-        editorAgentClient: { action: vi.fn() },
-        resolveEditorActionContext: () => ({
-          sessionId: "session-discover-count",
-          authorityRef: { runId: "run-discover-count", envelopeDigest: DIGEST },
-          origin: "agent",
-        }),
-        resolveWorkspaceRoot: () => root,
-      });
-      const result = await ports.repositoryDiscover.execute(
-        {
-          action: "discover",
-          actionId: "discover-count",
-          idempotencyKey: "discover-count-key",
-          query: "*",
-          maxResults: 10,
-        },
-        undefined,
-        { check: (): true => true },
-      );
-      expect(result).toMatchObject({
-        status: "completed",
-        read: { returnedPathCount: 2, totalLines: 3 },
-      });
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
+  // NTFS forbids a line break in a file name, so this case cannot be planted on Windows (#4068).
+  it.skipIf(process.platform === "win32")(
+    "counts returned discovery paths independently of lines inside a filename",
+    async () => {
+      const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-count-"));
+      try {
+        writeFileSync(join(root, "one\nfilename.ts"), "export {};\n");
+        writeFileSync(join(root, "second.ts"), "export {};\n");
+        const ports = createCodingToolReadEditPorts({
+          secureWorkspaceTextRead: { readText: vi.fn() },
+          editorAgentClient: { action: vi.fn() },
+          resolveEditorActionContext: () => ({
+            sessionId: "session-discover-count",
+            authorityRef: { runId: "run-discover-count", envelopeDigest: DIGEST },
+            origin: "agent",
+          }),
+          resolveWorkspaceRoot: () => root,
+        });
+        const result = await ports.repositoryDiscover.execute(
+          {
+            action: "discover",
+            actionId: "discover-count",
+            idempotencyKey: "discover-count-key",
+            query: "*",
+            maxResults: 10,
+          },
+          undefined,
+          { check: (): true => true },
+        );
+        expect(result).toMatchObject({
+          status: "completed",
+          read: { returnedPathCount: 2, totalLines: 3 },
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));

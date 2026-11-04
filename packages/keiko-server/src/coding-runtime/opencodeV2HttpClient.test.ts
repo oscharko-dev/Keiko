@@ -1063,6 +1063,39 @@ describe("OpenCode V2 agent and skill mentions (#3906)", () => {
     await expect(client.forms("relative/path")).rejects.toThrow("opencode-v2-directory-invalid");
   });
 
+  // #4068 W7: a Windows workspace is a drive path; refusing it stopped every Windows session before
+  // creation. UNC shares, `//` roots and Windows device namespaces stay refused before any request.
+  it.each(["C:\\Users\\dev\\repo", "d:/work/linked worktree"])(
+    "creates a session and lists forms in the Windows drive location %s",
+    async (directory) => {
+      const { client, fetch } = clientWith(() => json({ data: [] }));
+      await expect(client.forms(directory)).resolves.toEqual([]);
+      expect((fetch.mock.calls[0]?.[0] as URL).searchParams.get("location[directory]")).toBe(
+        directory,
+      );
+      const created = clientWith(() => json({ data: { id: "ses_1", location: { directory } } }));
+      await expect(created.client.createSession(directory)).resolves.toMatchObject({ id: "ses_1" });
+      const body = created.fetch.mock.calls[0]?.[1]?.body;
+      expect(typeof body).toBe("string");
+      expect(JSON.parse(body as string)).toMatchObject({ location: { directory } });
+    },
+  );
+
+  it.each([
+    "\\\\server\\share\\repo",
+    "//server/share/repo",
+    "\\\\?\\C:\\repo",
+    "\\\\.\\pipe\\opencode",
+    "\\repo",
+    "C:repo",
+    "",
+  ])("refuses the unsupported location %j before any request", async (directory) => {
+    const { client, fetch } = clientWith(() => json({ data: [] }));
+    await expect(client.forms(directory)).rejects.toThrow("opencode-v2-directory-invalid");
+    await expect(client.createSession(directory)).rejects.toThrow("opencode-v2-directory-invalid");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("lists skills by id and name and never their path or content", async () => {
     const { client, fetch } = clientWith(() =>
       json({

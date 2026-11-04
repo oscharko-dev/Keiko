@@ -1,7 +1,12 @@
-import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import { posix } from "node:path";
 import { NATIVE_LINKED_FILES_MAX } from "./native-linked-files.js";
 import { CREDENTIAL_PATH_SEATBELT_RULE } from "./seatbelt-credential-paths.js";
 import type { IsolatedRunPlan, RuntimeGatewayFilesystem } from "./types.js";
+
+// This filesystem capability describes the POSIX native backends even when its policy is
+// inspected on Windows. Windows' mapped profile carries no filesystem block; accepting a policy
+// here never establishes host support or authorizes the native backend to launch it.
+const { basename, dirname, isAbsolute, relative, resolve } = posix;
 
 const MACOS_RUNTIME_READ_ROOTS = [
   "/System/Library",

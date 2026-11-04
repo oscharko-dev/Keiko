@@ -717,6 +717,18 @@ describe("close() releases the file lock", () => {
     expect(v2.getMemory("m1" as MemoryId)?.id).toBe("m1");
     v2.close();
   });
+
+  // #4068: a composition that owns the vault closes it on every dispose, and a process may dispose
+  // twice (signal handler plus its own finally block). The second close is a no-op, while the
+  // vault itself stays closed: no operation runs against a released handle.
+  it("is idempotent and leaves the vault closed", () => {
+    const vault = openVault(freshDir());
+    vault.close();
+    expect(() => {
+      vault.close();
+    }).not.toThrow();
+    expect(() => vault.listMemoryScopes()).toThrow();
+  });
 });
 
 describe("deterministic now/newTombstoneId", () => {
@@ -1395,5 +1407,9 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
 
     const opened = events.filter((event) => event.op === "memory-vault.store.opened");
     expect(opened).toHaveLength(0);
+    // #4068: the failed vault released its handle. Windows refuses to remove an open database.
+    expect(() => {
+      rmSync(dir, { recursive: true, force: true });
+    }).not.toThrow();
   });
 });

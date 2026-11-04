@@ -15,7 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, relative } from "node:path";
+import { delimiter, dirname, join, relative, resolve } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import * as builder from "../build-coding-runtime-npm-package.mjs";
@@ -27,6 +27,7 @@ import {
   main,
   NPM_RUNTIME_PACKAGE_TARGETS,
   packCodingRuntimeNpmCandidate,
+  packRuntimeCandidate,
   verifyCodingRuntimeNpmCandidate,
 } from "../build-coding-runtime-npm-package.mjs";
 import { computePortableSidecarPayloadTreeDigest } from "../../packages/keiko-server/dist/coding-runtime/devLanePortableCodingRuntime.js";
@@ -59,6 +60,34 @@ const HELPER = "built-helper";
 const RIPGREP = "pinned-upstream-ripgrep";
 const RIPGREP_MIT = "MIT license text shipped with ripgrep";
 const sha256Of = (value) => createHash("sha256").update(value).digest("hex");
+
+it("packs a local candidate with literal host paths and without executing package scripts", () => {
+  const root = scratch();
+  const packageDir = join(root, "package space & %PATH% ü");
+  const artifacts = join(root, "artifacts space & %PATH% ü");
+  mkdirSync(artifacts);
+  write(
+    join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "keiko-windows-pack-fixture",
+      version: "1.0.0",
+      files: ["index.js"],
+      scripts: { prepack: 'node -e "process.exit(99)"' },
+    }),
+  );
+  write(join(packageDir, "index.js"), "export const fixture = true;\n");
+
+  const packed = packRuntimeCandidate(packageDir, artifacts);
+
+  expect(packed.filename).toBe("keiko-windows-pack-fixture-1.0.0.tgz");
+  expect(packed.files.map(({ path }) => path).sort()).toEqual(["index.js", "package.json"]);
+  expect(statSync(join(artifacts, packed.filename)).size).toBe(packed.size);
+  expect(packed.integrity).toBe(
+    `sha512-${createHash("sha512")
+      .update(readFileSync(join(artifacts, packed.filename)))
+      .digest("base64")}`,
+  );
+});
 
 // The pinned ripgrep release is data the server owns (ripgrepRuntime.ts); the builder stages and
 // verifies against it. These tests substitute a manifest whose digests bind their own fixture bytes.
@@ -669,8 +698,9 @@ describe("coding runtime npm package", () => {
     expect(lines.error[0]).toContain("usage:");
     expect(built).toHaveLength(0);
 
-    await expect(main(["macos-arm64", "1.2.3", "/abs/out"], { build, write })).resolves.toBe(0);
-    expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir: "/abs/out" }]);
+    const outDir = resolve("/abs/out");
+    await expect(main(["macos-arm64", "1.2.3", outDir], { build, write })).resolves.toBe(0);
+    expect(built).toStrictEqual([{ target: "macos-arm64", version: "1.2.3", outDir }]);
     expect(JSON.parse(lines.log[0])).toMatchObject({ target: "macos-arm64" });
   });
 });
