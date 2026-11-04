@@ -42,7 +42,9 @@ one persisted line — the report's total and per-step durations and statuses, t
 duration, the isolation backend and egress policy that applied, and the bootstrap's outcome —
 without recording a command, argument, path or output (2026-10-06).
 
-1.8 — #4068 adds D20: governed repository verification on Windows stays container-backed (2026-11-03).
+1.8 — #4068 adds D19: an administrator installs the Windows broker once and ordinary launches never
+elevate (2026-11-02); and D20: governed repository verification on Windows stays container-backed
+(2026-11-03).
 
 ## Context
 

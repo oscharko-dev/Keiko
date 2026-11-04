@@ -404,6 +404,16 @@ process.exit(41);
   & $loopbackTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows gateway loopback-exemption rules failed" }
 
+  # #4068 W1: what a per-tree AppContainer root is denied, against an unconfined control.
+  $boundaryTest = Join-Path (Split-Path $supervisor) "runtime_boundary.test.c"
+  $boundaryTestOut = Join-Path $scratch "runtime-boundary-test.exe"
+  $boundaryScratch = Join-Path $scratch "boundary-test"
+  New-Item -ItemType Directory -Force -Path $boundaryScratch | Out-Null
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$boundaryScratch\" "/Fe:$boundaryTestOut" $boundaryTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC runtime boundary test analysis failed" }
+  & $boundaryTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows runtime boundary proof failed" }
+
   # #4068 W2/W5: compiling a Job Object supervisor does not prove descendant cleanup. Exercise
   # the exact helper built above, including detached children and loss of the owning control pipe.
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs") --helper $supervisorOut

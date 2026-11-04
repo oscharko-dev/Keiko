@@ -666,7 +666,7 @@ no unfinished implementation or its results were imported as this branch's quali
 
 | Group                                | Evidence / remaining work                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| W1 — OS boundaries                   | PARTIAL. SCM/WFP admission and filter readback pass for a single synthetic job. With the per-run loopback exemption inside Keiko's filters (ADR-0043 D18), the installed transport proof passes on the Windows Server 2025 runner: the confined root reaches the permitted gateway port and the hostile port is refused with 10013. Filesystem and foreign-process boundaries remain unqualified.                                                                                                                                              |
+| W1 — OS boundaries                   | PARTIAL. Installed transport passes on a hosted runner. A confined root is denied foreign processes, sensitive files, the credential store and ungranted writes, against an unconfined control (see the 2026-11-03 section). Open blockers: it can read the user's persisted environment in the registry, no production code grants it the workspace, and Smart App Control refuses unsigned binaries on the Windows 11 host. Not run on Windows 11 hardware.                                                                                  |
 | W2 — Owned process tree              | PARTIAL. Coding and MCP roots enter their kill-on-close jobs at creation. Ordinary and detached descendant cancellation, control EOF, MCP owner death and final stdio drain pass. Watchers, active turns and Workbench concurrency release remain open.                                                                                                                                                                                                                                                                                        |
 | W3 — Customer installs               | PARTIAL. Published 1.3.3 root CLI/UI installation, package.json start, restart and npx pass on Windows x64. A customer Windows coding-runtime package, installed upgrade and an admitted model-backed task remain open.                                                                                                                                                                                                                                                                                                                        |
 | W4 — Artifacts / approvals           | PARTIAL. Approved OpenCode/ripgrep and published v1.3.0 portable helper bytes verified; release helpers pass isolated execution. Portable remains evaluation-unqualified; Windows npm approval and installed retained-state/stale-helper proofs remain open                                                                                                                                                                                                                                                                                    |
@@ -676,7 +676,7 @@ no unfinished implementation or its results were imported as this branch's quali
 | W8 — Shell / real repair             | PARTIAL. On native Windows the project's own Vitest runs red, green after the repair and red on a regression through the real `npm.cmd`, `npx.cmd` and `vitest.cmd`, and hostile arguments arrive byte for byte. This qualifies the shell path only. Governed verification stays container-backed by decision (ADR-0043 D20), and that loop is not yet qualified. Yarn, Java/Maven/Gradle and the three-mode model loop remain open; none is installed or admitted on this host. Governed creates below new directories and Git snapshots, both previously refused on Windows, are repaired |
 | W9 — Persisted sessions / locks      | PARTIAL. Synthetic-schema SQLite WAL snapshots, exclusive-lock failure/recovery, retained-state integrity, history/export/import and Windows junction refusal executed. Four retention observations remain; original-runtime Workbench restart/resume/fork remain unqualified. Owner-private operator inputs now use a handle-bound DACL check (ADR-0182); retained-session ACL isolation is not covered by it The memory vault now closes its SQLite handle on dispose and failed initialization (WAL checkpoint, removable state directory). |
 | W10 — Agents / IPC / active input    | NOT RUN. Native capabilities are unavailable under the retained mapped profile. Native local MCP servers are now refused statically on a platform without an env-scrubbing launcher (`openCodeNativeMcpAdmission` omits them with their tools and grants and records `coding-runtime.native-mcp-local.refused`, a count only; remote and relayed servers are unaffected), so `/usr/bin/env` is never emitted for Windows; this is a unit-level refusal only, not a Windows pass, and there is still no Windows launcher and no native Windows MCP execution claim; W10 stays open. The MCP, plugin and remote-skill registries and global configuration, previously always refused on Windows, are now read through the DACL check (component only) |
-| W11 — Network / environment          | PARTIAL. On the installed path the attested IPv4 TCP port connects under the per-run exemption (ADR-0043 D18) and the hostile port is denied. Proxy/CA/OpenSSL/FIPS, inbound sidecar control, long-running requests and a model-backed task remain open.                                                                                                                                                                                                                                                                                       |
+| W11 — Network / environment | PARTIAL. On the installed path the attested IPv4 TCP port connects under the per-run exemption (ADR-0043 D18) and the hostile port is denied. A confined root reaches the attested gateway under an untrusted SystemRoot after the supervisor repair; the hostile port is denied. A mapped launch keeps host proxy, CA, OpenSSL and credential settings out. Fixture waits and cancellation pass on Windows 11. Open: a model-backed task (blocked on owner approval), real proxy/CA/OpenSSL/FIPS behavior, inbound sidecar control, long-running requests and fragmented responses against a live gateway. |
 | W12 — Visible identity / state       | PARTIAL. A live run's model and agent are stated by the server and survive a browser reload, and readiness names the tool profile, so a mapped profile is never labeled native. Component evidence only: a real run, attachments, Changes/approval views and interrupted/large-output rendering on Windows need an admitted model. A server restart reports the identity as not reported                                                                                                                                                       |
 | W13 — Upgrade / rollback             | PARTIAL. Published v1.3.0 helpers executed; native candidate-image lock refusal and recovery preserve bytes and file identities. Generation/handoff/recovery components pass. No installed upgrade/rollback or original-runtime retained-state qualification; Windows npm runtime pair remains absent                                                                                                                                                                                                                                          |
 | W14 — Large repositories / resources | NOT RUN. Secure-read load observations above cannot substitute for standalone/Workbench task measurements or another platform's reference budgets                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -1058,6 +1058,68 @@ directory (`EPERM`), and all four fail identically on the unchanged base `53fca1
 3. Run the standalone and Workbench task suites in all three modes with an approved
    model, on Windows and Intel macOS. Record real edits, tests, cancellation,
    resource measurements and private-skill behavior against W2/W6–W10/W12/W14/W15.
+
+## W1 and W11 boundary proof on 2026-11-03
+
+This section does not close W1 or W11. Native process and socket results come from a **hosted
+disposable Windows Server 2025 runner, not Windows 11 hardware**. These branches do not yet contain
+#4090 (`gateway_journal.c` and 10 conflicting files), so this proof must run again after that merge.
+
+`native/runtime-supervisor/windows/runtime_boundary.test.c` launches one probe unconfined and then
+inside a per-tree AppContainer. A denial counts only when the same operation succeeds in the
+unconfined control. [Run 41720596585](https://github.com/oscharko-dev/Keiko/actions/runs/41720596585)
+on `aa76ca1a0`:
+
+| Boundary                                                     | Confined result            |
+| ------------------------------------------------------------ | -------------------------- |
+| Open a foreign process: terminate, VM read, query, duplicate | Denied (5)                 |
+| Terminate a process of another AppContainer                  | Denied (5)                 |
+| Read `.env` and a private key file                           | Denied (5)                 |
+| Read a workspace file without a grant                        | Denied (5)                 |
+| List the user profile and the credential store               | Denied (5)                 |
+| Write without a grant                                        | Denied (5)                 |
+| Read a file granted to this package                          | Allowed (positive control) |
+| Connect to a host loopback listener, no exemption            | Refused (10060)            |
+| Read `HKCU\Environment`                                      | **Allowed: open blocker**  |
+
+Production defect found and repaired: a launch request carries no `SystemRoot`, and `socket()` then
+fails with 10106 (`WSAEPROVIDERFAILEDINIT`), so a confined root could not reach its attested gateway.
+Every earlier proof supplied the host's value and hid this. The supervisor now resolves `SystemRoot`
+from the OS, as it does for `LOCALAPPDATA`, and drops any value the request names. The adapter proof
+now sends an untrusted value:
+[red run 41717475676](https://github.com/oscharko-dev/Keiko/actions/runs/41717475676) on `8df37466e`
+reported `allowed: 10106`; green run 41720596585 reported `allowed: 0`, `hostile: 10013`, with the
+host listeners seeing two gateway connections and one hostile connection (the control only).
+
+Open blockers from this pass, none of them repaired here:
+
+1. **Persisted user environment.** A confined root can read `HKCU\Environment`, so a credential
+   stored with `setx` is readable there despite the launch environment allowlist. The proof read an
+   ordinary value (`TEMP`), not a credential. Closing this changes a trust boundary and needs an
+   owner decision.
+2. **No workspace grant.** No production code grants the per-tree package access to the workspace or
+   its support roots, and an ungranted workspace read is denied. That direction fails closed, but a
+   confined runtime could not read its own workspace. A model-backed task cannot succeed until this
+   is designed.
+3. **Smart App Control.** The Windows 11 host enforces it. A freshly built, unsigned copy of the test
+   image was refused with 4551 (`ERROR_SYSTEM_INTEGRITY_POLICY_VIOLATION`), so this proof could not run on
+   that host, and the setting was left unchanged. An unsigned helper on such a customer machine needs
+   the same check; this result does not establish how a released helper behaves.
+
+Windows 11 host, unprivileged, Node only (no WFP, service or UAC action):
+
+- A mapped launch keeps host proxy, CA, OpenSSL/FIPS and credential settings out of the child. This
+  new test passes without any product change, so it pins existing behavior and is not a repair proof.
+  It uses a fixture supervisor, not a live child.
+- `coding-sidecar-gateway`, the terminal-cause gateway suite and the runtime gateway abstraction suite
+  pass 442 tests, including stalled readers, stream cancellation and client disconnects. These run
+  against fixture gateways and do not count as W11 closure.
+- `native-toolchain-roots` fails 14 of 19 tests on this host (symlink `EPERM` and POSIX fixtures). The
+  count is the same without this change, and the native profile it covers is not used on Windows.
+
+Not exercised: real proxy, CA, OpenSSL or FIPS traffic, inbound sidecar control, fragmented responses
+against a live gateway, a model-backed task (blocked until the owner approves a model and gateway
+configuration), and Windows 11 hardware for any native result above.
 
 ## Update impact
 

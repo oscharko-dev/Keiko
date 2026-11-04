@@ -55,6 +55,8 @@ jobs:
       - name: Investigate scoped inbound control and independent deny coexistence
         if: ${{ !cancelled() && steps.guard-proof.outcome == 'success' }}
         run: node scripts/testing/test-windows-gateway-filters.mjs --inbound-control-proof
+      - name: Prove the confined root's process, file and network boundaries
+        run: node scripts/testing/test-windows-runtime-boundary.mjs
       - name: Exercise the installed service and Workbench adapter transport
         env:
           VERIFY_TRANSPORT: ${{ (github.event_name == 'push' && github.ref_name == 'feature/4068-windows-workbench') || inputs.verify_transport }}
