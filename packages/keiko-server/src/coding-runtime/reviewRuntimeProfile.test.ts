@@ -108,6 +108,15 @@ describe("review report acknowledgement projection", () => {
     });
   });
 
+  it("hands the model a duplicate acknowledgement (R4130-025)", async () => {
+    const reviewReport = { status: "duplicate", accepted: 1, remaining: 7 };
+    const result = await facade({ outcome: "completed", reviewReport }).execute({
+      body,
+      capability: "c",
+    });
+    expect(result).toMatchObject({ status: "completed", reviewReport });
+  });
+
   it("collapses anything else the port returned to a failure", async () => {
     for (const outcome of [
       { outcome: "completed" },

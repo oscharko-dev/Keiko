@@ -646,6 +646,7 @@ function projectDomainResult(
 
 const REVIEW_REPORT_STATUSES: ReadonlySet<unknown> = new Set([
   "accepted",
+  "duplicate",
   "rejected",
   "limit-reached",
 ]);

@@ -207,9 +207,12 @@ const REVIEW_FINDING_REPORTED = defineActivityLogOperation({
         "range-invalid",
         "evidence-mismatch",
         "limit-reached",
+        "duplicate",
       ],
     },
     acceptedCount: { type: "integer", dataClass: "count", required: false },
+    // R4130-025: reports of this run so far that repeated an accepted candidate's fingerprint.
+    duplicateCount: { type: "integer", dataClass: "count", required: false },
     findingCategory: {
       type: "string",
       dataClass: "closed-enum",
@@ -352,22 +355,27 @@ export function logReviewFindingReported(
   log: ServerLogSink,
   runId: string,
   acknowledgement: ReviewReportAcknowledgement,
-  accepted?: { readonly fingerprint: string; readonly report: ReviewFindingReport },
+  facts: {
+    /** The accepted candidate, or for a duplicate the candidate it repeats. */
+    readonly accepted?: { readonly fingerprint: string; readonly report: ReviewFindingReport };
+    readonly duplicateCount?: number;
+  } = {},
 ): void {
+  const { accepted, duplicateCount } = facts;
+  const counted = acknowledgement.status === "accepted" || acknowledgement.status === "duplicate";
   log.write(
     activityLogEvent(
       REVIEW_FINDING_REPORTED,
       {
-        level: acknowledgement.status === "accepted" ? "info" : "warn",
+        level: counted ? "info" : "warn",
         correlationId: correlationIdOrUnknown(runId),
       },
       {
         runDigest: reviewEvidenceDigest("run", runId),
         outcome:
           acknowledgement.status === "rejected" ? acknowledgement.reason : acknowledgement.status,
-        ...(acknowledgement.status === "accepted"
-          ? { acceptedCount: acknowledgement.accepted }
-          : {}),
+        ...(counted ? { acceptedCount: acknowledgement.accepted } : {}),
+        ...(duplicateCount === undefined ? {} : { duplicateCount }),
         ...(accepted === undefined
           ? {}
           : {

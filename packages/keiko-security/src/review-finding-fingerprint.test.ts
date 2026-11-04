@@ -41,6 +41,12 @@ describe("computeReviewFindingFingerprint", () => {
     expect(computeReviewFindingFingerprint(moved, EXCERPT)).toBe(original);
   });
 
+  it("tells a later occurrence of the same excerpt apart from the first (R4130-025)", () => {
+    const first = computeReviewFindingFingerprint(REPORT, EXCERPT);
+    expect(computeReviewFindingFingerprint(REPORT, EXCERPT, 0)).toBe(first);
+    expect(computeReviewFindingFingerprint(REPORT, EXCERPT, 1)).not.toBe(first);
+  });
+
   it("changes when the defect excerpt, the category or the file changes", () => {
     const original = computeReviewFindingFingerprint(REPORT, EXCERPT);
     expect(computeReviewFindingFingerprint(REPORT, EXCERPT.replace("===", "!=="))).not.toBe(

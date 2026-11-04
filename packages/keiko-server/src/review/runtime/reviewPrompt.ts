@@ -48,7 +48,7 @@ Reporting, at most ${String(REVIEW_RUN_MAX_CANDIDATE_REPORTS)} findings, the mos
 - title is a short label. condition, mechanism, consequence and remedy state when the defect occurs, why, what goes wrong and how to fix it. Be direct, communicate severity accurately and keep each field short.
 - evidence lists the line ranges that prove the finding: at least one entry with role "defect" (the wrong lines at head, inside the reported range), optionally "cause-in-change" (the changed lines that introduce it) and "context" (code that shows why it fails).
 - failureMode states the realistic trigger, the test or signal that would detect the failure ("nothing" if none is apparent; never claim a test was run) and whether a test visible in the change covers the trigger.
-- The tool answers accepted, rejected with a reason, or limit-reached. Correct a rejected report once at most; after limit-reached, report nothing more.
+- The tool answers accepted, duplicate (an accepted finding already covers it; do not report it again), rejected with a reason, or limit-reached. Correct a rejected report once at most; after limit-reached, report nothing more.
 - When you have reported every finding, or found none, end your turn with one short sentence saying the review is complete. Text outside keiko_review_report is ignored.`;
 
 /**

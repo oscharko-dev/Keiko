@@ -122,7 +122,7 @@ describe("review runtime Activity Log proofs", () => {
         sink,
         RUN_ID,
         { status: "accepted", accepted: 1, remaining: 7 },
-        { fingerprint: "f".repeat(64), report: REPORT },
+        { accepted: { fingerprint: "f".repeat(64), report: REPORT } },
       );
     });
     expect(expectActivityLogProof("review.finding.reported.line", line)).toMatchObject({
@@ -131,6 +131,23 @@ describe("review runtime Activity Log proofs", () => {
       severity: "high",
       evidenceCount: 1,
       acceptedCount: 1,
+    });
+  });
+
+  it("proves a duplicate report with the run's duplicate count (R4130-025)", () => {
+    const line = onlyLine((sink) => {
+      logReviewFindingReported(
+        sink,
+        RUN_ID,
+        { status: "duplicate", accepted: 1, remaining: 7 },
+        { accepted: { fingerprint: "f".repeat(64), report: REPORT }, duplicateCount: 2 },
+      );
+    });
+    expect(expectActivityLogProof("review.finding.reported.line", line)).toMatchObject({
+      outcome: "duplicate",
+      acceptedCount: 1,
+      duplicateCount: 2,
+      fingerprintDigest: "f".repeat(64),
     });
   });
 

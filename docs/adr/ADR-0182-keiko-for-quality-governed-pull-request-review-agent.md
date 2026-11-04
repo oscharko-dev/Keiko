@@ -164,7 +164,9 @@ range must lie within that blob (`range-invalid`), and the report's location mus
 fingerprint from the head excerpt, accepts at most eight candidates per run (`limit-reached` after;
 each report reserves its slot before it is judged, so concurrent reports never exceed the cap),
 answers the model a closed acknowledgement so it can correct a report once, and logs
-`review.finding.reported` body-free. The rules reader (`rulesFile.ts`) resolves
+`review.finding.reported` body-free. A report whose fingerprint an accepted candidate already holds
+is answered `duplicate` with the accepted and remaining counts, adds no candidate, and is counted
+in the line's `duplicateCount` (R4130-025). The rules reader (`rulesFile.ts`) resolves
 `<baseSha>:<path>` through the hardened review runner (`readGitReviewPathObject`): a missing file is
 `absent`, more than 16 KiB `too-large`, undecodable or NUL-bearing content `not-utf8`, and a configured
 path that cannot name a file in the tree `path-invalid` (each logged as `review.run.rules-file`; all
@@ -318,7 +320,11 @@ decision record. Proven by Issue #4141.
 The finding fingerprint is content-derived and line-independent: a framed digest of the normalized
 file path, the category and the normalized code excerpt of the `defect` evidence. It ignores line
 numbers and model-written prose such as the title, so an identical finding keeps its identity when
-the code moves. Publication (D10) still anchors comments to exact lines of the reviewed commit.
+the code moves. When the same excerpt lines (each line NFC-normalized and trimmed) already occur
+above the defect in the head file, the preimage adds that occurrence ordinal as a fifth frame
+(`reviewDefectExcerptOccurrence`), so two separate defects on identical lines keep separate
+identities. The first occurrence keeps the four-frame preimage, so its fingerprint is unchanged
+(R4130-025). Publication (D10) still anchors comments to exact lines of the reviewed commit.
 
 ### D8 — Model roles
 

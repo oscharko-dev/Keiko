@@ -17,6 +17,7 @@ import {
   type ReviewReportAcknowledgement,
   type ReviewReportRejectionReason,
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
+import { reviewDefectExcerptOccurrence } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-rules";
 import { validateReviewFindingReport } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review-validation";
 import { computeReviewFindingFingerprint } from "@oscharko-dev/keiko-security/review-finding-fingerprint";
 import { isDenied } from "@oscharko-dev/keiko-workspace";
@@ -191,60 +192,95 @@ async function judge(
   if (file.kind === "refused") return { ok: false, reason: file.reason };
   const defectExcerpt = file.lines.slice(defect.startLine - 1, defect.endLine).join("\n");
   if (defectExcerpt.trim().length === 0) return { ok: false, reason: "evidence-mismatch" };
-  const fingerprint = computeReviewFindingFingerprint(report, defectExcerpt);
+  const occurrence = reviewDefectExcerptOccurrence(file.lines, defect.startLine, defect.endLine);
+  const fingerprint = computeReviewFindingFingerprint(report, defectExcerpt, occurrence);
   return { ok: true, candidate: { fingerprint, report, defectExcerpt } };
+}
+
+/** The run-bound state the intake keeps between reports. */
+interface IntakeState {
+  readonly input: ReviewFindingIntakeInput;
+  readonly accepted: ReviewCandidateFinding[];
+  readonly rejected: Record<ReviewReportRejectionReason, number>;
+  readonly max: number;
+  reserved: number;
+  duplicates: number;
+}
+
+function record(
+  state: IntakeState,
+  acknowledgement: ReviewReportAcknowledgement,
+  candidate?: ReviewCandidateFinding,
+): ReviewReportAcknowledgement {
+  logReviewFindingReported(state.input.activityLog, state.input.runId, acknowledgement, {
+    ...(candidate === undefined ? {} : { accepted: candidate }),
+    duplicateCount: state.duplicates,
+  });
+  return acknowledgement;
+}
+
+/**
+ * The acknowledgement of a report that passed the head-commit judgement. A report whose fingerprint
+ * an accepted candidate already holds adds nothing: it is answered `duplicate`, so the model knows
+ * it was not added, and counted (R4130-025).
+ */
+function acknowledgeCandidate(
+  state: IntakeState,
+  candidate: ReviewCandidateFinding,
+): ReviewReportAcknowledgement {
+  const known = state.accepted.find((entry) => entry.fingerprint === candidate.fingerprint);
+  if (known === undefined) state.accepted.push(candidate);
+  else state.duplicates += 1;
+  const counts = {
+    accepted: state.accepted.length,
+    remaining: Math.max(0, state.max - state.accepted.length),
+  };
+  return known === undefined
+    ? record(state, { status: "accepted", ...counts }, candidate)
+    : record(state, { status: "duplicate", ...counts }, known);
+}
+
+async function submitReport(
+  state: IntakeState,
+  reader: HeadFileReader,
+  value: unknown,
+  signal: AbortSignal | undefined,
+): Promise<ReviewReportAcknowledgement> {
+  // Up to eight reports may be judged at once: each reserves its slot synchronously before the
+  // head-commit judgement is awaited, so concurrent reports can never exceed the cap. The slot is
+  // released once the judgement settles; an accepted candidate then occupies it.
+  if (state.accepted.length + state.reserved >= state.max) {
+    state.rejected["limit-reached"] += 1;
+    return record(state, { status: "limit-reached" });
+  }
+  state.reserved += 1;
+  let verdict: Verdict;
+  try {
+    verdict = await judge(reader, value, signal);
+  } finally {
+    state.reserved -= 1;
+  }
+  if (verdict.ok) return acknowledgeCandidate(state, verdict.candidate);
+  state.rejected[verdict.reason] += 1;
+  return record(state, { status: "rejected", reason: verdict.reason });
 }
 
 /** Creates the intake of one review run. */
 export function createReviewFindingIntake(input: ReviewFindingIntakeInput): ReviewFindingIntake {
   const reader = new HeadFileReader(input);
-  const accepted: ReviewCandidateFinding[] = [];
-  const rejected = emptyRejections();
-  const max = input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS;
-  let reserved = 0;
-  const record = (
-    acknowledgement: ReviewReportAcknowledgement,
-    candidate?: ReviewCandidateFinding,
-  ): void => {
-    logReviewFindingReported(input.activityLog, input.runId, acknowledgement, candidate);
+  const state: IntakeState = {
+    input,
+    accepted: [],
+    rejected: emptyRejections(),
+    max: input.maxCandidates ?? REVIEW_RUN_MAX_CANDIDATE_REPORTS,
+    reserved: 0,
+    duplicates: 0,
   };
   return {
     runId: input.runId,
-    async submit(value, signal): Promise<ReviewReportAcknowledgement> {
-      // Up to eight reports may be judged at once: each reserves its slot synchronously before the
-      // head-commit judgement is awaited, so concurrent reports can never exceed the cap. The slot
-      // is released once the judgement settles; an accepted candidate then occupies it.
-      if (accepted.length + reserved >= max) {
-        rejected["limit-reached"] += 1;
-        const limit: ReviewReportAcknowledgement = { status: "limit-reached" };
-        record(limit);
-        return limit;
-      }
-      reserved += 1;
-      let verdict: Awaited<ReturnType<typeof judge>>;
-      try {
-        verdict = await judge(reader, value, signal);
-      } finally {
-        reserved -= 1;
-      }
-      if (!verdict.ok) {
-        rejected[verdict.reason] += 1;
-        const refusal: ReviewReportAcknowledgement = { status: "rejected", reason: verdict.reason };
-        record(refusal);
-        return refusal;
-      }
-      const known = accepted.some((entry) => entry.fingerprint === verdict.candidate.fingerprint);
-      if (!known) accepted.push(verdict.candidate);
-      const acknowledgement: ReviewReportAcknowledgement = {
-        status: "accepted",
-        accepted: accepted.length,
-        remaining: Math.max(0, max - accepted.length),
-      };
-      record(acknowledgement, verdict.candidate);
-      return acknowledgement;
-    },
-    candidates: () => [...accepted],
-    rejections: () => ({ ...rejected }),
+    submit: (value, signal) => submitReport(state, reader, value, signal),
+    candidates: () => [...state.accepted],
+    rejections: () => ({ ...state.rejected }),
   };
 }
 
