@@ -15,8 +15,10 @@ export interface RequirementVocabulary {
   readonly priorityValues: readonly string[];
   /** Keys that introduce acceptance criteria. */
   readonly criteriaKeys: readonly string[];
-  /** Keys whose line carries metadata, not statement text. */
+  /** Keys of one metadata value (`Quelle: X`): not statement text, and complete on its line. */
   readonly metaKeys: readonly string[];
+  /** Keys of a free-text remark, which runs over its lines up to the next key. */
+  readonly noteKeys: readonly string[];
   /** Keys that label the statement itself (`Anforderung: ...`); the label is not content. */
   readonly statementKeys: readonly string[];
   /** Obligation phrases; a sentence containing one is a requirement statement. */
@@ -121,10 +123,10 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "Kapitel",
     "Chapter",
     "Status",
-    "Hinweis",
-    "Note",
-    "Speaker notes",
-    "Anmerkung",
+    "Typ",
+    "Type",
+    "Jira",
+    "Ticket",
     "Abhängigkeit",
     "Abhängigkeiten",
     "Dependency",
@@ -133,8 +135,8 @@ export const DEFAULT_REQUIREMENT_VOCABULARY: RequirementVocabulary = Object.free
     "Owner",
     "Fuente",
     "Origine",
-    "Remarque",
   ],
+  noteKeys: ["Hinweis", "Note", "Speaker notes", "Anmerkung", "Remarque"],
   statementKeys: [
     "Anforderung",
     "Anforderungstext",
@@ -293,12 +295,18 @@ export interface CompiledVocabulary {
   readonly priorityKey: RegExp;
   /** `^<criteria key>` followed by an optional colon. */
   readonly criteriaKey: RegExp;
-  /** `^<meta key>\s*:` */
+  /** `^<meta or note key>\s*:` */
   readonly metaKey: RegExp;
+  /** `^<note key>\s*:` */
+  readonly noteKey: RegExp;
   /** `^<statement key>\s*:` */
   readonly statementKey: RegExp;
   /** Global zero-width split point in front of an inline priority or criteria key. */
   readonly inlineKey: RegExp;
+  /** The first statement key inside a line that opened with another field. */
+  readonly inlineStatementKey: RegExp;
+  /** A priority key and a value the vocabulary knows, up to the whitespace behind it. */
+  readonly priorityLead: RegExp;
   /** A sentence with an obligation phrase. */
   readonly modal: RegExp;
   /** A sentence that opens with a personal obligation phrase, so it names no subject. */
@@ -393,6 +401,7 @@ export function mergeRequirementVocabulary(
     priorityValues: merge(base.priorityValues, extra.priorityValues),
     criteriaKeys: merge(base.criteriaKeys, extra.criteriaKeys),
     metaKeys: merge(base.metaKeys, extra.metaKeys),
+    noteKeys: merge(base.noteKeys, extra.noteKeys),
     statementKeys: merge(base.statementKeys, extra.statementKeys),
     modalVerbs: merge(base.modalVerbs, extra.modalVerbs),
     impersonalModalVerbs: merge(base.impersonalModalVerbs, extra.impersonalModalVerbs),
@@ -437,12 +446,21 @@ export function compileRequirementVocabulary(
   return {
     priorityKey: new RegExp(String.raw`^(?:${priorityKeys})\s*[:=]`, "iu"),
     criteriaKey: new RegExp(String.raw`^(?:${criteriaKeys})${LETTER_AFTER}\s*:?`, "iu"),
-    metaKey: new RegExp(String.raw`^(?:${alternation(vocabulary.metaKeys)})\s*:`, "iu"),
+    metaKey: new RegExp(
+      String.raw`^(?:${alternation([...vocabulary.metaKeys, ...vocabulary.noteKeys])})\s*:`,
+      "iu",
+    ),
+    noteKey: new RegExp(String.raw`^(?:${alternation(vocabulary.noteKeys)})\s*:`, "iu"),
     statementKey: new RegExp(
       String.raw`^(?:${alternation(vocabulary.statementKeys)})${LETTER_AFTER}\s*:`,
       "iu",
     ),
     inlineKey: new RegExp(String.raw`(?<=^|\s)(?=(?:${priorityKeys}|${criteriaKeys})\s*:)`, "giu"),
+    inlineStatementKey: new RegExp(
+      String.raw`(?<=\s)(?=(?:${alternation(vocabulary.statementKeys)})${LETTER_AFTER}\s*:)`,
+      "iu",
+    ),
+    priorityLead: new RegExp(String.raw`^(?:${priorityKeys})\s*[:=]\s*(?:${values})(?=\s)`, "iu"),
     modal: new RegExp(
       `${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}`,
       "iu",

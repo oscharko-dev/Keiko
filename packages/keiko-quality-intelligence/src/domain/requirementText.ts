@@ -64,6 +64,13 @@ export function bare(raw: string): string {
   return collapse(stripEmphasis(noHeading.replace(LIST_MARKER, "")));
 }
 
+const THEMATIC_BREAK = /^\s*(?:[-–—―_*=~]\s*){3,}$/u;
+
+/** A line of nothing but rule characters: the thematic break of Markdown and of typed text. */
+export function isThematicBreak(raw: string): boolean {
+  return THEMATIC_BREAK.test(raw);
+}
+
 export function trimTrailingMarks(value: string): string {
   let end = value.length;
   while (end > 0 && (value[end - 1] === "." || value[end - 1] === ";")) end -= 1;
@@ -77,6 +84,8 @@ export function trimTrailingMarks(value: string): string {
  * optional dotted tail (`R-12`, `FR-12.3`, `REQ_003`, `REQ-FUNC-001`).
  */
 const ID_SOURCE = String.raw`[A-Z][A-Z0-9]*(?:[-_][A-Z][A-Z0-9]*)*[-_]\d{1,8}(?:\.\d{1,3})*`;
+/** A field whose value is one identifier (`Jira: KRED-29`), up to the whitespace behind it. */
+export const ID_VALUE_FIELD = new RegExp(String.raw`^[^:]{1,40}: ?${ID_SOURCE}(?=\s)`, "u");
 export const ID_START = new RegExp(String.raw`^\[?(${ID_SOURCE})(\])?`, "u");
 export const ID_EXACT = new RegExp(String.raw`^\[?(${ID_SOURCE})\]?$`, "u");
 export const ID_ANYWHERE = new RegExp(

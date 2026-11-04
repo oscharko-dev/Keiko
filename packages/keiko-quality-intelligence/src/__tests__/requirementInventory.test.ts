@@ -6,6 +6,7 @@ import {
   derivedRequirementId,
   documentScopeOf,
   requirementContentDigest,
+  type RequirementInventoryEntry,
   type RequirementInventoryInput,
   type RequirementInventorySection,
 } from "../domain/requirementInventory.js";
@@ -1003,5 +1004,407 @@ describe("an identifier title that plain text hard-wrapped (#4235)", () => {
       (item) => item.id === "REQ-1",
     );
     expect(found?.title).toBe("Anmeldung");
+  });
+});
+
+describe("the fields of a record line (#4235)", () => {
+  const entryOf = (lines: readonly string[]): RequirementInventoryEntry | undefined =>
+    detect(["FA-1: Anmeldung", ...lines]).entries[0];
+
+  it("keeps the statement behind fields a Word paragraph joined with a middle dot", () => {
+    const entry = entryOf([
+      "Typ: funktional · Priorität: Mittel · Quelle: GwG § 8 · Jira: COMP-8 Beschreibung: Die Bank prüft den Kunden. Akzeptanzkriterien:",
+      "- Erstes Kriterium.",
+    ]);
+
+    expect(entry).toMatchObject({ priority: "Mittel", statement: "Die Bank prüft den Kunden." });
+    expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual(["Erstes Kriterium."]);
+  });
+
+  it("ends a priority at a pipe and keeps the sentence behind an identifier value", () => {
+    const entry = entryOf([
+      "Priorität: Mittel | Quelle: Antragsstrecke §2 | Jira: KRED-29 Der Darlehensnehmer kann Sondertilgungen leisten.",
+    ]);
+
+    expect(entry).toMatchObject({
+      priority: "Mittel",
+      statement: "Der Darlehensnehmer kann Sondertilgungen leisten.",
+    });
+  });
+
+  it("reads the same statement from one record line and from its own line", () => {
+    const joined = entryOf([
+      "Priorität: Mittel | Quelle: A | Jira: KRED-29 Der Darlehensnehmer kann tilgen.",
+    ]);
+    const separate = entryOf([
+      "Priorität: Mittel | Quelle: A | Jira: KRED-29",
+      "Der Darlehensnehmer kann tilgen.",
+    ]);
+
+    expect(joined?.statement).toBe("Der Darlehensnehmer kann tilgen.");
+    expect(separate?.digest).toBe(joined?.digest);
+  });
+
+  it("does not take a field no vocabulary names for the statement", () => {
+    const entry = entryOf(["Anlass: Prüfung · Priorität: Hoch", "Die Bank prüft den Kunden."]);
+
+    expect(entry).toMatchObject({ priority: "Hoch", statement: "Die Bank prüft den Kunden." });
+  });
+
+  it("keeps the statement behind a known priority value on the same line", () => {
+    expect(entryOf(["Priorität: Hoch Die Bank prüft den Kunden."])).toMatchObject({
+      priority: "Hoch",
+      statement: "Die Bank prüft den Kunden.",
+    });
+  });
+
+  it("reads a line of a single label field as complete", () => {
+    expect(entryOf(["Quelle: GwG § 8", "Die Bank prüft den Kunden."])?.statement).toBe(
+      "Die Bank prüft den Kunden.",
+    );
+  });
+
+  it("keeps a wrapped label value out of the statement", () => {
+    expect(entryOf(["Quelle: GwG § 8,", "Kapitel fünf", "Priorität: Hoch"])?.statement).toBe("");
+    expect(entryOf(["Quelle: Gesetz über das", "aufspüren von Gewinnen"])?.statement).toBe("");
+  });
+
+  it("keeps a note running until the next key", () => {
+    const entry = entryOf([
+      "Die Bank prüft den Kunden.",
+      "Hinweis: Der Vorgang ist wichtig.",
+      "Er wird dokumentiert.",
+      "Priorität: Hoch",
+    ]);
+
+    expect(entry).toMatchObject({ priority: "Hoch", statement: "Die Bank prüft den Kunden." });
+  });
+
+  it("leaves prose with a colon and a pipe alone", () => {
+    expect(entryOf(["Das Feld enthält den Wert A | B: das ist erlaubt."])?.statement).toBe(
+      "Das Feld enthält den Wert A | B: das ist erlaubt.",
+    );
+  });
+
+  it("keeps a statement key inside the statement itself", () => {
+    expect(entryOf(["Beschreibung: Die Anforderung: Kunden werden geprüft."])?.statement).toBe(
+      "Die Anforderung: Kunden werden geprüft.",
+    );
+  });
+});
+
+describe("a rule line (#4235)", () => {
+  it.each(["————————————————————", "---", "- - -", "***", "___", "====="])(
+    "ends the block at %s",
+    (rule) => {
+      const inventory = detect([
+        "### FA-1 Anmeldung",
+        "Die Bank prüft den Kunden.",
+        "Akzeptanzkriterien:",
+        "- Erstes Kriterium.",
+        rule,
+        "Ende des Katalogs.",
+      ]);
+
+      expect(inventory.entries[0]?.acceptanceCriteria.map((item) => item.text)).toEqual([
+        "Erstes Kriterium.",
+      ]);
+    },
+  );
+
+  it("does not end the block when it underlines the heading", () => {
+    expect(
+      detect(["FA-1: Anmeldung", "=====", "Die Bank prüft den Kunden."]).entries[0]?.statement,
+    ).toBe("Die Bank prüft den Kunden.");
+  });
+
+  it("does not merge a paragraph across it into one statement", () => {
+    const statements = detect(["Das System muss prüfen", "---", "Das System muss melden."]).entries;
+
+    expect(statements.map((entry) => entry.statement)).toEqual([
+      "Das System muss prüfen",
+      "Das System muss melden.",
+    ]);
+  });
+});
+
+describe("tables that hold no requirements (#4235)", () => {
+  const CODES = ["SEPA-001 | Ungültige IBAN", "SEPA-002 | Limit überschritten"];
+
+  it("takes no requirement from the rows under a header that names other columns", () => {
+    const inventory = detect(["Code | Bedeutung", ...CODES]);
+
+    expect(inventory.entries).toEqual([]);
+    expect(inventory.rejectedCandidateCount).toBe(2);
+  });
+
+  it("takes none from a Markdown table with a separator row", () => {
+    expect(
+      detect(["| Fehlercode | Bedeutung | Auslöser |", "|---|---|---|", "| E-1 | Foo | Bar |"])
+        .entries,
+    ).toEqual([]);
+  });
+
+  it("takes none from a table across a page break", () => {
+    expect(detect(["Code | Bedeutung", CODES[0] ?? "", "", CODES[1] ?? ""]).entries).toEqual([]);
+  });
+
+  it("does not carry the roles of a requirement table into the next table", () => {
+    const inventory = detect([
+      "ID | Titel | Priorität",
+      "FR-1 | Anmeldung | Hoch",
+      "",
+      "Die folgenden Fehlercodes gibt es.",
+      "",
+      "Code | Bedeutung",
+      ...CODES,
+    ]);
+
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-1"]);
+  });
+
+  it("does not carry the roles of a requirement table into a table of another shape", () => {
+    const inventory = detect([
+      "ID | Titel | Priorität",
+      "FR-1 | Anmeldung | Hoch",
+      "",
+      "Code | Bedeutung",
+      ...CODES,
+    ]);
+
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-1"]);
+  });
+
+  it("keeps the roles of a requirement table across a page break", () => {
+    const inventory = detect([
+      "ID | Titel | Priorität",
+      "FR-1 | Anmeldung | Hoch",
+      "",
+      "FR-2 | Abmeldung | Mittel",
+    ]);
+
+    expect(inventory.entries[1]).toMatchObject({
+      id: "FR-2",
+      title: "Abmeldung",
+      priority: "Mittel",
+    });
+  });
+
+  it("reads a table without any header from its first row", () => {
+    expect(
+      detect(["FR-1 | Anmeldung | Hoch", "FR-2 | Abmeldung | Mittel"]).entries[1],
+    ).toMatchObject({ id: "FR-2", title: "Abmeldung", priority: "Mittel" });
+  });
+
+  it("takes a header that names only an identifier column and reads the rest by position", () => {
+    expect(detect(["Regel-ID | Regel", "TM-001 | Transaktion prüfen"]).entries[0]).toMatchObject({
+      id: "TM-001",
+      title: "Transaktion prüfen",
+    });
+  });
+
+  it("does not read a row holding a role word as a header", () => {
+    expect(detect(["FR-1 | Key", "FR-2 | Name"]).entries.map((entry) => entry.title)).toEqual([
+      "Key",
+      "Name",
+    ]);
+  });
+
+  it("does not reject a heading that merely holds a pipe", () => {
+    expect(ids(["FR-1: Login | Anmeldung", "Die Bank prüft den Kunden."])).toEqual(["FR-1"]);
+  });
+});
+
+describe("a table a document parser projected (#4235)", () => {
+  it("reads a Word or PowerPoint row with its header roles", () => {
+    expect(
+      detect([
+        "Table row 1: ID=FR-1 | Titel=Anmeldung | Typ=funktional | Priorität=Hoch | Jira=X-1",
+      ]).entries[0],
+    ).toMatchObject({ id: "FR-1", unitKind: "table-row", title: "Anmeldung", priority: "Hoch" });
+  });
+
+  it("ends the row at a blank line whatever its last cell holds", () => {
+    const inventory = detect([
+      "Table row 1: ID=FR-1 | Akzeptanzkriterien=Erstes Kriterium.",
+      "Zweites Kriterium.",
+      "",
+      "Folgeabsatz, der nicht zur Tabelle gehört.",
+    ]);
+
+    expect(inventory.entries[0]?.acceptanceCriteria.map((item) => item.text)).toEqual([
+      "Erstes Kriterium.",
+      "Zweites Kriterium.",
+    ]);
+  });
+
+  it("takes no requirement from a projected table under foreign headers", () => {
+    const inventory = detect([
+      "Table row 1: Code=SEPA-001 | Bedeutung=Ungültige IBAN",
+      "Table row 2: Code=SEPA-002 | Bedeutung=Limit",
+    ]);
+
+    expect(inventory.entries).toEqual([]);
+    expect(inventory.rejectedCandidateCount).toBe(2);
+  });
+
+  it("decides on the header of the whole table, not on the cells one row happens to fill", () => {
+    const inventory = detect([
+      "csv!2: Anforderungscode=AN-1 | Titel=Anmeldung | Priorität=Hoch",
+      "csv!3: Anforderungscode=AN-2 | Titel=Abmeldung",
+    ]);
+
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["AN-1", "AN-2"]);
+  });
+
+  it("starts a new table where the row numbers restart", () => {
+    const inventory = detect([
+      "Table row 1: ID=FR-1 | Titel=Anmeldung",
+      "Table row 2: ID=FR-2 | Titel=Abmeldung",
+      "Table row 1: Code=SEPA-001 | Bedeutung=Limit",
+    ]);
+
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-1", "FR-2"]);
+  });
+
+  it("reads neutral column labels by position", () => {
+    expect(
+      detect(["csv!1: Column 1=FR-1 | Column 2=Anmeldung | Column 3=Hoch"]).entries[0],
+    ).toMatchObject({ id: "FR-1", title: "Anmeldung", priority: "Hoch" });
+  });
+
+  it("takes no obligation from a line of a multi-line cell", () => {
+    const inventory = detect([
+      "Sheet!2: ID=FR-1 | Akzeptanzkriterien=Das System muss prüfen.",
+      "Das System muss melden.",
+      "Sheet!3: ID=FR-2 | Titel=Abmeldung",
+    ]);
+
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-1", "FR-2"]);
+  });
+
+  it("closes a row at the record line of a JSON document", () => {
+    const [entry] = detect([
+      "/requirements!1: id=FR-1 | title=Login | description=Die Bank prüft.",
+      "/requirements/0/meta: owner=Team",
+    ]).entries;
+
+    expect(entry?.statement).toBe("Die Bank prüft.");
+  });
+
+  it("reads repeated labels as one list", () => {
+    const [entry] = detect([
+      "/requirements!1: id=FR-1 | acceptanceCriteria=Erstes. | acceptanceCriteria=Zweites.",
+    ]).entries;
+
+    expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual(["Erstes.", "Zweites."]);
+  });
+});
+
+describe("a requirement over several rows (#4235)", () => {
+  it.each([
+    [
+      "projected",
+      [
+        "csv!2: ID=FR-1 | Titel=Login | Priorität=Hoch | Akzeptanzkriterien=Erstes.",
+        "csv!3: ID=FR-1 | Titel=Login | Priorität=Hoch | Akzeptanzkriterien=Zweites.",
+        "csv!4: Akzeptanzkriterien=Drittes.",
+        "csv!5: ID=FR-2 | Titel=Logout | Akzeptanzkriterien=Viertes.",
+      ],
+    ],
+    [
+      "pipe",
+      [
+        "| ID | Titel | Priorität | Akzeptanzkriterien |",
+        "|---|---|---|---|",
+        "| FR-1 | Login | Hoch | Erstes. |",
+        "| FR-1 | Login | Hoch | Zweites. |",
+        "|  |  |  | Drittes. |",
+        "| FR-2 | Logout |  | Viertes. |",
+      ],
+    ],
+  ])("merges criteria rows of one identifier in a %s table", (_name, lines) => {
+    const inventory = detect(lines);
+
+    expect(inventory.conflictingIds).toEqual([]);
+    expect(inventory.entries.map((entry) => entry.id)).toEqual(["FR-1", "FR-2"]);
+    expect(inventory.entries[0]?.acceptanceCriteria.map((item) => item.text)).toEqual([
+      "Erstes.",
+      "Zweites.",
+      "Drittes.",
+    ]);
+  });
+
+  it("still reports rows of one identifier that disagree", () => {
+    const inventory = detect([
+      "ID | Titel | Akzeptanzkriterien",
+      "FR-1 | Login | Erstes.",
+      "FR-1 | Anmeldung | Zweites.",
+    ]);
+
+    expect(inventory.conflictingIds).toEqual(["FR-1"]);
+  });
+
+  it("does not take a row that names something else for a continuation", () => {
+    const inventory = detect(["csv!2: ID=FR-1 | Titel=Login", "csv!3: Titel=Logout | Notiz=x"]);
+
+    expect(inventory.entries[0]?.statement).toBe("");
+    expect(inventory.entries[0]?.acceptanceCriteria).toEqual([]);
+  });
+
+  it("covers every merged row in the location of the unit", () => {
+    const lines = [
+      "csv!2: ID=FR-1 | Akzeptanzkriterien=Erstes.",
+      "csv!3: ID=FR-1 | Akzeptanzkriterien=Zweites.",
+    ];
+    const entry = detect(lines).entries[0];
+
+    expect(entry?.characterEnd).toBe(lines.join("\n").length);
+  });
+});
+
+describe("an overview table beside the definitions (#4235)", () => {
+  const OVERVIEW = ["ID | Titel | Priorität", "FR-1 | Anmeldung | Hoch", "", "Details", ""];
+  const DETAIL = ["### FR-1 Anmeldung", "Die Bank prüft den Kunden."];
+
+  it("lets the definition displace its overview row without a conflict", () => {
+    const inventory = detect([...OVERVIEW, ...DETAIL, "Priorität: Hoch"]);
+
+    expect(inventory.conflictingIds).toEqual([]);
+    expect(inventory.referenceOnlyCount).toBe(1);
+    expect(inventory.entries[0]).toMatchObject({
+      unitKind: "block",
+      statement: "Die Bank prüft den Kunden.",
+    });
+  });
+
+  it("prefers a definition without a priority over a row that only lists one", () => {
+    const inventory = detect([...OVERVIEW, ...DETAIL]);
+
+    expect(inventory.entries[0]).toMatchObject({
+      unitKind: "block",
+      statement: "Die Bank prüft den Kunden.",
+    });
+  });
+
+  it("reports an overview row and a definition that disagree on the priority", () => {
+    const inventory = detect([...OVERVIEW, ...DETAIL, "Priorität: Mittel"]);
+
+    expect(inventory.conflictingIds).toEqual(["FR-1"]);
+  });
+});
+
+describe("a single identifier line in flat text (#4235)", () => {
+  it.each([
+    ["a priority", ["FR-12 Anmeldung", "Priorität: Hoch"]],
+    ["criteria", ["FR-12 Anmeldung", "Akzeptanzkriterien:", "- Erstes."]],
+    ["an obligation behind it", ["FR-12 Anmeldung", "Das System muss anmelden."]],
+    ["an obligation in its own title", ["FR-12 Das System muss anmelden."]],
+  ])("accepts it with %s", (_name, lines) => {
+    expect(ids(lines)).toEqual(["FR-12"]);
+  });
+
+  it("still rejects it without any requirement context", () => {
+    expect(ids(["FOO-1 Einzelnes Wort", "Text ohne Pflicht."])).toEqual([]);
   });
 });
