@@ -54,8 +54,7 @@ export class ReviewRulesReadError extends Error {
 }
 
 /** Why a rules read failed, closed (R4130-022): the run's log line names it. */
-const REVIEW_RULES_READ_FAILURES = ["cancelled", "timeout", "spawn-refused", "git-failed"] as const;
-export type ReviewRulesReadFailure = (typeof REVIEW_RULES_READ_FAILURES)[number];
+export type ReviewRulesReadFailure = "cancelled" | "timeout" | "spawn-refused" | "git-failed";
 
 function readFailure(result: GitProcessResult): ReviewRulesReadFailure {
   if (result.aborted === true) return "cancelled";

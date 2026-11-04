@@ -5384,6 +5384,10 @@ function composeReviewRuntimeService(
   }
 }
 
+type ReviewRuntimeActivationResult = ReturnType<
+  Parameters<typeof createProductionReviewRuntimeService>[0]["activate"]
+>;
+
 /**
  * Activates the OpenCode runtime for one review instance under the review sidecar routes. An
  * unavailable activation hands its closed reason to the review runtime service, which logs it on
@@ -5393,7 +5397,7 @@ function reviewRuntimeActivation(
   args: UiHandlerDepsAssemblyArgs,
 ): Pick<Parameters<typeof createProductionReviewRuntimeService>[0], "activate"> {
   return {
-    activate: (request) => {
+    activate: (request): ReviewRuntimeActivationResult => {
       const activation = resolveProductionOpenCodeActivation({
         env: args.options.env,
         runtimeStateDir: request.runtimeStateDir,

@@ -120,12 +120,10 @@ describe("review runtime Activity Log proofs", () => {
     const [event] = capture.events;
     if (event === undefined) throw new TypeError("expected one event");
     const line = formatActivityLogProofLine(event);
-    expect(expectActivityLogProof("review.run.rules-file.line", line)).toMatchObject({
-      outcome: "read-failed",
-      failureClass: "timeout",
-      causeChain: expect.any(Array),
-      frames: expect.any(Array),
-    });
+    const proof = expectActivityLogProof("review.run.rules-file.line", line);
+    expect(proof).toMatchObject({ outcome: "read-failed", failureClass: "timeout" });
+    expect(Array.isArray(proof.causeChain)).toBe(true);
+    expect(Array.isArray(proof.frames)).toBe(true);
     expect(event).toMatchObject({ correlationId: CORRELATION, errorKind: "timeout" });
     for (const forbidden of ["rules read timed out", "inner", RUN_ID]) {
       expect(line).not.toContain(forbidden);
