@@ -2,7 +2,6 @@
 
 import {
   useOptionalWidgetTranslate,
-  type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
 import { discardEditorBufferSafetyFiles } from "./useEditorBufferSafety";
 import EditorSurfaceLoading from "./EditorSurfaceLoading";
