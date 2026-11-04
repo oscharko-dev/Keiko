@@ -80,15 +80,30 @@ function setextLevel(line: string): number | undefined {
   return char === "=" ? 1 : 2;
 }
 
+// A wiki macro that closes on its own opening line (`{code}x = 1{code}`) is one line of text, not a
+// block: opening a fence for it would hide every heading after it.
+function wikiMacroOpening(text: string): boolean {
+  const macro = text.startsWith("{code")
+    ? "{code"
+    : text.startsWith("{noformat")
+      ? "{noformat"
+      : "";
+  if (macro === "") return false;
+  const afterMarker = text.slice(text.indexOf("}") + 1);
+  return !afterMarker.includes(macro);
+}
+
 function fenceOpening(line: string): Fence {
   const text = line.trimStart();
   if (leadingSpaces(line) <= 3 && (text.startsWith("```") || text.startsWith("~~~"))) {
     const char = text.charAt(0);
     let length = 0;
     while (text.charAt(length) === char) length += 1;
+    // A backtick fence's info string holds no backtick: "```x```" is inline code, not a fence.
+    if (char === "`" && text.includes("`", length)) return undefined;
     return { char, length };
   }
-  return text.startsWith("{code") || text.startsWith("{noformat") ? "wiki" : undefined;
+  return wikiMacroOpening(text) ? "wiki" : undefined;
 }
 
 function fenceCloses(fence: Exclude<Fence, undefined>, line: string): boolean {
