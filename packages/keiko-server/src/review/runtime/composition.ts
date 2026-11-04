@@ -26,11 +26,11 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
   CodingWorkbenchActionClass,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeUnavailableReason,
   ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingRuntimePurpose } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import type { CodingWorkbenchRuntimeUnavailableReason } from "@oscharko-dev/keiko-contracts";
 
 import {
   createOpenCodeGatewayReadinessRegistry,
