@@ -135,7 +135,7 @@ ADR-0168 temporarily superseded the rollback's installation state and restored G
 quota-tolerant reviewer. ADR-0169 supersedes that later state as well: the provider, App,
 configuration, and review authority are fully retired.
 
-### D6 — Anti-slop findings ratchet (owner decisions, 2026-10-30 and 2026-11-03)
+### D6 — Anti-slop findings ratchet (owner decisions, 2026-10-30, 2026-11-03 and 2026-11-04)
 
 Epic #3914 built a repository-owned code-quality engine: Oxlint 1.78.0 running
 `oxlint-plugin-anti-slop` with 22 noncosmetic rules under `scripts/code-quality-policy.json`. Its
@@ -145,9 +145,10 @@ complete enforcement depends on responsibility qualifications that remain on the
 
 The owner changed the target on 2026-11-03. The rollout to `dev` is postponed to a date the owner
 sets later. Until then, the epic's delivery goes to the epic branch `codex/epic-anti-slop-quality`,
-and no epic pull request stays open against `dev`. The epic branch's tree is the `dev` snapshot
-`7bbca2e34`. The ratchet (#4145) lands there first. Each later slice carries its own register and
-ledger update and passes the ratchet. The owner integrates every pull request into the epic branch.
+and no epic pull request stays open against `dev`. The epic branch's tree started as the `dev`
+snapshot `7bbca2e34`; the dev cutoff sync below takes in release 1.4.0. The ratchet (#4145) lands
+there first. Each later slice carries its own register and ledger update and passes the ratchet.
+The owner integrates every pull request into the epic branch.
 The rules below apply on the epic branch now and on `dev` after the rollout:
 
 - `npm run check:code-quality-policy -- --mode ratchet` scans the whole repository and counts
@@ -178,21 +179,36 @@ over counting only enforceable findings and over landing the slices before #4145
 
 - `scripts/code-quality-register-increases.json` (version 1) lists entries of `path`, `rule`,
   `from`, `to`, `reason` and `issue`. `reason` is `qualified-boundary`,
-  `pending-boundary-migration`, `test-witness` or `proof-fixture`. The second covers a check under
-  the four boundary rules (no-runtime-typeof, no-unknown-parameters, no-unsafe-dictionary-type,
-  no-known-value-widening) that a later reviewed migration moves while those rules are inactive for
-  its package. The fourth covers a test helper, typed fixture or type-level assertion that builds
-  or checks the expected value of a proof and receives no hostile input. Code that receives hostile
-  input is a `test-witness` instead. `from` is less than `to`, and `issue` is a positive issue
-  number. Malformed, duplicated or non-canonical ledgers fail closed.
+  `pending-boundary-migration`, `test-witness`, `proof-fixture` or `dev-cutoff-sync`. The second
+  covers a check under the four boundary rules (no-runtime-typeof, no-unknown-parameters,
+  no-unsafe-dictionary-type, no-known-value-widening) that a later reviewed migration moves while
+  those rules are inactive for its package. The fourth covers a test helper, typed fixture or
+  type-level assertion that builds or checks the expected value of a proof and receives no hostile
+  input. Code that receives hostile input is a `test-witness` instead. The fifth is described
+  below. `from` is less than `to`, and `issue` is a positive issue number. Malformed, duplicated
+  or non-canonical ledgers fail closed.
 - `--prune-register` raises a count only to exactly the `to` of an entry with the same path, rule
   and `from`. Every other increase still fails with `code-quality-register-increase`.
 - The CI ratchet compares the committed register with the base commit's register. Each raised count
   needs one entry that the change adds; an entry the base already holds cannot approve a new raise.
   An added entry that matches no raise is stale, and a removed or changed base entry is rewritten
   history. Both fail. A CI comparison without a base fails, and CI still refuses register writes.
-- The ledger started empty at `7bbca2e34`. Entries accumulate as reviewed history in later slice
-  PRs.
+- The ledger started empty at `7bbca2e34`. Entries accumulate as reviewed history. Its first 592
+  entries come from the dev 1.4.0 cutoff sync below; slice PRs add the later ones.
+
+Dev cutoff sync (owner decision, 2026-11-04). Release 1.4.0 is the last `dev` state the epic branch
+takes in before the rollout; the owner named it the dev cutoff and code freeze. Merging `dev`
+`b6c26036e` into the epic branch raised 592 (file, rule) counts in 246 files, each byte-identical to
+`b6c26036e`. The owner decided to admit them with one last ledger raise instead of fixing dev's code
+inside the sync:
+
+- Those 592 entries carry reason `dev-cutoff-sync` and issue 3914. The pruned register goes from
+  46,618 to 48,205 findings.
+- The reason is usable by one change only. The ratchet reports an added `dev-cutoff-sync` entry as a
+  closed increase, and fails, when the base ledger already holds an entry with that reason. Any
+  later `dev` sync therefore needs a new owner decision and an engine change.
+- The sync lands on the epic branch by fast-forward, not squash, so the later rollout keeps `dev`'s
+  ancestry.
 
 ## Consequences
 
