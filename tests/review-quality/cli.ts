@@ -5,6 +5,8 @@
 // an interrupted replay from the reviews the original run stored since that instant;
 // `--resume-legacy-digest` additionally admits reviews stored before client request ids carried a
 // reuse key, and only when it equals the run's configuration digest (resume.ts).
+// `--resume-prior-keys` accepts reviews stored under earlier reuse keys, and `--rescore` starts no
+// review at all, so a finished replay can be scored again under changed scoring code.
 
 const GATE_SETS = ["development", "holdout", "seeds"] as const;
 type GateSet = (typeof GATE_SETS)[number];
@@ -28,6 +30,8 @@ export interface GateArguments {
   readonly port: number;
   readonly resumeSinceMs: number | undefined;
   readonly resumeLegacyDigest: string | undefined;
+  readonly resumePriorKeys: readonly string[];
+  readonly rescore: boolean;
 }
 
 export class GateArgumentError extends Error {
@@ -45,7 +49,7 @@ function flagValues(argv: readonly string[]): ReadonlyMap<string, string> {
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index] ?? "";
     if (!flag.startsWith("--")) throw new GateArgumentError(`unexpected argument: ${flag}`);
-    if (flag === "--confirm-final-holdout") {
+    if (flag === "--confirm-final-holdout" || flag === "--rescore") {
       values.set(flag, "true");
       continue;
     }
@@ -100,6 +104,17 @@ function digest(value: string | undefined, flag: string): string | undefined {
   return value;
 }
 
+const REUSE_KEY = /^[0-9a-f]{12}$/u;
+
+function reuseKeys(value: string | undefined, flag: string): readonly string[] {
+  if (value === undefined) return [];
+  const keys = value.split(",").map((part) => part.trim());
+  if (keys.some((key) => !REUSE_KEY.test(key))) {
+    throw new GateArgumentError(`${flag} must list twelve-character hex reuse keys`);
+  }
+  return keys;
+}
+
 function numberList(value: string | undefined, flag: string): readonly number[] | undefined {
   if (value === undefined) return undefined;
   if (value.trim() === "") return [];
@@ -110,8 +125,10 @@ function checkResumeRules(values: ReadonlyMap<string, string>, set: GateSet): vo
   if (set === "seeds" && values.has("--resume-since")) {
     throw new GateArgumentError("--resume-since continues a replay, not the seed gate");
   }
-  if (values.has("--resume-legacy-digest") && !values.has("--resume-since")) {
-    throw new GateArgumentError("--resume-legacy-digest belongs to a resumed run");
+  for (const flag of ["--resume-legacy-digest", "--resume-prior-keys", "--rescore"]) {
+    if (values.has(flag) && !values.has("--resume-since")) {
+      throw new GateArgumentError(`${flag} belongs to a resumed run`);
+    }
   }
 }
 
@@ -154,5 +171,7 @@ export function parseGateArguments(argv: readonly string[]): GateArguments {
     port: positiveInteger(values.get("--port") ?? String(DEFAULT_PORT), "--port"),
     resumeSinceMs: instant(values.get("--resume-since"), "--resume-since"),
     resumeLegacyDigest: digest(values.get("--resume-legacy-digest"), "--resume-legacy-digest"),
+    resumePriorKeys: reuseKeys(values.get("--resume-prior-keys"), "--resume-prior-keys"),
+    rescore: values.get("--rescore") === "true",
   };
 }

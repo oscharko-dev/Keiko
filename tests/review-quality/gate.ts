@@ -98,8 +98,9 @@ async function probeUntilReady(args: GateArguments): Promise<Record<string, stri
   return outcomes;
 }
 
-function reuseOf(resume: GateResume): GateReuse {
+function reuseOf(resume: GateResume, rescoreOnly: boolean): GateReuse {
   return {
+    rescoreOnly,
     reusableRun: (caseKey, repositoryRoot, refs) =>
       resume.reusableRun(caseKey, {
         baseSha: git(repositoryRoot, ["rev-parse", refs.baseRef]),
@@ -261,6 +262,8 @@ function writeEvidence(
         : {
             since: new Date(ctx.args.resumeSinceMs).toISOString(),
             legacyDigest: ctx.args.resumeLegacyDigest ?? null,
+            priorKeys: ctx.args.resumePriorKeys,
+            rescore: ctx.args.rescore,
             reusedReviews: records.filter((record) => record.resumed).length,
           },
     settlements: settlementCounts(records),
@@ -290,6 +293,7 @@ function openResume(args: GateArguments, configuration: GateConfiguration): Gate
     sinceMs: args.resumeSinceMs,
     models: args,
     reuseKey: configuration.reuseKey,
+    priorKeys: args.resumePriorKeys,
     acceptLegacy: legacy !== undefined,
   });
 }
@@ -321,7 +325,7 @@ async function main(argv: readonly string[]): Promise<void> {
         server.deps,
         args,
         configuration.reuseKey,
-        resume === undefined ? undefined : reuseOf(resume),
+        resume === undefined ? undefined : reuseOf(resume, args.rescore),
       ),
       configuration,
       dataset,

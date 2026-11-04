@@ -132,6 +132,34 @@ describe("parseGateArguments", () => {
     }
   });
 
+  it("reads prior reuse keys and the re-score flag only for a resumed run", () => {
+    const resumed = [
+      "--set",
+      "holdout",
+      "--confirm-final-holdout",
+      "--resume-since",
+      "2026-11-02T17:35:00Z",
+      ...COMMON,
+    ];
+    expect(parseGateArguments(resumed)).toMatchObject({ resumePriorKeys: [], rescore: false });
+    expect(
+      parseGateArguments([
+        ...resumed,
+        "--resume-prior-keys",
+        "0123456789ab,ba9876543210",
+        "--rescore",
+      ]),
+    ).toMatchObject({ resumePriorKeys: ["0123456789ab", "ba9876543210"], rescore: true });
+    expect(() => parseGateArguments([...resumed, "--resume-prior-keys", "0123456789AB"])).toThrow(
+      /twelve-character hex/u,
+    );
+    for (const flag of [["--rescore"], ["--resume-prior-keys", "0123456789ab"]]) {
+      expect(() =>
+        parseGateArguments(["--set", "holdout", "--confirm-final-holdout", ...flag, ...COMMON]),
+      ).toThrow(/belongs to a resumed run/u);
+    }
+  });
+
   it("refuses variants and tuning inputs outside the development set", () => {
     expect(() =>
       parseGateArguments(["--set", "seeds", "--variant", "roles-swapped", ...COMMON]),

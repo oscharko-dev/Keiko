@@ -138,6 +138,17 @@ describe("createGateReviewer", () => {
     expect(record.resumed).toBe(false);
   });
 
+  it("fails a case without a stored review instead of reviewing it when re-scoring", async () => {
+    const f = deps(() => Promise.resolve({ kind: "started", run: { runId: "review-2" } }));
+    const reviewer = createGateReviewer(f.deps, MODELS, REUSE_KEY, {
+      rescoreOnly: true,
+      reusableRun: () => undefined,
+    });
+
+    await expect(reviewer.review("pr-1", "/lab/keiko", REFS)).rejects.toThrow(/re-score/u);
+    expect(f.started).toEqual([]);
+  });
+
   it("refuses a composition without a review run service", () => {
     expect(() => createGateReviewer({} as UiHandlerDeps, MODELS, REUSE_KEY)).toThrow(
       /no review run service/u,

@@ -33,6 +33,13 @@ The evaluation clone is a local clone of Keiko with `origin` pointing at GitHub.
 fetches each replayed pull request's head through `refs/pull/<n>/head` when the clone lacks it, and
 reviews the range from the merge base of its base and head commits to its head.
 
+A finished replay can be scored again under changed scoring code without any new review. The owner
+decided on 2026-11-04 that the scoring fixes from the independent review (R4130-006, R4130-007,
+R4130-011, R4130-014) apply before anyone reads the holdout rate. Those fixes change the composition
+digest and so the reuse key. `--resume-prior-keys` then names the earlier reuse keys whose stored
+reviews the operator accepts. `--rescore` makes any case without such a review fail, so the re-scored
+run starts no review and reads exactly the stored ones. Its evidence records the prior keys.
+
 A replay probes both models again after it has prepared its pull requests, and retries a failed
 probe up to five times, 30 seconds apart. Preparing the 229 holdout pull requests takes minutes,
 and the probe before preparation does not keep the gateway connection open that long.

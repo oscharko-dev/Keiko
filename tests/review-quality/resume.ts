@@ -11,6 +11,10 @@
 // Reviews stored before the reuse key existed have ids without it (`review-gate-<caseKey>-...`).
 // They are reused only when the operator passes their configuration digest explicitly and it
 // equals the current one; the composition of those reviews is then the operator's checked claim.
+//
+// Re-scoring a finished replay under changed scoring code changes the composition digest and so the
+// reuse key. `--resume-prior-keys` names the earlier keys whose reviews the operator accepts, and
+// `--rescore` refuses to start any new review, so the re-scored run reads exactly the stored ones.
 
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -33,11 +37,13 @@ export interface GateResumeOptions {
   readonly sinceMs: number;
   readonly models: GateModels;
   readonly reuseKey: string;
+  /** Earlier reuse keys whose reviews the operator accepts explicitly (see the header). */
+  readonly priorKeys: readonly string[];
   /** Whether reviews stored without a reuse key may be reused (see the header). */
   readonly acceptLegacy: boolean;
 }
 
-const SQL_LATEST = `SELECT run_id, settlement_kind, settlement_reason, base_sha, head_sha,
+const SQL_LATEST = `SELECT run_id, created_at, settlement_kind, settlement_reason, base_sha, head_sha,
   reviewer_model_id, counter_checker_model_id FROM review_runs
   WHERE client_request_id LIKE ? ESCAPE '\\' AND created_at >= ? AND phase = 'settled'
   ORDER BY created_at DESC, run_id DESC LIMIT 1`;
@@ -86,6 +92,23 @@ function reusable(
   );
 }
 
+function createdAt(row: Record<string, unknown>): number {
+  const value = row.created_at;
+  return typeof value === "number" ? value : 0;
+}
+
+/** The newest row among those found, or `undefined` when none was found. */
+function newest(
+  rows: readonly (Record<string, unknown> | undefined)[],
+): Record<string, unknown> | undefined {
+  let found: Record<string, unknown> | undefined;
+  for (const row of rows) {
+    if (row !== undefined && (found === undefined || createdAt(row) > createdAt(found)))
+      found = row;
+  }
+  return found;
+}
+
 /** Opens the review store of the gate's state directory read-only. */
 export function openGateResume(stateDir: string, options: GateResumeOptions): GateResume {
   const db = new DatabaseSync(join(stateDir, "ui", "keiko-ui.db"), { readOnly: true });
@@ -95,9 +118,14 @@ export function openGateResume(stateDir: string, options: GateResumeOptions): Ga
   return {
     sinceMs: options.sinceMs,
     reusableRun: (caseKey, commits): string | undefined => {
-      // A keyed review is newer than any legacy one, so it decides alone when it exists.
+      // A keyed review is newer than any legacy one, so the newest keyed one decides alone.
+      const keyed = newest(
+        [options.reuseKey, ...options.priorKeys].map((key) =>
+          latestRow(clientRequestPattern(key, caseKey)),
+        ),
+      );
       const row =
-        latestRow(clientRequestPattern(options.reuseKey, caseKey)) ??
+        keyed ??
         (options.acceptLegacy ? latestRow(legacyClientRequestPattern(caseKey)) : undefined);
       if (row === undefined || !reusable(row, options.models, commits)) return undefined;
       return column(row, "run_id") ?? undefined;

@@ -68,11 +68,16 @@ function storeRun(run: StoredRun): string {
   return runId;
 }
 
-function reusable(caseKey: string, acceptLegacy = false): string | undefined {
+function reusable(
+  caseKey: string,
+  acceptLegacy = false,
+  priorKeys: readonly string[] = [],
+): string | undefined {
   const resume = openGateResume(stateDir, {
     sinceMs: SINCE,
     models: MODELS,
     reuseKey: KEY,
+    priorKeys,
     acceptLegacy,
   });
   try {
@@ -175,6 +180,30 @@ describe("openGateResume", () => {
       reuseKey: OTHER_KEY,
     });
     expect(reusable("pr-1")).toBe(keyed);
+  });
+
+  it("reuses the newest review under the current key or an accepted prior key", () => {
+    const prior = storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 1,
+      settlement: { kind: "complete" },
+      reuseKey: OTHER_KEY,
+    });
+    expect(reusable("pr-1")).toBeUndefined();
+    expect(reusable("pr-1", false, [OTHER_KEY])).toBe(prior);
+    const current = storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 2,
+      settlement: { kind: "complete" },
+    });
+    expect(reusable("pr-1", false, [OTHER_KEY])).toBe(current);
+    const newerPrior = storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 3,
+      settlement: { kind: "complete" },
+      reuseKey: OTHER_KEY,
+    });
+    expect(reusable("pr-1", false, [OTHER_KEY])).toBe(newerPrior);
   });
 
   it("reuses a review stored without a reuse key only when legacy reviews are accepted", () => {

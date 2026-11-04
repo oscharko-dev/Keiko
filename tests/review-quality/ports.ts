@@ -68,6 +68,8 @@ type GateReview = Awaited<ReturnType<GateReviewer["review"]>>;
 
 /** Names the stored review of an interrupted run that a resumed run reuses for one case. */
 export interface GateReuse {
+  /** When true, a case without a reusable stored review fails instead of being reviewed. */
+  readonly rescoreOnly?: boolean;
   readonly reusableRun: (
     caseKey: string,
     repositoryRoot: string,
@@ -122,6 +124,22 @@ async function storedReview(
   return { view, record: { ...recordOf(caseKey, view, storedWallTimeMs(view)), resumed: true } };
 }
 
+/** The stored review `reuse` names for a case; throws in re-score mode when there is none. */
+async function reusedReview(
+  service: NonNullable<UiHandlerDeps["reviewRunService"]>,
+  reuse: GateReuse | undefined,
+  caseKey: string,
+  repositoryRoot: string,
+  refs: EvaluationRefs,
+): Promise<GateReview | undefined> {
+  const runId = reuse?.reusableRun(caseKey, repositoryRoot, refs);
+  const reused = runId === undefined ? undefined : await storedReview(service, caseKey, runId);
+  if (reused === undefined && reuse?.rescoreOnly === true) {
+    throw new Error(`${caseKey} has no stored review to re-score; --rescore starts no review`);
+  }
+  return reused;
+}
+
 /**
  * Runs reviews one at a time through the composed review service. Every review's client request id
  * carries `reuseKey`, so a later resume can tell which configuration stored it. With `reuse`, a case
@@ -138,8 +156,7 @@ export function createGateReviewer(
   if (service === undefined) throw new Error("the composition has no review run service");
   const records: GateReviewRecord[] = [];
   const review: GateReviewer["review"] = async (caseKey, repositoryRoot, refs) => {
-    const runId = reuse?.reusableRun(caseKey, repositoryRoot, refs);
-    const reused = runId === undefined ? undefined : await storedReview(service, caseKey, runId);
+    const reused = await reusedReview(service, reuse, caseKey, repositoryRoot, refs);
     if (reused !== undefined) {
       records.push(reused.record);
       return reused;
