@@ -10,7 +10,7 @@ import type { ReviewEvaluationManifest } from "./types.js";
 export const REVIEW_EVALUATION_MANIFEST: ReviewEvaluationManifest = Object.freeze({
   schemaVersion: 1,
   datasetPath: "packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v2.json.gz",
-  datasetDigest: "sha256:8021f1840faf2f355ef2b5a1206d2b263922dac4d3ed86f33752d5807660d09c",
+  datasetDigest: "sha256:376d45f51991cc68ec72c3d9ba40f29e0d93a9debf9cd47653cbb5aff481af8f",
   holdoutFromPullRequest: 3066,
   holdoutRule:
     "The smallest pull request number from which the most recent 30 % of merged pull requests " +

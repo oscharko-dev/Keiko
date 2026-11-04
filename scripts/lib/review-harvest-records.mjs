@@ -43,7 +43,7 @@ const REGION_CHANGE_TOLERANCE_LINES = 3;
 const REVIEW_HARVEST_RULES = Object.freeze({
   regionChange: "first-parent-own-commits-carried-anchor-v1",
   regionChangeToleranceLines: REGION_CHANGE_TOLERANCE_LINES,
-  headAnchor: "right-side-first-parent-carried-to-head-v2",
+  headAnchor: "right-side-first-parent-carried-to-head-v3",
   replyClassification: "first-foreign-reply-earliest-phrase-v1",
   producerAttribution: "graphql-bot-login-or-user-typename-v1",
 });
@@ -217,26 +217,69 @@ export function regionChangedInHistory(history, anchor, tolerance = REGION_CHANG
   return false;
 }
 
-// Whether one change deleted every line of a line anchor and put nothing in their place: each
-// anchored line lies in a pure deletion hunk (new count 0). A deleted file is the same case, one
-// deletion hunk over the whole file. Carrying such an anchor would land it on the unrelated line
-// above the removed code (R4130-032).
-function anchorDeleted(anchor, change) {
-  const deletions = change.hunks.filter((hunk) => hunk.newCount === 0 && hunk.oldCount > 0);
-  for (let line = anchor.startLine; line <= anchor.endLine; line += 1) {
-    const removed = deletions.some((hunk) => hunk.oldStart <= line && line <= oldSpan(hunk).end);
-    if (!removed) return false;
+// The child line an unchanged parent line moves to: every hunk wholly above it shifts it by the
+// hunk's net line count. A pure insertion after line N is above every line below N.
+function childLine(line, hunks) {
+  let shift = 0;
+  for (const hunk of hunks) {
+    const above = hunk.oldCount === 0 ? hunk.oldStart < line : oldSpan(hunk).end < line;
+    if (above) shift += hunk.newCount - hunk.oldCount;
   }
-  return true;
+  return line + shift;
+}
+
+function hunkCoversLine(hunk, line) {
+  return hunk.oldCount > 0 && hunk.oldStart <= line && line <= oldSpan(hunk).end;
+}
+
+// The anchored parent lines that no hunk rewrote, in their child numbers, ends only.
+function unchangedEnds(anchor, hunks) {
+  const lines = [];
+  for (let line = anchor.startLine; line <= anchor.endLine; line += 1) {
+    if (hunks.some((hunk) => hunkCoversLine(hunk, line))) continue;
+    lines.push(childLine(line, hunks));
+    break;
+  }
+  for (let line = anchor.endLine; line >= anchor.startLine; line -= 1) {
+    if (hunks.some((hunk) => hunkCoversLine(hunk, line))) continue;
+    lines.push(childLine(line, hunks));
+    break;
+  }
+  return lines;
+}
+
+// The child lines that hunks inside the anchor wrote in place of, or between, anchored lines. A
+// pure deletion writes none, so it never pulls the anchor onto the line above the removed code.
+function writtenEnds(anchor, hunks) {
+  const lines = [];
+  for (const hunk of hunks) {
+    if (hunk.newCount === 0 || hunkPosition(hunk, anchor) !== "inside") continue;
+    lines.push(hunk.newStart, hunk.newStart + hunk.newCount - 1);
+  }
+  return lines;
+}
+
+/**
+ * Carries a line anchor across one change for the head walk, or returns null when the change left
+ * none of its lines: unchanged lines move with the hunks above them, rewritten and inserted lines
+ * inside the anchor stay in it, and deleted lines leave it (R4130-032, R4130-037). Unlike
+ * `carryAnchor`, which the region-change rule keeps, a deletion shrinks the anchor instead of
+ * stretching it onto the line above, so a deletion split across commits still ends the carry.
+ */
+function carryHeadAnchor(anchor, change) {
+  if (anchor.fileLevel) return anchor;
+  const lines = [...unchangedEnds(anchor, change.hunks), ...writtenEnds(anchor, change.hunks)];
+  if (lines.length === 0) return null;
+  return { startLine: Math.min(...lines), endLine: Math.max(...lines), fileLevel: false };
 }
 
 /**
  * The anchor carried through `history` into the head commit's line numbers, or null when the
- * carry cannot be trusted: a binary or whole-file change replaced the region's lines, or a change
- * deleted every anchored line (the file's deletion included). Every step
- * carries, the base merges included, because head line numbers count every line at head. A
- * rewritten history carries across its one cumulative diff, which maps reviewed lines to head lines
- * directly.
+ * carry cannot be trusted: a binary or whole-file change replaced the region's lines, or the
+ * changes deleted every anchored line, in one commit or across several (the file's deletion
+ * included). Every step carries, the base merges included, because head line numbers count every
+ * line at head. A rewritten history carries across its one cumulative diff, which maps reviewed
+ * lines to head lines directly.
  */
 export function carryAnchorToHead(history, anchor) {
   const changes =
@@ -244,8 +287,8 @@ export function carryAnchorToHead(history, anchor) {
   let carried = anchor;
   for (const change of changes) {
     if (change.kind !== "hunks") return null;
-    if (!carried.fileLevel && anchorDeleted(carried, change)) return null;
-    carried = carryAnchor(carried, change);
+    carried = carryHeadAnchor(carried, change);
+    if (carried === null) return null;
   }
   return carried;
 }

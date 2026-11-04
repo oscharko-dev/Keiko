@@ -424,8 +424,9 @@ The implementation chose these rules under decisions 1 and 2. They are not owner
   duplicate count.
 - Replayed findings sit at the pull request's head commit, so they are matched only against
   right-side anchors carried to that commit (R4130-007). The harvest stores the carried head range
-  in dataset schema 2. An anchor is not carried across a binary change or a change that deleted
-  every anchored line, the file's deletion included (R4130-032). A finding that may lie under such
+  in dataset schema 2. A deletion shrinks the carried anchor to its surviving lines, and an anchor
+  is not carried across a binary change or once the changes deleted every anchored line, in one
+  commit or across several, the file's deletion included (R4130-032, R4130-037). A finding that may lie under such
   an anchor scores `unmeasured`, never a hit.
 - The loader recomputes the dataset's content digest and refuses a mismatch with its stored field
   (R4130-010).

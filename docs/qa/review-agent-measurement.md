@@ -85,14 +85,16 @@ rebased-in base change from the pull request's own.
 
 Head anchor: a replay reviews each pull request at its final `headCommit`, so a replayed finding
 carries head line numbers, while `startLine` and `endLine` are positions at the reviewed commit. The
-harvest therefore carries each right-side line anchor to the head commit with the same walk
-(`carryAnchorToHead`, built on `carryAnchor`). Unlike the region-change rule, the walk carries the
-anchor through every commit, merges included, because head line numbers count every line at head;
-a force-pushed history carries it across its one cumulative diff. `headStartLine` and `headEndLine`
+harvest therefore carries each right-side line anchor to the head commit (`carryAnchorToHead`).
+Unlike the region-change rule, the walk carries the anchor through every commit, merges included,
+because head line numbers count every line at head; a force-pushed history carries it across its
+one cumulative diff. In each change, unchanged anchored lines move with the hunks above them,
+rewritten and inserted lines inside the anchor stay in it, and deleted lines leave it. The
+region-change rule's `carryAnchor` instead stretches a deletion onto the line above, which is
+harmless within its three-line tolerance but would put a head range on unrelated code. `headStartLine` and `headEndLine`
 are null for a file-level thread, a base-side thread, an `unavailable` history, an anchor whose
-carry crossed a binary or whole-file change, and an anchor whose every line a change deleted with
-nothing in their place, the file's deletion included (R4130-032). Carrying a deleted anchor would
-land it on the unrelated line above the removed code. A line anchor without a head range is
+carry crossed a binary or whole-file change, and an anchor whose every line the changes deleted,
+in one commit or across several, the file's deletion included (R4130-032, R4130-037). A line anchor without a head range is
 unmeasured for the replay: a finding in its file that may lie under it scores `unmeasured`, never
 a hit.
 

@@ -303,14 +303,33 @@ describe("head anchor (R4130-007)", () => {
     });
   });
 
+  it("does not carry an anchor deleted across two commits (R4130-037)", () => {
+    // One commit deletes lines 40-41, a later one deletes the old line 42 (now line 40).
+    const split = { kind: "steps", steps: [own(hunk(40, 2, 39, 0)), own(hunk(40, 1, 39, 0))] };
+    expect(carryAnchorToHead(split, anchor)).toBeNull();
+    const reversed = { kind: "steps", steps: [own(hunk(42, 1, 41, 0)), own(hunk(40, 2, 39, 0))] };
+    expect(carryAnchorToHead(reversed, anchor)).toBeNull();
+    const withMerge = {
+      kind: "steps",
+      steps: [own(hunk(41, 1, 40, 0)), merge(hunk(40, 2, 39, 0))],
+    };
+    expect(carryAnchorToHead(withMerge, anchor)).toBeNull();
+  });
+
+  it("shrinks the anchor to its surviving lines, never onto the line above (R4130-037)", () => {
+    const carried = (...steps) => carryAnchorToHead({ kind: "steps", steps }, anchor);
+    const range = (startLine, endLine) => ({ startLine, endLine, fileLevel: false });
+    // This replaces the earlier pin of {39, 40}: line 39 was never part of the anchor.
+    expect(carried(own(hunk(40, 2, 39, 0)))).toEqual(range(40, 40));
+    expect(carried(own(hunk(41, 2, 40, 0)))).toEqual(range(40, 40));
+    expect(carried(own(hunk(41, 1, 40, 0)))).toEqual(range(40, 41));
+    // A deletion that starts above the anchor removes its first line only.
+    expect(carried(own(hunk(38, 3, 37, 0)))).toEqual(range(38, 39));
+    // A deletion inside the anchor plus an insertion above it.
+    expect(carried(own(hunk(1, 0, 2, 5), hunk(40, 1, 44, 0)))).toEqual(range(45, 46));
+  });
+
   it("still carries an anchor that keeps at least one of its lines", () => {
-    // Lines 40-41 go, line 42 stays and becomes line 40.
-    const partial = { kind: "steps", steps: [own(hunk(40, 2, 39, 0))] };
-    expect(carryAnchorToHead(partial, anchor)).toEqual({
-      startLine: 39,
-      endLine: 40,
-      fileLevel: false,
-    });
     // The region's lines are replaced by one new line: the anchor follows the replacement.
     const replaced = { kind: "steps", steps: [own(hunk(40, 3, 40, 1))] };
     expect(carryAnchorToHead(replaced, anchor)).toEqual({
@@ -573,7 +592,7 @@ describe("addHeadAnchors", () => {
     });
     const result = addHeadAnchors(schemaOne(), shifted);
     expect(result.schemaVersion).toBe(2);
-    expect(result.rules.headAnchor).toBe("right-side-first-parent-carried-to-head-v2");
+    expect(result.rules.headAnchor).toBe("right-side-first-parent-carried-to-head-v3");
     expect(verifyReviewHarvestDataset(result)).toBe(true);
     expect(result.pullRequests[0].threads[0]).toMatchObject({
       id: "A",
