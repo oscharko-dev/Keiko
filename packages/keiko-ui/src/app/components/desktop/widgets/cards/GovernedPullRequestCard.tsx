@@ -49,6 +49,7 @@ import {
 import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 
 import { Icons } from "../../Icons";
+import { GovernedEmpty, GovernedField, GovernedPolicyFacts } from "./governed-delivery-shared";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const GitIcon = Icons.git;
@@ -327,34 +328,31 @@ interface FieldsProps {
   readonly onChange: <K extends keyof PrForm>(key: K, value: PrForm[K]) => void;
 }
 
-function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
+function PrTargetFields(props: FieldsProps): ReactNode {
+  const t = useTranslate();
+  const { form, busy } = props;
+  const change = props.onChange;
   return (
     <div style={ROW_STYLE}>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Repository (owner/repo){" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.ownerAndRepo}
-          disabled={busy}
-          onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-        />
-      </label>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        Base branch{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.baseBranchName}
-          disabled={busy}
-          onChange={(e) => onChange("baseBranchName", e.target.value)}
-          aria-label="Base branch"
-        />
-      </label>
+      <GovernedField
+        label={t("governedDelivery.ui.repository")}
+        value={form.ownerAndRepo}
+        disabled={busy}
+        onChange={(v) => change("ownerAndRepo", v)}
+      />
+      <GovernedField
+        label={t("governedDelivery.ui.baseBranch")}
+        value={form.baseBranchName}
+        disabled={busy}
+        onChange={(v) => change("baseBranchName", v)}
+      />
     </div>
   );
 }
 
 // Action (Create/Update) fieldset — extracted from PrMetadataFields (AGENTS.md §6 max-lines-per-function).
 function PrActionFieldset({ form, busy, onChange }: FieldsProps): ReactNode {
+  const tUi = useTranslate();
   return (
     <fieldset
       style={{
@@ -363,7 +361,7 @@ function PrActionFieldset({ form, busy, onChange }: FieldsProps): ReactNode {
         padding: "var(--space-2)",
       }}
     >
-      <legend style={KV_LABEL}>Action</legend>
+      <legend style={KV_LABEL}>{tUi("governedDelivery.ui.action")}</legend>
       <div style={ROW_STYLE}>
         <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
           <input
@@ -373,7 +371,7 @@ function PrActionFieldset({ form, busy, onChange }: FieldsProps): ReactNode {
             disabled={busy}
             onChange={() => onChange("kind", "pr-create")}
           />{" "}
-          Create
+          {tUi("governedDelivery.ui.create")}
         </label>
         <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
           <input
@@ -383,7 +381,7 @@ function PrActionFieldset({ form, busy, onChange }: FieldsProps): ReactNode {
             disabled={busy}
             onChange={() => onChange("kind", "pr-update")}
           />{" "}
-          Update
+          {tUi("governedDelivery.ui.update")}
         </label>
       </div>
     </fieldset>
@@ -405,16 +403,17 @@ function PrUpdatePrNumberField({
   prNumberHintId,
   prIdInvalid,
 }: UpdateOnlyFieldsProps): ReactNode {
+  const t = useTranslate();
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
-      Pull Request number{" "}
+      {t("governedDelivery.ui.prNumber")}{" "}
       <input
         style={FIELD_STYLE}
         inputMode="numeric"
         value={form.prExternalId}
         disabled={busy}
         onChange={(e) => onChange("prExternalId", e.target.value)}
-        aria-label="Pull Request number"
+        aria-label={t("governedDelivery.ui.prNumber")}
         aria-invalid={prIdInvalid}
         aria-describedby={prIdInvalid ? prNumberHintId : undefined}
       />
@@ -424,7 +423,7 @@ function PrUpdatePrNumberField({
           data-testid="gpr-pr-number-hint"
           style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
         >
-          Enter the numeric Pull Request number, for example 1499.
+          {t("governedDelivery.ui.prNumberHint")}
         </p>
       ) : null}
     </label>
@@ -435,16 +434,16 @@ function PrUpdateDraftStateField({ form, busy, onChange }: FieldsProps): ReactNo
   const t = useTranslate();
   return (
     <label style={{ ...LABEL_STYLE, flex: 1 }}>
-      Draft state{" "}
+      {t("governedDelivery.ui.draftState")}{" "}
       <select
         style={FIELD_STYLE}
         value={form.draftTransition}
         disabled={busy}
         onChange={(e) => onChange("draftTransition", e.target.value as PrForm["draftTransition"])}
-        aria-label="Draft state"
+        aria-label={t("governedDelivery.ui.draftState")}
       >
-        <option value="none">No change</option>
-        <option value="to-draft">Convert to draft</option>
+        <option value="none">{t("governedDelivery.ui.noChange")}</option>
+        <option value="to-draft">{t("governedDelivery.ui.toDraft")}</option>
       </select>
       <span
         style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}
@@ -468,41 +467,43 @@ function PrUpdateOnlyFields(props: UpdateOnlyFieldsProps): ReactNode {
 }
 
 function PrHeadBranchField({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useTranslate();
   return (
     <label style={LABEL_STYLE}>
-      Head branch{" "}
+      {t("governedDelivery.ui.headBranch")}{" "}
       <input
         style={FIELD_STYLE}
         value={form.headBranchName}
         disabled={busy}
         onChange={(e) => onChange("headBranchName", e.target.value)}
-        aria-label="Head branch"
+        aria-label={t("governedDelivery.ui.headBranch")}
       />
     </label>
   );
 }
 
 function PrTitleBodyFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useTranslate();
   return (
     <>
       <label style={LABEL_STYLE}>
-        Title{" "}
+        {t("governedDelivery.ui.title")}{" "}
         <input
           style={FIELD_STYLE}
           value={form.title}
           disabled={busy}
           onChange={(e) => onChange("title", e.target.value)}
-          aria-label="Pull Request title"
+          aria-label={t("governedDelivery.ui.prTitle")}
         />
       </label>
       <label style={LABEL_STYLE}>
-        Body{" "}
+        {t("governedDelivery.ui.body")}{" "}
         <textarea
           style={{ ...FIELD_STYLE, minHeight: 100, resize: "vertical" }}
           value={form.body}
           disabled={busy}
           onChange={(e) => onChange("body", e.target.value)}
-          aria-label="Pull Request body"
+          aria-label={t("governedDelivery.ui.prBody")}
         />
       </label>
     </>
@@ -510,6 +511,7 @@ function PrTitleBodyFields({ form, busy, onChange }: FieldsProps): ReactNode {
 }
 
 function PrDraftCheckbox({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useTranslate();
   return (
     <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
       <input
@@ -517,21 +519,22 @@ function PrDraftCheckbox({ form, busy, onChange }: FieldsProps): ReactNode {
         checked={form.kind === "pr-create" ? form.isDraft : false}
         disabled={busy || form.kind !== "pr-create"}
         onChange={(e) => onChange("isDraft", e.target.checked)}
-        aria-label="Open as draft"
+        aria-label={t("governedDelivery.ui.openDraft")}
       />{" "}
-      Open as draft
+      {t("governedDelivery.ui.openDraft")}
     </label>
   );
 }
 
 function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useTranslate();
   const prNumberHintId = useId();
   const prIdInvalid =
     form.kind === "pr-update" && form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
   return (
-    <section style={SECTION_STYLE} aria-label="Pull Request metadata">
+    <section style={SECTION_STYLE} aria-label={t("governedDelivery.ui.prMetadata")}>
       <h3 style={HEADING_STYLE}>
-        <GitIcon size={12} /> Metadata
+        <GitIcon size={12} /> {t("governedDelivery.ui.metadata")}
       </h3>
       <PrActionFieldset form={form} busy={busy} onChange={onChange} />
       {form.kind === "pr-update" ? (
@@ -551,6 +554,67 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
   );
 }
 
+function PrSuggestions({ preview }: { readonly preview: GitDeliveryPrPreviewResponse }): ReactNode {
+  const tUi = useTranslate();
+  return (
+    <>
+      {preview.suggestedLabels.length > 0 ? (
+        <p style={KV_LABEL} data-field="labels">
+          {tUi("governedDelivery.ui.suggestedLabels", {
+            value: preview.suggestedLabels.join(", "),
+          })}
+        </p>
+      ) : null}
+      {preview.suggestedIssueRefs.length > 0 ? (
+        <p style={KV_LABEL} data-field="linkage">
+          {tUi("governedDelivery.ui.linkedIssues", {
+            value: preview.suggestedIssueRefs.join(", "),
+          })}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function PrReadinessFacts({
+  preview,
+}: {
+  readonly preview: GitDeliveryPrPreviewResponse;
+}): ReactNode {
+  const tUi = useTranslate();
+  return (
+    <>
+      <p style={KV_LABEL} data-field="objectExists">
+        {tUi("governedDelivery.ui.remoteObject", {
+          value: tUi(
+            preview.readiness.objectExists
+              ? "governedDelivery.ui.exists"
+              : "governedDelivery.ui.notCreated",
+          ),
+        })}
+      </p>
+      <p style={KV_LABEL} data-field="reviewReady">
+        {tUi("governedDelivery.ui.reviewReady", {
+          value: tUi(
+            preview.readiness.reviewReady ? "governedDelivery.ui.yes" : "governedDelivery.ui.no",
+          ),
+        })}
+      </p>
+      <GovernedPolicyFacts
+        recommendation={preview.recommendation}
+        policyOutcome={preview.policyOutcome}
+        policyBlockReason={preview.policyBlockReason}
+      />
+      <p style={KV_LABEL} data-field="risk">
+        {tUi("governedDelivery.ui.riskNarrative", {
+          riskClass: preview.riskClass,
+          narrative: preview.riskNarrative,
+        })}
+      </p>
+    </>
+  );
+}
+
 // ─── Readiness + recommendation + suggestions panel (pure projection) ───────────────────────────────
 
 function PrReadinessPanel({
@@ -558,46 +622,27 @@ function PrReadinessPanel({
 }: {
   readonly preview: GitDeliveryPrPreviewResponse;
 }): ReactNode {
+  const tUi = useTranslate();
   return (
-    <section style={SECTION_STYLE} aria-label="Readiness" data-testid="gpr-readiness">
+    <section
+      style={SECTION_STYLE}
+      aria-label={tUi("governedDelivery.ui.readiness")}
+      data-testid="gpr-readiness"
+    >
       <h3 style={HEADING_STYLE}>
-        <InfoIcon size={12} /> Readiness
+        <InfoIcon size={12} /> {tUi("governedDelivery.ui.readiness")}
       </h3>
-      <p style={KV_LABEL} data-field="objectExists">
-        Remote PR object: {preview.readiness.objectExists ? "exists" : "not created yet"}
-      </p>
-      <p style={KV_LABEL} data-field="reviewReady">
-        Ready for review: {preview.readiness.reviewReady ? "yes" : "no"}
-      </p>
-      <p style={KV_LABEL} data-field="recommendation">
-        Recommendation: {preview.recommendation}
-      </p>
-      <p style={KV_LABEL} data-field="policy">
-        Policy: {preview.policyOutcome}
-        {preview.policyBlockReason !== undefined ? ` (${preview.policyBlockReason})` : ""}
-      </p>
-      <p style={KV_LABEL} data-field="risk">
-        Risk: {preview.riskClass} — {preview.riskNarrative}
-      </p>
+      <PrReadinessFacts preview={preview} />
       {preview.readiness.blockerCodes.length > 0 ? (
         <ul style={{ margin: 0, paddingLeft: "var(--space-4)", font: "var(--text-caption)" }}>
           {preview.readiness.blockerCodes.map((code) => (
             <li key={code} style={{ color: "var(--fg-muted)" }} data-blocker={code}>
-              blocker: {code}
+              {tUi("governedDelivery.ui.blockerCode", { code })}
             </li>
           ))}
         </ul>
       ) : null}
-      {preview.suggestedLabels.length > 0 ? (
-        <p style={KV_LABEL} data-field="labels">
-          Suggested labels: {preview.suggestedLabels.join(", ")}
-        </p>
-      ) : null}
-      {preview.suggestedIssueRefs.length > 0 ? (
-        <p style={KV_LABEL} data-field="linkage">
-          Linked issues: {preview.suggestedIssueRefs.join(", ")}
-        </p>
-      ) : null}
+      <PrSuggestions preview={preview} />
     </section>
   );
 }
@@ -1089,16 +1134,12 @@ function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
   // (owner/repo)", so the two fields never share an ambiguous accessible name.
   return (
     <div style={ROW_STYLE}>
-      <label style={{ ...LABEL_STYLE, flex: 1 }}>
-        {t("governedPullRequestCard.description.field.repositoryAria")}{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.ownerAndRepo}
-          disabled={busy}
-          onChange={(e) => onChange("ownerAndRepo", e.target.value)}
-          aria-label={t("governedPullRequestCard.description.field.repositoryAria")}
-        />
-      </label>
+      <GovernedField
+        label={t("governedPullRequestCard.description.field.repositoryAria")}
+        value={form.ownerAndRepo}
+        disabled={busy}
+        onChange={(v) => onChange("ownerAndRepo", v)}
+      />
       <PrDescriptionPrNumberField {...props} />
       <PrDescriptionLanguageField {...props} />
     </div>
@@ -1487,10 +1528,11 @@ function PrBodyHeader({
   readonly liveId: string;
   readonly liveText: string;
 }): ReactNode {
+  const tUi = useTranslate();
   return (
     <>
       <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <GitIcon size={14} /> Pull Request
+        <GitIcon size={14} /> {tUi("governedDelivery.ui.pullRequest")}
       </h2>
       <p
         id={liveId}
@@ -1505,8 +1547,8 @@ function PrBodyHeader({
   );
 }
 
-function prSubmitLabel(kind: GitDeliveryPrKind): string {
-  return kind === "pr-create" ? "Create Pull Request" : "Update Pull Request";
+function prSubmitLabel(kind: GitDeliveryPrKind, t: ReturnType<typeof useTranslate>): string {
+  return t(kind === "pr-create" ? "governedDelivery.ui.createPr" : "governedDelivery.ui.updatePr");
 }
 
 function PrFormActionButtons({
@@ -1524,10 +1566,11 @@ function PrFormActionButtons({
   readonly onPreview: () => void;
   readonly onExecute: () => void;
 }): ReactNode {
+  const tUi = useTranslate();
   return (
     <div style={ROW_STYLE}>
       <button type="button" style={GHOST_BTN} disabled={busy || !canPreview} onClick={onPreview}>
-        Preview
+        {tUi("governedDelivery.ui.preview")}
       </button>
       <button
         type="button"
@@ -1536,7 +1579,7 @@ function PrFormActionButtons({
         onClick={onExecute}
         data-testid="gpr-submit"
       >
-        {prSubmitLabel(kind)}
+        {prSubmitLabel(kind, tUi)}
       </button>
     </div>
   );
@@ -1764,19 +1807,11 @@ export function GovernedPullRequestCard({
   descriptionProposal,
   client = DEFAULT_CLIENT,
 }: GovernedPullRequestCardProps): ReactNode {
+  const t = useTranslate();
   const titleId = useId();
   const liveId = useId();
   if (projectId === undefined || projectId === "") {
-    return (
-      <div
-        data-testid="gpr-empty"
-        style={{ padding: "var(--space-4)", color: "var(--fg-muted)", font: "var(--text-body-sm)" }}
-      >
-        <p>
-          <GitIcon size={13} /> Select a project to open a pull request.
-        </p>
-      </div>
-    );
+    return <GovernedEmpty testId="gpr-empty" text={t("governedDelivery.ui.selectProjectPr")} />;
   }
   return (
     <GovernedPullRequestBody

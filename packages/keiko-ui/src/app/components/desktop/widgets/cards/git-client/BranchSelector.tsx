@@ -66,6 +66,7 @@ export function BranchSelector({
   onCreateBranch,
   onRetryBranches,
 }: BranchSelectorProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const t = useOptionalWidgetTranslate();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -198,12 +199,12 @@ export function BranchSelector({
       </button>
       <button
         type="button"
-        aria-label="New branch"
+        aria-label={t("gitClientWindow.ui.newBranch")}
         disabled={disabled || loading || branches.length === 0 || busy}
         style={{ ...COMPACT_BTN, ...disabledStyle(disabled || loading || busy) }}
         onClick={(event) => onCreateBranch(event.currentTarget)}
       >
-        <PlusIcon size={11} style={HEADER_ACCENT_ICON_STYLE} /> New
+        <PlusIcon size={11} style={HEADER_ACCENT_ICON_STYLE} /> {tUi("gitClientWindow.ui.new")}
       </button>
       {open ? (
         <div style={MENU_STYLE}>
@@ -217,14 +218,14 @@ export function BranchSelector({
               textTransform: "uppercase",
             }}
           >
-            Search branches
+            {t("gitClientWindow.ui.searchBranches")}
           </label>
           <input
             ref={searchRef}
             id={searchId}
             type="search"
             value={query}
-            aria-label="Search branches"
+            aria-label={t("gitClientWindow.ui.searchBranches")}
             style={{ ...INPUT_STYLE, marginBottom: 10 }}
             onChange={(event) => setQuery(event.currentTarget.value)}
             onKeyDown={(event) => {
@@ -241,11 +242,13 @@ export function BranchSelector({
           <div
             id={menuId}
             role="menu"
-            aria-label="Branches"
+            aria-label={t("gitClientWindow.ui.branches")}
             style={{ ...LIST_STYLE, maxHeight: 260, padding: 0 }}
           >
             {filtered.length === 0 ? (
-              <p style={{ ...SUBTLE_TEXT_STYLE, padding: 12 }}>No matching branches.</p>
+              <p style={{ ...SUBTLE_TEXT_STYLE, padding: 12 }}>
+                {t("gitClientWindow.ui.noMatchingBranches")}
+              </p>
             ) : (
               filtered.map((branch, index) => {
                 const selected = branch.name === currentBranch || branch.current;
