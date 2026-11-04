@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "2793639bac3909ac20858c5c280a1df739049783a0a1d86f68d5b443f5f8d0a0"
+    "catalogDigest": "2ca3767c123f4e855ece7209d5d7de571d93732964d3b6b54f50ed8c94dd8074"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1844,7 +1844,8 @@
       "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.test.ts"
     ],
     "coding-runtime.tool-authority.denied.emitted-line": [
-      "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts"
+      "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.test.ts",
+      "packages/keiko-server/src/review/runtime/readOnlyLayers.test.ts"
     ],
     "coding-runtime.tool-availability.failed.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.omitted-evidence.test.ts",
