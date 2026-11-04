@@ -213,6 +213,7 @@ export function LivePodHeader({
   readonly actions: ReactNode;
   readonly embedded: boolean;
 }): ReactNode {
+  const t = useTranslate();
   return (
     <>
       <div className={styles.cmpPodHead}>
@@ -222,7 +223,7 @@ export function LivePodHeader({
               <span className="lk-capsule-icon">
                 <Image
                   src="/assets/brands/jira.svg?v=ad20a139"
-                  alt="Jira"
+                  alt={t("atlassianConnectors.provider.jira")}
                   width={15}
                   height={15}
                   unoptimized
