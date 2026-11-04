@@ -43,7 +43,7 @@ const REGION_CHANGE_TOLERANCE_LINES = 3;
 const REVIEW_HARVEST_RULES = Object.freeze({
   regionChange: "first-parent-own-commits-carried-anchor-v1",
   regionChangeToleranceLines: REGION_CHANGE_TOLERANCE_LINES,
-  headAnchor: "right-side-first-parent-carried-to-head-v1",
+  headAnchor: "right-side-first-parent-carried-to-head-v2",
   replyClassification: "first-foreign-reply-earliest-phrase-v1",
   producerAttribution: "graphql-bot-login-or-user-typename-v1",
 });
@@ -217,9 +217,23 @@ export function regionChangedInHistory(history, anchor, tolerance = REGION_CHANG
   return false;
 }
 
+// Whether one change deleted every line of a line anchor and put nothing in their place: each
+// anchored line lies in a pure deletion hunk (new count 0). A deleted file is the same case, one
+// deletion hunk over the whole file. Carrying such an anchor would land it on the unrelated line
+// above the removed code (R4130-032).
+function anchorDeleted(anchor, change) {
+  const deletions = change.hunks.filter((hunk) => hunk.newCount === 0 && hunk.oldCount > 0);
+  for (let line = anchor.startLine; line <= anchor.endLine; line += 1) {
+    const removed = deletions.some((hunk) => hunk.oldStart <= line && line <= oldSpan(hunk).end);
+    if (!removed) return false;
+  }
+  return true;
+}
+
 /**
  * The anchor carried through `history` into the head commit's line numbers, or null when the
- * carry cannot be trusted: a binary or whole-file change replaced the region's lines. Every step
+ * carry cannot be trusted: a binary or whole-file change replaced the region's lines, or a change
+ * deleted every anchored line (the file's deletion included). Every step
  * carries, the base merges included, because head line numbers count every line at head. A
  * rewritten history carries across its one cumulative diff, which maps reviewed lines to head lines
  * directly.
@@ -230,6 +244,7 @@ export function carryAnchorToHead(history, anchor) {
   let carried = anchor;
   for (const change of changes) {
     if (change.kind !== "hunks") return null;
+    if (!carried.fileLevel && anchorDeleted(carried, change)) return null;
     carried = carryAnchor(carried, change);
   }
   return carried;

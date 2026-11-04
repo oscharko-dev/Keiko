@@ -8,20 +8,20 @@ shown with its absolute counts and its 95 % Wilson score interval.
 
 ## Harvest run
 
-| Item              | Value                                                                                                                                                          |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Repository        | `oscharko-dev/Keiko`                                                                                                                                           |
-| Population        | Every merged and closed pull request: 2,176 (1,782 merged, 394 closed), #14 to #4146                                                                           |
-| Not covered       | The 7 pull requests open at harvest time (their history is still moving)                                                                                       |
-| Run               | 2026-10-30, 02:10:01Z to 02:20:00Z (read-only; 1,125 GraphQL points)                                                                                           |
-| Reproduction run  | 2026-10-30, 02:20:00Z to 02:26:48Z, page size 25 instead of 10 (1,221 GraphQL points) — identical digest                                                       |
-| Dataset           | `packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v2.json.gz` (schema 2)                                                                  |
-| Dataset digest    | `sha256:af7d9d730611ee07d21c458bfe698ec47bb9145b8981b408d95cd53b48773ebd`                                                                                      |
-| Schema-1 digest   | `sha256:c6dfbede99249e9fda874649d4a938e4d3e69b4b8fb8e70be0d3c099b486f194` (the 2026-10-30 harvest, before head anchors)                                        |
-| Head anchors      | Added 2026-11-04 from local Git objects (R4130-007): 10,544 right-side line anchors, all carried; 7,802 sit on other lines at head than at the reviewed commit |
-| Size              | 5.2 MB of JSON, committed gzip-compressed (906 kB); no comment body, login, email address or token                                                             |
-| Threads           | 10,648 on 695 pull requests; 152 coverage notices of the retired reviewer excluded and counted                                                                 |
-| Region unmeasured | 16 threads (all anchored on the base side of the diff)                                                                                                         |
+| Item              | Value                                                                                                                                                                                                                                                  |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Repository        | `oscharko-dev/Keiko`                                                                                                                                                                                                                                   |
+| Population        | Every merged and closed pull request: 2,176 (1,782 merged, 394 closed), #14 to #4146                                                                                                                                                                   |
+| Not covered       | The 7 pull requests open at harvest time (their history is still moving)                                                                                                                                                                               |
+| Run               | 2026-10-30, 02:10:01Z to 02:20:00Z (read-only; 1,125 GraphQL points)                                                                                                                                                                                   |
+| Reproduction run  | 2026-10-30, 02:20:00Z to 02:26:48Z, page size 25 instead of 10 (1,221 GraphQL points) — identical digest                                                                                                                                               |
+| Dataset           | `packages/keiko-evaluations/src/review/fixtures/review-harvest-dataset.v2.json.gz` (schema 2)                                                                                                                                                          |
+| Dataset digest    | `sha256:8021f1840faf2f355ef2b5a1206d2b263922dac4d3ed86f33752d5807660d09c`                                                                                                                                                                              |
+| Schema-1 digest   | `sha256:c6dfbede99249e9fda874649d4a938e4d3e69b4b8fb8e70be0d3c099b486f194` (the 2026-10-30 harvest, before head anchors)                                                                                                                                |
+| Head anchors      | Added 2026-11-04 from local Git objects (R4130-007, R4130-032): of 10,544 right-side line anchors, 10,065 carried (7,346 on other lines at head) and 479 not carried because a change deleted every anchored line (32 of them in files absent at head) |
+| Size              | 5.2 MB of JSON, committed gzip-compressed (905 kB); no comment body, login, email address or token                                                                                                                                                     |
+| Threads           | 10,648 on 695 pull requests; 152 coverage notices of the retired reviewer excluded and counted                                                                                                                                                         |
+| Region unmeasured | 16 threads (all anchored on the base side of the diff)                                                                                                                                                                                                 |
 
 Command (the bare repository holds every `refs/pull/*/head`, prepared as the measurement document
 describes; `--fetch-missing-commits` fetched the 156 reviewed commits that later force-pushes had
@@ -41,8 +41,9 @@ label and every number in this document, is unchanged. The bare repository borro
 the main checkout and of a local evaluation clone through `objects/info/alternates`, then fetched
 `refs/pull/*/head` and the 156 force-pushed reviewed commits read-only from GitHub. Of the 4,493
 reviewed and head commits, 111 came from the main checkout, 1,705 from the evaluation clone, 2,521
-from the pull request head fetch and 156 from the fetch by object id. Two runs wrote byte-identical
-files:
+from the pull request head fetch and 156 from the fetch by object id. The walk does not carry an
+anchor whose every line a change deleted (R4130-032); those 479 threads have no head range and score
+`unmeasured` in a replay. Two runs wrote byte-identical files:
 
 ```bash
 node scripts/review-harvest.mjs --add-head-anchors <schema-1 dataset>.json.gz \

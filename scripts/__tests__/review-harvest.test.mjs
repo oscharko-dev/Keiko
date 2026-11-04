@@ -276,6 +276,50 @@ describe("head anchor (R4130-007)", () => {
     expect(carryAnchorToHead(steps, anchor)).toBeNull();
   });
 
+  it("does not carry an anchor whose lines a change deleted (R4130-032)", () => {
+    // The author deleted lines 40-42: line 39 at head is the unrelated line above the removed code.
+    const deleted = { kind: "steps", steps: [own(hunk(40, 3, 39, 0))] };
+    expect(carryAnchorToHead(deleted, anchor)).toBeNull();
+    const wider = { kind: "steps", steps: [own(hunk(38, 6, 37, 0))] };
+    expect(carryAnchorToHead(wider, anchor)).toBeNull();
+    const byMerge = { kind: "steps", steps: [merge(hunk(40, 3, 39, 0))] };
+    expect(carryAnchorToHead(byMerge, anchor)).toBeNull();
+    const cumulative = {
+      kind: "cumulative",
+      change: { kind: "hunks", hunks: [hunk(40, 3, 39, 0)] },
+    };
+    expect(carryAnchorToHead(cumulative, anchor)).toBeNull();
+    const twoDeletions = { kind: "steps", steps: [own(hunk(40, 1, 39, 0), hunk(41, 2, 39, 0))] };
+    expect(carryAnchorToHead(twoDeletions, anchor)).toBeNull();
+  });
+
+  it("does not carry an anchor in a file deleted later in the history (R4130-032)", () => {
+    const fileDeleted = { kind: "steps", steps: [own(hunk(1, 0, 2, 20)), own(hunk(1, 140, 0, 0))] };
+    expect(carryAnchorToHead(fileDeleted, anchor)).toBeNull();
+    expect(anchorFactsOf({ ...base, probe: () => fileDeleted })).toEqual({
+      regionChange: "changed",
+      headStartLine: null,
+      headEndLine: null,
+    });
+  });
+
+  it("still carries an anchor that keeps at least one of its lines", () => {
+    // Lines 40-41 go, line 42 stays and becomes line 40.
+    const partial = { kind: "steps", steps: [own(hunk(40, 2, 39, 0))] };
+    expect(carryAnchorToHead(partial, anchor)).toEqual({
+      startLine: 39,
+      endLine: 40,
+      fileLevel: false,
+    });
+    // The region's lines are replaced by one new line: the anchor follows the replacement.
+    const replaced = { kind: "steps", steps: [own(hunk(40, 3, 40, 1))] };
+    expect(carryAnchorToHead(replaced, anchor)).toEqual({
+      startLine: 40,
+      endLine: 40,
+      fileLevel: false,
+    });
+  });
+
   it("records the head range only where the anchor could be carried on the right side", () => {
     const moved = () => ({
       kind: "steps",
@@ -529,7 +573,7 @@ describe("addHeadAnchors", () => {
     });
     const result = addHeadAnchors(schemaOne(), shifted);
     expect(result.schemaVersion).toBe(2);
-    expect(result.rules.headAnchor).toBe("right-side-first-parent-carried-to-head-v1");
+    expect(result.rules.headAnchor).toBe("right-side-first-parent-carried-to-head-v2");
     expect(verifyReviewHarvestDataset(result)).toBe(true);
     expect(result.pullRequests[0].threads[0]).toMatchObject({
       id: "A",
