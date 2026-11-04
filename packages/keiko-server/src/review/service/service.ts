@@ -53,7 +53,7 @@ import {
   type ReviewRunState,
   type ReviewSequenceDeps,
 } from "./sequence.js";
-import { settleRunRecord } from "./settle.js";
+import { settleRunRecord, type ReviewSettledRun } from "./settle.js";
 import { ReviewStaleHeads } from "./stale.js";
 import type { ReviewRunRow, ReviewRunStore } from "./store.js";
 import { reviewRunView } from "./views.js";
@@ -121,6 +121,8 @@ export interface ReviewRunService {
   dispose(): Promise<void>;
 }
 
+const INTERRUPTED = { kind: "abandoned", reason: "interrupted" } as const;
+
 interface LiveRun {
   readonly controller: AbortController;
   cancelRequested: boolean;
@@ -148,26 +150,45 @@ class ReviewRunServiceImpl implements ReviewRunService {
 
   /** Every run a previous server process left unsettled ends `abandoned/interrupted`. */
   private recoverInterrupted(): void {
-    for (const row of this.deps.store.unsettled()) {
-      const settlement = { kind: "abandoned", reason: "interrupted" } as const;
-      const at = Math.max(this.now(), row.createdAt);
-      this.deps.store.settle(row.runId, [], {
-        settlement,
-        settledAt: at,
-        candidateCount: 0,
-        reviewer: row.reviewer,
-        counterChecker: row.counterChecker,
-      });
-      logReviewRunSettled(this.deps.activityLog, row.correlationId, {
-        runId: row.runId,
-        settlement,
-        coverage: row.coverage,
-        verdicts: { candidates: 0, confirmed: 0, refuted: 0, undecided: 0, presented: 0 },
-        reviewer: row.reviewer,
-        counterChecker: row.counterChecker,
-        durationMs: at - row.createdAt,
-        stale: false,
-      });
+    for (const row of this.deps.store.unsettled()) this.settleOrphan(row);
+  }
+
+  /** Settles a stored run that no live sequence owns as `abandoned/interrupted`. */
+  private settleOrphan(row: ReviewRunRow): void {
+    const settlement = INTERRUPTED;
+    const at = Math.max(this.now(), row.createdAt);
+    this.deps.store.settle(row.runId, [], {
+      settlement,
+      settledAt: at,
+      candidateCount: 0,
+      reviewer: row.reviewer,
+      counterChecker: row.counterChecker,
+    });
+    logReviewRunSettled(this.deps.activityLog, row.correlationId, {
+      runId: row.runId,
+      settlement,
+      coverage: row.coverage,
+      verdicts: { candidates: 0, confirmed: 0, refuted: 0, undecided: 0, presented: 0 },
+      reviewer: row.reviewer,
+      counterChecker: row.counterChecker,
+      durationMs: at - row.createdAt,
+      stale: false,
+    });
+  }
+
+  /**
+   * Settles an unsettled stored run of this process that no live sequence owns, a row whose
+   * settlement could not be written (R4130-017). Returns whether the run's slot is free now.
+   */
+  private recoverOrphan(runId: string, correlationId: string): boolean {
+    if (this.live.has(runId)) return false;
+    try {
+      const row = this.deps.store.get(runId);
+      if (row !== undefined && row.phase !== "settled") this.settleOrphan(row);
+      return true;
+    } catch (error) {
+      reportReviewFailure("review.run.persist", correlationId, error);
+      return false;
     }
   }
 
@@ -187,7 +208,30 @@ class ReviewRunServiceImpl implements ReviewRunService {
     repositoryId: string,
   ): Promise<ReviewRunStartOutcome> {
     const runId = this.deps.newRunId?.() ?? `review-${randomUUID()}`;
-    const inserted = this.deps.store.insert({
+    let inserted = this.insert(input, repositoryId, runId);
+    if (
+      !inserted.ok &&
+      inserted.reason === "active-exists" &&
+      this.recoverOrphan(inserted.activeRunId, input.correlationId)
+    ) {
+      inserted = this.insert(input, repositoryId, runId);
+    }
+    if (!inserted.ok && inserted.reason === "duplicate-request") {
+      return this.replay(inserted.runId, input.correlationId);
+    }
+    if (!inserted.ok) return this.refuse("active-review-exists", input, inserted.activeRunId);
+    this.launch(runId, input);
+    const view = await this.get(runId, input.correlationId);
+    if (view === undefined) throw new Error("review run record missing after insert");
+    return { kind: "started", run: view, replayed: false };
+  }
+
+  private insert(
+    input: ReviewRunStartInput,
+    repositoryId: string,
+    runId: string,
+  ): ReturnType<ReviewRunStore["insert"]> {
+    return this.deps.store.insert({
       runId,
       repositoryId,
       repositoryRoot: input.repositoryRoot,
@@ -199,14 +243,6 @@ class ReviewRunServiceImpl implements ReviewRunService {
       gatewayGeneration: this.deps.models.generation?.() ?? null,
       createdAt: this.now(),
     });
-    if (!inserted.ok && inserted.reason === "duplicate-request") {
-      return this.replay(inserted.runId, input.correlationId);
-    }
-    if (!inserted.ok) return this.refuse("active-review-exists", input, inserted.activeRunId);
-    this.launch(runId, input);
-    const view = await this.get(runId, input.correlationId);
-    if (view === undefined) throw new Error("review run record missing after insert");
-    return { kind: "started", run: view, replayed: false };
   }
 
   private async replay(runId: string, correlationId: string): Promise<ReviewRunStartOutcome> {
@@ -328,14 +364,35 @@ class ReviewRunServiceImpl implements ReviewRunService {
     await this.settle(ctx, state, live);
   }
 
+  /**
+   * Settles the run and announces it. A store failure anywhere in settling announces
+   * `abandoned/interrupted` and frees the live slot instead of rejecting the run's unawaited
+   * `done` promise (R4130-020); the row then settles at the next start or cancel.
+   */
   private async settle(ctx: ReviewRunContext, state: ReviewRunState, live: LiveRun): Promise<void> {
+    let settled: ReviewSettledRun = { settlement: INTERRUPTED, presentedCount: 0 };
+    try {
+      settled = await this.settleRecord(ctx, state, live);
+    } catch (error) {
+      reportReviewFailure("review.run.persist", ctx.correlationId, error);
+    } finally {
+      this.live.delete(ctx.runId);
+    }
+    this.events.settle(ctx.runId, settled.settlement, settled.presentedCount);
+  }
+
+  private async settleRecord(
+    ctx: ReviewRunContext,
+    state: ReviewRunState,
+    live: LiveRun,
+  ): Promise<ReviewSettledRun> {
     try {
       enterReviewRunPhase(this.sequenceDeps(), ctx, "settling");
     } catch (error) {
       reportReviewFailure("review.run.persist", ctx.correlationId, error);
     }
     const row = this.deps.store.get(ctx.runId);
-    const settled = await settleRunRecord(
+    return settleRunRecord(
       {
         store: this.deps.store,
         reviewServices: this.deps.reviewServices,
@@ -349,8 +406,6 @@ class ReviewRunServiceImpl implements ReviewRunService {
       state,
       { cancelled: () => live.cancelRequested, interrupted: () => this.shuttingDown },
     );
-    this.live.delete(ctx.runId);
-    this.events.settle(ctx.runId, settled.settlement, settled.presentedCount);
   }
 
   public async get(runId: string, correlationId?: string): Promise<ReviewRunView | undefined> {
@@ -409,7 +464,10 @@ class ReviewRunServiceImpl implements ReviewRunService {
       live.controller.abort();
       return "cancelling";
     }
-    return this.deps.store.get(runId) === undefined ? "not-found" : "settled";
+    const row = this.deps.store.get(runId);
+    if (row === undefined) return "not-found";
+    if (row.phase !== "settled") this.recoverOrphan(runId, row.correlationId);
+    return "settled";
   }
 
   public refuseInvalidRequest(correlationId: string, dryRun: boolean): void {

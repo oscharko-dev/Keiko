@@ -731,6 +731,125 @@ describe("review run service: fault injection", () => {
     await restarted.dispose();
   });
 
+  function diskFull(): Error {
+    return Object.assign(new Error("database or disk is full"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 13,
+    });
+  }
+
+  // R4130-017: one failed settlement write left the row `settling`; every later start was refused
+  // 409 REVIEW_ACTIVE and a cancel 409 REVIEW_SETTLED until the server restarted.
+  it("settles the row minimally when only the full record cannot be written", async () => {
+    const h = setUp({
+      runtime: reviewerFiling([reportAt(3, "high")]),
+      counterCheck: counterCheckBy({ 3: "confirmed" }),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const settle = store.settle.bind(store);
+        store.settle = (runId, rows, record): void => {
+          if (rows.length > 0) throw diskFull();
+          settle(runId, rows, record);
+        };
+        return store;
+      },
+    });
+    const first = runOf(await start(h));
+    await h.service.whenSettled(first.runId);
+    expect(h.store.get(first.runId)).toMatchObject({
+      phase: "settled",
+      settlement: { kind: "abandoned", reason: "interrupted" },
+    });
+    const second = await start(h, startBody({ clientRequestId: "client-request-2" }));
+    expect(second.status).toBe(202);
+  });
+
+  it("settles a stuck row at the next start or cancel when no write succeeded", async () => {
+    const failing = { settle: true };
+    const h = setUp({
+      runtime: reviewerFiling([]),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const settle = store.settle.bind(store);
+        store.settle = (runId, rows, record): void => {
+          if (failing.settle) throw diskFull();
+          settle(runId, rows, record);
+        };
+        return store;
+      },
+    });
+    const first = runOf(await start(h));
+    await h.service.whenSettled(first.runId);
+    expect(h.store.get(first.runId)?.phase).toBe("settling");
+    failing.settle = false;
+    const cancelled = await handleReviewRunCancel(
+      h.ctx(`/api/git-review/runs/${first.runId}/cancel`, { params: { runId: first.runId } }),
+      h.deps(),
+    );
+    expect(cancelled.status).toBe(409);
+    expect(h.store.get(first.runId)?.settlement).toEqual({
+      kind: "abandoned",
+      reason: "interrupted",
+    });
+    failing.settle = true;
+    const stuck = runOf(await start(h, startBody({ clientRequestId: "client-request-2" })));
+    await h.service.whenSettled(stuck.runId);
+    failing.settle = false;
+    const third = await start(h, startBody({ clientRequestId: "client-request-3" }));
+    expect(third.status).toBe(202);
+    expect(h.store.get(stuck.runId)?.settlement).toEqual({
+      kind: "abandoned",
+      reason: "interrupted",
+    });
+  });
+
+  // R4130-020: a store read that threw during settling rejected the run's unawaited `done`
+  // promise, which exits the CLI process on an unhandled rejection.
+  it("announces abandoned/interrupted when a store read fails during settling", async () => {
+    const record = vi.spyOn(defaultServerDiagnosticSink, "record");
+    const reads = { fail: false };
+    const h = setUp({
+      runtime: reviewerFiling([]),
+      store: (db) => {
+        const store = new ReviewRunStore(db);
+        const get = store.get.bind(store);
+        const setPhase = store.setPhase.bind(store);
+        store.setPhase = (runId, phase, at): void => {
+          setPhase(runId, phase, at);
+          if (phase === "settling") reads.fail = true;
+        };
+        store.get = (runId): ReturnType<ReviewRunStore["get"]> => {
+          if (reads.fail) throw new Error("database is locked");
+          return get(runId);
+        };
+        return store;
+      },
+    });
+    const run = runOf(await start(h));
+    const frames: unknown[] = [];
+    h.service.subscribe(run.runId, {
+      onEvent: (frame) => frames.push(frame),
+      onClose: () => undefined,
+    });
+    await expect(h.service.whenSettled(run.runId)).resolves.toBeUndefined();
+    expect(frames).toContainEqual(
+      expect.objectContaining({
+        kind: "settled",
+        settlement: { kind: "abandoned", reason: "interrupted" },
+      }),
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "review.run.persist",
+        correlationId: "corr-review-run",
+      }),
+    );
+    reads.fail = false;
+    const next = await start(h, startBody({ clientRequestId: "client-request-2" }));
+    expect(next.status).toBe(202);
+    record.mockRestore();
+  });
+
   it("interrupts a run whose phase record cannot be written", async () => {
     const db = new DatabaseSync(":memory:");
     const h = setUp({
