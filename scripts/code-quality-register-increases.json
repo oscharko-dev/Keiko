@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "increases": [
+    {
+      "path": "scripts/__tests__/semantic-duplication.test.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 0,
+      "to": 1,
+      "reason": "test-witness",
+      "issue": 3918
+    },
+    {
+      "path": "scripts/check-semantic-duplication.mjs",
+      "rule": "anti-slop/no-runtime-typeof",
+      "from": 1,
+      "to": 3,
+      "reason": "pending-boundary-migration",
+      "issue": 3918
+    }
+  ]
+}
