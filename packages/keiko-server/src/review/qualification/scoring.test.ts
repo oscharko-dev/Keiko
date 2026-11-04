@@ -50,12 +50,6 @@ describe("pair qualification scoring", () => {
     const found = seedRunResult(DEFECT, view("complete", [5]));
     expect(seedCaseResult(DEFECT, found)).toBe("found");
     expect(seedCaseResult(DEFECT, seedRunResult(DEFECT, view("complete", [9])))).toBe("missed");
-    // A Reviewer that reviewed but left files or budget unspent was measured: nothing presented is
-    // a miss. A Reviewer that failed is not (R4130-012, below).
-    for (const reason of ["files-unprocessed", "budget-exhausted"]) {
-      const run = seedRunResult(DEFECT, view("incomplete", [], false, reason));
-      expect(seedCaseResult(DEFECT, run)).toBe("missed");
-    }
     expect(seedCaseResult(DEFECT, seedRunResult(DEFECT, view("complete", [5], true)))).toBe(
       "stale",
     );
@@ -72,8 +66,16 @@ describe("pair qualification scoring", () => {
   // gateway failure as a measured "found nothing": a clean control that no model reviewed scored
   // `clean`, and a defect case scored `missed`, which recorded `seed-failed` for the pair. Such a
   // case is not scored, so the qualification ends `incomplete` and records no status.
-  it("does not score a Reviewer run that failed before presenting anything", () => {
-    for (const reason of ["model-failed", "deadline-exceeded"]) {
+  // R4130-034: the settlement names only the most consequential reason, so a Reviewer that timed out
+  // while a counter-check exhausted the budget settles `budget-exhausted`, and an unchecked or failed
+  // counter-check can hide the seed's own candidate. No incomplete reason proves an absence.
+  it("does not score an incomplete run that presented nothing", () => {
+    for (const reason of [
+      "model-failed",
+      "deadline-exceeded",
+      "budget-exhausted",
+      "files-unprocessed",
+    ]) {
       const cleanRun = seedRunResult(CLEAN, view("incomplete", [], false, reason));
       const defectRun = seedRunResult(DEFECT, view("incomplete", [], false, reason));
       expect(cleanRun).toBeUndefined();
@@ -85,6 +87,24 @@ describe("pair qualification scoring", () => {
       ]);
       expect(scored.unscored).toBe(2);
       expect(scored.score.falseAlarms).toBe(0);
+      expect(scored.missedSeedClasses).toEqual([]);
+      expect(qualificationOutcome(scored, "none")).toBe("incomplete");
+    }
+  });
+
+  // R4130-034: a Reviewer that failed after presenting an unrelated finding did not review the
+  // rest of the diff, so the seed's absence is not a measured miss either.
+  it("does not score a defect missing from an incomplete run that presented something else", () => {
+    for (const reason of [
+      "model-failed",
+      "deadline-exceeded",
+      "budget-exhausted",
+      "files-unprocessed",
+    ]) {
+      const run = seedRunResult(DEFECT, view("incomplete", [9], false, reason));
+      expect(run).toBeUndefined();
+      expect(seedCaseResult(DEFECT, run)).toBe("not-scored");
+      const scored = scoreQualification([{ seed: DEFECT, result: run }]);
       expect(scored.missedSeedClasses).toEqual([]);
       expect(qualificationOutcome(scored, "none")).toBe("incomplete");
     }

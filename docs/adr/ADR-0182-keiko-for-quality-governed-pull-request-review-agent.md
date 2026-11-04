@@ -396,9 +396,12 @@ reviewed as a `local-range` target under the qualification's correlation and rem
 the results are scored with `scoreReviewSeedRun`. `seed-qualified` needs every required seed found;
 one missed required seed is `seed-failed` with the missed seed classes; a cancellation, the
 three-hour deadline or an unscored case ends `cancelled` or `incomplete` and records no status. A
-case is unscored when its run did not settle `complete` or `incomplete`, and when its Reviewer failed
-(`incomplete/model-failed`) or ran out of time (`incomplete/deadline-exceeded`) before presenting a
-finding: no model reviewed it, so it is neither a clean control nor a missed seed (R4130-012). One
+case is unscored when its run did not settle `complete` or `incomplete`. An `incomplete` run scores
+only what it presented: a finding on the seed is `found`, and a finding on a clean control is a
+false alarm. Otherwise the case is unscored, because the Reviewer may have failed or run out of time
+before reaching the seed, and the one settlement reason can hide that failure or a counter-check that
+never presented the seed's candidate. A missed seed and a clean control are measured only on a
+`complete` run (R4130-012, R4130-034). One
 qualification runs at a time; progress streams over the shared SSE helper; leftovers are swept at
 start.
 
