@@ -278,11 +278,12 @@ startup sweep removes its worktree. The stale flag compares the reviewed head wi
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
-The run records live in the server store (migrations 59, 60 and 61): `review_runs` (one row per
-run; a partial unique index allows one unsettled run per repository, and the repository id and
-client request id are unique, so a repeated start returns the same run), `review_coverage` (path,
-list, closed reason, and since migration 61 the nullable `previous_path` of a renamed or copied
-file) and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented
+The run records live in the server store (migrations 59, 60 and 61, after the released migrations
+55 to 58 of 1.4.0): `review_runs` (one row per run; a partial unique index allows one unsettled run
+per repository, and the repository id and client request id are unique, so a repeated start returns
+the same run), `review_coverage` (path, list, closed reason, and since migration 61 the nullable
+`previous_path` of a renamed or copied file) and `review_findings` (fingerprint, report, verdict,
+verdict evidence, head anchoring, presented
 flag and rank). The routes are `POST /api/git-review/runs` (with `dryRun`), `GET
 /api/git-review/runs/{runId}`, `GET /api/git-review/runs?repositoryId=…&pullRequestNumber=…`, `GET
 /api/git-review/review-states?repositoryId=…`, `GET /api/git-review/runs/{runId}/diff` (from the
