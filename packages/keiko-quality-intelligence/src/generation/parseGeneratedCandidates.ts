@@ -181,47 +181,111 @@ const toRawItems = (parsed: unknown): readonly unknown[] => {
   return [];
 };
 
+// How many test-case objects a container holds. A list of numbers such as the evidence citation
+// `[1]` in a reasoning preamble is a JSON array too, but it holds no candidate.
 const candidateContainerItemCount = (parsed: unknown): number =>
-  hasCandidateContainer(parsed) ? toRawItems(parsed).length : -1;
+  hasCandidateContainer(parsed) ? toRawItems(parsed).filter(isObject).length : -1;
 
 interface ParsedJsonSlice {
   readonly parsed: unknown;
   readonly itemCount: number;
+  /** Index just past the slice in the scanned text. */
+  readonly end: number;
+  /** True when the slice contains an object, so a candidate could sit inside it. */
+  readonly mayHoldObjects: boolean;
 }
+
+// Models often leave a comma before a closing bracket. Remove exactly those commas, outside string
+// literals, in one forward pass; a comma inside a quoted step is never touched.
+const stripTrailingCommas = (json: string): string => {
+  let out = "";
+  let scan: StringScan = { inString: false, escaped: false };
+  let pendingComma = "";
+  for (const ch of json) {
+    if (scan.inString) {
+      scan = consumeStringChar(ch, scan.escaped);
+      out += ch;
+      continue;
+    }
+    if (ch === ",") {
+      out += pendingComma;
+      pendingComma = ",";
+      continue;
+    }
+    if (ch === "}" || ch === "]") pendingComma = "";
+    if (!/\s/u.test(ch)) {
+      out += pendingComma;
+      pendingComma = "";
+    }
+    if (ch === '"') scan = { inString: true, escaped: false };
+    out += ch;
+  }
+  return out + pendingComma;
+};
+
+const parseJsonOrTrailingCommaFree = (slice: string): unknown => {
+  try {
+    return JSON.parse(slice);
+  } catch {
+    return JSON.parse(stripTrailingCommas(slice));
+  }
+};
 
 const parseJsonSliceAt = (text: string, index: number): ParsedJsonSlice | undefined => {
   if (!isJsonOpen(text[index])) return undefined;
   const slice = extractJsonValueAt(text, index);
   if (slice === undefined) return undefined;
   try {
-    const parsed: unknown = JSON.parse(slice);
-    return { parsed, itemCount: candidateContainerItemCount(parsed) };
+    const parsed: unknown = parseJsonOrTrailingCommaFree(slice);
+    return {
+      parsed,
+      itemCount: candidateContainerItemCount(parsed),
+      end: index + slice.length,
+      mayHoldObjects: slice.includes("{"),
+    };
   } catch {
     return undefined;
   }
 };
 
+interface JsonRecovery {
+  firstParsed: unknown;
+  firstEmptyCandidateContainer: unknown;
+  attempts: number;
+}
+
+// Records a parsed slice. Returns true when it holds candidates and the search is over.
+const recordParsedSlice = (recovery: JsonRecovery, slice: ParsedJsonSlice): boolean => {
+  recovery.firstParsed ??= slice.parsed;
+  if (slice.itemCount > 0) return true;
+  if (slice.itemCount === 0) recovery.firstEmptyCandidateContainer ??= slice.parsed;
+  return false;
+};
+
 // Parse the first useful JSON candidate payload. If a chat model emits an invalid bracket fragment
 // before the real JSON, keep scanning; if it emits only a wrong-shape JSON value, preserve the old
-// `recovered:true, candidates:[]` behaviour by returning the first successfully parsed value.
+// `recovered:true, candidates:[]` behaviour by returning the first successfully parsed value. A
+// valid value that cannot hold an object (an evidence citation `[1]`) is stepped over whole and does
+// not use up a recovery attempt, so a long preamble of citations cannot hide the payload.
 const parseFirstUsefulJsonValue = (text: string): unknown => {
-  let firstParsed: unknown;
-  let firstEmptyCandidateContainer: unknown;
-  let attempts = 0;
+  const recovery: JsonRecovery = {
+    firstParsed: undefined,
+    firstEmptyCandidateContainer: undefined,
+    attempts: 0,
+  };
   for (let i = 0; i < text.length; i += 1) {
     if (!isJsonOpen(text[i])) continue;
-    attempts += 1;
-    if (attempts > MAX_JSON_RECOVERY_ATTEMPTS) break;
-    const parsedSlice = parseJsonSliceAt(text, i);
-    if (parsedSlice === undefined) continue;
-    const { parsed, itemCount } = parsedSlice;
-    if (firstParsed === undefined) firstParsed = parsed;
-    if (itemCount > 0) return parsed;
-    if (itemCount === 0 && firstEmptyCandidateContainer === undefined) {
-      firstEmptyCandidateContainer = parsed;
+    const slice = parseJsonSliceAt(text, i);
+    if (slice !== undefined && !slice.mayHoldObjects) {
+      recovery.firstParsed ??= slice.parsed;
+      i = slice.end - 1;
+      continue;
     }
+    recovery.attempts += 1;
+    if (recovery.attempts > MAX_JSON_RECOVERY_ATTEMPTS) break;
+    if (slice !== undefined && recordParsedSlice(recovery, slice)) return slice.parsed;
   }
-  return firstEmptyCandidateContainer ?? firstParsed;
+  return recovery.firstEmptyCandidateContainer ?? recovery.firstParsed;
 };
 
 const parseJsonLoose = (raw: string): unknown => {
