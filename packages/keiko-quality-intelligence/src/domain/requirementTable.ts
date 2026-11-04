@@ -48,7 +48,8 @@ export function isSeparatorRow(cells: readonly string[]): boolean {
 export type TableReading =
   | { readonly kind: "positional" }
   | { readonly kind: "roles"; readonly roles: ColumnRoles }
-  | { readonly kind: "foreign" };
+  /** A table of other things, with what its header still names (`Anforderung | Verantwortlich`). */
+  | { readonly kind: "foreign"; readonly named?: ColumnRoles };
 
 function knownRoles(roles: ColumnRoles): readonly TableColumnRole[] {
   return roles.filter((role) => role !== undefined);
@@ -71,12 +72,20 @@ function withPositionalColumns(roles: ColumnRoles): ColumnRoles {
   });
 }
 
+/** The columns a header names, whatever else it holds. */
+export function namedColumns(
+  cells: readonly string[],
+  vocabulary: CompiledVocabulary,
+): ColumnRoles {
+  return cells.map((cell) => tableRoleOf(vocabulary, cell));
+}
+
 /** Column roles of a header row; undefined unless it names requirement columns. */
 export function parseTableHeader(
   cells: readonly string[],
   vocabulary: CompiledVocabulary,
 ): ColumnRoles | undefined {
-  const roles = cells.map((cell) => tableRoleOf(vocabulary, cell));
+  const roles = namedColumns(cells, vocabulary);
   return namesRequirementColumns(roles) ? withPositionalColumns(roles) : undefined;
 }
 
@@ -168,6 +177,24 @@ export function parseTableRow(
   };
 }
 
+/** A row that holds no identifier: what its named columns say, if one of them is a statement. */
+export type UnidentifiedRow = Omit<TableRow, "id">;
+
+export function parseUnidentifiedRow(
+  cells: readonly string[],
+  roles: ColumnRoles,
+): UnidentifiedRow | undefined {
+  const parts: RowParts = { title: "", priority: undefined, statement: [], criteria: [] };
+  assignByRole(cells, roles, -1, parts);
+  if (parts.statement.length === 0) return undefined;
+  return {
+    title: parts.title,
+    ...(parts.priority === undefined ? {} : { priority: parts.priority }),
+    statement: parts.statement.join(" "),
+    criteria: parts.criteria,
+  };
+}
+
 export interface RowAddition {
   readonly statement: string;
   readonly criteria: readonly string[];
@@ -202,7 +229,7 @@ export function isSameRequirement(left: TableRow, right: TableRow): boolean {
 }
 
 /** The row extended by what a later row of the same requirement adds. */
-export function extendedRow(row: TableRow, addition: RowAddition): TableRow {
+export function extendedRow<Row extends UnidentifiedRow>(row: Row, addition: RowAddition): Row {
   const repeats = addition.statement === row.statement || addition.statement.length === 0;
   return {
     ...row,
@@ -217,9 +244,8 @@ export function extendedRow(row: TableRow, addition: RowAddition): TableRow {
  * The text a table extraction stores for one row, every cell labelled with its column header:
  *   * a workbook row, `Sheet!2: ID=FR-1 | Titel=Foo | Priorität=Muss` (xlsx, CSV as `csv!2:`, and a
  *     JSON array of objects under its pointer). A cell that holds line breaks (a list of acceptance
- *     criteria) continues on the lines that follow, up to the next row. A blank line inside a
- *     free-text cell (criteria, statement) is a paragraph break of that cell; it ends any other row,
- *     whose cells are single labels.
+ *     criteria) continues on the lines that follow, up to the next row. A cell never holds a blank
+ *     line, so a blank line ends the row and the table.
  *   * a document table row, `Table row 2: ID=FR-1 | Titel=Foo` (Word, PowerPoint, HTML). Such a table
  *     stands between paragraphs, and a blank line is what ends it.
  * A parser that knows of no header labels the cells `Column 1`, `Column 2`, ...
@@ -308,6 +334,11 @@ export function isDocumentProjection(raw: string): boolean {
   return DOCUMENT_PROJECTION.test(raw);
 }
 
+/** A line a table extraction wrote, whether or not it holds labelled cells. */
+export function isProjectedLine(raw: string): boolean {
+  return isPlainProjection(raw) || isDocumentProjection(raw);
+}
+
 /**
  * How a projected table is read, from the columns of all its rows: a row lists only the cells it
  * fills, so one row alone may not show the header.
@@ -318,7 +349,7 @@ export function readingOfProjectedTable(
 ): TableReading {
   const labels = [...new Set(rows.flatMap((row) => row.labels))];
   if (labels.every((label) => NEUTRAL_LABEL.test(label))) return { kind: "positional" };
-  const roles = labels.map((label) => tableRoleOf(vocabulary, label));
+  const roles = namedColumns(labels, vocabulary);
   return namesRequirementColumns(roles) ? { kind: "roles", roles } : { kind: "foreign" };
 }
 
@@ -340,8 +371,11 @@ export interface ProjectedCells {
   readonly roles: ColumnRoles | undefined;
 }
 
-/** The cells of a finished projected row, read by its table; every line of a criteria cell is one. */
-export function projectedCells(row: ProjectedRow, reading: TableReading): ProjectedCells {
+/** The cells of a projected row by what their labels name; every line of a criteria cell is one. */
+export function namedCellsOf(row: ProjectedRow): {
+  readonly cells: readonly string[];
+  readonly roles: ColumnRoles;
+} {
   const cells: string[] = [];
   const roles: (TableColumnRole | undefined)[] = [];
   row.cells.forEach((cell, index) => {
@@ -351,6 +385,12 @@ export function projectedCells(row: ProjectedRow, reading: TableReading): Projec
       roles.push(role);
     }
   });
+  return { cells, roles };
+}
+
+/** The cells of a finished projected row, read by its table. */
+export function projectedCells(row: ProjectedRow, reading: TableReading): ProjectedCells {
+  const { cells, roles } = namedCellsOf(row);
   return { cells, roles: reading.kind === "roles" ? projectedRoles(roles, reading) : undefined };
 }
 

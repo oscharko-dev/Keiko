@@ -111,6 +111,22 @@ describe("extractDocument — markdown success path", () => {
     expect(textRow?.normalized_text).toBe("# Hello\n\nWorld");
   });
 
+  it("reads a text file its name alone identifies (#4235)", async () => {
+    const fs = memoryFs(ROOT, [{ relativePath: "docs/README", content: "Installation" }]);
+    const result = await extractDocument(
+      { fs, store, parserRegistry: createDefaultParserRegistry() },
+      {
+        capsuleId,
+        source,
+        file: { relativePath: "docs/README", sizeBytes: 12 },
+      },
+    );
+
+    expect(result.outcome.kind).toBe("persisted");
+    if (result.outcome.kind !== "persisted") return;
+    expect(result.outcome.document.parser.parserId).toBe("text");
+  });
+
   it("persists colliding-looking filenames as separate documents", async () => {
     const fs = memoryFs(ROOT, [
       { relativePath: "a#u0.md", content: "# Hash" },

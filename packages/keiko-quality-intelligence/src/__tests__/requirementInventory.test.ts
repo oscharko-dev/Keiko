@@ -506,6 +506,134 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
     expect(detect([sentence]).entries).toEqual([]);
   });
 
+  describe("table rows without an identifier", () => {
+    it("does not read a row of a labelled table as a line of a pipe table", () => {
+      // `mandate.reference` folds to a word that names an identifier column, which made this data
+      // row a pipe header and the note of a later row a requirement.
+      const inventory = deriveRequirementInventory({
+        text: [
+          "Konten!49: Altfeld=MANDAT.REFERENZ | Neufeld=mandate.reference | Formel=Direkt | Hinweis=Eindeutig",
+          "Konten!50: Altfeld=KREDIT.VERZUG | Neufeld=loan.since | Formel=ISO 8601 | Hinweis=Beginn darf nicht zurückgesetzt werden",
+        ].join("\n"),
+        documentKey: "doc-1",
+      });
+
+      expect(inventory.entries).toEqual([]);
+    });
+
+    const EXPORT = "Das System muss Daten exportieren.";
+    const IMPORT = "Das System muss Daten importieren.";
+
+    it("derives a unit from each row and keeps the row's cells", () => {
+      const { entries } = detect([
+        `Anf!2: Nr=1 | Anforderung=${EXPORT} | Priorität=Hoch | Akzeptanzkriterien=CSV liegt vor.`,
+        `Anf!3: Nr=2 | Anforderung=${IMPORT} | Priorität=Niedrig | Akzeptanzkriterien=Import läuft.`,
+      ]);
+
+      expect(entries.map((entry) => entry.statement)).toEqual([EXPORT, IMPORT]);
+      expect(entries[0]).toMatchObject({
+        idOrigin: "derived",
+        unitKind: "table-row",
+        priority: "Hoch",
+        acceptanceCriteria: [{ text: "CSV liegt vor." }],
+      });
+      expect(entries[0]?.id).toMatch(/^DRV-/u);
+    });
+
+    it("reads a table of one statement column", () => {
+      const { entries } = detect([`csv!2: Anforderung=${EXPORT}`, `csv!3: Anforderung=${IMPORT}`]);
+
+      expect(entries.map((entry) => entry.statement)).toEqual([EXPORT, IMPORT]);
+    });
+
+    it("reads the rows of a document table", () => {
+      const { entries } = detect([
+        `Table row 2: Nr=1 | Anforderung=${EXPORT} | Prio=Hoch`,
+        `Table row 3: Nr=2 | Anforderung=${IMPORT} | Prio=Niedrig`,
+      ]);
+
+      expect(entries.map((entry) => [entry.statement, entry.priority])).toEqual([
+        [EXPORT, "Hoch"],
+        [IMPORT, "Niedrig"],
+      ]);
+    });
+
+    it("reads the rows of a Markdown table", () => {
+      const { entries } = detect([
+        "| Anforderung | Verantwortlich |",
+        "| --- | --- |",
+        `| ${EXPORT} | Team A |`,
+        `| ${IMPORT} | Team B |`,
+      ]);
+
+      expect(entries.map((entry) => entry.statement)).toEqual([EXPORT, IMPORT]);
+    });
+
+    it("keeps the title a row names", () => {
+      const [entry] = detect([`Anf!2: Titel=Export | Anforderung=${EXPORT}`]).entries;
+
+      expect(entry).toMatchObject({ title: "Export", statement: EXPORT });
+    });
+
+    it("keeps every sentence of a statement cell in one unit", () => {
+      const statement = `${EXPORT} Es entsteht eine Datei.`;
+      const { entries } = detect([`csv!2: Anforderung=${statement}`]);
+
+      expect(entries.map((entry) => entry.statement)).toEqual([statement]);
+    });
+
+    it("adds a row of criteria to the row above it", () => {
+      const { entries } = detect([
+        `Anf!2: Anforderung=${EXPORT} | Akzeptanzkriterien=Erstes.`,
+        "Anf!3: Akzeptanzkriterien=Zweites.",
+      ]);
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.acceptanceCriteria.map((item) => item.text)).toEqual([
+        "Erstes.",
+        "Zweites.",
+      ]);
+    });
+
+    it("tells identical rows apart", () => {
+      const { entries } = detect([`csv!2: Anforderung=${EXPORT}`, `csv!3: Anforderung=${EXPORT}`]);
+
+      expect(new Set(entries.map((entry) => entry.id)).size).toBe(2);
+    });
+
+    it.each([
+      [
+        "a statement column that obliges nobody",
+        ["Glossar!2: Begriff=Konto | Beschreibung=Ein Konto."],
+      ],
+      [
+        "an obligation outside the statement column",
+        ["Risiken!2: Risiko=Ausfall | Maßnahme=Das Team muss prüfen."],
+      ],
+      ["a table of neutral columns", [`csv!2: Column 1=FR | Column 2=${EXPORT}`]],
+    ])("takes nothing from %s", (_name, lines) => {
+      expect(detect(lines).entries).toEqual([]);
+    });
+
+    it("still reads a row with an identifier as that requirement", () => {
+      const { entries } = detect([
+        `Anf!2: ID=FR-1 | Anforderung=${EXPORT}`,
+        `Anf!3: ID=FR-2 | Anforderung=${IMPORT}`,
+      ]);
+
+      expect(entries.map((entry) => entry.id)).toEqual(["FR-1", "FR-2"]);
+    });
+
+    it("still adds a statement without an identifier to the requirement above it", () => {
+      const { entries } = detect([
+        `Anf!2: ID=FR-1 | Anforderung=${EXPORT}`,
+        `Anf!3: Anforderung=${IMPORT}`,
+      ]);
+
+      expect(entries.map((entry) => entry.statement)).toEqual([`${EXPORT} ${IMPORT}`]);
+    });
+  });
+
   describe("under the block contract: a blank line ends a block", () => {
     const criteria = (lines: readonly string[]): readonly string[] =>
       detect(lines).entries[0]?.acceptanceCriteria.map((item) => item.text) ?? [];

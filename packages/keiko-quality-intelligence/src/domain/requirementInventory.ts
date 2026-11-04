@@ -47,21 +47,27 @@ import {
   isDocumentProjection,
   isPlainProjection,
   isPointerRecord,
+  isProjectedLine,
   isSameRequirement,
   isSeparatorRow,
+  namedCellsOf,
+  namedColumns,
   openProjectedRow,
   parseContinuationRow,
   parseTableHeader,
   parseTableRow,
+  parseUnidentifiedRow,
   projectedCells,
   readingOfProjectedTable,
   startsWithIdentifier,
   tableCells,
+  type ColumnRoles,
   type ProjectedCells,
   type ProjectedRow,
   type RowAddition,
   type TableReading,
   type TableRow,
+  type UnidentifiedRow,
 } from "./requirementTable.js";
 import {
   ID_START,
@@ -265,8 +271,17 @@ interface RowDraft {
   lastLine: number;
 }
 
+/** A row that states an obligation and holds no identifier. */
+interface UnidentifiedDraft {
+  row: UnidentifiedRow;
+  readonly table: number;
+  readonly line: number;
+  lastLine: number;
+}
+
 interface TableScan {
   readonly drafts: RowDraft[];
+  readonly unidentified: UnidentifiedDraft[];
   /** Every line of a projected row and of a defining pipe row: no text of its own. */
   readonly lines: Set<number>;
   /** Identifier rows of tables whose header names other things. */
@@ -314,9 +329,29 @@ function addRow(scan: TableScan, row: TableRow, span: RowSpan): void {
 
 function addToLastRow(scan: TableScan, addition: RowAddition, lastLine: number): boolean {
   const last = scan.drafts.at(-1);
-  if (last?.table !== scan.table) return false;
-  last.row = extendedRow(last.row, addition);
-  last.lastLine = lastLine;
+  if (last?.table === scan.table) {
+    last.row = extendedRow(last.row, addition);
+    last.lastLine = lastLine;
+    return true;
+  }
+  // Without identifiers a row with its own statement is a requirement of its own.
+  const unidentified = scan.unidentified.at(-1);
+  if (unidentified?.table !== scan.table || addition.statement.length > 0) return false;
+  unidentified.row = extendedRow(unidentified.row, addition);
+  unidentified.lastLine = lastLine;
+  return true;
+}
+
+/** A row without an identifier is a requirement if its statement cell states an obligation. */
+function readUnidentifiedRow(
+  context: Context,
+  scan: TableScan,
+  { cells, roles }: { readonly cells: readonly string[]; readonly roles: ColumnRoles },
+  span: RowSpan,
+): boolean {
+  const row = parseUnidentifiedRow(cells, roles);
+  if (row === undefined || !obligationStatement(context.vocabulary, row.statement)) return false;
+  scan.unidentified.push({ row, table: scan.table, ...span });
   return true;
 }
 
@@ -333,8 +368,10 @@ function readRow(
     addRow(scan, row, span);
     return true;
   }
-  const addition = roles === undefined ? undefined : parseContinuationRow(cells, roles);
-  return addition !== undefined && addToLastRow(scan, addition, span.lastLine);
+  if (roles === undefined) return false;
+  const addition = parseContinuationRow(cells, roles);
+  if (addition !== undefined && addToLastRow(scan, addition, span.lastLine)) return true;
+  return readUnidentifiedRow(context, scan, { cells, roles }, span);
 }
 
 interface PipeTable {
@@ -345,10 +382,12 @@ interface PipeTable {
 }
 
 /** The table a pipe line that names no columns opens: its first cell tells a row from a header. */
-function openPipeTable(scan: TableScan, cells: readonly string[]): PipeTable {
+function openPipeTable(context: Context, scan: TableScan, cells: readonly string[]): PipeTable {
   scan.table += 1;
   return {
-    reading: { kind: startsWithIdentifier(cells) ? "positional" : "foreign" },
+    reading: startsWithIdentifier(cells)
+      ? { kind: "positional" }
+      : { kind: "foreign", named: namedColumns(cells, context.vocabulary) },
     columns: cells.length,
     gap: false,
   };
@@ -363,6 +402,14 @@ function readPipeRow(
 ): void {
   if (reading.kind === "foreign") {
     if (startsWithIdentifier(cells)) scan.foreign.add(index);
+    else if (reading.named !== undefined) {
+      readUnidentifiedRow(
+        context,
+        scan,
+        { cells, roles: reading.named },
+        { line: index, lastLine: index },
+      );
+    }
     return;
   }
   const roles = reading.kind === "roles" ? reading.roles : undefined;
@@ -386,7 +433,7 @@ function readPipeLine(
     return { reading: { kind: "roles", roles: header }, columns: cells.length, gap: false };
   }
   const goesOn = table !== undefined && (!table.gap || table.columns === cells.length);
-  const current = goesOn ? { ...table, gap: false } : openPipeTable(scan, cells);
+  const current = goesOn ? { ...table, gap: false } : openPipeTable(context, scan, cells);
   if (!isSeparatorRow(cells)) readPipeRow(context, scan, current, cells, index);
   return current;
 }
@@ -394,7 +441,8 @@ function readPipeLine(
 function pipeTableCandidates(context: Context, scan: TableScan): void {
   let table: PipeTable | undefined;
   context.lines.forEach((line, index) => {
-    const cells = tableCells(line.text);
+    // The pipes of a projected row separate labelled cells, not the columns of a pipe table.
+    const cells = isProjectedLine(line.text) ? undefined : tableCells(line.text);
     if (cells !== undefined) table = readPipeLine(context, scan, table, cells, index);
     else if (table !== undefined)
       table = collapse(line.text).length === 0 ? { ...table, gap: true } : undefined;
@@ -418,6 +466,7 @@ function readProjectedTable(context: Context, scan: TableScan, rows: readonly Op
     for (let index = line; index <= lastLine; index += 1) scan.lines.add(index);
     if (reading.kind === "foreign") {
       if (startsWithIdentifier(row.cells)) scan.foreign.add(line);
+      else readUnidentifiedRow(context, scan, namedCellsOf(row), { line, lastLine });
     } else {
       readRow(context, scan, projectedCells(row, reading), { line, lastLine });
     }
@@ -468,7 +517,13 @@ function projectedTableCandidates(context: Context, scan: TableScan): void {
 }
 
 function scanTables(context: Context): TableScan {
-  const scan: TableScan = { drafts: [], lines: new Set(), foreign: new Set(), table: 0 };
+  const scan: TableScan = {
+    drafts: [],
+    unidentified: [],
+    lines: new Set(),
+    foreign: new Set(),
+    table: 0,
+  };
   pipeTableCandidates(context, scan);
   projectedTableCandidates(context, scan);
   return scan;
@@ -1367,40 +1422,99 @@ function obligationStatement(vocabulary: CompiledVocabulary, statement: string):
   );
 }
 
-function statementUnits(context: Context, covered: ReadonlySet<number>): readonly RawUnit[] {
-  const occurrences = new Map<string, number>();
+/** The derived identifier of a wording; a repeated wording is told apart by its occurrence. */
+class DerivedIds {
+  private readonly occurrences = new Map<string, number>();
+
+  constructor(private readonly documentKey: string) {}
+
+  next(statement: string): string {
+    const wording = normalizedWording(statement);
+    const occurrence = this.occurrences.get(wording) ?? 0;
+    this.occurrences.set(wording, occurrence + 1);
+    return derivedRequirementId(this.documentKey, statement, occurrence);
+  }
+}
+
+interface DerivedPlace {
+  readonly start: number;
+  readonly end: number;
+  readonly first: number;
+  readonly last: number;
+}
+
+function derivedUnit(
+  context: Context,
+  fields: Pick<EntryParts, "id" | "unitKind" | "title" | "interpreted">,
+  place: DerivedPlace,
+): RawUnit {
+  const { start, end, first, last } = place;
+  const candidate: Candidate = {
+    kind: "strong",
+    id: fields.id,
+    title: "",
+    line: -1,
+    headingLine: false,
+  };
+  const parts: EntryParts = {
+    ...fields,
+    idOrigin: "derived",
+    sectionPath: sectionPathAt(context.sections, start),
+    start,
+    end,
+  };
+  const block: Block = { candidate, first, last, start, end };
+  return { candidate, entry: toEntry(context, parts), hasBody: true, block, parts };
+}
+
+function statementUnits(
+  context: Context,
+  covered: ReadonlySet<number>,
+  ids: DerivedIds,
+): readonly RawUnit[] {
   const units: RawUnit[] = [];
   for (const paragraph of paragraphsOf(context, covered)) {
     for (const sentence of paragraph.text.split(SENTENCE_BREAK)) {
       const statement = collapse(sentence);
       if (!obligationStatement(context.vocabulary, statement)) continue;
-      const wording = normalizedWording(statement);
-      const occurrence = occurrences.get(wording) ?? 0;
-      occurrences.set(wording, occurrence + 1);
-      const id = derivedRequirementId(context.documentKey, statement, occurrence);
-      const candidate: Candidate = { kind: "strong", id, title: "", line: -1, headingLine: false };
-      const parts: EntryParts = {
-        id,
-        idOrigin: "derived",
-        unitKind: "statement",
+      const fields = {
+        id: ids.next(statement),
+        unitKind: "statement" as const,
         title: "",
         interpreted: { ...statementOf(statement), criteria: [] },
-        sectionPath: sectionPathAt(context.sections, paragraph.start),
-        start: paragraph.start,
-        end: paragraph.end,
       };
-      const entry = toEntry(context, parts);
-      const block: Block = {
-        candidate,
-        first: 0,
-        last: 0,
-        start: paragraph.start,
-        end: paragraph.end,
-      };
-      units.push({ candidate, entry, hasBody: true, block, parts });
+      units.push(
+        derivedUnit(context, fields, {
+          start: paragraph.start,
+          end: paragraph.end,
+          first: 0,
+          last: 0,
+        }),
+      );
     }
   }
   return units;
+}
+
+function unidentifiedRowUnits(
+  context: Context,
+  drafts: readonly UnidentifiedDraft[],
+  ids: DerivedIds,
+): readonly RawUnit[] {
+  return drafts.map(({ row, line, lastLine }) => {
+    const fields = {
+      id: ids.next(row.statement),
+      unitKind: "table-row" as const,
+      title: row.title,
+      interpreted: interpretRow(row),
+    };
+    return derivedUnit(context, fields, {
+      start: lineAt(context.lines, line).start,
+      end: lineAt(context.lines, lastLine).end,
+      first: line,
+      last: lastLine,
+    });
+  });
 }
 
 function coveredLines(blocks: readonly Block[], tables: TableScan): ReadonlySet<number> {
@@ -1430,14 +1544,17 @@ export function deriveRequirementInventory(input: RequirementInventoryInput): Re
   const kept = units.filter((unit) => accepted(unit, corroboration, context.vocabulary));
   const rejected = new Set(units.filter((unit) => !kept.includes(unit)).map((unit) => unit.block));
   const selection = selectDefinitions(context, kept);
+  const ids = new DerivedIds(context.documentKey);
+  const rows = unidentifiedRowUnits(context, tables.unidentified, ids);
   const statements = statementUnits(
     context,
     coveredLines(
       blocks.filter((block) => !rejected.has(block)),
       tables,
     ),
+    ids,
   );
-  const all = [...selection.chosen, ...statements].map((unit) => unit.entry);
+  const all = [...selection.chosen, ...rows, ...statements].map((unit) => unit.entry);
   all.sort((a, b) => a.characterStart - b.characterStart);
   const bound = Math.max(1, Math.trunc(input.maxEntries ?? REQUIREMENT_INVENTORY_ENTRIES_MAX));
   return Object.freeze({

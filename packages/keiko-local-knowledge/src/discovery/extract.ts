@@ -1106,6 +1106,7 @@ function selectionInput(
     bytes,
     extension,
     mediaType: mediaTypeFor(extension),
+    fileName: basenameOf(relativePath),
   };
 }
 
