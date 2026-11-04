@@ -8,12 +8,19 @@ import type { ReviewRunSettlement } from "@oscharko-dev/keiko-contracts/runtime/
 
 import { ReviewRunStore } from "../../packages/keiko-server/src/review/service/store.js";
 import { runMigrations } from "../../packages/keiko-server/src/store/schema.js";
-import { clientRequestPattern, openGateResume } from "./resume.js";
+import {
+  clientRequestPattern,
+  gateClientRequestId,
+  legacyClientRequestPattern,
+  openGateResume,
+} from "./resume.js";
 
 const MODELS = { reviewerModelId: "reviewer", counterCheckerModelId: "counter" };
 const COMMITS = { baseSha: "a".repeat(40), headSha: "b".repeat(40) };
 const ZERO = { promptTokens: 0, completionTokens: 0, durationMs: 0 };
 const SINCE = 10_000;
+const KEY = "0123456789ab";
+const OTHER_KEY = "ba9876543210";
 
 let stateDir: string;
 let db: DatabaseSync;
@@ -26,6 +33,8 @@ interface StoredRun {
   readonly settlement?: ReviewRunSettlement;
   readonly reviewerModelId?: string;
   readonly headSha?: string;
+  /** The reuse key in the client request id; `null` stores a legacy id without one. */
+  readonly reuseKey?: string | null;
 }
 
 function storeRun(run: StoredRun): string {
@@ -35,7 +44,10 @@ function storeRun(run: StoredRun): string {
     runId,
     repositoryId: "repo_0000000000000001",
     repositoryRoot: "/lab/keiko",
-    clientRequestId: `review-gate-${run.caseKey}-${String(run.createdAt)}`,
+    clientRequestId:
+      run.reuseKey === null
+        ? `review-gate-${run.caseKey}-${String(run.createdAt)}`
+        : gateClientRequestId(run.reuseKey ?? KEY, run.caseKey, run.createdAt),
     correlationId: `corr-${String(sequence)}`,
     target: { kind: "local-range", baseRef: "base", headRef: "head" },
     reviewerModelId: run.reviewerModelId ?? MODELS.reviewerModelId,
@@ -56,8 +68,13 @@ function storeRun(run: StoredRun): string {
   return runId;
 }
 
-function reusable(caseKey: string): string | undefined {
-  const resume = openGateResume(stateDir, SINCE, MODELS);
+function reusable(caseKey: string, acceptLegacy = false): string | undefined {
+  const resume = openGateResume(stateDir, {
+    sinceMs: SINCE,
+    models: MODELS,
+    reuseKey: KEY,
+    acceptLegacy,
+  });
   try {
     return resume.reusableRun(caseKey, COMMITS);
   } finally {
@@ -127,7 +144,68 @@ describe("openGateResume", () => {
 
   it("matches a case key exactly, never a longer one that shares its prefix", () => {
     storeRun({ caseKey: "pr-12", createdAt: SINCE + 1, settlement: { kind: "complete" } });
+    storeRun({
+      caseKey: "pr-12",
+      createdAt: SINCE + 2,
+      settlement: { kind: "complete" },
+      reuseKey: null,
+    });
+    expect(reusable("pr-1", true)).toBeUndefined();
+    expect(clientRequestPattern(KEY, "a_b%c")).toBe(`review-gate-${KEY}-a\\_b\\%c-%`);
+    expect(legacyClientRequestPattern("a_b%c")).toBe("review-gate-a\\_b\\%c-%");
+  });
+
+  it("reuses only a review stored under the same reuse key", () => {
+    storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 1,
+      settlement: { kind: "complete" },
+      reuseKey: OTHER_KEY,
+    });
     expect(reusable("pr-1")).toBeUndefined();
-    expect(clientRequestPattern("a_b%c")).toBe("review-gate-a\\_b\\%c-%");
+    const keyed = storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 2,
+      settlement: { kind: "complete" },
+    });
+    storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 3,
+      settlement: { kind: "complete" },
+      reuseKey: OTHER_KEY,
+    });
+    expect(reusable("pr-1")).toBe(keyed);
+  });
+
+  it("reuses a review stored without a reuse key only when legacy reviews are accepted", () => {
+    const legacy = storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 1,
+      settlement: { kind: "complete" },
+      reuseKey: null,
+    });
+    expect(reusable("pr-1")).toBeUndefined();
+    expect(reusable("pr-1", true)).toBe(legacy);
+  });
+
+  it("lets a keyed review decide alone, even when it was not measured", () => {
+    storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 1,
+      settlement: { kind: "complete" },
+      reuseKey: null,
+    });
+    const keyed = storeRun({
+      caseKey: "pr-2",
+      createdAt: SINCE + 2,
+      settlement: { kind: "complete" },
+    });
+    storeRun({
+      caseKey: "pr-1",
+      createdAt: SINCE + 3,
+      settlement: { kind: "abandoned", reason: "interrupted" },
+    });
+    expect(reusable("pr-1", true)).toBeUndefined();
+    expect(reusable("pr-2", true)).toBe(keyed);
   });
 });

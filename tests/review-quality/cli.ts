@@ -2,7 +2,9 @@
 // exact model pair and where its evidence goes; a development run also names its iteration and the
 // pull requests whose labels informed its configuration. The holdout run needs an explicit
 // confirmation flag because it may happen exactly once (ADR-0182 D9). `--resume-since` continues
-// an interrupted replay from the reviews the original run stored since that instant.
+// an interrupted replay from the reviews the original run stored since that instant;
+// `--resume-legacy-digest` additionally admits reviews stored before client request ids carried a
+// reuse key, and only when it equals the run's configuration digest (resume.ts).
 
 const GATE_SETS = ["development", "holdout", "seeds"] as const;
 type GateSet = (typeof GATE_SETS)[number];
@@ -25,6 +27,7 @@ export interface GateArguments {
   readonly tuningInputs: readonly number[];
   readonly port: number;
   readonly resumeSinceMs: number | undefined;
+  readonly resumeLegacyDigest: string | undefined;
 }
 
 export class GateArgumentError extends Error {
@@ -87,10 +90,29 @@ function instant(value: string | undefined, flag: string): number | undefined {
   return parsed;
 }
 
+const CONFIGURATION_DIGEST = /^sha256:[0-9a-f]{64}$/u;
+
+function digest(value: string | undefined, flag: string): string | undefined {
+  if (value === undefined) return undefined;
+  if (!CONFIGURATION_DIGEST.test(value)) {
+    throw new GateArgumentError(`${flag} must be a sha256: configuration digest`);
+  }
+  return value;
+}
+
 function numberList(value: string | undefined, flag: string): readonly number[] | undefined {
   if (value === undefined) return undefined;
   if (value.trim() === "") return [];
   return value.split(",").map((part) => positiveInteger(part.trim(), flag));
+}
+
+function checkResumeRules(values: ReadonlyMap<string, string>, set: GateSet): void {
+  if (set === "seeds" && values.has("--resume-since")) {
+    throw new GateArgumentError("--resume-since continues a replay, not the seed gate");
+  }
+  if (values.has("--resume-legacy-digest") && !values.has("--resume-since")) {
+    throw new GateArgumentError("--resume-legacy-digest belongs to a resumed run");
+  }
 }
 
 function checkSetRules(
@@ -104,9 +126,6 @@ function checkSetRules(
   if (set !== "development" && variant !== "product") {
     throw new GateArgumentError("variants are measured on the development set only");
   }
-  if (set === "seeds" && values.has("--resume-since")) {
-    throw new GateArgumentError("--resume-since continues a replay, not the seed gate");
-  }
   if (set !== "development" && values.has("--tuning-inputs")) {
     throw new GateArgumentError("--tuning-inputs belongs to a development run");
   }
@@ -118,6 +137,7 @@ export function parseGateArguments(argv: readonly string[]): GateArguments {
   const set = oneOf(required(values, "--set"), GATE_SETS, "--set");
   const variant = oneOf(values.get("--variant") ?? "product", GATE_VARIANTS, "--variant");
   checkSetRules(values, set, variant);
+  checkResumeRules(values, set);
   return {
     set,
     variant,
@@ -133,5 +153,6 @@ export function parseGateArguments(argv: readonly string[]): GateArguments {
     tuningInputs: numberList(values.get("--tuning-inputs"), "--tuning-inputs") ?? [],
     port: positiveInteger(values.get("--port") ?? String(DEFAULT_PORT), "--port"),
     resumeSinceMs: instant(values.get("--resume-since"), "--resume-since"),
+    resumeLegacyDigest: digest(values.get("--resume-legacy-digest"), "--resume-legacy-digest"),
   };
 }

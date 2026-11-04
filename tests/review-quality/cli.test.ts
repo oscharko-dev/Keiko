@@ -101,6 +101,37 @@ describe("parseGateArguments", () => {
     }
   });
 
+  it("reads a legacy configuration digest only for a resumed run and only in sha256 form", () => {
+    const digest = `sha256:${"a".repeat(64)}`;
+    const resumed = [
+      "--set",
+      "holdout",
+      "--confirm-final-holdout",
+      "--resume-since",
+      "2026-11-02T17:35:00Z",
+      ...COMMON,
+    ];
+    expect(parseGateArguments(resumed).resumeLegacyDigest).toBeUndefined();
+    expect(
+      parseGateArguments([...resumed, "--resume-legacy-digest", digest]).resumeLegacyDigest,
+    ).toBe(digest);
+    expect(() =>
+      parseGateArguments([
+        "--set",
+        "holdout",
+        "--confirm-final-holdout",
+        "--resume-legacy-digest",
+        digest,
+        ...COMMON,
+      ]),
+    ).toThrow(/belongs to a resumed run/u);
+    for (const value of ["a".repeat(64), "sha256:abc", `sha256:${"G".repeat(64)}`]) {
+      expect(() => parseGateArguments([...resumed, "--resume-legacy-digest", value])).toThrow(
+        /sha256: configuration digest/u,
+      );
+    }
+  });
+
   it("refuses variants and tuning inputs outside the development set", () => {
     expect(() =>
       parseGateArguments(["--set", "seeds", "--variant", "roles-swapped", ...COMMON]),

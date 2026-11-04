@@ -7,7 +7,9 @@
 // only supplies the review ports, the evaluation repository and the evidence. It runs one review at
 // a time and stops the composed server when it is done. A replay probes both models again once its
 // pull requests are prepared, because preparing the holdout takes minutes and the gateway closes
-// idle connections in that time. `--resume-since` continues an interrupted replay (resume.ts).
+// idle connections in that time, and stops before its first review when a model still fails. A
+// holdout replay refuses to start when any holdout pull request cannot be prepared, so its verdict
+// always covers the whole holdout. `--resume-since` continues an interrupted replay (resume.ts).
 
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -26,6 +28,7 @@ import {
   gateConfiguration,
   type GateConfiguration,
   renderGateCost,
+  renderReplayCoverage,
   settlementCounts,
   summarizeGateCost,
 } from "./evidence.js";
@@ -75,15 +78,22 @@ async function probeReadiness(args: GateArguments): Promise<Record<string, strin
   return outcomes;
 }
 
-/** Probes until every model passes, or returns the last outcomes after the final attempt. */
+function allPassed(outcomes: Record<string, string>): boolean {
+  return Object.values(outcomes).every((outcome) => PROBE_PASSED.test(outcome));
+}
+
+/** Probes until every model passes; throws after the final failed attempt. */
 async function probeUntilReady(args: GateArguments): Promise<Record<string, string>> {
-  let outcomes: Record<string, string> = {};
-  for (let attempt = 1; attempt <= READINESS_ATTEMPTS; attempt += 1) {
-    outcomes = await probeReadiness(args);
-    if (Object.values(outcomes).every((outcome) => PROBE_PASSED.test(outcome))) break;
-    if (attempt < READINESS_ATTEMPTS) {
-      await new Promise((settle) => setTimeout(settle, READINESS_RETRY_MS));
-    }
+  for (let attempt = 1; attempt < READINESS_ATTEMPTS; attempt += 1) {
+    const outcomes = await probeReadiness(args);
+    if (allPassed(outcomes)) return outcomes;
+    await new Promise((settle) => setTimeout(settle, READINESS_RETRY_MS));
+  }
+  const outcomes = await probeReadiness(args);
+  if (!allPassed(outcomes)) {
+    throw new Error(
+      `a model failed readiness after preparation (${Object.values(outcomes).join(", ")}); no review ran`,
+    );
   }
   return outcomes;
 }
@@ -124,6 +134,11 @@ async function runReplay(ctx: GateContext): Promise<Record<string, unknown>> {
     ? holdoutPullRequests(dataset)
     : (args.pullRequests ?? developmentSample(dataset, args.sampleSize));
   const { available, unavailable } = preparedPullRequests(ctx, selected);
+  if (holdout && unavailable.length > 0) {
+    throw new Error(
+      `${String(unavailable.length)} holdout pull requests could not be prepared; the holdout runs whole or not at all`,
+    );
+  }
   const readinessAfterPreparation = await probeUntilReady(args);
   const run = await ReviewEval.runReviewReplay({
     dataset,
@@ -155,7 +170,10 @@ async function runReplay(ctx: GateContext): Promise<Record<string, unknown>> {
     run,
     summary,
     verdict,
-    markdown: ReviewEval.renderReviewPrecision(summary, verdict),
+    markdown: [
+      ReviewEval.renderReviewPrecision(summary, verdict),
+      renderReplayCoverage(selected, unavailable),
+    ].join("\n"),
   };
 }
 
@@ -242,6 +260,7 @@ function writeEvidence(
         ? null
         : {
             since: new Date(ctx.args.resumeSinceMs).toISOString(),
+            legacyDigest: ctx.args.resumeLegacyDigest ?? null,
             reusedReviews: records.filter((record) => record.resumed).length,
           },
     settlements: settlementCounts(records),
@@ -258,6 +277,21 @@ function writeEvidence(
     ].join("\n"),
   );
   return dir;
+}
+
+/** Opens the stored reviews a resumed replay reuses; legacy ones only under the same digest. */
+function openResume(args: GateArguments, configuration: GateConfiguration): GateResume | undefined {
+  if (args.resumeSinceMs === undefined) return undefined;
+  const legacy = args.resumeLegacyDigest;
+  if (legacy !== undefined && legacy !== configuration.configurationDigest) {
+    throw new Error("--resume-legacy-digest differs from this run's configuration digest");
+  }
+  return openGateResume(args.stateDir, {
+    sinceMs: args.resumeSinceMs,
+    models: args,
+    reuseKey: configuration.reuseKey,
+    acceptLegacy: legacy !== undefined,
+  });
 }
 
 async function main(argv: readonly string[]): Promise<void> {
@@ -277,10 +311,7 @@ async function main(argv: readonly string[]): Promise<void> {
     variant: args.variant,
     env: process.env,
   });
-  const resume =
-    args.resumeSinceMs === undefined
-      ? undefined
-      : openGateResume(args.stateDir, args.resumeSinceMs, args);
+  const resume = openResume(args, configuration);
   try {
     const readiness = await probeReadiness(args);
     const ctx: GateContext = {
@@ -289,6 +320,7 @@ async function main(argv: readonly string[]): Promise<void> {
       reviewer: createGateReviewer(
         server.deps,
         args,
+        configuration.reuseKey,
         resume === undefined ? undefined : reuseOf(resume),
       ),
       configuration,

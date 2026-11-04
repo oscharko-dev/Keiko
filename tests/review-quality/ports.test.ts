@@ -11,6 +11,7 @@ import {
 } from "./ports.js";
 
 const MODELS = { reviewerModelId: "reviewer", counterCheckerModelId: "counter" };
+const REUSE_KEY = "0123456789ab";
 const REFS = { baseRef: "keiko-eval/pr-1/base", headRef: "keiko-eval/pr-1/head" };
 
 function view(): ReviewRunView {
@@ -56,7 +57,7 @@ function deps(
 describe("createGateReviewer", () => {
   it("runs a local-range review with the pair, releases the instance and keeps its record", async () => {
     const f = deps(() => Promise.resolve({ kind: "started", run: { runId: "review-1" } }));
-    const reviewer = createGateReviewer(f.deps, MODELS);
+    const reviewer = createGateReviewer(f.deps, MODELS, REUSE_KEY);
 
     const { record } = await reviewer.review("pr-1", "/lab/keiko", REFS);
 
@@ -64,6 +65,8 @@ describe("createGateReviewer", () => {
       repositoryRoot: "/lab/keiko",
       request: { target: { kind: "local-range", ...REFS }, ...MODELS },
     });
+    const started = f.started[0] as { readonly request: { readonly clientRequestId: string } };
+    expect(started.request.clientRequestId).toMatch(/^review-gate-0123456789ab-pr-1-\d+$/u);
     expect(f.release).toHaveBeenCalledWith("/lab/keiko", expect.any(String));
     expect(record).toMatchObject({
       caseKey: "pr-1",
@@ -81,7 +84,7 @@ describe("createGateReviewer", () => {
 
   it("records a refused start as a skipped review with its reason and no cost", async () => {
     const f = deps(() => Promise.resolve({ kind: "refused", reason: "model-unavailable" }));
-    const reviewer = createGateReviewer(f.deps, MODELS);
+    const reviewer = createGateReviewer(f.deps, MODELS, REUSE_KEY);
 
     const { view: settled, record } = await reviewer.review("seed-x", "/lab/seed", REFS);
 
@@ -107,7 +110,7 @@ describe("createGateReviewer", () => {
       () => Promise.resolve(settled),
     );
     const asked: unknown[] = [];
-    const reviewer = createGateReviewer(f.deps, MODELS, {
+    const reviewer = createGateReviewer(f.deps, MODELS, REUSE_KEY, {
       reusableRun: (...input) => {
         asked.push(input);
         return input[0] === "pr-1" ? "review-1" : undefined;
@@ -125,7 +128,9 @@ describe("createGateReviewer", () => {
 
   it("reviews a case again when the stored review it names is not settled", async () => {
     const f = deps(() => Promise.resolve({ kind: "started", run: { runId: "review-2" } }));
-    const reviewer = createGateReviewer(f.deps, MODELS, { reusableRun: () => "review-1" });
+    const reviewer = createGateReviewer(f.deps, MODELS, REUSE_KEY, {
+      reusableRun: () => "review-1",
+    });
 
     const { record } = await reviewer.review("pr-1", "/lab/keiko", REFS);
 
@@ -134,7 +139,9 @@ describe("createGateReviewer", () => {
   });
 
   it("refuses a composition without a review run service", () => {
-    expect(() => createGateReviewer({} as UiHandlerDeps, MODELS)).toThrow(/no review run service/u);
+    expect(() => createGateReviewer({} as UiHandlerDeps, MODELS, REUSE_KEY)).toThrow(
+      /no review run service/u,
+    );
   });
 });
 

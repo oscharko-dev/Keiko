@@ -18,6 +18,7 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
 
 import type { EvaluationRefs } from "./repository.js";
+import { gateClientRequestId } from "./resume.js";
 
 export interface GateModels {
   readonly reviewerModelId: string;
@@ -122,12 +123,15 @@ async function storedReview(
 }
 
 /**
- * Runs reviews one at a time through the composed review service. With `reuse`, a case whose
- * stored review it names is read back through the same service instead of being reviewed again.
+ * Runs reviews one at a time through the composed review service. Every review's client request id
+ * carries `reuseKey`, so a later resume can tell which configuration stored it. With `reuse`, a case
+ * whose stored review it names is read back through the same service instead of being reviewed
+ * again.
  */
 export function createGateReviewer(
   deps: UiHandlerDeps,
   models: GateModels,
+  reuseKey: string,
   reuse?: GateReuse,
 ): GateReviewer {
   const service = deps.reviewRunService;
@@ -147,7 +151,7 @@ export function createGateReviewer(
       request: {
         target: { kind: "local-range", baseRef: refs.baseRef, headRef: refs.headRef },
         ...models,
-        clientRequestId: `review-gate-${caseKey}-${String(startedAt)}`,
+        clientRequestId: gateClientRequestId(reuseKey, caseKey, startedAt),
       },
       correlationId,
     });

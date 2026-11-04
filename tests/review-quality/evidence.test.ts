@@ -7,9 +7,12 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { parseGateArguments } from "./cli.js";
 import {
   BUDGET_SETTING_KEYS,
+  COMPOSITION_PATHS,
   CONFIGURATION_PATHS,
   gateConfiguration,
   renderGateCost,
+  renderReplayCoverage,
+  reuseKeyOf,
   settlementCounts,
   summarizeGateCost,
 } from "./evidence.js";
@@ -27,7 +30,22 @@ const FILES = [
   "packages/keiko-server/src/review/counter-check/prompt.ts",
   "packages/keiko-contracts/src/pull-request-review.ts",
   "packages/keiko-contracts/src/pull-request-review-rules.ts",
+  "packages/keiko-contracts/src/index.ts",
+  "packages/keiko-evaluations/src/index.ts",
+  "packages/keiko-git/src/index.ts",
+  "packages/keiko-harness/src/index.ts",
+  "packages/keiko-model-gateway/src/gateway.ts",
+  "packages/keiko-security/src/index.ts",
+  "packages/keiko-server/src/coding-sidecar-gateway.ts",
+  "packages/keiko-tool-catalog/src/index.ts",
+  "packages/keiko-tools/src/index.ts",
+  "package-lock.json",
 ];
+
+function commitChange(path: string, content: string): void {
+  writeFileSync(join(checkout, path), content);
+  git(checkout, ["commit", "-q", "-am", "change"], { env: IDENTITY });
+}
 
 function args(variant: string): ReturnType<typeof parseGateArguments> {
   return parseGateArguments([
@@ -102,6 +120,26 @@ describe("gateConfiguration", () => {
     writeFileSync(join(checkout, FILES[0] ?? ""), "// changed\n");
     expect(() => gateConfiguration(checkout, args("product"), {})).toThrow(/uncommitted changes/u);
   });
+
+  it("digests the composed packages apart from the review configuration", () => {
+    const before = gateConfiguration(checkout, args("product"), {});
+    expect(Object.keys(before.compositionObjects)).toEqual([...COMPOSITION_PATHS]);
+    expect(before.reuseKey).toMatch(/^[0-9a-f]{12}$/u);
+    expect(before.reuseKey).toBe(reuseKeyOf(before.configurationDigest, before.compositionDigest));
+    commitChange("packages/keiko-model-gateway/src/gateway.ts", "// repaired\n");
+    const after = gateConfiguration(checkout, args("product"), {});
+    expect(after.configurationDigest).toBe(before.configurationDigest);
+    expect(after.compositionDigest).not.toBe(before.compositionDigest);
+    expect(after.reuseKey).not.toBe(before.reuseKey);
+    const swapped = gateConfiguration(checkout, args("roles-swapped"), {});
+    expect(swapped.compositionDigest).toBe(after.compositionDigest);
+    expect(swapped.reuseKey).not.toBe(after.reuseKey);
+  });
+
+  it("refuses to run on uncommitted changes in a composed package", () => {
+    writeFileSync(join(checkout, "packages/keiko-server/src/coding-sidecar-gateway.ts"), "// x\n");
+    expect(() => gateConfiguration(checkout, args("product"), {})).toThrow(/uncommitted changes/u);
+  });
 });
 
 describe("summarizeGateCost and settlementCounts", () => {
@@ -134,6 +172,17 @@ describe("summarizeGateCost and settlementCounts", () => {
       summarizeGateCost([record(2_000, { kind: "complete" }), record(4_000, { kind: "complete" })])
         .wallTimeMs.median,
     ).toBe(3_000);
+  });
+});
+
+describe("renderReplayCoverage", () => {
+  it("states the replayed count and names every pull request it could not prepare", () => {
+    const full = renderReplayCoverage([1, 2, 3], []);
+    expect(full).toContain("Selected pull requests: 3. Replayed: 3. Not prepared: 0.");
+    expect(full).not.toContain("covers only");
+    const partial = renderReplayCoverage([1, 2, 3], [2]);
+    expect(partial).toContain("Selected pull requests: 3. Replayed: 2. Not prepared: 1.");
+    expect(partial).toContain("covers only the replayed pull requests. Not prepared: #2.");
   });
 });
 
