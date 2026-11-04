@@ -226,11 +226,11 @@ condition = "AND"
 commits = ["28156040aca87dc1c6e7290a911ec0c6c0b32815"]
 paths = ['''^tests/review-quality/(ports|resume)\.test\.ts$''']
 targetRules = ["generic-api-key"]
-regexTarget = "line"
+regexTarget = "match"
 regexes = [
-  '''^const REUSE_KEY = "0123456789ab";$''',
-  '''^const KEY = "0123456789ab";$''',
-  '''^const OTHER_KEY = "ba9876543210";$''',
+  '''^REUSE_KEY = "0123456789ab"$''',
+  '''^KEY = "0123456789ab"$''',
+  '''^OTHER_KEY = "ba9876543210"$''',
 ]
 
 [[allowlists]]
