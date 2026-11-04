@@ -1,0 +1,161 @@
+// Isolation rules of the MemoriaViva lab (#4207): what a run may touch and what it must keep to
+// itself. Real conversation text never leaves the machine and never stays in a kept database; the
+// measured product only talks to models on this machine; the measured product is the one the
+// operator named. Each rule is a small pure check the runner applies before an instance starts, so a
+// violation is refused up front and is never mistaken for a failed unit of the measurement.
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
+
+/**
+ * A refusal of the operator's configuration (a provider outside this machine, an environment the
+ * repository `.env` would change). It aborts the run: no unit of the measurement can succeed, so it
+ * must not be recorded as one unit failure among many.
+ */
+export class LabConfigurationError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = "LabConfigurationError";
+  }
+}
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
+const REAL_TEXT_CLASS_PREFIX = "anchor-";
+const REAL_CONVERSATION_CLASS = "anchor-real";
+
+function hostOf(provider) {
+  return hostOfUrl(provider?.baseUrl);
+}
+
+function hostOfUrl(text) {
+  try {
+    return new URL(text).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+const HTTP_URL = /^https?:\/\//iu;
+
+// Every http(s) URL anywhere in the configuration, not only the providers' base URLs: an embedding,
+// reranker, speech or tool endpoint elsewhere would receive conversation text just the same.
+function collectUrls(value, found = []) {
+  if (typeof value === "string") {
+    if (HTTP_URL.test(value.trim())) found.push(value.trim());
+  } else if (Array.isArray(value)) {
+    for (const item of value) collectUrls(item, found);
+  } else if (value !== null && typeof value === "object") {
+    for (const item of Object.values(value)) collectUrls(item, found);
+  }
+  return found;
+}
+
+function readConfigText(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch (error) {
+    throw new LabConfigurationError(
+      `the gateway configuration cannot be read (${String(error?.code ?? "error")})`,
+    );
+  }
+}
+
+function parseConfig(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new LabConfigurationError("the gateway configuration is not valid JSON");
+  }
+}
+
+/**
+ * Reads the gateway configuration a live run points the product at and refuses it unless every
+ * provider it names (not only the two models of the run: the product probes each configured
+ * provider at start) and every other URL in it lie on this machine: host 127.0.0.1, localhost or
+ * ::1. Everything a run reads and writes stays on the machine, so an endpoint elsewhere would
+ * receive the conversations. Returns the SHA-256 of the file's bytes, which the manifest records as
+ * the run's `configDigest`.
+ */
+export function assertLoopbackGatewayConfig(path) {
+  const text = readConfigText(path);
+  const parsed = parseConfig(text);
+  const providers = parsed?.providers;
+  if (!Array.isArray(providers) || providers.length === 0)
+    throw new LabConfigurationError("the gateway configuration names no provider");
+  const remote = providers.filter((provider) => !LOOPBACK_HOSTS.has(hostOf(provider)));
+  if (remote.length > 0) {
+    const names = remote.map((provider) => String(provider?.modelId ?? "unnamed")).join(", ");
+    throw new LabConfigurationError(
+      `the gateway configuration names ${String(remote.length)} provider(s) outside this machine (${names}); a run talks to 127.0.0.1, localhost or ::1 only`,
+    );
+  }
+  const elsewhere = collectUrls(parsed).filter((url) => !LOOPBACK_HOSTS.has(hostOfUrl(url)));
+  if (elsewhere.length > 0)
+    throw new LabConfigurationError(
+      `the gateway configuration carries ${String(elsewhere.length)} URL(s) outside this machine beyond the providers' base URLs; every endpoint a run can reach must be 127.0.0.1, localhost or ::1`,
+    );
+  return { digest: createHash("sha256").update(text).digest("hex") };
+}
+
+/**
+ * The product checks every configured chat model at each start. In a lab that starts one instance per
+ * unit, a chat model the run does not measure would be called and stay loaded beside the measured
+ * one, so its load would be in every timing of the run while its name is in none of the evidence. A
+ * provider of another kind (an embedding model) is what a run may need and is left alone; one that
+ * states no kind counts as a chat model. Called after the configuration passed the loopback check.
+ */
+export function assertOnlyMeasuredChatModels(path, measuredModelIds) {
+  const measured = new Set(measuredModelIds);
+  const { providers } = parseConfig(readConfigText(path));
+  const others = providers.filter(
+    (provider) =>
+      (provider?.capability?.kind ?? "chat") === "chat" && !measured.has(provider?.modelId),
+  );
+  if (others.length > 0) {
+    const names = others.map((provider) => String(provider?.modelId ?? "unnamed")).join(", ");
+    throw new LabConfigurationError(
+      `the gateway configuration names ${String(others.length)} chat model(s) this run does not measure (${names}); the product would call each at every start, so give every model its own configuration file`,
+    );
+  }
+}
+
+/**
+ * A long live run starts one instance per unit, and each reads the configuration file afresh. The
+ * file is therefore checked again before every instance: it must still be loopback-only and still
+ * the file whose digest the manifest records, or a provider added half way through would receive the
+ * conversations of every later unit.
+ */
+export function assertGatewayConfigUnchanged(path, digest) {
+  if (assertLoopbackGatewayConfig(path).digest !== digest)
+    throw new LabConfigurationError(
+      "the gateway configuration changed while the run was in progress",
+    );
+}
+
+/** True for a scenario whose text comes from the real-conversation anchor (#4208). */
+export function isAnchorScenario(scenario) {
+  return scenario.class.startsWith(REAL_TEXT_CLASS_PREFIX);
+}
+
+/**
+ * Bodies are retained only when the run asks for it, and never for anchor text unless the run is
+ * the labelling pass (`labelPass`, `--label-pass`): the one run that writes real text into its run
+ * files so that a person can label what the product stored (anchor/label.mjs), into a private
+ * directory outside every work tree. A forgotten `--no-retain-bodies` therefore cannot leak it.
+ */
+export function retainBodiesFor(scenario, retainBodies, labelPass = false) {
+  if (retainBodies !== true) return false;
+  return !isAnchorScenario(scenario) || labelPass === true;
+}
+
+/**
+ * `--keep` leaves every instance's chat database on disk, and a real conversation would stay in it
+ * as plain text. A run over real conversations therefore never keeps instance state.
+ */
+export function assertKeepAllowed(scenarios, keep) {
+  if (keep !== true) return;
+  if (scenarios.some((scenario) => scenario.class === REAL_CONVERSATION_CLASS))
+    throw new RangeError(
+      "--keep cannot be combined with real-conversation scenarios (class anchor-real): the kept instance state would hold the real text",
+    );
+}

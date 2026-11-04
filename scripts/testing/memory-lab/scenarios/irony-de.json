@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "irony-de",
+  "language": "de",
+  "class": "irony",
+  "difficulty": "plain",
+  "description": "An ironic remark that means the opposite of what it says. It is not a preference and must not be stored.",
+  "truth": [],
+  "forbidden": [
+    {
+      "class": "irony",
+      "terms": [["sieben Uhr"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Klar, ich liebe es ja total, wenn Besprechungen um sieben Uhr morgens anfangen.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "preference",
+      "question": "Zu welcher Uhrzeit möchte ich meine Termine am liebsten haben?",
+      "expect": {
+        "kind": "abstain"
+      }
+    }
+  ]
+}
