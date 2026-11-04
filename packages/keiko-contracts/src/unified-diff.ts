@@ -361,6 +361,12 @@ function handleBodyLine(
   consumeBudget(file.current, line);
 }
 
+// The signature delimiter of `git format-patch` (and of mail). With the hunk's budget spent, a
+// removal line spelled like this could only be an extra line, so it ends the patch body instead.
+function isSignatureDelimiter(line: string): boolean {
+  return line === "-- " || line === "--";
+}
+
 function handleLine(
   state: ParseState,
   line: string,
@@ -378,6 +384,10 @@ function handleLine(
   }
   if (state.current === undefined) {
     return; // skip preamble before the first file header
+  }
+  if (isSignatureDelimiter(line)) {
+    finishHunk(state.current);
+    return;
   }
   if (line.startsWith("+++ ")) {
     state.current.newPath = headerPath(line, "+++ ");
