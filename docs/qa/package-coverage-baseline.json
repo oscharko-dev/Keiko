@@ -294,7 +294,7 @@
       }
     },
     "keiko-ui": {
-      "files": 624,
+      "files": 625,
       "uncoveredFiles": 3,
       "uncoveredLines": 2947,
       "totalLines": 41689,

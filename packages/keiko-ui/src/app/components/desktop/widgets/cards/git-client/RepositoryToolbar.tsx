@@ -94,6 +94,7 @@ function repositorySections(
   addRepositoryLabel: string | undefined,
   selectedPath: string | null,
   repositorySelectionLocked: boolean,
+  boundWorkspaceLabel: string,
 ): RepositorySection[] {
   const sections: RepositorySection[] = [
     {
@@ -101,9 +102,7 @@ function repositorySections(
         value: repo.path,
         label: repo.name,
         description:
-          repositorySelectionLocked && repo.path === selectedPath
-            ? "Bound active workspace"
-            : repo.path,
+          repositorySelectionLocked && repo.path === selectedPath ? boundWorkspaceLabel : repo.path,
       })),
     },
   ];
@@ -193,6 +192,7 @@ function ToolbarActions({
   onConnectToChat,
   connectToChatLabel,
 }: ToolbarActionsProps): ReactNode {
+  const t = useTranslate();
   if (onOpenEditor === undefined && onOpenFiles === undefined && onConnectToChat === undefined) {
     return null;
   }
@@ -207,7 +207,7 @@ function ToolbarActions({
       ) : null}
       {onOpenEditor !== undefined ? (
         <ToolbarIconButton
-          label="Open in Editor"
+          label={t("gitClientWindow.ui.openInEditor")}
           icon={<CodeIcon size={15} />}
           onClick={() => {
             if (selectedPath !== null) onOpenEditor(selectedPath);
@@ -216,7 +216,7 @@ function ToolbarActions({
       ) : null}
       {onOpenFiles !== undefined ? (
         <ToolbarIconButton
-          label="Open Files"
+          label={t("gitClientWindow.ui.openFiles")}
           icon={<FilesIcon size={15} />}
           onClick={() => {
             if (selectedPath !== null) onOpenFiles(selectedPath);
@@ -234,16 +234,21 @@ function EmptyRepositoryToolbar({
 }: {
   readonly onOpenEditor: ((root: string) => void) | undefined;
 }): ReactNode {
+  const t = useTranslate();
   return (
-    <header style={TOOLBAR_EMPTY_STYLE} aria-label="Repository toolbar">
+    <header style={TOOLBAR_EMPTY_STYLE} aria-label={t("gitClientWindow.ui.repoToolbar")}>
       <span style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--fg-faint)" }}>
         <FolderIcon size={16} />
-        <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>Select a repository</span>
+        <span style={{ fontSize: 14, color: "var(--fg-muted)" }}>
+          {t("gitClientWindow.ui.selectRepository")}
+        </span>
       </span>
       <span style={{ width: 1, height: 26, background: "var(--line-soft)" }} />
       <span style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--fg-faint)" }}>
         <BranchIcon size={16} />
-        <span style={{ fontSize: 13, color: "var(--fg-faint)" }}>No branch</span>
+        <span style={{ fontSize: 13, color: "var(--fg-faint)" }}>
+          {t("gitClientWindow.ui.noBranch")}
+        </span>
       </span>
       <span style={{ flex: 1 }} />
       {onOpenEditor !== undefined ? (
@@ -251,7 +256,7 @@ function EmptyRepositoryToolbar({
           <span style={{ color: "var(--fg-dim)" }}>
             <CodeIcon size={15} />
           </span>{" "}
-          Open in Editor
+          {t("gitClientWindow.ui.openInEditor")}
         </button>
       ) : null}
     </header>
@@ -310,13 +315,14 @@ function RepositoryCell({
   readonly addRepository: AddRepositoryEntry | undefined;
   readonly onSelectRepository: (path: string) => void;
 }): ReactNode {
+  const t = useTranslate();
   // The Repository menu is disabled in the locked state, so the "Add repository" option it
   // carries is unclickable there. Only put the option in the menu when the picker is enabled;
   // when locked, `LockedAddRepositoryButton` below exposes the action as a separate control that
   // stays clickable without changing the bound project.
   const menuAddRepositoryLabel = repositorySelectionLocked ? undefined : addRepository?.label;
   return (
-    <ToolbarCell label="Repository" minWidth={248}>
+    <ToolbarCell label={t("gitClientWindow.ui.repository")} minWidth={248}>
       <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
         <span style={{ color: "var(--fg-dim)" }}>
           <FolderIcon size={16} />
@@ -325,7 +331,7 @@ function RepositoryCell({
           value={selectedPath ?? ""}
           ariaLabel="Repository"
           menuTitle="Repository"
-          placeholder="Select a repository"
+          placeholder={t("gitClientWindow.ui.selectRepository")}
           disabled={repositorySelectionLocked}
           triggerStyle={REPOSITORY_TRIGGER_STYLE}
           sections={repositorySections(
@@ -333,6 +339,7 @@ function RepositoryCell({
             menuAddRepositoryLabel,
             selectedPath,
             repositorySelectionLocked,
+            t("gitClientWindow.ui.boundWorkspace"),
           )}
           onValueChange={(value) => {
             if (value === ADD_REPOSITORY_OPTION) addRepository?.onSelect();
@@ -392,8 +399,9 @@ function BranchCell({
   readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
   readonly onRetryBranches: () => void;
 }): ReactNode {
+  const t = useTranslate();
   return (
-    <ToolbarCell label="Current branch" minWidth={190}>
+    <ToolbarCell label={t("gitClientWindow.ui.currentBranch")} minWidth={190}>
       <BranchSelector
         branches={branches}
         currentBranch={branchValue}
@@ -537,8 +545,9 @@ function ConnectedRepositoryToolbar({
   cells,
   actions,
 }: ConnectedRepositoryToolbarProps): ReactNode {
+  const t = useTranslate();
   return (
-    <header style={TOOLBAR_STYLE} aria-label="Repository toolbar">
+    <header style={TOOLBAR_STYLE} aria-label={t("gitClientWindow.ui.repoToolbar")}>
       <ConnectedToolbarCells {...cells} />
       <span style={{ flex: 1 }} />
       <ToolbarActions {...actions} />

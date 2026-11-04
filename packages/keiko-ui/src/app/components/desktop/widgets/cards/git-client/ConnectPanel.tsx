@@ -81,15 +81,13 @@ function RecentRepositories({
   if (loading && repositories.length === 0) {
     return (
       <output style={{ ...NATIVE_BLOCK_STYLE, ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-        Loading repositories…
+        {t("gitClientWindow.ui.loadingRepos")}
       </output>
     );
   }
   if (repositories.length === 0) {
     return (
-      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>
-        No repositories yet. Connect or clone one to get started.
-      </p>
+      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12 }}>{t("gitClientWindow.ui.noReposYet")}</p>
     );
   }
   return (
@@ -147,6 +145,7 @@ export function ConnectPanel({
   onClone,
   onRetry,
 }: ConnectPanelProps): ReactNode {
+  const tUi = useTranslate();
   const t = useTranslate();
   return (
     <div style={CONNECT_WRAP_STYLE}>
@@ -154,23 +153,20 @@ export function ConnectPanel({
         <div aria-hidden="true" style={CONNECT_MEDALLION_STYLE}>
           <BranchIcon size={28} />
         </div>
-        <h2 style={CONNECT_TITLE_STYLE}>No repository connected</h2>
-        <p style={CONNECT_SUBTITLE_STYLE}>
-          Connect a folder or repository to review changes, stage commits, and open pull requests —
-          all in one window.
-        </p>
+        <h2 style={CONNECT_TITLE_STYLE}>{t("gitClientWindow.ui.noRepoConnected")}</h2>
+        <p style={CONNECT_SUBTITLE_STYLE}>{t("gitClientWindow.ui.connectHint")}</p>
 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 22 }}>
           <button type="button" style={PRIMARY_BTN} onClick={onConnect}>
-            <FolderIcon size={16} /> Connect repository
+            <FolderIcon size={16} /> {t("gitClientWindow.ui.connectRepo")}
           </button>
           <button type="button" style={SECONDARY_BTN} onClick={onClone}>
-            <LinkIcon size={15} /> Clone from URL
+            <LinkIcon size={15} /> {t("gitClientWindow.ui.cloneFromUrl")}
           </button>
         </div>
 
         <div style={{ width: "100%", marginTop: 34, textAlign: "left" }}>
-          <div style={RECENT_LABEL_STYLE}>Recent</div>
+          <div style={RECENT_LABEL_STYLE}>{tUi("gitClientWindow.ui.recent")}</div>
           <RecentRepositories
             repositories={repositories}
             loading={loading}

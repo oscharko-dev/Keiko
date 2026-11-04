@@ -86,6 +86,7 @@ function createdChatMatchesCurrentProject(
 }
 
 export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): ReactNode {
+  const tUi = useTranslate();
   const optionalT = useOptionalWidgetTranslate();
   const t = useTranslate();
   const session = useChatSessionCatalog();
@@ -363,8 +364,8 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
     <div className="chat-history">
       <div className="chat-history-head">
         <div>
-          <p className="chat-history-kicker">Conversations</p>
-          <h2>Chat History</h2>
+          <p className="chat-history-kicker">{tUi("chatHistoryPanel.ui.conversations")}</p>
+          <h2>{tUi("chatHistoryPanel.ui.chatHistory")}</h2>
         </div>
         {/* A new chat needs the session bootstrap (models, active project). A click before it
             settles created nothing and reported a false "no model configured" error. */}
@@ -375,7 +376,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
           onClick={() => void createNew()}
         >
           <NewChatIcon size={15} />
-          New
+          {tUi("chatHistoryPanel.ui.new")}
         </button>
       </div>
       <label className="chat-history-search">
@@ -388,15 +389,15 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
             selection.clear();
             setQuery(event.target.value);
           }}
-          placeholder="Search"
-          aria-label="Search chat history"
+          placeholder={tUi("chatHistoryPanel.ui.search")}
+          aria-label={tUi("chatHistoryPanel.ui.searchChatHistory")}
         />
       </label>
       <div
         ref={tablistRef}
         className="chat-history-tabs"
         role="tablist"
-        aria-label="Conversation state"
+        aria-label={tUi("chatHistoryPanel.ui.conversationState")}
         // Programmatic focus target only (mirrors ProjectPanel's role=tree pattern); the tabs carry
         // the roving tabIndex (0/-1) per the WAI-ARIA APG tabs pattern.
         tabIndex={-1}
@@ -458,7 +459,7 @@ export function ChatHistoryPanel({ openChatWindow }: ChatHistoryPanelProps): Rea
       >
         {chats.length === 0 ? (
           <div className="lk-empty">
-            <p className="lk-empty-title">No conversations</p>
+            <p className="lk-empty-title">{tUi("chatHistoryPanel.ui.noConversations")}</p>
           </div>
         ) : (
           chats.map((chat) => {

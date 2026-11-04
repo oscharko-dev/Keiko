@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import { useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
 import type { WorkspaceSearchResultMatch } from "@oscharko-dev/keiko-contracts";
 import styles from "./SearchPanel.module.css";
@@ -65,6 +67,7 @@ export function SearchResultList({
   onActiveIndexChange,
   onOpen,
 }: SearchResultListProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const entries = useMemo(() => entriesFromGroups(groups), [groups]);
 
@@ -98,7 +101,7 @@ export function SearchResultList({
     <div
       className={styles.results}
       role="listbox"
-      aria-label="Workspace search results"
+      aria-label={tUi("searchResults.ui.workspaceSearchResults")}
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >

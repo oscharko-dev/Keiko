@@ -324,6 +324,7 @@ export function RelationshipListPanel({
   animateBadges = true,
   highContrast = false,
 }: RelationshipListPanelProps): ReactNode {
+  const tUi = useTranslate();
   const t = useTranslate();
   // Density from localStorage; URL param ?relDensity= overrides for this session only
   const [density, setDensity] = useState<DensityMode>(() => {
@@ -571,7 +572,7 @@ export function RelationshipListPanel({
       {/* Density switcher — uiux-fix F018 C042: the four buttons need ~296px but the
           list column offers ~254px; wrapping keeps the labels inside their buttons. */}
       <fieldset
-        aria-label="Relationship density"
+        aria-label={tUi("relationshipPanel.ui.relationshipDensity")}
         style={{
           ...NATIVE_FIELDSET_RESET_STYLE,
           display: "flex",
@@ -597,11 +598,13 @@ export function RelationshipListPanel({
           className="arun-btn"
           aria-pressed={focusMode}
           onClick={() => setFocusMode((p) => !p)}
-          title="Toggle focus mode (F)"
-          aria-label={`Focus mode: ${focusMode ? "on" : "off"}`}
+          title={tUi("relationshipPanel.ui.toggleFocusModeF")}
+          aria-label={tUi(
+            focusMode ? "relationshipPanel.ui.focusModeOn" : "relationshipPanel.ui.focusModeOff",
+          )}
           style={{ minWidth: 24, minHeight: 24 }}
         >
-          Focus
+          {tUi("relationshipPanel.ui.focus")}
         </button>
       </fieldset>
 
@@ -615,7 +618,7 @@ export function RelationshipListPanel({
           className="rb-row-k"
           style={{ display: "block", marginBottom: 2, fontSize: 11, fontWeight: 600 }}
         >
-          Filter by type (press / to focus)
+          {tUi("relationshipPanel.ui.filterByTypePressTo")}
         </label>
         <input
           id="rel-type-filter"
@@ -658,7 +661,7 @@ export function RelationshipListPanel({
           // Same micro-label scale as the type-filter label above (uiux-fix F046 C288).
           style={{ display: "block", marginBottom: 2, fontSize: 11, fontWeight: 600 }}
         >
-          Lifecycle
+          {tUi("relationshipPanel.ui.lifecycle")}
         </label>
         <select
           id="rel-lifecycle-filter"
@@ -709,7 +712,7 @@ export function RelationshipListPanel({
         <div className="lk-alert" role="alert" aria-live="assertive">
           <span>{error}</span>
           <button type="button" className="lk-alert-retry" onClick={() => void fetchItems()}>
-            Retry
+            {tUi("relationshipPanel.ui.retry")}
           </button>
           {/* No aria-label: the visible text is the accessible name (Label-in-Name, WCAG 2.5.3,
               GEN-UI-A11Y-023) — an aria-label would override it. */}
@@ -749,7 +752,7 @@ export function RelationshipListPanel({
           aria-busy + reduced opacity signal the in-flight update without unmounting. */}
       {visibleItems.length > 0 && (
         <ul
-          aria-label="Relationships"
+          aria-label={tUi("relationshipPanel.ui.relationships")}
           aria-busy={loading || undefined}
           style={{
             ...NATIVE_LIST_STYLE,

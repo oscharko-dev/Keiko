@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate, type WidgetMessageKey } from "@/lib/optional-widget-i18n";
+
 // Issue #1559, Epic #1556 — presentational dialog-mode controls.
 //
 // Four surfaces compose the spoken-dialogue UX over the existing voice hooks. None of them owns
@@ -33,6 +35,12 @@ const PERSONA_LABEL: Record<VoicePersona, string> = {
   female: "Female voice",
   neutral: "Neutral voice",
 };
+
+const PERSONA_KEYS = {
+  male: "voiceDialog.ui.personaMale",
+  female: "voiceDialog.ui.personaFemale",
+  neutral: "voiceDialog.ui.personaNeutral",
+} as const satisfies Record<VoicePersona, WidgetMessageKey>;
 
 export function personaLabel(persona: VoicePersona): string {
   return PERSONA_LABEL[persona];
@@ -167,6 +175,7 @@ export function VoiceProfileSelect({
   disabled = false,
   compact = false,
 }: VoiceProfileSelectProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   // Render nothing when there is nothing to choose; the caller already gates on availability, but this
   // keeps the component honest in isolation (no empty combobox).
   if (personas.length === 0) {
@@ -175,7 +184,7 @@ export function VoiceProfileSelect({
   return (
     <div className={`cmp-model mono${compact ? " cmp-model-compact" : ""}`}>
       <span id={VOICE_PROFILE_LABEL_ID} className="sr-only">
-        {`Voice profile: ${personaLabel(selected)}`}
+        {tUi("voiceDialog.ui.voiceProfile", { profile: tUi(PERSONA_KEYS[selected]) })}
       </span>
       <KeikoSelect
         value={selected}
@@ -193,7 +202,7 @@ export function VoiceProfileSelect({
           {
             options: personas.map((persona) => ({
               value: persona,
-              label: personaLabel(persona),
+              label: tUi(PERSONA_KEYS[persona]),
             })),
           },
         ]}
@@ -258,6 +267,7 @@ export function VoiceDialogControls({
   compact = false,
   muteButtonRef,
 }: VoiceDialogControlsProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const leaveRef = useRef<HTMLButtonElement>(null);
 
   // Focus handoff (WCAG 2.4.3): when the session errors out, move focus to the Leave control so the
@@ -288,13 +298,13 @@ export function VoiceDialogControls({
       <button
         type="button"
         className="cmp-voice-btn"
-        aria-label="Stop voice dialogue"
+        aria-label={tUi("voiceDialog.ui.stopVoiceDialogue")}
         onClick={onStop}
       >
-        Stop
+        {tUi("voiceDialog.ui.stop")}
       </button>
       <button type="button" ref={leaveRef} className="cmp-voice-btn" onClick={onLeave}>
-        Leave voice dialogue
+        {tUi("voiceDialog.ui.leaveVoiceDialogue")}
       </button>
     </div>
   );
@@ -327,6 +337,7 @@ export function VoiceDialogTurnControls({
   onInterrupt,
   compact = false,
 }: VoiceDialogTurnControlsProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   // The mic label changes with capture state so a screen-reader user always hears what the next press
   // does: begin a turn, or end it and send. `speaking` is reflected in the data attribute for styling
   // only; it never widens the accessible name.
@@ -354,8 +365,8 @@ export function VoiceDialogTurnControls({
       <button
         type="button"
         className="cmp-voice-btn"
-        aria-label="Interrupt the assistant"
-        data-tip="Interrupt the assistant"
+        aria-label={tUi("voiceDialog.ui.interruptTheAssistant")}
+        data-tip={tUi("voiceDialog.ui.interruptTheAssistant")}
         // GEN-UI-A11Y-013: aria-disabled + guarded onClick keep the control focusable and its
         // availability condition audible; the native `disabled` would blur and hide it.
         aria-disabled={!canInterrupt}
@@ -365,7 +376,7 @@ export function VoiceDialogTurnControls({
           onInterrupt();
         }}
       >
-        <span aria-hidden="true">Interrupt</span>
+        <span aria-hidden="true">{tUi("voiceDialog.ui.interrupt")}</span>
         <span id={TURN_INTERRUPT_HINT_ID} className="sr-only">
           {INTERRUPT_UNAVAILABLE_HINT}
         </span>
