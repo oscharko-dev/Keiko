@@ -408,7 +408,7 @@ function renderDecisionList(node: AdfNode, state: ConversionState, depth: number
 function renderTableCell(node: AdfNode, state: ConversionState, depth: number): string {
   return renderChildren(node, state, depth + 1, "\n")
     .replace(/\n+/gu, " ")
-    .replaceAll("|", "\\|");
+    .replaceAll("|", String.raw`\|`);
 }
 
 function renderTableRow(node: AdfNode, state: ConversionState, depth: number): string {

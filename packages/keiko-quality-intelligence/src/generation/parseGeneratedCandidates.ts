@@ -273,12 +273,15 @@ const parseFirstUsefulJsonValue = (text: string): unknown => {
     firstEmptyCandidateContainer: undefined,
     attempts: 0,
   };
-  for (let i = 0; i < text.length; i += 1) {
-    if (!isJsonOpen(text[i])) continue;
-    const slice = parseJsonSliceAt(text, i);
+  let next = 0;
+  while (next < text.length) {
+    const open = next;
+    next += 1;
+    if (!isJsonOpen(text[open])) continue;
+    const slice = parseJsonSliceAt(text, open);
     if (slice !== undefined && !slice.mayHoldObjects) {
       recovery.firstParsed ??= slice.parsed;
-      i = slice.end - 1;
+      next = slice.end;
       continue;
     }
     recovery.attempts += 1;

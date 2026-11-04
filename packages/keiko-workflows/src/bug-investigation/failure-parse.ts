@@ -146,6 +146,10 @@ function locationToken(line: string): LocationToken {
   return { text: trimmed, delimited: false };
 }
 
+function isControlSequenceEnd(code: number | undefined): boolean {
+  return code !== undefined && code >= 0x40 && code <= 0x7e;
+}
+
 // Removes ANSI CSI escape sequences (colour and cursor codes) so that coloured test output reads as
 // the plain text it colours. A single forward scan: no regex, no backtracking.
 function stripAnsi(line: string): string {
@@ -158,10 +162,7 @@ function stripAnsi(line: string): string {
       index += 1;
     } else if (line.charAt(index + 1) === "[") {
       index += 2;
-      while (
-        index < line.length &&
-        !(line.charCodeAt(index) >= 0x40 && line.charCodeAt(index) <= 0x7e)
-      ) {
+      while (index < line.length && !isControlSequenceEnd(line.codePointAt(index))) {
         index += 1;
       }
       index += 1;

@@ -395,8 +395,44 @@ function rowText(row: LayoutRow): string {
 const FURNITURE_Y_BUCKET = 3;
 
 // A word that names a page, straight in front of its number (`Seite 3`, `p. 3`, `Pág. 3`).
-const PAGE_COUNTER =
-  /(?:^|[^\p{L}])(?:seite|s\.|page|pag\.?|pg\.?|p\.|pagina|página|pág\.?|folio|folie|slide|blatt|bl\.|hoja|feuille|foglio)\s*:?\s*#/u;
+const PAGE_WORDS: ReadonlySet<string> = new Set([
+  "seite",
+  "s.",
+  "page",
+  "pag",
+  "pag.",
+  "pg",
+  "pg.",
+  "p.",
+  "pagina",
+  "página",
+  "pág",
+  "pág.",
+  "folio",
+  "folie",
+  "slide",
+  "blatt",
+  "bl.",
+  "hoja",
+  "feuille",
+  "foglio",
+]);
+
+/** The word at the end of this text, with its full stop, past a space and a colon in front of a number. */
+function wordBeforeNumber(text: string): string {
+  const bare = text.trimEnd();
+  const open = bare.endsWith(":") ? bare.slice(0, -1).trimEnd() : bare;
+  let start = open.endsWith(".") ? open.length - 1 : open.length;
+  while (start > 0 && /\p{L}/u.test(open.charAt(start - 1))) start -= 1;
+  return open.slice(start);
+}
+
+function namesPageCounter(masked: string): boolean {
+  return masked
+    .split("#")
+    .slice(0, -1)
+    .some((before) => PAGE_WORDS.has(wordBeforeNumber(before)));
+}
 
 // The same line on every page, unless a number in it counts the pages. It does so alone (`12`,
 // `- 12 -`, `3 / 10`) or behind a word naming a page. In any other line a number is content: `FR-1`,
@@ -404,7 +440,7 @@ const PAGE_COUNTER =
 function repeatedLineKey(text: string): string {
   const folded = text.toLowerCase().replaceAll(/\s+/gu, " ");
   const masked = folded.replaceAll(/\p{N}+/gu, "#");
-  return !/\p{L}/u.test(masked) || PAGE_COUNTER.test(masked) ? masked : folded;
+  return !/\p{L}/u.test(masked) || namesPageCounter(masked) ? masked : folded;
 }
 
 function furnitureKey(row: LayoutRow): string {
