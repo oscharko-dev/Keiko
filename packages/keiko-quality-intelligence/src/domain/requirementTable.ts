@@ -129,10 +129,16 @@ interface RowParts {
   criteria: string[];
 }
 
+/** A lone priority word is a rating: it states nothing, whichever column it stands in. */
+function addStatementCell(cell: string, vocabulary: CompiledVocabulary, parts: RowParts): void {
+  if (vocabulary.priorityValues.has(foldTerm(cell))) parts.priority ??= cell;
+  else parts.statement.push(cell);
+}
+
 function assignByRole(
-  cells: readonly string[],
-  roles: ColumnRoles,
+  { cells, roles }: { readonly cells: readonly string[]; readonly roles: ColumnRoles },
   idIndex: number,
+  vocabulary: CompiledVocabulary,
   parts: RowParts,
 ): void {
   cells.forEach((cell, index) => {
@@ -141,7 +147,7 @@ function assignByRole(
     if (role === "title") parts.title = cell;
     else if (role === "priority") parts.priority = cell;
     else if (role === "criteria") parts.criteria.push(cell);
-    else if (role === "statement") parts.statement.push(cell);
+    else if (role === "statement") addStatementCell(cell, vocabulary, parts);
   });
 }
 
@@ -169,7 +175,7 @@ export function parseTableRow(
   if (identifier === undefined || isSeparatorRow(cells)) return undefined;
   const parts: RowParts = { title: "", priority: undefined, statement: [], criteria: [] };
   if (roles === undefined) assignByPosition(cells, vocabulary, parts);
-  else assignByRole(cells, roles, identifier.index, parts);
+  else assignByRole({ cells, roles }, identifier.index, vocabulary, parts);
   return {
     id: identifier.id,
     title: parts.title,
@@ -185,9 +191,10 @@ export type UnidentifiedRow = Omit<TableRow, "id">;
 export function parseUnidentifiedRow(
   cells: readonly string[],
   roles: ColumnRoles,
+  vocabulary: CompiledVocabulary,
 ): UnidentifiedRow | undefined {
   const parts: RowParts = { title: "", priority: undefined, statement: [], criteria: [] };
-  assignByRole(cells, roles, -1, parts);
+  assignByRole({ cells, roles }, -1, vocabulary, parts);
   if (parts.statement.length === 0) return undefined;
   return {
     title: parts.title,
@@ -211,13 +218,14 @@ const ADDITION_ROLES: ReadonlySet<TableColumnRole | undefined> = new Set(["state
 export function parseContinuationRow(
   cells: readonly string[],
   roles: ColumnRoles,
+  vocabulary: CompiledVocabulary,
 ): RowAddition | undefined {
   const filled = cells.flatMap((cell, index) => (cell.length > 0 ? [index] : []));
   if (filled.length === 0 || !filled.every((index) => ADDITION_ROLES.has(roles[index]))) {
     return undefined;
   }
   const parts: RowParts = { title: "", priority: undefined, statement: [], criteria: [] };
-  assignByRole(cells, roles, -1, parts);
+  assignByRole({ cells, roles }, -1, vocabulary, parts);
   return { statement: parts.statement.join(" "), criteria: parts.criteria };
 }
 

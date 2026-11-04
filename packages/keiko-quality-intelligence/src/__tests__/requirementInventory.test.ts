@@ -1454,6 +1454,20 @@ describe("tables that hold no requirements (#4235)", () => {
     ).toMatchObject({ id: "FR-2", title: "Abmeldung", priority: "Mittel" });
   });
 
+  it("does not read a lone rating as the statement of a row", () => {
+    const { entries } = detect([
+      "Risiken!2: ID=R-1 | Risiko=Datenverlust | Eintritt=hoch | Auswirkung=mittel",
+      "Risiken!3: ID=R-2 | Risiko=Ausfall | Eintritt=niedrig | Massnahme=Das System muss umschalten.",
+    ]);
+
+    expect(
+      entries.map(({ id, title, statement, priority }) => [id, title, statement, priority]),
+    ).toEqual([
+      ["R-1", "Datenverlust", "", "hoch"],
+      ["R-2", "Ausfall", "Das System muss umschalten.", "niedrig"],
+    ]);
+  });
+
   it("takes a header that names only an identifier column and reads the rest by position", () => {
     expect(detect(["Regel-ID | Regel", "TM-001 | Transaktion prüfen"]).entries[0]).toMatchObject({
       id: "TM-001",

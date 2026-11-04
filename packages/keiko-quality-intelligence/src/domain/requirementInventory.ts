@@ -350,7 +350,7 @@ function readUnidentifiedRow(
   { cells, roles }: { readonly cells: readonly string[]; readonly roles: ColumnRoles },
   span: RowSpan,
 ): boolean {
-  const row = parseUnidentifiedRow(cells, roles);
+  const row = parseUnidentifiedRow(cells, roles, context.vocabulary);
   if (row === undefined || !obligationStatement(context.vocabulary, row.statement)) return false;
   scan.unidentified.push({ row, table: scan.table, ...span });
   return true;
@@ -370,7 +370,7 @@ function readRow(
     return true;
   }
   if (roles === undefined) return false;
-  const addition = parseContinuationRow(cells, roles);
+  const addition = parseContinuationRow(cells, roles, context.vocabulary);
   if (addition !== undefined && addToLastRow(scan, addition, span.lastLine)) return true;
   return readUnidentifiedRow(context, scan, { cells, roles }, span);
 }

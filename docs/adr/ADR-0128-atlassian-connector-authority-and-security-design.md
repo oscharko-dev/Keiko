@@ -1349,6 +1349,7 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   criteria; a row holding only criteria extends the row above it. A statement cell without a modal
   verb yields no unit, because a description column looks the same and a glossary must not become
   requirements.
+  A lone priority word in a statement column is a rating, not a statement.
   The same specification yields the same
   identifiers, titles, priorities, criteria and digests from Markdown, plain text, HTML, Word,
   PowerPoint, PDF and Excel extraction (`requirement-inventory-formats.integration`,
