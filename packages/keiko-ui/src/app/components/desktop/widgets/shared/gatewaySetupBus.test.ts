@@ -12,6 +12,7 @@ import {
   notifyGatewayModelCatalogUpdated,
   notifyGatewayConfigUpdated,
   notifyGatewayModelReadinessUpdated,
+  gatewayModelCatalogCheckRequested,
   requestGatewayModelCatalogRefresh,
   requestGatewaySetup,
 } from "./gatewaySetupBus";
@@ -84,6 +85,12 @@ describe("gatewaySetupBus", () => {
       requestGatewayModelCatalogRefresh();
       expect(onCatalogRefresh).toHaveBeenCalledOnce();
       expect(onConfigUpdated).not.toHaveBeenCalled();
+      const plain = onCatalogRefresh.mock.calls.at(-1)?.[0] as Event;
+      expect(gatewayModelCatalogCheckRequested(plain)).toBe(false);
+      requestGatewayModelCatalogRefresh({ check: true });
+      const asked = onCatalogRefresh.mock.calls.at(-1)?.[0] as Event;
+      expect(gatewayModelCatalogCheckRequested(asked)).toBe(true);
+      expect(gatewayModelCatalogCheckRequested(new Event("plain"))).toBe(false);
     } finally {
       window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, onCatalogRefresh);
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);

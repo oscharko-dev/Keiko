@@ -51,6 +51,17 @@ export function prepareRuntimeGatewayProcessSandbox(
   return decision;
 }
 
+/**
+ * Only the gateway profile admits Git through its process-exec allowlist, so only it needs an
+ * attested Git (ADR-0043 D16). The native profile has no exec allowlist: its shell runs the host's
+ * toolchains, Git included, from the system PATH. Attesting there only refused a run on a managed
+ * Mac whose Git is Xcode's in the admin-writable /Applications (customer, 1.3.4). Every backend
+ * that launches a confined runtime asks this one rule.
+ */
+export function runtimeProfileAttestsGit(profile: RuntimeGatewayConfinement["profile"]): boolean {
+  return profile !== "keiko-native";
+}
+
 function childExecutablePolicy(
   profile: RuntimeGatewayConfinement["profile"],
   git: AttestedDarwinGitExecutable | undefined,

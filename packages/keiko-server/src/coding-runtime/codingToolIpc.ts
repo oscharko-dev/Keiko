@@ -222,6 +222,8 @@ export type CodingToolActionRequest =
       readonly verifierId: string;
       /** Required only for targeted-test; always a bounded workspace-relative path. */
       readonly targetPath?: string | undefined;
+      /** Workspace-relative folder of the nested package to verify; absent for the root package. */
+      readonly packageDir?: string | undefined;
       readonly approvalProof?: CodingToolApprovalProof | undefined;
     })
   | (CodingToolRequestIdentity & { readonly action: "git"; readonly operation: "read" })
@@ -881,7 +883,7 @@ function approvableNamedRequest(
       "idempotencyKey",
       key,
       "approvalProof",
-      ...(action === "verification" ? ["targetPath"] : []),
+      ...(action === "verification" ? ["targetPath", "packageDir"] : []),
     ]) ||
     !nonEmpty(value[key]) ||
     approvalProof.kind === "invalid"
@@ -912,11 +914,22 @@ function validVerificationTarget(targeted: boolean, targetPath: unknown): boolea
   );
 }
 
+// The package folder is optional on every verifier; the empty string is the model-facing "none"
+// sentinel (every declared tool argument is required on the wire) and reads as absent.
+function validPackageDir(packageDir: unknown): boolean {
+  return (
+    packageDir === undefined ||
+    packageDir === "" ||
+    (typeof packageDir === "string" && isContainedAgentPath(packageDir) && !isDenied(packageDir))
+  );
+}
+
 function verificationRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
   const base = approvableNamedRequest(value, "verifierId", "verification");
   if (base?.action !== "verification") return undefined;
   const targeted = base.verifierId === "targeted-test";
   const targetPath = value.targetPath;
+  const packageDir = value.packageDir;
   if (
     !hasAllowedKeys(value, [
       "action",
@@ -924,13 +937,17 @@ function verificationRequest(value: Record<string, unknown>): CodingToolActionRe
       "idempotencyKey",
       "verifierId",
       "targetPath",
+      "packageDir",
       "approvalProof",
     ]) ||
-    !validVerificationTarget(targeted, targetPath)
+    !validVerificationTarget(targeted, targetPath) ||
+    !validPackageDir(packageDir)
   ) {
     return undefined;
   }
-  return targeted ? { ...base, targetPath: targetPath as string } : base;
+  const scoped =
+    typeof packageDir === "string" && packageDir !== "" ? { ...base, packageDir } : base;
+  return targeted ? { ...scoped, targetPath: targetPath as string } : scoped;
 }
 
 /** A single explicit result shape: `optionalApprovalProof` always returns an object literal

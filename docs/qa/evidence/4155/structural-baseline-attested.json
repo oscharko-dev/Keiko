@@ -1,0 +1,40 @@
+{
+  "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+  "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+  "productDigestMethod": "sorted-tracked-input-paths-and-sha256-v1",
+  "distributionDigest": "8db41da9c3dcd477b02d2ecc1ba6bdad88a44a560030d76106f99e851db396e9",
+  "compilerDigest": "3722b30210616a13a3213ded11575ba6b2dbab10c32a5ef67afca8513e27017e",
+  "nodeVersion": "v24.22.0",
+  "buildProvenance": {
+    "schemaVersion": 1,
+    "producer": "native-forced-packages-build",
+    "sourceHead": "8973da10dcc253923c5e9dfd35eea610f2930eb5",
+    "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+    "productDigestMethod": "sorted-tracked-input-paths-and-sha256-v1",
+    "distributionDigest": "8db41da9c3dcd477b02d2ecc1ba6bdad88a44a560030d76106f99e851db396e9",
+    "compilerDigest": "3722b30210616a13a3213ded11575ba6b2dbab10c32a5ef67afca8513e27017e",
+    "nodeVersion": "v24.22.0"
+  },
+  "measurementKind": "deterministic-production-path-observation-not-model-quality",
+  "shortIdentifierRecall": {
+    "originalExists": true,
+    "returned": false
+  },
+  "summarySourceCoverage": {
+    "availableMessages": 40,
+    "modelCalls": 1,
+    "witnessesDelivered": 12,
+    "coveredFraction": 0.3,
+    "declaredCoveredItems": 40,
+    "summaryStatus": "valid"
+  },
+  "manualProjection": {
+    "originalMessages": 40,
+    "gatewayMessages": 1,
+    "verbatimSourceMessagesRetained": 0,
+    "tokensBefore": 30480,
+    "tokensAfter": 946
+  },
+  "canonicalMessagesAfter": 40,
+  "logOperations": ["reference-id.issued", "chat.continuity.rehydration"]
+}

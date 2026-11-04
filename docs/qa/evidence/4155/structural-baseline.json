@@ -1,0 +1,26 @@
+{
+  "sourceHead": "a9e89f07417006d5ca4bf187086fc50f6b7ce40e",
+  "productTreeDigest": "549a7c56d06f1a49909c24ff927526e2354ea0fe452373a5fbada7ce57cf22bf",
+  "measurementKind": "deterministic-production-path-observation-not-model-quality",
+  "shortIdentifierRecall": {
+    "originalExists": true,
+    "returned": false
+  },
+  "summarySourceCoverage": {
+    "availableMessages": 40,
+    "modelCalls": 1,
+    "witnessesDelivered": 12,
+    "coveredFraction": 0.3,
+    "declaredCoveredItems": 40,
+    "summaryStatus": "valid"
+  },
+  "manualProjection": {
+    "originalMessages": 40,
+    "gatewayMessages": 1,
+    "verbatimSourceMessagesRetained": 0,
+    "tokensBefore": 30480,
+    "tokensAfter": 946
+  },
+  "canonicalMessagesAfter": 40,
+  "logOperations": ["reference-id.issued", "chat.continuity.rehydration"]
+}

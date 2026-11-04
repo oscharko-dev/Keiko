@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { Chat, ProjectWithAvailability } from "@/lib/types";
@@ -339,14 +341,59 @@ function useProjectPanelChatSelection(
   return [selectedChatId, selectChat];
 }
 
+function ProjectTree({
+  session,
+  actions,
+  selectedChatId,
+  selectChat,
+}: {
+  readonly session: ReturnType<typeof useChatSessionCatalog>;
+  readonly actions: ReturnType<typeof useChatSessionActions>;
+  readonly selectedChatId: string | undefined;
+  readonly selectChat: (chat: Chat) => void;
+}): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
+  const treeRef = useRef<HTMLDivElement | null>(null);
+  return (
+    // role="tree" + onKeyDown implements the WAI-ARIA tree keyboard pattern (PA-03).
+    // tabIndex={-1}: programmatic focus target only (mirrors FilesWidget pattern).
+    <div
+      className="proj-tree"
+      role="tree"
+      aria-label={tUi("projectPanel.ui.projects")}
+      tabIndex={-1}
+      ref={treeRef}
+      onKeyDown={(event) => {
+        if (!TREE_NAV_KEYS.has(event.key)) return;
+        if (treeRef.current !== null) handleTreeKey(event, treeRef.current);
+      }}
+    >
+      {session.projects.map((project) => (
+        <ProjectRow
+          key={project.path}
+          project={project}
+          activeProjectPath={session.activeProject?.path}
+          chats={session.activeProject?.path === project.path ? session.chats : []}
+          activeChatId={selectedChatId}
+          treeRef={treeRef}
+          onProject={(nextProject) => {
+            void actions.openProject(nextProject);
+          }}
+          onChat={selectChat}
+        />
+      ))}
+    </div>
+  );
+}
+
 export function ProjectPanel({
   openChatWindow,
 }: {
   readonly openChatWindow: (chat: Chat) => void;
 }): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const session = useChatSessionCatalog();
   const actions = useChatSessionActions();
-  const treeRef = useRef<HTMLDivElement | null>(null);
   const [selectedChatId, selectChat] = useProjectPanelChatSelection(
     session.activeChat?.id,
     openChatWindow,
@@ -355,39 +402,17 @@ export function ProjectPanel({
   return (
     <div className="tw-scroll">
       <div className="sb-section">
-        <span className="sb-section-label">Projects</span>
+        <span className="sb-section-label">{tUi("projectPanel.ui.projects")}</span>
       </div>
       {session.projects.length === 0 ? (
-        <div className="proj-empty">No registered projects</div>
+        <div className="proj-empty">{tUi("projectPanel.ui.noRegisteredProjects")}</div>
       ) : (
-        // role="tree" + onKeyDown implements the WAI-ARIA tree keyboard pattern (PA-03).
-        // tabIndex={-1}: programmatic focus target only (mirrors FilesWidget pattern).
-        <div
-          className="proj-tree"
-          role="tree"
-          aria-label="Projects"
-          tabIndex={-1}
-          ref={treeRef}
-          onKeyDown={(event) => {
-            if (!TREE_NAV_KEYS.has(event.key)) return;
-            if (treeRef.current !== null) handleTreeKey(event, treeRef.current);
-          }}
-        >
-          {session.projects.map((project) => (
-            <ProjectRow
-              key={project.path}
-              project={project}
-              activeProjectPath={session.activeProject?.path}
-              chats={session.activeProject?.path === project.path ? session.chats : []}
-              activeChatId={selectedChatId}
-              treeRef={treeRef}
-              onProject={(nextProject) => {
-                void actions.openProject(nextProject);
-              }}
-              onChat={selectChat}
-            />
-          ))}
-        </div>
+        <ProjectTree
+          session={session}
+          actions={actions}
+          selectedChatId={selectedChatId}
+          selectChat={selectChat}
+        />
       )}
     </div>
   );

@@ -58,6 +58,7 @@ import {
   selectEmbeddingModelId,
 } from "./local-knowledge-handlers.js";
 import { errorKindOf, getServerLogger, startLogTimer } from "./observability/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
 export type MemoryEmbeddingKind = "query" | "document";
@@ -218,6 +219,10 @@ export function selectMemoryEmbeddingModelId(
   return selectEmbeddingModelId(config);
 }
 
+// The model-gateway log port, named through the request that carries it (the package does not
+// export the interface itself).
+type EmbeddingLogSink = NonNullable<OpenAIEmbeddingRequest["log"]>;
+
 function requestEmbeddingImpl(
   deps: UiHandlerDeps,
 ): (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome> {
@@ -228,6 +233,7 @@ function requestEmbeddingImpl(
 function buildAdapter(
   provider: ModelProviderConfig,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  log: EmbeddingLogSink,
 ): OpenAIEmbeddingAdapter {
   return {
     endpoint: provider.baseUrl,
@@ -237,7 +243,10 @@ function buildAdapter(
       : {}),
     ...(provider.egress !== undefined ? { egress: provider.egress } : {}),
     request: (request) =>
+      // `log` is spread first so a caller-supplied sink wins. Without one the gateway transport
+      // resolves the frozen no-op sink and its failure / TLS-trust lines count as `port-unwired`.
       requestImpl({
+        log,
         ...request,
         endpoint: provider.baseUrl,
         apiKey: provider.apiKey,
@@ -394,6 +403,7 @@ function logEmbeddingSucceeded(
 export function createMemoryEmbedder(
   config: GatewayConfig | undefined,
   requestImpl: (request: OpenAIEmbeddingRequest) => Promise<OpenAIEmbeddingOutcome>,
+  log: EmbeddingLogSink = processServerLogSink(),
 ): MemoryEmbedder | null {
   const providers = configuredEmbeddingProviders(config);
   if (providers.length === 0) {
@@ -405,7 +415,7 @@ export function createMemoryEmbedder(
     logEmbeddingUnavailable("provider-absent", providers.length, true);
     return null;
   }
-  const adapter = buildAdapter(provider, requestImpl);
+  const adapter = buildAdapter(provider, requestImpl, log);
   // NOT `async`: an async arrow that merely returns an inner promise adopts it, adding two
   // microtask ticks before the caller observes the result. Chat streaming interleaves cancellation
   // with this exact resolution, and those two ticks moved a cancelled turn from "retryable" to
@@ -455,7 +465,11 @@ export async function embedMemoryText(
   text: string,
   kind: MemoryEmbeddingKind = "document",
 ): Promise<MemoryEmbeddingInput | null> {
-  const embedder = createMemoryEmbedder(currentGatewayConfig(deps), requestEmbeddingImpl(deps));
+  const embedder = createMemoryEmbedder(
+    currentGatewayConfig(deps),
+    requestEmbeddingImpl(deps),
+    deps.activityLog ?? processServerLogSink(),
+  );
   if (embedder === null) return null;
   return embedder(text, kind);
 }

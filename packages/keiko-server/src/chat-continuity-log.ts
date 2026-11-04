@@ -5,6 +5,72 @@ import {
 import { correlationIdOrUnknown } from "./correlation.js";
 import { getServerLogger } from "./observability/index.js";
 
+const CHAT_CONTINUITY_CHECKPOINT = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.continuity.checkpoint",
+  owner: "keiko-server",
+  category: "gateway",
+  emitter: "chat-continuity-log.logChatContinuityCheckpoint",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["read", "write"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "available",
+        "missing",
+        "invalid",
+        "persisted",
+        "retained",
+        "stale",
+        "rejected",
+        "failed",
+      ],
+    },
+    generation: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-context-management"],
+  proofIds: ["chat.continuity.checkpoint.line"],
+  releaseImpact: "patch",
+});
+
+export function logChatContinuityCheckpoint(
+  evidence: {
+    readonly operation: "read" | "write";
+    readonly outcome:
+      | "available"
+      | "missing"
+      | "invalid"
+      | "persisted"
+      | "retained"
+      | "stale"
+      | "rejected"
+      | "failed";
+    readonly generation?: number;
+  },
+  correlationId?: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_CONTINUITY_CHECKPOINT,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { ...evidence, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 export type CheckpointDisposition =
   | "none"
   | "read-failed"
@@ -68,11 +134,21 @@ const CHAT_CONTINUITY_CAPTURE = defineActivityLogOperation({
 });
 
 export interface ChatRehydrationEvidence {
+  readonly queryTermCount?: number;
+  readonly identifierTermCount?: number;
+  readonly matchingPolicy?: "word-prefix-and-identifiers-v1" | "word-prefix-and-identifiers-v2";
   readonly unitsVisited: number;
   readonly scannedChars: number;
   readonly candidateCount: number;
   readonly excerptCount: number;
   readonly rehydratedTokens: number;
+  readonly tokenBudget?: number;
+  readonly tokenCounterSource?: "local-estimate";
+  readonly budgetDroppedExcerpts?: number;
+  readonly discoveryPolicy?: "indexed-candidates-and-bounded-tail-v1";
+  readonly indexedCandidateRows?: number;
+  readonly indexedUnitsVisited?: number;
+  readonly indexLimitReached?: boolean;
   readonly scanDisposition:
     "complete" | "unit-limit" | "character-limit" | "best-matches" | "no-query-terms";
 }
@@ -85,11 +161,36 @@ const CHAT_CONTINUITY_REHYDRATION = defineActivityLogOperation({
   category: "gateway",
   emitter: "chat-continuity-log.logChatRehydration",
   fields: {
+    queryTermCount: { type: "integer", dataClass: "count", required: false },
+    identifierTermCount: { type: "integer", dataClass: "count", required: false },
+    matchingPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["word-prefix-and-identifiers-v1", "word-prefix-and-identifiers-v2"],
+    },
     unitsVisited: { type: "integer", dataClass: "count", required: true },
     scannedChars: { type: "integer", dataClass: "count", required: true },
     candidateCount: { type: "integer", dataClass: "count", required: true },
     excerptCount: { type: "integer", dataClass: "count", required: true },
     rehydratedTokens: { type: "integer", dataClass: "count", required: true },
+    tokenBudget: { type: "integer", dataClass: "count", required: false },
+    tokenCounterSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["local-estimate"],
+    },
+    budgetDroppedExcerpts: { type: "integer", dataClass: "count", required: false },
+    discoveryPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["indexed-candidates-and-bounded-tail-v1"],
+    },
+    indexedCandidateRows: { type: "integer", dataClass: "count", required: false },
+    indexedUnitsVisited: { type: "integer", dataClass: "count", required: false },
+    indexLimitReached: { type: "boolean", dataClass: "closed-enum", required: false },
     scanDisposition: {
       type: "string",
       dataClass: "closed-enum",
@@ -134,6 +235,57 @@ const CHAT_CONTINUITY_DEGRADED = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+interface SummaryWorkEvidence {
+  readonly outcome:
+    "accepted" | "invalid" | "timed-out" | "unavailable" | "coalesced" | "cancelled";
+  readonly modelPortCalled: boolean;
+  readonly timeoutMs: number;
+  readonly elapsedMs: number;
+  readonly promptCodeUnitsPlanned: number;
+}
+
+const CHAT_COMPACTION_SUMMARY_WORK = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.compaction.summary.work",
+  owner: "keiko-server",
+  category: "gateway",
+  emitter: "chat-continuity-log.logChatCompactionSummaryWork",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "invalid", "timed-out", "unavailable", "coalesced", "cancelled"],
+    },
+    modelPortCalled: { type: "boolean", dataClass: "closed-enum", required: true },
+    timeoutMs: { type: "integer", dataClass: "count", required: true },
+    elapsedMs: { type: "integer", dataClass: "count", required: true },
+    promptCodeUnitsPlanned: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["chat-context-management"],
+  proofIds: ["chat.compaction.summary.work.line"],
+  releaseImpact: "patch",
+});
+
+export function logChatCompactionSummaryWork(
+  evidence: SummaryWorkEvidence,
+  correlationId?: string,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_COMPACTION_SUMMARY_WORK,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { ...evidence, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
 export function logChatHistoryCapture(
   evidence: ChatHistoryCaptureEvidence,
   correlationId?: string,
@@ -163,7 +315,8 @@ export function logChatRehydration(
         ...evidence,
         completeness:
           evidence.scanDisposition === "unit-limit" ||
-          evidence.scanDisposition === "character-limit"
+          evidence.scanDisposition === "character-limit" ||
+          evidence.indexLimitReached === true
             ? "partial"
             : "complete",
         loss: "none",

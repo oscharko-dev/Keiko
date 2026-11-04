@@ -455,6 +455,23 @@ describe("useChatSession bootstrap", () => {
     expect(result.current).toBe(false);
   });
 
+  // Customer 1.3.4: a model busy at startup was hidden from the pickers until a page reload.
+  // Opening the Workbench or a picker is the person asking, so that refresh checks again; an
+  // automatic reread never does, or the catalog poll would probe models in the background.
+  it("checks the models again only when a person opens a picker or the Workbench", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [] });
+    const { result } = renderHook(() => useGatewayModelCatalogSettled());
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(vi.mocked(fetchModels).mock.calls.at(-1)?.[1]).toBe(false);
+    act(() => {
+      requestGatewayModelCatalogRefresh({ check: true });
+    });
+    await waitFor(() => expect(vi.mocked(fetchModels).mock.calls.at(-1)?.[1]).toBe(true));
+  });
+
   it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
     const catalog = [model({ id: "chat-live" }), model({ id: "chat-alt" })];
     vi.mocked(fetchModels).mockResolvedValue({ models: catalog });
@@ -1456,6 +1473,56 @@ describe("useChatSession bootstrap", () => {
 
     expect(result.current.activeChat?.id).toBe("other-open");
     expect(result.current.chats.map((item) => item.id)).toEqual(["other-trashed", "other-open"]);
+  });
+
+  it("says when a grounded turn waits for the human's decision", async () => {
+    const groundedChat = chat({
+      id: "chat-boot",
+      selectedModel: "chat-live",
+      connectedScopes: [
+        { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+      ],
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [groundedChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(askGrounded).mockImplementation(() => new Promise(() => undefined));
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    act(() => {
+      void result.current.sendMessage({ text: "Attach the file." });
+    });
+    await waitFor(() => expect(askGrounded).toHaveBeenCalled());
+    const clientTurnId = vi.mocked(askGrounded).mock.lastCall?.[0].clientTurnId ?? "";
+    const canonicalTurnRef = await canonicalTurnReferenceForClient("chat-boot", clientTurnId);
+    const turnWith = (state: "pending" | "approved"): { messages: ChatMessage[] } => ({
+      messages: [
+        {
+          id: "canonical-user",
+          chatId: "chat-boot",
+          role: "user",
+          content: "Attach the file.",
+          canonicalTurnRef,
+          toolTranscript: {
+            schemaVersion: 1,
+            exchanges: [
+              {
+                call: { id: "call-1", name: "jira_attach", arguments: {} },
+                approval: { chatId: "chat-boot", approvalId: "approval-1", state },
+              },
+            ],
+          },
+        } as unknown as ChatMessage,
+      ],
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue(turnWith("pending"));
+    await waitFor(() => expect(result.current.sendStatus).toBe("awaiting-decision"), {
+      timeout: 4000,
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue(turnWith("approved"));
+    await waitFor(() => expect(result.current.sendStatus).toBe("contacting"), { timeout: 4000 });
+    act(() => result.current.cancelSend());
   });
 
   it("does not create a replacement chat when an isolated window opens an empty project", async () => {

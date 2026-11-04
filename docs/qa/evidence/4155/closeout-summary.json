@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "scope": "owner-requested-partial-delivery; no-complete-production-qualification",
+  "historicalQwenPlain": {
+    "correct": 46,
+    "questions": 90,
+    "score0to10": 5.111111111111111
+  },
+  "candidate": {
+    "sourceHead": "c472621f55d43916c71ea46b69d8a888959d0b9e",
+    "status": "terminated",
+    "stopReason": "owner-requested-closeout-before-complete-qualification",
+    "lanes": [
+      {
+        "model": "gemma-4-31b-it",
+        "kind": "plain",
+        "completedCompactions": 4,
+        "postCompactionAnswers": 4,
+        "correct": 36,
+        "questions": 36,
+        "requestFailures": 0
+      },
+      {
+        "model": "gemma-4-31b-it",
+        "kind": "grounded",
+        "completedCompactions": 3,
+        "postCompactionAnswers": 3,
+        "correct": 27,
+        "questions": 27,
+        "requestFailures": 0
+      },
+      {
+        "model": "qwen3.6-35b-a3b-8bit",
+        "kind": "plain",
+        "completedCompactions": 3,
+        "postCompactionAnswers": 3,
+        "correct": 27,
+        "questions": 27,
+        "requestFailures": 0
+      },
+      {
+        "model": "qwen3.6-35b-a3b-8bit",
+        "kind": "grounded",
+        "completedCompactions": 3,
+        "postCompactionAnswers": 3,
+        "correct": 26,
+        "questions": 27,
+        "requestFailures": 0
+      }
+    ]
+  },
+  "comparison": {
+    "configurationMatches": false,
+    "causalQualityIncreaseEstablished": false,
+    "globalSystemScore": null,
+    "fullModelCampaignQualified": false,
+    "matchedControl": "canceled-before-start-by-owner-closeout"
+  },
+  "commonOracle": {
+    "version": "chat-continuity-v5",
+    "verifiedHistoricalAnswers": 37,
+    "verifiedCandidateAnswers": 17,
+    "changedScores": 0
+  },
+  "remaining": [
+    "complete source-summary coverage and adaptive retained working state",
+    "MCP/source/attachment/skill freshness and behavior qualification",
+    "last actual tool-round occupancy versus cumulative usage",
+    "complete matched multi-hour campaigns, restart and repeated model qualification"
+  ]
+}

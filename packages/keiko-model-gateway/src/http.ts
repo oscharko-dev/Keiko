@@ -1539,22 +1539,57 @@ function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): v
   );
 }
 
+// Origins (scheme+host+port) whose default-trust-store handshake was rejected while Keiko's
+// assembled CA set accepted them. The outcome is stable for the life of the process, so later
+// direct calls skip the doomed first handshake and the per-request fallback warning. Insertion
+// ordered and bounded: the oldest origin is evicted first.
+const MAX_REMEMBERED_CA_BUNDLE_ORIGINS = 64;
+const rememberedCaBundleOrigins = new Set<string>();
+
+// Exposed for tests to reset the remembered-origin memo between runs.
+export function _resetRememberedCaBundleOriginsForTests(): void {
+  rememberedCaBundleOrigins.clear();
+}
+
+function rememberCaBundleOrigin(origin: string): void {
+  rememberedCaBundleOrigins.delete(origin);
+  rememberedCaBundleOrigins.add(origin);
+  for (const oldest of rememberedCaBundleOrigins) {
+    if (rememberedCaBundleOrigins.size <= MAX_REMEMBERED_CA_BUNDLE_ORIGINS) break;
+    rememberedCaBundleOrigins.delete(oldest);
+  }
+}
+
+// The memo applies only to the native direct HTTPS path that already owns the CA fallback: an
+// injected fetch implementation, a single attempt, or a proxied call keeps its own behaviour.
+function caBundleMemoOrigin(url: string, plan: DirectFetchPlan): string | undefined {
+  const eligible =
+    plan.useCaFallback && !plan.singleAttempt && plan.doFetch === NATIVE_FETCH && usesHttps(url);
+  return eligible ? new URL(url).origin : undefined;
+}
+
 // Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
+// A success remembers `memoOrigin`; a recoverable TLS trust failure forgets the call's origin so a
+// changed trust situation falls back to the full default-then-bundle sequence.
 async function attemptCaBundleFallback(
   url: string,
   init: PreparedRequestInit,
   plan: DirectFetchPlan,
+  memoOrigin: string | undefined,
 ): Promise<Response> {
   try {
-    return await fetchWithCaBundle(
+    const response = await fetchWithCaBundle(
       url,
       init,
       plan.egress,
       plan.maxResponseBytes,
       plan.pinnedAddresses !== undefined ? pinnedLookup(plan.pinnedAddresses) : undefined,
     );
+    if (memoOrigin !== undefined) rememberCaBundleOrigin(memoOrigin);
+    return response;
   } catch (fallbackError) {
     if (isRecoverableTlsTrustError(fallbackError)) {
+      rememberedCaBundleOrigins.delete(new URL(url).origin);
       logTlsTrustFailure(url, plan, fallbackError, true);
       throw tlsCaFailureError();
     }
@@ -1567,6 +1602,19 @@ async function fetchDirectWithCaFallback(
   url: string,
   init: PreparedRequestInit,
   plan: DirectFetchPlan,
+): Promise<Response> {
+  const memoOrigin = caBundleMemoOrigin(url, plan);
+  if (memoOrigin !== undefined && rememberedCaBundleOrigins.has(memoOrigin)) {
+    return attemptCaBundleFallback(url, init, plan, memoOrigin);
+  }
+  return fetchDirectDefaultThenCaBundle(url, init, plan, memoOrigin);
+}
+
+async function fetchDirectDefaultThenCaBundle(
+  url: string,
+  init: PreparedRequestInit,
+  plan: DirectFetchPlan,
+  memoOrigin: string | undefined,
 ): Promise<Response> {
   try {
     if (plan.singleAttempt && plan.pinnedAddresses !== undefined && usesHttps(url)) {
@@ -1589,9 +1637,10 @@ async function fetchDirectWithCaFallback(
     const recoverable = usesHttps(url) && isRecoverableTlsTrustError(error);
     if (plan.useCaFallback && !plan.singleAttempt && recoverable) {
       // Degradation: the default trust store rejected the peer, so the call is retried against
-      // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
+      // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency; the
+      // origin is remembered after a success so this line is written once per origin, not per call.
       logTlsCaFallback(url, plan, error);
-      return attemptCaBundleFallback(url, init, plan);
+      return attemptCaBundleFallback(url, init, plan, memoOrigin);
     }
     if (recoverable) {
       logTlsTrustFailure(url, plan, error, false);

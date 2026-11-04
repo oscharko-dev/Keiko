@@ -81,3 +81,16 @@ export class WorkspaceTrustRequiredError extends VerificationRunnerError {
     this.trustRefusal = trustRefusal;
   }
 }
+
+// A workspace with several packages and nothing to choose between them (a monorepo whose package.json
+// files all sit below the root, no `packageDir`, no target path inside one of them). The refusal is
+// the runner's `NO_RUNNABLE_STEPS`, so the closed vocabulary does not grow; the candidate folders are
+// workspace-relative and travel in memory to the model-facing tool only, never to the Activity Log.
+export class PackageSelectionRequiredError extends VerificationRunnerError {
+  public readonly candidates: readonly string[];
+
+  public constructor(candidates: readonly string[]) {
+    super("NO_RUNNABLE_STEPS", "Several packages were found; name the package folder to verify.");
+    this.candidates = candidates;
+  }
+}

@@ -8,6 +8,7 @@ import {
   ATLASSIAN_CONNECTOR_ACTION_TYPES,
   JIRA_MANAGED_ACTION_TYPES,
   JIRA_MANAGED_READ_TOOLS,
+  JIRA_MUTATION_OPERATIONS,
   ATLASSIAN_CONNECTOR_AUTH_SCHEMES,
   ATLASSIAN_CONNECTOR_PROVIDERS,
   ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON,
@@ -302,6 +303,30 @@ const D4_TABLE: readonly D4Row[] = [
   },
   {
     action: "jira.assignable-users",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.report",
+    provider: "jira",
+    actionClass: "connector-access",
+    scope: "issue-tracker.read",
+    risk: "low",
+    dispositions: {
+      "governed-assist": "review-required",
+      "supervised-coding": "review-required",
+      "autonomous-delivery": "allowed",
+    },
+  },
+  {
+    action: "jira.draft-stage",
     provider: "jira",
     actionClass: "connector-access",
     scope: "issue-tracker.read",
@@ -1331,6 +1356,8 @@ it.each([
   "jira.comments",
   "jira.transitions",
   "jira.assignable-users",
+  "jira.report",
+  "jira.draft-stage",
   "assign-issue",
 ])("recognizes governed Jira capability %s in the shared policy vocabulary", (action) => {
   expect(isAtlassianConnectorActionType(action)).toBe(true);
@@ -1338,12 +1365,18 @@ it.each([
 
 it("maps every managed Jira tool to one existing connector-policy action", () => {
   for (const name of JIRA_MANAGED_READ_TOOLS) expect(JIRA_MANAGED_ACTION_TYPES[name]).toBe(name);
-  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(14);
+  expect(Object.keys(JIRA_MANAGED_ACTION_TYPES)).toHaveLength(
+    JIRA_MANAGED_READ_TOOLS.length + JIRA_MUTATION_OPERATIONS.length,
+  );
   expect(JIRA_MANAGED_ACTION_TYPES).toMatchObject({
     "jira.create": "create-issue",
+    // A backlog draft only creates issues and is governed like one create (#4178).
+    "jira.draft": "create-issue",
     "jira.edit": "update-issue-fields",
     "jira.assign": "assign-issue",
     "jira.comment": "add-issue-comment",
     "jira.transition": "transition-issue",
+    // An attachment changes the issue exactly as an edit does and is governed as one (#4176).
+    "jira.attach": "update-issue-fields",
   });
 });

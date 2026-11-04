@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "id": "update-lists-de",
+  "language": "de",
+  "class": "update",
+  "difficulty": "plain",
+  "description": "A preference is stated and then changed. Only the newer value may survive; the older one is stale.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ab jetzt bevorzuge ich Listen.",
+      "must": true,
+      "private": true,
+      "terms": [["Liste*"]]
+    }
+  ],
+  "superseded": [
+    {
+      "terms": [["Tabelle*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    },
+    {
+      "user": "Ab jetzt bevorzuge ich Listen.",
+      "learner": [
+        {
+          "body": "Ab jetzt bevorzuge ich Listen.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Wie sollst du mir Zahlen zeigen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Liste*"]],
+        "forbidden": [["Tabelle*"]]
+      }
+    },
+    {
+      "id": "related-no-overlap",
+      "question": "Stell mir das Quartal zusammen: Umsatz 120, Kosten 80, Gewinn 40.",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Liste*"]],
+        "forbidden": [["Tabelle*"]],
+        "format": "list",
+        "forbiddenFormat": "table"
+      }
+    }
+  ]
+}

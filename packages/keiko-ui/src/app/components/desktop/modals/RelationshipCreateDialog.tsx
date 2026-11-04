@@ -14,6 +14,7 @@
 
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode, KeyboardEvent } from "react";
@@ -87,6 +88,7 @@ export interface RelationshipCreateDialogProps {
 // ─── Component ─────────────────────────────────────────────────────────────────
 
 export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const [form, setForm] = useState<FormState>(initialForm);
   const [clientHints, setClientHints] = useState<readonly string[]>([]);
   const [serverDenial, setServerDenial] = useState<{
@@ -335,10 +337,10 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
         {/* Title */}
         <div className="cmdk-input" style={{ borderBottom: "1px solid var(--line)" }}>
           <span id={titleId} style={{ fontWeight: 600, fontSize: 14, color: "var(--fg)" }}>
-            Create relationship
+            {tUi("relationshipDialog.ui.createRelationship")}
           </span>
           <span id={descId} className="visually-hidden">
-            Create a new relationship between two workspace endpoints.
+            {tUi("relationshipDialog.ui.createANewRelationshipBetween")}
           </span>
           {/* Same close-control identity as Palette/NewWindowDialog: square
               .palette-x with the Icons.close glyph, aria-label === title (audit C037). */}
@@ -346,8 +348,8 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
             type="button"
             className="palette-x"
             onClick={() => onClose(null)}
-            aria-label="Close"
-            title="Close"
+            aria-label={tUi("relationshipDialog.ui.close")}
+            title={tUi("relationshipDialog.ui.close")}
             style={{ marginLeft: "auto" }}
           >
             <CloseIcon size={16} />
@@ -361,14 +363,14 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               htmlFor="rel-type"
               style={{ fontSize: 12, color: "var(--fg-muted)", display: "block", marginBottom: 3 }}
             >
-              Type
+              {tUi("relationshipDialog.ui.type")}
             </label>
             <KeikoSelect
               value={form.type}
-              ariaLabel="Relationship type"
+              ariaLabel={tUi("relationshipDialog.ui.relationshipType")}
               /* eslint-disable-next-line jsx-a11y/no-autofocus -- relationship dialog intentionally starts on type selection. */
               autoFocus
-              menuTitle="Relationship type"
+              menuTitle={tUi("relationshipDialog.ui.relationshipType")}
               triggerStyle={{
                 width: "100%",
                 background: "var(--inset)",
@@ -408,7 +410,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   marginBottom: 3,
                 }}
               >
-                Source kind
+                {tUi("relationshipDialog.ui.sourceKind")}
               </label>
               <select
                 id="rel-src-kind"
@@ -426,7 +428,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
-                aria-label="Source endpoint kind"
+                aria-label={tUi("relationshipDialog.ui.sourceEndpointKind")}
               >
                 {RELATIONSHIP_SUPPORTED_OBJECT_KINDS.map((k) => (
                   <option key={k} value={k}>
@@ -445,7 +447,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   marginBottom: 3,
                 }}
               >
-                Source ID
+                {tUi("relationshipDialog.ui.sourceId")}
               </label>
               <input
                 id="rel-src-id"
@@ -463,7 +465,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
-                aria-label="Source endpoint ID"
+                aria-label={tUi("relationshipDialog.ui.sourceEndpointId")}
               />
             </div>
           </div>
@@ -480,7 +482,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   marginBottom: 3,
                 }}
               >
-                Target kind
+                {tUi("relationshipDialog.ui.targetKind")}
               </label>
               <select
                 id="rel-tgt-kind"
@@ -498,7 +500,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
-                aria-label="Target endpoint kind"
+                aria-label={tUi("relationshipDialog.ui.targetEndpointKind")}
               >
                 {RELATIONSHIP_SUPPORTED_OBJECT_KINDS.map((k) => (
                   <option key={k} value={k}>
@@ -517,7 +519,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   marginBottom: 3,
                 }}
               >
-                Target ID
+                {tUi("relationshipDialog.ui.targetId")}
               </label>
               <input
                 id="rel-tgt-id"
@@ -535,7 +537,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   color: "var(--fg)",
                   fontSize: 12,
                 }}
-                aria-label="Target endpoint ID"
+                aria-label={tUi("relationshipDialog.ui.targetEndpointId")}
               />
             </div>
           </div>
@@ -546,7 +548,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               htmlFor="rel-summary"
               style={{ fontSize: 12, color: "var(--fg-muted)", display: "block", marginBottom: 3 }}
             >
-              Summary (optional, ≤240 chars)
+              {tUi("relationshipDialog.ui.summaryOptional")}
             </label>
             <textarea
               id="rel-summary"
@@ -565,7 +567,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                 fontSize: 12,
                 resize: "vertical",
               }}
-              aria-label="Relationship summary"
+              aria-label={tUi("relationshipDialog.ui.relationshipSummary")}
             />
           </div>
 
@@ -589,7 +591,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
           {/* Server-side preview loading */}
           {previewLoading && (
             <div style={{ fontSize: 12, color: "var(--fg-muted)" }} aria-live="polite">
-              Validating…
+              {tUi("relationshipDialog.ui.validating")}
             </div>
           )}
 
@@ -629,7 +631,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
                   onClick={() => setServerDenial(null)}
                   style={{ marginTop: 6 }}
                 >
-                  Dismiss
+                  {tUi("relationshipDialog.ui.dismiss")}
                 </button>
               )}
             </div>
@@ -650,7 +652,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               onClick={() => onClose(null)}
               style={{ minWidth: 24, minHeight: 24 }}
             >
-              Cancel
+              {tUi("relationshipDialog.ui.cancel")}
             </button>
             <button
               type="button"
@@ -663,7 +665,7 @@ export function RelationshipCreateDialog({ onClose }: RelationshipCreateDialogPr
               aria-busy={submitting}
               style={{ minWidth: 24, minHeight: 24 }}
             >
-              {submitting ? "Creating…" : "Create"}
+              {tUi(submitting ? "relationshipDialog.ui.creating" : "relationshipDialog.ui.create")}
             </button>
           </div>
         </div>

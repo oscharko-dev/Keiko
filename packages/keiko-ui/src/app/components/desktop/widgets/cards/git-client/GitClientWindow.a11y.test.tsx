@@ -746,7 +746,7 @@ describe("GitClientWindow — explicit name/role/value assertions", () => {
           <GitClientWindow projectId={REPO_A.path} client={client} />
         </I18nProvider>,
       );
-      await user.click(await screen.findByRole("tab", { name: "History" }));
+      await user.click(await screen.findByRole("tab", { name: "Verlauf" }));
 
       expect(await screen.findByRole("button", { name: "Weitere Commits laden" })).toBeEnabled();
       expect(await axe(container)).toHaveNoViolations();

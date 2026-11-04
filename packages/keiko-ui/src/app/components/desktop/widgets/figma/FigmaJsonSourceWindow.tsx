@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { formatBytes, formatDate } from "@/lib/format";
 import {
@@ -30,6 +32,7 @@ export function FigmaJsonSourceWindow({
   screenName,
   loadScreenJsonImpl = loadFigmaSnapshotScreenJson,
 }: FigmaJsonSourceWindowProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const abortRef = useRef<AbortController | null>(null);
   const [state, setState] = useState<JsonLoadState>("idle");
   const [screenJson, setScreenJson] = useState<FigmaSnapshotScreenJsonResponse | null>(null);
@@ -100,7 +103,7 @@ export function FigmaJsonSourceWindow({
     <section className="figma-json-window" aria-label={`Figma JSON source ${label}`}>
       <header className="figma-json-header">
         <div>
-          <p className="figma-json-eyebrow">Figma JSON</p>
+          <p className="figma-json-eyebrow">{tUi("figmaJson.ui.figmaJson")}</p>
           <h1 className="figma-json-heading" title={label}>
             {label}
           </h1>
@@ -113,7 +116,7 @@ export function FigmaJsonSourceWindow({
           </p>
         </div>
         <div className="figma-json-actions">
-          <span className="figma-view-source-badge">QI source</span>
+          <span className="figma-view-source-badge">{tUi("figmaJson.ui.qiSource")}</span>
           <button
             type="button"
             className="figma-view-json-copy-btn"
@@ -121,21 +124,21 @@ export function FigmaJsonSourceWindow({
             disabled={jsonText.length === 0}
             aria-disabled={jsonText.length === 0 ? "true" : undefined}
           >
-            Copy JSON
+            {tUi("figmaJson.ui.copyJson")}
           </button>
         </div>
       </header>
 
       {state === "loading" ? (
         <output className="figma-json-status" style={NATIVE_BLOCK_STYLE}>
-          Loading JSON…
+          {tUi("figmaJson.ui.loadingJson")}
         </output>
       ) : null}
       {state === "error" && error !== null ? (
         <div className="figma-json-error" role="alert">
           <p>{error}</p>
           <button type="button" className="figma-snapshot-load-btn" onClick={loadJson}>
-            Retry
+            {tUi("figmaJson.ui.retry")}
           </button>
         </div>
       ) : null}

@@ -12,7 +12,9 @@ import type { UiHandlerDeps } from "./deps.js";
 
 type GatewayEgressConfig = NonNullable<GatewayConfig["egress"]>;
 
-export function currentGatewayConfig(deps: UiHandlerDeps): GatewayConfig | undefined {
+export function currentGatewayConfig(
+  deps: Pick<UiHandlerDeps, "config" | "gatewayConfig">,
+): GatewayConfig | undefined {
   return deps.gatewayConfig?.current() ?? deps.config;
 }
 
@@ -102,7 +104,9 @@ export function redactionSecrets(
   );
 }
 
-export function currentRedactionSecrets(deps: UiHandlerDeps): readonly string[] {
+export function currentRedactionSecrets(
+  deps: Pick<UiHandlerDeps, "env" | "config" | "gatewayConfig" | "egress">,
+): readonly string[] {
   return redactionSecrets(
     deps.env,
     deps.gatewayConfig?.configured?.() ?? currentGatewayConfig(deps),

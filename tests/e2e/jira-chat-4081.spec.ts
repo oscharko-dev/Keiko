@@ -8,28 +8,27 @@ import {
   fixture,
   messages,
   openJiraChat,
+  selectAskForApproval,
   send,
 } from "./support/jira-chat-4081.js";
 
-test("ordinary Chat requires read consent and exact write approval through real MCP", async ({
+test("ordinary Chat reads without consent and requires exact write approval through real MCP", async ({
   page,
 }) => {
   const region = await openJiraChat(page, "approval");
   await createAndConnect(page, region, "Jira approval fixture");
+  await selectAskForApproval(page, region);
   const before = counts();
   await send(region, "JIRA_E2E_READ: read the connected Jira projects.");
-  const allow = region.getByRole("button", { name: "Allow reading", exact: true });
-  await expect(allow).toBeVisible();
-  expect(counts().projects).toBe(before.projects);
-  await allow.click();
   await expect.poll(() => counts().projects).toBe(before.projects + 1);
   await expect(region.getByText("JIRA_E2E_DONE", { exact: true })).toBeVisible();
+  await expect(region.getByRole("button", { name: "Allow reading", exact: true })).toHaveCount(0);
   await send(region, "JIRA_E2E_COMMENT: add the synthetic approval fixture comment.");
   const approval = region.getByRole("button", { name: "Approve this action", exact: true });
   await expect(approval).toBeEnabled();
-  await expect(region.getByLabel("Proposed action details")).toHaveValue(
-    /Synthetic browser approval fixture/u,
-  );
+  const details = region.getByRole("group", { name: "Proposed action details" });
+  await expect(details).toContainText("Synthetic browser approval fixture");
+  await expect(details).not.toContainText(/[{}]/u);
   expect(counts().writes).toBe(before.writes);
   await approval.click();
   await expect(region.getByText("Jira change confirmed", { exact: true })).toBeVisible();
@@ -49,9 +48,9 @@ test("a forged decision and a disconnected Chat cannot dispatch the pending writ
 }) => {
   const region = await openJiraChat(page, "revocation");
   await createAndConnect(page, region, "Jira revoked fixture");
+  await selectAskForApproval(page, region);
   const before = counts();
   await send(region, "JIRA_E2E_COMMENT: add the synthetic approval fixture comment.");
-  await region.getByRole("button", { name: "Allow reading", exact: true }).click();
   await expect(
     region.getByRole("button", { name: "Approve this action", exact: true }),
   ).toBeEnabled();
@@ -107,7 +106,7 @@ test.describe("Jira surfaces accessibility and visual evidence", () => {
   // Local, committed axe-core injection only; the product server retains its real CSP.
   test.use({ bypassCSP: true });
   for (const locale of ["en", "de"] as const) {
-    test(`${locale} Jira Hub, consent, exact approval and result across visual modes`, async ({
+    test(`${locale} Jira Hub, connectors, exact approval and result across visual modes`, async ({
       page,
     }, info) => {
       // Eight presentation variants per state share one real read/write journey per locale.
