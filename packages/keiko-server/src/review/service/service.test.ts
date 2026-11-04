@@ -730,12 +730,13 @@ describe("review run service: fault injection", () => {
     });
     const result = await start(h);
     await h.service.whenSettled(runOf(result).runId);
-    const settledLine = h.log.events.find((event) => event.op === "review.run.settled");
-    expect(settledLine).toMatchObject({
-      extra: { settlement: "abandoned", reason: "interrupted", presentedCount: 0 },
-    });
+    const settledLines = (): readonly unknown[] =>
+      h.log.events.filter((event) => event.op === "review.run.settled");
+    // No write settled the row, so the run has not ended in the Activity Log yet (R4130-029).
+    expect(settledLines()).toHaveLength(0);
     noWorktreeLeft(h, runOf(result).runId);
-    // The stored row stays unsettled; the next start settles it the same way.
+    // The stored row stays unsettled; the next start settles it the same way and writes the run's
+    // one terminal line.
     const restarted = createReviewRunService({
       store: new ReviewRunStore(h.db),
       reviewServices: h.services,
@@ -747,6 +748,10 @@ describe("review run service: fault injection", () => {
     expect(h.store.get(runOf(result).runId)?.settlement).toEqual({
       kind: "abandoned",
       reason: "interrupted",
+    });
+    expect(settledLines()).toHaveLength(1);
+    expect(settledLines()[0]).toMatchObject({
+      extra: { settlement: "abandoned", reason: "interrupted", presentedCount: 0 },
     });
     await restarted.dispose();
   });
@@ -802,11 +807,12 @@ describe("review run service: fault injection", () => {
     await h.service.whenSettled(first.runId);
     expect(h.store.get(first.runId)?.phase).toBe("settling");
     failing.settle = false;
-    const firstDigest = reviewEvidenceDigest("run", first.runId);
-    const settledLines = (): number =>
-      h.log.withOp("review.run.settled").filter((line) => line.extra?.runDigest === firstDigest)
-        .length;
-    const beforeRecovery = settledLines();
+    // R4130-029: the run ends once in the Activity Log, when its stored row settles.
+    const settledLines = (runId: string): number =>
+      h.log
+        .withOp("review.run.settled")
+        .filter((line) => line.extra?.runDigest === reviewEvidenceDigest("run", runId)).length;
+    expect(settledLines(first.runId)).toBe(0);
     const cancelled = handleReviewRunCancel(
       h.ctx(`/api/git-review/runs/${first.runId}/cancel`, { params: { runId: first.runId } }),
       h.deps(),
@@ -816,7 +822,7 @@ describe("review run service: fault injection", () => {
       kind: "abandoned",
       reason: "interrupted",
     });
-    expect(settledLines()).toBe(beforeRecovery + 1);
+    expect(settledLines(first.runId)).toBe(1);
     failing.settle = true;
     const stuck = runOf(await start(h, startBody({ clientRequestId: "client-request-2" })));
     await h.service.whenSettled(stuck.runId);
@@ -827,6 +833,8 @@ describe("review run service: fault injection", () => {
       kind: "abandoned",
       reason: "interrupted",
     });
+    expect(settledLines(stuck.runId)).toBe(1);
+    expect(settledLines(first.runId)).toBe(1);
   });
 
   // R4130-020: a store read that threw during settling rejected the run's unawaited `done`
@@ -858,6 +866,8 @@ describe("review run service: fault injection", () => {
       onClose: () => undefined,
     });
     await expect(h.service.whenSettled(run.runId)).resolves.toBeUndefined();
+    // R4130-030: the run's checkout is removed although settling threw before its removal.
+    noWorktreeLeft(h, run.runId);
     expect(frames).toContainEqual(
       expect.objectContaining({
         kind: "settled",

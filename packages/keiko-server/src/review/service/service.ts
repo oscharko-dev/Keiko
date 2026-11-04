@@ -53,7 +53,7 @@ import {
   type ReviewRunState,
   type ReviewSequenceDeps,
 } from "./sequence.js";
-import { settleRunRecord, type ReviewSettledRun } from "./settle.js";
+import { removeReviewWorktree, settleRunRecord, type ReviewSettledRun } from "./settle.js";
 import { ReviewStaleHeads } from "./stale.js";
 import type { ReviewRunRow, ReviewRunStore } from "./store.js";
 import { reviewRunView } from "./views.js";
@@ -366,8 +366,9 @@ class ReviewRunServiceImpl implements ReviewRunService {
 
   /**
    * Settles the run and announces it. A store failure anywhere in settling announces
-   * `abandoned/interrupted` and frees the live slot instead of rejecting the run's unawaited
-   * `done` promise (R4130-020); the row then settles at the next start or cancel.
+   * `abandoned/interrupted`, removes the run's checkout (R4130-030) and frees the live slot instead
+   * of rejecting the run's unawaited `done` promise (R4130-020); the row then settles at the next
+   * start or cancel, which writes the run's one `review.run.settled` line.
    */
   private async settle(ctx: ReviewRunContext, state: ReviewRunState, live: LiveRun): Promise<void> {
     let settled: ReviewSettledRun = { settlement: INTERRUPTED, presentedCount: 0 };
@@ -375,6 +376,7 @@ class ReviewRunServiceImpl implements ReviewRunService {
       settled = await this.settleRecord(ctx, state, live);
     } catch (error) {
       reportReviewFailure("review.run.persist", ctx.correlationId, error);
+      await removeReviewWorktree(this.deps, ctx, state, INTERRUPTED);
     } finally {
       this.live.delete(ctx.runId);
     }
