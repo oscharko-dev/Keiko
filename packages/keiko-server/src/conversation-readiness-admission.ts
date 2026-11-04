@@ -118,8 +118,20 @@ function observationDisposition(
     : "expired";
 }
 
+/**
+ * Checks the model again through the conversation-request readiness check (ADR-0171). Given to the
+ * guard, an admission that merely expired during a long turn is checked once more instead of
+ * refused: a tool turn can outlast the freshness interval without a served response, and refusing it
+ * then ended a working Jira turn with "failed its live readiness check" while the very next check of
+ * the same model answered ready (2026-11-01, S08).
+ */
+export type ConversationReadinessRecheck = (
+  modelId: string,
+  correlationId: string | undefined,
+) => Promise<void>;
+
 interface ConversationCallGuard {
-  assert(request: GatewayCallRequest, signal: AbortSignal): void;
+  assert(request: GatewayCallRequest, signal: AbortSignal): Promise<void>;
   complete(response: NormalizedResponse, signal: AbortSignal): void;
 }
 
@@ -133,21 +145,34 @@ function conversationCallGuard(
   modelId: string,
   admission: ConversationReadinessAdmission,
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  recheck: ConversationReadinessRecheck | undefined,
 ): ConversationCallGuard {
   let completedAt: number | undefined;
+  const decide = (request: GatewayCallRequest): ConversationAdmissionDisposition => {
+    const disposition =
+      request.modelId === modelId
+        ? admissionDisposition(deps, admission, modelId, completedAt)
+        : "model-changed";
+    logConversationAdmission(
+      disposition,
+      request.logContext?.correlationId,
+      admission.gatewayConfigGeneration,
+      deps.gatewayConfig?.generation(),
+    );
+    return disposition;
+  };
   return {
-    assert(request, signal): void {
+    async assert(request, signal): Promise<void> {
       signal.throwIfAborted();
-      const disposition =
-        request.modelId === modelId
-          ? admissionDisposition(deps, admission, modelId, completedAt)
-          : "model-changed";
-      logConversationAdmission(
-        disposition,
-        request.logContext?.correlationId,
-        admission.gatewayConfigGeneration,
-        deps.gatewayConfig?.generation(),
-      );
+      let disposition = decide(request);
+      // Only an expiry is checked again; a failed probe, a replaced model or configuration and a
+      // missing or malformed observation still refuse at once. The recheck must leave a fresh
+      // positive observation of this generation, or the call is refused before any provider work.
+      if (disposition === "expired" && recheck !== undefined) {
+        await recheck(modelId, request.logContext?.correlationId);
+        signal.throwIfAborted();
+        disposition = decide(request);
+      }
       if (!disposition.startsWith("allowed-")) throw new ConversationModelNotReadyError();
     },
     complete(response, signal): void {
@@ -166,10 +191,11 @@ export function withConversationReadinessAdmission(
   modelId: string,
   admission: ConversationReadinessAdmission,
   deps: Pick<UiHandlerDeps, "gatewayConfig">,
+  recheck?: ConversationReadinessRecheck,
 ): ModelPort {
-  const guard = conversationCallGuard(modelId, admission, deps);
+  const guard = conversationCallGuard(modelId, admission, deps, recheck);
   const call: ModelPort["call"] = async (request, signal) => {
-    guard.assert(request, signal);
+    await guard.assert(request, signal);
     const response = await model.call(request, signal);
     guard.complete(response, signal);
     return response;
@@ -182,7 +208,7 @@ export function withConversationReadinessAdmission(
   return {
     call,
     callStream: async function* (request, signal): AsyncIterable<GatewayStreamChunk> {
-      guard.assert(request, signal);
+      await guard.assert(request, signal);
       let completedResponse: NormalizedResponse | undefined;
       for await (const chunk of callStream(request, signal)) {
         if (chunk.type === "done") completedResponse = chunk.response;

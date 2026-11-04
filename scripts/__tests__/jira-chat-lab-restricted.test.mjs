@@ -50,7 +50,10 @@ function observedCase(testCase, transport = "buffered") {
           id: "user",
           role: "user",
           turnState: "completed",
-          toolTranscript: { exchanges: [exchange] },
+          toolTranscript: {
+            readGrant: { kind: "jira-chat-read", state: "granted", grantId: "grant" },
+            exchanges: [exchange],
+          },
         },
       ],
     },
@@ -102,9 +105,21 @@ describe("restricted real-Chat qualification assertions", () => {
 
   it.each([
     [
-      "missing initial read consent",
+      "a read grant the server did not establish",
       (observed) => {
         observed.decisions.grants = 0;
+      },
+    ],
+    [
+      "a missing read grant on the transcript",
+      (observed) => {
+        delete observed.completed.messages[0].toolTranscript.readGrant;
+      },
+    ],
+    [
+      "a read grant still waiting for a person",
+      (observed) => {
+        observed.completed.messages[0].toolTranscript.readGrant.state = "pending";
       },
     ],
     [

@@ -40,7 +40,7 @@ it("shows central availability separately from conversation authority without di
   expect(screen.getByText("sign-in · Sign-in required")).toBeInTheDocument();
   expect(screen.getByText("disabled · Disabled")).toBeInTheDocument();
   expect(
-    screen.getByText("Each conversation and coding task keeps its own permissions."),
+    screen.getByText("Choose in each Chat and coding task which servers it uses."),
   ).toBeInTheDocument();
   expect(screen.queryByText("/synthetic/runtime")).not.toBeInTheDocument();
   expect(api).toHaveBeenCalledWith("/api/mcp/servers", { signal: expect.any(AbortSignal) });

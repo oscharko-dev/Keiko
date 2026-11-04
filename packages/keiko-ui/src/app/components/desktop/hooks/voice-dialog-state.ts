@@ -137,6 +137,7 @@ export function deriveVoiceAuraState(inputs: VoiceAuraStateInputs): VoiceAuraSta
     inputs.sending ||
     inputs.sendStatus === "queued" ||
     inputs.sendStatus === "contacting" ||
+    inputs.sendStatus === "awaiting-decision" ||
     inputs.sendStatus === "streaming";
   if (inputs.voiceDialogState === "thinking" || modelBusy) {
     return { active: true, state: "thinking", intensity: modelBusy ? "high" : "medium" };

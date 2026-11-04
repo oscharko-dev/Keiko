@@ -33,6 +33,7 @@ function fixture(transport = "buffered") {
         role: "user",
         turnState: "cancelled",
         toolTranscript: {
+          readGrant: { kind: "jira-chat-read", state: "granted", grantId: "grant" },
           exchanges: [
             {
               call: {
@@ -48,7 +49,6 @@ function fixture(transport = "buffered") {
     ],
     witness: {
       nativeStatuses: [401],
-      grants: 1,
       approvals: 0,
       responses: [transport === "stream" ? 200 : 499],
       cancelledFrames: transport === "stream" ? 1 : 0,
@@ -108,9 +108,15 @@ describe("native restricted Jira authentication refusal", () => {
       },
     ],
     [
-      "missing consent",
+      "missing server-established read grant",
       (f) => {
-        f.witness.grants = 0;
+        delete f.messages[0].toolTranscript.readGrant;
+      },
+    ],
+    [
+      "read grant still waiting for a person",
+      (f) => {
+        f.messages[0].toolTranscript.readGrant.state = "pending";
       },
     ],
     [
@@ -192,18 +198,29 @@ describe("native restricted Jira authentication refusal", () => {
     },
   );
 
-  it("observes public cancellation and consent without changing emitted frames", () => {
+  it("observes public cancellation and write approval without changing emitted frames", () => {
     const observer = restrictedAuthenticationObserver();
     const server = new EventEmitter();
     observer.configureServer({ server });
     observer.arm(true);
-    const consent = Object.assign(new EventEmitter(), { statusCode: 200 });
+    const approval = Object.assign(new EventEmitter(), { statusCode: 200 });
+    server.emit(
+      "request",
+      {
+        method: "POST",
+        url: "/api/atlassian-connectors/action-approvals/write/chat-write-approval",
+      },
+      approval,
+    );
+    approval.emit("finish");
+    // The retired read-consent route is not a decision any more: even a 200 is not counted.
+    const retired = Object.assign(new EventEmitter(), { statusCode: 200 });
     server.emit(
       "request",
       { method: "POST", url: "/api/atlassian-connectors/action-approvals/grant/chat-read-consent" },
-      consent,
+      retired,
     );
-    consent.emit("finish");
+    retired.emit("finish");
     const write = vi.fn(() => true);
     const stream = Object.assign(new EventEmitter(), { statusCode: 200, write });
     server.emit("request", { method: "POST", url: "/api/desktop/chat/stream" }, stream);
@@ -215,8 +232,7 @@ describe("native restricted Jira authentication refusal", () => {
       nativeStatuses: [],
       responses: [200],
       cancelledFrames: 1,
-      grants: 1,
-      approvals: 0,
+      approvals: 1,
     });
   });
 });

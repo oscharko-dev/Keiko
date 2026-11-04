@@ -3,7 +3,7 @@
 // boundary (resolveWithinWorkspace + WorkspaceFs.exists); no raw node:fs. Candidate test-path
 // derivation uses plain string ops (no regex), so there is no ReDoS surface.
 
-import { basename, dirname, extname, join, relative } from "node:path";
+import { basename, dirname, extname, join, posix, relative } from "node:path";
 import {
   assertContainedRealPath,
   resolveWithinWorkspace,
@@ -11,6 +11,7 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { VerificationPackage } from "./package-dir.js";
 import { targetedVitestProjects } from "./targeted-project.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -36,30 +37,57 @@ export interface PlanOptions {
   readonly limits?: Partial<VerificationResourceLimits> | undefined;
   // Changed source files (workspace-relative) used to derive targeted-test steps.
   readonly changedFiles?: readonly string[] | undefined;
+  // The nested package the script steps run in; absent, they run at the workspace root with npm.
+  readonly package?: VerificationPackage | undefined;
 }
 
 function resolveLimits(overrides: PlanOptions["limits"]): VerificationResourceLimits {
   return { ...DEFAULT_VERIFICATION_LIMITS, ...overrides };
 }
 
+// What a step that cannot run for want of an installed tree says. The governed verifier installs
+// dependencies with npm only, so a Yarn or pnpm package without its own tree has to be verified in
+// the caller's shell; the closed prefix is what the tool maps to `native-shell-required`.
+export const NATIVE_SHELL_SKIP_PREFIX = "native shell required: ";
+
+function nativeShellSkipReason(pkg: VerificationPackage | undefined): string | undefined {
+  return pkg === undefined || pkg.manager === "npm" || pkg.installed
+    ? undefined
+    : `${NATIVE_SHELL_SKIP_PREFIX}${pkg.manager} dependencies are not installed`;
+}
+
 function scriptStep(
   kind: Exclude<VerificationKind, "targeted-test">,
   scriptName: string | undefined,
   limits: VerificationResourceLimits,
+  pkg: VerificationPackage | undefined,
 ): VerificationStep {
+  const command = pkg?.manager ?? "npm";
+  const cwd = pkg === undefined ? {} : { cwd: pkg.dir };
   if (scriptName === undefined) {
     return {
       kind,
       scriptName: undefined,
-      command: "npm",
+      command,
       args: ["run", kind],
       limits,
       skipReason: `no ${kind} script detected in package.json`,
+      ...cwd,
     };
   }
-  // `npm test` has a dedicated subcommand; every other kind runs via `npm run <script>`.
-  const args = scriptName === "test" ? ["test"] : ["run", scriptName];
-  return { kind, scriptName, command: "npm", args, limits };
+  // `npm test` has a dedicated subcommand; every other kind (and every Yarn or pnpm script) runs via
+  // `<manager> run <script>`.
+  const args = scriptName === "test" && command === "npm" ? ["test"] : ["run", scriptName];
+  const skipReason = nativeShellSkipReason(pkg);
+  return {
+    kind,
+    scriptName,
+    command,
+    args,
+    limits,
+    ...(skipReason === undefined ? {} : { skipReason }),
+    ...cwd,
+  };
 }
 
 function wants(only: PlanOptions["only"], kind: VerificationKind): boolean {
@@ -223,11 +251,48 @@ export function buildVerificationPlan(
   const steps: VerificationStep[] = [];
   for (const kind of SCRIPT_KINDS) {
     if (wants(options.only, kind)) {
-      steps.push(scriptStep(kind, catalog.mapping[kind], limits));
+      steps.push(scriptStep(kind, catalog.mapping[kind], limits, options.package));
     }
   }
   if (wants(options.only, "targeted-test") && options.changedFiles !== undefined) {
     steps.push(...resolveTargetedTests(workspace, options.changedFiles, fs, limits));
   }
-  return { workspaceRoot: workspace.root, steps };
+  return {
+    workspaceRoot: workspace.root,
+    steps,
+    ...(options.package === undefined
+      ? {}
+      : { packageDir: options.package.dir, packageManager: options.package.manager }),
+  };
+}
+
+// Targeted tests of a nested package. The files are workspace-relative; the invocation is planned
+// against the package folder (its own test framework, its own nested Vitest projects). Vitest runs
+// from the workspace root with the package as its `--root`, so hoisted tools stay reachable inside
+// the execution-root sandbox; Jest has no generated root form and runs in the package folder. A
+// file outside the package is not planned.
+export function planPackageTargetedTests(
+  pkg: VerificationPackage,
+  testFiles: readonly string[],
+  fs: WorkspaceFs = nodeWorkspaceFs,
+  limits: VerificationResourceLimits = DEFAULT_VERIFICATION_LIMITS,
+): readonly VerificationStep[] {
+  const prefix = `${pkg.dir}/`;
+  const relative = testFiles
+    .map((file) => file.replaceAll("\\", "/"))
+    .filter((file) => file.startsWith(prefix))
+    .map((file) => file.slice(prefix.length));
+  const skipReason = nativeShellSkipReason(pkg);
+  return planDirectTargetedTests(pkg.workspace, relative, fs, limits).map((step) => ({
+    ...packageInvocation(step, pkg.dir),
+    ...(skipReason === undefined ? {} : { skipReason }),
+  }));
+}
+
+function packageInvocation(step: VerificationStep, dir: string): VerificationStep {
+  if (step.args[0] !== "vitest") return { ...step, cwd: dir };
+  const hasRoot = step.args[2] === "--root";
+  const nested = hasRoot ? (step.args[3] ?? "") : "";
+  const files = step.args.slice(hasRoot ? 4 : 2);
+  return { ...step, args: ["vitest", "run", "--root", posix.join(dir, nested), ...files] };
 }

@@ -5,6 +5,7 @@
 
 import type { DocumentId } from "@oscharko-dev/keiko-contracts";
 import { Buffer } from "node:buffer";
+import { deflateRawSync } from "node:zlib";
 
 import type { ParserSelectionInput } from "./types.js";
 
@@ -186,3 +187,138 @@ export const GZIP_MAGIC: Uint8Array = new Uint8Array([0x1f, 0x8b, 0x08, 0x00]);
 export const PNG_MAGIC: Uint8Array = new Uint8Array([
   0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
 ]);
+
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (0xedb88320 & -(crc & 1));
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+export interface ZipTextEntry {
+  readonly name: string;
+  readonly content: string;
+}
+
+// Builds a minimal deflate-compressed zip from text entries so OOXML parsers can be exercised
+// with a synthetic package whose every part the test controls.
+export function zipTextEntries(entries: readonly ZipTextEntry[]): Uint8Array {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+  for (const entry of entries) {
+    const filename = Buffer.from(entry.name, "utf8");
+    const raw = Buffer.from(entry.content, "utf8");
+    const compressed = deflateRawSync(raw);
+    const checksum = crc32(raw);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(8, 8);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(compressed.byteLength, 18);
+    localHeader.writeUInt32LE(raw.byteLength, 22);
+    localHeader.writeUInt16LE(filename.byteLength, 26);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(8, 10);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(compressed.byteLength, 20);
+    centralHeader.writeUInt32LE(raw.byteLength, 24);
+    centralHeader.writeUInt16LE(filename.byteLength, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+
+    localParts.push(localHeader, filename, compressed);
+    centralParts.push(centralHeader, filename);
+    localOffset += localHeader.byteLength + filename.byteLength + compressed.byteLength;
+  }
+  const centralSize = centralParts.reduce((sum, part) => sum + part.byteLength, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Uint8Array.from(Buffer.concat([...localParts, ...centralParts, end]));
+}
+
+/**
+ * A password-protected Office file: the OLE2 compound-file header Office wraps around an
+ * encrypted package, followed by filler. The bytes are not a ZIP archive and hold no slide text.
+ */
+export function oleEncryptedPackage(): Uint8Array {
+  const bytes = new Uint8Array(512);
+  bytes.set([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+  return bytes;
+}
+
+// ─── PDF builder ─────────────────────────────────────────────────────────────
+
+function pdfStringLiteral(text: string): string {
+  return text.replaceAll(/[\\()]/gu, (match) => `\\${match}`);
+}
+
+export interface TextPdfOptions {
+  /** Adds a standard-security-handler /Encrypt dictionary that no empty password opens. */
+  readonly encrypted?: boolean;
+}
+
+const FIRST_PAGE_OBJECT = 4;
+
+function pdfPageObjects(pages: readonly string[]): readonly string[] {
+  return pages.flatMap((text, index) => {
+    const content = `BT /F1 18 Tf 72 700 Td (${pdfStringLiteral(text)}) Tj ET`;
+    const contentNumber = FIRST_PAGE_OBJECT + index * 2 + 1;
+    return [
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${String(contentNumber)} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`,
+      `<< /Length ${String(content.length)} >>\nstream\n${content}\nendstream`,
+    ];
+  });
+}
+
+// Builds a valid text-layer PDF with one page per entry and a byte-exact cross-reference table, so
+// the fixture needs neither a recovery pass nor a canned blob. With `encrypted`, the trailer
+// references an /Encrypt dictionary whose owner and user entries do not authenticate the empty
+// password, which is how a document that requires a password reaches the parser.
+export function buildTextPdf(pages: readonly string[], options: TextPdfOptions = {}): Uint8Array {
+  const kids = pages.map((_, index) => `${String(FIRST_PAGE_OBJECT + index * 2)} 0 R`).join(" ");
+  const bodies: string[] = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    `<< /Type /Pages /Kids [${kids}] /Count ${String(pages.length)} >>`,
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ...pdfPageObjects(pages),
+  ];
+  const encryptEntries: readonly string[] =
+    options.encrypted === true
+      ? [
+          `/Encrypt ${String(bodies.length + 1)} 0 R`,
+          "/ID [<00112233445566778899aabbccddeeff> <00112233445566778899aabbccddeeff>]",
+        ]
+      : [];
+  if (options.encrypted === true) {
+    bodies.push(
+      `<< /Filter /Standard /V 1 /R 2 /P -4 /O <${"ab".repeat(32)}> /U <${"cd".repeat(32)}> >>`,
+    );
+  }
+  let document = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (const [index, body] of bodies.entries()) {
+    offsets.push(document.length);
+    document += `${String(index + 1)} 0 obj\n${body}\nendobj\n`;
+  }
+  const size = bodies.length + 1;
+  const entries = offsets.map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`);
+  const trailer = [`/Size ${String(size)}`, "/Root 1 0 R", ...encryptEntries].join(" ");
+  const xref = `xref\n0 ${String(size)}\n0000000000 65535 f \n${entries.join("")}`;
+  return encode(
+    `${document}${xref}trailer\n<< ${trailer} >>\nstartxref\n${String(document.length)}\n%%EOF\n`,
+  );
+}

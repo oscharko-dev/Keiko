@@ -12,7 +12,8 @@ import { createBufferedServerLogSink } from "../../../../tests/support/buffered-
 import { createNodeUiStore, buildUiStoreOverDatabase, type UiStore } from "./index.js";
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 import { runMigrations } from "./schema.js";
-import { createChatToolMutationStore } from "./chatToolMutations.js";
+import { createChatToolMutationStore, readChatToolMutationTurn } from "./chatToolMutations.js";
+import { observedChatToolMutationOutcome } from "./chatToolMutationState.js";
 import type {
   JiraChatToolMutationIntent as ChatToolMutationIntent,
   ChatToolMutationStore,
@@ -139,6 +140,59 @@ describe("durable mutation admission", () => {
       }),
     ).toBe(false);
   });
+  // #4176: an attachment that was refused or never sent left no remote effect, and the model is told
+  // to request it again; the retry in the same turn is a new attempt, not a replay of the refusal.
+  describe("retrying an attachment in the same turn", () => {
+    const attach = (f: Fixture): ChatToolMutationIntent => ({
+      ...f.intent,
+      operation: "jira.attach",
+    });
+    it.each(["rejected", "not-dispatched"] as const)(
+      "does not replay a %s attachment",
+      (outcome) => {
+        const f = fixture();
+        const first = attach(f);
+        f.journal.prepare(first);
+        f.journal.settle(first.invocationId, outcome);
+        const retry = { ...first, invocationId: "invocation-retry" };
+        expect(f.journal.prepare(retry)).toMatchObject({
+          kind: "prepared",
+          record: { invocationId: "invocation-retry", phase: "prepared" },
+        });
+        expect(f.journal.find(first.invocationId)).toMatchObject({ outcome, phase: "settled" });
+        expect(
+          f.journal.prepare({ ...retry, invocationId: "invocation-retry-again" }),
+        ).toMatchObject({
+          kind: "replayed",
+          record: { invocationId: "invocation-retry" },
+        });
+      },
+    );
+    it.each(["succeeded", "succeeded-unconfirmed"] as const)(
+      "still replays, or blocks after, a %s attachment",
+      (outcome) => {
+        const f = fixture();
+        const first = attach(f);
+        f.journal.prepare(first);
+        f.journal.beginDispatch(first.invocationId, () => true);
+        f.journal.acknowledge(first.invocationId, 200);
+        f.journal.settle(first.invocationId, outcome);
+        expect(f.journal.prepare({ ...first, invocationId: "invocation-retry" })).toMatchObject({
+          kind: "replayed",
+          record: { invocationId: first.invocationId, outcome },
+        });
+      },
+    );
+    it("does not retry any other refused operation", () => {
+      const f = fixture();
+      f.journal.prepare(f.intent);
+      f.journal.settle(f.intent.invocationId, "rejected");
+      expect(f.journal.prepare({ ...f.intent, invocationId: "invocation-retry" })).toMatchObject({
+        kind: "replayed",
+        record: { invocationId: f.intent.invocationId, outcome: "rejected" },
+      });
+    });
+  });
   it.each([
     { actorId: "another-actor" },
     { podId: "another-pod" },
@@ -211,6 +265,90 @@ describe("durable mutation admission", () => {
     });
     f.store.deleteChat(f.intent.chatId);
     expect(f.journal.find(f.intent.invocationId)).toBeUndefined();
+  });
+  it("does not count records that settled before anything was sent (#4175)", () => {
+    const f = fixture();
+    const prepare = (index: number): string => {
+      const invocationId = `invocation-${String(index)}`;
+      expect(
+        f.journal.prepare({
+          ...f.intent,
+          invocationId,
+          actionDigest: index.toString(16).padStart(64, "0"),
+        }).kind,
+      ).toBe("prepared");
+      return invocationId;
+    };
+    for (let index = 0; index < 40; index++)
+      f.journal.settle(prepare(index), index % 2 === 0 ? "not-dispatched" : "rejected");
+    for (let index = 40; index < 72; index++) prepare(index);
+    expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
+  it("keeps counting writes the provider answered", () => {
+    const f = fixture();
+    for (let index = 0; index < 32; index++) {
+      const invocationId = `invocation-${String(index)}`;
+      f.journal.prepare({
+        ...f.intent,
+        invocationId,
+        actionDigest: index.toString(16).padStart(64, "0"),
+      });
+      f.journal.beginDispatch(invocationId, () => true);
+      f.journal.acknowledge(invocationId, 201);
+      f.journal.settle(invocationId, "succeeded");
+    }
+    expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
+  it("admits the items of one approved draft as their own bounded batch (#4178)", () => {
+    const f = fixture();
+    const batch = "d".repeat(64);
+    const item = (index: number): ChatToolMutationIntent => ({
+      ...f.intent,
+      invocationId: `item-${String(index)}`,
+      actionDigest: (index + 1).toString(16).padStart(64, "0"),
+      batchDigest: batch,
+    });
+    // Far past the 32 single writes a turn admits: the approved draft authorizes its own items.
+    for (let index = 0; index < 100; index++)
+      expect(f.journal.prepare(item(index)).kind).toBe("prepared");
+    expect(f.journal.find("item-0")).toMatchObject({ batchDigest: batch });
+    // Single writes of the turn are still counted on their own.
+    for (let index = 0; index < 32; index++)
+      expect(
+        f.journal.prepare({
+          ...f.intent,
+          invocationId: `single-${String(index)}`,
+          actionDigest: `f${index.toString(16)}`.padStart(64, "0"),
+        }).kind,
+      ).toBe("prepared");
+    expect(f.journal.prepare(f.intent)).toEqual({ kind: "blocked", reason: "capacity" });
+  });
+  it("has no item-count limit for a batch, and refuses a replay under another batch", () => {
+    const f = fixture();
+    const batch = "e".repeat(64);
+    const item = (index: number): ChatToolMutationIntent => ({
+      ...f.intent,
+      invocationId: `item-${String(index)}`,
+      actionDigest: (index + 1).toString(16).padStart(64, "0"),
+      batchDigest: batch,
+    });
+    for (let index = 0; index < 1200; index++)
+      expect(f.journal.prepare(item(index)).kind).toBe("prepared");
+    expect(() => f.journal.prepare({ ...item(0), batchDigest: "f".repeat(64) })).toThrow();
+    expect(() => f.journal.prepare({ ...item(0), batchDigest: "not-a-digest" })).toThrow();
+  });
+  it("keeps batch items out of the history projection's single-write window", () => {
+    const f = fixture();
+    const batch = "c".repeat(64);
+    for (let index = 0; index < 40; index++)
+      f.journal.prepare({
+        ...f.intent,
+        invocationId: `item-${String(index)}`,
+        actionDigest: (index + 1).toString(16).padStart(64, "0"),
+        batchDigest: batch,
+      });
+    const turn = readChatToolMutationTurn(f.db, f.intent.chatId, f.intent.turnRef);
+    expect(turn).toHaveLength(0);
   });
   it("bounds intent growth within a canonical turn", () => {
     const f = fixture();
@@ -292,6 +430,81 @@ describe("remote observation and terminal outcomes", () => {
       expect(f.journal.settle(f.intent.invocationId, "unknown").outcome).toBe("unknown");
     },
   );
+  // #4176: Data Center validates a whole request before it applies anything, so a client error that
+  // carries Jira's parsable error document is a definitive rejection. The proof comes from the
+  // caller; the status alone (pinned above) never is one.
+  describe("a rejection Jira proved with its own error document", () => {
+    const EVIDENCE = { jiraErrorDocument: true } as const;
+
+    it.each([400, 401, 403, 404, 405, 412, 413, 415, 422])(
+      "settles HTTP %i as rejected, keeps the turn open and records a closed rejection",
+      (status) => {
+        const f = fixture();
+        dispatch(f);
+        f.journal.acknowledge(f.intent.invocationId, status);
+
+        const settled = f.journal.settle(f.intent.invocationId, "rejected", undefined, EVIDENCE);
+
+        expect(settled).toMatchObject({
+          phase: "settled",
+          outcome: "rejected",
+          httpStatus: status,
+        });
+        expect(observedChatToolMutationOutcome(settled)).toBe("rejected");
+        const next = { ...f.intent, invocationId: "corrected", actionDigest: "c".repeat(64) };
+        expect(f.journal.prepare(next).kind).toBe("prepared");
+        expect(f.journal.beginDispatch(next.invocationId, () => true)).toBe(true);
+        const line = expectActivityLogProof(
+          "chat.tool-mutation.emitted-line",
+          formatActivityLogProofLine(
+            f.logs.events.find((event) => event.extra?.event === "settled") ?? {},
+          ),
+        );
+        expect(line).toMatchObject({ outcome: "rejected", rejection: "jira-error-document" });
+        expect(JSON.stringify(f.logs.events)).not.toContain("synthetic-private-body");
+      },
+    );
+
+    it.each([302, 408, 409, 429, 500, 502, 503])(
+      "refuses the proof for the uncertain HTTP %i and keeps the turn blocked",
+      (status) => {
+        const f = fixture();
+        dispatch(f);
+        f.journal.acknowledge(f.intent.invocationId, status);
+
+        expect(() =>
+          f.journal.settle(f.intent.invocationId, "rejected", undefined, EVIDENCE),
+        ).toThrow("conflicts");
+        f.journal.settle(f.intent.invocationId, "unknown");
+        expect(
+          f.journal.prepare({ ...f.intent, invocationId: "next", actionDigest: "c".repeat(64) }),
+        ).toEqual({ kind: "blocked", reason: "unknown-effect" });
+      },
+    );
+
+    it("refuses the proof when no response was observed or the write was acknowledged", () => {
+      const lost = fixture();
+      dispatch(lost);
+      expect(() =>
+        lost.journal.settle(lost.intent.invocationId, "rejected", undefined, EVIDENCE),
+      ).toThrow("conflicts");
+      const applied = fixture();
+      dispatch(applied);
+      applied.journal.acknowledge(applied.intent.invocationId, 201);
+      expect(() =>
+        applied.journal.settle(applied.intent.invocationId, "rejected", undefined, EVIDENCE),
+      ).toThrow("conflicts");
+    });
+
+    it("leaves a dispatched 4xx without a settlement unknown across a crash", () => {
+      const f = fixture();
+      dispatch(f);
+
+      const record = f.journal.acknowledge(f.intent.invocationId, 400);
+
+      expect(observedChatToolMutationOutcome(record)).toBe("unknown");
+    });
+  });
   it.each(["unknown", "succeeded-unconfirmed"] as const)(
     "blocks new and previously prepared mutations after %s in the same turn",
     (outcome) => {

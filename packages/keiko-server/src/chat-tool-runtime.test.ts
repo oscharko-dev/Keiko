@@ -10,11 +10,8 @@ import {
   type GatewayCallRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { DEFAULT_LIMITS, type ModelPort } from "@oscharko-dev/keiko-harness";
-import type {
-  ChatToolReadGrantView,
-  ChatToolWriteApprovalView,
-} from "@oscharko-dev/keiko-contracts";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
+import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ExternalMcpConnection } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type { McpServerDefinition } from "@oscharko-dev/keiko-contracts/runtime/mcp-servers";
 import type {
@@ -28,7 +25,6 @@ import { deriveChatGroundingScopeIdentity } from "./store/chat-grounding-scope-i
 import { mockRequest, mockResponse } from "./_support.js";
 import type { RouteContext } from "./routes.js";
 import { jiraChatActorDigest } from "./atlassian/jiraPodAccess.js";
-import { handleDecideChatReadConsent } from "./atlassian/chatReadConsentRoutes.js";
 import { handleDecideChatWriteApproval } from "./atlassian/chatWriteApprovalRoutes.js";
 import { installMcpChatCatalogRuntime } from "./mcp/mcpChatCatalogRuntime.js";
 import { createBufferedServerLogSink } from "../../../tests/support/buffered-server-log.js";
@@ -47,7 +43,17 @@ interface Options {
   readonly batchSize?: number;
   readonly promptTokens?: number;
   readonly beforeMcpWriteResult?: () => Promise<void>;
+  readonly budget?: NonNullable<UiHandlerDeps["chatToolTurnBudget"]>;
+  /** Leave the Chat without an explicit mode, so it resolves the default (Full access). */
+  readonly defaultMode?: boolean;
 }
+// A narrow composed envelope budget keeps the shared-bound pins exact and fast (#4175).
+const NARROW_BUDGET = {
+  maxRuntimeMs: 300_000,
+  maxToolCalls: 30,
+  maxPromptTokens: 100_000,
+  maxPatchBytes: 0,
+} as const;
 function context(body: Record<string, unknown>, params: Record<string, string> = {}): RouteContext {
   return {
     req: mockRequest({ body: JSON.stringify(body) }),
@@ -175,6 +181,8 @@ interface Fixture {
   readonly root: string;
   readonly calls: GatewayCallRequest[];
   readonly effects: string[];
+  /** Grant ids the server accepted itself, in order; no human ever decides a read grant. */
+  readonly acceptedReadGrants: string[];
 }
 function fixture(options: Options = {}): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-combined-chat-")));
@@ -232,10 +240,16 @@ function fixture(options: Options = {}): Fixture {
     serve: () => Promise.resolve(new Response(null, { status: 404 })),
     close: () => Promise.resolve(),
   };
-  const deps = installMcpChatCatalogRuntime(Object.assign(base, { mcpConnections: connections }), {
-    primary: createBufferedServerLogSink(),
-    diagnostics: { record: (): void => undefined },
-  });
+  const deps = installMcpChatCatalogRuntime(
+    Object.assign(base, {
+      mcpConnections: connections,
+      ...(options.budget === undefined ? {} : { chatToolTurnBudget: options.budget }),
+    }),
+    {
+      primary: createBufferedServerLogSink(),
+      diagnostics: { record: (): void => undefined },
+    },
+  );
   cleanup.push(async () => {
     await deps.dispose?.();
     rmSync(root, { recursive: true, force: true });
@@ -245,9 +259,19 @@ function fixture(options: Options = {}): Fixture {
   const chat = deps.store.createChat(root, "Synthetic combined", MODEL);
   deps.store.updateChat(
     chat.id,
-    { jiraPodId: POD },
+    options.defaultMode === true
+      ? { jiraPodId: POD }
+      : { jiraPodId: POD, toolMode: "governed-assist" },
     { verifiedJiraPod: { podId: POD, authenticationGeneration: 1 } },
   );
+  const acceptedReadGrants: string[] = [];
+  const registry = deps.atlassianActionApprovalRegistry;
+  if (registry === undefined) throw new Error("Missing approval registry");
+  const accept = registry.acceptChatReadGrant.bind(registry);
+  vi.spyOn(registry, "acceptChatReadGrant").mockImplementation((grantId, ...rest) => {
+    acceptedReadGrants.push(grantId);
+    return accept(grantId, ...rest);
+  });
   const credentials = deps.atlassianConnectorCredentials;
   if (credentials === undefined) throw new Error("Missing credential owner");
   vi.spyOn(credentials.custody, "list").mockImplementation(() => [credential(deps)]);
@@ -273,7 +297,7 @@ function fixture(options: Options = {}): Fixture {
         });
       },
   );
-  return { deps, chatId: chat.id, root, calls, effects };
+  return { deps, chatId: chat.id, root, calls, effects, acceptedReadGrants };
 }
 function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
   return handleSendDesktopChat(
@@ -288,38 +312,17 @@ function send(f: Fixture): ReturnType<typeof handleSendDesktopChat> {
     f.deps,
   );
 }
-async function pendingRead(
-  f: Fixture,
-  kind: ChatToolReadGrantView["kind"],
-): Promise<ChatToolReadGrantView> {
-  const current = (): ChatToolReadGrantView | undefined =>
-    f.deps.store
-      .listMessages(f.chatId)[0]
-      ?.toolTranscript?.readGrants?.find(
-        (grant) => grant.kind === kind && grant.state === "pending",
-      );
-  await vi.waitFor(() => {
-    expect(current()).toBeDefined();
+function acceptedReadGrants(f: Fixture): readonly { kind: string; state: string }[] {
+  return f.acceptedReadGrants.map((grantId) => {
+    const grant = f.deps.atlassianActionApprovalRegistry?.getChatReadGrant(grantId)?.grant;
+    if (grant === undefined) throw new Error("Missing accepted read grant");
+    return { kind: grant.kind, state: grant.state };
   });
-  const grant = current();
-  if (grant === undefined) throw new Error("Missing source disclosure");
-  return grant;
 }
-async function approveRead(f: Fixture, kind: ChatToolReadGrantView["kind"]): Promise<void> {
-  const grant = await pendingRead(f, kind);
-  expect(
-    (
-      await handleDecideChatReadConsent(
-        context(
-          { decision: "approve", disclosureVersion: grant.disclosureVersion },
-          { approvalId: grant.grantId },
-        ),
-        f.deps,
-      )
-    ).status,
-  ).toBe(200);
-}
-async function approveWrite(f: Fixture, kind: ChatToolWriteApprovalView["kind"]): Promise<void> {
+async function pendingWrite(
+  f: Fixture,
+  kind: ChatToolWriteApprovalView["kind"],
+): Promise<ChatToolWriteApprovalView> {
   const current = (): ChatToolWriteApprovalView | undefined =>
     f.deps.store
       .listMessages(f.chatId)[0]
@@ -331,6 +334,10 @@ async function approveWrite(f: Fixture, kind: ChatToolWriteApprovalView["kind"])
   });
   const approval = current();
   if (approval === undefined) throw new Error("Missing action approval");
+  return approval;
+}
+async function approveWrite(f: Fixture, kind: ChatToolWriteApprovalView["kind"]): Promise<void> {
+  const approval = await pendingWrite(f, kind);
   expect(
     (
       await handleDecideChatWriteApproval(
@@ -349,13 +356,16 @@ async function expectFirstMutationAwaitingResult(f: Fixture): Promise<void> {
   });
   const blocked = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
   // The remote effect has started, but its result/receipt/journal settlement is still pending.
-  // The second source must not even publish a call or request its read/action consent yet.
+  // The second source must not even publish a call or request its read grant/action approval yet.
   expect(blocked?.exchanges.map((exchange) => exchange.call.id)).toEqual(["call-1-0"]);
   expect(blocked?.exchanges[0]?.result).toBeUndefined();
-  expect(blocked?.readGrants?.map((grant) => grant.kind)).toEqual(["mcp-chat-read"]);
+  expect(blocked?.readGrants?.map(({ kind, state }) => ({ kind, state }))).toEqual([
+    { kind: "mcp-chat-read", state: "granted" },
+  ]);
+  expect(acceptedReadGrants(f).map(({ kind }) => kind)).toEqual(["mcp-chat-read-grant"]);
   expect(f.calls).toHaveLength(1);
 }
-it("offers both sources through one ordinary Chat handler and retains independent disclosures", async () => {
+it("offers both sources through one ordinary Chat handler and grants each first read without a decision", async () => {
   const f = fixture();
   const pending = send(f);
   void pending.catch(() => undefined);
@@ -371,18 +381,17 @@ it("offers both sources through one ordinary Chat handler and retains independen
   expect(
     offered.projection.tools.some((entry) => entry.toolRef.canonicalId === "keiko.jira.projects"),
   ).toBe(true);
-  await pendingRead(f, "mcp-chat-read");
-  expect(f.effects).toEqual([]);
-  await approveRead(f, "mcp-chat-read");
-  await pendingRead(f, "jira-chat-read");
-  expect(f.effects).toEqual(["mcp-read"]);
-  await approveRead(f, "jira-chat-read");
   expect((await pending).status).toBe(200);
   expect(f.effects).toEqual(["mcp-read", "jira-read"]);
   const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+  // The connection is the consent: each grant is recorded granted and nothing waited for a human.
   expect(transcript?.readGrants?.map(({ kind, state }) => ({ kind, state }))).toEqual([
     { kind: "mcp-chat-read", state: "granted" },
     { kind: "jira-chat-read", state: "granted" },
+  ]);
+  expect(acceptedReadGrants(f)).toEqual([
+    { kind: "mcp-chat-read-grant", state: "granted" },
+    { kind: "jira-chat-read-grant", state: "granted" },
   ]);
   expect(transcript?.exchanges.map((exchange) => exchange.result?.status)).toEqual([
     "completed",
@@ -394,6 +403,21 @@ it("offers both sources through one ordinary Chat handler and retains independen
       .map((message) => message.toolCallId),
   ).toEqual(["call-1-0", "call-1-1"]);
 });
+it("resolves Full access for a Chat without a mode and runs both writes without an approval", async () => {
+  const f = fixture({ write: true, defaultMode: true });
+  expect(f.deps.store.findChatById(f.chatId)?.toolMode).toBe("autonomous-delivery");
+  expect((await send(f)).status).toBe(200);
+  expect(f.effects).toEqual(["mcp-write", "jira-write", "jira-read"]);
+  const transcript = f.deps.store.listMessages(f.chatId)[0]?.toolTranscript;
+  expect(transcript?.readGrants?.every((grant) => grant.state === "granted")).toBe(true);
+  expect(transcript?.exchanges.map((exchange) => exchange.approval?.state)).not.toContain(
+    "pending",
+  );
+  expect(transcript?.exchanges.map((exchange) => exchange.mutationOutcome)).toEqual([
+    "succeeded",
+    "succeeded",
+  ]);
+});
 it("approves and journals writes from both sources independently on the same accepted turn", async () => {
   let releaseFirst!: () => void;
   const firstResult = new Promise<void>((resolve) => {
@@ -403,20 +427,17 @@ it("approves and journals writes from both sources independently on the same acc
   const pending = send(f);
   void pending.catch(() => undefined);
   try {
-    await approveRead(f, "mcp-chat-read");
-    expect(f.effects).toEqual([]);
     await approveWrite(f, "mcp-chat-write");
     await expectFirstMutationAwaitingResult(f);
   } finally {
     releaseFirst();
   }
-  await pendingRead(f, "jira-chat-read");
-  expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]).toMatchObject({
-    mutationOutcome: "succeeded",
-    result: { status: "completed" },
+  await vi.waitFor(() => {
+    expect(f.deps.store.listMessages(f.chatId)[0]?.toolTranscript?.exchanges[0]).toMatchObject({
+      mutationOutcome: "succeeded",
+      result: { status: "completed" },
+    });
   });
-  await approveRead(f, "jira-chat-read");
-  expect(f.effects).toEqual(["mcp-write"]);
   await approveWrite(f, "jira-chat-write");
   expect((await pending).status).toBe(200);
   expect(f.effects).toEqual(["mcp-write", "jira-write", "jira-read"]);
@@ -437,12 +458,12 @@ it("approves and journals writes from both sources independently on the same acc
   expect(f.effects).toEqual(["mcp-write", "jira-write", "jira-read"]);
 });
 it.each(["jira", "mcp"] as const)(
-  "stops both sources when %s scope changes while disclosure is pending",
+  "stops both sources when %s scope changes while a write approval is pending",
   async (source) => {
-    const f = fixture();
+    const f = fixture({ write: true });
     const pending = send(f);
     void pending.catch(() => undefined);
-    const grant = await pendingRead(f, "mcp-chat-read");
+    const approval = await pendingWrite(f, "mcp-chat-write");
     if (source === "mcp") {
       const settings = f.deps.mcpSettings;
       if (settings === undefined) throw new Error("Missing MCP settings");
@@ -464,10 +485,10 @@ it.each(["jira", "mcp"] as const)(
     expect(f.effects).toEqual([]);
     expect(
       (
-        await handleDecideChatReadConsent(
+        await handleDecideChatWriteApproval(
           context(
-            { decision: "approve", disclosureVersion: grant.disclosureVersion },
-            { approvalId: grant.grantId },
+            { decision: "approve", actionDigest: approval.actionDigest },
+            { approvalId: approval.approvalId },
           ),
           f.deps,
         )
@@ -475,23 +496,20 @@ it.each(["jira", "mcp"] as const)(
     ).not.toBe(200);
   },
 );
-it("shares the physical tool limit across alternating Jira and MCP calls", async () => {
-  const f = fixture({ repeat: true, batchSize: DEFAULT_LIMITS.maxToolCalls });
+it("shares the envelope's physical tool limit across alternating Jira and MCP calls", async () => {
+  const f = fixture({ repeat: true, batchSize: NARROW_BUDGET.maxToolCalls, budget: NARROW_BUDGET });
   const pending = send(f);
   void pending.catch(() => undefined);
-  await approveRead(f, "mcp-chat-read");
-  await approveRead(f, "jira-chat-read");
   await pending;
-  expect(f.effects).toHaveLength(DEFAULT_LIMITS.maxToolCalls);
+  expect(f.effects).toHaveLength(NARROW_BUDGET.maxToolCalls);
   expect(new Set(f.effects)).toEqual(new Set(["mcp-read", "jira-read"]));
-  expect(f.calls).toHaveLength(2);
+  // No further model round is requested once the shared tool-call budget is spent.
+  expect(f.calls).toHaveLength(1);
 });
 it("keeps the prompt allowance shared when source execution changes", async () => {
-  const f = fixture({ repeat: true, promptTokens: 60_000 });
+  const f = fixture({ repeat: true, promptTokens: 60_000, budget: NARROW_BUDGET });
   const pending = send(f);
   void pending.catch(() => undefined);
-  await approveRead(f, "mcp-chat-read");
-  await approveRead(f, "jira-chat-read");
   await pending;
   expect(f.effects).toEqual(["mcp-read", "jira-read"]);
   expect(f.calls).toHaveLength(2);

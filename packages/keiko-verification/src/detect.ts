@@ -83,12 +83,18 @@ export function classifyScripts(scripts: Readonly<Record<string, string>>): Scri
   };
 }
 
-export function detectScripts(workspace: WorkspaceInfo, fs?: WorkspaceFs): ScriptCatalog {
+// `packageDir` (workspace-relative) names a nested package whose package.json is read instead of the
+// workspace root's; absent, the root package.json is read as before.
+export function detectScripts(
+  workspace: WorkspaceInfo,
+  fs?: WorkspaceFs,
+  packageDir?: string,
+): ScriptCatalog {
   let scripts: Readonly<Record<string, string>>;
   try {
     const content = readWorkspaceFile(
       workspace,
-      "package.json",
+      packageDir === undefined || packageDir === "" ? "package.json" : `${packageDir}/package.json`,
       { maxBytes: PACKAGE_READ_BYTES },
       fs,
     );

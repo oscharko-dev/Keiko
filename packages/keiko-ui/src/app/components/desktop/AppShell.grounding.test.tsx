@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode, RefObject } from "react";
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
+import type { ChatConnectorSelection } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
@@ -56,7 +57,7 @@ interface WorkspaceHookOptions {
   ) => boolean | Promise<boolean>;
   readonly onConnectorBind?: (
     chatWindowId: string,
-    scope: ChatLocalKnowledgeScope,
+    scope: ChatConnectorSelection,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectorUnbind?: (
@@ -110,6 +111,7 @@ const mocks = vi.hoisted(() => ({
   updateChatConnectedScopes: vi.fn(),
   updateChatLocalKnowledgeScopes: vi.fn(),
   updateChatGitChangeScopes: vi.fn(),
+  updateChat: vi.fn(),
   recordReadsContextRelationship: vi.fn(),
   registerSw: vi.fn(),
   refreshActiveWorkspace: vi.fn(),
@@ -205,6 +207,7 @@ vi.mock("@/lib/api", async (importOriginal) => ({
   },
   updateChatLocalKnowledgeScopes: mocks.updateChatLocalKnowledgeScopes,
   updateChatGitChangeScopes: mocks.updateChatGitChangeScopes,
+  updateChat: mocks.updateChat,
 }));
 
 vi.mock("../../relationships/connector-relationship", () => ({
@@ -1334,6 +1337,106 @@ describe("AppShell grounding connections", () => {
     expect(api.removeConn).not.toHaveBeenCalledWith("browser-chat", expect.anything());
     expect(mocks.updateChatConnectedScopes).not.toHaveBeenCalled();
     expect(api.updateConnBoundScope).not.toHaveBeenCalled();
+  });
+
+  describe("Jira Pod lasso", () => {
+    const podScope: ChatConnectorSelection = {
+      kind: "jira-live",
+      podId: "pod-one",
+      connectedAtMs: 1,
+    };
+    const binding = (podId: string): NonNullable<Chat["jiraPodBinding"]> => ({
+      podId,
+      bindingGeneration: 1,
+      authenticationGeneration: 1,
+      connectedAtMs: 1,
+    });
+
+    it("binds the pod through one jiraPodId PATCH without any request popover", async () => {
+      const bound = chat({ jiraPodBinding: binding("pod-one"), updatedAt: 3 });
+      mocks.updateChat.mockResolvedValue({ chat: bound });
+      await renderMounted();
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", podScope);
+      });
+
+      expect(result).toBe(true);
+      expect(mocks.updateChat).toHaveBeenCalledExactlyOnceWith("chat-1", { jiraPodId: "pod-one" });
+      expect(mocks.state.session?.replaceChat).toHaveBeenCalledWith(bound);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("carries the current scope identity so a stale lasso is refused by the server", async () => {
+      const current = chat({ groundingScopeIdentity: "scope-one" });
+      mocks.state.session = { ...mocks.state.session!, chats: [current], activeChat: current };
+      mocks.updateChat.mockResolvedValue({
+        chat: chat({ jiraPodBinding: binding("pod-one"), updatedAt: 3 }),
+      });
+      await renderMounted();
+
+      await act(async () => {
+        await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", podScope);
+      });
+
+      expect(mocks.updateChat).toHaveBeenCalledExactlyOnceWith("chat-1", {
+        jiraPodId: "pod-one",
+        expectedGroundingScopeIdentity: "scope-one",
+      });
+    });
+
+    it("accepts a pod the Chat is already bound to without another PATCH", async () => {
+      const current = chat({ jiraPodBinding: binding("pod-one") });
+      mocks.state.session = { ...mocks.state.session!, chats: [current], activeChat: current };
+      await renderMounted();
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", podScope);
+      });
+
+      expect(result).toBe(true);
+      expect(mocks.updateChat).not.toHaveBeenCalled();
+      expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+    });
+
+    it("does not adopt the reply once the binding target is superseded", async () => {
+      const persisted = deferred<{ readonly chat: Chat }>();
+      mocks.updateChat.mockReturnValue(persisted.promise);
+      await renderMounted();
+      let current = true;
+      const target: ChatBindingTarget = {
+        conversationId: "chat-1",
+        isCurrent: (): boolean => current,
+      };
+
+      const pending = Promise.resolve(
+        mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", podScope, target),
+      );
+      await waitFor((): void => expect(mocks.updateChat).toHaveBeenCalledOnce());
+      current = false;
+      persisted.resolve({ chat: chat({ jiraPodBinding: binding("pod-one"), updatedAt: 3 }) });
+
+      await expect(pending).resolves.toBe(false);
+      expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+    });
+
+    it("rejects the lasso when the server refuses the binding and surfaces a notice", async () => {
+      mocks.updateChat.mockRejectedValue(new ApiError("INTERNAL", "refused", 500));
+      await renderMounted();
+
+      let result: boolean | undefined;
+      await act(async () => {
+        result = await mocks.state.workspaceOptions?.onConnectorBind?.("chat-window", podScope);
+      });
+
+      expect(result).toBe(false);
+      expect(mocks.state.session?.replaceChat).not.toHaveBeenCalled();
+      expect(
+        await screen.findByText(/could not connect that knowledge source/i),
+      ).toBeInTheDocument();
+    });
   });
 
   it("removes only an obsolete Jira edge after canonical replacement and preserves Data Pod links", async () => {

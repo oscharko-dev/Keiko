@@ -23,6 +23,8 @@ export interface ConversationShare {
 
 export interface ContextBreakdownInput {
   readonly protectedSkillTokens?: number | undefined;
+  /** Tool definitions the Chat's active connectors add to every tool-capable request. */
+  readonly toolDefinitions?: { readonly tokens: number; readonly count: number } | undefined;
   readonly profile: ContextProfile;
   readonly conversation: ConversationShare;
   /** Present while the chat is grounded: the conversation lane cap and the last source share. */
@@ -57,6 +59,19 @@ function skillSegments(tokens = 0): readonly ChatContextSegmentWire[] {
   return tokens > 0 ? [{ id: "skill", tokens, count: 1 }] : [];
 }
 
+function toolSegments(
+  tools: ContextBreakdownInput["toolDefinitions"],
+): readonly ChatContextSegmentWire[] {
+  return tools !== undefined && tools.tokens > 0
+    ? [{ id: "tools", tokens: tools.tokens, count: tools.count }]
+    : [];
+}
+
+// Shares a request always carries whole: the send path trims or compacts around them.
+function isFixedShare(segment: ChatContextSegmentWire): boolean {
+  return segment.id === "skill" || segment.id === "tools";
+}
+
 function instructionShare(input: ContextBreakdownInput): number {
   const prompt = input.grounded?.lastPrompt;
   return prompt === undefined
@@ -77,6 +92,7 @@ function usedSegments(input: ContextBreakdownInput): readonly ChatContextSegment
       tokens: instructionShare(input),
     },
     ...skillSegments(input.protectedSkillTokens),
+    ...toolSegments(input.toolDefinitions),
     { id: "summary", tokens: shares.summaryTokens, count: conversation.summaryCount },
     { id: "messages", tokens: shares.messageTokens, count: conversation.messageCount },
     ...(grounded === undefined
@@ -127,14 +143,14 @@ function fittedToBudget(
   segments: readonly ChatContextSegmentWire[],
   budget: number,
 ): readonly ChatContextSegmentWire[] {
-  const protectedTokens = tokensOf(segments.filter((segment) => segment.id === "skill"));
+  const protectedTokens = tokensOf(segments.filter(isFixedShare));
   const elastic = fittedElasticToBudget(
-    segments.filter((segment) => segment.id !== "skill"),
+    segments.filter((segment) => !isFixedShare(segment)),
     Math.max(0, budget - protectedTokens),
   );
   const fitted = new Map(elastic.map((segment) => [segment.id, segment]));
   return segments.map((segment) =>
-    segment.id === "skill" ? segment : (fitted.get(segment.id) ?? segment),
+    isFixedShare(segment) ? segment : (fitted.get(segment.id) ?? segment),
   );
 }
 
@@ -149,7 +165,7 @@ function autoCompactionAt(
   if (input.grounded === undefined) return Math.floor(budget * AUTOMATIC_COMPACTION_THRESHOLD);
   const beside = tokensOf(
     used.filter(
-      (segment) => segment.id === "system" || segment.id === "knowledge" || segment.id === "skill",
+      (segment) => segment.id === "system" || segment.id === "knowledge" || isFixedShare(segment),
     ),
   );
   const lane = Math.floor(input.grounded.historyLaneTokens * AUTOMATIC_COMPACTION_THRESHOLD);
