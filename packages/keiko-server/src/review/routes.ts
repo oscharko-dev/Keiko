@@ -186,7 +186,7 @@ export async function handleReviewRunDiff(
     return failure(ctx, 400, "BAD_REQUEST", "The context line count is invalid.");
   }
   const lines = context === null ? DEFAULT_DIFF_CONTEXT_LINES : Number(context);
-  const result = await service.diff(runId, path, lines);
+  const result = await service.diff(runId, path, lines, ctx.correlationId);
   if (result.kind === "not-found") return failure(ctx, 404, "NOT_FOUND", "No such review run.");
   return { status: 200, body: deps.redactor(result.body) };
 }

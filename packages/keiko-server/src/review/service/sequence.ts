@@ -15,6 +15,7 @@ import type {
   ReviewCoverageEntry,
   ReviewDiffCoverage,
   ReviewDiffCoverageSummary,
+  ReviewDiffFileRef,
   ReviewDiffSettlementInput,
   ReviewRoleTotals,
   ReviewRunPhase,
@@ -188,10 +189,15 @@ async function createWorktree(
 /** Every changed path with its coverage list and closed reason, in list order. */
 function coverageEntries(coverage: ReviewDiffCoverage): ReviewCoverageEntry[] {
   const entries: ReviewCoverageEntry[] = [];
-  const add = (list: ReviewCoverageEntry["list"], files: readonly { path: string }[]): void => {
+  const add = (list: ReviewCoverageEntry["list"], files: readonly ReviewDiffFileRef[]): void => {
     for (const file of files) {
       const reason = (file as { readonly reason?: string }).reason;
-      entries.push({ path: file.path, list, ...(reason === undefined ? {} : { reason }) });
+      entries.push({
+        path: file.path,
+        list,
+        ...(reason === undefined ? {} : { reason }),
+        ...(file.previousPath === undefined ? {} : { previousPath: file.previousPath }),
+      });
     }
   };
   add("included", coverage.included);

@@ -5,7 +5,7 @@
 
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createGitReviewProcessRunner } from "@oscharko-dev/keiko-git";
 import type {
   ReviewRunSettlement,
@@ -13,7 +13,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/pull-request-review";
 
 import type { RouteResult } from "../../routes.js";
-import { git } from "../reviewFixtures.test-support.js";
+import { defaultServerDiagnosticSink } from "../../diagnostics-log.js";
+import { commitFile, git } from "../reviewFixtures.test-support.js";
 import {
   handleReviewRunCancel,
   handleReviewRunDiff,
@@ -532,6 +533,76 @@ describe("review run service: stale heads and the reviewed diff (AC5)", () => {
     for (const ref of h.store.get(view.runId)?.privateRefs ?? [])
       git(h.repo, "update-ref", "-d", ref);
     expect((await diff("src/total.ts")).body).toMatchObject({ status: "objects-unavailable" });
+  });
+});
+
+describe("review run service: the reviewed diff of renamed and unusual paths", () => {
+  const RENAMED_BASE = ["one", "two", "three", "four", "five", "six", "seven", "eight"];
+
+  function diffRoute(h: ReviewRunHarness, runId: string, path: string): Promise<RouteResult> {
+    return handleReviewRunDiff(
+      h.ctx(`/api/git-review/runs/${runId}/diff?path=${encodeURIComponent(path)}`, {
+        params: { runId },
+      }),
+      h.deps(),
+    );
+  }
+
+  // R4130-015: the base blob was looked up under the new path, so a renamed file with two edited
+  // lines was served as one hunk that adds every line.
+  it("diffs a renamed file against its base path", async () => {
+    const h = setUp({ runtime: reviewerFiling([]) });
+    git(h.repo, "checkout", "-q", "-b", "rename-base", "main");
+    commitFile(h.repo, "src/a.ts", `${RENAMED_BASE.join("\n")}\n`, "a");
+    git(h.repo, "checkout", "-q", "-b", "rename-head");
+    git(h.repo, "mv", "src/a.ts", "src/b.ts");
+    const edited = RENAMED_BASE.map((line) => (line === "three" ? "THREE" : line));
+    commitFile(h.repo, "src/b.ts", `${edited.join("\n")}\n`, "rename");
+    git(h.repo, "checkout", "-q", "main");
+    const view = await settled(
+      h,
+      await start(
+        h,
+        startBody({
+          target: { kind: "local-range", baseRef: "rename-base", headRef: "rename-head" },
+        }),
+      ),
+    );
+    expect(h.store.coverageEntries(view.runId)).toContainEqual(
+      expect.objectContaining({ path: "src/b.ts", previousPath: "src/a.ts" }),
+    );
+    const served = await diffRoute(h, view.runId, "src/b.ts");
+    expect(served.body).toMatchObject({ status: "available", path: "src/b.ts" });
+    const diff = (served.body as { readonly diff: string }).diff;
+    expect(diff).toContain("-three");
+    expect(diff).toContain("+THREE");
+    expect(diff).not.toContain("@@ -0,0 ");
+  });
+
+  // R4130-024: the hardened path read throws for a control character; the route answered an
+  // opaque 500 and never wrote its declared diagnostic.
+  it("refuses a covered path with a control character as objects-unavailable", async () => {
+    const record = vi.spyOn(defaultServerDiagnosticSink, "record");
+    const h = setUp({ runtime: reviewerFiling([]) });
+    git(h.repo, "checkout", "-q", "-b", "tab-head", "topic");
+    commitFile(h.repo, "docs/a\tb.md", "tabbed\n", "tab");
+    git(h.repo, "checkout", "-q", "main");
+    const view = await settled(
+      h,
+      await start(
+        h,
+        startBody({ target: { kind: "local-range", baseRef: "main", headRef: "tab-head" } }),
+      ),
+    );
+    expect(h.store.coverageEntries(view.runId).map((entry) => entry.path)).toContain(
+      "docs/a\tb.md",
+    );
+    const served = await diffRoute(h, view.runId, "docs/a\tb.md");
+    expect(served).toMatchObject({ status: 200, body: { status: "objects-unavailable" } });
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "review.run.diff", correlationId: "corr-review-run" }),
+    );
+    record.mockRestore();
   });
 });
 

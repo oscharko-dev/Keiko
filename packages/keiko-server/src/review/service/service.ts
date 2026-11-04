@@ -108,7 +108,12 @@ export interface ReviewRunService {
   cancel(runId: string): ReviewRunCancelOutcome;
   /** Records a start request the route refused before the service saw it (`request-invalid`). */
   refuseInvalidRequest(correlationId: string, dryRun: boolean): void;
-  diff(runId: string, path: string, contextLines: number): Promise<ReviewRunDiffResult>;
+  diff(
+    runId: string,
+    path: string,
+    contextLines: number,
+    correlationId?: string,
+  ): Promise<ReviewRunDiffResult>;
   /** Private refs recorded runs still reference; the retention sweep keeps them. */
   retainedRefs(repositoryRoot: string): ReadonlySet<string>;
   /** Resolves when the run settled (tests and shutdown). */
@@ -411,8 +416,18 @@ class ReviewRunServiceImpl implements ReviewRunService {
     logReviewRunRefused(this.deps.activityLog, correlationId, "request-invalid", dryRun);
   }
 
-  public diff(runId: string, path: string, contextLines: number): Promise<ReviewRunDiffResult> {
-    return reviewRunDiff(this.deps.store, this.deps.reviewServices, { runId, path, contextLines });
+  public diff(
+    runId: string,
+    path: string,
+    contextLines: number,
+    correlationId?: string,
+  ): Promise<ReviewRunDiffResult> {
+    return reviewRunDiff(this.deps.store, this.deps.reviewServices, {
+      runId,
+      path,
+      contextLines,
+      correlationId,
+    });
   }
 
   public retainedRefs(repositoryRoot: string): ReadonlySet<string> {

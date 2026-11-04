@@ -10,7 +10,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 56;
+export const SCHEMA_VERSION = 57;
 
 interface Migration {
   readonly version: number;
@@ -1919,6 +1919,12 @@ export const MIGRATIONS: readonly Migration[] = [
     // settlement. NULL when no Reviewer run started and for every run recorded before this column.
     sql: `ALTER TABLE review_runs ADD COLUMN runtime_cleanup TEXT
       CHECK (runtime_cleanup IS NULL OR runtime_cleanup IN ('proven','unproven'));`,
+  },
+  {
+    version: 57,
+    // ADR-0182 D6 (R4130-015): the base path of a renamed file, so the reviewed diff reads the base
+    // side under the name it had there. NULL for every other entry and every entry recorded earlier.
+    sql: `ALTER TABLE review_coverage ADD COLUMN previous_path TEXT;`,
   },
 ];
 
