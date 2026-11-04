@@ -32,15 +32,20 @@ import type {
 } from "@oscharko-dev/keiko-security/secret-vault";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { AtlassianNetworkConfig } from "@oscharko-dev/keiko-contracts";
 import type { OutboundHttpEgressConfig } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type { ServerLogSink } from "@oscharko-dev/keiko-activity-log";
 import { openAtlassianCredentialVault } from "./credentialVault.js";
-import { createAtlassianCredentialMetadataStore } from "./credentialMetadataStore.js";
+import {
+  createAtlassianCredentialMetadataStore,
+  type AtlassianCredentialMetadataStore,
+} from "./credentialMetadataStore.js";
+import {
+  resolveAtlassianTargetAdmission,
+  type AtlassianTargetAdmission,
+} from "./targetAdmission.js";
 
 export interface BuildAtlassianConnectorCredentialDepsOptions {
   readonly onLivePodInvalidated?: AtlassianCredentialCustodyDeps["onLivePodInvalidated"];
-  readonly networkConfig?: () => AtlassianNetworkConfig | undefined;
   // The effective gateway config path; the credential custody domain lives in the sibling
   // `credentials/` directory (shared with the provider vault, separately keyed — ADR-0128 D2).
   readonly configPath: string;
@@ -90,9 +95,10 @@ export function buildAtlassianConnectorCredentialDeps(
   options: BuildAtlassianConnectorCredentialDepsOptions,
 ): AtlassianConnectorCredentialDeps {
   const listenerPorts = new Set<number>();
+  const metadataStore = createAtlassianCredentialMetadataStore({ configPath: options.configPath });
   const { custody, executionResolver } = createAtlassianCredentialCustody({
     vault: lazyVaultPort(options),
-    metadataStore: createAtlassianCredentialMetadataStore({ configPath: options.configPath }),
+    metadataStore,
     onLivePodInvalidated: options.onLivePodInvalidated,
   });
   return {
@@ -106,7 +112,7 @@ export function buildAtlassianConnectorCredentialDeps(
     httpPortFactory: (metadata, correlationId, lifecycle) =>
       createGatewayAtlassianHttpPort(
         credentialTransportOptions(
-          { options, listenerPorts, executionResolver, custody },
+          { options, listenerPorts, executionResolver, custody, metadataStore },
           metadata,
           correlationId,
           lifecycle,
@@ -115,7 +121,7 @@ export function buildAtlassianConnectorCredentialDeps(
     httpBodyPortFactory: (metadata, correlationId, lifecycle) =>
       createGatewayAtlassianHttpBodyPort(
         credentialTransportOptions(
-          { options, listenerPorts, executionResolver, custody },
+          { options, listenerPorts, executionResolver, custody, metadataStore },
           metadata,
           correlationId,
           lifecycle,
@@ -137,6 +143,7 @@ interface CredentialTransportOwner {
   readonly listenerPorts: ReadonlySet<number>;
   readonly executionResolver: AtlassianCredentialExecutionResolver;
   readonly custody: AtlassianCredentialCustody;
+  readonly metadataStore: AtlassianCredentialMetadataStore;
 }
 
 function observedAuthentication(
@@ -166,6 +173,21 @@ function observedAuthentication(
   };
 }
 
+function targetAdmissionFor(
+  owner: CredentialTransportOwner,
+  metadata: AtlassianCredentialMetadata,
+  lifecycle: AtlassianCredentialHttpOptions,
+): CreateAtlassianHttpPortOptions["targetAdmission"] {
+  if (metadata.deployment !== "data-center") return undefined;
+  return (signal): Promise<AtlassianTargetAdmission | undefined> =>
+    resolveAtlassianTargetAdmission(
+      owner.metadataStore,
+      metadata,
+      signal,
+      lifecycle.purpose === "verification",
+    );
+}
+
 function credentialTransportOptions(
   owner: CredentialTransportOwner,
   metadata: AtlassianCredentialMetadata,
@@ -173,7 +195,6 @@ function credentialTransportOptions(
   lifecycle: AtlassianCredentialHttpOptions = {},
 ): CreateAtlassianHttpPortOptions {
   const { options, listenerPorts, executionResolver } = owner;
-  const dataCenter = metadata.deployment === "data-center";
   const observe =
     lifecycle.purpose === "verification"
       ? (): void => undefined
@@ -181,7 +202,8 @@ function credentialTransportOptions(
   const beforeDispatch = lifecycle.beforeDispatch;
   const onResponse = lifecycle.onResponse;
   return {
-    privateTargets: () => (dataCenter ? (options.networkConfig?.()?.privateTargets ?? []) : []),
+    targetAdmission: targetAdmissionFor(owner, metadata, lifecycle),
+    activityLog: options.activityLog,
     deniedLoopbackPorts: () => [...listenerPorts],
     baseUrl: metadata.baseUrl,
     authRef: metadata.authRef,

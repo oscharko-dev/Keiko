@@ -1,3 +1,5 @@
+import { editorM11PairingFragment } from "./support/editor-m11-app-session.js";
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -146,76 +148,207 @@ test.afterEach(() => {
   }
 });
 
-async function seedChatWindow(page: Page, chat: ChatResponse["chat"]): Promise<void> {
-  await page.addInitScript(
-    ({ chatId, title }) => {
-      window.localStorage.setItem(
-        "keiko.workspace.v4",
-        JSON.stringify([
-          {
-            id: "e2e-chat-window",
-            type: "chat",
-            x: 96,
-            y: 72,
-            w: 760,
-            h: 620,
-            z: 10,
-            cfg: { chatId, title },
-            max: false,
-          },
-        ]),
-      );
-      window.localStorage.removeItem("keiko.conns.v1");
-    },
-    { chatId: chat.id, title: chat.title },
-  );
-}
+test("connects through the native handoff in one click without a code dialog @smoke", async ({
+  page,
+  context,
+}) => {
+  let opened: Page | undefined;
+  await page.route("**/api/coding-workbench/app-session/open-browser", async (route) => {
+    expect(route.request().postDataJSON()).toEqual({ origin: new URL(page.url()).origin });
+    // The OS opener is the only seam: proof is delivered to a second browser tab, never the POST.
+    opened = await context.newPage();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ state: "opened" }),
+    });
+    await opened.goto(
+      `${new URL(page.url()).origin}/${editorM11PairingFragment("browser-open-smoke")}`,
+    );
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Connect browser", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "Connect this browser" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Connecting…", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Connect browser", exact: true })).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(async () => {
+        const response = await fetch("/api/coding-workbench/app-session/browser", {
+          cache: "no-store",
+        });
+        const result: unknown = await response.json();
+        return result;
+      }),
+    )
+    .toMatchObject({ state: "active" });
+  await opened?.close();
+});
 
-async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
+test("starts without replaying an unowned former chat window @smoke", async ({ page }) => {
+  // Deliberately legacy/unowned: this regression must not use the scoped fixture adapter.
+  await page.addInitScript(() => {
+    localStorage.setItem(
       "keiko.workspace.v4",
       JSON.stringify([
         {
-          id: "e2e-files-window",
-          type: "files",
-          x: 96,
-          y: 72,
-          w: 620,
-          h: 640,
-          z: 10,
-          cfg: { root },
+          id: "former-chat-window",
+          type: "chat",
+          x: 32,
+          y: 32,
+          w: 700,
+          h: 500,
+          z: 1,
+          cfg: { chatId: "00000000-0000-4000-8000-000000000111" },
           max: false,
         },
       ]),
     );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, projectPath);
+  });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "New window", exact: true })).toBeVisible();
+  await expect(page.locator('[data-window-id="former-chat-window"]')).toHaveCount(0);
+  await expect(page.getByText("Chat not found", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => localStorage.getItem("keiko.workspace.v4"))).toContain(
+    "former-chat-window",
+  );
+});
+
+test("restores the saved chat and its content after reloading @smoke", async ({
+  page,
+  request,
+}) => {
+  const projectPath = createProjectFixture();
+  await ensureProject(request, projectPath);
+  const created = await request.post("/api/chats", {
+    headers: MUTATION_HEADERS,
+    data: { projectPath, title: "Restored conversation", selectedModel: CHAT_MODEL_ID },
+  });
+  expect(created.status()).toBe(201);
+  const { chat } = (await created.json()) as ChatResponse;
+  const content = "This conversation survives reopening the workspace.";
+  const message = await request.post("/api/chats/messages", {
+    headers: MUTATION_HEADERS,
+    data: { chatId: chat.id, projectPath, role: "user", content, timestamp: Date.now() },
+  });
+  expect(message.status()).toBe(201);
+  const storageKey = await seedChatWindow(page, chat, true);
+  await page.goto("/");
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  const restored = page.locator('[data-window-id="e2e-chat-window"]');
+  await expect(restored).toHaveAttribute("data-max", "false");
+  await clickWindowChromeButton(restored, "Full screen Chat window");
+  await expect(restored).toHaveAttribute("data-max", "true");
+  // A real UI mutation must reach native storage before reload; the initial fixture is not proof.
+  await expect
+    .poll(() =>
+      page.evaluate((key) => {
+        const windows = JSON.parse(localStorage.getItem(key) ?? "[]") as {
+          readonly id: string;
+          readonly max: boolean;
+        }[];
+        return windows.find((window) => window.id === "e2e-chat-window")?.max;
+      }, storageKey),
+    )
+    .toBe(true);
+  await page.reload();
+  await expect(restored).toBeVisible();
+  await expect(restored).toHaveAttribute("data-max", "true");
+  await expect(page.getByText(content, { exact: true })).toBeVisible();
+  await expect(page.getByText("Chat not found", { exact: true })).toHaveCount(0);
+  const saved = await request.get(
+    `/api/chats/messages?chatId=${encodeURIComponent(chat.id)}&projectPath=${encodeURIComponent(projectPath)}`,
+  );
+  expect(saved.status()).toBe(200);
+  expect(await saved.json()).toMatchObject({ messages: [expect.objectContaining({ content })] });
+});
+
+async function seedChatWindow(
+  page: Page,
+  chat: ChatResponse["chat"],
+  seedOnce = false,
+): Promise<string> {
+  const fixture = await workspaceStorageArgs(page, {
+    chatId: chat.id,
+    title: chat.title,
+    seedOnce,
+  });
+  await page.addInitScript(({ argument: { chatId, title, seedOnce }, storageKeys }) => {
+    const seededKey = `${storageKeys.workspace}:e2e-chat-window:seeded`;
+    if (seedOnce && window.sessionStorage.getItem(seededKey) === "true") return;
+    window.localStorage.setItem(
+      storageKeys.workspace,
+      JSON.stringify([
+        {
+          id: "e2e-chat-window",
+          type: "chat",
+          x: 96,
+          y: 72,
+          w: 760,
+          h: 620,
+          z: 10,
+          cfg: { chatId, title },
+          max: false,
+        },
+      ]),
+    );
+    window.localStorage.removeItem(storageKeys.connections);
+    if (seedOnce) window.sessionStorage.setItem(seededKey, "true");
+  }, fixture);
+  return fixture.storageKeys.workspace;
+}
+
+async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "e2e-files-window",
+            type: "files",
+            x: 96,
+            y: 72,
+            w: 620,
+            h: 640,
+            z: 10,
+            cfg: { root },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, projectPath),
+  );
 }
 
 async function seedModalProofWindow(
   page: Page,
   windowEntry: { readonly id: string; readonly type: "governedGit" | "settings" },
 ): Promise<void> {
-  await page.addInitScript((entry) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: entry.id,
-          type: entry.type,
-          x: 36,
-          y: 36,
-          w: 720,
-          h: 640,
-          z: 10,
-          cfg: {},
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, windowEntry);
+  await page.addInitScript(
+    ({ argument: entry, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: entry.id,
+            type: entry.type,
+            x: 36,
+            y: 36,
+            w: 720,
+            h: 640,
+            z: 10,
+            cfg: {},
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, windowEntry),
+  );
 }
 
 async function expectFilesNavigationLayout(

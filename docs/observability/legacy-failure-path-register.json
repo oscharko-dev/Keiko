@@ -2133,18 +2133,6 @@
     },
     {
       "path": "packages/keiko-server/src/atlassian/httpPort.ts",
-      "owner": "createGatewayAtlassianHttpBodyPort",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/atlassian/httpPort.ts",
-      "owner": "createGatewayAtlassianHttpPort",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-server/src/atlassian/httpPort.ts",
       "owner": "discardBody",
       "kind": "unregistered-catch",
       "count": 1
@@ -7876,12 +7864,6 @@
     {
       "path": "packages/keiko-ui/src/app/local-knowledge/connector-drag.ts",
       "owner": "parseLocalKnowledgeConnectorDrag",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/app/local-knowledge/connector-graph-state.ts",
-      "owner": "doCreate",
       "kind": "unregistered-catch",
       "count": 1
     },

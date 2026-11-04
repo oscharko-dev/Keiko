@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -203,14 +204,17 @@ function seededWindows(root: string): readonly SeedWindow[] {
 }
 
 async function seedWindows(page: Page, root: string): Promise<void> {
-  await page.addInitScript((windows) => {
-    window.localStorage.setItem("keiko.theme", "dark");
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    const seededKey = "keiko.e2e.issue-2533-seeded";
-    if (window.sessionStorage.getItem(seededKey) === "1") return;
-    window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(windows));
-    window.sessionStorage.setItem(seededKey, "1");
-  }, seededWindows(root));
+  await page.addInitScript(
+    ({ argument: windows, storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", "dark");
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      const seededKey = "keiko.e2e.issue-2533-seeded";
+      if (window.sessionStorage.getItem(seededKey) === "1") return;
+      window.localStorage.setItem(storageKeys.workspace, JSON.stringify(windows));
+      window.sessionStorage.setItem(seededKey, "1");
+    },
+    await workspaceStorageArgs(page, seededWindows(root)),
+  );
 }
 
 async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<Page> {
@@ -220,15 +224,18 @@ async function replacePage(page: Page, windows: readonly SeedWindow[]): Promise<
   await page.context().close();
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const replacement = await context.newPage();
-  await replacement.addInitScript((value) => {
-    window.localStorage.setItem("keiko.theme", "dark");
-    window.localStorage.setItem("keiko.view", JSON.stringify({ zoom: 1, x: 0, y: 0 }));
-    window.localStorage.setItem("keiko.workspace.v4", JSON.stringify(value));
-    // Positive control for the leak probe's sessionStorage arm. The journey writes nothing to
-    // sessionStorage of its own, so without a value planted here a broken reader and an empty sink
-    // are indistinguishable and the probe's negative would mean nothing.
-    window.sessionStorage.setItem("keiko.e2e.storage-probe", "session-sink-reachable");
-  }, windows);
+  await replacement.addInitScript(
+    ({ argument: value, storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", "dark");
+      window.localStorage.setItem(storageKeys.view, JSON.stringify({ zoom: 1, x: 0, y: 0 }));
+      window.localStorage.setItem(storageKeys.workspace, JSON.stringify(value));
+      // Positive control for the leak probe's sessionStorage arm. The journey writes nothing to
+      // sessionStorage of its own, so without a value planted here a broken reader and an empty sink
+      // are indistinguishable and the probe's negative would mean nothing.
+      window.sessionStorage.setItem("keiko.e2e.storage-probe", "session-sink-reachable");
+    },
+    await workspaceStorageArgs(replacement, windows),
+  );
   await replacement.goto(`${origin}/${pairingFragment()}`);
   return replacement;
 }

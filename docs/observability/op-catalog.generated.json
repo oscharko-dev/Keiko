@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f68b39e1c6b0ab9d72b10b7de225ad9236c9c8c1da3aa86c3cad892a7e4adeaf",
+    "catalogDigest": "e31ac8ac2dead30899ee0b4a58750998e83d824bbb557ab451bc0da5b32bd087",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1474,6 +1474,52 @@
         "releaseImpact": "minor",
         "registrationSite": "packages/keiko-server/src/atlassian/jiraReportActivity.ts:28",
         "emitterSites": ["packages/keiko-server/src/atlassian/jiraReportActivity.ts:292"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "atlassian.target.admission",
+        "category": "setup",
+        "owner": "keiko-server",
+        "emitter": "atlassian.targetAdmissionActivity.recordTargetAdmission",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "source": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["saved-data-center", "default-public"]
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["admitted", "blocked", "failed"]
+          },
+          "addressClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["public", "private", "loopback"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["atlassian-credential-custody"],
+        "proofIds": ["atlassian.target.admission.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/atlassian/targetAdmissionActivity.ts:8",
+        "emitterSites": ["packages/keiko-server/src/atlassian/targetAdmissionActivity.ts:54"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5283,6 +5329,9 @@
               "workspace-window-sizing-retired",
               "workspace-layout-locked",
               "workspace-layout-unlocked",
+              "workspace-layout-restored",
+              "workspace-layout-empty",
+              "workspace-layout-unowned",
               "literal-input-preserved",
               "draft-resynchronized",
               "context-details-expanded",
@@ -7050,6 +7099,46 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:17",
         "emitterSites": ["packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:72"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-app-session.browser-open",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "coding-app-session.launcherBrowserRoutes.recordBrowserOpenOutcome",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["opened", "busy", "unavailable", "failed"]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-app-session-pairing"],
+        "diagnosticWhen": [
+          {
+            "field": "outcome",
+            "values": ["failed", "unavailable"]
+          }
+        ],
+        "proofIds": ["coding-app-session.browser-open.outcome"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-app-session/launcherBrowserRoutes.ts:12",
+        "emitterSites": ["packages/keiko-server/src/coding-app-session/launcherBrowserRoutes.ts:85"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29645,7 +29734,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           },
           "proxied": {
@@ -29664,7 +29754,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           },
           "transport": {
@@ -29680,8 +29771,8 @@
         "failureClasses": ["gateway-egress"],
         "proofIds": ["http.gateway.egress.planned.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:104",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1775"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:122",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1838"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29712,7 +29803,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           }
         },
@@ -29722,8 +29814,8 @@
         "failureClasses": ["gateway-http-fetch"],
         "proofIds": ["http.gateway.fetch.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:170",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1938"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:215",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:2001"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29754,7 +29846,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           },
           "policyReason": {
@@ -29770,8 +29863,8 @@
         "failureClasses": ["gateway-http-fetch", "gateway-egress"],
         "proofIds": ["http.gateway.fetch.failed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:193",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1975"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:247",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:2038"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29802,7 +29895,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           },
           "method": {
@@ -29828,8 +29922,8 @@
         "failureClasses": ["gateway-http-fetch"],
         "proofIds": ["http.gateway.fetch.started.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:144",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1897"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:180",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1960"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29860,7 +29954,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           }
         },
@@ -29870,8 +29965,8 @@
         "failureClasses": ["gateway-tls-trust"],
         "proofIds": ["http.gateway.tls.ca-bundle-fallback.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/http.ts:81",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1530"]
+        "registrationSite": "packages/keiko-model-gateway/src/http.ts:90",
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1593"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -29902,7 +29997,8 @@
               "private",
               "link-local",
               "metadata",
-              "multicast"
+              "multicast",
+              "unspecified"
             ]
           },
           "afterCaBundleFallback": {
@@ -29918,7 +30014,7 @@
         "proofIds": ["http.gateway.tls.trust-failed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/http.ts:53",
-        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1511"]
+        "emitterSites": ["packages/keiko-model-gateway/src/http.ts:1574"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -45541,7 +45637,7 @@
         "requiredProductSurfaces": ["keiko-server"],
         "requiredLifecycleOperations": {
           "start": [],
-          "state": [],
+          "state": ["atlassian.target.admission"],
           "end": [
             "atlassian.connection.checked",
             "atlassian.credential.created",
@@ -45555,7 +45651,8 @@
           "atlassian.connection.checked",
           "atlassian.credential.created",
           "atlassian.credential.listed",
-          "atlassian.credential.updated"
+          "atlassian.credential.updated",
+          "atlassian.target.admission"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
@@ -45563,14 +45660,16 @@
           "atlassian.credential.created",
           "atlassian.credential.listed",
           "atlassian.credential.rejected",
-          "atlassian.credential.updated"
+          "atlassian.credential.updated",
+          "atlassian.target.admission"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "atlassian.connection.checked",
           "atlassian.credential.created",
           "atlassian.credential.listed",
-          "atlassian.credential.updated"
+          "atlassian.credential.updated",
+          "atlassian.target.admission"
         ],
         "requiredEvidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
         "requiredFrameOperations": [],
@@ -46267,12 +46366,17 @@
             "coding-app-session.expired",
             "coding-app-session.operation.state"
           ],
-          "end": ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
+          "end": [
+            "coding-app-session.browser-open",
+            "coding-app-session.local-session.confirmed",
+            "coding-app-session.paired"
+          ],
           "failure": [],
           "loss": []
         },
         "requiredCausalOperations": [
           "coding-app-session.browser-approval.state",
+          "coding-app-session.browser-open",
           "coding-app-session.expired",
           "coding-app-session.local-session.confirmed",
           "coding-app-session.operation.state",
@@ -46281,6 +46385,7 @@
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "coding-app-session.browser-approval.state",
+          "coding-app-session.browser-open",
           "coding-app-session.expired",
           "coding-app-session.local-session.confirmed",
           "coding-app-session.operation.state",
@@ -46289,6 +46394,7 @@
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "coding-app-session.browser-approval.state",
+          "coding-app-session.browser-open",
           "coding-app-session.expired",
           "coding-app-session.local-session.confirmed",
           "coding-app-session.operation.state",
@@ -57726,10 +57832,10 @@
           "failureClass": "atlassian-credential-custody",
           "requirementContract": "atlassian-credential-custody",
           "productSurfaces": ["keiko-server"],
-          "lifecycleTransitions": ["end", "failure"],
+          "lifecycleTransitions": ["end", "failure", "state"],
           "lifecycleOperations": {
             "start": [],
-            "state": [],
+            "state": ["atlassian.target.admission"],
             "end": [
               "atlassian.connection.checked",
               "atlassian.credential.created",
@@ -57759,6 +57865,10 @@
             {
               "op": "atlassian.credential.updated",
               "mode": "correlation"
+            },
+            {
+              "op": "atlassian.target.admission",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
@@ -57766,7 +57876,8 @@
             "atlassian.connection.checked",
             "atlassian.credential.created",
             "atlassian.credential.listed",
-            "atlassian.credential.updated"
+            "atlassian.credential.updated",
+            "atlassian.target.admission"
           ],
           "replayReferences": [],
           "operations": [
@@ -57914,6 +58025,42 @@
                 "causeChain": false
               },
               "proofIds": ["atlassian.credential.updated.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "atlassian.target.admission",
+              "owner": "keiko-server",
+              "category": "setup",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "addressClass",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
+                },
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "source",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["atlassian.target.admission.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -63096,13 +63243,21 @@
               "coding-app-session.expired",
               "coding-app-session.operation.state"
             ],
-            "end": ["coding-app-session.local-session.confirmed", "coding-app-session.paired"],
+            "end": [
+              "coding-app-session.browser-open",
+              "coding-app-session.local-session.confirmed",
+              "coding-app-session.paired"
+            ],
             "failure": [],
             "loss": []
           },
           "causalEdges": [
             {
               "op": "coding-app-session.browser-approval.state",
+              "mode": "correlation"
+            },
+            {
+              "op": "coding-app-session.browser-open",
               "mode": "correlation"
             },
             {
@@ -63125,6 +63280,7 @@
           "lossSignals": [],
           "resourceSignals": [
             "coding-app-session.browser-approval.state",
+            "coding-app-session.browser-open",
             "coding-app-session.expired",
             "coding-app-session.local-session.confirmed",
             "coding-app-session.operation.state",
@@ -63183,6 +63339,30 @@
                 "causeChain": false
               },
               "proofIds": ["coding-app-session.browser-approval.state.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "coding-app-session.browser-open",
+              "owner": "keiko-server",
+              "category": "http",
+              "lifecycle": "end",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "outcome",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["coding-app-session.browser-open.outcome"],
               "replayReferences": [],
               "missingObligations": []
             },
@@ -106726,31 +106906,31 @@
     {
       "op": "http.gateway.egress.planned",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:107",
+      "site": "packages/keiko-model-gateway/src/http.ts:125",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.completed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:173",
+      "site": "packages/keiko-model-gateway/src/http.ts:218",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.failed",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:196",
+      "site": "packages/keiko-model-gateway/src/http.ts:250",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.fetch.started",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:147",
+      "site": "packages/keiko-model-gateway/src/http.ts:183",
       "package": "keiko-model-gateway"
     },
     {
       "op": "http.gateway.tls.ca-bundle-fallback",
       "category": "http",
-      "site": "packages/keiko-model-gateway/src/http.ts:84",
+      "site": "packages/keiko-model-gateway/src/http.ts:93",
       "package": "keiko-model-gateway"
     },
     {
@@ -107523,6 +107703,19 @@
       "package": "keiko-server"
     },
     {
+      "op": "atlassian.target.admission",
+      "category": "setup",
+      "site": "packages/keiko-server/src/atlassian/targetAdmissionActivity.ts:11",
+      "package": "keiko-server"
+    },
+    {
+      "op": "atlassian.target.admission",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/atlassian/targetAdmissionActivity.ts:70",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
       "op": "chat.compaction.checkpoint",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/chat-continuity-checkpoint.ts:123",
@@ -107942,6 +108135,12 @@
       "op": "coding-app-session.browser-approval.state",
       "category": "http",
       "site": "packages/keiko-server/src/coding-app-session/browserApprovalRoutes.ts:20",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-app-session.browser-open",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/launcherBrowserRoutes.ts:15",
       "package": "keiko-server"
     },
     {
@@ -109350,7 +109549,7 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1659",
+      "site": "packages/keiko-server/src/deps.ts:1666",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110232,14 +110431,14 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2450",
+      "site": "packages/keiko-server/src/deps.ts:2457",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "manual-pod.job",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/manual/manual-pod-service.ts:256",
+      "site": "packages/keiko-server/src/manual/manual-pod-service.ts:232",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110749,14 +110948,14 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4722",
+      "site": "packages/keiko-server/src/deps.ts:4728",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "server.diagnostic.failure",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:1010",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:1011",
       "package": "keiko-server"
     },
     {
@@ -110909,7 +111108,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3307",
+      "site": "packages/keiko-server/src/deps.ts:3314",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -110934,7 +111133,7 @@
     {
       "op": "tool-catalog.bind-ready",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:488",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:490",
       "package": "keiko-server"
     },
     {
@@ -110952,7 +111151,7 @@
     {
       "op": "tool-catalog.bind-unavailable",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:496",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:498",
       "package": "keiko-server"
     },
     {
@@ -110983,7 +111182,7 @@
     {
       "op": "tool-catalog.binding-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:226",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:228",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -111089,13 +111288,13 @@
     {
       "op": "tool-catalog.projection",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:425",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:427",
       "package": "keiko-server"
     },
     {
       "op": "tool-catalog.projection",
       "category": "unknown",
-      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:535",
+      "site": "packages/keiko-server/src/tool-catalog/catalogToolBinder.ts:537",
       "package": "keiko-server"
     },
     {
@@ -111437,6 +111636,7 @@
     "atlassian.jira-draft",
     "atlassian.jira-report",
     "atlassian.sync-job",
+    "atlassian.target.admission",
     "chat.compaction.checkpoint",
     "chat.compaction.evidence",
     "chat.compaction.facts.classified",
@@ -111524,6 +111724,7 @@
     "client.support-report.prepared",
     "client.update-notice.presented",
     "coding-app-session.browser-approval.state",
+    "coding-app-session.browser-open",
     "coding-app-session.channel.closed",
     "coding-app-session.channel.opened",
     "coding-app-session.channel.subscribe",

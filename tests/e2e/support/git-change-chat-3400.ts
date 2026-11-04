@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 // Issue #3400 (epic #3384) — fixture and seeding helpers for the "Connect a Git change to Chat"
 // journey. Kept separate from the spec so the real-git-repository builder and the window-seeding
 // helpers read as one unit, mirroring the existing coding-issue-* support modules.
@@ -178,9 +179,9 @@ export async function seedWorkspace(
   chat: CreatedChat,
 ): Promise<void> {
   await page.addInitScript(
-    ({ projectPath, chatId, title }) => {
+    ({ argument: { projectPath, chatId, title }, storageKeys }) => {
       window.localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "issue-3400-git-window",
@@ -206,32 +207,39 @@ export async function seedWorkspace(
           },
         ]),
       );
-      window.localStorage.removeItem("keiko.conns.v1");
+      window.localStorage.removeItem(storageKeys.connections);
     },
-    { projectPath: fixtureRoot, chatId: chat.id, title: chat.title },
+    await workspaceStorageArgs(page, {
+      projectPath: fixtureRoot,
+      chatId: chat.id,
+      title: chat.title,
+    }),
   );
 }
 
 export async function seedGovernedPrDescriptionWindow(page: Page): Promise<void> {
-  await page.addInitScript(() => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-3389-governed-pr-window",
-          type: "governedPullRequest",
-          x: 24,
-          y: 24,
-          w: 760,
-          h: 900,
-          z: 20,
-          cfg: { projectPath: "issue-3389-governed-project", headBranchName: "feature/x" },
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  });
+  await page.addInitScript(
+    ({ storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-3389-governed-pr-window",
+            type: "governedPullRequest",
+            x: 24,
+            y: 24,
+            w: 760,
+            h: 900,
+            z: 20,
+            cfg: { projectPath: "issue-3389-governed-project", headBranchName: "feature/x" },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, undefined),
+  );
 }
 
 // The Git window's own toolbar-and-picker gating (BoundRootSurface) reads `/api/projects`, a

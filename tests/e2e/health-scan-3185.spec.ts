@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Browser, type Locator, type Page, type Route } from "@playwright/test";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -249,10 +250,13 @@ async function installHealthScanRoute(page: Page): Promise<{
 }
 
 async function seedTheme(page: Page, mode: EvidenceMode): Promise<void> {
-  await page.addInitScript((theme) => {
-    window.localStorage.setItem("keiko.theme", theme);
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, mode.theme);
+  await page.addInitScript(
+    ({ argument: theme, storageKeys }) => {
+      window.localStorage.setItem("keiko.theme", theme);
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, mode.theme),
+  );
 }
 
 async function applyMode(page: Page, mode: EvidenceMode): Promise<void> {

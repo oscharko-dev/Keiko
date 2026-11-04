@@ -266,3 +266,13 @@ The approval card's link label (PR #4182) changed the optional catalogs again, s
 producer ran on 2026-11-02 with Node 24.18.0. All nine cases passed, and the three records rebind
 every declared digest. The evidence freshness gate passed. No updater behavior, baseline or
 numerical ceiling changed.
+
+The local workspace restoration and browser connection repair regenerated the original nine-case
+producer on 2026-11-04 in an isolated macOS arm64 checkout using Node 24.22.0, npm 11.19.1 and
+Playwright 1.64.1. All nine cases passed in 1.3 minutes, including the real BFF outage. The fixture
+adapter resolves the actual store identity at the selected fixture origin; both that adapter and
+the production storage-key builder are included in harness provenance. All 17 artifacts were
+recreated: only `10-responsive-manual-path.png` changed PNG bytes and was visually inspected;
+the three JSON records bind the current sources and harness. The other 13 screenshots remain
+byte-identical. The unchanged freshness gate passes. This remains updater fixture evidence,
+without claiming a native update or release qualification.

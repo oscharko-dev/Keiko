@@ -145,6 +145,9 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "browserApproval.close": "Schließen",
   "browserApproval.notice":
     "Verbinde diesen Browser, um private Entwürfe zu speichern und geschützte Funktionen zu verwenden.",
+  "browserApproval.launchNotice": "Keiko öffnet ein verbundenes Fenster in diesem Browser.",
+  "browserApproval.launchFailed":
+    "Keiko konnte diesen Browser nicht verbinden. Versuche es erneut oder öffne Keiko über den Starter.",
   "browserApproval.open": "Browser verbinden",
   "browserApproval.description":
     "Gib diesen Browser über einen Browser frei, der bereits mit dieser Keiko-Installation verbunden ist.",
@@ -227,12 +230,17 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.draft.unsaved": "Die Änderungen am Entwurf sind noch nicht gespeichert.",
   "chat.draft.saving": "Entwurf wird gespeichert…",
   "chat.draft.unavailable":
-    "Entwurf nicht gespeichert. Verbinde diesen Browser über den Browser-Hinweis oben oder öffne Keiko über den Launcher. Lass dieses Fenster geöffnet.",
+    "Dieser Entwurf ist noch nicht gespeichert. Lass dieses Fenster geöffnet.",
+  "chat.draft.loadFailed":
+    "Der gespeicherte Entwurf konnte nicht geladen werden. Versuche es erneut.",
+  "chat.draft.loadFailedUnsaved":
+    "Der gespeicherte Entwurf konnte nicht geladen werden. Deine Änderungen sind noch nicht gespeichert. Lass dieses Fenster geöffnet und versuche es erneut.",
   "chat.draft.failed":
     "Dieser Entwurf konnte nicht gespeichert werden. Lass dieses Fenster geöffnet und versuche es erneut.",
   "chat.draft.conflict":
     "Ein anderes Fenster hat den gespeicherten Entwurf geändert. Behalte diesen Entwurf, um ihn zu ersetzen, oder ersetze diesen Text durch den gespeicherten Entwurf.",
   "chat.draft.retry": "Erneut speichern",
+  "chat.draft.retryLoad": "Entwurf erneut laden",
   "chat.draft.keepLocal": "Diesen Entwurf behalten",
   "chat.draft.useSaved": "Gespeicherten Entwurf verwenden",
   "chat.skills.sendBlocked":
@@ -250,7 +258,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.skills.author.generationError":
     "Es wurde kein vollständiger Skill-Entwurf geliefert. Prüfe das gewählte Modell und den Gateway, kürze bei Bedarf den Quelltext und versuche es erneut.",
   "chat.skills.author.review":
-    "Prüfe den vollständigen Entwurf, besonders Vorschläge, Widersprüche und offene Entscheidungen. Speichern oder Herunterladen aktiviert den Skill noch nicht.",
+    "Prüfe den vollständigen Entwurf, besonders Vorschläge, Widersprüche und offene Entscheidungen. Normale Skills wirken erst nach der Auswahl im Chat. Jira-Vorlagen gelten bereits ab dem Speichern; Herunterladen aktiviert nichts.",
   "chat.skills.author.draft": "Skill-Entwurf (Markdown)",
   "chat.skills.author.save": "Geprüften Skill speichern",
 
@@ -298,7 +306,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Öffne Keiko über den Launcher, um private Skills zu verwalten. Chat bleibt ohne Skill verfügbar.",
   "chat.skills.close": "Skills schließen",
   "chat.skills.description":
-    "Markdown-Datei hochladen und für diesen Chat auswählen. Hochladen allein aktiviert keinen Skill.",
+    "Normale Skills musst du nach dem Hochladen für diesen Chat auswählen. Gespeicherte Jira-Vorlagen gelten für die darin angegebenen Projekte, Vorgangstypen und Aktionen.",
   "chat.skills.protected":
     "Gilt für jede neue Nachricht. Skill-Anweisungen zählen zum Kontext und bleiben beim Kompaktieren des Gesprächs vollständig erhalten.",
   "chat.skills.remove": "Skill aus diesem Chat entfernen",
@@ -2019,6 +2027,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.model.search": "Modelle suchen...",
   "chat.model.searchEmpty": "Keine passenden Modelle.",
   "chat.model.loading": "Modelle werden geladen…",
+  "chat.model.unavailable": "Modellliste nicht verfügbar",
   "chat.model.noEligible": "Kein dialogfähiges Modell",
   "chat.model.change": "Modell wechseln",
   "chat.noModelAlert":

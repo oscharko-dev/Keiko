@@ -62,7 +62,16 @@ const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
     afterCaBundleFallback: {
       type: "boolean",
@@ -90,7 +99,16 @@ const HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
   },
   causal: "none",
@@ -113,7 +131,16 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
     proxied: {
       type: "boolean",
@@ -124,7 +151,16 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
     transport: {
       type: "string",
@@ -153,7 +189,16 @@ const HTTP_GATEWAY_FETCH_STARTED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
     method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 32 },
     requestBytes: { type: "integer", dataClass: "count", required: false },
@@ -179,7 +224,16 @@ const HTTP_GATEWAY_FETCH_COMPLETED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
   },
   causal: "none",
@@ -202,7 +256,16 @@ const HTTP_GATEWAY_FETCH_FAILED_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["hostname", "public", "loopback", "private", "link-local", "metadata", "multicast"],
+      values: [
+        "hostname",
+        "public",
+        "loopback",
+        "private",
+        "link-local",
+        "metadata",
+        "multicast",
+        "unspecified",
+      ],
     },
     policyReason: {
       type: "string",
@@ -826,7 +889,7 @@ async function enforceOutboundTargetPolicy(
   const literalReason = outboundTargetBlockedReason(target, egress);
   if (literalReason !== undefined) throw blockedTargetError(literalReason);
   if (!options.resolveDns) return undefined;
-  const addresses = await boundedDnsLookup(target.hostname, options.signal);
+  const addresses = await boundedDnsLookup(normalizeHost(target.hostname), options.signal);
   for (const address of addresses) {
     const reason = outboundAddressBlockedReason(
       address.address,
@@ -886,7 +949,7 @@ function joinDnsLookup(hostname: string): PendingDnsLookup {
   return pending;
 }
 
-async function boundedDnsLookup(
+export async function boundedDnsLookup(
   hostname: string,
   signal: AbortSignal | undefined,
 ): Promise<LookupAddress[]> {

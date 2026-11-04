@@ -9,6 +9,20 @@ Prerequisites: Docker Compose, the repository’s supported Node version, OpenSS
 and built workspace packages. State, passwords, PATs, license material and private
 keys stay outside the repository in a private session directory.
 
+## Connect the existing local lab
+
+For ordinary local development, the lab needs a running, licensed Jira, the basic seed
+and the generated CA configured through `egress.caBundlePath`. The seed supplies its own
+non-admin API actor and private `secrets/api-token` file. In Keiko's Knowledge Hub, choose
+**Create Jira Pod**, enter its name, the lab's HTTPS URL and that PAT, then submit the form.
+That single submit saves and verifies the connection automatically. Verification binds the
+saved URL; no second address list,
+comparison code or private-network switch is required.
+
+The connection probe below checks this production path using an isolated temporary vault.
+The larger Chat, mutation and requirements groups are separate acceptance qualifications;
+their successful completion is recorded independently of ordinary local connection setup.
+
 ## Finite normal-Chat catalog qualification
 
 After setup, identity/field fixtures and preflight, use the actual locally verified
@@ -185,10 +199,13 @@ node scripts/testing/jira-chat-lab/verify-connection.mjs \
 ```
 
 The PAT must be a private regular file. The harness invokes the production custody,
-encrypted vault, HTTP adapter and domain verifier, then removes its temporary vault.
-It checks trusted HTTPS, rejection without CA trust, and refusal after exact admission
-is removed, using the same already-created HTTP port throughout. It emits only closed
-outcomes. This probe alone does not qualify mutations, model calls or Chat UX.
+encrypted vault, explicit connection verification and HTTP adapter, then removes its
+temporary vault. The saved Data Center URL is sufficient: its address class is bound
+automatically during verification and retained privately. No `privateTargets` entry or
+global private-network setting is added. The probe checks trusted HTTPS, rejection
+without CA trust, and successful reuse of the saved connection after restoring trust.
+It emits only closed outcomes. This probe alone does not qualify mutations, model calls
+or Chat UX.
 
 ```sh
 node scripts/testing/jira-chat-lab/preflight.mjs "$HOME/.local/share/keiko-jira-4081-new"
@@ -203,18 +220,28 @@ remote effects by read-only inspection before removing that marker. Never assume
 transport failure means a mutation was not committed. Finish each group with a license
 check; an interrupted or expired-license group is not acceptance evidence.
 
-The equivalent operator-owned configuration is:
+The generated development CA still needs the ordinary configured trust setting:
 
 ```json
 {
-  "atlassian": {
-    "privateTargets": [{ "baseUrl": "https://127.0.0.1:18443", "addressClass": "loopback" }]
+  "egress": {
+    "caBundlePath": "/absolute/private/session/secrets/tls/ca.pem"
   }
 }
 ```
 
-Use the existing gateway `egress.caBundlePath` setting for the generated `ca.pem`.
-Never disable certificate validation or enable global private-network access.
+This is certificate trust, not a second address approval. A connector with a certificate
+already trusted by the configured runtime needs no extra trust file. Never disable
+certificate validation or enable global private-network access. The connector remains
+bound to the exact saved HTTPS origin, port and context path; metadata/link-local targets,
+Keiko's own listener ports and redirects remain refused.
+
+A newly completed Jira setup can be `RUNNING` and licensed while still having zero
+projects or fixture users. Run the basic seed before claiming a Live Pod has useful test
+data. The seed's non-admin PAT, project/issue readback and permission checks are distinct
+from Docker health, and a successful connection probe is distinct from a complete Chat
+or mutation qualification. Keep passwords and PATs in the existing private session files;
+never copy the administrator credential into a product config or qualification receipt.
 
 Checkpoint (2026-10-26): the fresh licensed instance passed basic PAT/non-admin,
 three-create/three-read and repeat-seed checks. All three production HTTPS probes

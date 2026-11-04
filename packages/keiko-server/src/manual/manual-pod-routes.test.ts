@@ -1,4 +1,4 @@
-// Route trust-boundary proof for the manual-pod create/refresh/status BFF surface (Issue #2063).
+// Route trust-boundary proof for the manual-pod refresh/status BFF surface (Issue #2063).
 // The handlers validate the request against the contract validators before any job starts and thread
 // the correlation id into every fail-closed error body. No crawl or model call is exercised here.
 
@@ -8,7 +8,6 @@ import type { IncomingMessage } from "node:http";
 import type { RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {
-  handleCreateHtmlManualPod,
   handleGetHtmlManualPodJob,
   handleRefreshHtmlManualPod,
   type ManualPodRouteService,
@@ -59,35 +58,24 @@ describe("handleGetHtmlManualPodJob", () => {
 });
 
 describe("handleRefreshHtmlManualPod", () => {
-  it("rejects an invalid refresh body with a 400 before starting a job", async () => {
-    const result = await handleRefreshHtmlManualPod(ctxFor({}, { capsuleId: "../etc" }), FAKE_DEPS);
-    expect(result.status).toBe(400);
-    expect(JSON.stringify(result.body)).toContain("corr-xyz");
-  });
-});
-
-describe("handleCreateHtmlManualPod", () => {
-  it("rejects an unsafe origin with a 400 before starting a job", async () => {
-    const result = await handleCreateHtmlManualPod(
-      ctxFor({}, { displayName: "x", origin: "ftp://evil/x" }),
-      FAKE_DEPS,
-    );
-    expect(result.status).toBe(400);
-  });
-
-  it("rejects a request body that is not a JSON object with a 400", async () => {
+  it("rejects a request body that is not a JSON object before starting a job", async () => {
     const req = Readable.from([Buffer.from("[]", "utf8")]) as IncomingMessage;
     req.method = "POST";
     req.headers = { "content-type": "application/json" };
     const ctx: RouteContext = {
+      ...ctxFor({}),
       req,
-      res: {} as never,
-      params: {},
-      url: new URL("http://127.0.0.1/api/local-knowledge/manual-pods/create"),
-      correlationId: "corr-json",
     };
-    const result = await handleCreateHtmlManualPod(ctx, FAKE_DEPS);
+    const startRefresh = vi.fn();
+    const result = await handleRefreshHtmlManualPod(ctx, FAKE_DEPS, { startRefresh });
     expect(result.status).toBe(400);
+    expect(startRefresh).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid refresh body with a 400 before starting a job", async () => {
+    const result = await handleRefreshHtmlManualPod(ctxFor({}, { capsuleId: "../etc" }), FAKE_DEPS);
+    expect(result.status).toBe(400);
+    expect(JSON.stringify(result.body)).toContain("corr-xyz");
   });
 });
 
@@ -96,7 +84,6 @@ describe("manual-pod route success + service-error mapping (injected service)", 
     const job = initialJob("route-ok", "refresh", "cap", "src");
     const service: ManualPodRouteService = {
       startRefresh: vi.fn().mockReturnValue({ ok: true, job }),
-      startCreate: vi.fn(),
     };
     const result = await handleRefreshHtmlManualPod(
       ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
@@ -110,7 +97,6 @@ describe("manual-pod route success + service-error mapping (injected service)", 
   it("maps a no-embedding-model service result to a 409 with a correlation id", async () => {
     const service: ManualPodRouteService = {
       startRefresh: vi.fn().mockReturnValue({ ok: false, reason: "no-embedding-model" }),
-      startCreate: vi.fn(),
     };
     const result = await handleRefreshHtmlManualPod(
       ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
@@ -126,7 +112,6 @@ describe("manual-pod route success + service-error mapping (injected service)", 
   it("maps a job-already-running service result to a 409 with a correlation id", async () => {
     const service: ManualPodRouteService = {
       startRefresh: vi.fn().mockReturnValue({ ok: false, reason: "job-already-running" }),
-      startCreate: vi.fn(),
     };
     const result = await handleRefreshHtmlManualPod(
       ctxFor({}, { capsuleId: "cap", sourceId: "src" }),
@@ -136,30 +121,5 @@ describe("manual-pod route success + service-error mapping (injected service)", 
     expect(result.status).toBe(409);
     expect(JSON.stringify(result.body)).toContain("corr-xyz");
     expect(JSON.stringify(result.body)).toContain("MANUAL_POD_JOB_ALREADY_RUNNING");
-  });
-
-  it("returns 202 for a create job and maps invalid-source to 400", async () => {
-    const job = initialJob("route-create", "create", "cap", "src");
-    const okService: ManualPodRouteService = {
-      startRefresh: vi.fn(),
-      startCreate: vi.fn().mockResolvedValue({ ok: true, job }),
-    };
-    const ok = await handleCreateHtmlManualPod(
-      ctxFor({}, { displayName: "Ops", origin: "https://manual.example.com" }),
-      FAKE_DEPS,
-      okService,
-    );
-    expect(ok.status).toBe(202);
-
-    const badService: ManualPodRouteService = {
-      startRefresh: vi.fn(),
-      startCreate: vi.fn().mockResolvedValue({ ok: false, reason: "invalid-source" }),
-    };
-    const bad = await handleCreateHtmlManualPod(
-      ctxFor({}, { displayName: "Ops", origin: "https://manual.example.com" }),
-      FAKE_DEPS,
-      badService,
-    );
-    expect(bad.status).toBe(400);
   });
 });

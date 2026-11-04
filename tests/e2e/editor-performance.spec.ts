@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type CDPSession, type Page, type Response } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -469,25 +470,28 @@ async function measureWorkspaceCapDegradation(
 }
 
 async function seedFilesWindow(page: Page, projectPath: string): Promise<void> {
-  await page.addInitScript((root) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "perf-files",
-          type: "files",
-          x: 64,
-          y: 64,
-          w: 620,
-          h: 640,
-          z: 10,
-          cfg: { root },
-          max: false,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, projectPath);
+  await page.addInitScript(
+    ({ argument: root, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "perf-files",
+            type: "files",
+            x: 64,
+            y: 64,
+            w: 620,
+            h: 640,
+            z: 10,
+            cfg: { root },
+            max: false,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, projectPath),
+  );
 }
 
 async function openTreePath(

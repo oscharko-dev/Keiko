@@ -45,6 +45,20 @@ afterEach(() => {
 });
 
 describe("updater UI evidence freshness", () => {
+  it.each([
+    "scripts/lib/d12-baseline.mjs",
+    "scripts/lib/workspace-storage-fixture.mjs",
+    "scripts/lib/workspace-storage-fixture.d.mts",
+    "tests/e2e/support/workspace-storage.ts",
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
+  ])("rejects drift in shared workspace fixture provenance %s", (path) => {
+    const root = fixtureRoot();
+    write(root, path, "changed workspace storage fixture\n");
+    expect(() => checkUpdateUiEvidence(root)).toThrow(
+      `stale harnessProvenanceSha256 digest for ${path}`,
+    );
+  });
+
   it("accepts records bound to every declared source and harness input", () => {
     expect(() => checkUpdateUiEvidence(fixtureRoot())).not.toThrow();
   });

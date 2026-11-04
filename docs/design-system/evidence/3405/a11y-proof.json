@@ -88,19 +88,19 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.de.ts",
-      "sha256": "e4b9029bffe25896be92d77bbd28d9acd96535f46e96e9d13a2d282064a4951b"
+      "sha256": "ee973da6df95272c61cf534f03f40baac4b74b6520667ce4f6bf71b298c8263c"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.en.ts",
-      "sha256": "042480b654c698acc64a41a7be9f67e53fd7d8294989a0be03ba3256df439006"
+      "sha256": "83c63b0eaf3e37f91dc06c9b23cd9fec50a947e577066b680e98c943878f46ca"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.de.ts",
-      "sha256": "39999035c67e8e4cb08fbd1fa6375e14a1447abe8289b80a6dce1bf2fe5cf2ac"
+      "sha256": "eba504c13daf942f0768b4b531b84cd462a33612aaa6e15b6440ec7567e90307"
     },
     {
       "path": "packages/keiko-ui/src/lib/i18n-messages.optional.en.ts",
-      "sha256": "34c321ea2a070fb08f2a585a643f14434334ce22821c33f8a987b98f45fd613a"
+      "sha256": "3637aa1aae8394ba5a2de3b6ed65ce2f6225e779f41d64c39ba5dc63d3c39d6f"
     },
     {
       "path": "packages/keiko-ui/src/lib/optional-widget-i18n.ts",
@@ -111,7 +111,9 @@
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
     "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
     "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
-    "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f"
+    "tests/e2e/support/update-bff-outage-3405.mjs": "097ca94239ff03ab06c2c8ec341c59ca61ee0138cf6bb9b66d9241b08e24204f",
+    "tests/e2e/support/workspace-storage.ts": "7632545c0f143eb5c619d445b6386cba356500c4a97fddf719892e6dce337d35",
+    "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts": "23649437b93047cf1c14280cc6fd06de170ab00d981a36a30f92979cf7a2dd99"
   },
   "wcagTags": [
     "wcag2a",

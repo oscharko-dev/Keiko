@@ -2185,40 +2185,23 @@ function VoiceDialogMicMuteButton({
   );
 }
 
-// Extracted from ComposerContextControls (SonarCloud S3358) — the compact model-select tip label.
-function composerModelCompactTip(
-  loading: boolean,
-  noEligibleModels: boolean,
+/** An unfinished catalog read is unknown, not proof that no model is configured. */
+function composerModelStatus(
+  session: Pick<ChatSessionApi, "loading" | "noEligibleModels" | "modelCatalogStatus">,
   t: I18nTranslate,
-): string {
-  if (loading) return t("chat.model.loading");
-  if (noEligibleModels) return t("chat.model.noEligible");
-  return t("chat.model.change");
-}
-
-// Extracted from ComposerContextControls (SonarCloud S3358) — the model-select placeholder text.
-function composerModelPlaceholder(
-  loading: boolean,
-  noEligibleModels: boolean,
-  t: I18nTranslate,
-): string {
-  if (loading) return t("chat.model.loading");
-  if (noEligibleModels) return t("chat.model.noEligible");
-  return t("chat.model.menuTitle");
+): string | undefined {
+  if (session.loading || session.modelCatalogStatus === "loading") return t("chat.model.loading");
+  if (session.modelCatalogStatus === "failed") return t("chat.model.unavailable");
+  return session.noEligibleModels ? t("chat.model.noEligible") : undefined;
 }
 
 // Extracted from ComposerContextControls (SonarCloud S3358) — the model-select option list: a
 // single disabled placeholder option while loading or with no eligible models, else the real list.
 function composerModelOptions(
-  loading: boolean,
-  noEligibleModels: boolean,
+  status: string | undefined,
   models: readonly ModelCapability[],
-  t: I18nTranslate,
 ): readonly { readonly value: string; readonly label: string; readonly disabled?: boolean }[] {
-  if (loading) return [{ value: "", label: t("chat.model.loading"), disabled: true }];
-  if (noEligibleModels) {
-    return [{ value: "", label: t("chat.model.noEligible"), disabled: true }];
-  }
+  if (status !== undefined) return [{ value: "", label: status, disabled: true }];
   return modelList(models).map((model) => ({ value: model.id, label: model.id }));
 }
 
@@ -2227,6 +2210,18 @@ function composerModelSearch(
   t: I18nTranslate,
 ): string | undefined {
   return models.length >= 10 ? t("chat.model.search") : undefined;
+}
+
+function refreshComposerModels(status: ChatSessionApi["modelCatalogStatus"]): void {
+  if (status !== "loading") requestGatewayModelCatalogRefresh({ check: true });
+}
+
+function composerModelCatalogReady(status: ChatSessionApi["modelCatalogStatus"]): boolean {
+  return status === undefined || status === "ready";
+}
+
+function composerModelValue(status: string | undefined, selected: string | undefined): string {
+  return status === undefined ? (selected ?? "") : "";
 }
 
 function ChatSkillControl({ session }: { readonly session: ChatSessionApi }): ReactNode {
@@ -2248,9 +2243,10 @@ function ComposerContextControls({
 }: ComposerContextControlsProps): ReactNode {
   const t = useTranslate();
   const { models, selectedModel, setSelectedModel, noEligibleModels, loading } = session;
+  const status = composerModelStatus(session, t);
   const selectDescribedBy = noEligibleModels ? NO_MODEL_ALERT_ID : undefined;
-  const selectValue = loading || noEligibleModels ? "" : (selectedModel ?? "");
-  const compactModelTip = composerModelCompactTip(loading, noEligibleModels, t);
+  const selectValue = composerModelValue(status, selectedModel);
+  const compactModelTip = status ?? t("chat.model.change");
 
   return (
     <div className="cmp-bar-model">
@@ -2265,7 +2261,7 @@ function ComposerContextControls({
           ariaLabel={t("chat.model.menuTitle")}
           ariaDescribedBy={selectDescribedBy}
           disabled={loading}
-          placeholder={composerModelPlaceholder(loading, noEligibleModels, t)}
+          placeholder={status ?? t("chat.model.menuTitle")}
           leadingVisual={
             <CubeIcon size={controlsNarrow ? 16 : 13} style={{ color: "var(--accent)" }} />
           }
@@ -2279,15 +2275,15 @@ function ComposerContextControls({
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
           onOpen={() => {
-            requestGatewayModelCatalogRefresh({ check: true });
+            refreshComposerModels(session.modelCatalogStatus);
           }}
           sections={[
             {
-              options: composerModelOptions(loading, noEligibleModels, models, t),
+              options: composerModelOptions(status, models),
             },
           ]}
           onValueChange={(next) => {
-            if (noEligibleModels || loading) return;
+            if (status !== undefined) return;
             setSelectedModel(next);
           }}
         />
@@ -5820,6 +5816,7 @@ export function ChatWindow({
   };
   const displayedError = presentChatSessionError(error, optionalT);
   const ready =
+    composerModelCatalogReady(session.modelCatalogStatus) &&
     !chatSkillBlocksSend(session.markdownSkill) &&
     session.groundingScopeTransition === undefined &&
     isComposerReadyToSend(draft, sending, loading, noEligibleModels) &&
@@ -6019,7 +6016,7 @@ export function ChatWindow({
           draft={draft}
           focusComposer={() => composerInputRef.current?.focus()}
         />
-        <ChatDraftStatus draft={draft} persistence={session.draftPersistence} />
+        <ChatDraftStatus persistence={session.draftPersistence} />
         <ChatSourceTransitionStatus transition={session.groundingScopeTransition} />
         <ChatWindowComposerFooter
           visible={visible}

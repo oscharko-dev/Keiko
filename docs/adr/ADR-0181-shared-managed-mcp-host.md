@@ -465,5 +465,6 @@ External schemas follow the explicitly separate JSON Schema dialect described in
 [ADR-0175 D3](ADR-0175-canonical-governed-tool-catalog.md#d3--digest-inputs-and-compatibility).
 The adapter preserves admitted remote schemas and validates actual arguments and results;
 it does not strip unsupported constraints to make a server connect. Internal closed schemas
-retain their existing contract. External schema complexity, references and patterns are
+retain their existing contract; `jira.draft` explicitly uses that same standard dialect for its
+two closed input alternatives as specified in ADR-0175 D3. Schema complexity, references and patterns are
 bounded before compilation, with no remote schema fetches or execution of schema-supplied code.

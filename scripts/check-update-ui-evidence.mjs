@@ -18,6 +18,11 @@ export const UPDATE_UI_HARNESS_PATHS = Object.freeze([
   "tests/e2e/fixtures/keiko.e2e.config.json",
   "tests/e2e/support/evidence.ts",
   "tests/e2e/support/update-bff-outage-3405.mjs",
+  "tests/e2e/support/workspace-storage.ts",
+  "scripts/lib/d12-baseline.mjs",
+  "scripts/lib/workspace-storage-fixture.mjs",
+  "scripts/lib/workspace-storage-fixture.d.mts",
+  "packages/keiko-ui/src/app/components/desktop/hooks/workspace-storage.ts",
 ]);
 
 function sha256File(path) {

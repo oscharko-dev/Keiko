@@ -26,7 +26,8 @@ import { JiraDecisionActions } from "./JiraDecisionActions";
 import { DraftFields, JiraDraftPreview } from "./JiraDraftPreview";
 import { jiraActionFacts } from "./jiraActionFacts";
 import { jiraDraftExcluded, jiraDraftTree } from "./jiraDraftTree";
-import { JiraNamesContext } from "./jiraNames";
+import { JiraNamesContext, type JiraNames } from "./jiraNames";
+import { jiraNamesBinding } from "./jiraFieldChoices";
 import { useJiraDecision } from "./useJiraDecision";
 import { useStagedJiraDraft, type StagedJiraDraft } from "./useStagedJiraDraft";
 import styles from "./JiraChatTools.module.css";
@@ -288,6 +289,12 @@ function approvalStatusKey(
   return APPROVAL_KEYS[ended && state === "pending" ? "expired" : state];
 }
 
+function useApprovalNames(approval: ChatToolWriteApprovalView): JiraNames {
+  const names = useContext(JiraNamesContext);
+  const binding = jiraNamesBinding(approval);
+  return useMemo(() => ({ ...names, binding }), [names, binding]);
+}
+
 export function JiraWriteApproval({
   approval,
   call,
@@ -316,22 +323,25 @@ export function JiraWriteApproval({
     deselection,
   });
   const status = approvalStatusKey(state.verified, state.view.state, ended);
+  const boundNames = useApprovalNames(approval);
   return (
-    <section ref={card} className={styles.cmpCard} aria-label={t(approvalTitleKey(approval))}>
-      <ApprovalHeader approval={approval} call={call} />
-      <ApprovalContent
-        approval={approval}
-        staged={staged}
-        draft={draft}
-        decidable={decidable}
-        editable={decidable && !state.busy}
-        toggle={toggle}
-      />
-      <JiraAttachmentReview approval={approval} />
-      <output aria-live="polite">
-        {t(state.busy ? "chat.jira.writeApproval.working" : status)}
-      </output>
-      <WriteApprovalActions state={state} turnState={turnState} empty={blocked} />
-    </section>
+    <JiraNamesContext.Provider value={boundNames}>
+      <section ref={card} className={styles.cmpCard} aria-label={t(approvalTitleKey(approval))}>
+        <ApprovalHeader approval={approval} call={call} />
+        <ApprovalContent
+          approval={approval}
+          staged={staged}
+          draft={draft}
+          decidable={decidable}
+          editable={decidable && !state.busy}
+          toggle={toggle}
+        />
+        <JiraAttachmentReview approval={approval} />
+        <output aria-live="polite">
+          {t(state.busy ? "chat.jira.writeApproval.working" : status)}
+        </output>
+        <WriteApprovalActions state={state} turnState={turnState} empty={blocked} />
+      </section>
+    </JiraNamesContext.Provider>
   );
 }

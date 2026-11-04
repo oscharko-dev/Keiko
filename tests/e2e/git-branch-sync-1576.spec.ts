@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import {
@@ -490,25 +491,28 @@ async function installRoutes(
 }
 
 async function seedGitClientWindow(page: Page, fixture: GitFixture): Promise<void> {
-  await page.addInitScript((projectPath) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-1576-branch-sync",
-          type: "governedGit",
-          x: 24,
-          y: 24,
-          w: 1200,
-          h: 900,
-          z: 20,
-          cfg: { projectPath },
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, fixture.browserProjectPath);
+  await page.addInitScript(
+    ({ argument: projectPath, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-1576-branch-sync",
+            type: "governedGit",
+            x: 24,
+            y: 24,
+            w: 1200,
+            h: 900,
+            z: 20,
+            cfg: { projectPath },
+            max: true,
+          },
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, fixture.browserProjectPath),
+  );
 }
 
 function ensureEvidenceDir(): void {

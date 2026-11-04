@@ -2,9 +2,11 @@
 // One Jira Pod (owner decision 2026-11-02): its name, base URL and a status chip in one row, one
 // visible primary action, and the secondary actions behind a single "…" menu. A healthy Pod shows
 // no explanatory text; a Pod that needs attention shows one remediation line and the action that
-// resolves it.
+// resolves it. The embedded Knowledge Pods overview keeps only the name and actions when healthy
+// (owner decision 2026-11-04); standalone connector settings retain the address and health chip.
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import Image from "next/image";
 import { useOptionalWidgetTranslate as useTranslate } from "@/lib/optional-widget-i18n";
 import type {
   AtlassianConnectorMetadata,
@@ -160,10 +162,12 @@ export function LivePodActions({
   connector,
   ctrl,
   state,
+  embedded,
 }: {
   readonly connector: AtlassianConnectorMetadata;
   readonly ctrl: CardController;
   readonly state: LivePodState;
+  readonly embedded: boolean;
 }): ReactNode {
   const t = useTranslate();
   const repair = repairAction(state);
@@ -173,7 +177,7 @@ export function LivePodActions({
       <JiraPodWorkspaceAction
         connector={connector}
         disabled={ctrl.busy}
-        primary={repair === undefined}
+        primary={!embedded && repair === undefined}
       />
       {repair === undefined ? null : (
         <button
@@ -202,21 +206,44 @@ export function LivePodHeader({
   connector,
   state,
   actions,
+  embedded,
 }: {
   readonly connector: AtlassianConnectorMetadata;
   readonly state: LivePodState;
   readonly actions: ReactNode;
+  readonly embedded: boolean;
 }): ReactNode {
   return (
     <>
       <div className={styles.cmpPodHead}>
-        <div className={styles.cmpPodIdentity}>
-          <p className="acx-card-title">{connector.displayName}</p>
-          <p className={`acx-meta ${styles.cmpPodUrl}`} title={connector.baseUrl}>
-            {connector.baseUrl}
-          </p>
+        <div className={`${styles.cmpPodIdentity} ${embedded ? styles.cmpEmbeddedIdentity : ""}`}>
+          {embedded ? (
+            <>
+              <span className="lk-capsule-icon">
+                <Image
+                  src="/assets/brands/jira.svg?v=ad20a139"
+                  alt="Jira"
+                  width={15}
+                  height={15}
+                  unoptimized
+                />
+              </span>
+              <div className="lk-capsule-info">
+                <div className="lk-capsule-name" title={connector.displayName}>
+                  {connector.displayName}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="acx-card-title">{connector.displayName}</p>
+              <p className={`acx-meta ${styles.cmpPodUrl}`} title={connector.baseUrl}>
+                {connector.baseUrl}
+              </p>
+            </>
+          )}
         </div>
-        <StatusChip state={state} />
+        {embedded && state.kind === "ready" ? null : <StatusChip state={state} />}
         {actions}
       </div>
       <StatusHint state={state} />

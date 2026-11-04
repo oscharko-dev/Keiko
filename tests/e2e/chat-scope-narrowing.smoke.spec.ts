@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -63,10 +64,10 @@ async function seedConnectedWindows(
   if (scope === undefined) throw new TypeError("Missing acknowledged fixture scope");
   const fingerprint = connectedScopeFingerprint(scope);
   await page.addInitScript(
-    ({ root, chat, fingerprint, chatSize }) => {
-      if (localStorage.getItem("keiko.workspace.v4") !== null) return;
+    ({ argument: { root, chat, fingerprint, chatSize }, storageKeys }) => {
+      if (localStorage.getItem(storageKeys.workspace) !== null) return;
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: "scope-files",
@@ -93,7 +94,7 @@ async function seedConnectedWindows(
         ]),
       );
       localStorage.setItem(
-        "keiko.conns.v1",
+        storageKeys.connections,
         JSON.stringify([
           {
             id: "scope-edge",
@@ -106,7 +107,7 @@ async function seedConnectedWindows(
         ]),
       );
     },
-    { root, chat, fingerprint, chatSize },
+    await workspaceStorageArgs(page, { root, chat, fingerprint, chatSize }),
   );
 }
 
@@ -192,14 +193,19 @@ async function openNarrowedPreview(
 
 async function expectRetiredPinRemoved(page: Page): Promise<void> {
   await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const windows = JSON.parse(localStorage.getItem("keiko.workspace.v4") ?? "[]") as readonly {
-          readonly id: string;
-          readonly cfg: { readonly keepFilesFolder?: boolean };
-        }[];
-        return windows.find((window) => window.id === "scope-chat")?.cfg.keepFilesFolder;
-      }),
+    .poll(async () =>
+      page.evaluate(
+        ({ storageKeys }) => {
+          const windows = JSON.parse(
+            localStorage.getItem(storageKeys.workspace) ?? "[]",
+          ) as readonly {
+            readonly id: string;
+            readonly cfg: { readonly keepFilesFolder?: boolean };
+          }[];
+          return windows.find((window) => window.id === "scope-chat")?.cfg.keepFilesFolder;
+        },
+        await workspaceStorageArgs(page, undefined),
+      ),
     )
     .toBeUndefined();
 }
@@ -328,9 +334,12 @@ for (const locale of ["en", "de"]) {
   }, testInfo) => {
     const fixture = await createScopeChat(request);
     await seedConnectedWindows(page, fixture.root, fixture.chat, { width: 480, height: 480 });
-    await page.addInitScript((value) => {
-      localStorage.setItem("keiko.locale", value);
-    }, locale);
+    await page.addInitScript(
+      ({ argument: value }) => {
+        localStorage.setItem("keiko.locale", value);
+      },
+      await workspaceStorageArgs(page, locale),
+    );
     await page.goto("/");
     await openNarrowedPreview(page, request, fixture, locale);
     const { chatWindow } = scopeViews(page);
@@ -396,9 +405,12 @@ for (const size of [
   }) => {
     const fixture = await createScopeChat(request);
     await seedConnectedWindows(page, fixture.root, fixture.chat, size);
-    await page.addInitScript((locale) => {
-      localStorage.setItem("keiko.locale", locale);
-    }, size.locale);
+    await page.addInitScript(
+      ({ argument: locale }) => {
+        localStorage.setItem("keiko.locale", locale);
+      },
+      await workspaceStorageArgs(page, size.locale),
+    );
     await page.goto("/");
     const chat = page.getByRole("region", { name: "Chat — Scope narrowing" });
     await expect(chat.getByTestId("grounding-help")).toHaveCount(0);

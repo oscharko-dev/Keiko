@@ -1,17 +1,27 @@
 import { createContext, useMemo, type ReactNode } from "react";
 import type { ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { JiraDraftField } from "./jiraDraftTree";
+import {
+  jiraChoiceValue,
+  jiraChoicesOf,
+  NO_JIRA_CHOICES,
+  type JiraChoices,
+  type JiraFieldTarget,
+} from "./jiraFieldChoices";
 
 /** What Jira itself called the ids a proposed action uses, from this Chat's completed reads. */
 export interface JiraNames {
   readonly projects: ReadonlyMap<string, string>;
   readonly issueTypes: ReadonlyMap<string, string>;
   readonly fields: ReadonlyMap<string, string>;
+  readonly choices: JiraChoices;
+  readonly binding?: string | undefined;
 }
 export const NO_JIRA_NAMES: JiraNames = {
   projects: new Map(),
   issueTypes: new Map(),
   fields: new Map(),
+  choices: NO_JIRA_CHOICES,
 };
 export const JiraNamesContext = createContext<JiraNames>(NO_JIRA_NAMES);
 
@@ -39,6 +49,7 @@ export function jiraNamesOf(transcripts: Transcripts): JiraNames {
     projects: namesOf(transcripts, "jira_projects"),
     issueTypes: namesOf(transcripts, "jira_issue_types"),
     fields: namesOf(transcripts, "jira_create_fields"),
+    choices: jiraChoicesOf(transcripts),
   };
 }
 
@@ -57,9 +68,17 @@ export function ChatJiraNames({
   return <JiraNamesContext.Provider value={names}>{children}</JiraNamesContext.Provider>;
 }
 
-export function jiraNamed(field: JiraDraftField, names: JiraNames): JiraDraftField {
+export function jiraNamed(
+  field: JiraDraftField,
+  names: JiraNames,
+  target: JiraFieldTarget = {},
+): JiraDraftField {
   const label = names.fields.get(field.id);
-  return label === undefined ? field : { ...field, label };
+  return {
+    ...field,
+    ...(label === undefined ? {} : { label }),
+    value: jiraChoiceValue(field.id, field.value, target, names.choices, names.binding),
+  };
 }
 
 /**

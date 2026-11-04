@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./workspace-storage.js";
 import { expect, type Page } from "@playwright/test";
 import { createRequire } from "node:module";
 import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
@@ -15,10 +16,10 @@ export async function openCodingIssueWorkbench(
   const { repository, windowId, launcherSecret } = input;
   await page.addInitScript({ path: createRequire(import.meta.url).resolve("axe-core/axe.min.js") });
   await page.addInitScript(
-    ({ root, windowId }) => {
+    ({ argument: { root, windowId }, storageKeys }) => {
       localStorage.setItem("keiko.theme", "dark");
       localStorage.setItem(
-        "keiko.workspace.v4",
+        storageKeys.workspace,
         JSON.stringify([
           {
             id: windowId,
@@ -35,7 +36,7 @@ export async function openCodingIssueWorkbench(
         ]),
       );
     },
-    { root: repository, windowId: windowId },
+    await workspaceStorageArgs(page, { root: repository, windowId: windowId }),
   );
   const fragment = encodeCodingAppSessionPairingFragment(
     mintLauncherPairingAttestation({

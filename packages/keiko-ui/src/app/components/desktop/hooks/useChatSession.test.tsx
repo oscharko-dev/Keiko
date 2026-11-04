@@ -417,9 +417,40 @@ describe("useChatSession bootstrap", () => {
 
     expect(result.current.models).toEqual([]);
     expect(result.current.configuredModelsAvailable).toBe(true);
+    // A pending read is unknown, not a successful empty catalog.
+    expect(result.current.loading).toBe(false);
+    expect(result.current.noEligibleModels).toBe(false);
     // Pinned invalidation: no stale id is sendable mid-refresh — restoration is the success
     // path's job (see the restore pin below).
     expect(result.current.selectedModel).toBeUndefined();
+  });
+
+  it("distinguishes a failed catalog from a successful empty catalog and then recovers", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    vi.mocked(fetchModels).mockRejectedValueOnce(new TypeError("Synthetic catalog failure"));
+    act(() => requestGatewayModelCatalogRefresh());
+    expect(result.current.modelCatalogStatus).toBe("loading");
+    expect(result.current.noEligibleModels).toBe(false);
+    expect(result.current.modelCatalogRead).toBeUndefined();
+    await waitFor(() => expect(result.current.modelCatalogStatus).toBe("failed"));
+    expect(result.current.error).toContain("Synthetic catalog failure");
+    expect(result.current.noEligibleModels).toBe(false);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.models).toEqual([]);
+    vi.mocked(fetchModels).mockResolvedValueOnce({ models: [] });
+    act(() => requestGatewayModelCatalogRefresh());
+    await waitFor(() => expect(result.current.modelCatalogStatus).toBe("ready"));
+    expect(result.current.noEligibleModels).toBe(true);
+    expect(result.current.error).toBeUndefined();
+    vi.mocked(fetchModels).mockResolvedValueOnce({ models: [model({ id: "chat-live" })] });
+    act(() => requestGatewayModelCatalogRefresh());
+    await waitFor(() => expect(result.current.selectedModel).toBe("chat-live"));
+    expect(result.current.modelCatalogStatus).toBe("ready");
+    expect(result.current.noEligibleModels).toBe(false);
   });
 
   // PR #3625 review: a consumer must tell a refresh in flight (empty catalog) from a settled one.
@@ -684,6 +715,8 @@ describe("useChatSession bootstrap", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toContain("project catalog unavailable");
+    expect(result.current.modelCatalogStatus).toBe("unknown");
+    expect(result.current.noEligibleModels).toBe(false);
     expect(fetchChats).not.toHaveBeenCalled();
   });
 
@@ -696,6 +729,8 @@ describe("useChatSession bootstrap", () => {
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.error).toContain("chat catalog unavailable");
+    expect(result.current.modelCatalogStatus).toBe("unknown");
+    expect(result.current.noEligibleModels).toBe(false);
     // A failed load decides nothing, so no evidence may name it.
     expect(chatListCorrelationId("/repo")).toBeUndefined();
     expect(result.current.activeProject).toBeUndefined();

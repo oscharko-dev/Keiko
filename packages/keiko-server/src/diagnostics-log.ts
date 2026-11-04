@@ -780,6 +780,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "atlassian-credential-list-activity-log-failed",
   "atlassian-credential-updated-activity-log-failed",
   "atlassian-connection-check-activity-log-failed",
+  "atlassian-target-admission-activity-log-failed",
   // #2906 round 3: update-session-lock.ts's corrupt-lock quarantine prune used to swallow
   // directory/stat/unlink failures outright. "-pruned" reports a clean sweep (occurrenceCount is
   // the removed count); "-prune-degraded" reports one where at least one entry could not be

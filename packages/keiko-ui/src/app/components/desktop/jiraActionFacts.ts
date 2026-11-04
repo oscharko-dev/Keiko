@@ -154,7 +154,7 @@ function managedFacts(
         key !== "fields" ||
         !restatesTarget(fact, stringOf(raw.projectId), stringOf(raw.issueTypeId)),
     )
-    .map((fact) => (key === "fields" ? jiraNamed(fact, names) : fact));
+    .map((fact) => (key === "fields" ? jiraNamed(fact, names, raw) : fact));
 }
 function stringOf(value: unknown): string {
   return typeof value === "string" ? value : "";

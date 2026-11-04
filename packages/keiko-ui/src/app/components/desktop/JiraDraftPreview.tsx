@@ -100,7 +100,7 @@ function ItemFields({ item }: { readonly item: JiraDraftTreeItem }): ReactNode {
     <DraftFields
       fields={item.fields
         .filter((field) => !restatesTarget(field, item.projectId, item.issueTypeId))
-        .map((field) => jiraNamed(field, names))}
+        .map((field) => jiraNamed(field, names, item))}
     />
   );
 }

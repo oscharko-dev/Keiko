@@ -1,3 +1,4 @@
+import { workspaceStorageArgs } from "./support/workspace-storage.js";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { existsSync, lstatSync, mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
@@ -144,28 +145,31 @@ async function interceptGovernedPrRoutes(page: Page, ledger: RouteLedger): Promi
 const PROJECT_REFERENCE = "issue-477-governed-project";
 
 async function seedGovernedPrWindow(page: Page): Promise<void> {
-  await page.addInitScript((projectRef) => {
-    window.localStorage.setItem(
-      "keiko.workspace.v4",
-      JSON.stringify([
-        {
-          id: "issue-477-governed-pr",
-          type: "governedPullRequest",
-          x: 24,
-          y: 24,
-          w: 600,
-          h: 820,
-          z: 20,
-          cfg: {
-            projectPath: projectRef,
-            headBranchName: "claude/issue-477-github-pr-command-center",
+  await page.addInitScript(
+    ({ argument: projectRef, storageKeys }) => {
+      window.localStorage.setItem(
+        storageKeys.workspace,
+        JSON.stringify([
+          {
+            id: "issue-477-governed-pr",
+            type: "governedPullRequest",
+            x: 24,
+            y: 24,
+            w: 600,
+            h: 820,
+            z: 20,
+            cfg: {
+              projectPath: projectRef,
+              headBranchName: "claude/issue-477-github-pr-command-center",
+            },
+            max: true,
           },
-          max: true,
-        },
-      ]),
-    );
-    window.localStorage.removeItem("keiko.conns.v1");
-  }, PROJECT_REFERENCE);
+        ]),
+      );
+      window.localStorage.removeItem(storageKeys.connections);
+    },
+    await workspaceStorageArgs(page, PROJECT_REFERENCE),
+  );
 }
 
 function ensureEvidenceDir(): void {

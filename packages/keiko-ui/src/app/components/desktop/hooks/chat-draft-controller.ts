@@ -26,9 +26,11 @@ export class ChatDraftController {
     entry.text = text;
     entry.edited = true;
     entry.editVersion += 1;
-    entry.phase = entry.conflict ? "conflict" : "unsaved";
+    const failed =
+      entry.phase === "failed" || entry.phase === "unavailable" || entry.phase === "load-failed";
+    if (!failed) entry.phase = entry.conflict ? "conflict" : "unsaved";
     this.changed();
-    this.schedule(chatId, entry);
+    if (entry.phase === "unsaved") this.schedule(chatId, entry);
   }
 
   private schedule(chatId: string, entry: DraftEntry): void {
@@ -62,7 +64,9 @@ export class ChatDraftController {
       return await operation(await this.loadActions());
     } catch {
       this.actions = undefined;
-      for (const entry of this.entries.values()) entry.phase = "failed";
+      for (const entry of this.entries.values()) {
+        entry.phase = dirty(entry) ? "failed" : "load-failed";
+      }
       this.changed();
       reportClientDiagnostic("Private chat draft runtime could not be loaded.", {
         errorKind: "unavailable",

@@ -1318,22 +1318,13 @@ describe("keiko-contracts package surface", () => {
   it("HTML manual pod-job contracts remain available and fail closed at their public surface (#2063)", async () => {
     const m = await import("./html-manual-job.js");
     expect(m.HTML_MANUAL_POD_JOB_SCHEMA_VERSION).toBe("1");
+    expect(m).not.toHaveProperty("validateHtmlManualPodCreateRequest");
     expect(m.HTML_MANUAL_POD_JOB_OPERATIONS).toStrictEqual(["create", "refresh"]);
     expect(m.HTML_MANUAL_POD_JOB_STATES).toContain("running");
     expect(m.HTML_MANUAL_POD_JOB_PHASES.length).toBeGreaterThan(0);
 
     // The validators must fail closed on hostile input and accept a well-formed request when reached
     // through the public entrypoint (not just the leaf module).
-    const create = m.validateHtmlManualPodCreateRequest({
-      displayName: "Vendor guide",
-      origin: "https://manual.example.com",
-      pathPrefix: null,
-    });
-    expect(create.ok).toBe(true);
-    expect(m.validateHtmlManualPodCreateRequest({ displayName: "", origin: "ftp://x" }).ok).toBe(
-      false,
-    );
-
     const refresh = m.validateHtmlManualPodRefreshRequest({
       capsuleId: "cap_1",
       sourceId: "src_1",
@@ -1352,7 +1343,6 @@ describe("keiko-contracts package surface", () => {
     pin<import("./index.js").HtmlManualPodJobIndexing>();
     pin<import("./index.js").HtmlManualPodJobRemediation>();
     pin<import("./index.js").HtmlManualPodRefreshRequest>();
-    pin<import("./index.js").HtmlManualPodCreateRequest>();
   });
 
   it("M11 workspace-foundation contracts remain available at their declared public surface (#2520)", async (): Promise<void> => {
