@@ -330,18 +330,25 @@ function addRow(scan: TableScan, row: TableRow, span: RowSpan): void {
   scan.drafts.push({ row, table: scan.table, ...span });
 }
 
+/** The requirement the row above belongs to; an explicit and a derived one take turns in a table. */
+function latestRowOwner(scan: TableScan): RowDraft | UnidentifiedDraft | undefined {
+  const explicit = scan.drafts.at(-1);
+  const derived = scan.unidentified.at(-1);
+  const inTable = [explicit, derived].filter((draft) => draft?.table === scan.table);
+  return inTable.reduce<RowDraft | UnidentifiedDraft | undefined>(
+    (latest, draft) =>
+      latest === undefined || (draft !== undefined && draft.line > latest.line) ? draft : latest,
+    undefined,
+  );
+}
+
 function addToLastRow(scan: TableScan, addition: RowAddition, lastLine: number): boolean {
-  const last = scan.drafts.at(-1);
-  if (last?.table === scan.table) {
-    last.row = extendedRow(last.row, addition);
-    last.lastLine = lastLine;
-    return true;
-  }
+  const owner = latestRowOwner(scan);
+  if (owner === undefined) return false;
   // Without identifiers a row with its own statement is a requirement of its own.
-  const unidentified = scan.unidentified.at(-1);
-  if (unidentified?.table !== scan.table || addition.statement.length > 0) return false;
-  unidentified.row = extendedRow(unidentified.row, addition);
-  unidentified.lastLine = lastLine;
+  if (owner === scan.unidentified.at(-1) && addition.statement.length > 0) return false;
+  owner.row = extendedRow(owner.row, addition);
+  owner.lastLine = lastLine;
   return true;
 }
 
@@ -1493,54 +1500,67 @@ function derivedUnit(
   return { candidate, entry: toEntry(context, parts), hasBody: true, block, parts };
 }
 
-function statementUnits(
-  context: Context,
-  covered: ReadonlySet<number>,
-  ids: DerivedIds,
-): readonly RawUnit[] {
-  const units: RawUnit[] = [];
+/** A requirement without an identifier, before its place in the document gives it one. */
+interface DerivedSeed {
+  readonly statement: string;
+  readonly start: number;
+  readonly unit: (id: string) => RawUnit;
+}
+
+function statementSeeds(context: Context, covered: ReadonlySet<number>): readonly DerivedSeed[] {
+  const seeds: DerivedSeed[] = [];
   for (const paragraph of paragraphsOf(context, covered)) {
     for (const sentence of paragraph.text.split(SENTENCE_BREAK)) {
       const statement = collapse(sentence);
       if (!obligationStatement(context.vocabulary, statement)) continue;
-      const fields = {
-        id: ids.next(statement),
-        unitKind: "statement" as const,
-        title: "",
-        interpreted: { ...statementOf(statement), criteria: [] },
-      };
-      units.push(
-        derivedUnit(context, fields, {
-          start: paragraph.start,
-          end: paragraph.end,
-          first: 0,
-          last: 0,
-        }),
-      );
+      seeds.push({
+        statement,
+        start: paragraph.start,
+        unit: (id) =>
+          derivedUnit(
+            context,
+            {
+              id,
+              unitKind: "statement",
+              title: "",
+              interpreted: { ...statementOf(statement), criteria: [] },
+            },
+            { start: paragraph.start, end: paragraph.end, first: 0, last: 0 },
+          ),
+      });
     }
   }
-  return units;
+  return seeds;
 }
 
-function unidentifiedRowUnits(
+function unidentifiedRowSeeds(
   context: Context,
   drafts: readonly UnidentifiedDraft[],
-  ids: DerivedIds,
-): readonly RawUnit[] {
+): readonly DerivedSeed[] {
   return drafts.map(({ row, line, lastLine }) => {
-    const fields = {
-      id: ids.next(row.statement),
-      unitKind: "table-row" as const,
-      title: row.title,
-      interpreted: interpretRow(row),
+    const start = lineAt(context.lines, line).start;
+    return {
+      statement: row.statement,
+      start,
+      unit: (id) =>
+        derivedUnit(
+          context,
+          { id, unitKind: "table-row", title: row.title, interpreted: interpretRow(row) },
+          { start, end: lineAt(context.lines, lastLine).end, first: line, last: lastLine },
+        ),
     };
-    return derivedUnit(context, fields, {
-      start: lineAt(context.lines, line).start,
-      end: lineAt(context.lines, lastLine).end,
-      first: line,
-      last: lastLine,
-    });
   });
+}
+
+/**
+ * The occurrence number of a repeated wording follows the document, whatever form each occurrence
+ * has: text appended later never takes the identifier of a requirement that stands before it.
+ */
+function derivedUnits(context: Context, seeds: readonly DerivedSeed[]): readonly RawUnit[] {
+  const ids = new DerivedIds(context.documentKey);
+  return [...seeds]
+    .sort((a, b) => a.start - b.start)
+    .map((seed) => seed.unit(ids.next(seed.statement)));
 }
 
 function coveredLines(blocks: readonly Block[], tables: TableScan): ReadonlySet<number> {
@@ -1570,17 +1590,17 @@ export function deriveRequirementInventory(input: RequirementInventoryInput): Re
   const kept = units.filter((unit) => accepted(unit, corroboration, context.vocabulary));
   const rejected = new Set(units.filter((unit) => !kept.includes(unit)).map((unit) => unit.block));
   const selection = selectDefinitions(context, kept);
-  const ids = new DerivedIds(context.documentKey);
-  const rows = unidentifiedRowUnits(context, tables.unidentified, ids);
-  const statements = statementUnits(
-    context,
-    coveredLines(
-      blocks.filter((block) => !rejected.has(block)),
-      tables,
+  const derived = derivedUnits(context, [
+    ...unidentifiedRowSeeds(context, tables.unidentified),
+    ...statementSeeds(
+      context,
+      coveredLines(
+        blocks.filter((block) => !rejected.has(block)),
+        tables,
+      ),
     ),
-    ids,
-  );
-  const all = [...selection.chosen, ...rows, ...statements].map((unit) => unit.entry);
+  ]);
+  const all = [...selection.chosen, ...derived].map((unit) => unit.entry);
   all.sort((a, b) => a.characterStart - b.characterStart);
   const bound = Math.max(1, Math.trunc(input.maxEntries ?? REQUIREMENT_INVENTORY_ENTRIES_MAX));
   return Object.freeze({

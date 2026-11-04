@@ -176,3 +176,110 @@ describe("a JSON row with a nested object", () => {
     expect(entry).toMatchObject({ id: "FR-1", title: "Export" });
   });
 });
+
+describe("a continuation row in a table that mixes identified and derived rows", () => {
+  const LINES = [
+    "FR-1 | First | The system must validate login. | first criterion",
+    " | Second | The system must log out. | second criterion",
+    " |  |  | third criterion",
+  ];
+  const owned = (text: string): ReadonlyMap<string, readonly string[]> =>
+    new Map(
+      derive(text).entries.map((entry) => [
+        entry.title,
+        entry.acceptanceCriteria.map((criterion) => criterion.text),
+      ]),
+    );
+  const spans = (text: string): readonly string[] =>
+    derive(text).entries.map((entry) => text.slice(entry.characterStart, entry.characterEnd));
+
+  describe.each([
+    [
+      "pipe table",
+      [
+        "| ID | Titel | Beschreibung | Akzeptanzkriterien |",
+        "| --- | --- | --- | --- |",
+        ...LINES.map((line) => `| ${line} |`),
+      ].join("\n"),
+    ],
+    [
+      "projected table",
+      [
+        "Table!2: ID=FR-1 | Titel=First | Beschreibung=The system must validate login. | Akzeptanzkriterien=first criterion",
+        "Table!3: Titel=Second | Beschreibung=The system must log out. | Akzeptanzkriterien=second criterion",
+        "Table!4: Akzeptanzkriterien=third criterion",
+      ].join("\n"),
+    ],
+  ])("as a %s", (_name, text) => {
+    it("adds the criterion to the row above it", () => {
+      const criteria = owned(text);
+      expect(criteria.get("First")).toEqual(["first criterion"]);
+      expect(criteria.get("Second")).toEqual(["second criterion", "third criterion"]);
+    });
+
+    it("gives the two requirements spans that do not overlap", () => {
+      const [first, second] = derive(text).entries;
+      expect(first?.characterEnd).toBeLessThanOrEqual(second?.characterStart ?? 0);
+      expect(spans(text)[1]).toContain("third criterion");
+      expect(spans(text)[0]).not.toContain("second criterion");
+    });
+
+    it("changes only the digest of the row whose criterion changed", () => {
+      const changed = text.replace("third criterion", "other criterion");
+      const digests = (input: string): readonly string[] =>
+        derive(input).entries.map((entry) => entry.digest);
+      const [before, after] = [digests(text), digests(changed)];
+      expect(after[0]).toBe(before[0]);
+      expect(after[1]).not.toBe(before[1]);
+    });
+  });
+
+  it("goes back to the identified row when it is the one above", () => {
+    const text = [
+      "| ID | Titel | Beschreibung | Akzeptanzkriterien |",
+      "| --- | --- | --- | --- |",
+      "|  | Second | The system must log out. | second criterion |",
+      "| FR-1 | First | The system must validate login. | first criterion |",
+      "|  |  |  | third criterion |",
+    ].join("\n");
+    const criteria = owned(text);
+    expect(criteria.get("First")).toEqual(["first criterion", "third criterion"]);
+    expect(criteria.get("Second")).toEqual(["second criterion"]);
+  });
+});
+
+describe("the identifier of a requirement without one", () => {
+  const PROSE = "The system must export data.";
+  const TABLE = [
+    "| Anforderung | Priorität |",
+    "| --- | --- |",
+    "| The system must export data. | Hoch |",
+  ].join("\n");
+  const inventory = (text: string): ReturnType<typeof deriveRequirementInventory> =>
+    deriveRequirementInventory({ text, documentKey: "recheck" });
+  const idAt = (text: string, kind: string): string | undefined =>
+    inventory(text).entries.find((entry) => entry.unitKind === kind)?.id;
+
+  it("stays when a table with the same wording is appended behind it", () => {
+    expect(idAt(`${PROSE}\n\n${TABLE}\n`, "statement")).toBe(idAt(`${PROSE}\n`, "statement"));
+  });
+
+  it("stays when prose with the same wording is appended behind it", () => {
+    expect(idAt(`${TABLE}\n\n${PROSE}\n`, "table-row")).toBe(idAt(`${TABLE}\n`, "table-row"));
+  });
+
+  it.each([
+    ["prose first", `${PROSE}\n\n${TABLE}\n`],
+    ["table first", `${TABLE}\n\n${PROSE}\n`],
+  ])("tells the two occurrences apart with %s", (_name, text) => {
+    const ids = inventory(text).entries.map((entry) => entry.id);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  it("keeps the digest of what did not change", () => {
+    const digestOf = (text: string): string | undefined =>
+      inventory(text).entries.find((entry) => entry.unitKind === "statement")?.digest;
+    expect(digestOf(`${PROSE}\n\n${TABLE}\n`)).toBe(digestOf(`${PROSE}\n`));
+  });
+});
