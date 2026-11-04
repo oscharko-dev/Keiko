@@ -91,7 +91,7 @@ export function decodeGitQuotedPath(raw: string): string | undefined {
   }
   // Bytes that are not valid UTF-8 decode to U+FFFD; a path that holds one has no reliable identity.
   const decoded = new TextDecoder("utf-8").decode(Uint8Array.from(bytes));
-  return decoded.includes("�") ? undefined : decoded;
+  return decoded.includes("\uFFFD") ? undefined : decoded;
 }
 
 function stripPrefix(raw: string): string {

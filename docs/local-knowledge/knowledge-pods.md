@@ -225,8 +225,15 @@ items of one list and the rows of one table stay on adjacent lines. Retrieval an
 inventory rely on this rule, so a new or changed parser has to keep it.
 
 Content a person does not see is reported, never silently dropped or passed off as visible: hidden
-Word text and unfilled placeholders are excluded with a count, Word comments are not indexed with
-a count, and hidden Excel sheets, rows and columns and hidden slides stay indexed with a count.
+Word text, unfilled placeholders and HTML marked `hidden` or `display:none` are excluded with a
+count, Word comments are not indexed with a count, and hidden Excel sheets, rows and columns and
+hidden slides stay indexed with a count.
+
+A repeated page line whose only change is a page counter (`Seite 3 von 12`, `Page 3`) counts as the
+same page furniture; a line whose number changes without a page word stays document text. JSON
+records keep their nested fields and exact number spellings within one object budget. CSV, Excel and
+the other formats share one parse deadline per document, and every Office container, Excel included,
+passes the same ZIP controls.
 
 The stored text is what a parser made of a file, so a refresh reads an unchanged file again when
 its parser has changed since and records `PARSER_VERSION_CHANGED`. A repaired parser therefore

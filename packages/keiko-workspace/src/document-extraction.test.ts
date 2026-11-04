@@ -346,7 +346,7 @@ describe("extractDocumentContext — happy path", () => {
         if (!result.ok) return;
         expect(result.context.truncated).toBe(true);
         expect(result.context.text.startsWith("ab\u{1f600}ab")).toBe(true);
-        expect(result.context.text).not.toContain("�");
+        expect(result.context.text).not.toContain("\uFFFD");
       }
     },
   );

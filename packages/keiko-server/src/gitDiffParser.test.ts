@@ -180,7 +180,7 @@ describe("parseGitEditorUnifiedDiff", () => {
         "--- a/src/legacy.txt",
         "+++ b/src/legacy.txt",
         "@@ -1,2 +1,2 @@",
-        " Gr��e",
+        " Gr\uFFFD\uFFFDe",
         "-alt",
         "+neu",
         "diff --git a/src/clean.txt b/src/clean.txt",

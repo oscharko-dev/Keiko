@@ -196,7 +196,8 @@ interface ParsedJsonSlice {
 }
 
 // Models often leave a comma before a closing bracket. Remove exactly those commas, outside string
-// literals, in one forward pass; a comma inside a quoted step is never touched.
+// literals, in one forward pass; a comma inside a quoted step is never touched, and valid JSON has
+// nothing to remove.
 const stripTrailingCommas = (json: string): string => {
   let out = "";
   let scan: StringScan = { inString: false, escaped: false };
@@ -223,20 +224,12 @@ const stripTrailingCommas = (json: string): string => {
   return out + pendingComma;
 };
 
-const parseJsonOrTrailingCommaFree = (slice: string): unknown => {
-  try {
-    return JSON.parse(slice);
-  } catch {
-    return JSON.parse(stripTrailingCommas(slice));
-  }
-};
-
 const parseJsonSliceAt = (text: string, index: number): ParsedJsonSlice | undefined => {
   if (!isJsonOpen(text[index])) return undefined;
   const slice = extractJsonValueAt(text, index);
   if (slice === undefined) return undefined;
   try {
-    const parsed: unknown = parseJsonOrTrailingCommaFree(slice);
+    const parsed: unknown = JSON.parse(stripTrailingCommas(slice));
     return {
       parsed,
       itemCount: candidateContainerItemCount(parsed),

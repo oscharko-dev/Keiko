@@ -73,7 +73,7 @@ describe("parseGitBlamePorcelain", () => {
     const parsed = parseGitBlamePorcelain(
       [
         record("a".repeat(40), 1, "Ada", 1_752_172_800, "First", "plain"),
-        record("a".repeat(40), 2, "Ada", 1_752_172_800, "First", "Gr��e latin1 line"),
+        record("a".repeat(40), 2, "Ada", 1_752_172_800, "First", "Gr\uFFFD\uFFFDe latin1 line"),
         record("b".repeat(40), 3, "Grace", 1_752_172_800, "Second", "plain"),
       ].join("\n"),
       { maxLines: 10, processTruncated: false },
@@ -87,7 +87,7 @@ describe("parseGitBlamePorcelain", () => {
   it.each(["author", "summary"])("still drops a record whose %s is not valid UTF-8", (name) => {
     const damaged = record("a".repeat(40), 1, "Ada", 1_752_172_800, "First", "plain").replace(
       name === "author" ? "author Ada" : "summary First",
-      `${name} Br�ken`,
+      `${name} Br\uFFFDken`,
     );
     const parsed = parseGitBlamePorcelain(damaged, { maxLines: 10, processTruncated: false });
 
