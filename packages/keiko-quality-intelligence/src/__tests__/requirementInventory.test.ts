@@ -506,6 +506,120 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
     expect(detect([sentence]).entries).toEqual([]);
   });
 
+  describe("under the block contract: a blank line ends a block", () => {
+    const criteria = (lines: readonly string[]): readonly string[] =>
+      detect(lines).entries[0]?.acceptanceCriteria.map((item) => item.text) ?? [];
+    const REQUIREMENT = ["FR-1: Export", "", "Der Nutzer kann exportieren.", ""];
+    const NEXT = ["", "FR-2: Import", "", "Der Nutzer kann importieren."];
+
+    it("keeps every paragraph of an unmarked criteria list", () => {
+      expect(
+        criteria([...REQUIREMENT, "Akzeptanzkriterien:", "", "Erstes.", "", "Zweites.", ...NEXT]),
+      ).toEqual(["Erstes.", "Zweites."]);
+    });
+
+    it("takes a short first paragraph as the criterion the key announces", () => {
+      expect(
+        criteria([...REQUIREMENT, "Akzeptanzkriterien:", "", "Export als CSV", "", ...NEXT]),
+      ).toEqual(["Export als CSV"]);
+    });
+
+    it("ends an unmarked list at a numbered chapter", () => {
+      const entries = detect([
+        ...REQUIREMENT,
+        "Akzeptanzkriterien:",
+        "",
+        "Export als CSV",
+        "",
+        "3. Nächstes Kapitel",
+        "",
+        "Der Text des Kapitels.",
+      ]).entries;
+
+      expect(entries[0]?.acceptanceCriteria.map((item) => item.text)).toEqual(["Export als CSV"]);
+    });
+
+    it("keeps the items of a list whose paragraphs are set apart", () => {
+      expect(
+        criteria([...REQUIREMENT, "Akzeptanzkriterien:", "", "- erstes", "", "- zweites", ...NEXT]),
+      ).toEqual(["erstes", "zweites"]);
+    });
+
+    it("does not read a paragraph into the marked item before it", () => {
+      const lines = [...REQUIREMENT, "Akzeptanzkriterien:", "- erstes", "", "Ein Folgeabsatz."];
+      expect(criteria([...lines, ...NEXT])).toEqual(["erstes"]);
+    });
+
+    it("still reads a wrapped marked item as one criterion", () => {
+      const lines = [...REQUIREMENT, "Akzeptanzkriterien:", "- erstes ohne", "Ende.", "- zweites"];
+      expect(criteria([...lines, ...NEXT])).toEqual(["erstes ohne Ende.", "zweites"]);
+    });
+
+    it("takes the statement that stands behind the list of a structured unit", () => {
+      const text = [
+        "FR-1 Export",
+        "",
+        "Akzeptanzkriterien:",
+        "- erstes",
+        "",
+        "Der Nutzer kann exportieren.",
+      ].join("\n");
+      const [entry] = deriveRequirementInventory({
+        text,
+        documentKey: KEY,
+        sections: [{ sectionPath: ["FR-1 Export"], characterStart: 0, characterEnd: text.length }],
+      }).entries;
+
+      expect(entry?.statement).toBe("Der Nutzer kann exportieren.");
+      expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual(["erstes"]);
+    });
+
+    it("keeps the second paragraph of a requirement", () => {
+      expect(
+        detect([...REQUIREMENT, "Der Export liefert CSV.", ...NEXT]).entries[0]?.statement,
+      ).toBe("Der Nutzer kann exportieren. Der Export liefert CSV.");
+    });
+
+    it("keeps the list a statement announces", () => {
+      expect(
+        detect(["FR-1: Export", "", "Der Export enthält:", "", "- Name", "- IBAN", ...NEXT])
+          .entries[0]?.statement,
+      ).toBe("Der Export enthält: Name IBAN");
+    });
+
+    it.each([
+      ["a chapter heading", ["4. Betrieb", "", "Der Betrieb läuft.", ...NEXT]],
+      ["a prose paragraph before a chapter", ["Ein Absatz.", "", "Betrieb", "", "Text.", ...NEXT]],
+      ["a table", ["Table row 1: Regel=R1 | Wert=eins", ...NEXT]],
+      ["a workbook table", ["Regeln!2: Regel=R1 | Wert=eins", ...NEXT]],
+      ["the lead-in of the next unit", ["Die folgende Anforderung betrifft den Import:", ...NEXT]],
+      ["a paragraph behind the last unit", ["Ein Absatz zu etwas anderem."]],
+    ])("ends the statement at %s", (_name, after) => {
+      expect(detect([...REQUIREMENT, ...after]).entries[0]?.statement).toBe(
+        "Der Nutzer kann exportieren.",
+      );
+    });
+
+    it("reads a long unit between two others in linear time", () => {
+      const paragraphs = Array.from({ length: 20_000 }, (_, i) => [
+        `Absatz Nummer ${String(i)}.`,
+        "",
+      ]);
+      const started = performance.now();
+      const [entry] = detect([...REQUIREMENT, ...paragraphs.flat(), ...NEXT]).entries;
+
+      expect(entry?.statement.length).toBeGreaterThan(100);
+      expect(performance.now() - started).toBeLessThan(5_000);
+    });
+
+    it("ends the statement behind a closing field", () => {
+      expect(
+        detect([...REQUIREMENT, "Priorität: Hoch", "", "Ein Folgeabsatz.", ...NEXT]).entries[0]
+          ?.statement,
+      ).toBe("Der Nutzer kann exportieren.");
+    });
+  });
+
   it("does not read the result line of a calculation as an obligation", () => {
     expect(
       detect([

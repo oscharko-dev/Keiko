@@ -44,6 +44,7 @@ import {
   continueProjectedRow,
   continuesProjectedTable,
   extendedRow,
+  isDocumentProjection,
   isPlainProjection,
   isPointerRecord,
   isSameRequirement,
@@ -596,6 +597,10 @@ interface Block {
 interface Scan {
   hasBody: boolean;
   inCriteria: boolean;
+  /** The criteria list so far has list markers, so a paragraph without one is not an item. */
+  markedCriteria: boolean;
+  /** The last line already read as prose up to the next unit. */
+  proseThrough: number;
 }
 
 function isKeyLine(text: string, vocabulary: CompiledVocabulary): boolean {
@@ -608,8 +613,10 @@ function isKeyLine(text: string, vocabulary: CompiledVocabulary): boolean {
 }
 
 function advanceScanSegment(scan: Scan, text: string, vocabulary: CompiledVocabulary): void {
-  if (vocabulary.criteriaKey.test(text)) scan.inCriteria = true;
-  else if (vocabulary.statementKey.test(text)) {
+  if (vocabulary.criteriaKey.test(text)) {
+    scan.inCriteria = true;
+    scan.markedCriteria = false;
+  } else if (vocabulary.statementKey.test(text)) {
     scan.inCriteria = false;
     scan.hasBody = true;
   } else if (vocabulary.priorityKey.test(text) || vocabulary.metaKey.test(text))
@@ -641,23 +648,8 @@ function leadsIntoKeyLine(context: Context, from: number, limit: number): boolea
 }
 
 /** A line without a closing mark, then one starting in lower case: one sentence around a break. */
-function sentenceGoesOn(context: Context, blank: number, next: number): boolean {
-  const before = bare(lineAt(context.lines, blank - 1).text);
-  return (
-    before.length > 0 &&
-    !CLOSING_MARK.test(before) &&
-    LOWER_CASE_START.test(bare(lineAt(context.lines, next).text))
-  );
-}
-
-/** In flat text a blank line ends the block unless the block evidently goes on behind it. */
-function continuesAfterBlank(context: Context, scan: Scan, blank: number, limit: number): boolean {
-  const next = nextNonBlank(context.lines, blank + 1, limit);
-  if (next < 0) return false;
-  const raw = lineAt(context.lines, next).text;
-  if (isKeyLine(bare(raw), context.vocabulary) || !scan.hasBody) return true;
-  if (scan.inCriteria && LIST_MARKER.test(raw)) return true;
-  return sentenceGoesOn(context, blank, next) || leadsIntoKeyLine(context, next, limit);
+function sentenceGoesOn(before: string, next: string): boolean {
+  return !CLOSING_MARK.test(bare(before)) && LOWER_CASE_START.test(bare(next));
 }
 
 function isHeadingShaped(raw: string, before: string, context: Context): boolean {
@@ -665,6 +657,71 @@ function isHeadingShaped(raw: string, before: string, context: Context): boolean
   if (text.length > HEADING_MAX_CHARS || CLOSING_MARK.test(text)) return false;
   if (!HEADING_START.test(text) || isKeyLine(text, context.vocabulary)) return false;
   return NUMBERED_ITEM.test(raw) ? !NUMBERED_ITEM.test(before) : !LIST_MARKER.test(raw);
+}
+
+/** A list with markers takes only marked paragraphs; one without takes a paragraph per criterion. */
+function criteriaGoOn(context: Context, scan: Scan, raw: string, before: string): boolean {
+  if (NUMBERED_ITEM.test(raw) && !NUMBERED_ITEM.test(before)) return false;
+  if (LIST_MARKER.test(raw)) return true;
+  if (scan.markedCriteria) return false;
+  if (isKeyLine(bare(before), context.vocabulary)) return true;
+  return !(CLOSING_MARK.test(bare(before)) && isHeadingShaped(raw, before, context));
+}
+
+/** Whether the line can be prose of the unit: no chapter, no table, and no closing field before. */
+function readsAsProseOfUnit(context: Context, raw: string, before: string): boolean {
+  return (
+    !isKeyLine(bare(before), context.vocabulary) &&
+    !endsProjectedRow(raw) &&
+    !isDocumentProjection(raw) &&
+    tableCells(raw) === undefined &&
+    !isHeadingShaped(raw, before, context)
+  );
+}
+
+interface BlankLinePlace {
+  readonly index: number;
+  readonly last: number;
+  readonly limit: number;
+}
+
+/**
+ * Between two units of one chapter prose belongs to the unit before it, unless it announces the
+ * next one. Behind the last unit nothing says so. The lines are read once per block.
+ */
+function runsIntoNextUnit(
+  context: Context,
+  scan: Scan,
+  from: number,
+  place: BlankLinePlace,
+): boolean {
+  const { last, limit } = place;
+  if (limit >= context.lines.length - 1) return false;
+  if (from <= scan.proseThrough) return true;
+  let before = lineAt(context.lines, last).text;
+  for (let index = from; index <= limit; index += 1) {
+    const raw = lineAt(context.lines, index).text;
+    if (bare(raw).length > 0) {
+      if (!readsAsProseOfUnit(context, raw, before)) return false;
+      before = raw;
+    }
+  }
+  if (bare(before).endsWith(":")) return false;
+  scan.proseThrough = limit;
+  return true;
+}
+
+/** In flat text a blank line ends a block; the unit goes on only with what evidently belongs to it. */
+function continuesAfterBlank(context: Context, scan: Scan, place: BlankLinePlace): boolean {
+  const { index, last, limit } = place;
+  const next = nextNonBlank(context.lines, index + 1, limit);
+  if (next < 0) return false;
+  const raw = lineAt(context.lines, next).text;
+  const before = lineAt(context.lines, last).text;
+  if (isKeyLine(bare(raw), context.vocabulary) || !scan.hasBody) return true;
+  if (scan.inCriteria) return criteriaGoOn(context, scan, raw, before);
+  if (sentenceGoesOn(before, raw) || leadsIntoKeyLine(context, next, limit)) return true;
+  return runsIntoNextUnit(context, scan, next, place);
 }
 
 /** What precedes a chapter heading is finished: a closed sentence, a list item or a key value. */
@@ -708,15 +765,11 @@ function leavesBlock(context: Context, candidate: Candidate, line: Line): boolea
     : line.start >= sectionEnd;
 }
 
-function endsFlatBlock(
-  context: Context,
-  scan: Scan,
-  positions: { readonly index: number; readonly last: number; readonly limit: number },
-): boolean {
-  const { index, last, limit } = positions;
+function endsFlatBlock(context: Context, scan: Scan, positions: BlankLinePlace): boolean {
+  const { index, last } = positions;
   const raw = lineAt(context.lines, index).text;
   return bare(raw).length === 0
-    ? !continuesAfterBlank(context, scan, index, limit)
+    ? !continuesAfterBlank(context, scan, positions)
     : startsChapter(context, scan, raw, last);
 }
 
@@ -731,7 +784,7 @@ function isStructured(candidate: Candidate): boolean {
 
 function lastBodyLine(context: Context, candidate: Candidate, limit: number): number {
   const structured = isStructured(candidate);
-  const scan: Scan = { hasBody: false, inCriteria: false };
+  const scan: Scan = { hasBody: false, inCriteria: false, markedCriteria: false, proseThrough: -1 };
   const head = headLastLine(candidate);
   let last = head;
   for (let index = head + 1; index <= limit; index += 1) {
@@ -744,6 +797,7 @@ function lastBodyLine(context: Context, candidate: Candidate, limit: number): nu
     const text = bare(line.text);
     if (text.length > 0) {
       advanceScan(scan, text, context.vocabulary);
+      if (scan.inCriteria && LIST_MARKER.test(line.text)) scan.markedCriteria = true;
       last = index;
     }
   }
@@ -800,6 +854,10 @@ interface BodyState {
   mode: Mode;
   /** A marked criterion without a closing mark: the next unmarked line is its wrapped remainder. */
   criterionOpen: boolean;
+  /** The criteria list has markers. Behind a blank line a paragraph without one is not an item. */
+  criteriaMarked: boolean;
+  /** A blank line ended the block before: the next line wraps nothing. */
+  afterBlank: boolean;
   /** A metadata value that ended open: the next line still belongs to it. */
   labelOpen: boolean;
 }
@@ -868,6 +926,7 @@ function readStatementLabel(state: BodyState, value: string): void {
 function readCriteria(state: BodyState, criteria: string): void {
   state.mode = "criteria";
   state.criterionOpen = false;
+  state.criteriaMarked = false;
   for (const item of criteria.split(MERGED_ITEMS)) {
     const criterion = stripCriterionNumber(item);
     if (criterion.length > 0) state.criteria.push(criterion);
@@ -880,6 +939,12 @@ function readCriteria(state: BodyState, criteria: string): void {
  * evidence and keeps one criterion per line.
  */
 function readCriterionLine(state: BodyState, segment: string, marked: boolean): void {
+  if (state.afterBlank && state.criteriaMarked && !marked) {
+    state.mode = "text";
+    state.statement.push(segment);
+    return;
+  }
+  state.criteriaMarked ||= marked;
   const text = stripCriterionNumber(segment);
   const last = state.criteria.length - 1;
   if (state.criterionOpen && !marked && last >= 0) {
@@ -936,13 +1001,21 @@ function interpretBody(bodyLines: readonly Line[], vocabulary: CompiledVocabular
     priority: undefined,
     mode: "text",
     criterionOpen: false,
+    criteriaMarked: false,
+    afterBlank: false,
     labelOpen: false,
   };
   for (const line of bodyLines) {
     if (isThematicBreak(line.text)) continue;
+    if (bare(line.text).length === 0) {
+      state.criterionOpen = false;
+      state.afterBlank = true;
+      continue;
+    }
     const marked = LIST_MARKER.test(line.text);
     for (const segment of segmentsOf(line.text, vocabulary))
       readSegment(state, segment, vocabulary, marked);
+    state.afterBlank = false;
   }
   return {
     ...(state.priority === undefined || state.priority.length === 0

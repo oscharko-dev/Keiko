@@ -246,6 +246,7 @@ const PROJECTION_PREFIX = new RegExp(
 const PROJECTED_CELL_BREAK = new RegExp(String.raw` \| ${LABEL_AHEAD}`, "u");
 // A projected line that holds no labelled cell (a title, a note, a header-only table).
 const PLAIN_PROJECTION = /^[^\n:]{1,120}!\d{1,9}:(?:[ \t]|$)/u;
+const DOCUMENT_PROJECTION = /^Table row \d{1,9}:[ \t]/u;
 const NEUTRAL_LABEL = /^Column (?:\d+|[A-Z]{1,3})$/u;
 /** The line of a JSON record: a row of a JSON document never continues on another line. */
 const POINTER_RECORD = /^\/[^\n:]{0,120}: /u;
@@ -301,6 +302,10 @@ export function isPointerRecord(raw: string): boolean {
 /** A projected line with no labelled cell: a title or note of a sheet, never part of the last cell. */
 export function isPlainProjection(raw: string): boolean {
   return PLAIN_PROJECTION.test(raw);
+}
+
+export function isDocumentProjection(raw: string): boolean {
+  return DOCUMENT_PROJECTION.test(raw);
 }
 
 /**
