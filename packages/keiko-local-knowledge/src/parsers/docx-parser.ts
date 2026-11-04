@@ -153,10 +153,10 @@ interface ReadContext {
   readonly diagnostics: ParserDiagnostic[];
 }
 
-function unreadablePartDiagnostic(context: ReadContext, entry: string): void {
+function recordUnreadablePart(context: ReadContext, entry: string): void {
   context.diagnostics.push(
     diagnostic(
-      "MALFORMED_INPUT",
+      "PART_SKIPPED",
       `docx ${entry} could not be read and was skipped`,
       context.input.documentId,
       "warning",
@@ -175,7 +175,7 @@ function readAuxiliary<T>(
   try {
     return read(xml);
   } catch {
-    unreadablePartDiagnostic(context, entry);
+    recordUnreadablePart(context, entry);
     return undefined;
   }
 }

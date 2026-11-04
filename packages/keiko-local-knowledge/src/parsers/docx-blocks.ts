@@ -80,7 +80,9 @@ function paragraphEntry(paragraph: RawParagraph, context: ProjectionContext): Pa
   const marker = listMarkerOf(paragraph, context);
   const text = lineOf(paragraph.text);
   if (text.length === 0) return [];
-  const headingLevel = resolveHeadingLevel(context.styles, paragraph.styleId, paragraph.outlineLvl);
+  const headingLevel = paragraph.inBox
+    ? undefined
+    : resolveHeadingLevel(context.styles, paragraph.styleId, paragraph.outlineLvl);
   if (headingLevel !== undefined) return [{ text: normalizeLine(text), headingLevel }];
   return [{ text: withMarker(text, marker) }];
 }

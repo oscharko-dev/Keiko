@@ -79,7 +79,7 @@ function gridRowOf(row: RawRow, carry: Map<number, string>): GridRow {
     cells.push(gridCellOf(cell, col, carry));
     col += cell.span;
   }
-  const nested = row.cells.some(hasNestedTable);
+  const nested = row.cells.some((cell) => hasNestedTable(cell));
   return { cells, headerMarked: row.headerMarked, nested };
 }
 

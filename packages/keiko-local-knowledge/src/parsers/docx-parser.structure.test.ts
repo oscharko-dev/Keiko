@@ -210,6 +210,11 @@ describe("docx section paths follow heading levels", () => {
     expect(pathsOf(result)).toEqual([""]);
   });
 
+  it("keeps the text of a cell that is not inside a row", async () => {
+    const result = await parseDocx({ document: documentXml(cellXml(textPara("Verirrt"))) });
+    expect(linesOf(result)).toEqual(["Verirrt"]);
+  });
+
   it("does not turn a heading inside a table cell into a section", async () => {
     const cell = cellXml(textPara("In Zelle", { style: "Heading1" }));
     const document = documentXml(tableXml(rowXml([cell, textCell("b")])));
@@ -423,6 +428,18 @@ describe("docx list markers", () => {
     expect(linesOf(result)).toEqual(["1. a", "2. b", "5. neu", "6. weiter"]);
   });
 
+  it("counts letters past z the way Word does", async () => {
+    const items = Array.from({ length: 28 }, (_, index) =>
+      textPara(`Punkt ${String(index + 1)}`, { numId: "6", ilvl: 0 }),
+    );
+    const letters = numberingXml(
+      abstractNumXml("3", [levelXml(0, { format: "lowerLetter", text: "%1)" })]),
+      numXml("6", "3"),
+    );
+    const result = await parseDocx({ document: documentXml(...items), numbering: letters });
+    expect(linesOf(result).slice(25)).toEqual(["z) Punkt 26", "aa) Punkt 27", "ab) Punkt 28"]);
+  });
+
   it("formats roman numerals and zero padded numbers", async () => {
     const document = documentXml(
       textPara("eins", { numId: "5", ilvl: 0 }),
@@ -490,6 +507,15 @@ describe("docx text boxes", () => {
       document: documentXml(paraXml(`${runXml("Text")}${legacy}`)),
     });
     expect(linesOf(result)).toEqual(["Text", "Altes Feld"]);
+  });
+
+  it("does not open a section for a heading-styled paragraph inside a box", async () => {
+    const drawing = `<w:r><w:drawing><wps:wsp><wps:txbx><w:txbxContent>${heading("Randnotiz", 1)}</w:txbxContent></wps:txbx></wps:wsp></w:drawing></w:r>`;
+    const result = await parseDocx({
+      document: documentXml(heading("Kapitel", 1), paraXml(`${runXml("Text")}${drawing}`)),
+    });
+    expect(pathsOf(result)).toEqual(["Kapitel"]);
+    expect(linesOf(result)).toEqual(["Kapitel", "Text", "Randnotiz"]);
   });
 
   it("keeps the anchor paragraph's own text out of the box block and the other way round", async () => {
@@ -684,8 +710,8 @@ describe("docx bounds and failure honesty", () => {
     const result = await parseDocx({ document, styles: "<w:styles><w:style>", numbering: "<<" });
     expect(pathsOf(result)).toEqual(["Kapitel"]);
     expect(result.diagnostics.map((entry) => [entry.code, entry.severity, entry.message])).toEqual([
-      ["MALFORMED_INPUT", "warning", "docx word/styles.xml could not be read and was skipped"],
-      ["MALFORMED_INPUT", "warning", "docx word/numbering.xml could not be read and was skipped"],
+      ["PART_SKIPPED", "warning", "docx word/styles.xml could not be read and was skipped"],
+      ["PART_SKIPPED", "warning", "docx word/numbering.xml could not be read and was skipped"],
     ]);
   });
 

@@ -32,6 +32,8 @@ export interface RawParagraph {
   readonly outlineLvl: number | undefined;
   /** True when every visible text run of the paragraph is bold. */
   readonly allBold: boolean;
+  /** The paragraph sits in a text box, which never opens a section of its own. */
+  readonly inBox: boolean;
   readonly noteRefs: readonly NoteRef[];
 }
 
@@ -336,6 +338,7 @@ function closeParagraph(state: WalkState): void {
     ilvl: frame.ilvl,
     outlineLvl: frame.outlineLvl,
     allBold: frame.textTokens > 0 && frame.boldTokens === frame.textTokens,
+    inBox: state.frames.some((open) => open.kind === "container" && open.role === "txbx"),
     noteRefs: frame.noteRefs,
   };
   const sink = sinkOf(state);
@@ -382,8 +385,10 @@ function closeCell(state: WalkState): void {
   const frame = state.frames.pop();
   const row = topFrame(state);
   state.objectCount += 1;
-  if (frame?.kind !== "container" || row?.kind !== "row") return;
-  row.cells.push({ span: frame.span, vMerge: frame.vMerge, blocks: frame.blocks });
+  if (frame?.kind !== "container") return;
+  if (row?.kind === "row")
+    row.cells.push({ span: frame.span, vMerge: frame.vMerge, blocks: frame.blocks });
+  else sinkOf(state).push(...frame.blocks);
 }
 
 function openTextBox(state: WalkState): void {
