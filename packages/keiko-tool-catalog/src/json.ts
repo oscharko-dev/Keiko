@@ -14,12 +14,6 @@ import { GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES } from "@oscharko-dev/keiko-
 const MAX_ADVERTISEMENT_COPY_BYTES = GATEWAY_NATIVE_ADVERTISEMENT_CAPTURE_BYTES;
 
 const ENCODER = new TextEncoder();
-const NON_ASCII = /\P{ASCII}/u;
-
-function utf8Bytes(text: string): number {
-  return NON_ASCII.test(text) ? ENCODER.encode(text).length : text.length;
-}
-
 const UNSAFE_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 interface CopyBudget {
   readonly maxBytes: number;
@@ -30,11 +24,11 @@ interface CopyBudget {
 }
 
 export function catalogBytes(value: CatalogJsonValue): number {
-  return utf8Bytes(JSON.stringify(value));
+  return ENCODER.encode(JSON.stringify(value)).length;
 }
 
 function charge(budget: CopyBudget, text: string): void {
-  budget.bytes += utf8Bytes(text);
+  budget.bytes += ENCODER.encode(text).length;
   requireCatalog(budget.bytes <= budget.maxBytes, "input-bound");
 }
 
@@ -48,7 +42,7 @@ function scalar(value: unknown, budget: CopyBudget): CatalogJsonValue {
   );
   if (typeof value === "number") requireCatalog(Number.isFinite(value), "invalid-shape");
   if (typeof value === "string")
-    requireCatalog(utf8Bytes(value) <= budget.maxStringBytes, "input-bound");
+    requireCatalog(ENCODER.encode(value).length <= budget.maxStringBytes, "input-bound");
   const result = value;
   charge(budget, JSON.stringify(result));
   return result;
