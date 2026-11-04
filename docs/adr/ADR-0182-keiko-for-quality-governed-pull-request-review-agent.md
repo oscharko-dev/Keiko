@@ -265,21 +265,31 @@ The
 Reviewer's diff budget is sized so the task always fits the 64 KiB first-prompt bound beside the
 largest admitted rules file (the gateway estimator counts at least one token per 3.5 bytes); a
 larger task is refused, never truncated. A record that cannot be written (a full disk) settles the
-run `abandoned/interrupted` with nothing presented; every run a stopped server left unsettled is
+run `abandoned/interrupted` with nothing presented. The service then writes a minimal record without
+findings that settles the stored row the same way, so one failed write does not hold the
+repository's active-run slot. When the minimal write fails too, the row stays unsettled, and the
+next start or cancel for that repository settles it `abandoned/interrupted` once no live run owns it
+(`recoverOrphan`, #4251). A store failure anywhere in settling announces `abandoned/interrupted`,
+removes the run's worktree and frees the live slot instead of ending the process. The run's one
+terminal `review.run.settled` line is written when its stored row settles: at settlement when a
+record was written, otherwise by that later recovery. Every run a stopped server left unsettled is
 settled `abandoned/interrupted` when the review service is composed at the next start, and child 3's
 startup sweep removes its worktree. The stale flag compares the reviewed head with the pull
 request's current head from the read-only detail (cached 30 seconds), at settlement and on every
 read; it never changes the settlement.
 
-The run records live in the server store (migrations 55 and 56): `review_runs` (one row per run; a partial
-unique index allows one unsettled run per repository, and the repository id and client request id
-are unique, so a repeated start returns the same run), `review_coverage` (path, list, closed reason)
-and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented
+The run records live in the server store (migrations 55, 56 and 57): `review_runs` (one row per
+run; a partial unique index allows one unsettled run per repository, and the repository id and
+client request id are unique, so a repeated start returns the same run), `review_coverage` (path,
+list, closed reason, and since migration 57 the nullable `previous_path` of a renamed or copied
+file) and `review_findings` (fingerprint, report, verdict, verdict evidence, head anchoring, presented
 flag and rank). The routes are `POST /api/git-review/runs` (with `dryRun`), `GET
 /api/git-review/runs/{runId}`, `GET /api/git-review/runs?repositoryId=…&pullRequestNumber=…`, `GET
 /api/git-review/review-states?repositoryId=…`, `GET /api/git-review/runs/{runId}/diff` (from the
-Git objects the run's private refs retain; `objects-unavailable` once the sweep removed them, which
-keeps refs a recorded run references), `GET /api/git-review/runs/{runId}/events` (SSE through the
+Git objects the run's private refs retain; a renamed file's base side is read under its
+`previous_path`; `objects-unavailable` once the sweep removed them, which keeps refs a recorded run
+references, and for a stored path the hardened Git reads refuse, such as one with a control
+character), `GET /api/git-review/runs/{runId}/events` (SSE through the
 shared flow control: phases and counts only, then one `settled` event) and `POST
 /api/git-review/runs/{runId}/cancel`. The start route addresses the repository by the Git window's
 selected `root` through the registered-project authority, like every Git read; reads address
