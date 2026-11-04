@@ -183,6 +183,25 @@ describe("review run service: every settlement of the child 1 table (AC1)", () =
     ).toEqual({ kind: "skipped", reason: "model-unavailable" });
   });
 
+  // R4130-003: the policy admission runs before anything reads a role model, so a model the
+  // policy refuses is never read, probed or called for the run.
+  it("reads no role model capability when the policy refuses the pair", async () => {
+    const reads: string[] = [];
+    const capabilities = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor: (_target, key): undefined => {
+          reads.push(String(key));
+          return undefined;
+        },
+      },
+    );
+    const settlement = await settlementOf({ capabilities, admit: () => false });
+    expect(settlement).toEqual({ kind: "skipped", reason: "policy-invalid" });
+    expect(reads).toEqual([]);
+    expect(harness?.runtimeRequests).toEqual([]);
+  });
+
   it("skips with target-changed, no-reviewable-changes and worktree-failed", async () => {
     const missing = startBody({
       target: { kind: "local-range", baseRef: "main", headRef: "gone" },
