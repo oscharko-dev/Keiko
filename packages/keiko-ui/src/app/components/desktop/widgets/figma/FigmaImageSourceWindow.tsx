@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 import Image from "next/image";
 import type { ReactNode } from "react";
 import styles from "./FigmaImageSourceWindow.module.css";
@@ -18,12 +20,13 @@ export function FigmaImageSourceWindow({
   imageSrc,
   screenName,
 }: FigmaImageSourceWindowProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const label = labelFrom(screenName);
   if (imageSrc === undefined || imageSrc.trim().length === 0) {
     return (
       <section className={`figma-image-window ${styles.lazyWidgetScope}`} aria-label={label}>
         <div className="figma-image-missing" role="alert">
-          Image preview is unavailable.
+          {tUi("figmaImage.ui.imagePreviewIsUnavailable")}
         </div>
       </section>
     );

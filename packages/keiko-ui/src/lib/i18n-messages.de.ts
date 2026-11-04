@@ -931,4 +931,13 @@ export const DE_MESSAGES = {
     "Retrieval-Embedding: bestanden (Modellidentität in diesem Bericht nicht verfügbar)",
   "settings.models.retrievalEmbeddingIdentity": "Retrieval-Embedding-Modell: {modelId}{shape}",
   "settings.models.retrievalEmbeddingDimensions": " ({dimensions} Dimensionen)",
+  "permControl.keikoMode": "Keiko-Modus",
+  "permControl.zeroStandingRights": "Keine Dauerrechte · Keiko steuert",
+  "permControl.legacyAccessMode": "Älterer Zugriffsmodus",
+  "permControl.askEveryAction": "Jede Aktion nachfragen",
+  "permControl.fullAccess": "Vollzugriff",
+  "permControl.noteKeiko":
+    "Standardmäßig keine Rechte. Im manuellen Modus genehmigen Sie; im autonomen Modus steuert Keiko nach Richtlinie.",
+  "permControl.noteLegacyFull": "Älterer Modus: Der Agent handelt ohne Rückfrage.",
+  "permControl.noteLegacyAsk": "Älterer Modus: Sie genehmigen jede privilegierte Aktion.",
 } satisfies MessageCatalog;

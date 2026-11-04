@@ -267,12 +267,15 @@ producer ran on 2026-11-02 with Node 24.18.0. All nine cases passed, and the thr
 every declared digest. The evidence freshness gate passed. No updater behavior, baseline or
 numerical ceiling changed.
 
-The local workspace restoration and browser connection repair regenerated the original nine-case
-producer on 2026-11-04 in an isolated macOS arm64 checkout using Node 24.22.0, npm 11.19.1 and
-Playwright 1.64.1. All nine cases passed in 1.3 minutes, including the real BFF outage. The fixture
-adapter resolves the actual store identity at the selected fixture origin; both that adapter and
-the production storage-key builder are included in harness provenance. All 17 artifacts were
-recreated: only `10-responsive-manual-path.png` changed PNG bytes and was visually inspected;
-the three JSON records bind the current sources and harness. The other 13 screenshots remain
-byte-identical. The unchanged freshness gate passes. This remains updater fixture evidence,
-without claiming a native update or release qualification.
+## Message catalog translation — 2026-11-04 (#4183)
+
+Moving hard-coded English texts into the message catalogs (PR #4198) changes the digests of the
+declared UI sources `i18n-messages.{en,de}.ts` and `i18n-messages.optional.{en,de}.ts`. The original
+producer ran with tracked evidence enabled on Windows 11 (Node 24.21.0, Playwright Chromium headless
+shell build 1248) after merging `dev` (1.4.0). Eight of the nine cases passed; the ninth, "routes
+default updater JSON and PNG evidence into one untracked output root", asserts the default routing
+and fails by construction while `KEIKO_WRITE_TRACKED_EVIDENCE=1` is set. All 17 declared artifacts
+were rewritten. The recorded source digests hash LF line endings, as CI does, because a Windows
+checkout may hold CRLF copies. This is Windows rendering, not the Linux Liberation-font set used for
+earlier captures, so the 14 PNGs differ in bytes from that set; the update window itself did not
+change. A Linux regeneration remains preferable if byte-comparable captures are wanted.
