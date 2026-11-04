@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "id": "operator-in-third-party-de",
+  "language": "de",
+  "class": "operator-in-third-party",
+  "difficulty": "plain",
+  "description": "A fact about the person inside a sentence about a colleague: the person's fact is true, the colleague's is not.",
+  "truth": [
+    {
+      "key": "numbers-wiki",
+      "seed": "Ich führe meine Zahlen immer im Wiki.",
+      "must": true,
+      "private": true,
+      "terms": [["Wiki"]]
+    }
+  ],
+  "forbidden": [
+    {
+      "class": "third-party",
+      "terms": [["Ostrander"]]
+    },
+    {
+      "class": "third-party",
+      "terms": [["Kollegin", "Kollege", "Kollegen", "rechnet"], ["Excel"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Frau Ostrander rechnet alles in Excel, ich führe meine Zahlen immer im Wiki.",
+      "learner": [
+        {
+          "body": "Ich führe meine Zahlen immer im Wiki.",
+          "type": "procedural"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "own",
+      "question": "Wo liegen meine Zahlen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Wiki"]]
+      }
+    },
+    {
+      "id": "colleague",
+      "question": "Womit rechnet Frau Ostrander?",
+      "expect": {
+        "kind": "abstain",
+        "allow": ["numbers-wiki"]
+      }
+    }
+  ]
+}
