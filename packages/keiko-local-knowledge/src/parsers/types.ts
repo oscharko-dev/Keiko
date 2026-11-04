@@ -60,6 +60,9 @@ export interface ParserSelectionInput {
   // Optional page context for callers that already split a document into per-page images before
   // invoking a parser. OCR adapters use this to avoid collapsing every page to page 1.
   readonly pageNumber?: number;
+  // Base name of the file (no directory) when the caller knows it. Only the text adapter reads it,
+  // to recognise a well-known file that has no extension (README, LICENSE, Makefile).
+  readonly fileName?: string;
 }
 
 export interface ParserCapability {
@@ -140,6 +143,9 @@ export type ParserErrorCode =
   | "PLACEHOLDER_CONTENT_EXCLUDED"
   | "COMMENTS_NOT_INDEXED"
   | "HIDDEN_SLIDE_INDEXED"
+  | "HTML_CONTENT_EXCLUDED"
+  | "JSON_DUPLICATE_KEY"
+  | "ENCODING_REPAIRED"
   | "UNSUPPORTED_FORMAT";
 
 export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
@@ -163,6 +169,9 @@ export const PARSER_ERROR_CODES: readonly ParserErrorCode[] = [
   "PLACEHOLDER_CONTENT_EXCLUDED",
   "COMMENTS_NOT_INDEXED",
   "HIDDEN_SLIDE_INDEXED",
+  "HTML_CONTENT_EXCLUDED",
+  "JSON_DUPLICATE_KEY",
+  "ENCODING_REPAIRED",
   "UNSUPPORTED_FORMAT",
 ] as const;
 
