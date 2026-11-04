@@ -76,6 +76,8 @@ export interface CodingRuntimeLaunchResolver {
     readonly jiraPodId?: string | undefined;
     /** The Pod identity the resolver bound the run to; the resolver sets it, the orchestrator never. */
     readonly jiraPod?: CodingJiraPodBinding | undefined;
+    /** The MCP servers the human selected for the run; absent offers every enabled server. */
+    readonly mcpServers?: readonly string[] | undefined;
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;

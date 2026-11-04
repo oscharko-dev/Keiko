@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "multi-turn-de",
+  "language": "de",
+  "class": "multi-turn",
+  "difficulty": "split",
+  "description": "A fact spread over two turns: the subject in one, the rule in the next. A single-turn learner cannot attribute the second sentence.",
+  "truth": [
+    {
+      "key": "report-rule",
+      "seed": "Meine Berichte beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+      "must": true,
+      "private": true,
+      "terms": [["Zusammenfassung"], ["drei Sätze*", "drei Saetze*", "3 Sätze*", "3 Saetze*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Ich habe eine neue Regel fuer meine Berichte.",
+      "learner": []
+    },
+    {
+      "user": "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+      "learner": [
+        {
+          "body": "Sie beginnen immer mit einer Zusammenfassung in drei Saetzen.",
+          "type": "procedural"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "Womit beginnen meine Berichte?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Zusammenfassung"], ["drei Sätze*", "drei Saetze*", "3 Sätze*", "3 Saetze*"]]
+      }
+    }
+  ]
+}

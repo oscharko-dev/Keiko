@@ -10,9 +10,11 @@ import {
   type SelectedScope,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import {
-  LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS,
   LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,
   LOCAL_KNOWLEDGE_WEB_DOCUMENT_FILE_EXTENSIONS,
+  LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import {
   extractPathReferences,
@@ -113,7 +115,14 @@ interface AdmissionState {
   basenameMatches: number;
 }
 
-const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_DOCUMENT_FILE_EXTENSIONS);
+// Repository Search reads exactly these container documents (ADR-0022 bounded extraction). Local
+// Knowledge indexes further formats (for example .pptx) that a connected folder must keep
+// reporting as unsupported, so this set is deliberately not the whole Local Knowledge group.
+const DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
+  ...LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS,
+  ...LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS,
+  ...LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS,
+]);
 const BASENAME_MATCH_CAP = 96;
 const ORDINARY_DOCUMENT_EXTENSIONS: ReadonlySet<string> = new Set([
   ...LOCAL_KNOWLEDGE_TEXT_DOCUMENT_FILE_EXTENSIONS,

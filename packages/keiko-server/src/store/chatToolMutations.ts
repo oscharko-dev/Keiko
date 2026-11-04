@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import type { JiraMutationOutcome } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { ServerLogSink } from "../observability/index.js";
@@ -14,8 +15,11 @@ import {
 import { recordChatToolMutation } from "./chatToolMutationActivity.js";
 import type {
   ChatToolMutationIntent,
+  ChatToolMutationLinkCounts,
   ChatToolMutationRecord,
   ChatToolMutationPreparation,
+  ChatToolMutationLocalRefusal,
+  ChatToolMutationSettleEvidence,
   ChatToolMutationStore,
 } from "./chatToolMutationTypes.js";
 const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_id AS userMessageId,
@@ -26,7 +30,8 @@ const COLUMNS = `invocation_id AS invocationId, chat_id AS chatId, user_message_
   tool_name AS toolName, protocol_outcome AS protocolOutcome,
   consumer_kind AS consumerKind, coding_run_id AS codingRunId, native_session_id AS nativeSessionId,
   native_message_id AS nativeMessageId, native_call_id AS nativeCallId, native_arguments_digest AS nativeArgumentsDigest,
-  native_mcp_action_digest AS nativeMcpActionDigest`;
+  native_mcp_action_digest AS nativeMcpActionDigest, batch_digest AS batchDigest`;
+// Single writes of one turn. The items of an approved draft are bounded by their own batch instead.
 const MAX_MUTATIONS_PER_TURN = 32;
 function consumerColumns(intent: ChatToolMutationIntent): readonly (string | null)[] {
   const consumer = intent.consumer;
@@ -73,10 +78,12 @@ function rowRecord(value: unknown): ChatToolMutationRecord | undefined {
     nativeCallId,
     nativeArgumentsDigest,
     nativeMcpActionDigest,
+    batchDigest,
     ...fields
   } = value as Record<string, unknown>;
   const row = {
     ...fields,
+    ...(batchDigest === null ? {} : { batchDigest }),
     ...(consumerKind === "coding"
       ? {
           consumer: {
@@ -110,7 +117,7 @@ export function readChatToolMutationTurn(
 ): readonly ChatToolMutationRecord[] {
   return db
     .prepare(
-      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND consumer_kind = 'chat' LIMIT 33`,
+      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ? AND consumer_kind = 'chat' AND batch_digest IS NULL LIMIT 33`,
     )
     .all(chatId, turnRef)
     .map((row) => rowRecord(row))
@@ -169,15 +176,10 @@ function observedWithinNativeCall(
     prior.callId === current.callId
   );
 }
-function turnRecords(
-  db: DatabaseSync,
-  intent: { readonly chatId: string; readonly turnRef: string },
-): readonly ChatToolMutationRecord[] {
-  return db
-    .prepare(`SELECT ${COLUMNS} FROM chat_tool_mutations WHERE chat_id = ? AND turn_ref = ?`)
-    .all(intent.chatId, intent.turnRef)
-    .map(rowRecord)
-    .filter((row): row is ChatToolMutationRecord => row !== undefined);
+const TURN = "chat_id = ? AND turn_ref = ?";
+interface TurnKey {
+  readonly chatId: string;
+  readonly turnRef: string;
 }
 function hasInflightBarrier(
   rows: readonly ChatToolMutationRecord[],
@@ -189,16 +191,63 @@ function hasInflightBarrier(
       (row.phase === "acknowledged" && !observedWithinNativeCall(row, intent)),
   );
 }
+/**
+ * What stops further writes in a turn: an effect of unknown outcome, or a write in flight. Only
+ * those rows are read, so admitting the next item of a large approved draft does not re-read every
+ * record the turn already holds.
+ */
+function turnBarrier(
+  db: DatabaseSync,
+  intent: TurnKey & Pick<ChatToolMutationIntent, "consumer" | "invocationId">,
+): "unknown-effect" | "in-flight" | undefined {
+  const unknown = db
+    .prepare(
+      `SELECT 1 FROM chat_tool_mutations WHERE ${TURN} AND outcome IN ('unknown','succeeded-unconfirmed') LIMIT 1`,
+    )
+    .get(intent.chatId, intent.turnRef);
+  if (unknown !== undefined) return "unknown-effect";
+  const open = db
+    .prepare(
+      `SELECT ${COLUMNS} FROM chat_tool_mutations WHERE ${TURN} AND phase IN ('dispatched','acknowledged')`,
+    )
+    .all(intent.chatId, intent.turnRef)
+    .map(rowRecord)
+    .filter((row): row is ChatToolMutationRecord => row !== undefined);
+  return hasInflightBarrier(open, intent) ? "in-flight" : undefined;
+}
+/**
+ * Whether a record may have reached the provider. The turn bound limits single writes, so a record
+ * that settled as a local refusal before dispatch (an existing draft item, a value refused before
+ * sending) does not use it up (#4175, #4178). The settlement rules admit those two outcomes only
+ * without a provider response; every other record counts.
+ */
+const HELD_SINGLE_WRITES = `SELECT COUNT(*) AS held FROM chat_tool_mutations WHERE ${TURN}
+  AND batch_digest IS NULL AND NOT (phase = 'settled' AND outcome IN ('not-dispatched','rejected'))`;
 function blockedTurn(
   db: DatabaseSync,
   intent: ChatToolMutationIntent,
 ): ChatToolMutationPreparation | undefined {
-  const rows = turnRecords(db, intent);
-  if (rows.some((row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed"))
-    return { kind: "blocked", reason: "unknown-effect" };
-  if (hasInflightBarrier(rows, intent)) return { kind: "blocked", reason: "in-flight" };
-  if (rows.length >= MAX_MUTATIONS_PER_TURN) return { kind: "blocked", reason: "capacity" };
-  return undefined;
+  const barrier = turnBarrier(db, intent);
+  if (barrier !== undefined) return { kind: "blocked", reason: barrier };
+  // The items of one approved draft are their own batch: the draft authorizes exactly its own
+  // items, and its size is bounded in bytes where it is staged, not by this per-turn count (#4178).
+  if (intent.batchDigest !== undefined) return undefined;
+  const row = db.prepare(HELD_SINGLE_WRITES).get(intent.chatId, intent.turnRef);
+  return Number(row?.held ?? 0) >= MAX_MUTATIONS_PER_TURN
+    ? { kind: "blocked", reason: "capacity" }
+    : undefined;
+}
+function retryableAttachment(
+  prior: ChatToolMutationRecord,
+  intent: ChatToolMutationIntent,
+): boolean {
+  return (
+    prior.operation === "jira.attach" &&
+    prior.phase === "settled" &&
+    (prior.outcome === "rejected" || prior.outcome === "not-dispatched") &&
+    prior.invocationId !== intent.invocationId &&
+    sameMutationIdentity(prior, intent)
+  );
 }
 /** One SQLite commit precedes every possible external effect; nested savepoints are insufficient. */
 class MutationStore implements ChatToolMutationStore {
@@ -258,7 +307,8 @@ class MutationStore implements ChatToolMutationStore {
           )
           .get(intent.chatId, intent.turnRef, intent.actionDigest),
       );
-      if (prior !== undefined) {
+      if (prior !== undefined && retryableAttachment(prior, intent)) this.retire(prior);
+      else if (prior !== undefined) {
         if (!sameMutationIdentity(prior, intent)) throw journalConflict();
         return { kind: "replayed", record: prior };
       }
@@ -273,10 +323,25 @@ class MutationStore implements ChatToolMutationStore {
     if (result.kind !== "blocked") recordChatToolMutation(this.log, result.record, result.kind);
     return result;
   }
+  /**
+   * A refused or never-sent attachment left no remote effect, and the model is told to request it
+   * again after correcting the file; the retry is a new call and must not replay that refusal. The
+   * old record keeps its identity and outcome under a retired action digest (#4176).
+   */
+  private retire(record: ChatToolMutationRecord): void {
+    this.db
+      .prepare("UPDATE chat_tool_mutations SET action_digest = ? WHERE invocation_id = ?")
+      .run(
+        createHash("sha256")
+          .update(`${record.actionDigest}:retired:${record.invocationId}`)
+          .digest("hex"),
+        record.invocationId,
+      );
+  }
   private insertPrepared(intent: ChatToolMutationIntent, createdAt: number): void {
     this.db
       .prepare(
-        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest, native_mcp_action_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO chat_tool_mutations (invocation_id, chat_id, user_message_id, turn_ref, actor_id, pod_id, binding_generation, authentication_generation, authority_digest, action_digest, operation, correlation_id, phase, created_at, updated_at, source_kind, configuration_digest, server_name, tool_name, consumer_kind, coding_run_id, native_session_id, native_message_id, native_call_id, native_arguments_digest, native_mcp_action_digest, batch_digest) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,'prepared',?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       )
       .run(
         intent.invocationId,
@@ -298,6 +363,7 @@ class MutationStore implements ChatToolMutationStore {
         intent.sourceKind === "configured-mcp" ? intent.serverName : null,
         intent.sourceKind === "configured-mcp" ? intent.toolName : null,
         ...consumerColumns(intent),
+        intent.batchDigest ?? null,
       );
   }
   beginDispatch(invocationId: string, guard: () => boolean): boolean {
@@ -306,14 +372,7 @@ class MutationStore implements ChatToolMutationStore {
         const current = this.requireRecord(invocationId);
         if (current.phase !== "prepared") return undefined;
         assertCurrentTurn(this.db, current);
-        const rows = turnRecords(this.db, current);
-        if (
-          rows.some(
-            (row) => row.outcome === "unknown" || row.outcome === "succeeded-unconfirmed",
-          ) ||
-          hasInflightBarrier(rows, current)
-        )
-          return undefined;
+        if (turnBarrier(this.db, current) !== undefined) return undefined;
         // A synchronous guard may atomically redeem an approval in this same transaction.
         if (!guardApproved(guard())) throw new GuardDenied();
         this.db
@@ -382,10 +441,16 @@ class MutationStore implements ChatToolMutationStore {
     recordChatToolMutation(this.log, change.record, change.event);
     return change.record;
   }
-  settle(invocationId: string, outcome: JiraMutationOutcome): ChatToolMutationRecord {
+  settle(
+    invocationId: string,
+    outcome: JiraMutationOutcome,
+    links?: ChatToolMutationLinkCounts,
+    evidence?: ChatToolMutationSettleEvidence,
+    refusal?: ChatToolMutationLocalRefusal,
+  ): ChatToolMutationRecord {
     const change = durableWrite(this.db, (): MutationChange => {
       const current = this.requireRecord(invocationId);
-      validateMutationSettlement(current, outcome);
+      validateMutationSettlement(current, outcome, evidence?.jiraErrorDocument === true);
       if (current.phase === "settled") return { record: current, event: "replayed" };
       this.db
         .prepare(
@@ -394,7 +459,14 @@ class MutationStore implements ChatToolMutationStore {
         .run(outcome, timestamp(this.now, current.updatedAt), invocationId);
       return { record: this.requireRecord(invocationId), event: "settled" };
     });
-    recordChatToolMutation(this.log, change.record, change.event);
+    const settled = change.event === "settled";
+    recordChatToolMutation(
+      this.log,
+      change.record,
+      change.event,
+      settled ? links : undefined,
+      settled ? refusal : undefined,
+    );
     return change.record;
   }
 }

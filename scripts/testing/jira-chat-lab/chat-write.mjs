@@ -7,6 +7,7 @@ import { pathToFileURL } from "node:url";
 import { basicAuth, labRequest, loadSession, requireLicense } from "./lab-client.mjs";
 import { jsonRequest, prepareChat, request, withLiveChat } from "./chat-read.mjs";
 import { privateJson } from "./private-json.mjs";
+import { establishedReadGrant } from "./read-grant.mjs";
 export { privateJson, payload as chatToolRequest };
 
 const MODES = new Set(["governed-assist", "supervised-coding", "autonomous-delivery"]);
@@ -60,19 +61,6 @@ async function observeMessages(context, chat, signal) {
   );
 }
 
-async function consent(context, grant, signal) {
-  const decided = await jsonRequest(
-    context.origin,
-    context.cookie,
-    "read-consent",
-    `/api/atlassian-connectors/action-approvals/${encodeURIComponent(grant.grantId)}/chat-read-consent`,
-    { decision: "approve", disclosureVersion: grant.disclosureVersion },
-    "POST",
-    signal,
-  );
-  assert.equal(decided.approval.state, "granted");
-}
-
 async function approve(context, exchange, intent, signal) {
   assert.notEqual(intent.mode, "autonomous-delivery");
   assert.equal(exchange.call.name, toolName(intent));
@@ -116,49 +104,50 @@ async function assertUnchanged(session, intent) {
 function expectedReadGrants(intent) {
   const expected = intent.expectedReadGrants ?? 1;
   if (expected !== 0 && expected !== 1) throw new TypeError("Invalid expected disclosure count");
-  if (expected === 0 && typeof intent.reusedReadGrantId !== "string")
-    throw new TypeError("A consent-reuse proof requires its exact existing grant");
+  if (expected === 0 && typeof intent.reusedReadGrant?.grantId !== "string")
+    throw new TypeError("A grant-reuse proof requires the exact grant the server established");
   return expected;
 }
 
-async function requireReusableGrant(context, chat, intent, signal) {
+/**
+ * A reused grant is the one the server established for this Chat's current binding. No route reads
+ * it any more, so its own view (kept from the turn that established it) must still name this Chat
+ * and binding, be granted and be inside its lifetime.
+ */
+function requireReusableGrant(chat, intent) {
   if (expectedReadGrants(intent) !== 0) return;
-  const { approval } = await jsonRequest(
-    context.origin,
-    context.cookie,
-    "read-reuse-observe",
-    `/api/atlassian-connectors/action-approvals/${encodeURIComponent(intent.reusedReadGrantId)}/chat-read-consent`,
-    undefined,
-    "GET",
-    signal,
-  );
-  assert.equal(approval.kind, "jira-chat-read");
-  assert.equal(approval.grantId, intent.reusedReadGrantId);
-  assert.equal(approval.state, "granted");
-  assert.equal(approval.chatId, chat.id);
+  const grant = intent.reusedReadGrant;
+  assert.equal(grant.kind, "jira-chat-read");
+  assert.equal(grant.state, "granted");
+  assert.equal(grant.chatId, chat.id);
   assert.ok(chat.jiraPodBinding);
   for (const field of ["podId", "bindingGeneration", "authenticationGeneration"])
-    assert.equal(approval[field], chat.jiraPodBinding[field]);
-  assert.ok(approval.expiresAt > Date.now());
+    assert.equal(grant[field], chat.jiraPodBinding[field]);
+  assert.ok(grant.expiresAt > Date.now());
 }
 
-async function readDecision(context, transcript, intent, grants, signal) {
-  const grant = transcript?.readGrant;
-  if (grant?.state !== "pending" || grants.has(grant.grantId)) return;
-  assert.equal(expectedReadGrants(intent), 1, "Consent reuse must not approve a fresh disclosure");
-  await assertUnchanged(context.session, intent);
-  grants.add(grant.grantId);
-  assert.equal(grants.size, 1);
-  await consent(context, grant, signal);
-  stage("read-consent", { approved: true });
+/**
+ * The read grant of the admitted turn. A person never decides it (owner decision 2026-11-02): a
+ * fresh disclosure leaves a server-established grant on the transcript, a reuse proof leaves either
+ * none or exactly the reused one, and none is ever pending.
+ */
+function turnReadGrants(chat, intent, user) {
+  const grant = establishedReadGrant(user);
+  if (expectedReadGrants(intent) === 1) {
+    assert.ok(grant, "A fresh disclosure must leave a read grant established by the server");
+    assert.equal(grant.chatId, chat.id);
+    assert.equal(grant.podId, chat.jiraPodBinding.podId);
+    return 1;
+  }
+  if (grant !== undefined) assert.equal(grant.grantId, intent.reusedReadGrant.grantId);
+  return 0;
 }
 
 async function writeDecisions(context, chat, transcript, intent, counts, signal) {
   for (const exchange of transcript?.exchanges ?? []) {
     const approval = exchange.approval;
     if (approval?.state !== "pending" || counts.approvals.has(approval.approvalId)) continue;
-    assert.equal(counts.grants.size, expectedReadGrants(intent));
-    await requireReusableGrant(context, chat, intent, signal);
+    requireReusableGrant(chat, intent);
     await assertUnchanged(context.session, intent);
     counts.approvals.add(approval.approvalId);
     assert.equal(counts.approvals.size, 1);
@@ -168,19 +157,24 @@ async function writeDecisions(context, chat, transcript, intent, counts, signal)
 }
 
 async function observeDecisions(context, chat, intent, priorUserIds, signal, settled) {
-  const counts = { grants: new Set(), approvals: new Set() };
+  const counts = { approvals: new Set() };
   while (!settled() && !signal.aborted) {
     const observed = await observeMessages(context, chat, signal);
     const admitted = observed.messages.filter(
       (message) => message.role === "user" && !priorUserIds.has(message.id),
     );
     assert.ok(admitted.length <= 1, "Consent observation requires one newly admitted user turn");
-    const transcript = admitted[0]?.toolTranscript;
-    await readDecision(context, transcript, intent, counts.grants, signal);
-    await writeDecisions(context, chat, transcript, intent, counts, signal);
+    const grant = establishedReadGrant(admitted[0]);
+    if (grant !== undefined && expectedReadGrants(intent) === 0)
+      assert.equal(
+        grant.grantId,
+        intent.reusedReadGrant.grantId,
+        "A fresh disclosure must not appear during a grant-reuse proof",
+      );
+    await writeDecisions(context, chat, admitted[0]?.toolTranscript, intent, counts, signal);
     await new Promise((resolve) => globalThis.setTimeout(resolve, 300));
   }
-  return { grants: counts.grants.size, approvals: counts.approvals.size };
+  return { approvals: counts.approvals.size };
 }
 
 function payload(context, chat, intent) {
@@ -286,7 +280,7 @@ export async function runObservedChatTurn(context, chat, intent) {
   let settled = false;
   let pending;
   try {
-    await requireReusableGrant(context, chat, intent, controller.signal);
+    requireReusableGrant(chat, intent);
     const before = await observeMessages(context, chat, controller.signal);
     const priorUserIds = new Set(
       before.messages.filter((message) => message.role === "user").map((message) => message.id),
@@ -300,7 +294,7 @@ export async function runObservedChatTurn(context, chat, intent) {
         settled = true;
       },
     );
-    const decisions = await observeDecisions(
+    const observed = await observeDecisions(
       context,
       chat,
       intent,
@@ -308,7 +302,13 @@ export async function runObservedChatTurn(context, chat, intent) {
       controller.signal,
       () => settled,
     );
-    return { completed: await pending, decisions, events, request: turnRequest };
+    const completed = await pending;
+    const user = completed.messages.find(
+      (message) => message.role === "user" && !priorUserIds.has(message.id),
+    );
+    // `grants` counts the read grants the server established for this turn, not human decisions.
+    const decisions = { grants: turnReadGrants(chat, intent, user), approvals: observed.approvals };
+    return { completed, decisions, events, request: turnRequest };
   } finally {
     globalThis.clearTimeout(timeout);
     controller.abort();

@@ -1,5 +1,7 @@
 "use client";
 
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
+
 // Issue #1389 — Runtime, Git, and command UX hub. This card composes the existing governed surfaces
 // without adding execution authority: read-only Git lives in Files, command/container runs keep their
 // server-frozen catalogs, and all Git mutations stay in Epic #470 Git Delivery windows.
@@ -46,6 +48,7 @@ function RuntimeActionButton({ action }: { readonly action: RuntimeAction }): Re
 }
 
 export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
+  const tUi = useOptionalWidgetTranslate();
   const t = useTranslate();
   const [projectInput, setProjectInput] = useState<string>(props.projectPath ?? "");
   useEffect(() => {
@@ -108,7 +111,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
         }}
       >
         <label className="tm-field">
-          <span>Project path</span>
+          <span>{tUi("runtimeHub.ui.projectPath")}</span>
           <input
             type="text"
             value={projectInput}
@@ -121,7 +124,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
         </label>
         <div
           role="group"
-          aria-label="Runtime actions"
+          aria-label={tUi("runtimeHub.ui.runtimeActions")}
           style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}
         >
           {actions.map((action) => (
@@ -130,7 +133,7 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
         </div>
         {!hasProject ? (
           <output className="tm-limits" style={NATIVE_BLOCK_STYLE}>
-            Add a project path to enable task and Git workflows.
+            {tUi("runtimeHub.ui.addAProjectPathTo")}
           </output>
         ) : null}
       </form>
@@ -138,11 +141,11 @@ export function RuntimeHubWidget(props: RuntimeHubWidgetProps): ReactNode {
       <section aria-label={t("runtimeHubWidget.auditMetadataAria")}>
         <ul className="tm-events">
           <li className="tm-event">
-            <span className="tm-event-kind">Commands</span>
+            <span className="tm-event-kind">{tUi("runtimeHub.ui.commands")}</span>
             <span className="tm-event-detail">runId / taskId / exit status</span>
           </li>
           <li className="tm-event">
-            <span className="tm-event-kind">Containers</span>
+            <span className="tm-event-kind">{tUi("runtimeHub.ui.containers")}</span>
             <span className="tm-event-detail">runId / taskId / engine / exit status</span>
           </li>
           <li className="tm-event">

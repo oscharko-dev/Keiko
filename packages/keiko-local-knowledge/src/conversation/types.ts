@@ -86,6 +86,8 @@ export interface ConversationGroundedAnswer {
   // The policy disabled the assessment, yet the model wrote an assessment block: it was dropped,
   // so no unbacked words reach the answer.
   readonly ownAssessmentNeutralized?: true | undefined;
+  // What became of the citation repair; absent when the model was not asked.
+  readonly citationRepair?: GroundedCitationRepair | undefined;
 }
 
 // A `[n]` marker the answer text uses, paired with the citation it points at. `marker`
@@ -127,7 +129,33 @@ export interface AnswerGenerator {
    * given reference was sent.
    */
   readonly promptReferences?: () => readonly RetrievalReference[];
+  /**
+   * Whether a citation-repair call can still be admitted. A generator with a bounded number of
+   * model calls answers false once they are spent; the completed answer is then kept as it is
+   * instead of failing the turn on an optional repair. Absent means the repair may run.
+   */
+  readonly repairAvailable?: () => boolean;
+  /**
+   * Whether a citation repair's failure is only the refusal of the optional call. Whether it fits
+   * can be estimated in advance, so the refusal itself must not fail the turn either: the completed
+   * answer is kept. Absent means no failure is such a refusal.
+   */
+  readonly repairRefused?: (error: unknown) => boolean;
+  /**
+   * Whether the last `generate` call's answer ended on its own rather than at its output limit. A
+   * citation repair cut at that limit never replaces the complete answer it was asked to cite.
+   * Absent means complete.
+   */
+  readonly lastAnswerComplete?: () => boolean;
 }
+
+/**
+ * What became of the citation repair a grounded answer without citations is offered. A repair
+ * replaces the answer only when it ended on its own and attached at least one citation; otherwise
+ * the complete first answer stands (`rejected-truncated`, `rejected-uncited`).
+ */
+export type GroundedCitationRepair =
+  "not-needed" | "applied" | "rejected-truncated" | "rejected-uncited" | "skipped-budget";
 
 // Optional pre-answer reranker port. The BFF owns provider configuration; this package only sees
 // already-retrieved references and returns a reordered subset for prompt assembly and citation

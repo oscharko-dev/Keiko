@@ -13,6 +13,13 @@ export const CODING_WORKBENCH_MODES: readonly CodingWorkbenchMode[] = Object.fre
   "autonomous-delivery",
 ] as const satisfies readonly CodingWorkbenchMode[]);
 
+/**
+ * The tool mode of an ordinary Chat that has no selection of its own (owner decision 2026-11-02):
+ * Full access. A Chat reads and acts through its connected MCP servers and Jira Pod without asking
+ * per call; a narrower selection or deployment ceiling still applies.
+ */
+export const CHAT_TOOL_DEFAULT_MODE: CodingWorkbenchMode = "autonomous-delivery";
+
 export type CodingWorkbenchRuntimeSource =
   "keiko-sidecar" | "codex-cli-adapter" | "delivery-runner";
 
@@ -542,10 +549,11 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
   | "tool-calling-unverified"
   // Appended (#3591, 1.1.7): the automatic verification of this model (basic chat, context window or tool
-  // calling) is still running against a slow gateway. Transient: the Workbench re-reads its profile
-  // until the probe settles, and no operator action is required.
+  // calling) is running against a slow gateway right now. Transient: the Workbench re-reads its
+  // profile until the probe settles, and no operator action is required.
   | "model-verification-pending"
-  // An actual current-generation basic-chat check failed; background recovery continues.
+  // An actual current-generation basic-chat check failed. Nothing retries it in the background;
+  // opening the Workbench or choosing the model checks it again (customer 1.3.4).
   | "conversation-not-ready";
 
 /**

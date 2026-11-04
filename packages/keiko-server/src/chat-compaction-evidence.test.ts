@@ -328,6 +328,44 @@ afterEach(() => {
 
 describe("chat compaction evidence wiring (ADR-0057 D3)", () => {
   it.each(["buffered", "streaming"] as const)(
+    "pauses %s before any model call if required private context storage fails",
+    async (mode) => {
+      const chatId = seedChat();
+      seedOversizedHistory(chatId);
+      const model = streamingModel("Must not run");
+      const call = vi.spyOn(model, "call");
+      const stream = vi.spyOn(model, "callStream");
+      vi.spyOn(store, "writeChatContinuityCheckpoint").mockImplementation(() => {
+        throw new Error("PRIVATE_CHECKPOINT_FAILURE_CANARY");
+      });
+      const captured = captureRes();
+      const ctx = routeContext(
+        makeReq({
+          chatId,
+          projectPath: projectDir,
+          modelId: CHAT_MODEL,
+          content: "Continue our work.",
+        }),
+        captured.res,
+      );
+      const handler = mode === "buffered" ? handleSendDesktopChat : handleSendDesktopChatStream;
+      const result = await handler(ctx, deps(model, createInMemoryEvidenceStore(), true)).catch(
+        (error: unknown) => error,
+      );
+      if (mode === "buffered") expect(result).toMatchObject({ status: 503 });
+      else {
+        const frames = captured.writes.join("");
+        expect(frames).toContain("event: error");
+        expect(frames).toContain("Context storage is unavailable");
+        expect(frames).not.toContain("event: done");
+        expect(frames).not.toContain("PRIVATE_CHECKPOINT_FAILURE_CANARY");
+      }
+      expect(call).not.toHaveBeenCalled();
+      expect(stream).not.toHaveBeenCalled();
+      expect(store.countMessages(chatId)).toBeGreaterThanOrEqual(4);
+    },
+  );
+  it.each(["buffered", "streaming"] as const)(
     "uses the selected model window for %s sends without an explicit model id",
     async (mode) => {
       const chatId = seedChat();

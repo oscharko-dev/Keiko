@@ -764,3 +764,90 @@ describe("runVerification — wall-time wiring (D2)", () => {
     expect(report.results[0]?.durationMs).toBe(85);
   });
 });
+
+describe("runVerification — nested package steps", () => {
+  it("runs a Yarn script in the package folder with the whole workspace as execution root", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("web/app/package.json", JSON.stringify({ scripts: { test: "vitest run" } }));
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+    const target = step({ command: "yarn", args: ["run", "test"], cwd: "web/app" });
+
+    const report = await runVerification(planOf([target], ws.info.root), depsWith(ws, rec.fn));
+
+    expect(report.results[0]?.status).toBe("passed");
+    // The sandbox mounts the workspace root, so dependencies hoisted there stay readable; the
+    // package folder is selected by the manager's own folder flag.
+    const args = rec.calls()[0]?.args ?? [];
+    expect(args).toEqual(
+      expect.arrayContaining([
+        "--bind",
+        realpathSync(ws.info.root),
+        "/keiko-execution-root",
+        "/abs/yarn",
+        "--cwd=web/app",
+        "run",
+        "test",
+      ]),
+    );
+    expect(args).not.toContain(join(realpathSync(ws.info.root), "web/app"));
+  });
+
+  it("refuses a package folder that is not a directory before anything runs", async () => {
+    const ws = makeWorkspace();
+    ws.writeFile("web/app", "not a folder");
+    const rec = recordingSpawn();
+    const report = await runVerification(
+      planOf([step({ command: "npm", args: ["run", "test"], cwd: "web/app" })], ws.info.root),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.results[0]?.status).not.toBe("passed");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it.each(["../escape", "/abs", "a/../b", ""])(
+    "denies a step whose package folder %j is not a generated workspace-relative path",
+    async (cwd) => {
+      const ws = makeWorkspace();
+      const rec = recordingSpawn();
+      const report = await runVerification(
+        planOf([step({ command: "yarn", args: ["run", "test"], cwd })], ws.info.root),
+        depsWith(ws, rec.fn),
+      );
+      expect(report.results[0]?.status).toBe("denied");
+      expect(rec.calls()).toHaveLength(0);
+    },
+  );
+
+  it("refuses a package-manager subcommand outside the vetted run command", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const report = await runVerification(
+      planOf(
+        [step({ command: "yarn", args: ["add", "left-pad"], scriptName: "test" })],
+        ws.info.root,
+      ),
+      depsWith(ws, rec.fn),
+    );
+    expect(report.results[0]?.status).toBe("denied");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("skips a step marked native-shell-required without spawning", async () => {
+    const ws = makeWorkspace();
+    const rec = recordingSpawn();
+    const target = step({
+      command: "yarn",
+      args: ["run", "test"],
+      cwd: "web/app",
+      skipReason: "native shell required: yarn dependencies are not installed",
+    });
+    const report = await runVerification(
+      planOf([target], ws.info.root),
+      depsWith(ws, rec.fn, { dependencyBootstrap: "auto" }),
+    );
+    expect(report.results[0]?.status).toBe("skipped");
+    expect(report.dependencies).toBeUndefined();
+    expect(rec.calls()).toHaveLength(0);
+  });
+});

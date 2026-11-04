@@ -14,6 +14,7 @@ import { SafeMarkdown } from "../SafeMarkdown";
 import { Icons } from "../Icons";
 import { useMarkdownSkillLibrary, type MarkdownSkillLibrary } from "./useMarkdownSkillLibrary";
 import { MarkdownSkillAuthor } from "./MarkdownSkillAuthor";
+import { JiraTemplateTools } from "./JiraTemplateTools";
 import styles from "./MarkdownSkillControl.module.css";
 
 const FileIcon = Icons.file;
@@ -78,6 +79,7 @@ export function MarkdownSkillDialog({ skill, disabled, onClose, modelId }: Dialo
           ))}
         </ul>
         {library.preview ? <SkillPreview library={library} /> : null}
+        <JiraTemplateTools library={library} />
         <MarkdownSkillAuthor key={modelId} modelId={modelId} library={library} />
         <p className={styles.cmpHint}>{t("chat.skills.protected")}</p>
       </dialog>

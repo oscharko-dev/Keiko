@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "id": "mixed-language-tables",
+  "language": "mixed",
+  "class": "preference",
+  "difficulty": "embedded",
+  "description": "A German fact inside an English message, asked for in both languages.",
+  "truth": [
+    {
+      "key": "format-preference",
+      "seed": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+      "must": true,
+      "private": true,
+      "terms": [["Tabelle*", "table*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "Can you help me with the quarterly numbers? Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst. Thanks in advance.",
+      "learner": [
+        {
+          "body": "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.",
+          "type": "preference"
+        }
+      ]
+    }
+  ],
+  "probes": [
+    {
+      "id": "same-language",
+      "question": "In welcher Form soll ich meine Zahlen bekommen?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*", "table*"]]
+      }
+    },
+    {
+      "id": "other-language",
+      "question": "In which form do I want to get my figures?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["Tabelle*", "table*"]]
+      }
+    }
+  ]
+}

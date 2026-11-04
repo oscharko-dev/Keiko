@@ -217,3 +217,61 @@ token fidelity with zero gated differences and all 14 reference captures, the se
 accessibility proof with zero serious/critical violations and zero unresolved incomplete findings,
 and all 108 running-app captures with zero page errors, unexpected API requests, missing selectors,
 crashed windows or unavailable workspace-trust states. No gate, fixture or rule was changed.
+
+
+## Release 1.3.4 input refresh — 2026-10-31
+
+The canonical version cut changes the root/workspace manifests and lockfile, which
+are declared producer inputs. All four original producers were rerun against the
+1.3.4 source on macOS arm64, Node 24.22.0, npm 11.19.1 and Playwright 1.64.1.
+The normalized third-party dependency graph is unchanged by this version cut.
+Component and editor fidelity passed with zero gated differences and no missing
+selectors; all 14 editor references and 108 running-app captures completed without
+errors. The seven-mode accessibility proof has zero serious/critical violations
+and zero unresolved incomplete findings. The source-input regression passes all
+281 tests. No producer assertion, tolerance, budget or source stylesheet changed.
+These remain synthetic historical fixtures; they do not qualify model behavior.
+
+## Release 1.3.5 input refresh — 2026-11-01
+
+The canonical version cut changes the root/workspace manifests and lockfile, which are declared
+producer inputs. All four
+original producers were rerun against the 1.3.5 source on macOS arm64, Node 24.18.0. Component
+and editor fidelity passed with zero gated differences and no missing selectors; all 14 editor
+references and 108 running-app captures completed without errors. The seven-mode accessibility
+proof has zero serious/critical violations and zero unresolved incomplete findings. No producer
+assertion, tolerance, budget or source stylesheet changed. These remain synthetic historical
+fixtures; they do not qualify model behavior.
+
+## PR #4182 Jira requirements integration input refresh — 2026-11-02
+
+The per-package repository lint changes `package.json`, a declared producer input. The four original
+producers were rerun on macOS arm64, Node 24.18.0, as for releases 1.3.4 and 1.3.5. The first browser
+run rejected one previously unstubbed `GET /api/mcp/servers`, read by the new Chat Connectors menu,
+in all 18 chat-quality captures. The fixture now answers only that path with an empty MCP settings
+snapshot (`{ revision, servers: [] }`); other paths and methods still fail closed. All four producers
+were then rerun, so the declared source fingerprints also bind the updated harness. Component
+fidelity passed with zero gated differences and no missing selectors; editor fidelity passed with
+zero gated differences and all 14 reference captures; the seven-mode accessibility proof has zero
+serious/critical violations and zero unresolved incomplete findings; all 108 running-app captures
+have zero page errors, unexpected API requests, missing selectors, crashed windows or unavailable
+workspace-trust states. No producer assertion, tolerance, budget or source stylesheet changed.
+
+## PR #4182 composer wrap input refresh — 2026-11-02
+
+The composer's controls now wrap below a 400 px container instead of overlapping, which changes
+`globals.css`, a declared producer input. The four original producers were rerun on macOS arm64, Node
+24.18.0. Component fidelity passed with zero gated differences and no missing selectors; editor
+fidelity passed with zero gated differences and all 14 reference captures; the seven-mode
+accessibility proof has zero serious/critical violations and zero unresolved incomplete findings; all
+108 running-app captures passed. No producer assertion, tolerance or budget changed.
+
+## Release 1.4.0 input refresh — 2026-11-03
+
+The canonical version cut changes the root/workspace manifests and lockfile, which are declared
+producer inputs. All four original producers were rerun against the 1.4.0 source on macOS arm64,
+Node 24.18.0. Component and editor fidelity passed with zero gated differences and no missing
+selectors; all 14 editor references and 108 running-app captures completed without errors. The
+seven-mode accessibility proof has zero serious/critical violations and zero unresolved incomplete
+findings. No producer assertion, tolerance, budget or source stylesheet changed. These remain
+synthetic historical fixtures; they do not qualify model behavior.

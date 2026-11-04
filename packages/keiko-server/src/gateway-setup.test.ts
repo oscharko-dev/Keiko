@@ -26,6 +26,10 @@ import { modelWindowAwareBudget } from "./grounded-qa.js";
 import { buildUiHandlerDeps as createUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import { createServerLogger, setServerLogger } from "./observability/index.js";
 import { gatewaySetupTargetClass } from "./gateway-setup.js";
+import {
+  captureConversationReadinessAdmission,
+  validateConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 import { openProviderCredentialVault, providerSecretRef } from "./credentialVault.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -535,6 +539,75 @@ describe("handleGatewaySetup", () => {
     expect(observation).toMatchObject({ fields: { conversationReady: true } });
     expect(observation?.fields.toolCalling).toBeUndefined();
     expect(observation?.generation).toBe(gatewayConfig.generation());
+    deps.store.close();
+  });
+
+  it("keeps an admitted conversation generation across a capability-only update (#4175)", async () => {
+    const uiDir = await tempDir("keiko-gw-capability-generation-ui-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: await tempDir("keiko-gw-capability-generation-ev-"),
+      env: { ...VAULT_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const gatewayConfig = deps.gatewayConfig;
+    if (gatewayConfig?.replaceCatalog === undefined) throw new Error("expected catalog owner");
+    const rawConfig = {
+      providers: [
+        {
+          modelId: "model/turn",
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          capability: { kind: "chat", contextWindow: 8_192, toolCalling: false },
+        },
+      ],
+    };
+    gatewayConfig.set(parseGatewayConfig(rawConfig), true);
+    writeFileSync(gatewayConfig.storagePath, JSON.stringify(rawConfig), "utf8");
+    const admitted = gatewayConfig.generation();
+    gatewayConfig.recordVerifiedCapability(
+      "model/turn",
+      { conversationReady: true, toolCalling: true },
+      new Date().toISOString(),
+      admitted,
+    );
+    const admission = captureConversationReadinessAdmission(deps, "model/turn");
+    if ("status" in admission) throw new Error("expected an admitted conversation");
+
+    const result = await handleApplyGatewayVerifiedCapabilities(
+      { ...ctx({ fields: { toolCalling: true } }), params: { modelId: "model%2Fturn" } },
+      deps,
+    );
+
+    // A readiness probe that only refines capability metadata of an unchanged connection must not
+    // invalidate a conversation turn admitted against that same connection.
+    expect(result.status).toBe(200);
+    expect(requiredCapability(requiredGatewayConfig(deps), "model/turn").toolCalling).toBe(true);
+    expect(gatewayConfig.generation()).toBe(admitted);
+    expect(gatewayConfig.verifiedCapability("model/turn")).toMatchObject({
+      fields: { conversationReady: true },
+      generation: admitted,
+    });
+    // The 2026-10-31 refusal: this catalog refresh during an admitted turn ended it as not ready.
+    expect(validateConversationReadinessAdmission(deps, admission, "model/turn")).toBeUndefined();
+    const current = requiredGatewayConfig(deps);
+    expect(
+      gatewayConfig.replaceCatalog(
+        {
+          ...current,
+          providers: current.providers.map((provider) => ({
+            ...provider,
+            baseUrl: "https://replacement.example.invalid/v1",
+          })),
+        },
+        admitted,
+      ),
+    ).toBe(true);
+    expect(gatewayConfig.generation()).toBe(admitted + 1);
+    expect(gatewayConfig.verifiedCapability("model/turn")).toBeUndefined();
+    expect(validateConversationReadinessAdmission(deps, admission, "model/turn")).toMatchObject({
+      status: 400,
+    });
     deps.store.close();
   });
 
@@ -11602,6 +11675,99 @@ describe("gateway setup writes the process activity log", () => {
       expect(sink.events.map((event) => event.op)).toContain("gateway.chat.completed");
       // …and the probe's own request carries the sink independently of the Gateway's.
       expect(sink.events.find((event) => event.category === "embedding")).toBeDefined();
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  // Discovery used to call `gatewayFetch` without a sink: a refused `/model/info` or `/models`
+  // request wrote `http.gateway.fetch.failed` into the null sink and only bumped `portUnwired`.
+  it("records a failed discovery request on the Activity Log under the setup correlation id", async () => {
+    const uiDir = await tempDir("keiko-gw-discovery-log-ui-");
+    const evidenceDir = await tempDir("keiko-gw-discovery-log-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      const href = fetchInputUrl(url);
+      if (href.endsWith("/model/info") || href.endsWith("/model/group/info")) {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      if (href.endsWith("/models")) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ data: [{ id: "fallback-chat" }] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return answerSetupCall(url);
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      const result = await handleGatewaySetup(
+        ctx(
+          { baseUrl: "https://llm-gateway.example.com/v1", apiKey: "example-secret-token" },
+          "corr-discovery-log",
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-discovery-log")).toBe(true);
+      expect(JSON.stringify(sink.events)).not.toContain("example-secret-token");
+    } finally {
+      deps.store.close();
+    }
+  });
+
+  it("records a failed Figma credential smoke request instead of counting it port-unwired", async () => {
+    const uiDir = await tempDir("keiko-gw-figma-log-ui-");
+    const evidenceDir = await tempDir("keiko-gw-figma-log-ev-");
+    vi.stubGlobal("fetch", (url: Parameters<typeof fetch>[0]): Promise<Response> => {
+      if (new URL(fetchInputUrl(url)).hostname === "api.figma.com") {
+        return Promise.reject(new TypeError("fetch failed"));
+      }
+      return answerSetupCall(url);
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      gatewayModelDiscovery: () => Promise.resolve(["example-chat-model"]),
+      gatewayEmbeddingProbe: PASSTHROUGH_EMBEDDING_PROBE,
+      gatewaySetupTester: (_config, modelIds) =>
+        Promise.resolve([modelIds[0] ?? "example-chat-model"]),
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+
+    try {
+      await handleGatewaySetup(
+        ctx(
+          {
+            baseUrl: "https://llm-gateway.example.com",
+            apiKey: "example-secret-token",
+            figmaAccessToken: "figd_log-smoke-token",
+          },
+          "corr-figma-log",
+        ),
+        deps,
+      );
+
+      const failures = sink.events.filter((event) => event.op === "http.gateway.fetch.failed");
+      expect(failures.length).toBeGreaterThan(0);
+      expect(failures.every((event) => event.correlationId === "corr-figma-log")).toBe(true);
+      expect(failures.every((event) => event.errorKind !== undefined)).toBe(true);
+      expect(JSON.stringify(sink.events)).not.toContain("figd_log-smoke-token");
     } finally {
       deps.store.close();
     }
