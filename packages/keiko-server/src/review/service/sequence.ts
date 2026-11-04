@@ -89,12 +89,19 @@ export interface ReviewRunState {
   runtimeCleanup: ReviewRuntimeCleanup | undefined;
   readonly counterCheckEffects: CounterCheckEffect[];
   uncheckedCandidates: number;
-  target: { readonly baseSha: string; readonly headSha: string } | undefined;
+  /** `diffBaseSha` is the merge base the diff starts at; `baseSha` is the base the rules come from. */
+  target: ReviewRunTarget | undefined;
   worktreeRoot: string | undefined;
   candidates: readonly ReviewCandidateFinding[];
   readonly outcomes: Map<string, CounterCheckOutcome>;
   reviewerTotals: ReviewRoleTotals;
   counterCheckerTotals: ReviewRoleTotals;
+}
+
+interface ReviewRunTarget {
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly diffBaseSha: string;
 }
 
 const ZERO_TOTALS: ReviewRoleTotals = { promptTokens: 0, completionTokens: 0, durationMs: 0 };
@@ -160,9 +167,14 @@ async function resolveTarget(
     correlationId: ctx.correlationId,
   });
   if (!resolved.ok) return stopWith(state, targetRefusalSettlement(resolved.reason));
-  const target = { baseSha: resolved.target.baseSha, headSha: resolved.target.headSha };
-  state.target = target;
-  deps.store.setTarget(ctx.runId, target, resolved.privateRefs);
+  const { baseSha, headSha } = resolved.target;
+  state.target = { baseSha, headSha, diffBaseSha: resolved.mergeBaseSha };
+  // R4130-008: the run record keeps the diff base, so its per-file diff view matches the package.
+  deps.store.setTarget(
+    ctx.runId,
+    { baseSha: resolved.mergeBaseSha, headSha },
+    resolved.privateRefs,
+  );
   return !cancelled(ctx, state);
 }
 
@@ -222,13 +234,13 @@ async function buildPackage(
   deps: ReviewSequenceDeps,
   ctx: ReviewRunContext,
   state: ReviewRunState,
-  target: { readonly baseSha: string; readonly headSha: string },
+  target: ReviewRunTarget,
 ): Promise<ReviewDiffPackage | undefined> {
   const built = await deps.reviewServices.buildDiffPackage({
     repositoryRoot: ctx.repositoryRoot,
-    baseSha: target.baseSha,
+    baseSha: target.diffBaseSha,
     headSha: target.headSha,
-    config: { budgetTokens: reviewDiffBudgetTokens(target.baseSha, target.headSha) },
+    config: { budgetTokens: reviewDiffBudgetTokens(target.diffBaseSha, target.headSha) },
     abortSignal: ctx.signal,
     correlationId: ctx.correlationId,
   });

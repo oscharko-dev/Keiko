@@ -130,6 +130,16 @@ and head SHA; Keiko fetches `refs/pull/<n>/head` with the hardened Git runner an
 (`skipped/target-changed`) when the fetched head differs from the head the provider reported. A
 local-range target reviews a local branch against its base without a hosting provider.
 
+The diff starts at the merge base of the two commits, the commit the head branched from, as
+GitHub's own "Files changed" view does. It never starts at the base branch's newer tip, which would
+show the base's later changes as reverted or deleted by the head. Once both commits are present, a
+fixed-argv review operation (`resolveGitReviewMergeBase`, `git merge-base --end-of-options <base>
+<head>`) names it, for pull request and local-range targets alike. The target keeps the reported
+base SHA, and the review-rules file of D4 is read from that base. The run record keeps the merge
+base, so its per-file diff view shows the reviewed diff. Two commits without a common ancestor
+refuse the target under the closed reason `no-merge-base`, which settles `skipped/target-changed`.
+`review.target.resolved` records the merge base as a digest (R4130-008).
+
 Keiko creates a dedicated, detached review worktree at the head SHA. The user's own checkout and
 branches are never modified. Hooks, filter drivers (including Git LFS smudge), `core.symlinks` and
 fsmonitor are neutralized for that worktree, symbolic links are checked out as plain files, and
@@ -232,7 +242,8 @@ the facts a run collected onto this table; an interruption wins over a cancellat
 over everything else, a preparation failure skips the run, and of several incomplete reasons the
 most consequential names it (`model-failed`, `budget-exhausted`, `deadline-exceeded`,
 `files-unprocessed`). The building blocks' closed refusals map as follows (`mapping.ts`): a target
-that moved or no longer resolves (`target-changed`, `not-found`, `ref-invalid`) is
+that moved, no longer resolves or has no merge base (`target-changed`, `not-found`, `ref-invalid`,
+`no-merge-base`) is
 `skipped/target-changed`, a target Keiko cannot fetch (no provider access, no GitHub remote, rate
 limit, failed fetch) and every worktree refusal but cancellation `skipped/worktree-failed`; the
 review runtime's `rules-file-invalid` is `skipped/rules-file-invalid`, `task-too-large`

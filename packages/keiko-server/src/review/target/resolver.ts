@@ -5,7 +5,10 @@
 // then `refs/pull/<n>/head` is fetched with the hardened review runner into the private ref named
 // for that head. The fetched object must BE that head: anything else means the pull request moved
 // between the read and the fetch, and the target is refused as `target-changed` (the run settles
-// `skipped`). A local range resolves both refs with `rev-parse --verify <ref>^{commit}`. The user's
+// `skipped`). A local range resolves both refs with `rev-parse --verify <ref>^{commit}`. Once both
+// commits are present, `merge-base` names the commit the head branched from: the diff starts there,
+// as GitHub's own "Files changed" view does, never at the base branch's newer tip (R4130-008). The
+// target keeps the reported base, which the rules file is read from. The user's
 // branches, HEAD, index, working tree, stash and FETCH_HEAD are never written; the only repository
 // change is the private ref, which the retention sweep removes.
 
@@ -31,6 +34,7 @@ import {
   gitReviewPullRequestBaseRef,
   gitReviewPullRequestRef,
   resolveGitReviewCommit,
+  resolveGitReviewMergeBase,
   type GitProcessRunner,
   type GitReviewOperationContext,
 } from "@oscharko-dev/keiko-git";
@@ -51,7 +55,16 @@ export const REVIEW_FETCH_REMOTE = "origin";
 const FETCH_TIMEOUT_MS = 120_000;
 
 export type ReviewTargetResolution =
-  | { readonly ok: true; readonly target: ReviewTarget; readonly privateRefs: readonly string[] }
+  | {
+      readonly ok: true;
+      readonly target: ReviewTarget;
+      /**
+       * The diff base: the best common ancestor of `target.baseSha` and `target.headSha`
+       * (R4130-008). It equals `target.baseSha` when the head branched from the base's tip.
+       */
+      readonly mergeBaseSha: string;
+      readonly privateRefs: readonly string[];
+    }
   | { readonly ok: false; readonly reason: ReviewTargetRefusalReason };
 
 export interface ReviewTargetResolverDeps {
@@ -77,6 +90,7 @@ type ResolvedFacts = Omit<ReviewTargetResolvedLine, "durationMs">;
 
 interface Resolved {
   readonly target: ReviewTarget;
+  readonly mergeBaseSha: string;
   readonly refs: readonly string[];
   readonly facts: ResolvedFacts;
 }
@@ -192,6 +206,27 @@ async function ensureBaseCommit(
   return refused("fetch-failed");
 }
 
+/**
+ * The diff base of a target whose two commits are present (R4130-008). Commits without a common
+ * ancestor refuse as `no-merge-base`; a failed Git read refuses with the caller's failure reason.
+ */
+async function mergeBase(
+  deps: ReviewTargetResolverDeps,
+  input: ReviewTargetResolveInput,
+  commits: { readonly baseSha: string; readonly headSha: string },
+  failure: ReviewTargetRefusalReason,
+): Promise<Step<string>> {
+  const local = localContext(deps, input.correlationId);
+  const resolved = await resolveGitReviewMergeBase(local, {
+    cwd: input.repositoryRoot,
+    ...commits,
+  });
+  if (!resolved.ok) return refused(failure);
+  return resolved.value === undefined
+    ? refused("no-merge-base")
+    : { ok: true, value: resolved.value };
+}
+
 function validatedTarget(candidate: ReviewTarget): Step<ReviewTarget> {
   const validation = validateReviewTarget(candidate);
   return validation.ok ? { ok: true, value: validation.value } : refused("ref-invalid");
@@ -217,6 +252,9 @@ async function resolvePullRequest(
   const refs = base.ok && base.value !== undefined ? [head.value, base.value] : [head.value];
   await recordRefs(deps, input.repositoryRoot, refs, detail.number);
   if (!base.ok) return base;
+  const commits = { baseSha: detail.baseSha, headSha: detail.headSha };
+  const diffBase = await mergeBase(deps, input, commits, "fetch-failed");
+  if (!diffBase.ok) return diffBase;
   const target = validatedTarget({
     kind: "pull-request",
     provider: "github",
@@ -233,11 +271,12 @@ async function resolvePullRequest(
     targetKind: "pull-request",
     baseSha: detail.baseSha,
     headSha: detail.headSha,
+    mergeBaseSha: diffBase.value,
     isCrossRepository: detail.isCrossRepository,
     baseFetched: refs.length > 1,
     fetchDurationMs: Math.max(0, deps.now() - fetchStartedMs),
   };
-  return { ok: true, value: { target: target.value, refs, facts } };
+  return { ok: true, value: { target: target.value, mergeBaseSha: diffBase.value, refs, facts } };
 }
 
 function resolvePullRequestNumber(
@@ -268,6 +307,9 @@ async function resolveLocalRange(
   if (!base.ok || !head.ok || !isGitObjectId(base.value) || !isGitObjectId(head.value)) {
     return refused("ref-invalid");
   }
+  const commits = { baseSha: base.value, headSha: head.value };
+  const diffBase = await mergeBase(deps, input, commits, "ref-invalid");
+  if (!diffBase.ok) return diffBase;
   const ref = gitReviewLocalRangeRef(deps.namespace, reviewRunLeaf(input.runId));
   const created = await createGitReviewRef(local, {
     cwd: input.repositoryRoot,
@@ -289,8 +331,12 @@ async function resolveLocalRange(
     targetKind: "local-range",
     baseSha: base.value,
     headSha: head.value,
+    mergeBaseSha: diffBase.value,
   };
-  return { ok: true, value: { target: target.value, refs: [ref], facts } };
+  return {
+    ok: true,
+    value: { target: target.value, mergeBaseSha: diffBase.value, refs: [ref], facts },
+  };
 }
 
 export async function resolveReviewTarget(
@@ -318,5 +364,6 @@ export async function resolveReviewTarget(
     ...step.value.facts,
     durationMs: Math.max(0, deps.now() - startedMs),
   });
-  return { ok: true, target: step.value.target, privateRefs: step.value.refs };
+  const { target, mergeBaseSha, refs } = step.value;
+  return { ok: true, target, mergeBaseSha, privateRefs: refs };
 }

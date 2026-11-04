@@ -34,6 +34,8 @@ const TARGET_REFUSALS: Readonly<Record<ReviewTargetRefusalReason, PreparationSet
   "target-changed": SKIPPED_TARGET_CHANGED,
   "not-found": SKIPPED_TARGET_CHANGED,
   "ref-invalid": SKIPPED_TARGET_CHANGED,
+  // R4130-008: a base and head without a common ancestor name no reviewable change set.
+  "no-merge-base": SKIPPED_TARGET_CHANGED,
   "gh-unavailable": SKIPPED_WORKTREE_FAILED,
   "gh-unauthenticated": SKIPPED_WORKTREE_FAILED,
   "no-github-remote": SKIPPED_WORKTREE_FAILED,

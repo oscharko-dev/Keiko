@@ -33943,6 +33943,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "ref-invalid",
           "fetch-failed",
           "rate-limited",
+          "no-merge-base",
         ],
       },
     },
@@ -33984,6 +33985,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         maxLength: 64,
       },
       headShaDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      mergeBaseShaDigest: {
         type: "string",
         dataClass: "digest",
         required: true,

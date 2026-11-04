@@ -88,6 +88,8 @@ const REVIEW_TARGET_RESOLVED = defineActivityLogOperation({
     targetKind: TARGET_KIND_FIELD,
     baseShaDigest: DIGEST_FIELD,
     headShaDigest: DIGEST_FIELD,
+    // R4130-008: the diff base, the merge base of the base and head commits.
+    mergeBaseShaDigest: DIGEST_FIELD,
     isCrossRepository: { type: "boolean", dataClass: "closed-enum", required: false },
     baseFetched: { type: "boolean", dataClass: "closed-enum", required: false },
     fetchDurationMs: { type: "integer", dataClass: "duration", required: false },
@@ -116,6 +118,7 @@ const REVIEW_TARGET_REFUSED = defineActivityLogOperation({
         "ref-invalid",
         "fetch-failed",
         "rate-limited",
+        "no-merge-base",
       ],
     },
   },
@@ -263,6 +266,7 @@ export interface ReviewTargetResolvedLine {
   readonly targetKind: ReviewTargetKind;
   readonly baseSha: string;
   readonly headSha: string;
+  readonly mergeBaseSha: string;
   readonly isCrossRepository?: boolean | undefined;
   readonly baseFetched?: boolean | undefined;
   readonly fetchDurationMs?: number | undefined;
@@ -282,6 +286,7 @@ export function logReviewTargetResolved(
         targetKind: line.targetKind,
         baseShaDigest: reviewEvidenceDigest("sha", line.baseSha),
         headShaDigest: reviewEvidenceDigest("sha", line.headSha),
+        mergeBaseShaDigest: reviewEvidenceDigest("sha", line.mergeBaseSha),
         ...(line.isCrossRepository === undefined
           ? {}
           : { isCrossRepository: line.isCrossRepository }),

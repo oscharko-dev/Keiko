@@ -41085,6 +41085,12 @@
               "required": false
             },
             {
+              "name": "mergeBaseShaDigest",
+              "type": "string",
+              "dataClass": "digest",
+              "required": true
+            },
+            {
               "name": "targetKind",
               "type": "string",
               "dataClass": "closed-enum",

@@ -241,6 +241,27 @@ export async function gitReviewCommitExists(
   return { ok: true, value: result.exitCode === 0 };
 }
 
+/**
+ * The best common ancestor of a review target's base and head (`git merge-base`): the commit a
+ * pull request's head branched from, which its diff starts at (R4130-008). `undefined` when the
+ * two commits share no history; a missing object or any other failure is not an answer.
+ */
+export async function resolveGitReviewMergeBase(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string; readonly baseSha: string; readonly headSha: string },
+): Promise<GitReviewOperationResult<string | undefined>> {
+  const baseSha = assertObjectId(request.baseSha, "baseSha");
+  const headSha = assertObjectId(request.headSha, "headSha");
+  const args = ["merge-base", "--end-of-options", baseSha, headSha];
+  const result = await run(ctx, request.cwd, args, [1]);
+  if (result.exitCode === 1 && result.refusal === undefined && result.stdout === "") {
+    return { ok: true, value: undefined };
+  }
+  if (!succeeded(result)) return { ok: false, result };
+  const value = result.stdout.trim();
+  return OBJECT_ID.test(value) ? { ok: true, value } : { ok: false, result };
+}
+
 export function createGitReviewRef(
   ctx: GitReviewOperationContext,
   request: { readonly cwd: string; readonly ref: string; readonly sha: string },

@@ -80,6 +80,7 @@ export {
   readGitReviewTreeIntoIndex,
   removeGitReviewWorktree,
   resolveGitReviewCommit,
+  resolveGitReviewMergeBase,
   showGitReviewFile,
   skipGitReviewWorktreePaths,
   unlockGitReviewWorktree,
