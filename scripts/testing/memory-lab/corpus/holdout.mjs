@@ -23,6 +23,7 @@ import { writeContinuityJson } from "../../coding-workbench-lab/chat-continuity-
 import { runMain } from "../../coding-workbench-lab/lab-common.mjs";
 import { loadScenarioDirectory, scenarioSetManifest, validateScenario } from "../scenario.mjs";
 import { assertOutsideCheckout } from "./paths.mjs";
+import { compareStrings } from "../../../lib/compare-strings.mjs";
 
 const FORMAT = "keiko-memory-holdout";
 const VERSION = 1;
@@ -210,7 +211,7 @@ export function openSealedHoldout(file, keyFile) {
   if (new Set(scenarios.map((scenario) => scenario.id)).size !== scenarios.length)
     throw new HoldoutError("the holdout holds two scenarios with one id");
   return {
-    scenarios: scenarios.toSorted((left, right) => left.id.localeCompare(right.id)),
+    scenarios: scenarios.toSorted((left, right) => compareStrings(left.id, right.id)),
     maskingKey: deriveMaskingKey(key),
   };
 }

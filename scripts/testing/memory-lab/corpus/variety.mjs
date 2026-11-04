@@ -122,7 +122,7 @@ export function generatorShare(entries) {
   }
   const all = [...totals.values()].reduce((sum, entry) => sum + entry.userTurns, 0);
   return [...totals.values()]
-    .toSorted((left, right) => left.generator.localeCompare(right.generator))
+    .toSorted((left, right) => compareStrings(left.generator, right.generator))
     .map((entry) => ({ ...entry, share: all === 0 ? 0 : rounded(entry.userTurns / all) }));
 }
 

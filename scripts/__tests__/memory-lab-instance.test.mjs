@@ -294,8 +294,10 @@ describe("waiting for learning through the product's own log", () => {
         { op: "gateway.stream.abandoned", correlationId: "learn2", requestId: "r2" },
       ]).logDirectory,
     );
+    // No call is open any more and none is seen to start, so the wait ends after the grace period.
     const settled = await awaitLearning(instance, {
       quietMs: 20,
+      graceMs: 50,
       maxMs: 3000,
       openCalls: () => pendingGatewayCalls(instance),
     });

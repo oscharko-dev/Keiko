@@ -16,7 +16,8 @@ const UNMEASURED = Object.freeze([
 const MAX_LISTED_FAILURES = 20;
 // A sealed run reports groups, never units: a per-unit verdict under a stable masked name would let
 // an optimizer follow single hidden scenarios from candidate to candidate, and a group of fewer
-// distinct scenarios than this would be one unit in all but name, so it is folded into "other".
+// distinct scenarios than this would be one unit in all but name, so it is folded into "other" (and
+// "other" itself, when it stays below this, into the largest group).
 const MIN_SEALED_GROUP = 5;
 const FOLDED_GROUP = "other";
 
@@ -103,14 +104,52 @@ function distinctScenarios(results, keyOf) {
   return sizes;
 }
 
-// The value a sealed run may report for a group field: the value itself when enough distinct
-// scenarios share it, otherwise the folded name. An open run reports every value as it is.
+// The folding plan of one sealed group field, per scope (a language, or the whole run): the values
+// that reach the minimum, the largest of them (ties by name), and the distinct scenarios of the
+// values that do not.
+function foldPlan(results, field, scopeOf) {
+  const sizes = distinctScenarios(results, (result) => `${result[field]}\u0000${scopeOf(result)}`);
+  const plan = new Map();
+  for (const [key, scenarios] of sizes) {
+    const [value, scope] = key.split("\u0000");
+    const entry = plan.get(scope) ?? {
+      large: new Set(),
+      largest: undefined,
+      largestSize: 0,
+      small: new Set(),
+    };
+    if (scenarios.size < MIN_SEALED_GROUP)
+      for (const scenario of scenarios) entry.small.add(scenario);
+    else {
+      entry.large.add(value);
+      const wins =
+        scenarios.size > entry.largestSize ||
+        (scenarios.size === entry.largestSize && compareStrings(value, entry.largest) < 0);
+      if (wins) Object.assign(entry, { largest: value, largestSize: scenarios.size });
+    }
+    plan.set(scope, entry);
+  }
+  return plan;
+}
+
+// The name a sealed run reports for a value: the value itself when enough distinct scenarios share
+// it; otherwise `other`. A folded remainder below the minimum would be a unit in all but name, so the
+// largest group absorbs it and says so (`preference+other`); only when no group reaches the minimum
+// does `other` stand alone, and then it is the whole run.
+function groupName(entry, value) {
+  const absorbed =
+    entry.small.size > 0 && entry.small.size < MIN_SEALED_GROUP && entry.largest !== undefined;
+  if (entry.large.has(value))
+    return absorbed && entry.largest === value ? `${value}+${FOLDED_GROUP}` : value;
+  return absorbed ? `${entry.largest}+${FOLDED_GROUP}` : FOLDED_GROUP;
+}
+
+// The value a sealed run may report for a group field; an open run reports every value as it is.
 function groupField(results, sealed, field, withLanguage) {
   if (!sealed) return (result) => result[field];
-  const keyOf = (result) => (withLanguage ? `${result[field]}/${result.language}` : result[field]);
-  const sizes = distinctScenarios(results, keyOf);
-  return (result) =>
-    (sizes.get(keyOf(result))?.size ?? 0) >= MIN_SEALED_GROUP ? result[field] : FOLDED_GROUP;
+  const scopeOf = (result) => (withLanguage ? result.language : "");
+  const plan = foldPlan(results, field, scopeOf);
+  return (result) => groupName(plan.get(scopeOf(result)), result[field]);
 }
 
 function sum(values) {

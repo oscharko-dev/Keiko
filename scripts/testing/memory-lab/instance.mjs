@@ -336,14 +336,19 @@ export async function readCaptures(instance) {
   return [...read.values()];
 }
 
-// The lab's own expectation: queued scripted replies (`pendingLearner`) end the wait once served and
-// are bounded by the grace period, because a turn the product handles without its learner, an
-// explicit statement or a refused one, would otherwise wait forever. Without the signal (live mode)
-// the grace period is always waited through.
-async function learnerDone(options, startedAt) {
-  if (options.pendingLearner === undefined) return true;
+// What ends the wait once the ledger is quiet. Offline, the lab's own expectation: queued scripted
+// replies (`pendingLearner`) end it once served, bounded by the grace period, because a turn the
+// product handles without its learner, an explicit statement or a refused one, would otherwise wait
+// forever. Live, the product's own calls: a call that was seen to start and end ends the wait after
+// the quiet period; when no call was seen the grace period is waited through, because the learner's
+// call may start a moment after the answer and a quiet ledger alone would miss it. With neither
+// signal the quiet period alone decides.
+async function learnerDone(options, startedAt, state) {
+  const graceOver = Date.now() - startedAt >= (options.graceMs ?? DEFAULT_GRACE_MS);
+  if (options.pendingLearner === undefined)
+    return options.openCalls === undefined || state.sawCall || graceOver;
   if ((await options.pendingLearner()) === 0) return true;
-  return Date.now() - startedAt >= (options.graceMs ?? DEFAULT_GRACE_MS);
+  return graceOver;
 }
 
 /**
@@ -357,33 +362,38 @@ export async function pendingGatewayCalls(instance) {
   return openCallKeys(await readActivityEvents(instance.logDirectory)).size;
 }
 
-// The quiet period starts over whenever the ledger moved or a model call is still open. A capture is
-// written only after its learner call completed, so a wait that merely saw the call end could return
-// in the gap before the capture lands; the quiet period must outlast the call's end.
+// The quiet period starts over whenever the ledger moved, while a model call is open, and once more
+// at the poll that sees the last call closed. A capture is written only after its learner call
+// completed, so a wait that merely saw the call end could return in the gap before the capture lands;
+// the quiet period must outlast the observed end of the call.
 function observeActivity(state, count, openCalls) {
   const moved = count !== state.lastCount;
+  const closing = openCalls === 0 && state.lastOpen > 0;
   state.lastCount = count;
-  if (moved || openCalls > 0) state.quietSince = Date.now();
+  state.lastOpen = openCalls;
+  if (openCalls > 0) state.sawCall = true;
+  if (moved || openCalls > 0 || closing) state.quietSince = Date.now();
 }
 
 /**
  * Waits until learning has settled: for `quietMs` the capture ledger stayed unchanged and no model
  * call the product started was open (`openCalls`, read from the instance's own Activity Log by
  * `pendingGatewayCalls`; the product's own evidence, never cut short), and every scripted reply the
- * lab queued was served or the grace period passed (`pendingLearner`). Fails after `maxMs`, naming
- * the `phase` of the unit when the caller gives one.
+ * lab queued was served or the grace period passed (`pendingLearner`); without that signal, a call
+ * was seen to start and end, or the grace period passed. Fails after `maxMs`, naming the `phase` of
+ * the unit when the caller gives one.
  */
 export async function awaitLearning(instance, options = {}) {
   const quietMs = options.quietMs ?? DEFAULT_QUIET_MS;
   const maxMs = options.maxMs ?? DEFAULT_MAX_WAIT_MS;
   const startedAt = Date.now();
-  const state = { lastCount: -1, quietSince: Date.now() };
+  const state = { lastCount: -1, lastOpen: 0, quietSince: Date.now(), sawCall: false };
   for (;;) {
     const count = await captureTotal(instance);
     const open = options.openCalls === undefined ? 0 : await options.openCalls();
     observeActivity(state, count, open);
     const quiet = Date.now() - state.quietSince >= quietMs;
-    if (quiet && (await learnerDone(options, startedAt))) return { captures: count };
+    if (quiet && (await learnerDone(options, startedAt, state))) return { captures: count };
     if (Date.now() - startedAt > maxMs)
       throw new Error(
         `learning did not settle in time${options.phase === undefined ? "" : ` (${options.phase})`}`,

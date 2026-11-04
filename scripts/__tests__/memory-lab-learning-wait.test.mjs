@@ -24,6 +24,41 @@ describe("memory lab learning wait after a model call ends", () => {
     expect(polls).toBeGreaterThanOrEqual(5);
   });
 
+  it("waits through the grace period in live mode when no call was ever seen", async () => {
+    // The learner's call may start a moment after the answer; a quiet ledger alone would miss it.
+    const started = Date.now();
+    const instance = {
+      request: async () => ({ status: 200, json: { captures: [], total: 0 } }),
+    };
+    const settled = await awaitLearning(instance, {
+      quietMs: 20,
+      graceMs: 300,
+      maxMs: 5000,
+      openCalls: async () => 0,
+    });
+    expect(settled.captures).toBe(0);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(290);
+  });
+
+  it("ends before the grace period once a call was seen to start and end", async () => {
+    let polls = 0;
+    const instance = {
+      request: async () => {
+        polls += 1;
+        return { status: 200, json: { captures: [], total: polls >= 3 ? 1 : 0 } };
+      },
+    };
+    const started = Date.now();
+    const settled = await awaitLearning(instance, {
+      quietMs: 50,
+      graceMs: 5000,
+      maxMs: 10000,
+      openCalls: async () => (polls < 2 ? 1 : 0),
+    });
+    expect(settled.captures).toBe(1);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it("names the phase of the unit when it gives up", async () => {
     const instance = {
       request: async () => ({ status: 200, json: { captures: [], total: 0 } }),

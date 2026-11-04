@@ -63,6 +63,7 @@ import {
 } from "./private-files.mjs";
 import { addRedactionCounts, emptyRedactionCounts, totalRedactions } from "./redact.mjs";
 import { ANCHOR_SET_NAMES, anchorSet, sourceOf } from "./sets.mjs";
+import { compareStrings } from "../../../lib/compare-strings.mjs";
 
 const PROVENANCE_KEYS = Object.freeze([
   "fetchedAt",
@@ -326,7 +327,7 @@ export function normalizeConvertOptions(values) {
 
 function summaryLine(name, stats) {
   const skipped = Object.entries(stats.skipped)
-    .toSorted(([left], [right]) => left.localeCompare(right))
+    .toSorted(([left], [right]) => compareStrings(left, right))
     .map(([reason, count]) => `${reason}=${String(count)}`)
     .join(",");
   return `${name} examined=${String(stats.examined)} produced=${String(stats.produced)} skipped=${skipped || "-"} redactions=${String(stats.redactions.total)}`;

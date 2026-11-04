@@ -36,6 +36,7 @@ import { mapSequential } from "./sequence.mjs";
 import { varietyReport } from "./variety.mjs";
 import { createModelWriter } from "./writer-model.mjs";
 import { createScriptedWriter } from "./writer-scripted.mjs";
+import { compareStrings } from "../../../lib/compare-strings.mjs";
 
 export const DEFAULT_BLUEPRINT_DIR = resolve(
   fileURLToPath(new URL("./blueprints/", import.meta.url)),
@@ -195,7 +196,7 @@ function manifestEntry(entry, meta) {
 function buildManifest(options, blueprints, results, writer) {
   const scenarios = results
     .map((result) => result.scenario)
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+    .toSorted((left, right) => compareStrings(left.id, right.id));
   const base = scenarioSetManifest(scenarios);
   const metaById = new Map(results.map((result) => [result.scenario.id, result.meta]));
   const entries = base.entries.map((entry) => manifestEntry(entry, metaById.get(entry.id)));

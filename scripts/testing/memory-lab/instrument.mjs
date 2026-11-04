@@ -26,6 +26,7 @@ export const INSTRUMENT_FILES = Object.freeze([
   "scenario.mjs",
   "score.mjs",
   "scripted-model.mjs",
+  "set-files.mjs",
   "unit-failure.mjs",
 ]);
 

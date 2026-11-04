@@ -3,6 +3,7 @@
 // two such sets with one loader and one shape of error, each under its own error name.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { compareStrings } from "../../lib/compare-strings.mjs";
 
 export function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -42,5 +43,5 @@ export function loadJsonSet(directory, { validate, fail, what }) {
     if (ids.has(entry.id)) fail(entry.id, `duplicate ${what} id in the set`);
     ids.add(entry.id);
   }
-  return entries.toSorted((left, right) => left.id.localeCompare(right.id));
+  return entries.toSorted((left, right) => compareStrings(left.id, right.id));
 }

@@ -212,8 +212,9 @@ the product head and the options. Its `metadata` records `sealed` (true for a `-
 the judge requires of the holdout part), `allowFoldedEnv`, `foldedKeys`, `budgetTokens`,
 `brokenLearner` and `configDigest`: the SHA-256 of the gateway configuration file in live mode,
 `offline` otherwise. It also records the **instrument**: `instrumentDigest`, a SHA-256 over the lab
-sources that decide what a run measures (`instrument.mjs` lists them: scorer, driver, instance,
-isolation, report, runner, scenario validator, scripted model, unit failure, value grammar), beside
+sources that decide what a run measures (`INSTRUMENT_FILES` in `instrument.mjs`: `corpus/values.mjs`,
+`driver.mjs`, `gateway-calls.mjs`, `instance.mjs`, `isolation.mjs`, `report.mjs`, `run.mjs`,
+`scenario.mjs`, `score.mjs`, `scripted-model.mjs`, `set-files.mjs`, `unit-failure.mjs`), beside
 `labHead` and `labDirty` (the lab's commit, and whether its sources carried uncommitted changes) for
 people; and the **product build**: `productHead` and `productDistDigest`, a SHA-256 over every built
 `.js` under the subject's `packages/*/dist`, because the product runs from its built packages, which a
@@ -231,8 +232,12 @@ The learning wait that precedes every store reading waits until the capture ledg
 for the quiet period **and** no model call the product started was open during it (read from the
 instance's own Activity Log). The quiet period starts over while a call is open: a capture is written
 only after its learner call completed, so a wait that merely saw the call end would read the store in
-the gap before the capture lands. The same wait runs after the probes, before the store and the
-ledger are read, so `probeCaptures` does not depend on timing.
+the gap before the capture lands. Live, a call that was seen to start and end ends the wait after that
+quiet period; when no call was seen at all, the grace period (`--learner-grace-ms`) is waited through,
+because the learner's call may start a moment after the answer and a quiet ledger alone would miss it.
+Offline, the scripted learner's queue is the signal, bounded by the same grace period. The same wait
+runs after the probes, before the store and the ledger are read, so `probeCaptures` does not depend on
+timing.
 
 Five hard counters must read zero and are never averaged away: credentials stored, customer or
 personal identifiers stored, forgotten facts returning, third-party facts in private memory, private
@@ -536,7 +541,9 @@ entry per class, language, arm and repetition with sums and counts (`precisionSu
 `answerPassed`/`answerTotal` and so on, from which `compare` rebuilds the same per-repetition means it
 takes from the per-unit entries of an open run), `summary.json` the group tables, and `timing.json`
 means per arm and repetition. A class, language or difficulty that fewer than five distinct scenarios
-share is folded into `other`, because a group of one is a unit in all but name. A per-unit verdict
+share is folded into `other`, because a group of one is a unit in all but name; a folded remainder
+that itself stays below five is absorbed by the largest group, which then says so
+(`preference+other`), and `other` stands alone only when no group reaches five. A per-unit verdict
 under a stable masked name would let an optimizer follow single hidden scenarios from candidate to
 candidate, which is the overfitting the holdout exists to prevent. The console shows `holdout unit
 <n> done` per unit and never a per-unit result; a failing unit is named by its masked name in the

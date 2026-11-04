@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { matchesTermGroups, validPrefixMark } from "./score.mjs";
 import { SetFileError, isRecord, loadJsonSet, nonEmptyString } from "./set-files.mjs";
+import { compareStrings } from "../../lib/compare-strings.mjs";
 
 const SCENARIO_SCHEMA_VERSION = 1;
 const SCENARIO_LANGUAGES = Object.freeze(["de", "en", "mixed"]);
@@ -236,15 +237,21 @@ export function loadScenarioDirectory(directory) {
   return loadJsonSet(directory, { validate: validateScenario, fail, what: "scenario" });
 }
 
-/** The versioned manifest of a scenario set: ids, classes, languages and per-scenario digests. */
+/**
+ * The versioned manifest of a scenario set: ids, classes, languages and per-scenario digests. The
+ * entries are ordered by id in byte order, whatever order the set arrived in, so the set digest
+ * depends on the content alone and never on a loader or a locale.
+ */
 export function scenarioSetManifest(scenarios) {
-  const entries = scenarios.map((scenario) => ({
-    id: scenario.id,
-    language: scenario.language,
-    class: scenario.class,
-    difficulty: scenario.difficulty,
-    digest: scenarioDigest(scenario),
-  }));
+  const entries = scenarios
+    .map((scenario) => ({
+      id: scenario.id,
+      language: scenario.language,
+      class: scenario.class,
+      difficulty: scenario.difficulty,
+      digest: scenarioDigest(scenario),
+    }))
+    .toSorted((left, right) => compareStrings(left.id, right.id));
   const setDigest = createHash("sha256")
     .update(entries.map((entry) => `${entry.id}:${entry.digest}`).join("\n"))
     .digest("hex");
