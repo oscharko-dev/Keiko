@@ -4718,12 +4718,6 @@
       "count": 1
     },
     {
-      "path": "packages/keiko-server/src/gitDiffParser.ts",
-      "owner": "decodeQuotedPath",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
       "path": "packages/keiko-server/src/gitRepositoryReads.ts",
       "owner": "readLastSync",
       "kind": "unregistered-catch",
