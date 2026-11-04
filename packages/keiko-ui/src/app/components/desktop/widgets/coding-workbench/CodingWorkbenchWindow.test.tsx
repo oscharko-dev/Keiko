@@ -68,6 +68,7 @@ import {
   resetLoadedMessageCatalogs,
 } from "@/lib/i18n";
 import styles from "./CodingWorkbenchWindow.module.css";
+import { ConnectorWindowsProvider } from "../../connector-windows-context";
 import {
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
   gatewayModelCatalogCheckRequested,
@@ -111,6 +112,11 @@ vi.mock("../../hooks/useChatSession", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../hooks/useChatSession")>()),
   useGatewayModelCatalogSettled: (): boolean => catalogRefreshMock.settled,
 }));
+// The central MCP read is not part of what this file proves; a stable empty list keeps it hermetic.
+vi.mock("../../useMcpServerChoices", () => {
+  const choices = { servers: [], loading: false, failed: false, reload: (): void => undefined };
+  return { useMcpServerChoices: (): typeof choices => choices };
+});
 vi.mock("./codingWorkbenchRepositories", () => ({
   repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
   selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
@@ -614,17 +620,24 @@ beforeEach(() => {
 });
 
 describe("CodingWorkbenchWindow", () => {
-  it("offers central MCP management before a fresh task starts", async () => {
+  it("offers central MCP management from the connector menu before a fresh task starts", async () => {
     runtimeHookMock.mockReturnValue({
       state: liveState({ run: { status: "ready", value: null, error: null } }),
       actions: actions(),
     });
-    const openSettings = vi.fn();
-    render(<CodingWorkbenchWindow selectedRoot="/repo" onOpenMcpSettings={openSettings} />);
-    const manage = await screen.findByRole("button", { name: "Manage MCP servers" });
-    expect(manage).toBeVisible();
-    fireEvent.click(manage);
-    expect(openSettings).toHaveBeenCalledOnce();
+    const manage = { manageServers: vi.fn(), managePods: vi.fn() };
+    render(
+      <ConnectorWindowsProvider value={manage}>
+        <CodingWorkbenchWindow selectedRoot="/repo" />
+      </ConnectorWindowsProvider>,
+    );
+    expect(screen.queryByRole("button", { name: "Manage MCP servers" })).toBeNull();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: /^Connectors/u }));
+    const servers = screen.getByRole("region", { name: "MCP servers" });
+    await user.click(within(servers).getByRole("button", { name: "MCP servers: Manage" }));
+    expect(manage.manageServers).toHaveBeenCalledOnce();
+    expect(manage.managePods).not.toHaveBeenCalled();
   });
 
   it("keeps a fresh task start available when previous history cannot load", async () => {

@@ -1,7 +1,10 @@
-import type {
-  AtlassianHttpBodyPort,
-  AtlassianHttpBodyRequest,
-  AtlassianHttpRequest,
+import {
+  isJiraIssueLinkWrite,
+  JIRA_ISSUE_LINKS_MAX,
+  JIRA_ISSUE_LINKS_PER_REQUEST_MAX,
+  type AtlassianHttpBodyPort,
+  type AtlassianHttpBodyRequest,
+  type AtlassianHttpRequest,
 } from "@oscharko-dev/keiko-connectors";
 import type {
   JiraMutationAttempt,
@@ -10,13 +13,17 @@ import type {
 import type { ManagedMcpToolResult } from "@oscharko-dev/keiko-contracts/runtime/managed-mcp";
 import type {
   JiraChatToolMutationIntent as ChatToolMutationIntent,
+  ChatToolMutationLocalRefusal,
   ChatToolMutationRecord,
   ChatToolMutationStore,
 } from "../store/chatToolMutationTypes.js";
+import { definitiveRejectionStatus } from "../store/chatToolMutationState.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { AtlassianHttpLifecycleOptions } from "./httpRequestLifecycle.js";
+import { recordJiraTemplateAttempt } from "./jiraTemplateLog.js";
 import {
   jiraAttemptToolResult,
+  jiraLinkCounts,
   jiraMutationToolResult as result,
   validJiraMutationAttempt,
 } from "./jiraMutationResult.js";
@@ -54,14 +61,35 @@ function observedOutcome(record: ChatToolMutationRecord | undefined): JiraMutati
   if (record.phase === "prepared") return "not-dispatched";
   return record.phase === "acknowledged" ? "succeeded-unconfirmed" : "unknown";
 }
+/**
+ * Jira takes one `issuelinks` operation per create/edit, so a request with several links is that
+ * request plus one `POST /rest/api/2/issueLink` per further link (#4176). Those calls are the same
+ * approved mutation, not new ones: they dispatch only after this invocation's own write was
+ * acknowledged, under the same current-authority and approval guards, at most once each and at
+ * most the approved count. They leave the journal record as the primary write set it; a failure or
+ * a lost answer leaves it acknowledged, which settles as succeeded-unconfirmed, never as a retry.
+ */
 function mutationTransport(
   input: JiraChatMutationExecution,
   journal: ChatToolMutationStore,
 ): AtlassianHttpBodyPort {
   const { intent } = input;
+  let furtherLinks = 0;
+  let continuing = false;
+  const admitsContinuation = (request: AtlassianHttpRequest | AtlassianHttpBodyRequest): boolean =>
+    isJiraIssueLinkWrite(request) &&
+    furtherLinks < JIRA_ISSUE_LINKS_MAX - JIRA_ISSUE_LINKS_PER_REQUEST_MAX &&
+    journal.find(intent.invocationId)?.phase === "acknowledged";
   return input.httpPortFactory({
     beforeDispatch: (request): boolean => {
+      continuing = false;
       if (request.method === "GET") return confirmed(input.beforeEffect());
+      if (admitsContinuation(request)) {
+        if (!confirmed(input.beforeEffect()) || !confirmed(input.beforeMutation())) return false;
+        furtherLinks += 1;
+        continuing = true;
+        return true;
+      }
       return journal.beginDispatch(
         intent.invocationId,
         () => confirmed(input.beforeEffect()) && confirmed(input.beforeMutation()),
@@ -71,7 +99,7 @@ function mutationTransport(
       request: AtlassianHttpRequest | AtlassianHttpBodyRequest,
       status: number,
     ): boolean => {
-      if (request.method !== "GET") journal.acknowledge(intent.invocationId, status);
+      if (request.method !== "GET" && !continuing) journal.acknowledge(intent.invocationId, status);
       return true;
     },
   });
@@ -81,14 +109,47 @@ async function attempt(
   journal: ChatToolMutationStore,
 ): Promise<JiraMutationAttempt> {
   try {
-    return validJiraMutationAttempt(
+    const result = validJiraMutationAttempt(
       await input.execute(mutationTransport(input, journal)),
       input.intent.operation,
     );
+    recordJiraTemplateAttempt(input.intent.correlationId, input.intent.operation, result);
+    return result;
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
     return FAILED;
   }
+}
+/**
+ * Jira refused the whole request with its own error document: nothing was applied, so the turn may
+ * go on and the model gets the field errors to correct. Anything less stays an uncertain write.
+ */
+function jiraRejectedWithoutEffect(
+  record: ChatToolMutationRecord,
+  attempt: JiraMutationAttempt,
+): boolean {
+  if (attempt.ok || !definitiveRejectionStatus(record.httpStatus)) return false;
+  const detail = attempt.detail;
+  return (detail?.fieldErrors?.length ?? 0) > 0 || (detail?.messages?.length ?? 0) > 0;
+}
+/** The outcome to settle, and whether it rests on Jira's own error document. */
+function settlement(
+  current: ChatToolMutationRecord | undefined,
+  attempt: JiraMutationAttempt,
+): { readonly outcome: JiraMutationOutcome; readonly errorDocument: boolean } {
+  if (current?.phase === "prepared" && !attempt.ok)
+    return { outcome: "rejected", errorDocument: false };
+  if (current?.phase === "dispatched" && jiraRejectedWithoutEffect(current, attempt))
+    return { outcome: "rejected", errorDocument: true };
+  if (current?.phase === "acknowledged" && attempt.ok)
+    return { outcome: "succeeded", errorDocument: false };
+  return { outcome: observedOutcome(current), errorDocument: false };
+}
+/** Keiko's closed reason for a write that failed; the store records it only for a local refusal. */
+function localRefusal(attempt: JiraMutationAttempt): ChatToolMutationLocalRefusal | undefined {
+  if (attempt.ok) return undefined;
+  const validation = attempt.detail?.validation;
+  return { reason: attempt.reason, ...(validation === undefined ? {} : { validation }) };
 }
 function finish(
   input: JiraChatMutationExecution,
@@ -96,11 +157,15 @@ function finish(
   attempt: JiraMutationAttempt,
 ): ManagedMcpToolResult {
   const current = journal.find(input.intent.invocationId);
-  let outcome = observedOutcome(current);
-  if (current?.phase === "prepared" && !attempt.ok) outcome = "rejected";
-  if (current?.phase === "acknowledged" && attempt.ok) outcome = "succeeded";
+  const { outcome, errorDocument } = settlement(current, attempt);
   try {
-    journal.settle(input.intent.invocationId, outcome);
+    journal.settle(
+      input.intent.invocationId,
+      outcome,
+      jiraLinkCounts(attempt),
+      errorDocument ? { jiraErrorDocument: true } : undefined,
+      localRefusal(attempt),
+    );
   } catch (error) {
     emitServerDiagnostic(undefined, mutationDiagnostic(input.intent, error));
     return result(observedOutcome(current), "unavailable");

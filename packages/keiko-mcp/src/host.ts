@@ -19,7 +19,7 @@ import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { recordManagedMcp } from "./activity.js";
 import { ManagedMcpError, definitionIdentity, toolDefinition, toolsOf } from "./definitions.js";
 
-import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
+import { deepFreeze, isDeepFrozen } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 
 const INTERNAL_URL = "https://keiko-managed.invalid/mcp";
 const SERVER_INFO = { name: "keiko-managed", version: "1" };
@@ -79,6 +79,11 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
   readonly #toolCount: number;
   readonly #catalog: readonly ManagedMcpToolDeclaration[];
   readonly #tools: readonly ManagedMcpTool<Context>[];
+  // The providers' own descriptors when every one was deeply frozen at construction: a frozen
+  // descriptor that is still the same object cannot have drifted, so readiness, catalog and call
+  // checks need not canonicalise every declaration again. Each Chat tool round runs several such
+  // checks, and recomputing the identity made a long turn hash the whole catalog dozens of times.
+  readonly #frozenDescriptors: readonly ManagedMcpTool<Context>["descriptor"][] | undefined;
   readonly #lifetime = new AbortController();
   #admission: Promise<void> | undefined;
   #admitted = false;
@@ -102,6 +107,9 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     );
     this.#expected = definitionIdentity(tools.map(toolDefinition));
     this.#declarations = this.declarationIdentity(tools);
+    this.#frozenDescriptors = tools.every((tool) => isDeepFrozen(tool.descriptor))
+      ? tools.map((tool) => tool.descriptor)
+      : undefined;
     this.#registrySha256 = sha256Hex(this.#declarations);
     this.#toolCount = tools.length;
     this.#handler = createMcpHandler(({ requestInfo }) => this.server(requestInfo), {
@@ -123,8 +131,25 @@ class ManagedHost<Context extends ManagedMcpInvocationContext> implements Manage
     );
   }
 
+  private unchangedSources(tools: readonly ManagedMcpTool<Context>[]): boolean {
+    const frozen = this.#frozenDescriptors;
+    return (
+      frozen?.length === tools.length &&
+      tools.every((tool, index) => {
+        const admitted = this.#tools[index];
+        return (
+          tool.descriptor === frozen[index] &&
+          tool.name === admitted?.name &&
+          tool.risk === admitted.risk &&
+          tool.execute === admitted.execute
+        );
+      })
+    );
+  }
+
   private currentTools(): readonly ManagedMcpTool<Context>[] {
     const tools = toolsOf(this.providers);
+    if (this.unchangedSources(tools)) return this.#tools;
     if (
       this.declarationIdentity(tools) !== this.#declarations ||
       tools.some((tool, index) => tool.execute !== this.#tools[index]?.execute)

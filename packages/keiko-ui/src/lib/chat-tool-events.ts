@@ -4,6 +4,7 @@ import type {
   ChatToolExchange,
   ChatToolTranscript,
   DesktopChatStreamReadConsentEvent,
+  DesktopChatStreamToolExchangeEvent,
   DesktopChatStreamWriteApprovalEvent,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 
@@ -34,6 +35,31 @@ export function applyChatWriteApproval(
       ...message.toolTranscript,
       schemaVersion: 1,
       exchanges: mergeExchange(message.toolTranscript?.exchanges ?? [], event),
+    },
+  };
+}
+
+/** A running turn's call as it starts and settles; its approval stays with its own event. */
+export function applyChatToolExchange(
+  message: ChatMessage,
+  event: DesktopChatStreamToolExchangeEvent["data"],
+): ChatMessage {
+  if (message.turnState !== undefined && message.turnState !== "pending") return message;
+  const exchanges = message.toolTranscript?.exchanges ?? [];
+  const { call } = event.exchange;
+  const known = exchanges.some((entry) => entry.call.id === call.id);
+  return {
+    ...message,
+    id: event.messageId,
+    turnState: "pending",
+    toolTranscript: {
+      ...message.toolTranscript,
+      schemaVersion: 1,
+      exchanges: known
+        ? exchanges.map((entry) =>
+            entry.call.id === call.id ? { ...entry, ...event.exchange } : entry,
+          )
+        : [...exchanges, event.exchange],
     },
   };
 }
