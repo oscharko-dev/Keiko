@@ -210,10 +210,23 @@ anyway is dropped. Any other value fails the configuration load. The Activity Lo
 
 ## Project document formats
 
-A pod indexes the text layer of Word (`.docx`), Excel (`.xlsx`), PowerPoint (`.pptx`) and PDF
+A pod indexes the text of Word (`.docx`), Excel (`.xlsx`), CSV, PowerPoint (`.pptx`) and PDF
 files, with the source location a citation points at: the paragraph or sheet row, the slide
-(`Slide N: <title>`, including table rows and speaker notes) or the page. Images, charts and
-embedded objects are not read, and scanned documents are not recognized (no OCR).
+(`Slide N: <title>`, including table rows, chart and SmartArt text, and speaker notes) or the page.
+Images and other embedded objects are not read, and scanned documents are not recognized (no OCR).
+
+A PDF stores glyph runs, not paragraphs, so its pages are rebuilt from the layout: reading order
+of rows, columns and table cells, the paragraph a wrapped line belongs to, list items, headings as
+sections, and page headers and footers a document repeats are removed with a count. Where the
+layout gives no evidence, a line stays a line.
+
+Content a person does not see is reported, never silently dropped or passed off as visible: hidden
+Word text and unfilled placeholders are excluded with a count, Word comments are not indexed with
+a count, and hidden Excel sheets, rows and columns and hidden slides stay indexed with a count.
+
+The stored text is what a parser made of a file, so a refresh reads an unchanged file again when
+its parser has changed since and records `PARSER_VERSION_CHANGED`. A repaired parser therefore
+reaches existing pods without touching the files.
 
 A file that cannot be indexed is named by a closed reason and never contributes partial text:
 
