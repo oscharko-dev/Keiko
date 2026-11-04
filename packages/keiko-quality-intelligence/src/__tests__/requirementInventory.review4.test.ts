@@ -77,3 +77,22 @@ describe("numbered clauses of a specification typed one per line", () => {
     expect(inventory.entries).toHaveLength(1);
   });
 });
+
+describe("table headers in French, Spanish and Italian", () => {
+  it.each([
+    ["Identificador", "Requisito", "El sistema debe permitir"],
+    ["Identifiant", "Exigence", "Le système doit permettre"],
+    ["Identificativo", "Requisito", "Il sistema deve consentire"],
+  ])("reads %s and %s as identifier and statement", (id, statement, text) => {
+    const inventory = derive(
+      [
+        `Table!2: ${id}=RF-1 | ${statement}=${text} X.`,
+        `Table!3: ${id}=RF-2 | ${statement}=${text} Y.`,
+      ].join("\n"),
+    );
+    expect(inventory.entries.map((entry) => [entry.id, entry.statement])).toEqual([
+      ["RF-1", `${text} X.`],
+      ["RF-2", `${text} Y.`],
+    ]);
+  });
+});
