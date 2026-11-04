@@ -120,10 +120,10 @@ const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/gu;
 function cleanItemText(raw: string): string {
   const cleaned = raw
     .replaceAll(ZERO_WIDTH, "")
-    .replaceAll(" ", " ")
+    .replaceAll("\u00A0", " ")
     .trim()
-    .replaceAll(/­(?=.)/gu, "")
-    .replaceAll(/­$/gu, "-");
+    .replaceAll(/\u00AD(?=.)/gu, "")
+    .replaceAll(/\u00AD$/gu, "-");
   return SYMBOL_FACE_BULLET.test(cleaned) ? "•" : cleaned;
 }
 

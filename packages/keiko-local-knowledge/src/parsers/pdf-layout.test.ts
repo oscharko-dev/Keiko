@@ -207,6 +207,12 @@ describe("paragraph reflow", () => {
     expect(textOf([drawn("Fett", LEFT, 700), drawn("Fett", LEFT + 0.3, 700)])).toBe("Fett");
   });
 
+  it("reads a non-breaking space as a space", () => {
+    const text = textOf([drawn("Paragraph\u00A01\u00A0Absatz\u00A02", LEFT, 700)]);
+
+    expect(text).toBe("Paragraph 1 Absatz 2");
+  });
+
   it("strips the soft hyphen inside a word and resolves it at the wrap", () => {
     const start = `${fullLine("Vorlauf ").slice(0, -7)}Kunden­`;
     expect(bodyText([drawn(start, LEFT, 700), drawn("kon­to wird", LEFT, 688)])).toBe(
