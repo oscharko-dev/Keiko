@@ -517,13 +517,22 @@ function lineTotals(hunks: readonly GitEditorDiffHunk[]): {
   };
 }
 
+// The lines of a file section before its first hunk header.
+function fileHeaderLines(lines: readonly string[]): readonly string[] {
+  const firstHunk = lines.findIndex((line) => line.startsWith("@@"));
+  return firstHunk === -1 ? lines : lines.slice(0, firstHunk);
+}
+
 // File assembly deliberately keeps binary, rename, malformed, cap, and process-tail states explicit.
 function parseFile(
   lines: readonly string[],
   options: GitUnifiedDiffParseOptions,
   isFinal: boolean,
 ): GitEditorDiffFile | undefined {
-  if (lines.some((line) => line.includes("\uFFFD"))) return undefined;
+  // A replacement character in the header makes the file's identity unreliable. One in a hunk body
+  // only makes that hunk unrepresentable: `parseUnifiedHunks` drops it as malformed, so the file
+  // stays listed (truncated) instead of vanishing from the diff.
+  if (fileHeaderLines(lines).some((line) => line.includes("\uFFFD"))) return undefined;
   const header = parseUnifiedDiffFileHeader(lines);
   if (header === undefined) return undefined;
   const identity = editorIdentity(header, options.selectedRootPrefix);

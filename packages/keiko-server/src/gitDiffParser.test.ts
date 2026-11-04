@@ -170,6 +170,38 @@ describe("parseGitEditorUnifiedDiff", () => {
     expect(capped.truncated).toBe(true);
   });
 
+  // A Latin-1 source file decodes with U+FFFD in its content lines. The file was changed and the
+  // diff must say so: it is listed with the unreadable hunk dropped and marked truncated, not
+  // removed from the response as if it had not changed.
+  it("keeps a file whose hunk content is not valid UTF-8 listed, with the hunk dropped", () => {
+    const parsed = parseGitEditorUnifiedDiff(
+      [
+        "diff --git a/src/legacy.txt b/src/legacy.txt",
+        "--- a/src/legacy.txt",
+        "+++ b/src/legacy.txt",
+        "@@ -1,2 +1,2 @@",
+        " Gr��e",
+        "-alt",
+        "+neu",
+        "diff --git a/src/clean.txt b/src/clean.txt",
+        "--- a/src/clean.txt",
+        "+++ b/src/clean.txt",
+        "@@ -1 +1 @@",
+        "-a",
+        "+b",
+        "",
+      ].join("\n"),
+      { scope: "unstaged", selectedRootPrefix: "", processTruncated: false },
+    );
+
+    expect(parsed.totalFiles).toBe(2);
+    expect(parsed.truncated).toBe(true);
+    expect(parsed.files.map((file) => file.path)).toEqual(["src/legacy.txt", "src/clean.txt"]);
+    expect(parsed.files[0]).toMatchObject({ hunks: [], addedLines: 0, truncated: true });
+    expect(parsed.files[1]).toMatchObject({ addedLines: 1, removedLines: 1, truncated: false });
+    expect(JSON.stringify(parsed)).not.toContain("alt");
+  });
+
   it("drops hunks beyond the per-file cap and marks the file truncated", () => {
     const hunkCount = GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE + 1;
     const hunkLines = Array.from({ length: hunkCount }, (_, index) => {
