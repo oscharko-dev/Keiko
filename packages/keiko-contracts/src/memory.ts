@@ -99,11 +99,10 @@ export type {
   StaleModelMetadataInput,
   StatusTransitionCheck,
 } from "./memory-validation.js";
+export { hasPaymentCardPanShape, looksLikeSecretShape } from "./memory-secret-shape.js";
 export {
   checkStatusTransition,
-  hasPaymentCardPanShape,
   hasStaleModelMetadata,
-  looksLikeSecretShape,
   validateMemoryEdge,
   validateMemoryProvenance,
   validateMemoryScope,

@@ -346,6 +346,7 @@
     "keiko-contracts/memory-record-validation",
     "keiko-contracts/memory-records",
     "keiko-contracts/memory-retrieval-validation",
+    "keiko-contracts/memory-secret-shape",
     "keiko-contracts/memory-validation",
     "keiko-contracts/memory-workflow-port",
     "keiko-contracts/native-file-dialog",
