@@ -2080,7 +2080,9 @@ function sharedRuntimeFields(typedRegistry) {
 
 // TypeScript refuses to write one inferred type past its serialization limit into the declaration
 // file (TS7056). The dev 1.4.0 operations pushed the whole registry past it, so the registry is
-// built from parts whose inferred types each stay well below that limit.
+// built from part factories whose inferred types each stay well below that limit. They stay
+// factories, called only inside the registry's one pure call: separate top-level pure calls kept
+// the whole registry in the first-load UI chunk.
 export const OPERATIONS_PER_PART = 200;
 
 function registryParts(renderedOperations) {
@@ -2088,7 +2090,7 @@ function registryParts(renderedOperations) {
   for (let start = 0; start < renderedOperations.length; start += OPERATIONS_PER_PART) {
     const name = `activityLogOperationPart${String(parts.length)}`;
     const body = renderedOperations.slice(start, start + OPERATIONS_PER_PART).join(",\n");
-    parts.push({ name, source: `const ${name} = /*#__PURE__*/ (() => [${body}] as const)();` });
+    parts.push({ name, source: `const ${name} = () => [${body}] as const;` });
   }
   return parts;
 }
@@ -2102,8 +2104,8 @@ export function runtimeOperationsModule(typedRegistry) {
   const factories = [...sharedFields].map(
     ([fields, name]) => `const ${name} = () => (${fields}) as const;`,
   );
-  const registryType = parts.map((part) => `...typeof ${part.name}`).join(", ");
-  const registryValue = parts.map((part) => `...${part.name}`).join(", ");
+  const registryType = parts.map((part) => `...ReturnType<typeof ${part.name}>`).join(", ");
+  const registryValue = parts.map((part) => `...${part.name}()`).join(", ");
   const runConstructors = Object.values(FIELD_RUN_CONSTRUCTORS).filter((name) =>
     `${operations}${factories.join("")}`.includes(`...${name}(`),
   );
@@ -2120,10 +2122,10 @@ export function runtimeOperationsModule(typedRegistry) {
     ].join(", ")} } from "./activity-log-field-contracts.js";`,
     ...factories,
     operations,
-    // The registry calls the field constructors while the module loads. Marking every part and the
-    // registry call pure lets a bundler drop the registry from a bundle that never reads it, such
-    // as the first-load UI chunk, as it could when the registry was plain literals. Only the
-    // registry reads the parts, so an unread registry leaves every part unread too.
+    // The registry calls the field constructors while the module loads. Marking that one call pure
+    // lets a bundler drop the registry from a bundle that never reads it, such as the first-load UI
+    // chunk, as it could when the registry was plain literals. The part factories are only
+    // declared, so this call is still the only place the module builds the registry.
     "// The registry only calls side-effect-free field constructors.",
     `export const ACTIVITY_LOG_OPERATION_REGISTRY: readonly [${registryType}] = /*#__PURE__*/ (() => [${registryValue}] as const)();`,
     "",

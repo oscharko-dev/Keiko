@@ -222,19 +222,15 @@ describe("generated field construction preservation", () => {
     expect(source.indexOf(call)).toBeGreaterThan(source.indexOf(start));
     expect(source.trimEnd().endsWith("] as const)();")).toBe(true);
     expect(source.slice(0, source.indexOf(start))).not.toContain("ACTIVITY_LOG_OPERATION_REGISTRY");
-    // Every part is its own pure call, and only the registry's pure call reads it.
-    const parts = [
-      ...source.matchAll(/^const (activityLogOperationPart\d+) = \/\*#__PURE__\*\/ \(\(\) =>/gmu),
-    ];
+    // The part factories are only declared above the export; the pure call is their one caller.
+    // Separate top-level pure calls per part kept the registry in the first-load UI chunk.
+    const parts = [...source.matchAll(/^const (activityLogOperationPart\d+) = \(\) =>/gmu)];
     expect(parts).toHaveLength(
       Math.ceil(catalog.typedRegistry.operations.length / OPERATIONS_PER_PART),
     );
-    expect(source.split("activityLogOperationPart").length - 1).toBe(parts.length * 3);
     for (const [, name] of parts) {
-      expect(source.indexOf(`...${name}`, source.indexOf(call))).toBeGreaterThan(
-        source.indexOf(call),
-      );
-      expect(source.indexOf(`...typeof ${name}`)).toBeGreaterThan(source.indexOf(start));
+      expect(source.split(`${name}()`).length - 1).toBe(1);
+      expect(source.indexOf(`...${name}()`)).toBeGreaterThan(source.indexOf(call));
     }
   });
 
