@@ -114,7 +114,7 @@
       }
     },
     "keiko-local-knowledge": {
-      "files": 138,
+      "files": 155,
       "uncoveredFiles": 0,
       "uncoveredLines": 711,
       "totalLines": 9545,
@@ -318,7 +318,7 @@
       }
     },
     "keiko-workflows": {
-      "files": 80,
+      "files": 81,
       "uncoveredFiles": 0,
       "uncoveredLines": 160,
       "totalLines": 2904,
