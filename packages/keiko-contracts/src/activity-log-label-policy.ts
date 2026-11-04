@@ -67,8 +67,6 @@ const PERSONAL_IDENTIFIER_PATTERNS: readonly RegExp[] = [
   // counts from zero (`corr-0123456789`).
   /(?:^|[^a-z])(?:tel|telefon|phone|mobil|mobile|handy|fax)[-_.:=]?\+?\d[\d ()./-]{5,}/i,
   /[-_.]0(?:1[5-7]|[2-9])\d{7,12}(?:[^\dA-Za-z_]|$)/,
-  // A URL names a machine and often its owner (`https://jane.doe.example`). Only a local one is
-  // nobody's.
   // A date with a four-digit year, as a birth date is written in a form or a contract.
   /(?:^|[^\d.])\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}(?:[^\d.]|$)/,
   // An IPv4 address, which identifies a person's machine.
@@ -83,7 +81,8 @@ const NON_PERSONAL_DIGIT_SHAPES: readonly RegExp[] = [
   // A UUID.
   /\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b/g,
   // An instant with its time of day. A bare date stays personal: it may be a date of birth.
-  /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:\d{2})?/g,
+  // Its offset stays behind and holds no run a personal shape reads.
+  /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?/g,
   // The loopback and unspecified addresses a local server binds. They identify no one's machine.
   /\b(?:127\.\d{1,3}\.\d{1,3}\.\d{1,3}|0\.0\.0\.0)\b/g,
   // A measurement by its name (`responseBudgetBytes=114819072`). A name that says what the number
@@ -142,6 +141,8 @@ function isLowercaseIban(candidate: string): boolean {
   );
 }
 
+// A URL names a machine and often its owner (`https://jane.doe.example`). Only a local one is
+// nobody's.
 const URL_START = /(?:^|[^a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\//gi;
 const LOCAL_URL_AUTHORITY = /^(?:localhost|127\.\d|0\.0\.0\.0|\[::1\])(?:[:/?#]|$)/i;
 // Longer than any local authority above; what follows does not change the answer.

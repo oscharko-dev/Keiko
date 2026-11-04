@@ -303,6 +303,8 @@ describe("log field redaction", () => {
   it.each([
     "corr-root-00000001",
     "chat-0000000001",
+    "2026-11-04T18:29:01.524+02:00",
+    "2026-11-04T18:29:01-05:30",
     "corr-0123456789",
     "run-0123456789",
     // Passes the IBAN checksum by chance; a Bosnian IBAN has 20 characters.
