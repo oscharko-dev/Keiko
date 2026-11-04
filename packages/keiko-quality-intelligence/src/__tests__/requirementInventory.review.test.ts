@@ -1,12 +1,13 @@
-// Findings of the fourth independent review of the requirement inventory (#4235). Synthetic
+// Findings of the independent review of the requirement inventory (#4235). Synthetic
 // documents only.
 
 import { describe, expect, it } from "vitest";
 
 import { deriveRequirementInventory } from "../domain/requirementInventory.js";
+import { assessRequirementInventoryQuality } from "../domain/requirementInventoryQuality.js";
 
 function derive(text: string): ReturnType<typeof deriveRequirementInventory> {
-  return deriveRequirementInventory({ text, documentKey: "doc:review4" });
+  return deriveRequirementInventory({ text, documentKey: "doc:review" });
 }
 
 describe("a line break written as a lone carriage return", () => {
@@ -94,5 +95,84 @@ describe("table headers in French, Spanish and Italian", () => {
       ["RF-1", `${text} X.`],
       ["RF-2", `${text} Y.`],
     ]);
+  });
+});
+
+describe("a requirement written on the line of its identifier", () => {
+  it("keeps the sentence as its statement", () => {
+    const [entry] = derive("FR-1: Das System muss X speichern.").entries;
+    expect(entry).toMatchObject({
+      id: "FR-1",
+      title: "Das System muss X speichern.",
+      statement: "Das System muss X speichern.",
+    });
+  });
+
+  it("prefers it to a listing of the same identifier", () => {
+    const { entries, referenceOnlyCount } = derive(
+      [
+        "FR-1: Login",
+        "FR-2: Logout",
+        "",
+        "FR-1: Das System muss X speichern.",
+        "FR-2: Das System muss Y senden.",
+      ].join("\n"),
+    );
+    expect(entries.map((entry) => entry.statement)).toEqual([
+      "Das System muss X speichern.",
+      "Das System muss Y senden.",
+    ]);
+    expect(referenceOnlyCount).toBe(2);
+  });
+
+  it("reports two different sentences under one identifier as a conflict", () => {
+    const { conflictingIds } = derive(
+      "FR-1: Das System muss X speichern.\n\nFR-1: Das System muss Y senden.",
+    );
+    expect(conflictingIds).toEqual(["FR-1"]);
+  });
+
+  it("keeps its criteria", () => {
+    const [entry] = derive(
+      "FR-1: Das System muss X speichern.\nAkzeptanzkriterien:\n- Eins.",
+    ).entries;
+    expect(entry?.statement).toBe("Das System muss X speichern.");
+    expect(entry?.acceptanceCriteria.map((item) => item.text)).toEqual(["Eins."]);
+  });
+
+  it.each(["FR-1: Das System muss X speichern.", "FR-1:\nDas System muss X speichern."])(
+    "is one obligation when its title comes from its statement: %j",
+    (text) => {
+      const findings = assessRequirementInventoryQuality(derive(text).entries).get("FR-1");
+      expect(findings).not.toContain("compound-requirement");
+    },
+  );
+
+  it("does not take a plain title for a statement", () => {
+    const { entries } = derive("FR-1: Login\nFR-2: Logout");
+    expect(entries.map(({ title, statement }) => [title, statement])).toEqual([
+      ["Login", ""],
+      ["Logout", ""],
+    ]);
+  });
+});
+
+describe("a JSON row with a nested object", () => {
+  it("reads the object's fields by their own names", () => {
+    const [entry] = derive(
+      "/reqs!1: id=FR-1 | detail.text=Das System muss exportieren. | detail.owner.name=Team A | priority=Hoch",
+    ).entries;
+    expect(entry).toMatchObject({
+      id: "FR-1",
+      statement: "Das System muss exportieren.",
+      priority: "Hoch",
+    });
+  });
+
+  it("does not read a dotted spreadsheet column by its last part", () => {
+    const [entry] = derive(
+      "Sheet!2: Abt.ID=17 | ID=FR-1 | Titel=Export | Beschreibung=Das System muss exportieren.",
+    ).entries;
+    expect(entry).toMatchObject({ id: "FR-1", title: "Export" });
   });
 });

@@ -1105,7 +1105,8 @@ function interpretRow(row: RowFields): Interpreted {
   };
 }
 
-function shorten(value: string): string {
+/** The title of a requirement that has none of its own: the start of its statement. */
+export function titleFromStatement(value: string): string {
   return value.length <= TITLE_FALLBACK_CHARS
     ? value
     : `${value.slice(0, TITLE_FALLBACK_CHARS - 1).trimEnd()}…`;
@@ -1169,7 +1170,7 @@ interface EntryParts {
 
 function toEntry(context: Context, parts: EntryParts): RequirementInventoryEntry {
   const { id, interpreted } = parts;
-  const title = parts.title.length > 0 ? parts.title : shorten(interpreted.statement);
+  const title = parts.title.length > 0 ? parts.title : titleFromStatement(interpreted.statement);
   return Object.freeze({
     id,
     idOrigin: parts.idOrigin,
@@ -1205,13 +1206,27 @@ interface RawUnit {
   readonly parts: EntryParts;
 }
 
+/** A sentence on the line of the identifier states the requirement; it needs no line of its own. */
+function withTitleStatement(
+  unit: { readonly title: string; readonly interpreted: Interpreted },
+  vocabulary: CompiledVocabulary,
+): { readonly title: string; readonly interpreted: Interpreted } {
+  if (unit.interpreted.statement.length > 0 || !obligationStatement(vocabulary, unit.title)) {
+    return unit;
+  }
+  return { title: "", interpreted: { ...unit.interpreted, ...statementOf(unit.title) } };
+}
+
 function rawUnit(context: Context, block: Block): RawUnit {
   const { candidate } = block;
   const body =
     candidate.row === undefined
       ? interpretBody(context.lines.slice(block.first, block.last + 1), context.vocabulary)
       : interpretRow(candidate.row);
-  const { title, interpreted } = withTitleTag(candidate.title, body, context.vocabulary);
+  const { title, interpreted } = withTitleStatement(
+    withTitleTag(candidate.title, body, context.vocabulary),
+    context.vocabulary,
+  );
   const parts: EntryParts = {
     id: candidate.id,
     idOrigin: "explicit",

@@ -287,6 +287,22 @@ const NEUTRAL_LABEL = /^Column (?:\d+|[A-Z]{1,3})$/u;
 /** The line of a JSON record: a row of a JSON document never continues on another line. */
 const POINTER_RECORD = /^\/[^\n:]{0,120}: /u;
 
+// Only a JSON row writes a path, and a JSON record's name starts with `/`. A field of a nested object
+// (`detail.text`) is read by its own name; deeper ones describe something else. A spreadsheet column
+// headed `Abt.ID` says nothing about the identifier.
+const NESTED_FIELD_LABEL = /^[^.]+\.([^.]+)$/u;
+
+function projectedRole(
+  vocabulary: CompiledVocabulary,
+  table: string,
+  label: string,
+): TableColumnRole | undefined {
+  const own = tableRoleOf(vocabulary, label);
+  if (own !== undefined || !table.startsWith("/")) return own;
+  const nested = NESTED_FIELD_LABEL.exec(label)?.[1];
+  return nested === undefined ? undefined : tableRoleOf(vocabulary, nested);
+}
+
 function appendProjectedCells(
   row: ProjectedRow,
   parts: readonly string[],
@@ -297,7 +313,7 @@ function appendProjectedCells(
     if (equals < 1) return false;
     const label = part.slice(0, equals);
     row.labels.push(label);
-    row.roles.push(tableRoleOf(vocabulary, label));
+    row.roles.push(projectedRole(vocabulary, row.table, label));
     row.cells.push(part.slice(equals + 1));
   }
   return true;
@@ -359,7 +375,8 @@ export function readingOfProjectedTable(
 ): TableReading {
   const labels = [...new Set(rows.flatMap((row) => row.labels))];
   if (labels.every((label) => NEUTRAL_LABEL.test(label))) return { kind: "positional" };
-  const roles = namedColumns(labels, vocabulary);
+  const table = rows[0]?.table ?? "";
+  const roles = labels.map((label) => projectedRole(vocabulary, table, label));
   return namesRequirementColumns(roles) ? { kind: "roles", roles } : { kind: "foreign" };
 }
 

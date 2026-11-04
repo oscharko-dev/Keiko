@@ -1320,7 +1320,9 @@ answer over 200 issues became a 403 because only the repair's bare prompt had be
   modal verbs are data in several languages (DE, EN, FR, ES, IT) and extensible through the
   vocabulary, never code branches. A definition with a body wins over a table-of-contents mention of
   the same identifier; two different bodies under one identifier in one document are reported as
-  conflicting, never merged. Every document parser follows one block contract in its stored text: a
+  conflicting, never merged. A sentence with a modal verb on the line of the identifier
+  (`FR-1: Das System muss X speichern.`) is that requirement's statement and body; a plain title
+  stays a title. Every document parser follows one block contract in its stored text: a
   blank line ends a block, only the items of one list and the rows of one table stay on adjacent
   lines, a table row holds no blank line, a PDF heading is a block of its own and a paragraph running
   over a PDF page break stays one block. A unit ends at the next heading or section boundary, wrapped
