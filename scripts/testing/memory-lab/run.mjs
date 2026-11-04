@@ -24,8 +24,10 @@ import {
   openSealedHoldout,
 } from "./corpus/holdout.mjs";
 import { ARMS, runScenario } from "./driver.mjs";
+import { SCAN_FILE, scanEvidence, secretsOfConfig } from "./evidence-scan.mjs";
 import { CEILINGS, pendingGatewayCalls, startLabInstance } from "./instance.mjs";
 import { instrumentDigest, productDistDigest } from "./instrument.mjs";
+import { conversationTextInLog } from "./log-text.mjs";
 import {
   LabConfigurationError,
   assertGatewayConfigUnchanged,
@@ -291,7 +293,14 @@ async function closeFixture(fixture) {
   });
 }
 
+// An instance that has just ended can still have a file being written by a process on its way out,
+// so a directory can refuse removal once for not being empty. Retried: it is gone or the run says so.
+function removeTree(path) {
+  rmSync(path, { recursive: true, force: true, maxRetries: 8, retryDelay: 100 });
+}
+
 async function startUnit(label, arm, repetition, options, stateRoot) {
+  if (ending) throw new Error("the run is ending");
   // Every instance of a live run reads the configuration file afresh: it is the one that was checked.
   if (options.gatewayDigest !== undefined)
     assertGatewayConfigUnchanged(options.configPath, options.gatewayDigest);
@@ -315,21 +324,43 @@ async function startUnit(label, arm, repetition, options, stateRoot) {
   } catch (error) {
     // The instance's own close would have torn the fixture down; a failed start leaves it to us.
     await closeFixture(fixture);
-    if (!options.keep) rmSync(dir, { recursive: true, force: true });
+    if (!options.keep) removeTree(dir);
     throw error;
   }
 }
 
-// The unit currently running, so that an interrupt can close its instance and fixture.
+// The unit being started or run, so that an interrupt can close its instance and fixture, and the
+// run's state root, which holds nothing once its units are gone.
 let activeUnit;
+let activeStateRoot;
+// Once the run is ending no further unit starts: the loop would otherwise count the interrupted unit
+// as an ordinary failure and go on, with an instance nobody is left to end.
+let ending = false;
 
-/** Closes the running unit, if any; an interrupted run must leave no process, port or state behind. */
+function removeStateRoot() {
+  const root = activeStateRoot;
+  activeStateRoot = undefined;
+  if (root !== undefined) removeTree(root);
+}
+
+/**
+ * Closes the unit in progress and removes the run's state; an interrupted run must leave no process,
+ * port or state behind. A unit still starting is waited for, because its instance has no handle
+ * before that and would outlive the runner. A start that fails has cleaned up after itself.
+ */
 export async function closeActiveUnit() {
+  ending = true;
   const unit = activeUnit;
   activeUnit = undefined;
-  if (unit === undefined) return;
-  await unit.instance.close();
-  if (!unit.keep) rmSync(unit.dir, { recursive: true, force: true });
+  const started = await unit?.starting.then(
+    (value) => value,
+    () => undefined,
+  );
+  if (started !== undefined) {
+    await started.instance.close();
+    if (!unit.keep) removeTree(started.dir);
+  }
+  removeStateRoot();
 }
 
 async function runUnit(scenario, arm, repetition, options, stateRoot, label) {
@@ -339,32 +370,52 @@ async function runUnit(scenario, arm, repetition, options, stateRoot, label) {
     ...options,
     retainBodies: retainBodiesFor(scenario, options.retainBodies, options.labelPass),
   };
-  const { dir, fixture, instance, instanceStartMs } = await startUnit(
-    label,
-    arm,
-    repetition,
-    unitOptions,
-    stateRoot,
-  );
-  activeUnit = { dir, instance, keep: unitOptions.keep };
+  const starting = startUnit(label, arm, repetition, unitOptions, stateRoot);
+  activeUnit = { starting, keep: unitOptions.keep };
+  const { dir, fixture, instance, instanceStartMs } = await starting;
+  let closed = false;
   try {
     const context = runContext(unitOptions, arm, fixture, instance);
     const result = await runScenario(scenario, instance, context);
-    return { ...result, repetition, foldedKeys: instance.foldedKeys, instanceStartMs };
+    // The log is complete once the instance has ended, and it goes with the state below.
+    await instance.close();
+    closed = true;
+    const logTextLeaks = conversationTextInLog(instance.logDirectory, scenario);
+    return {
+      ...result,
+      repetition,
+      foldedKeys: instance.foldedKeys,
+      instanceStartMs,
+      logTextLeaks,
+    };
   } finally {
     activeUnit = undefined;
-    await instance.close();
-    if (!unitOptions.keep) rmSync(dir, { recursive: true, force: true });
+    if (!closed) await instance.close();
+    if (!unitOptions.keep) removeTree(dir);
   }
 }
 
+// An interrupt fails the unit in progress, and any error of the runner itself would end it on the
+// spot with the instance still running and its state in place: a socket of the runner's own fetch can
+// raise one while the instance goes down. Every way out passes the same cleanup, once.
 function installInterruptHandlers() {
-  for (const signal of ["SIGINT", "SIGTERM"])
-    process.once(signal, () => {
-      void closeActiveUnit().finally(() => {
-        process.exit(130);
+  let exiting = false;
+  const end = (code) => {
+    if (exiting) return;
+    exiting = true;
+    closeActiveUnit()
+      .catch((error) => {
+        console.error(`memory-lab: state may be left behind: ${String(error)}`);
+      })
+      .finally(() => {
+        process.exit(code);
       });
-    });
+  };
+  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => end(130));
+  process.on("uncaughtException", (error) => {
+    console.error(`memory-lab: uncaught error: ${String(error)}`);
+    end(1);
+  });
 }
 
 function meanOf(values) {
@@ -556,6 +607,7 @@ export async function runLab(options, log = console.log) {
   const corpus = loadCorpus(options);
   assertKeepAllowed(corpus.scenarios, options.keep);
   const stateRoot = prepareOutput(options, corpus);
+  activeStateRoot = corpus.sealed || !options.keep ? stateRoot : undefined;
   let results;
   try {
     results = await runAll(
@@ -565,12 +617,16 @@ export async function runLab(options, log = console.log) {
       log,
     );
   } finally {
-    if (corpus.sealed) rmSync(stateRoot, { recursive: true, force: true });
+    removeStateRoot();
   }
-  if (!options.keep) rmSync(stateRoot, { recursive: true, force: true });
   const summary = writeEvidence(options, corpus, results, gateway);
-  log(passFailLine(summary));
-  return summary;
+  const scan = scanEvidence(options.out, {
+    secrets: options.mode === "live" ? secretsOfConfig(options.configPath) : [],
+  });
+  writeContinuityJson(join(options.out, SCAN_FILE), scan);
+  const scanned = { ...summary, evidenceFindings: scan.findings.length };
+  log(passFailLine(scanned));
+  return scanned;
 }
 
 async function main() {
@@ -585,6 +641,8 @@ async function main() {
   // The pre-PR short run turns red on a hard counter; every other reading stays in the summary. A
   // unit that could not be measured is a harness incident, not a product verdict: its own exit code.
   if (options.failOnHardCounters && summary.hardCountersViolated) return 4;
+  // Evidence that is not clean is not evidence, whatever it measured.
+  if (summary.evidenceFindings > 0 || summary.logTextLeaks > 0) return 6;
   return summary.failedUnits > 0 ? 5 : 0;
 }
 

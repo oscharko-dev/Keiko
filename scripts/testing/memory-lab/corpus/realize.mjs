@@ -29,6 +29,7 @@ export function createCleanTester(oracle) {
     ...oracle.superseded,
     ...oracle.forgotten,
     ...oracle.forbidden,
+    ...oracle.poison,
   ].map((entry) => compileTermGroups(entry.terms));
   return (text) => {
     if (text.includes("[[") || text.includes("]]")) return false;
@@ -88,9 +89,9 @@ async function requestChecked(call, check, attempt = 1) {
 }
 
 /** The checked access to a writer: every method returns validated text or throws CorpusError. */
-export function createContext({ blueprint, writer, random, isClean }) {
+export function createContext({ blueprint, writer, random, isClean, fillerLanguage }) {
   const base = {
-    language: blueprint.language,
+    language: fillerLanguage ?? blueprint.language,
     role: blueprint.role,
     styleNotes: blueprint.styleNotes,
     random,
@@ -211,6 +212,16 @@ function realizeParaphrase(unit, context) {
   });
 }
 
+// The fact stands already, so a correct learner has nothing new to extract from its reminder.
+function realizeReminder(unit, context) {
+  return statement(context, {
+    kind: "reminder",
+    key: unit.fact.key,
+    text: unit.reminder.text,
+    hardness: unit.hardness,
+  });
+}
+
 function realizeTrap(unit, context) {
   const taught = unit.fact;
   return statement(context, {
@@ -228,6 +239,7 @@ const REALIZERS = Object.freeze({
   ask: realizeAsk,
   forget: realizeForget,
   paraphrase: realizeParaphrase,
+  reminder: realizeReminder,
   trap: realizeTrap,
 });
 

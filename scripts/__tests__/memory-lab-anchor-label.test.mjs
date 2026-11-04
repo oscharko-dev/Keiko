@@ -17,9 +17,13 @@ import {
   LABELS,
   aggregateLabels,
   buildLabelSheet,
+  cohensKappa,
   exportLabelSheet,
+  exportReviewSample,
   locateSourceTurn,
   main,
+  measureAgreement,
+  renderAgreement,
   renderLabelSummary,
   summarizeLabels,
 } from "../testing/memory-lab/anchor/label.mjs";
@@ -438,6 +442,172 @@ describe("memory lab anchor labelling", () => {
         { class: "anchor-real", language: "de", status: "accepted", label: "correct" },
       ]);
       expect(renderLabelSummary(summary)).toContain("Hard-zero labels: none.");
+    });
+  });
+
+  describe("human spot check", () => {
+    const AGENT = {
+      "mem-1": "correct",
+      "mem-2": "correct",
+      "mem-3": "unnecessary",
+      "mem-5": "correct",
+      "mem-6": "forbidden",
+    };
+
+    function agentFiles(files) {
+      exportSheet(files);
+      const labels = join(files.root, "agent.json");
+      writeFileSync(labels, JSON.stringify(AGENT));
+      return labels;
+    }
+
+    function draw(files, labels, name, options = {}) {
+      const out = join(files.root, name);
+      const sampled = exportReviewSample({
+        labelsPath: labels,
+        sheetPath: files.sheet,
+        out,
+        ...options,
+      });
+      return { out, sampled, sheet: JSON.parse(readFileSync(out, "utf8")) };
+    }
+
+    function review(path, sheet, verdicts) {
+      for (const entry of sheet.entries) entry.label = verdicts[entry.memoryId] ?? null;
+      writeFileSync(path, JSON.stringify(sheet));
+    }
+
+    it("shows the person what was stored, never what the agent said", () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const { sheet, sampled } = draw(files, labels, "review.json");
+      expect(sampled.drawn).toBe(Object.keys(AGENT).length);
+      expect(sheet.entries.every((entry) => entry.label === null)).toBe(true);
+      expect(sheet.entries.every((entry) => typeof entry.body === "string")).toBe(true);
+      expect(sheet.entries.every((entry) => !("agentLabel" in entry))).toBe(true);
+    });
+
+    it("draws the same subset for a seed, another for another seed, and only what is labelled", () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const ids = ({ sheet }) => sheet.entries.map((entry) => entry.memoryId);
+      const first = draw(files, labels, "a.json", { size: 3, seed: 7 });
+      expect(first.sheet.sample).toEqual({ seed: 7, requested: 3, drawn: 3, population: 5 });
+      expect(ids(draw(files, labels, "b.json", { size: 3, seed: 7 }))).toEqual(ids(first));
+      const others = [8, 9, 10, 11].map((seed) =>
+        ids(draw(files, labels, `s${String(seed)}.json`, { size: 3, seed })).join(),
+      );
+      expect(others.some((other) => other !== ids(first).join())).toBe(true);
+      expect(ids(first).every((id) => id in AGENT)).toBe(true);
+    });
+
+    it("refuses an empty labels file, a bad size, an overwrite and a path in the checkout", () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const empty = join(files.root, "empty.json");
+      writeFileSync(empty, "{}");
+      const out = join(files.root, "r.json");
+      const base = { labelsPath: labels, sheetPath: files.sheet, out };
+      expect(() => exportReviewSample({ ...base, labelsPath: empty })).toThrow(
+        /nothing to spot-check/u,
+      );
+      expect(() => exportReviewSample({ ...base, size: 0 })).toThrow(/positive integer/u);
+      exportReviewSample(base);
+      expect(() => exportReviewSample(base)).toThrow(/overwrite/u);
+      expect(() => exportReviewSample({ ...base, out: join(REPO_ROOT, "review.json") })).toThrow();
+    });
+
+    it("measures agreement and kappa, and reports where the two differ, in counts only", () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const { out, sheet } = draw(files, labels, "review.json");
+      review(out, sheet, { ...AGENT, "mem-3": "correct", "mem-6": "third-party" });
+      const result = measureAgreement({
+        reviewPath: out,
+        labelsPath: labels,
+        sheetPath: files.sheet,
+      });
+      expect(result).toMatchObject({ sampled: 5, compared: 5, agreed: 3, agreement: 0.6 });
+      expect(result.confusion.correct).toMatchObject({ correct: 3, unnecessary: 1 });
+      expect(result.confusion["third-party"].forbidden).toBe(1);
+      const text = renderAgreement(result);
+      expect(text).toContain("agreed on 3");
+      for (const entry of sheet.entries) {
+        expect(text).not.toContain(entry.body);
+        expect(text).not.toContain(entry.scenario);
+      }
+    });
+
+    it("compares only what the person labelled, and refuses a review with no label", () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const { out, sheet } = draw(files, labels, "review.json");
+      review(out, sheet, {});
+      const args = { reviewPath: out, labelsPath: labels, sheetPath: files.sheet };
+      expect(() => measureAgreement(args)).toThrow(/no label yet/u);
+      review(out, sheet, { "mem-1": "correct" });
+      expect(measureAgreement(args)).toMatchObject({ sampled: 5, compared: 1, agreed: 1 });
+    });
+
+    it("refuses a review of a memory the agent never judged", () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const { out, sheet } = draw(files, labels, "review.json");
+      review(out, sheet, { "mem-1": "correct" });
+      writeFileSync(labels, JSON.stringify({ "mem-2": "correct" }));
+      const args = { reviewPath: out, labelsPath: labels, sheetPath: files.sheet };
+      expect(() => measureAgreement(args)).toThrow(/left open/u);
+      const renamed = {
+        ...sheet,
+        entries: sheet.entries.map((e) => ({ ...e, runFile: "other.json" })),
+      };
+      writeFileSync(out, JSON.stringify(renamed));
+      expect(() => measureAgreement(args)).toThrow(/do not cover/u);
+    });
+
+    it("computes kappa from the two label distributions", () => {
+      const pair = (human, agent) => ({ human, agent });
+      expect(cohensKappa([])).toBeNull();
+      // One label on both sides: chance explains everything, so there is no kappa to report.
+      expect(cohensKappa([pair("correct", "correct"), pair("correct", "correct")])).toBeNull();
+      // Perfect agreement over two labels.
+      expect(cohensKappa([pair("correct", "correct"), pair("forbidden", "forbidden")])).toBe(1);
+      // Two raters who always disagree over two evenly used labels: observed 0, chance 0.5.
+      expect(cohensKappa([pair("correct", "forbidden"), pair("forbidden", "correct")])).toBe(-1);
+      // Agreeing because one side always says "correct" is what chance alone reaches: observed and
+      // chance are both 0.75, so kappa is 0 however high the raw agreement looks.
+      const mixed = [
+        pair("correct", "correct"),
+        pair("correct", "correct"),
+        pair("correct", "correct"),
+        pair("forbidden", "correct"),
+      ];
+      expect(cohensKappa(mixed)).toBe(0);
+    });
+
+    it("runs through the command line", async () => {
+      const files = fixture();
+      const labels = agentFiles(files);
+      const out = join(files.root, "cli-review.json");
+      const lines = [];
+      const log = (line) => lines.push(line);
+      const base = ["--labels", labels, "--sheet", files.sheet];
+      expect(await main(["sample", ...base, "--out", out, "--size", "2", "--seed", "3"], log)).toBe(
+        0,
+      );
+      expect(lines.join("\n")).toContain("PASS anchor-label sample drawn=2 population=5");
+      const sheet = JSON.parse(readFileSync(out, "utf8"));
+      review(
+        out,
+        sheet,
+        Object.fromEntries(sheet.entries.map((e) => [e.memoryId, AGENT[e.memoryId]])),
+      );
+      lines.length = 0;
+      expect(await main(["agreement", "--review", out, ...base], log)).toBe(0);
+      expect(lines.join("\n")).toContain("agreed on 2");
+      await expect(main(["sample", ...base, "--out", out, "--size", "x"], log)).rejects.toThrow(
+        /whole/u,
+      );
     });
   });
 

@@ -16,11 +16,14 @@ const LAB_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 
 /** The lab files that decide what a run measures, in the order they are digested. */
 export const INSTRUMENT_FILES = Object.freeze([
+  "corpus/sequence.mjs",
   "corpus/values.mjs",
   "driver.mjs",
+  "evidence-scan.mjs",
   "gateway-calls.mjs",
   "instance.mjs",
   "isolation.mjs",
+  "log-text.mjs",
   "report.mjs",
   "run.mjs",
   "scenario.mjs",

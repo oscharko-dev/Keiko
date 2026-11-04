@@ -120,6 +120,31 @@ describe("memory lab scenario format", () => {
     );
   });
 
+  it("measures the form of an answer on an answer probe only, and knows two forms and languages", () => {
+    const withProbe = (probe) => ({
+      ...valid(),
+      probes: [{ id: "q", question: "Wie?", ...probe }],
+    });
+    const answer = { kind: "answer", terms: [["Tabelle"]] };
+    expect(() =>
+      validateScenario(
+        withProbe({
+          language: "en",
+          expect: { ...answer, format: "table", forbiddenFormat: "list" },
+        }),
+      ),
+    ).not.toThrow();
+    expect(() => validateScenario(withProbe({ expect: { ...answer, format: "chart" } }))).toThrow(
+      /format must be one of table\|list/u,
+    );
+    expect(() =>
+      validateScenario(withProbe({ expect: { kind: "abstain", forbiddenFormat: "table" } })),
+    ).toThrow(/only measured on an answer probe/u);
+    expect(() => validateScenario(withProbe({ language: "fr", expect: answer }))).toThrow(
+      /language must be one of de\|en/u,
+    );
+  });
+
   it("loads a directory, sorts by id and refuses duplicate ids", () => {
     directory = mkdtempSync(join(tmpdir(), "memory-lab-scenarios-"));
     writeFileSync(join(directory, "b.json"), JSON.stringify({ ...valid(), id: "zeta-scenario" }));
@@ -142,7 +167,9 @@ describe("memory lab scenario format", () => {
     const scenarios = loadScenarioDirectory(DEFAULT_SCENARIO_DIR);
     expect(scenarios.length).toBeGreaterThanOrEqual(10);
     for (const scenario of scenarios) expect(SCENARIO_CLASSES).toContain(scenario.class);
-    expect(new Set(scenarios.map((scenario) => scenario.language))).toEqual(new Set(["de", "en"]));
+    expect(new Set(scenarios.map((scenario) => scenario.language))).toEqual(
+      new Set(["de", "en", "mixed"]),
+    );
     const first = scenarioSetManifest(scenarios);
     const second = scenarioSetManifest(loadScenarioDirectory(DEFAULT_SCENARIO_DIR));
     expect(second).toEqual(first);

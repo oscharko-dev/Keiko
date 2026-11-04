@@ -3,7 +3,7 @@
 // list, newest first, like the real list route, and records every call it receives.
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { runScenario } from "../testing/memory-lab/driver.mjs";
+import { askedQuestion, runScenario } from "../testing/memory-lab/driver.mjs";
 import { validateScenario } from "../testing/memory-lab/scenario.mjs";
 
 const TABLES = "Ich bevorzuge Tabellen, wenn du mir Zahlen zeigst.";
@@ -290,5 +290,22 @@ describe("anchor text keeps no body", () => {
     );
     expect(result.store.memories[0].body).toBe(TABLES);
     expect(result.probes[0]).toHaveProperty("answer");
+  });
+});
+
+describe("the text a probe sends", () => {
+  const probe = { id: "q", question: "How do I write reports?" };
+
+  it("asks for English on an English probe, because the answer's default is German", () => {
+    expect(askedQuestion({ language: "en" }, probe)).toBe("How do I write reports? (in English)");
+    expect(askedQuestion({ language: "mixed" }, { ...probe, language: "en" })).toBe(
+      "How do I write reports? (in English)",
+    );
+  });
+
+  it("sends a German probe and a mixed probe without a language of its own as written", () => {
+    expect(askedQuestion({ language: "de" }, probe)).toBe(probe.question);
+    expect(askedQuestion({ language: "mixed" }, probe)).toBe(probe.question);
+    expect(askedQuestion({ language: "mixed" }, { ...probe, language: "de" })).toBe(probe.question);
   });
 });

@@ -6,6 +6,10 @@
 //        --scenarios <scenario dir> --out <sheet.json> [--arm product]
 //   node scripts/testing/memory-lab/anchor/label.mjs summarize --labels <file> [--sheet <sheet.json>] \
 //        [--status accepted]
+//   node scripts/testing/memory-lab/anchor/label.mjs sample --labels <agent labels> [--sheet <sheet.json>] \
+//        --out <review.json> [--size 50] [--seed 1]
+//   node scripts/testing/memory-lab/anchor/label.mjs agreement --review <review.json> \
+//        --labels <agent labels> [--sheet <sheet.json>]
 //
 // `export` reads `runs/*.json` of a lab run whose memory bodies were retained and writes one sheet
 // entry per stored memory: `{runFile, memoryId, scenario, class, language, arm, repetition, status,
@@ -19,8 +23,14 @@
 // - aggregates only: no body, no source turn, no scenario id. Memories without a label are counted as
 // unlabelled and never enter the precision.
 //
+// `sample` and `agreement` are the human spot check of an agent's labels. `sample` draws a seeded
+// random subset into a new sheet with every label empty, so the person judges without seeing what the
+// agent said. `agreement` compares the two and prints the agreement, Cohen's kappa (agreement beyond
+// what the two label distributions reach by chance) and the confusion counts - counts only.
+//
 // The sheet and the run directory hold real text: both stay outside every git work tree (a sheet in
 // the checkout is refused), and the sheet is never overwritten, so labels are never lost.
+import { createHash } from "node:crypto";
 import { existsSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,7 +48,9 @@ import {
 
 export const LABELS = Object.freeze(["correct", "unnecessary", "forbidden", "third-party"]);
 const SHEET_KIND = "memory-lab-anchor-label-sheet";
-const COMMANDS = new Set(["export", "summarize"]);
+const COMMANDS = new Set(["export", "summarize", "sample", "agreement"]);
+const DEFAULT_SAMPLE_SIZE = 50;
+const DEFAULT_SAMPLE_SEED = 1;
 // Labels that mean the product stored something it must never store (the lab's hard-zero classes).
 const HARD_ZERO_LABELS = Object.freeze(["forbidden", "third-party"]);
 
@@ -229,6 +241,135 @@ export function summarizeLabels({ labelsPath, sheetPath, statuses }) {
   return { ...aggregateLabels(entries), statuses: statuses ?? null };
 }
 
+function loadLabelled(labelsPath, sheetPath) {
+  const labelsFile = assertOutsideCheckout(labelsPath, "--labels");
+  const sheetFile =
+    sheetPath === undefined ? undefined : assertOutsideCheckout(sheetPath, "--sheet");
+  const labels = readJsonFile(labelsFile, "the labels file");
+  const sheet = sheetFile === undefined ? undefined : readJsonFile(sheetFile, "the label sheet");
+  return labelledEntries(labels, sheet);
+}
+
+function sampleRank(seed, entry) {
+  return createHash("sha256")
+    .update(`${String(seed)}\0${entry.runFile}\0${entry.memoryId}`)
+    .digest("hex");
+}
+
+/**
+ * Draws the review sheet of a person: a seeded random subset of what the agent labelled, with every
+ * label empty, so the agent's verdict cannot steer the person's.
+ */
+export function exportReviewSample({
+  labelsPath,
+  sheetPath,
+  out,
+  size = DEFAULT_SAMPLE_SIZE,
+  seed = DEFAULT_SAMPLE_SEED,
+}) {
+  const outFile = assertOutsideCheckout(out, "--out");
+  if (existsSync(outFile))
+    throw new RangeError(`refusing to overwrite an existing sheet at ${outFile}`);
+  if (!Number.isInteger(size) || size < 1)
+    throw new RangeError("--size must be a positive integer");
+  const labelled = loadLabelled(labelsPath, sheetPath).filter((entry) => entry.label !== null);
+  if (labelled.length === 0)
+    throw new RangeError("the labels file holds no label, so there is nothing to spot-check");
+  const ranked = labelled
+    .map((entry) => ({ entry, rank: sampleRank(seed, entry) }))
+    .toSorted((left, right) => compareStrings(left.rank, right.rank));
+  const entries = ranked.slice(0, size).map(({ entry }) => ({ ...entry, label: null }));
+  const sheet = {
+    schemaVersion: 1,
+    kind: SHEET_KIND,
+    labels: LABELS,
+    sample: { seed, requested: size, drawn: entries.length, population: labelled.length },
+    entries,
+  };
+  ensurePrivateDirectory(dirname(outFile));
+  writeNewPrivateFile(outFile, `${JSON.stringify(sheet, null, 2)}\n`);
+  return { out: resolve(out), drawn: entries.length, population: labelled.length };
+}
+
+function entryKey(entry) {
+  return `${entry.runFile}\0${entry.memoryId}`;
+}
+
+function comparedPairs(reviewed, agent) {
+  const agentLabels = new Map(agent.map((entry) => [entryKey(entry), entry.label]));
+  const pairs = [];
+  for (const entry of reviewed) {
+    if (entry.label === null) continue;
+    if (!agentLabels.has(entryKey(entry)))
+      throw new RangeError("the review names a memory the agent's labels do not cover");
+    const agentLabel = agentLabels.get(entryKey(entry));
+    if (agentLabel === null) throw new RangeError("the review names a memory the agent left open");
+    pairs.push({ human: entry.label, agent: agentLabel });
+  }
+  return pairs;
+}
+
+function shareOf(pairs, side, label) {
+  return pairs.filter((pair) => pair[side] === label).length / pairs.length;
+}
+
+/** Cohen's kappa; null when the two sides used one label only, where chance explains everything. */
+export function cohensKappa(pairs) {
+  if (pairs.length === 0) return null;
+  const observed = pairs.filter((pair) => pair.human === pair.agent).length / pairs.length;
+  const chance = LABELS.reduce(
+    (sum, label) => sum + shareOf(pairs, "human", label) * shareOf(pairs, "agent", label),
+    0,
+  );
+  return chance === 1 ? null : Math.round(((observed - chance) / (1 - chance)) * 10000) / 10000;
+}
+
+function confusionOf(pairs) {
+  const confusion = {};
+  for (const human of LABELS) {
+    confusion[human] = {};
+    for (const agent of LABELS)
+      confusion[human][agent] = pairs.filter(
+        (pair) => pair.human === human && pair.agent === agent,
+      ).length;
+  }
+  return confusion;
+}
+
+/** How far a person agrees with the agent on the reviewed sample; counts only. */
+export function measureAgreement({ reviewPath, labelsPath, sheetPath }) {
+  const reviewFile = assertOutsideCheckout(reviewPath, "--review");
+  const reviewed = labelledEntries(readJsonFile(reviewFile, "the review sheet"));
+  const pairs = comparedPairs(reviewed, loadLabelled(labelsPath, sheetPath));
+  if (pairs.length === 0)
+    throw new RangeError("the review holds no label yet, so there is no agreement to measure");
+  const agreed = pairs.filter((pair) => pair.human === pair.agent).length;
+  return {
+    sampled: reviewed.length,
+    compared: pairs.length,
+    agreed,
+    agreement: ratio(agreed, pairs.length),
+    kappa: cohensKappa(pairs),
+    confusion: confusionOf(pairs),
+  };
+}
+
+/** The Markdown table a person reads; rows are the person's label, columns the agent's. */
+export function renderAgreement(result) {
+  const rows = LABELS.map(
+    (human) =>
+      `| ${human} | ${LABELS.map((agent) => String(result.confusion[human][agent])).join(" | ")} |`,
+  );
+  return [
+    `Compared ${String(result.compared)} of ${String(result.sampled)} sampled memories: agreed on ${String(result.agreed)}.`,
+    `Agreement ${cell(result.agreement)}, Cohen's kappa ${cell(result.kappa)}.`,
+    "",
+    `| Person \\ Agent | ${LABELS.join(" | ")} |`,
+    `| --- | ${LABELS.map(() => "---").join(" | ")} |`,
+    ...rows,
+  ].join("\n");
+}
+
 function cell(value) {
   return value === null || value === undefined ? "n/a" : String(value);
 }
@@ -265,6 +406,9 @@ const OPTIONS = {
   labels: { type: "string" },
   sheet: { type: "string" },
   status: { type: "string" },
+  review: { type: "string" },
+  size: { type: "string" },
+  seed: { type: "string" },
   help: { type: "boolean", short: "h", default: false },
 };
 
@@ -272,6 +416,8 @@ function usage() {
   return [
     "usage: node scripts/testing/memory-lab/anchor/label.mjs export --run <run dir> --scenarios <dir> --out <sheet.json> [--arm product]",
     "       node scripts/testing/memory-lab/anchor/label.mjs summarize --labels <file> [--sheet <sheet.json>] [--status accepted,proposed]",
+    "       node scripts/testing/memory-lab/anchor/label.mjs sample --labels <file> [--sheet <sheet.json>] --out <review.json> [--size 50] [--seed 1]",
+    "       node scripts/testing/memory-lab/anchor/label.mjs agreement --review <review.json> --labels <file> [--sheet <sheet.json>]",
     `  labels: ${LABELS.join(", ")}; the sheet holds real text and must stay outside every git work tree`,
   ].join("\n");
 }
@@ -315,6 +461,48 @@ function runSummarize(values, log) {
   log(renderLabelSummary(summary));
 }
 
+function integerOption(value, name, fallback) {
+  if (value === undefined) return fallback;
+  if (!/^\d+$/.test(value)) throw new RangeError(`--${name} must be a whole number`);
+  return Number(value);
+}
+
+function resolvedOptional(value) {
+  return value === undefined ? undefined : resolve(value);
+}
+
+function runSample(values, log) {
+  requireOptions(values, ["labels", "out"]);
+  const sampled = exportReviewSample({
+    labelsPath: resolve(values.labels),
+    sheetPath: resolvedOptional(values.sheet),
+    out: resolve(values.out),
+    size: integerOption(values.size, "size", DEFAULT_SAMPLE_SIZE),
+    seed: integerOption(values.seed, "seed", DEFAULT_SAMPLE_SEED),
+  });
+  log(`review sheet: ${sampled.out}`);
+  log(
+    `PASS anchor-label sample drawn=${String(sampled.drawn)} population=${String(sampled.population)}`,
+  );
+}
+
+function runAgreement(values, log) {
+  requireOptions(values, ["review", "labels"]);
+  const result = measureAgreement({
+    reviewPath: resolve(values.review),
+    labelsPath: resolve(values.labels),
+    sheetPath: resolvedOptional(values.sheet),
+  });
+  log(renderAgreement(result));
+}
+
+const COMMAND_BODIES = {
+  export: runExport,
+  summarize: runSummarize,
+  sample: runSample,
+  agreement: runAgreement,
+};
+
 /** The CLI body; returns the exit code. */
 export async function main(argv = process.argv.slice(2), log = (line) => console.log(line)) {
   let parsed;
@@ -330,8 +518,7 @@ export async function main(argv = process.argv.slice(2), log = (line) => console
   }
   if (extra.length > 0 || !COMMANDS.has(command))
     throw new UsageError(`unknown command\n\n${usage()}`);
-  if (command === "export") runExport(parsed.values, log);
-  else runSummarize(parsed.values, log);
+  COMMAND_BODIES[command](parsed.values, log);
   return 0;
 }
 

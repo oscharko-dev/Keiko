@@ -84,12 +84,13 @@ function assembleScenario({ blueprint, header, oracle, turns, probes }) {
   const optional = (name, list) => (list.length > 0 ? { [name]: list } : {});
   return {
     schemaVersion: SCENARIO_SCHEMA_VERSION,
-    ...header,
     language: blueprint.language,
+    ...header,
     truth: oracle.truth,
     ...optional("superseded", oracle.superseded),
     ...optional("forgotten", oracle.forgotten),
     ...optional("forbidden", oracle.forbidden),
+    ...optional("poison", oracle.poison),
     turns,
     probes,
   };
@@ -104,7 +105,7 @@ export function scenarioMeta({ blueprint, scenario, settings, plan, counts }) {
     scenarioId: scenario.id,
     blueprintId: blueprint.id,
     blueprintDigest: blueprintDigest(blueprint),
-    language: blueprint.language,
+    language: scenario.language,
     role: blueprint.role,
     size: settings.size,
     messages: scenario.turns.length * 2,
@@ -150,10 +151,19 @@ export async function runGeneration(blueprint, settings, shape) {
   const { random, plan, turnCount } = planConversation(blueprint, settings, shape);
   const { units } = plan;
   const isClean = createCleanTester(oracle);
-  const context = createContext({ blueprint, writer: settings.writer, random, isClean });
+  const context = createContext({
+    blueprint,
+    writer: settings.writer,
+    random,
+    isClean,
+    fillerLanguage: shape.fillerLanguage,
+  });
   const { turns, designated } = await realizePlan(plan, context);
   const counts = hardnessCounts(units);
-  const probes = deriveProbes(blueprint, random, shape.probeGroups);
+  // Around a blueprint's own sentence the conversation may be in another language; its probes are not.
+  const probes = deriveProbes(blueprint, random, shape.probeGroups).map((probe) =>
+    shape.fillerLanguage === undefined ? probe : { ...probe, language: blueprint.language },
+  );
   const header = shape.header({ turns, counts });
   const scenario = validateScenario(assembleScenario({ blueprint, header, oracle, turns, probes }));
   verifyScenario({
@@ -179,7 +189,9 @@ export async function generateScenario(blueprint, options) {
   const settings = generatorSettings(options);
   const checked = validateBlueprint(blueprint);
   const { scenario, designated, plan, counts } = await runGeneration(
-    checked,
+    // A person's conversation has no poisoned memories: a store seeded with thirty of them would
+    // measure nothing about learning, and the focused scenarios measure them one by one.
+    { ...checked, poisons: [] },
     settings,
     personShape(checked, settings),
   );

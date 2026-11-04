@@ -28,7 +28,7 @@
   "probes": [
     {
       "id": "related",
-      "question": "How should I show you numbers?",
+      "question": "How should you show me numbers?",
       "expect": {
         "kind": "answer",
         "terms": [["table*"]]
@@ -36,10 +36,11 @@
     },
     {
       "id": "related-no-overlap",
-      "question": "Summarize the quarterly results for me.",
+      "question": "Summarize the quarter for me: revenue 120, costs 80, profit 40.",
       "expect": {
         "kind": "answer",
-        "terms": [["table*"]]
+        "terms": [["table*"]],
+        "format": "table"
       }
     },
     {

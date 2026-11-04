@@ -42,7 +42,7 @@
   "probes": [
     {
       "id": "related",
-      "question": "Wie soll ich dir Zahlen zeigen?",
+      "question": "Wie sollst du mir Zahlen zeigen?",
       "expect": {
         "kind": "answer",
         "terms": [["Liste*"]],
@@ -51,11 +51,13 @@
     },
     {
       "id": "related-no-overlap",
-      "question": "Stell mir die Umsatzzahlen des letzten Quartals zusammen.",
+      "question": "Stell mir das Quartal zusammen: Umsatz 120, Kosten 80, Gewinn 40.",
       "expect": {
         "kind": "answer",
         "terms": [["Liste*"]],
-        "forbidden": [["Tabelle*"]]
+        "forbidden": [["Tabelle*"]],
+        "format": "list",
+        "forbiddenFormat": "table"
       }
     }
   ]

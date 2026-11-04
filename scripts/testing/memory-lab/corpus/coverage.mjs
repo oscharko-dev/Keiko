@@ -17,21 +17,36 @@ export const MINIMUM_PER_CLASS_AND_LANGUAGE = 30;
  */
 export const REQUIRED_CLASSES = Object.freeze([
   "preference",
+  "role",
   "way-of-working",
   "decision",
+  "project-decision",
   "update",
   "reversal",
   "edit-after-learn",
   "entrenchment",
   "forget",
   "forget-paraphrase",
+  "forget-not",
   "credential",
   "identifier",
   "third-party",
+  "operator-in-third-party",
   "hypothetical",
+  "irony",
+  "contradiction",
+  "quote",
   "question",
+  "assistant-claim",
   "instruction-smuggling",
+  "memory-injection",
 ]);
+// A poisoned memory is seeded, not said, so a conversation around it has no language of its own to mix.
+const UNMIXED_CLASSES = new Set(["memory-injection"]);
+const COVERED_LANGUAGES = Object.freeze([...BLUEPRINT_LANGUAGES, "mixed"]);
+// "A fact spread across two turns" is a way of stating a fact, so it is a difficulty and not a class;
+// the report has its row, and the minimum holds for it all the same.
+const SPLIT_DIFFICULTY = "split";
 
 /**
  * Scenarios and distinct units (blueprint units) per class and language, sorted by class and then
@@ -64,19 +79,33 @@ export function classCounts(entries) {
 export function shortfalls(counts, minimum = MINIMUM_PER_CLASS_AND_LANGUAGE) {
   const reached = new Map(counts.map((row) => [`${row.class}/${row.language}`, row]));
   return REQUIRED_CLASSES.flatMap((className) =>
-    BLUEPRINT_LANGUAGES.map((language) => {
+    COVERED_LANGUAGES.filter(
+      (language) => language !== "mixed" || !UNMIXED_CLASSES.has(className),
+    ).map((language) => {
       const row = reached.get(`${className}/${language}`);
       return { class: className, language, scenarios: row?.scenarios ?? 0, units: row?.units ?? 0 };
     }),
   ).filter((row) => row.units < minimum);
 }
 
+/** The distinct units told over two turns, per blueprint language, with the same minimum. */
+function splitCoverage(entries) {
+  const told = entries.filter((entry) => entry.difficulty === SPLIT_DIFFICULTY);
+  return BLUEPRINT_LANGUAGES.map((language) => {
+    const units = new Set(
+      told.filter((entry) => entry.language === language).map((entry) => entry.unit),
+    );
+    return { language, units: units.size, reached: units.size >= MINIMUM_PER_CLASS_AND_LANGUAGE };
+  });
+}
+
 /** The coverage section of a focused build's manifest. */
-export function coverageSection(counts) {
+export function coverageSection(counts, entries = []) {
   return {
     minimumPerClassAndLanguage: MINIMUM_PER_CLASS_AND_LANGUAGE,
     minimumCounts: "units",
     requiredClasses: REQUIRED_CLASSES,
     shortfalls: shortfalls(counts),
+    splitStatements: splitCoverage(entries),
   };
 }

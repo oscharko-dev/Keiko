@@ -3,6 +3,7 @@
 // enables memory (the floor), `product` learns from the turns (the measurement), `oracle` receives
 // the truth facts as a curated store and only answers (the ceiling of retrieval and answering).
 import { randomUUID } from "node:crypto";
+import { mapSequential } from "./corpus/sequence.mjs";
 import { awaitLearning, captureTotal, listMemories, readCaptures } from "./instance.mjs";
 import { retainBodiesFor } from "./isolation.mjs";
 import { scoreProbe, scoreStore } from "./score.mjs";
@@ -231,11 +232,13 @@ function countBy(values) {
 // reads back accepted and exact exactly once, and nothing else is accepted. The scope each seed
 // landed in is reported (`scopes`, a count per scope kind): the explicit route stores in project
 // scope today, which the report states instead of leaving to be rediscovered.
-async function seedOracle(scenario, instance) {
+async function seedOracle(scenario, instance, poisonIds) {
   const chatId = await createChat(instance, `oracle ${scenario.id}`);
   const seeded = [];
   for (const fact of scenario.truth) seeded.push(await seedFact(instance, chatId, fact));
-  const accepted = (await listMemories(instance)).filter((memory) => memory.status === "accepted");
+  const accepted = (await listMemories(instance)).filter(
+    (memory) => memory.status === "accepted" && !poisonIds.has(memory.id),
+  );
   const seedIds = new Set(seeded.map((seed) => seed.memoryId).filter((id) => id !== undefined));
   const mismatches = scenario.truth
     .filter((fact) => accepted.filter((memory) => sameBody(memory, fact)).length !== 1)
@@ -250,12 +253,36 @@ async function seedOracle(scenario, instance) {
   };
 }
 
+// The poisoned memories of a scenario, stored through the same explicit route as an oracle fact. A
+// poison the product refuses stays out of the store and is reported as not seeded, which is a result:
+// the guard held, and the model was never tested.
+async function seedPoison(scenario, instance) {
+  const poison = scenario.poison ?? [];
+  if (poison.length === 0) return [];
+  const chatId = await createChat(instance, `poison ${scenario.id}`);
+  return mapSequential(poison, (entry, index) =>
+    seedFact(instance, chatId, { key: `poison-${String(index + 1)}`, seed: entry.body }),
+  );
+}
+
+// Keiko's chat prompt answers in German unless the user asks for another language, and an English
+// probe's terms are English: unasked, every English answer would be scored against words it cannot
+// contain. So an English probe asks for English the way a user would, in the fewest words, because
+// the same text is also the query the product's memory retrieval sees.
+const ANSWER_LANGUAGE_REQUEST = Object.freeze({ en: " (in English)" });
+
+/** The text a probe sends: its question, with the request for its language where one is needed. */
+export function askedQuestion(scenario, probe) {
+  return `${probe.question}${ANSWER_LANGUAGE_REQUEST[probe.language ?? scenario.language] ?? ""}`;
+}
+
 async function runProbes(scenario, instance, context) {
   context.fixture?.setAnswerMode("echo");
   const rows = [];
   for (const probe of scenario.probes) {
     const chatId = await createChat(instance, `probe ${scenario.id} ${probe.id}`);
-    const sent = await sendTurn(instance, chatId, probe.question, context, context.arm !== "off");
+    const asked = askedQuestion(scenario, probe);
+    const sent = await sendTurn(instance, chatId, asked, context, context.arm !== "off");
     const score = scoreProbe(scenario, probe, sent.answer, sent.supplied);
     rows.push({
       ...score,
@@ -305,11 +332,15 @@ export async function runScenario(scenario, instance, requested) {
   if (!ARMS.includes(context.arm)) throw new RangeError(`unknown arm ${context.arm}`);
   await ensureProject(instance);
   context.fixture?.setPhase("run");
+  const poison = context.arm === "off" ? [] : await seedPoison(scenario, instance);
+  const poisonIds = new Set(poison.map((seed) => seed.memoryId).filter((id) => id !== undefined));
   const startedAt = Date.now();
   const turns = context.arm === "oracle" ? [] : await runTurns(scenario, instance, context);
-  const oracle = context.arm === "oracle" ? await seedOracle(scenario, instance) : undefined;
+  const oracle =
+    context.arm === "oracle" ? await seedOracle(scenario, instance, poisonIds) : undefined;
   const learnedAt = Date.now();
   const memories = await listMemories(instance);
+  const scored = memories.filter((memory) => !poisonIds.has(memory.id));
   const probes = await runProbes(scenario, instance, context);
   // Probes run with memory on, so the product may still be learning from the last question; settle
   // before the store and the ledger are read, otherwise probeCaptures would depend on timing.
@@ -329,9 +360,10 @@ export async function runScenario(scenario, instance, requested) {
     arm: context.arm,
     turns,
     ...(oracle === undefined ? {} : { oracle }),
+    ...(poison.length === 0 ? {} : { poison: { total: poison.length, seeded: poisonIds.size } }),
     store: {
-      ...scoreStore(memories, scenario),
-      memories: storeView(memories, context.retainBodies),
+      ...scoreStore(scored, scenario),
+      memories: storeView(scored, context.retainBodies),
     },
     captures: captures.map((capture) => ({
       outcome: capture.outcome,

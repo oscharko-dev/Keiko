@@ -21,7 +21,7 @@
   "probes": [
     {
       "id": "rules",
-      "question": "Wie soll ich antworten?",
+      "question": "Wie sollst du mir antworten?",
       "expect": {
         "kind": "no-memory"
       }

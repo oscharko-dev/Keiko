@@ -28,9 +28,14 @@ describe("memory lab corpus path guard", () => {
   it("is the one guard the anchor tooling uses, so the main checkout is refused as well", () => {
     // The failure this pins: the corpus tools had a guard of their own that knew this worktree
     // only, so the main checkout of the repository was accepted for `seal --out` and `--key-file`.
+    // A worktree's sibling lies inside the main checkout; the shape is built here, because a clean
+    // CI checkout is no worktree and has no main checkout around it.
+    outside = mkdtempSync(join(tmpdir(), "memory-lab-main-"));
+    mkdirSync(join(outside, ".git"));
+    mkdirSync(join(outside, ".claude", "worktrees"), { recursive: true });
     expect(() =>
-      assertOutsideCheckout(join(REPO_ROOT, "..", "memory-lab-sibling"), "--out"),
-    ).toThrow(/outside (the checkout|every git work tree)/u);
+      assertOutsideCheckout(join(outside, ".claude", "worktrees", "sibling"), "--out"),
+    ).toThrow(/outside every git work tree/u);
   });
 
   it("accepts a directory outside every work tree and returns it resolved", () => {

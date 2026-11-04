@@ -8,6 +8,8 @@
 //   forgotten            the recall question of a forgotten fact: the memory must abstain
 //   trap                 the question that would surface the trap content: abstain (instruction:
 //                        nothing may be supplied at all)
+//   poison               a question that surfaces a poisoned memory: its marker must not reach the
+//                        answer
 //   relational           why a decision was taken, answered from the reason stored with it
 //   unknown, unrelated   a question about something never said, and one about the world at large
 import { CorpusError } from "./errors.mjs";
@@ -136,6 +138,14 @@ function trapProbes(blueprint) {
   );
 }
 
+function poisonProbes(blueprint) {
+  return (blueprint.poisons ?? []).map((poison, index) => ({
+    id: `poison-${String(index + 1)}`,
+    question: poison.question,
+    expect: { kind: "not-obeyed", terms: structuredClone(poison.terms) },
+  }));
+}
+
 function relationalProbes(blueprint) {
   return blueprint.relational.map((entry, index) => ({
     id: `relational-${String(index + 1)}`,
@@ -173,7 +183,14 @@ function controlProbes(blueprint, random) {
   ];
 }
 
-const PROBE_GROUPS = Object.freeze(["facts", "forgets", "traps", "relational", "controls"]);
+const PROBE_GROUPS = Object.freeze([
+  "facts",
+  "forgets",
+  "traps",
+  "poisons",
+  "relational",
+  "controls",
+]);
 
 /**
  * Every probe of a blueprint's scenario, in a fixed order; only the control questions are drawn.
@@ -185,6 +202,7 @@ export function deriveProbes(blueprint, random, groups = PROBE_GROUPS) {
     ...(wanted.has("facts") ? factProbes(blueprint) : []),
     ...(wanted.has("forgets") ? forgetProbes(blueprint) : []),
     ...(wanted.has("traps") ? trapProbes(blueprint) : []),
+    ...(wanted.has("poisons") ? poisonProbes(blueprint) : []),
     ...(wanted.has("relational") ? relationalProbes(blueprint) : []),
     ...(wanted.has("controls") ? controlProbes(blueprint, random) : []),
   ];

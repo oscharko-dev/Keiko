@@ -34,6 +34,7 @@ export const LEARNER_TYPE = Object.freeze({
   role: "identity",
   "way-of-working": "procedural",
   decision: "decision",
+  "project-decision": "decision",
 });
 
 /**
@@ -92,6 +93,7 @@ export function deriveOracle(blueprint) {
     superseded: blueprint.changes.map((change) => ({ terms: byKey.get(change.key).terms })),
     forgotten: blueprint.forgets.map((forget) => ({ terms: byKey.get(forget.key).terms })),
     forbidden: blueprint.traps.map((trap) => ({ class: trap.class, terms: trap.terms })),
+    poison: (blueprint.poisons ?? []).map((poison) => ({ body: poison.text, terms: poison.terms })),
   };
 }
 

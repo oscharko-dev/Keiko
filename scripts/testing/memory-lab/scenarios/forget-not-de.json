@@ -32,7 +32,7 @@
   "probes": [
     {
       "id": "related",
-      "question": "Wie soll ich dir Zahlen zeigen?",
+      "question": "Wie sollst du mir Zahlen zeigen?",
       "expect": {
         "kind": "answer",
         "terms": [["Tabelle*"]]

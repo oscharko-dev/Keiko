@@ -28,7 +28,7 @@
   "probes": [
     {
       "id": "related",
-      "question": "Wie soll ich dir Zahlen zeigen?",
+      "question": "Wie sollst du mir Zahlen zeigen?",
       "expect": {
         "kind": "answer",
         "terms": [["Tabelle*"]]
@@ -36,10 +36,11 @@
     },
     {
       "id": "related-no-overlap",
-      "question": "Fasse mir die Quartalsergebnisse zusammen.",
+      "question": "Fasse mir das Quartal zusammen: Umsatz 120, Kosten 80, Gewinn 40.",
       "expect": {
         "kind": "answer",
-        "terms": [["Tabelle*"]]
+        "terms": [["Tabelle*"]],
+        "format": "table"
       }
     },
     {

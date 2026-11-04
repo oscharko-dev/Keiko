@@ -20,6 +20,7 @@ export const UNSPLIT_KINDS = Object.freeze(["plain", "embedded", "noisy"]);
 const PARAPHRASE_GAP = 0.12;
 const PARAPHRASE_SPREAD = 0.18;
 const PARAPHRASE_LIMIT = 0.97;
+const REMINDER_ANCHOR = 0.75;
 
 /** How many questions of the person make the product supply a fact before it is corrected. */
 export const ASK_COUNT = 3;
@@ -53,6 +54,7 @@ function factUnits(blueprint, entrenched) {
   const events = new Map([
     ...blueprint.changes.map((change) => [change.key, changed(change)]),
     ...blueprint.forgets.map((forget) => [forget.key, `forget:${forget.key}`]),
+    ...(blueprint.reminders ?? []).map((reminder) => [reminder.key, `reminder:${reminder.key}`]),
   ]);
   return blueprint.facts
     .filter((fact) => !taught.has(fact.key))
@@ -119,6 +121,19 @@ function forgetUnits(blueprint, byKey, random, withParaphrase) {
     };
     return [command, paraphrase];
   });
+}
+
+// "Vergiss nicht" comes after the fact it must not take away, as a plain turn of its own.
+function reminderUnits(blueprint, byKey) {
+  return (blueprint.reminders ?? []).map((reminder) => ({
+    id: `reminder:${reminder.key}`,
+    kind: "reminder",
+    fact: byKey.get(reminder.key),
+    reminder,
+    anchor: REMINDER_ANCHOR,
+    hardness: "plain",
+    length: 1,
+  }));
 }
 
 function trapUnits(blueprint, byKey, bareCommands) {
@@ -197,6 +212,7 @@ export function buildUnits(blueprint, random, options = {}) {
     ...changeUnits(blueprint, byKey, options),
     ...(entrenched ? askUnits(blueprint, byKey, random) : []),
     ...forgetUnits(blueprint, byKey, random, options.paraphrase !== false),
+    ...reminderUnits(blueprint, byKey),
     ...trapUnits(blueprint, byKey, drawn),
   ];
   return drawn ? withHardness(units, random) : givenHardness(units, options.hardnessOf);

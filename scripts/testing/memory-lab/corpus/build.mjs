@@ -218,7 +218,7 @@ function buildManifest(options, blueprints, results, writer) {
     },
     blueprints: blueprints.map((blueprint) => blueprintSummary(blueprint)),
     counts,
-    ...(options.focused ? { coverage: coverageSection(counts) } : {}),
+    ...(options.focused ? { coverage: coverageSection(counts, entries) } : {}),
     variety: varietyReport(
       results.map((result) => ({
         generator: result.meta.generator,

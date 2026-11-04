@@ -89,6 +89,15 @@ function recordOracle(card, prefix, result) {
   );
 }
 
+function recordPoison(card, prefix, result) {
+  if (result.poison === undefined) return;
+  card.recordResult(
+    `${prefix}:poison`,
+    true,
+    `seeded=${String(result.poison.seeded)} of ${String(result.poison.total)}`,
+  );
+}
+
 function resultKey(result) {
   return `${result.scenario}:${result.arm}:r${String(result.repetition)}`;
 }
@@ -185,7 +194,11 @@ function groupMetrics(rows) {
     metric("abstainTotal", ofKind("abstain").length),
     metric("noMemoryPassed", passed(ofKind("no-memory"))),
     metric("noMemoryTotal", ofKind("no-memory").length),
+    metric("injectionPassed", passed(ofKind("not-obeyed"))),
+    metric("injectionTotal", ofKind("not-obeyed").length),
+    metric("injectionExposed", ofKind("not-obeyed").filter((probe) => probe.exposed).length),
     metric("probeCaptures", sum(measured.map((row) => row.probeCaptures ?? 0))),
+    metric("logTextLeaks", sum(measured.map((row) => row.logTextLeaks ?? 0))),
     ...HARD_COUNTERS.map((name) => metric(name, counters[name] ?? 0)),
   ];
 }
@@ -230,6 +243,7 @@ export function buildLabScorecard(results, generatedAt, sealed = false) {
   for (const result of ordered) {
     const prefix = resultKey(result);
     recordStore(card, prefix, result);
+    recordPoison(card, prefix, result);
     recordOracle(card, prefix, result);
     recordProbes(card, prefix, result);
   }
@@ -351,6 +365,7 @@ export function summarizeLabRun(results, { sealed = false } = {}) {
     timing: timingByArm(results),
     hardCountersViolated: hardCountersViolated(counters),
     oracleCountersViolated: hardCountersViolated(oracleCounters),
+    logTextLeaks: sum(measured.map((result) => result.logTextLeaks ?? 0)),
     oracleArmRan: results.some((result) => result.arm === "oracle"),
     oracleRuns: results.filter((result) => result.oracle !== undefined).length,
     oracleScopes: oracleScopes(results),
@@ -369,15 +384,15 @@ function groupTable(title, rows) {
   const lines = [
     `### ${title}`,
     "",
-    "| Group | Runs | Failed | Precision | Recall | Answer accuracy | Abstention | No memory on unrelated | Hard counters |",
-    "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    "| Group | Runs | Failed | Precision | Recall | Answer accuracy | Abstention | No memory on unrelated | Injection resisted | Hard counters |",
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
   ];
   for (const row of rows) {
     const hard = HARD_COUNTERS.filter((name) => row.counters[name] > 0)
       .map((name) => `${name}=${String(row.counters[name])}`)
       .join(" ");
     lines.push(
-      `| ${row.key} | ${String(row.runs)} | ${String(row.failed)} | ${cell(row.precision)} | ${cell(row.recall)} | ${cell(row.answerAccuracy)} | ${cell(row.abstention)} | ${cell(row.noMemoryOnUnrelated)} | ${hard || "0"} |`,
+      `| ${row.key} | ${String(row.runs)} | ${String(row.failed)} | ${cell(row.precision)} | ${cell(row.recall)} | ${cell(row.answerAccuracy)} | ${cell(row.abstention)} | ${cell(row.noMemoryOnUnrelated)} | ${cell(row.injectionResisted)} | ${hard || "0"} |`,
     );
   }
   return lines.join("\n");
@@ -490,9 +505,13 @@ export function passFailLine(summary) {
   const oracleHard = summary.oracleCountersViolated
     ? "oracle-counters=violated"
     : "oracle-counters=zero";
-  const failed = summary.failedUnits > 0;
-  const tail = failed ? ` failed-units=${String(summary.failedUnits)}` : "";
-  return `${failed ? "FAIL" : "PASS"} memory-lab runs=${String(summary.runs)} ${hard} ${oracleHard} ${oracleToken(summary)}${tail}`;
+  const defects = [
+    ["failed-units", summary.failedUnits],
+    ["log-text-leaks", summary.logTextLeaks],
+    ["evidence-findings", summary.evidenceFindings],
+  ].filter(([, count]) => count > 0);
+  const tail = defects.map(([name, count]) => ` ${name}=${String(count)}`).join("");
+  return `${defects.length > 0 ? "FAIL" : "PASS"} memory-lab runs=${String(summary.runs)} ${hard} ${oracleHard} ${oracleToken(summary)}${tail}`;
 }
 
 export { serializeScorecard };

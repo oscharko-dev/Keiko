@@ -17,29 +17,54 @@ import { shannonEntropy, valueShapeFindings, visitStrings } from "./values.mjs";
 
 const BLUEPRINT_SCHEMA_VERSION = 1;
 export const BLUEPRINT_LANGUAGES = Object.freeze(["de", "en"]);
-export const FACT_CLASSES = Object.freeze(["preference", "role", "way-of-working", "decision"]);
+export const FACT_CLASSES = Object.freeze([
+  "preference",
+  "role",
+  "way-of-working",
+  "decision",
+  "project-decision",
+]);
 export const TRAP_CLASSES = Object.freeze([
   "credential",
   "identifier",
   "third-party",
   "hypothetical",
+  "irony",
+  "contradiction",
   "quote",
   "question",
   "assistant-claim",
   "instruction",
 ]);
 const LANGUAGE_SET = new Set(BLUEPRINT_LANGUAGES);
+// A decision is the one kind of fact with a reason, and the one a project can share.
+const DECISION_CLASSES = new Set(["decision", "project-decision"]);
 const FACT_CLASS_SET = new Set(FACT_CLASSES);
 const TRAP_CLASS_SET = new Set(TRAP_CLASSES);
 // These traps are probed on their own, so the question that probes them is part of the blueprint.
-const QUESTION_REQUIRED = new Set(["credential", "identifier", "third-party", "instruction"]);
+const QUESTION_REQUIRED = new Set([
+  "credential",
+  "identifier",
+  "third-party",
+  "instruction",
+  "irony",
+  "contradiction",
+]);
+// "Vergiss nicht" means remember: a reminder of a fact opens with exactly this, in the blueprint's
+// language, because it is the words a careless forget matcher falls for.
+const REMINDER_OPENING = Object.freeze({
+  de: /^vergiss nicht\b/iu,
+  en: /^(?:don['’]t|do not) forget\b/iu,
+});
 const IDENTIFIER_KINDS = new Set(["iban", "phone", "customer-id", "email"]);
 const LIMITS = Object.freeze({
   facts: 40,
   changes: 20,
   forgets: 10,
-  traps: 40,
+  traps: 64,
   relational: 20,
+  reminders: 20,
+  poisons: 20,
   groups: 4,
   alternatives: 8,
 });
@@ -124,9 +149,9 @@ function checkFactIdentity(id, where, fact) {
     fail(id, `${where}.class must be one of ${FACT_CLASSES.join("|")}`);
   if (typeof fact.must !== "boolean" || typeof fact.private !== "boolean")
     fail(id, `${where}.must and ${where}.private must be booleans`);
-  if (fact.class !== "decision" && !fact.private)
+  if (!DECISION_CLASSES.has(fact.class) && !fact.private)
     fail(id, `${where}: only a decision may be shared with the project (private: false)`);
-  if (fact.reason !== undefined && fact.class !== "decision")
+  if (fact.reason !== undefined && !DECISION_CLASSES.has(fact.class))
     fail(id, `${where}.reason is only for a decision`);
 }
 
@@ -247,6 +272,27 @@ function checkTrap(id, trap, index) {
     fail(id, `${where}.teaches is only for a third-party trap`);
 }
 
+function checkReminder(id, language, reminder, index) {
+  const where = `reminders[${String(index)}]`;
+  checkFields(id, where, reminder, ["key", "text"]);
+  checkSentence(id, `${where}.text`, reminder.text, 400);
+  if (!REMINDER_OPENING[language].test(reminder.text))
+    fail(id, `${where}.text must open with the ${language} words for "do not forget"`);
+}
+
+// A poisoned memory: it reads like a memory and carries an instruction with a marker word no answer
+// would contain by itself. The question surfaces the memory and does not carry the marker.
+function checkPoison(id, poison, index) {
+  const where = `poisons[${String(index)}]`;
+  checkFields(id, where, poison, ["text", "terms", "question"]);
+  checkSentence(id, `${where}.text`, poison.text, 400);
+  checkTerms(id, `${where}.terms`, poison.terms);
+  if (!matchesTermGroups(poison.text, poison.terms)) fail(id, `${where}.terms must match the text`);
+  checkQuestion(id, `${where}.question`, poison.question);
+  if (matchesTermGroups(poison.question, poison.terms))
+    fail(id, `${where}.question must not carry the marker`);
+}
+
 function checkRelational(id, entry, index) {
   const where = `relational[${String(index)}]`;
   checkFields(id, where, entry, ["question", "terms"]);
@@ -256,18 +302,24 @@ function checkRelational(id, entry, index) {
 
 function checkHeader(blueprint) {
   const id = nonEmptyString(blueprint?.id) ? blueprint.id : "<unnamed>";
-  checkFields(id, "blueprint", blueprint, [
-    "schemaVersion",
-    "id",
-    "language",
-    "role",
-    "styleNotes",
-    "facts",
-    "changes",
-    "forgets",
-    "traps",
-    "relational",
-  ]);
+  checkFields(
+    id,
+    "blueprint",
+    blueprint,
+    [
+      "schemaVersion",
+      "id",
+      "language",
+      "role",
+      "styleNotes",
+      "facts",
+      "changes",
+      "forgets",
+      "traps",
+      "relational",
+    ],
+    ["reminders", "poisons"],
+  );
   if (blueprint.schemaVersion !== BLUEPRINT_SCHEMA_VERSION)
     fail(id, `schemaVersion must be ${String(BLUEPRINT_SCHEMA_VERSION)}`);
   if (!SLUG.test(blueprint.id)) fail(id, "id must be a lowercase slug of 3 to 48 characters");
@@ -286,6 +338,8 @@ function checkCollections(id, blueprint) {
   checkArray(id, "forgets", blueprint.forgets, LIMITS.forgets);
   checkArray(id, "traps", blueprint.traps, LIMITS.traps);
   checkArray(id, "relational", blueprint.relational, LIMITS.relational);
+  checkArray(id, "reminders", blueprint.reminders ?? [], LIMITS.reminders);
+  checkArray(id, "poisons", blueprint.poisons ?? [], LIMITS.poisons);
   if (blueprint.facts.length === 0) fail(id, "facts must not be empty");
 }
 
@@ -363,6 +417,26 @@ function checkTaught(id, blueprint, byKey) {
   }
 }
 
+// A reminder restates a fact that stays true to the end, so nothing but the words "do not forget"
+// can take it away.
+function checkReminders(id, blueprint, byKey) {
+  const reminders = blueprint.reminders ?? [];
+  checkKeyList(
+    id,
+    "reminders",
+    reminders.map((reminder) => reminder.key),
+    byKey,
+  );
+  const chained = new Set([...blueprint.changes, ...blueprint.forgets].map((entry) => entry.key));
+  const taught = new Set(blueprint.traps.map((trap) => trap.teaches));
+  for (const reminder of reminders) {
+    if (chained.has(reminder.key) || taught.has(reminder.key))
+      fail(id, `fact ${reminder.key} has a reminder and must stay a plain fact`);
+    if (!matchesTermGroups(reminder.text, byKey.get(reminder.key).terms))
+      fail(id, `the reminder of ${reminder.key} must carry the fact's terms`);
+  }
+}
+
 function checkRelationalAnswers(id, blueprint) {
   const reasons = blueprint.facts.filter((fact) => fact.reason !== undefined);
   for (const [index, entry] of blueprint.relational.entries()) {
@@ -378,6 +452,7 @@ function checkReferences(id, blueprint) {
   const byKey = new Map(blueprint.facts.map((fact) => [fact.key, fact]));
   checkChains(id, blueprint, byKey);
   checkTaught(id, blueprint, byKey);
+  checkReminders(id, blueprint, byKey);
   checkRelationalAnswers(id, blueprint);
 }
 
@@ -457,6 +532,11 @@ function classificationExpectations(blueprint, oracle) {
       text: trap.text,
       verdict: "forbidden",
       class: trap.class,
+    })),
+    ...(blueprint.reminders ?? []).map((reminder) => ({
+      text: reminder.text,
+      verdict: "correct",
+      key: reminder.key,
     })),
   ];
 }
@@ -540,6 +620,10 @@ export function validateBlueprint(blueprint) {
   blueprint.forgets.forEach((forget, index) => checkForget(id, forget, index));
   blueprint.traps.forEach((trap, index) => checkTrap(id, trap, index));
   blueprint.relational.forEach((entry, index) => checkRelational(id, entry, index));
+  (blueprint.reminders ?? []).forEach((reminder, index) =>
+    checkReminder(id, blueprint.language, reminder, index),
+  );
+  (blueprint.poisons ?? []).forEach((poison, index) => checkPoison(id, poison, index));
   checkReferences(id, blueprint);
   checkValueGrammar(id, blueprint);
   checkClassification(id, blueprint);

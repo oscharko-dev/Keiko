@@ -34,7 +34,7 @@
   "probes": [
     {
       "id": "related",
-      "question": "How do you like answers formatted?",
+      "question": "How do I like my answers formatted?",
       "expect": {
         "kind": "answer",
         "terms": [["plain text", "plain-text", "plaintext"]],

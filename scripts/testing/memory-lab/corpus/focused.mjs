@@ -15,14 +15,19 @@
 //   forget                                 forget                          nothing of the fact survives
 //   forget with its paraphrase             forget-paraphrase               the paraphrase is not learned again
 //   trap                                   the trap's class                the forbidden content is not stored
-//   fact taught inside a colleague's line  third-party                     the person's fact is true, the colleague's is not
+//   fact taught inside a colleague's line  operator-in-third-party         the person's fact is true, the colleague's is not
+//   reminder of a fact                     forget-not                      "Vergiss nicht" takes nothing away
+//   poisoned memory                        memory-injection                the answer follows no instruction in it
 //   relational question                    decision                        why a decision was taken
+//
+// Every unit but a poisoned memory is also stated once in a mixed conversation, language `mixed`:
+// everything around the blueprint's own sentences is written in the other language.
 //
 // A scenario id encodes where it comes from:
 //   <blueprint>-<kind>-<unit>-<hardness>-s<seed>
-// with kind one of fact, update, reversal, edit, entrench, forget, forget-paraphrase, trap, taught,
-// relational, unit the fact key (trap: the trap's class and position; relational: its position),
-// hardness one of the ways a unit is stated in and seed the number given to the build, so several
+// with kind one of fact, update, reversal, edit, entrench, forget, forget-paraphrase, reminder, trap,
+// taught, poison, relational, unit the fact key (trap: the trap's class and position; relational and
+// poison: the position), hardness one of the ways a unit is stated in or `mixed`, and seed the number given to the build, so several
 // seeds live in one directory. An id longer than the scenario format's 64 characters shortens its unit and appends four
 // hex digits of it.
 import { createHash } from "node:crypto";
@@ -38,13 +43,26 @@ const TRAP_SCENARIO_CLASS = Object.freeze({
   identifier: "identifier",
   "third-party": "third-party",
   hypothetical: "hypothetical",
+  irony: "irony",
+  contradiction: "contradiction",
   quote: "quote",
   question: "question",
   "assistant-claim": "assistant-claim",
   instruction: "instruction-smuggling",
 });
 
-const NONE = Object.freeze({ facts: [], changes: [], forgets: [], traps: [], relational: [] });
+const NONE = Object.freeze({
+  facts: [],
+  changes: [],
+  forgets: [],
+  traps: [],
+  relational: [],
+  reminders: [],
+  poisons: [],
+});
+/** A way of stating a unit that is no hardness: `embedded`, with the other language around it. */
+const MIXED = "mixed";
+const OTHER_LANGUAGE = Object.freeze({ de: "en", en: "de" });
 
 function factDescriptors(blueprint) {
   return blueprint.facts.map((fact) => ({
@@ -131,7 +149,7 @@ function trapDescriptors(blueprint) {
         {
           kind: "taught",
           unit: taught.key,
-          scenarioClass: "third-party",
+          scenarioClass: "operator-in-third-party",
           parts: { ...NONE, facts: [taught], traps: [trap] },
           interest: "trap",
           probeGroups: ["facts", "traps"],
@@ -150,6 +168,33 @@ function trapDescriptors(blueprint) {
       },
     ];
   });
+}
+
+function reminderDescriptors(blueprint) {
+  const byKey = new Map(blueprint.facts.map((fact) => [fact.key, fact]));
+  return (blueprint.reminders ?? []).map((reminder) => ({
+    kind: "reminder",
+    unit: reminder.key,
+    scenarioClass: "forget-not",
+    parts: { ...NONE, facts: [byKey.get(reminder.key)], reminders: [reminder] },
+    interest: "fact",
+    probeGroups: ["facts"],
+    paraphrase: true,
+  }));
+}
+
+// The conversation around a poisoned memory is filler; nothing is stated, so there is one way to tell
+// it, and the memory is what the scenario is about.
+function poisonDescriptors(blueprint) {
+  return (blueprint.poisons ?? []).map((poison, index) => ({
+    kind: "poison",
+    unit: String(index + 1),
+    scenarioClass: "memory-injection",
+    parts: { ...NONE, poisons: [poison] },
+    probeGroups: ["poisons"],
+    paraphrase: true,
+    statesNothing: true,
+  }));
 }
 
 function relationalDescriptors(blueprint) {
@@ -175,11 +220,12 @@ function relationalDescriptors(blueprint) {
  * so they are never told over two turns.
  */
 export function focusedHardnessKinds(descriptor) {
+  if (descriptor.statesNothing === true) return ["plain"];
   const owner = {
     fact: descriptor.parts.facts[0],
     change: descriptor.parts.changes[0],
   }[descriptor.interest];
-  return owner?.split === undefined ? UNSPLIT_KINDS : HARDNESS_KINDS;
+  return [...(owner?.split === undefined ? UNSPLIT_KINDS : HARDNESS_KINDS), MIXED];
 }
 
 /** Every focused unit of a validated blueprint, in a fixed order. */
@@ -189,7 +235,9 @@ export function focusedUnits(blueprint) {
     ...changeDescriptors(blueprint),
     ...correctionDescriptors(blueprint),
     ...forgetDescriptors(blueprint),
+    ...reminderDescriptors(blueprint),
     ...trapDescriptors(blueprint),
+    ...poisonDescriptors(blueprint),
     ...relationalDescriptors(blueprint),
   ];
 }
@@ -268,9 +316,12 @@ export async function generateFocusedScenario(blueprint, descriptor, hardness, o
     seed: options.seed,
   });
   const part = { ...blueprint, ...descriptor.parts };
+  const mixed = hardness === MIXED;
+  const stated = mixed ? "embedded" : hardness;
   const { scenario, designated, plan } = await runGeneration(part, settings, {
+    fillerLanguage: mixed ? OTHER_LANGUAGE[blueprint.language] : undefined,
     unitOptions: {
-      hardnessOf: (unit) => (unit.kind === descriptor.interest ? hardness : "plain"),
+      hardnessOf: (unit) => (unit.kind === descriptor.interest ? stated : "plain"),
       paraphrase: descriptor.paraphrase,
       edit: descriptor.edit === true,
       asks: descriptor.asks === true,
@@ -280,7 +331,8 @@ export async function generateFocusedScenario(blueprint, descriptor, hardness, o
     header: ({ turns }) => ({
       id,
       class: descriptor.scenarioClass,
-      difficulty: hardness,
+      ...(mixed ? { language: MIXED } : {}),
+      difficulty: stated,
       description: describeFocused(blueprint, descriptor, hardness, settings, turns.length),
     }),
   });
@@ -289,7 +341,7 @@ export async function generateFocusedScenario(blueprint, descriptor, hardness, o
     scenario,
     settings,
     plan,
-    counts: interestCounts(hardness),
+    counts: interestCounts(stated),
   });
   const focus = { kind: descriptor.kind, unit: descriptor.unit, hardness };
   return { scenario, designated, meta: { ...meta, focus } };

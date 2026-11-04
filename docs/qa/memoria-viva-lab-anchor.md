@@ -81,8 +81,21 @@ The tools enforce the mechanics, and the rest is procedure:
   instance state.
 - **Live runs talk to this machine only.** The gateway configuration of a live run is refused unless
   every provider in it has the host `127.0.0.1`, `localhost` or `::1`.
-- This tooling does not scan the repository, issues or evidence for real text. That proof is a
-  separate acceptance item of #4208.
+- **The Activity Log is checked per unit.** Before a unit's state goes, the runner looks for the
+  conversation it sent in that instance's log (`logTextLeaks` must be zero); see the lab's page.
+- **A scan proves the rest.** `scan.mjs` indexes the fetched text and the converted scenarios, hashed and
+  in memory, and searches the named targets for any run of ten words from them. The result names files and
+  counts and never a word of what matched:
+
+  ```bash
+  node scripts/testing/memory-lab/anchor/scan.mjs --fetched ~/keiko-anchor/fetched \
+    --scenarios ~/keiko-anchor/converted/scenarios --git . --target <exported issues> --target <run directory>
+  ```
+
+  Issues and pull requests are exported for it first, one file per number, for example with
+  `gh issue view <n> --json title,body,comments > <exported issues>/<n>.json`. A copied passage of at least
+  twelve words is found; a shorter one cannot be told from ordinary language. That is the limit of the
+  proof, and the procedure above (reports carry aggregates) covers what lies below it.
 
 ## Fetch
 
@@ -224,8 +237,18 @@ judge it). Fill in `label` with one of:
 | `third-party` | A fact about another person or organisation (a colleague, a customer, someone mentioned)                                                                         |
 
 An agent may label the sheet by writing a flat `{memoryId: label}` file instead. A person then
-re-labels a random sample of it, and the disagreement rate is stated next to the precision (the tool
-does not compute it). Then:
+re-labels a blind, seeded random sample of it (`sample` writes a new sheet with every label empty,
+so the agent's verdict cannot steer the person's), and `agreement` compares the two. Agreement and
+Cohen's kappa are stated next to the precision; kappa matters because a corpus that is nearly all
+`correct` reaches a high raw agreement by chance alone. An agent's precision without a person's
+sample behind it is stated as unreviewed, never as measured.
+
+```bash
+node scripts/testing/memory-lab/anchor/label.mjs sample --labels ~/keiko-anchor/labels/labels.json --sheet ~/keiko-anchor/labels/sheet.json --out ~/keiko-anchor/labels/review.json --size 50
+node scripts/testing/memory-lab/anchor/label.mjs agreement --review ~/keiko-anchor/labels/review.json --labels ~/keiko-anchor/labels/labels.json --sheet ~/keiko-anchor/labels/sheet.json
+```
+
+Then:
 
 ```bash
 node scripts/testing/memory-lab/anchor/label.mjs summarize --labels ~/keiko-anchor/labels/labels.json --sheet ~/keiko-anchor/labels/sheet.json
@@ -277,5 +300,5 @@ All under `scripts/testing/memory-lab/anchor/`, tested hermetically by
 | `converters.mjs`    | Row, thread and instance to scenario, or the named reason it was skipped      |
 | `convert.mjs`       | The pipeline: pages, `--sample`, validation, the manifest; the mapping header |
 | `redact.mjs`        | The credential-shaped redaction pass and its counters                         |
-| `label.mjs`         | Labelling sheet export and the aggregate summary                              |
+| `label.mjs`         | Labelling sheet export, aggregate summary, human spot check and agreement     |
 | `private-files.mjs` | The outside-the-checkout guard, owner-private writes, body-free JSON reads    |

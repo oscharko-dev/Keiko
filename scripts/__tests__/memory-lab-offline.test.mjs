@@ -93,6 +93,13 @@ describe("memory lab offline run", () => {
       );
       expect(existsSync(join(root, "first", "summary.md"))).toBe(true);
       expect(existsSync(join(root, "first", "state"))).toBe(false);
+      // What a run proves about itself: nothing it sent is in the Activity Log, and its evidence
+      // names neither this machine nor anything else that is not synthetic.
+      expect(first.logTextLeaks).toBe(0);
+      expect(first.evidenceFindings).toBe(0);
+      const scan = JSON.parse(readFileSync(join(root, "first", "evidence-scan.json"), "utf8"));
+      expect(scan.filesScanned).toBeGreaterThan(SCENARIOS.length);
+      expect(scan.findings).toEqual([]);
       await runLab(options(root, "second", scenarios), () => undefined);
       const one = readFileSync(join(root, "first", "scorecard.json"), "utf8");
       const two = readFileSync(join(root, "second", "scorecard.json"), "utf8");

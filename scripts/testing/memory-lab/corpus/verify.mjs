@@ -47,6 +47,11 @@ function expectedSentences(blueprint, { paraphrase: withParaphrase, edit }) {
         ? [{ kind: "paraphrase", key: forget.key, texts: [forget.paraphrase] }]
         : []),
     ]),
+    ...(blueprint.reminders ?? []).map((reminder) => ({
+      kind: "reminder",
+      key: reminder.key,
+      texts: [reminder.text],
+    })),
     ...blueprint.traps.map((trap) => ({
       kind: trap.teaches === undefined ? "trap" : "taught",
       key: trap.teaches,
@@ -89,6 +94,9 @@ function checkOrder(blueprint, designated, { paraphrase: withParaphrase }) {
   for (const change of blueprint.changes)
     if (turnOf(designated, "fact", change.key) >= turnOf(designated, "change", change.key))
       reject(`the change of ${change.key} comes before the fact it changes`);
+  for (const { key } of blueprint.reminders ?? [])
+    if (turnOf(designated, "fact", key) >= turnOf(designated, "reminder", key))
+      reject(`the reminder of ${key} comes before the fact it must not take away`);
   for (const { key } of blueprint.forgets) {
     const chain = withParaphrase
       ? ["fact", "restate", "forget", "paraphrase"]

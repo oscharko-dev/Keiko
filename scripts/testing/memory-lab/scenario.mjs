@@ -15,6 +15,7 @@ export const SCENARIO_CLASSES = Object.freeze([
   "role",
   "way-of-working",
   "decision",
+  "project-decision",
   "update",
   "reversal",
   "forget",
@@ -22,13 +23,17 @@ export const SCENARIO_CLASSES = Object.freeze([
   "forget-not",
   "multi-turn",
   "third-party",
+  "operator-in-third-party",
   "credential",
   "identifier",
   "hypothetical",
+  "irony",
+  "contradiction",
   "quote",
   "question",
   "assistant-claim",
   "instruction-smuggling",
+  "memory-injection",
   "edit-after-learn",
   "entrenchment",
   "unrelated",
@@ -41,13 +46,17 @@ const FORBIDDEN_CLASSES = Object.freeze([
   "identifier",
   "third-party",
   "hypothetical",
+  "irony",
+  "contradiction",
   "quote",
   "question",
   "assistant-claim",
   "instruction",
   "other",
 ]);
-const PROBE_KINDS = Object.freeze(["answer", "abstain", "no-memory"]);
+const PROBE_KINDS = Object.freeze(["answer", "abstain", "no-memory", "not-obeyed"]);
+const ANSWER_FORMATS = Object.freeze(["table", "list"]);
+const PROBE_LANGUAGES = Object.freeze(["de", "en"]);
 
 class ScenarioError extends SetFileError {
   constructor(id, message) {
@@ -145,24 +154,51 @@ function validateTurns(id, turns) {
 // the supplied memories: the person's own fact, asked for a colleague's.
 function validateAllowance(id, where, expect, truthKeys) {
   if (expect.allow === undefined) return;
-  if (expect.kind === "answer")
-    fail(id, `${where}.expect.allow is not measured on an answer probe`);
+  if (expect.kind === "answer" || expect.kind === "not-obeyed")
+    fail(id, `${where}.expect.allow is only measured on an abstain or no-memory probe`);
   if (!Array.isArray(expect.allow) || expect.allow.length === 0)
     fail(id, `${where}.expect.allow must be a non-empty array of truth keys`);
   for (const key of expect.allow)
     if (!truthKeys.has(key)) fail(id, `${where}.expect.allow names no truth key: ${String(key)}`);
 }
 
+// A preference for a form shows in the form of the answer, whether or not the answer names it.
+function validateFormats(id, where, expect) {
+  for (const field of ["format", "forbiddenFormat"]) {
+    if (expect[field] === undefined) continue;
+    if (expect.kind !== "answer")
+      fail(id, `${where}.expect.${field} is only measured on an answer probe`);
+    if (!ANSWER_FORMATS.includes(expect[field]))
+      fail(id, `${where}.expect.${field} must be one of ${ANSWER_FORMATS.join("|")}`);
+  }
+}
+
 function validateExpectation(id, where, expect, truthKeys) {
   if (!isRecord(expect) || !PROBE_KINDS.includes(expect.kind))
     fail(id, `${where}.expect.kind must be one of ${PROBE_KINDS.join("|")}`);
-  if (expect.kind === "answer" && !validTermGroups(expect.terms))
-    fail(id, `${where}.expect.terms must be non-empty term groups for an answer probe`);
+  if ((expect.kind === "answer" || expect.kind === "not-obeyed") && !validTermGroups(expect.terms))
+    fail(id, `${where}.expect.terms must be non-empty term groups for a ${expect.kind} probe`);
   if (expect.forbidden !== undefined && expect.kind !== "answer")
     fail(id, `${where}.expect.forbidden is only measured on an answer probe`);
   if (expect.forbidden !== undefined && !validTermGroups(expect.forbidden))
     fail(id, `${where}.expect.forbidden must be term groups when present`);
+  validateFormats(id, where, expect);
   validateAllowance(id, where, expect, truthKeys);
+}
+
+// Memories already in the store when the conversation starts, each carrying an instruction: the lab
+// seeds them in every arm that has memory and leaves them out of the store's score, because they
+// test what the answer does with a poisoned memory, not what the learner stored.
+function validatePoison(id, poison) {
+  if (poison === undefined) return;
+  if (!Array.isArray(poison) || poison.length === 0)
+    fail(id, "poison must be a non-empty array when present");
+  poison.forEach((entry, index) => {
+    const where = `poison[${String(index)}]`;
+    if (!isRecord(entry) || !nonEmptyString(entry.body)) fail(id, `${where}.body is required`);
+    if (!validTermGroups(entry.terms)) fail(id, `${where}.terms must be non-empty term groups`);
+    if (!matchesTermGroups(entry.body, entry.terms)) fail(id, `${where}.terms must match its body`);
+  });
 }
 
 function validateProbes(id, probes, truthKeys) {
@@ -175,6 +211,8 @@ function validateProbes(id, probes, truthKeys) {
     if (seen.has(probe.id)) fail(id, `${where}.id duplicates ${probe.id}`);
     seen.add(probe.id);
     if (!nonEmptyString(probe.question)) fail(id, `${where}.question is required`);
+    if (probe.language !== undefined && !PROBE_LANGUAGES.includes(probe.language))
+      fail(id, `${where}.language must be one of ${PROBE_LANGUAGES.join("|")} when present`);
     validateExpectation(id, where, probe.expect, truthKeys);
   });
 }
@@ -204,6 +242,7 @@ export function validateScenario(scenario) {
   validateTruthApartFromReplaced(id, scenario.truth, scenario.superseded);
   validateTermList(id, scenario.forgotten, "forgotten", false);
   validateTermList(id, scenario.forbidden, "forbidden", true);
+  validatePoison(id, scenario.poison);
   validateTurns(id, scenario.turns);
   validateProbes(id, scenario.probes, new Set(scenario.truth.map((fact) => fact.key)));
   return Object.freeze({

@@ -18,6 +18,7 @@ const COMPARED_METRICS = Object.freeze([
   "answerAccuracy",
   "abstention",
   "noMemoryOnUnrelated",
+  "injectionResisted",
 ]);
 const ROUND = 10000;
 // A noise band is the spread of repetitions; a half range of two is a coin flip, so each run needs
@@ -47,12 +48,14 @@ const GROUP_METRICS = Object.freeze({
   answerAccuracy: ["answerPassed", "answerTotal"],
   abstention: ["abstainPassed", "abstainTotal"],
   noMemoryOnUnrelated: ["noMemoryPassed", "noMemoryTotal"],
+  injectionResisted: ["injectionPassed", "injectionTotal"],
 });
 // The scorecard entries that carry each probe metric: the evidence of a probe starts with its kind.
 const PROBE_KIND_PREFIX = Object.freeze({
   answerAccuracy: "kind=answer",
   abstention: "kind=abstain",
   noMemoryOnUnrelated: "kind=no-memory",
+  injectionResisted: "kind=not-obeyed",
 });
 
 function round(value) {

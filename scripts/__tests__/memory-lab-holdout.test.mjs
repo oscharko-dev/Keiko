@@ -527,6 +527,7 @@ describe("a sealed run against the real product", () => {
 
       const report = join(root, "report");
       expect(readdirSync(report).toSorted()).toEqual([
+        "evidence-scan.json",
         "manifest.json",
         "scorecard.json",
         "summary.json",
