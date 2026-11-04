@@ -847,3 +847,91 @@ describe("degenerate input", () => {
     expect(performance.now() - started).toBeLessThan(5_000);
   });
 });
+
+describe("review of real producers (#4235)", () => {
+  it("keeps numbers in a two-column numeric table as cells, not as a numbered list", () => {
+    const rows = [
+      ["1", "2"],
+      ["3", "4"],
+      ["12", "99"],
+      ["5", "6"],
+    ].flatMap(([left, right], index) => [
+      drawn(left ?? "", LEFT, 700 - index * 14),
+      drawn(right ?? "", 200, 700 - index * 14),
+    ]);
+    expect(textOf(rows)).toBe("1 | 2\n3 | 4\n12 | 99\n5 | 6");
+  });
+
+  it("reads the private-use bullet an Office export draws as one list item", () => {
+    const bullet = "";
+    const rows = [0, 1, 2].flatMap((index) => [
+      drawn(bullet, LEFT, 700 - index * 14),
+      drawn(`Punkt ${String(index)} der Liste`, LEFT + 18, 700 - index * 14),
+    ]);
+    expect(textOf(rows)).toBe("• Punkt 0 der Liste\n• Punkt 1 der Liste\n• Punkt 2 der Liste");
+  });
+
+  it("reads a second-level bullet drawn as the letter o in its own face as a list item", () => {
+    const rows = [0, 1].flatMap((index) => [
+      drawn("o", LEFT + 18, 700 - index * 14, 10, "courier"),
+      drawn(`Unterpunkt ${String(index)}`, LEFT + 36, 700 - index * 14),
+    ]);
+    expect(textOf(rows)).toBe("◦ Unterpunkt 0\n◦ Unterpunkt 1");
+  });
+
+  it("keeps a subscript and a superscript on the line of the word they belong to", () => {
+    const text = textOf([
+      drawn("Der Betrag steigt um 5", LEFT, 700),
+      drawn("1", LEFT + 110, 704, 6),
+      drawn("und H", LEFT + 118, 700),
+      drawn("2", LEFT + 143, 699, 6),
+      drawn("O im Wasser.", LEFT + 147, 700),
+    ]);
+    expect(text).toBe("Der Betrag steigt um 51 und H2O im Wasser.");
+  });
+
+  it("keeps a heading that every page starts with, which is larger than the body", () => {
+    const pages = [1, 2, 3, 4].map((page) =>
+      pageLayoutOf([drawn("Zusammenfassung", LEFT, 780, 16, "bold"), ...bodyLines(page)]),
+    );
+    const composed = composePages(pages);
+    expect(composed.removedRows).toBe(0);
+    expect(composed.texts[2]?.startsWith("Zusammenfassung\n")).toBe(true);
+  });
+
+  it("reads three columns one after the other, not as a table of their lines", () => {
+    const starts = [50, 220, 390];
+    const rows = [700, 688, 676, 664, 652].flatMap((y, index) =>
+      starts.map((start, column) =>
+        runningText(start, y, `${"ABC".charAt(column)}${String(index)}`, start + 150),
+      ),
+    );
+    const lines = textOf(rows)
+      .split("\n")
+      .map((line) => line.slice(0, 2));
+    expect(lines).toEqual([
+      ...[0, 1, 2, 3, 4].map((index) => `A${String(index)}`),
+      ...[0, 1, 2, 3, 4].map((index) => `B${String(index)}`),
+      ...[0, 1, 2, 3, 4].map((index) => `C${String(index)}`),
+    ]);
+  });
+
+  it("stays linear when thousands of wrapped lines make one paragraph", () => {
+    const items = Array.from({ length: 60_000 }, (_, index) =>
+      drawn(fullLine(`Zeile ${String(index)}`), LEFT, 900_000 - index * 12),
+    );
+    const started = performance.now();
+    const text = composePages([pageLayoutOf(items)]).texts[0] ?? "";
+    expect(text.length).toBeGreaterThan(60_000 * 80);
+    expect(performance.now() - started).toBeLessThan(3_000);
+  });
+
+  it("stays fast when every row of a page holds thousands of separate cells", () => {
+    const items = Array.from({ length: 40_000 }, (_, index) =>
+      drawn("w", Math.floor(index / 40) * 30 + (index % 3), 800 - (index % 40) * 12),
+    );
+    const started = performance.now();
+    composePages([pageLayoutOf(items)]);
+    expect(performance.now() - started).toBeLessThan(3_000);
+  });
+});
