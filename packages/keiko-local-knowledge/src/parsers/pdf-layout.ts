@@ -140,6 +140,8 @@ const COMPOUND_START = /^[\p{Lu}\p{N}]/u;
 // "Ein- und Auszahlung": a word that follows a suspended hyphen keeps it.
 const SUSPENDED_HYPHEN_NEXT = /^(?:und|oder|bzw|sowie|bis|and|or)\b/u;
 const WORD_CORE = /[\p{L}\p{N}](?:.*[\p{L}\p{N}])?/su;
+// Letters between optional opening and closing punctuation: "(Zahlungs-" and "verkehr)," are words.
+const PLAIN_WORD = /^[^\p{L}\p{N}]*\p{L}+(?:-\p{L}+)*[^\p{L}\p{N}/_@:\\]*$/u;
 const NUMBER_FRAGMENT_END = /[\p{N}-]$/u;
 const NUMBER_FRAGMENT_START = /^\p{N}/u;
 const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/gu;
@@ -520,11 +522,16 @@ function hasColumnEvidence(
   });
 }
 
+/** Segments wider than this share of the text's width are running text, not part of a column. */
+function fullWidthLimit(segments: readonly Segment[]): number {
+  const pageLeft = minOf(segments.map((segment) => segment.x));
+  const pageRight = maxOf(segments.map((segment) => segment.right));
+  return (pageRight - pageLeft) * FULL_WIDTH_RATIO;
+}
+
 function guttersOf(rows: readonly LayoutRow[]): readonly Gutter[] {
   const all = rows.flatMap((row) => row.segments);
-  const pageLeft = minOf(all.map((segment) => segment.x));
-  const pageRight = maxOf(all.map((segment) => segment.right));
-  const limit = (pageRight - pageLeft) * FULL_WIDTH_RATIO;
+  const limit = fullWidthLimit(all);
   const body = all.filter((segment) => segment.right - segment.x <= limit);
   const gutters = coverageGaps(body);
   if (gutters.length === 0 || gutters.length >= MAX_COLUMNS) return [];
@@ -537,10 +544,12 @@ function crossesGutter(row: LayoutRow, gutters: readonly Gutter[]): boolean {
   );
 }
 
-/** Rows split into reading flows: full-width bands stay in place, a column set reads left first. */
-function readingFlows(rows: readonly LayoutRow[]): readonly (readonly LayoutRow[])[] {
-  const gutters = rows.length === 0 ? [] : guttersOf(rows);
-  if (gutters.length === 0) return rows.length === 0 ? [] : [rows];
+type Flows = readonly (readonly LayoutRow[])[];
+
+/** The flows of rows that share one set of gutters, or undefined when they share none. */
+function columnFlows(rows: readonly LayoutRow[]): Flows | undefined {
+  const gutters = guttersOf(rows);
+  if (gutters.length === 0) return undefined;
   const flows: (readonly LayoutRow[])[] = [];
   let band: LayoutRow[] = [];
   let columns = emptyColumns<LayoutRow>(gutters.length + 1);
@@ -566,6 +575,43 @@ function readingFlows(rows: readonly LayoutRow[]): readonly (readonly LayoutRow[
   flushColumns();
   flushBand();
   return flows;
+}
+
+interface RowBand {
+  readonly rows: LayoutRow[];
+  readonly fullWidth: boolean;
+}
+
+/** Runs of rows with and without a full-width line: a column pair can start below a table. */
+function bandsOf(rows: readonly LayoutRow[]): readonly RowBand[] {
+  const limit = fullWidthLimit(rows.flatMap((row) => row.segments));
+  const bands: RowBand[] = [];
+  for (const row of rows) {
+    const fullWidth = row.segments.some((segment) => segment.right - segment.x > limit);
+    const current = bands.at(-1);
+    if (current?.fullWidth === fullWidth) current.rows.push(row);
+    else bands.push({ rows: [row], fullWidth });
+  }
+  return bands;
+}
+
+/** Column pairs found band by band; undefined when no band holds one. */
+function bandedFlows(rows: readonly LayoutRow[]): Flows | undefined {
+  const bands = bandsOf(rows);
+  if (bands.length < 2) return undefined;
+  const columnsOfBand = bands.map((band) => (band.fullWidth ? undefined : columnFlows(band.rows)));
+  if (columnsOfBand.every((columns) => columns === undefined)) return undefined;
+  return bands.flatMap((band, index) => columnsOfBand[index] ?? [band.rows]);
+}
+
+/**
+ * Rows split into reading flows: full-width bands stay in place, a column set reads left first.
+ * Columns shared by the whole page decide first; failing that, each stretch between full-width
+ * lines is looked at on its own, so a table elsewhere on the page cannot hide the columns.
+ */
+function readingFlows(rows: readonly LayoutRow[]): Flows {
+  if (rows.length === 0) return [];
+  return columnFlows(rows) ?? bandedFlows(rows) ?? [rows];
 }
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -720,6 +766,11 @@ function keepsWrapHyphen(left: string, right: string, vocabulary: Vocabulary): b
   );
 }
 
+/** Only a plain word was hyphenated by the renderer; a URL, a path or an identifier was not. */
+function isPlainWord(word: string): boolean {
+  return PLAIN_WORD.test(word);
+}
+
 interface WrapJoin {
   /** The line ends in a hyphen the wrap added, and the join removes it. */
   readonly dropHyphen: boolean;
@@ -730,7 +781,8 @@ interface WrapJoin {
 function wrapJoinOf(tail: string, right: string, vocabulary: Vocabulary): WrapJoin {
   if (!HYPHENATED_END.test(tail)) return { dropHyphen: false, separator: " " };
   if (LOWER_START.test(right) && !SUSPENDED_HYPHEN_NEXT.test(right)) {
-    return { dropHyphen: !keepsWrapHyphen(tail, right, vocabulary), separator: "" };
+    const repairable = isPlainWord(lastWord(tail)) && isPlainWord(firstWord(right));
+    return { dropHyphen: repairable && !keepsWrapHyphen(tail, right, vocabulary), separator: "" };
   }
   return { dropHyphen: false, separator: COMPOUND_START.test(right) ? "" : " " };
 }

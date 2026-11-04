@@ -916,6 +916,47 @@ describe("review of real producers (#4235)", () => {
     ]);
   });
 
+  it("reads a column pair below a table and a full-width line down its left column first", () => {
+    const items = [
+      ...[700, 688, 676, 664].flatMap((y, index) =>
+        tableRow(y, [
+          [50, `T${String(index)}`],
+          [200, "Hoch"],
+          [350, "offen"],
+        ]),
+      ),
+      runningText(LEFT, 640, "WIDE", 550),
+      ...[610, 598, 586, 574, 562].flatMap((y, index) => [
+        runningText(LEFT, y, `L${String(index)}`, 280),
+        runningText(320, y, `R${String(index)}`, 550),
+      ]),
+    ];
+    const lines = textOf(items)
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => line.slice(0, 2));
+    expect(lines).toEqual([
+      "T0",
+      "T1",
+      "T2",
+      "T3",
+      "WI",
+      ...[0, 1, 2, 3, 4].map((index) => `L${String(index)}`),
+      ...[0, 1, 2, 3, 4].map((index) => `R${String(index)}`),
+    ]);
+  });
+
+  it("keeps the hyphen of a URL or an identifier that a wrap broke after it", () => {
+    const url = fullLineEndingIn("siehe https://example.org/a-");
+    expect(bodyText([drawn(url, LEFT, 700), drawn("b/c.html weiter.", LEFT, 688)])).toBe(
+      `${url}b/c.html weiter.`,
+    );
+    const identifier = fullLineEndingIn("Feld CdtTrfTxInf_Pmt-");
+    expect(bodyText([drawn(identifier, LEFT, 700), drawn("id2 folgt.", LEFT, 688)])).toBe(
+      `${identifier}id2 folgt.`,
+    );
+  });
+
   it("stays linear when thousands of wrapped lines make one paragraph", () => {
     const items = Array.from({ length: 60_000 }, (_, index) =>
       drawn(fullLine(`Zeile ${String(index)}`), LEFT, 900_000 - index * 12),
