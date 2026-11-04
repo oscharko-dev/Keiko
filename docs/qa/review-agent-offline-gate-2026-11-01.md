@@ -6,21 +6,21 @@ Definitions, labeling rules and the holdout discipline are in
 
 ## Pair and environment
 
-| Item                             | Value                                                                                                                                   |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Reviewer                         | `qwen3.6-35b-a3b-4bit` (mlx-community/Qwen3.6-35B-A3B-4bit)                                                                             |
-| Counter-checker                  | `gemma-4-31b-it-4bit` (mlx-community/gemma-4-31b-it-4bit)                                                                               |
-| Serving                          | mlx_lm 0.32.2 behind LiteLLM 1.106.6 on loopback, one Apple silicon Mac with 64 GB; memory bounds from the dev-6 roles-swapped rerun on |
-| Gateway configuration generation | recorded per run in its evidence                                                                                                        |
-| Dataset                          | `review-harvest-dataset.v1.json.gz`, digest `sha256:c6dfbede99249e9fda874649d4a938e4d3e69b4b8fb8e70be0d3c099b486f194`                   |
-| Holdout boundary                 | pull request #3066 (`REVIEW_EVALUATION_MANIFEST.holdoutFromPullRequest`)                                                                |
+| Item                             | Value                                                                                                                                                                                                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Reviewer                         | `qwen3.6-35b-a3b-4bit` (mlx-community/Qwen3.6-35B-A3B-4bit)                                                                                                                                                                                            |
+| Counter-checker                  | `gemma-4-31b-it-4bit` (mlx-community/gemma-4-31b-it-4bit)                                                                                                                                                                                              |
+| Serving                          | mlx_lm 0.32.2 behind LiteLLM 1.106.6 on loopback, one Apple silicon Mac with 64 GB. From the dev-6 roles-swapped rerun on, including the holdout: one decode at a time, 512-token prefill steps, prompt caches capped at 4 GB (Qwen) and 6 GB (Gemma). |
+| Gateway configuration generation | recorded per run in its evidence                                                                                                                                                                                                                       |
+| Dataset                          | `review-harvest-dataset.v1.json.gz`, digest `sha256:c6dfbede99249e9fda874649d4a938e4d3e69b4b8fb8e70be0d3c099b486f194`                                                                                                                                  |
+| Holdout boundary                 | pull request #3066 (`REVIEW_EVALUATION_MANIFEST.holdoutFromPullRequest`)                                                                                                                                                                               |
 
 ## How a run is made
 
 The composition is `tests/review-quality/`. It starts the real server composition and runs the
 evaluation family's replay or seed gate through the composed review service, one review at a time.
 Every run records its configuration digest (the committed review code, the variant and the pair),
-the prompt digest, the dataset digest, the gateway configuration generation, the readiness probes,
+its composition digest (every other package the pipeline runs, and the lockfile), the prompt digest, the dataset digest, the gateway configuration generation, the readiness probes,
 each review's settlement, and per-role tokens and durations.
 
 ```bash
@@ -175,6 +175,21 @@ The single holdout run started at 17:36 UTC on 2026-11-02 with the product confi
   for about two minutes and moved the review of #3380 into its review phase with no model
   reachable. That review is settled `abandoned/interrupted` on the next start and reviewed again.
   The run continues with the same `--resume-since` value.
+- The resumed run was paused again at 16:08 UTC on 2026-11-04, right after the review of #3418
+  settled, because the models' memory froze the owner's machine. 135 of the 229 reviews had
+  measured something by then. The review of #3419 had just started; it is settled
+  `abandoned/interrupted` on the next start and reviewed again.
+- Independent review finding R4130-002 showed that a resume matched stored reviews only on the pair
+  and the commits. From `bf12b6c30`'s successor on, every review's client request id carries a reuse
+  key over the configuration and composition digests, and a resume reuses only reviews with the
+  current key. Reviews stored earlier carry no key. A resume reuses them only with
+  `--resume-legacy-digest`, which must equal the run's configuration digest. The holdout resumes
+  with `--resume-legacy-digest sha256:7c5395d728e44fe28f7681aca24db2c7b15ff8b39183b9ae534fff27192f6b9d`,
+  the dev-6 product digest that the holdout recorded at its start. Its composition is unchanged
+  too: between `0edb7387a` and this head, the only change under `packages/` is the generated catalog
+  digest constant in `packages/keiko-contracts/src/activity-log-identity.generated.ts`, and
+  `package-lock.json` is unchanged. Every review in the state directory since the holdout start
+  is a holdout review.
 - No finding, match or rate of the holdout was read before the stops. Only settlement counts and
   kinds and the Activity Log entries around the first review were read, to find the cause of the
   17 refusals and to watch progress.
