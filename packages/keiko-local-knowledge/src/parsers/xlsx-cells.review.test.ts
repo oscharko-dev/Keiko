@@ -2,6 +2,9 @@
 
 import { describe, expect, it } from "vitest";
 
+import { selectionFromBytes } from "./parser-test-fixtures.js";
+import { buildParserOptions } from "./registry.js";
+import { xlsxParser } from "./xlsx-parser.js";
 import {
   buildWorkbook,
   inlineCell,
@@ -40,6 +43,49 @@ describe("a shared string table larger than the unit limit", () => {
     );
     expect(parsed.lines).toEqual(["S!2: Text 0=Text 59998 | Text 1=Text 59999"]);
     expect(parsed.diagnostics).toEqual([]);
+  });
+});
+
+describe("a sheet with more rows than a call can take as arguments", () => {
+  it("projects 300,000 rows instead of failing the whole workbook", async () => {
+    const rows = Array.from(
+      { length: 300_000 },
+      (_, row) => `<row r="${String(row + 1)}"><c><v>${String(row)}</v></c></row>`,
+    ).join("");
+    const result = await xlsxParser.parseAsync(
+      selectionFromBytes(buildWorkbook({ sheets: [{ name: "S", xml: sheetXml(rows) }] }), {
+        extension: "xlsx",
+      }),
+      buildParserOptions({ now: () => 0, maxUnitsPerDocument: 400_000 }),
+    );
+    expect(result.diagnostics).toEqual([]);
+    expect(result.units).toHaveLength(300_000);
+  });
+});
+
+describe("a package of many large parts", () => {
+  it("is refused when its parts together inflate past the ceiling", async () => {
+    // Three sheets of about 1.8 MB each (370 KB deflated in all): every part is within the ceiling
+    // of one part (4 MB for an input limit of 400 KB), the package is not within the ceiling of
+    // all parts together.
+    const filler = (seed: number): string =>
+      Array.from(
+        { length: 50_000 },
+        (_, row) => `<row r="${String(row + 1)}"><c><v>${String(seed)}</v></c></row>`,
+      ).join("");
+    const bytes = buildWorkbook({
+      sheets: [1, 2, 3].map((seed) => ({ name: `S${String(seed)}`, xml: sheetXml(filler(seed)) })),
+    });
+    const parseWith = async (maxBytes: number): Promise<readonly string[]> => {
+      const result = await xlsxParser.parseAsync(
+        selectionFromBytes(bytes, { extension: "xlsx" }),
+        buildParserOptions({ now: () => 0, maxBytes, maxUnitsPerDocument: 1_000_000 }),
+      );
+      return result.diagnostics.map((entry) => entry.code);
+    };
+    // The control: with a larger input limit the same package is read.
+    expect(await parseWith(800_000)).toEqual([]);
+    expect(await parseWith(400_000)).toEqual(["MALFORMED_INPUT"]);
   });
 });
 

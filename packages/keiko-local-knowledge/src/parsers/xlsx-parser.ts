@@ -40,6 +40,7 @@ const DEPENDENCY_VERSIONS = Object.freeze([
 ]);
 const XLSX_MEDIA = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 const MAX_XML_INFLATED_BYTES = 32 * 1024 * 1024;
+const MAX_TOTAL_INFLATED_BYTES = 256 * 1024 * 1024;
 const SHEET_ENTRY_PREFIX = "xl/worksheets/";
 const XLSX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS);
 
@@ -140,6 +141,9 @@ function xlsxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
     format: "xlsx",
     isWanted: isRelevantEntry,
     maxEntryInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_XML_INFLATED_BYTES),
+    // Every wanted part is held as text; without a ceiling on all of them a workbook of many sheets
+    // each just under the ceiling of one part is read into memory in full.
+    maxTotalInflatedBytes: ooxmlEntryInflatedLimit(options.maxBytes, MAX_TOTAL_INFLATED_BYTES),
     scanBudget: "none",
     duplicateParts: "replace",
   };
@@ -831,13 +835,15 @@ function readWorkbookSheets(
     totals.hiddenRows += read.hiddenRowCount;
     totals.hiddenColumns += read.hiddenColumnCount;
     totals.uncachedFormulas += read.uncachedFormulaCount;
-    lines.push(
-      ...projectTable(
-        sheet.name,
-        read.rows,
-        (columnIndex) => `Column ${columnLetters(columnIndex)}`,
-      ),
-    );
+    // One push per line: spreading a sheet's lines into one call overflows the argument limit at a
+    // few hundred thousand rows and failed the whole workbook as malformed.
+    for (const line of projectTable(
+      sheet.name,
+      read.rows,
+      (columnIndex) => `Column ${columnLetters(columnIndex)}`,
+    )) {
+      lines.push(line);
+    }
     if (lines.length > maxLines) return undefined;
   }
   return { lines, totals };
