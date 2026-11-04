@@ -95,6 +95,25 @@ describe("grepGitReviewTree", () => {
     expect(none.ok && none.value).toEqual({ matches: [], truncated: false });
   });
 
+  // R4130-026: a literal that looks like an option is a search pattern, not a refused flag.
+  it.each(["-cp", "-config", "-c", "--exec", "--upload-pack", "--textconv", "--ext-diff", "-e"])(
+    "searches for the option-shaped literal %s instead of refusing it",
+    async (literal) => {
+      write("a.ts", `java ${literal} lib.jar Main\nother line\n`);
+      const sha = commitAll();
+      const result = await grepGitReviewTree(context(), {
+        cwd: repo,
+        sha,
+        literal,
+        maxCountPerFile: 5,
+      });
+      expect(result.ok && result.value).toEqual({
+        matches: [{ path: "a.ts", line: 1, text: `java ${literal} lib.jar Main` }],
+        truncated: false,
+      });
+    },
+  );
+
   it("reports a cut listing as truncated with its complete records only", async () => {
     write("a.ts", "needle line\n".repeat(50));
     const sha = commitAll();

@@ -188,8 +188,9 @@ bounded harness session over a caller-supplied catalog, reserved profile and too
 configurable wall time. `keiko_child_agent` keeps its reserved `child@1` profile and behaviour on
 the same two functions. The counter-check (`review/counter-check/`) uses its own reserved profile,
 `review-counter-check@1` (ADR-0175 D2): `keiko_counter_check_read`, `keiko_counter_check_discover`,
-`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`)
-and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
+`keiko_counter_check_search` (a fixed-string `git grep -F` over the head commit, `grepGitReviewTree`;
+the literal is one `-e<literal>` token, so an option-shaped literal such as `-cp` is searched,
+never refused as an option, R4130-026) and `keiko_counter_check_verdict`. Every read is served from the Git objects of the reviewed head
 commit in the run's review worktree (never a working tree), behind the sensitive-path deny list.
 Each candidate gets a fresh session with the Counter-checker model whose only input is the candidate
 task: location, category, condition, mechanism, consequence and evidence locations as nonce-bound

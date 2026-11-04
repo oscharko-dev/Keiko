@@ -458,7 +458,10 @@ export async function grepGitReviewTree(
   const perFile = assertGrepCount(request.maxCountPerFile);
   const args = ["grep", "--no-color", "-I", "-F", "-n", "-z", "--full-name"];
   const result = await ctx.runner(
-    [...GIT_BASE_ARGS, ...args, `--max-count=${String(perFile)}`, "-e", literal, sha, "--"],
+    // R4130-026: the literal is stuck to `-e` as one token. As a separate token, a literal such as
+    // `-cp` or `--exec` trips the runner's whole-argv option refusals. Git's option parser reads
+    // the rest of `-e<literal>` as the pattern; `git grep` has no `--regexp=` long form.
+    [...GIT_BASE_ARGS, ...args, `--max-count=${String(perFile)}`, `-e${literal}`, sha, "--"],
     {
       cwd: request.cwd,
       timeoutMs: ctx.timeoutMs ?? DEFAULT_TIMEOUT_MS,
