@@ -19,8 +19,8 @@ const MODELS = { reviewerModelId: "reviewer", counterCheckerModelId: "counter" }
 const COMMITS = { baseSha: "a".repeat(40), headSha: "b".repeat(40) };
 const ZERO = { promptTokens: 0, completionTokens: 0, durationMs: 0 };
 const SINCE = 10_000;
-const KEY = "0123456789ab";
-const OTHER_KEY = "ba9876543210";
+const KEY = "aaaaaaaaaaaa";
+const OTHER_KEY = "bbbbbbbbbbbb";
 
 let stateDir: string;
 let db: DatabaseSync;

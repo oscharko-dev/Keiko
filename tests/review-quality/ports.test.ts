@@ -11,7 +11,7 @@ import {
 } from "./ports.js";
 
 const MODELS = { reviewerModelId: "reviewer", counterCheckerModelId: "counter" };
-const REUSE_KEY = "0123456789ab";
+const REUSE_KEY = "aaaaaaaaaaaa";
 const REFS = { baseRef: "keiko-eval/pr-1/base", headRef: "keiko-eval/pr-1/head" };
 
 function view(): ReviewRunView {
@@ -66,7 +66,7 @@ describe("createGateReviewer", () => {
       request: { target: { kind: "local-range", ...REFS }, ...MODELS },
     });
     const started = f.started[0] as { readonly request: { readonly clientRequestId: string } };
-    expect(started.request.clientRequestId).toMatch(/^review-gate-0123456789ab-pr-1-\d+$/u);
+    expect(started.request.clientRequestId).toMatch(/^review-gate-aaaaaaaaaaaa-pr-1-\d+$/u);
     expect(f.release).toHaveBeenCalledWith("/lab/keiko", expect.any(String));
     expect(record).toMatchObject({
       caseKey: "pr-1",

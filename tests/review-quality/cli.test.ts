@@ -146,14 +146,14 @@ describe("parseGateArguments", () => {
       parseGateArguments([
         ...resumed,
         "--resume-prior-keys",
-        "0123456789ab,ba9876543210",
+        "aaaaaaaaaaaa,bbbbbbbbbbbb",
         "--rescore",
       ]),
-    ).toMatchObject({ resumePriorKeys: ["0123456789ab", "ba9876543210"], rescore: true });
-    expect(() => parseGateArguments([...resumed, "--resume-prior-keys", "0123456789AB"])).toThrow(
+    ).toMatchObject({ resumePriorKeys: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"], rescore: true });
+    expect(() => parseGateArguments([...resumed, "--resume-prior-keys", "AAAAAAAAAAAA"])).toThrow(
       /twelve-character hex/u,
     );
-    for (const flag of [["--rescore"], ["--resume-prior-keys", "0123456789ab"]]) {
+    for (const flag of [["--rescore"], ["--resume-prior-keys", "aaaaaaaaaaaa"]]) {
       expect(() =>
         parseGateArguments(["--set", "holdout", "--confirm-final-holdout", ...flag, ...COMMON]),
       ).toThrow(/belongs to a resumed run/u);
