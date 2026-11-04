@@ -78,6 +78,7 @@ import {
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { buildMultiSourceGatewayMessages } from "./grounded-qa-multi-source.js";
+import { CatalogDispatchFault } from "./tool-catalog/catalogToolErrors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { sentPromptContext } from "./grounded-prompt-context.js";
 import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
@@ -5633,6 +5634,30 @@ describe("mappedGatewayError diagnostic symmetry", () => {
 
     expect(result?.status).toBe(499);
     expect(events).toHaveLength(0);
+  });
+
+  it("maps a Chat tool dispatch fault like the desktop route instead of an opaque 500 (#4175)", () => {
+    const events: ServerDiagnosticRecord[] = [];
+    const deps = diagnosticDeps({
+      record: (record): void => {
+        events.push(record);
+      },
+    });
+
+    const result = mappedGatewayError(
+      new CatalogDispatchFault("denied", "budget-exhausted"),
+      deps,
+      "grounded-correlation-3",
+    );
+
+    expect(result).toMatchObject({ status: 403, body: { error: { code: "FORBIDDEN" } } });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      correlationId: "grounded-correlation-3",
+      operation: "POST /api/chats/messages/grounded",
+      source: "grounded.qa",
+      errorClass: "CatalogDispatchFault",
+    });
   });
 });
 

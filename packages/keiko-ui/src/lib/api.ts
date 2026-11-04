@@ -187,9 +187,11 @@ import {
   type ConversationAttachmentUploadRequestWire,
   type ConversationAttachmentUploadResponseWire,
   type DesktopChatStreamDoneEvent,
+  type DesktopChatStreamEvent,
   type DesktopChatStreamErrorEvent,
   type DesktopChatStreamEventType,
   type DesktopChatStreamReadConsentEvent,
+  type DesktopChatStreamToolExchangeEvent,
   type DesktopChatStreamWriteApprovalEvent,
   type GitChangeConnectResponse,
   type GitChangeRefreshResponse,
@@ -1236,6 +1238,7 @@ export async function createChat(input: CreateChatInput): Promise<ChatResponse> 
 
 export interface UpdateChatInput {
   jiraPodId?: string | null;
+  mcpServers?: readonly string[] | null;
   toolMode?: CodingWorkbenchMode;
   expectedGroundingScopeIdentity?: string;
   title?: string;
@@ -1509,6 +1512,7 @@ export type SseErrorPayload = DesktopChatStreamErrorEvent["data"];
 export interface StreamHandlers {
   readonly onWriteApproval?: (payload: DesktopChatStreamWriteApprovalEvent["data"]) => void;
   readonly onReadConsent?: (payload: DesktopChatStreamReadConsentEvent["data"]) => void;
+  readonly onToolExchange?: (payload: DesktopChatStreamToolExchangeEvent["data"]) => void;
   readonly onStarted?: (correlationId: string) => void;
   readonly onToken: (text: string) => void;
   readonly onDone: (payload: SseDonePayload) => void;
@@ -1534,6 +1538,26 @@ function malformedDesktopChatStreamError(): ApiError {
   );
 }
 
+function dispatchToolStreamEvent(
+  candidate: Extract<
+    DesktopChatStreamEvent,
+    { readonly event: "tool-write-approval" | "tool-read-consent" | "tool-exchange" }
+  >,
+  handlers: StreamHandlers,
+): void {
+  switch (candidate.event) {
+    case "tool-write-approval":
+      handlers.onWriteApproval?.(candidate.data);
+      break;
+    case "tool-read-consent":
+      handlers.onReadConsent?.(candidate.data);
+      break;
+    case "tool-exchange":
+      handlers.onToolExchange?.(candidate.data);
+      break;
+  }
+}
+
 // Dispatches a parsed SSE (event, data) pair to the appropriate handler.
 function dispatchSseEvent(
   eventName: DesktopChatStreamEventType | undefined,
@@ -1544,10 +1568,9 @@ function dispatchSseEvent(
   if (!isDesktopChatStreamEvent(candidate)) throw malformedDesktopChatStreamError();
   switch (candidate.event) {
     case "tool-write-approval":
-      handlers.onWriteApproval?.(candidate.data);
-      break;
     case "tool-read-consent":
-      handlers.onReadConsent?.(candidate.data);
+    case "tool-exchange":
+      dispatchToolStreamEvent(candidate, handlers);
       break;
     case "token": {
       handlers.onToken(candidate.data.text);
@@ -1672,6 +1695,7 @@ async function fetchWithinIdleLimit(
 function terminalAwareHandlers(handlers: StreamHandlers, onTerminal: () => void): StreamHandlers {
   return {
     onToken: handlers.onToken,
+    ...(handlers.onToolExchange === undefined ? {} : { onToolExchange: handlers.onToolExchange }),
     ...(handlers.onReadConsent === undefined ? {} : { onReadConsent: handlers.onReadConsent }),
     ...(handlers.onWriteApproval === undefined
       ? {}

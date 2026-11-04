@@ -22,6 +22,11 @@ import {
   withCodingJiraServer,
 } from "./codingJiraPodBinding.js";
 
+/** A draft is approved as one reviewed tree in Chat (#4178) and an attachment reads Chat-connected files (#4176); Coding runs offer neither. */
+const CODING_MUTATIONS = JIRA_MUTATION_OPERATIONS.filter(
+  (operation) => operation !== "jira.draft" && operation !== "jira.attach",
+);
+
 const BINDING = {
   podId: "d5f5681e-ce98-4c3c-b27e-51d707c9d018",
   authenticationGeneration: 3,
@@ -39,7 +44,9 @@ describe("the run's Jira server definition", () => {
       Object.entries(CODING_JIRA_TOOL_RISKS)
         .filter(([, risk]) => risk === "write")
         .map(([n]) => n),
-    ).toEqual([...JIRA_MUTATION_OPERATIONS]);
+    ).toEqual(CODING_MUTATIONS);
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.draft"]);
+    expect(CODING_JIRA_TOOL_RISKS).not.toHaveProperty(["jira.attach"]);
   });
 
   it("reaches the policy as jira_<tool> without any two tools sharing an action", () => {
@@ -153,7 +160,7 @@ describe("the coding-runtime.jira-pod Activity Log operation", () => {
     const registration = registry.find((entry) => entry.op === "coding-runtime.jira-pod");
     expect(registration?.fields.tool?.values).toEqual([
       ...JIRA_MANAGED_READ_TOOLS,
-      ...JIRA_MUTATION_OPERATIONS,
+      ...CODING_MUTATIONS,
     ]);
   });
 });

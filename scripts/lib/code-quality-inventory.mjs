@@ -275,6 +275,18 @@ export function collectPolicyPaths(root) {
   return sortedPolicyPaths([...tracked, ...additions]);
 }
 
+// HTML is never compiled or shipped by a workspace build. Only two non-shipped homes are known:
+// the design-system reference pages and the Playwright fixture pages under tests/e2e/. Any other
+// HTML stays unclassified, so a new home needs a deliberate entry here.
+const HTML_SOURCE_REASONS = [
+  ["design-system/", "non-shipped-design-system-reference"],
+  ["tests/e2e/", "non-shipped-e2e-fixture"],
+];
+
+function htmlSourceReason(path) {
+  return HTML_SOURCE_REASONS.find(([prefix]) => path.startsWith(prefix))?.[1];
+}
+
 export async function collectPolicySubject(root) {
   root = realpathSync(root);
   const membership = collectPolicyMembership(root);
@@ -307,14 +319,15 @@ export async function collectPolicySubject(root) {
     html: paths
       .filter((path) => /\.html?$/u.test(path))
       .map((path) => {
-        if (!path.startsWith("design-system/")) throw new TypeError("unclassified-html-source");
+        const reason = htmlSourceReason(path);
+        if (reason === undefined) throw new TypeError("unclassified-html-source");
         safePolicyFile(root, path);
         const source = readFileSync(join(root, path), "utf8");
         return {
           path,
           sha256: policyDigest(source),
           inlineScriptHashes: extractInlineScriptHashes([source]),
-          reason: "non-shipped-design-system-reference",
+          reason,
           production: false,
         };
       }),

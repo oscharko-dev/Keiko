@@ -1197,11 +1197,6 @@
       "count": 3
     }
   },
-  "src/app/components/desktop/widgets/connectors/AtlassianConnectorsPanel.tsx": {
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
   "src/app/components/desktop/widgets/connectors/ConnectorApprovalsPanel.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 1
