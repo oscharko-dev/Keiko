@@ -851,7 +851,7 @@ interface WrapJoin {
 
 const HYPHENATED_END = /\p{L}-$/u;
 // Nothing but the rest of the address can follow a URL scheme.
-const URL_SCHEME_END = /\p{L}[\p{L}\p{N}+.-]*:\/\/$/u;
+const URL_SCHEME_END = /[\p{L}\p{N}]:\/\/$/u;
 const LOWER_START = /^\p{Ll}/u;
 const COMPOUND_START = /^[\p{Lu}\p{N}]/u;
 // "Ein- und Auszahlung": a word that follows a suspended hyphen keeps it.
