@@ -243,7 +243,7 @@ function harness(): Harness {
         serverPrincipal: () => "operator-review",
         activityLog: log,
       });
-      if (composition !== undefined) compositions.push(composition);
+      if (!("startFailure" in composition)) compositions.push(composition);
       return composition;
     },
     layersFor: (composition, modelId) =>
@@ -421,7 +421,7 @@ describe("composeReviewRuntime", () => {
     const composition = composeReviewRuntime({
       runtimeStateDir: "/state/review-runtime",
       reviewWorktreeRoot: "/state/review-worktrees",
-      activate: () => undefined,
+      activate: () => ({ unavailableReason: "loopback-unavailable" }),
       verificationRunner: { runToReport: vi.fn() },
       readWorkspaceHead: () => undefined,
       resolveManagedModelProfile: () => ({ profileId: "p" }),
@@ -433,6 +433,6 @@ describe("composeReviewRuntime", () => {
       serverPrincipal: () => "operator",
       activityLog: createBufferedServerLogSink(),
     });
-    expect(composition).toBeUndefined();
+    expect(composition).toEqual({ startFailure: "loopback-unavailable" });
   });
 });

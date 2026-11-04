@@ -86,6 +86,40 @@ describe("review runtime Activity Log proofs", () => {
     });
   });
 
+  it("proves review.run.runtime-stopped for an instance that could not start (R4130-019)", () => {
+    const line = onlyLine((sink) => {
+      logReviewRuntimeStopped(sink, CORRELATION, {
+        instanceId: INSTANCE,
+        trigger: "start-failed",
+        idleDurationMs: 0,
+        runCount: 0,
+        startFailure: "loopback-unavailable",
+      });
+    });
+    expect(expectActivityLogProof("review.run.runtime-stopped.line", line)).toMatchObject({
+      trigger: "start-failed",
+      startFailure: "loopback-unavailable",
+    });
+  });
+
+  it("proves review.run.rules-file for a failed read with its cause (R4130-022)", () => {
+    const line = onlyLine((sink) => {
+      logReviewRulesFile(sink, {
+        correlationId: CORRELATION,
+        runId: RUN_ID,
+        outcome: "read-failed",
+        byteCount: 0,
+        failure: { failureClass: "timeout", error: new Error("rules read timed out") },
+      });
+    });
+    expect(expectActivityLogProof("review.run.rules-file.line", line)).toMatchObject({
+      outcome: "read-failed",
+      failureClass: "timeout",
+    });
+    expect(line).toContain('"errorKind":"timeout"');
+    expect(line).not.toContain("rules read timed out");
+  });
+
   it("proves review.run.profile-refused with its closed reason", () => {
     const line = onlyLine((sink) => {
       logReviewProfileRefused(sink, CORRELATION, "native-profile", "profile");
@@ -98,7 +132,12 @@ describe("review runtime Activity Log proofs", () => {
 
   it("proves review.run.rules-file with a run digest, never the run id or the rules", () => {
     const line = onlyLine((sink) => {
-      logReviewRulesFile(sink, RUN_ID, "too-large", 20_000);
+      logReviewRulesFile(sink, {
+        correlationId: CORRELATION,
+        runId: RUN_ID,
+        outcome: "too-large",
+        byteCount: 20_000,
+      });
     });
     expect(expectActivityLogProof("review.run.rules-file.line", line)).toMatchObject({
       outcome: "too-large",

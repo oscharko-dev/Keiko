@@ -16,6 +16,7 @@ import { isReviewRulesFilePath } from "@oscharko-dev/keiko-contracts/runtime/pul
 import {
   readGitReviewBlob,
   readGitReviewPathObject,
+  type GitProcessResult,
   type GitProcessRunner,
 } from "@oscharko-dev/keiko-git";
 
@@ -46,10 +47,26 @@ export type ReviewRulesReadResult =
 
 /** Thrown when the base commit cannot be read at all; the caller settles the run, never "no rules". */
 export class ReviewRulesReadError extends Error {
-  public constructor() {
-    super("review rules could not be read from the base commit");
+  public constructor(public readonly failure: ReviewRulesReadFailure) {
+    super(`review rules could not be read from the base commit (${failure})`);
     this.name = "ReviewRulesReadError";
   }
+}
+
+/** Why a rules read failed, closed (R4130-022): the run's log line names it. */
+export const REVIEW_RULES_READ_FAILURES = [
+  "cancelled",
+  "timeout",
+  "spawn-refused",
+  "git-failed",
+] as const;
+export type ReviewRulesReadFailure = (typeof REVIEW_RULES_READ_FAILURES)[number];
+
+function readFailure(result: GitProcessResult): ReviewRulesReadFailure {
+  if (result.aborted === true) return "cancelled";
+  if (result.timedOut === true) return "timeout";
+  if (result.refusal !== undefined) return "spawn-refused";
+  return "git-failed";
 }
 
 /**
@@ -87,7 +104,7 @@ export async function readReviewRulesFromBase(
     sha: input.baseSha,
     path,
   });
-  if (!object.ok) throw new ReviewRulesReadError();
+  if (!object.ok) throw new ReviewRulesReadError(readFailure(object.result));
   if (object.value?.type !== "blob") return { outcome: "absent", byteCount: 0 };
   const byteCount = object.value.size;
   if (byteCount > REVIEW_RULES_FILE_MAX_BYTES) return { outcome: "too-large", byteCount };
@@ -95,7 +112,7 @@ export async function readReviewRulesFromBase(
     { ...ctx, maxBytes: REVIEW_RULES_FILE_MAX_BYTES },
     { cwd: input.repositoryRoot, oid: object.value.oid },
   );
-  if (!blob.ok) throw new ReviewRulesReadError();
+  if (!blob.ok) throw new ReviewRulesReadError(readFailure(blob.result));
   if (!isAdmissibleText(blob.value)) return { outcome: "not-utf8", byteCount };
   return { outcome: "loaded", text: blob.value, byteCount };
 }
