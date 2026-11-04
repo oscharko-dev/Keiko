@@ -38,6 +38,24 @@ function transcriptBinding(transcript: ChatToolTranscript): string | undefined {
   const grant = transcript.readGrants?.find((entry) => entry.kind === "jira-chat-read");
   return jiraNamesBinding(grant ?? transcript.readGrant);
 }
+interface BoundRead {
+  readonly exchange: ChatToolExchange;
+  readonly binding: string;
+}
+/** Later turns may retain the existing Jira grant without repeating its disclosure. */
+export function jiraBoundReads(
+  transcripts: readonly (ChatToolTranscript | undefined)[],
+): readonly BoundRead[] {
+  const reads: BoundRead[] = [];
+  let binding: string | undefined;
+  for (const transcript of transcripts) {
+    if (transcript === undefined) continue;
+    binding = transcriptBinding(transcript) ?? binding;
+    if (binding === undefined) continue;
+    for (const exchange of transcript.exchanges) reads.push({ exchange, binding });
+  }
+  return reads;
+}
 function fieldChoices(value: unknown): readonly Choice[] {
   const field = record(value);
   if (!CHOICE_KINDS.has(String(field.kind)) || !Array.isArray(field.allowedValues)) return [];
@@ -112,13 +130,8 @@ export function jiraChoicesOf(
 ): JiraChoices {
   const projects = new Map<string, string>();
   const fields = new Map<string, readonly Choice[]>();
-  let binding: string | undefined;
-  for (const transcript of transcripts) {
-    if (transcript === undefined) continue;
-    binding = transcriptBinding(transcript) ?? binding;
-    if (binding === undefined) continue;
-    for (const exchange of transcript.exchanges) collectRead(exchange, binding, projects, fields);
-  }
+  for (const { exchange, binding } of jiraBoundReads(transcripts))
+    collectRead(exchange, binding, projects, fields);
   return { projects, fields };
 }
 function namedValue(value: JiraDraftValue, choices: readonly Choice[]): JiraDraftValue {

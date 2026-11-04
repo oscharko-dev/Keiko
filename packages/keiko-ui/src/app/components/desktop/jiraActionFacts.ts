@@ -6,7 +6,7 @@
 // the action digest, not this model.
 import type { OptionalWidgetTranslate, WidgetMessageKey } from "@/lib/optional-widget-i18n";
 import { jiraDraftValueOf, type JiraDraftField, type JiraDraftValue } from "./jiraDraftTree";
-import { jiraNamed, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
+import { jiraNamed, jiraNameOf, NO_JIRA_NAMES, restatesTarget, type JiraNames } from "./jiraNames";
 
 type Raw = Readonly<Record<string, unknown>>;
 type Fact = JiraDraftField;
@@ -143,10 +143,9 @@ function managedFacts(
   t: OptionalWidgetTranslate,
   names: JiraNames,
 ): readonly Fact[] {
-  const lookup = key === "projectId" ? names.projects : names.issueTypes;
   const known =
     (key === "projectId" || key === "issueTypeId") && typeof value === "string"
-      ? lookup.get(value)
+      ? jiraNameOf(names, key === "projectId" ? "projects" : "issueTypes", value)
       : undefined;
   return jiraFacts(key, known ?? value, t)
     .filter(

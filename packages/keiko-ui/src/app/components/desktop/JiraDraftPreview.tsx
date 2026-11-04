@@ -7,7 +7,7 @@ import type {
   JiraDraftTreeItem,
   JiraDraftValue,
 } from "./jiraDraftTree";
-import { JiraNamesContext, jiraNamed, restatesTarget } from "./jiraNames";
+import { JiraNamesContext, jiraNamed, jiraNameOf, restatesTarget } from "./jiraNames";
 import styles from "./JiraChatTools.module.css";
 
 // Longer text is collapsed to this many characters until the human expands it in place.
@@ -130,8 +130,8 @@ function ItemRelations({ item }: { readonly item: JiraDraftTreeItem }): ReactNod
     <>
       <span className={styles.cmpDraftNote}>
         {t("chat.jira.draft.target", {
-          projectId: names.projects.get(item.projectId) ?? item.projectId,
-          issueTypeId: names.issueTypes.get(item.issueTypeId) ?? item.issueTypeId,
+          projectId: jiraNameOf(names, "projects", item.projectId) ?? item.projectId,
+          issueTypeId: jiraNameOf(names, "issueTypes", item.issueTypeId) ?? item.issueTypeId,
         })}
       </span>
       {notes.length === 0 ? null : <span className={styles.cmpDraftNote}>{notes.join(" · ")}</span>}

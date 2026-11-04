@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, type RenderResult } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { ChatToolWriteApprovalView } from "@oscharko-dev/keiko-contracts";
 import type { ChatToolExchange, ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -11,7 +11,7 @@ const BINDING = {
   bindingGeneration: 1,
   authenticationGeneration: 1,
 };
-const APPROVAL: ChatToolWriteApprovalView = {
+const APPROVAL: Extract<ChatToolWriteApprovalView, { kind: "jira-chat-write" }> = {
   ...BINDING,
   kind: "jira-chat-write",
   approvalId: "approval-1",
@@ -68,16 +68,17 @@ function review(
   operation: "jira.create" | "jira.draft" | "jira.edit" | "jira.transition" = "jira.draft",
   fields: Record<string, unknown> = { summary: "Synthetic epic", priority: { id: "1" } },
   target: Record<string, unknown> = { projectId: "10000", issueTypeId: "10002" },
-): void {
+  binding: typeof BINDING = BINDING,
+): RenderResult {
   const item = {
     ...target,
     ref: "epic",
     fields,
   };
-  render(
+  return render(
     <ChatJiraNames messages={reads.map((toolTranscript) => ({ toolTranscript }))}>
       <JiraWriteApproval
-        approval={{ ...APPROVAL, operation }}
+        approval={{ ...APPROVAL, ...binding, operation }}
         call={{
           id: "write",
           name: operation.replace(".", "_"),
@@ -93,6 +94,86 @@ function expectRawId(): void {
   expect(screen.getByText("1", { exact: true })).toBeVisible();
   expect(screen.queryByText("Highest")).toBeNull();
 }
+
+function namedMetadata(label: string, binding: typeof BINDING = BINDING): ChatToolTranscript {
+  const source = transcript(
+    read("jira_projects", {}, [{ id: "10000", key: "SHARED", name: `${label} project` }]),
+    read("jira_issue_types", { projectKey: "SHARED" }, [{ id: "10002", name: `${label} type` }]),
+    read("jira_create_fields", { projectKey: "SHARED", issueTypeId: "10002" }, [
+      {
+        id: "priority",
+        name: `${label} field`,
+        kind: "option",
+        allowedValues: [{ id: "1", name: `${label} value` }],
+      },
+    ]),
+  );
+  if (source.readGrant?.kind !== "jira-chat-read") throw new Error("Expected a Jira read grant");
+  return { ...source, readGrant: { ...source.readGrant, ...binding } };
+}
+
+function expectNames(container: HTMLElement, label: string): void {
+  for (const kind of ["project", "type", "field", "value"])
+    expect(container).toHaveTextContent(`${label} ${kind}`);
+}
+
+function expectNoNames(container: HTMLElement, label: string): void {
+  for (const kind of ["project", "type", "field", "value"])
+    expect(container).not.toHaveTextContent(`${label} ${kind}`);
+}
+
+describe("Jira approval names stay with their metadata binding", () => {
+  const otherBinding = { ...BINDING, podId: "22222222-2222-4222-8222-222222222222" };
+
+  it.each(["jira.create", "jira.draft"] as const)(
+    "keeps both Pods' names and values separate for %s with identical ids",
+    (operation) => {
+      const reads = [namedMetadata("A"), namedMetadata("B", otherBinding)];
+      const first = review(reads, operation);
+      expectNames(first.container, "A");
+      expectNoNames(first.container, "B");
+      first.unmount();
+      const second = review(reads, operation, undefined, undefined, otherBinding);
+      expectNames(second.container, "B");
+      expectNoNames(second.container, "A");
+    },
+  );
+
+  it.each(["bindingGeneration", "authenticationGeneration"] as const)(
+    "does not reuse names from another %s",
+    (key) => {
+      const view = review([namedMetadata("A"), namedMetadata("Other", { ...BINDING, [key]: 2 })]);
+      expectNames(view.container, "A");
+      expectNoNames(view.container, "Other");
+    },
+  );
+
+  it("uses the latest read in the same retained binding after another Pod was read", () => {
+    const latest = namedMetadata("Latest");
+    const view = review([
+      namedMetadata("Old"),
+      { schemaVersion: 1, exchanges: latest.exchanges },
+      namedMetadata("B", otherBinding),
+    ]);
+    expectNames(view.container, "Latest");
+    expectNoNames(view.container, "Old");
+    expectNoNames(view.container, "B");
+  });
+
+  it.each(["another Pod", "no read grant"])(
+    "keeps ids visible when the metadata has %s",
+    (source) => {
+      const metadata = namedMetadata("Other", otherBinding);
+      const view = review([
+        source === "another Pod" ? metadata : { schemaVersion: 1, exchanges: metadata.exchanges },
+      ]);
+      expect(view.container).toHaveTextContent("Project 10000 · Issue type 10002");
+      expect(screen.getByText("priority")).toBeVisible();
+      expect(screen.getByText("1", { exact: true })).toBeVisible();
+      expectNoNames(view.container, "Other");
+    },
+  );
+});
 
 describe("Jira approval selection values from instance metadata", () => {
   it.each(["jira.create", "jira.draft"] as const)(

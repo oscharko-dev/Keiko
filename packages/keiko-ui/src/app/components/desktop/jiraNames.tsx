@@ -2,6 +2,7 @@ import { createContext, useMemo, type ReactNode } from "react";
 import type { ChatToolTranscript } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { JiraDraftField } from "./jiraDraftTree";
 import {
+  jiraBoundReads,
   jiraChoiceValue,
   jiraChoicesOf,
   NO_JIRA_CHOICES,
@@ -30,27 +31,45 @@ function itemsOf(data: unknown): readonly unknown[] {
   const items = typeof data === "object" && data !== null && "items" in data ? data.items : [];
   return Array.isArray(items) ? (items as readonly unknown[]) : [];
 }
-function namedEntries(item: unknown): readonly (readonly [string, string])[] {
+function namedEntries(item: unknown, binding: string): readonly (readonly [string, string])[] {
   const { id, name } = (item ?? {}) as { readonly id?: unknown; readonly name?: unknown };
-  return typeof id === "string" && typeof name === "string" ? [[id, name]] : [];
+  return typeof id === "string" && typeof name === "string"
+    ? [[JSON.stringify([binding, id]), name]]
+    : [];
 }
-function namesOf(transcripts: Transcripts, tool: string): ReadonlyMap<string, string> {
-  const reads = transcripts
-    .flatMap((entry) => entry?.exchanges ?? [])
-    .filter(({ call, result }) => call.name === tool && result?.status === "completed");
+function namesOf(
+  reads: ReturnType<typeof jiraBoundReads>,
+  tool: string,
+): ReadonlyMap<string, string> {
+  const completed = reads.filter(
+    ({ exchange }) => exchange.call.name === tool && exchange.result?.status === "completed",
+  );
   return new Map(
-    reads.flatMap(({ result }) => itemsOf(result?.data).flatMap((item) => namedEntries(item))),
+    completed.flatMap(({ exchange, binding }) =>
+      itemsOf(exchange.result?.data).flatMap((item) => namedEntries(item, binding)),
+    ),
   );
 }
 
-/** The later read of an id wins, so a renamed project shows its newest name. */
+/** The later read of an id within the same binding wins, including renamed projects. */
 export function jiraNamesOf(transcripts: Transcripts): JiraNames {
+  const reads = jiraBoundReads(transcripts);
   return {
-    projects: namesOf(transcripts, "jira_projects"),
-    issueTypes: namesOf(transcripts, "jira_issue_types"),
-    fields: namesOf(transcripts, "jira_create_fields"),
+    projects: namesOf(reads, "jira_projects"),
+    issueTypes: namesOf(reads, "jira_issue_types"),
+    fields: namesOf(reads, "jira_create_fields"),
     choices: jiraChoicesOf(transcripts),
   };
+}
+
+export function jiraNameOf(
+  names: JiraNames,
+  kind: "projects" | "issueTypes" | "fields",
+  id: string,
+): string | undefined {
+  return names.binding === undefined
+    ? undefined
+    : names[kind].get(JSON.stringify([names.binding, id]));
 }
 
 /** Every card of a Chat reads the names of the whole Chat, because a later turn may not read them. */
@@ -73,7 +92,7 @@ export function jiraNamed(
   names: JiraNames,
   target: JiraFieldTarget = {},
 ): JiraDraftField {
-  const label = names.fields.get(field.id);
+  const label = jiraNameOf(names, "fields", field.id);
   return {
     ...field,
     ...(label === undefined ? {} : { label }),
