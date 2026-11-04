@@ -181,7 +181,8 @@ These quantities answer different questions and are always reported under their 
   refute in prose, so almost every decided thread is a hit.
 - **Actionable rate.** Hits over hits, false alarms and undecided (owner decision 2026-11-04,
   R4130-006). For a replayed review it counts findings, and duplicate findings join the
-  denominator: hits / (hits + false alarms + undecided + duplicates). A finding that lands on a
+  denominator, an implementation rule for R4130-014 rather than an owner decision:
+  hits / (hits + false alarms + undecided + duplicates). A finding that lands on a
   thread nobody answered or acted on counts against the agent. ADR-0182 D9's offline threshold of
   at least 50 % applies to this rate on the holdout. For a producer's history the baseline reports
   the same quantity over threads, which have no duplicates.

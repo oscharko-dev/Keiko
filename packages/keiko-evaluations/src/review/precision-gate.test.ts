@@ -87,9 +87,10 @@ const sample = run([
 ]);
 
 describe("countReviewOutcomes", () => {
-  // Owner decision 2026-11-04 (R4130-006, R4130-014): the gated actionable rate counts undecided
-  // and duplicate findings against the agent; hits over hits plus false alarms is reported apart
-  // as the acceptance rate. This replaces the earlier pin of hits over decided findings.
+  // Owner decision 2026-11-04 (R4130-006): the gated actionable rate counts undecided findings
+  // against the agent; hits over hits plus false alarms is reported apart as the acceptance rate.
+  // Duplicates joining the denominator is the implementation's rule for R4130-014. This replaces
+  // the earlier pin of hits over decided findings.
   it("rates hits over hits, false alarms, undecided and duplicate findings", () => {
     const counts = countReviewOutcomes([
       replayed("hit"),

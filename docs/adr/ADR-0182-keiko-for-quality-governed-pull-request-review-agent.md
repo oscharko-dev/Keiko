@@ -402,27 +402,35 @@ pull request #3066, fixed by Issue #4132 from the recorded baseline
 (`docs/qa/review-agent-baseline-2026-10-30.md`); the replay refuses a run that tunes on the holdout.
 Definitions and labeling rules are in `docs/qa/review-agent-measurement.md`.
 
-Offline scoring (owner decisions of 2026-11-04 on the epic branch review, fixed before anyone read
-the holdout rate):
+Offline scoring. The owner made four decisions on 2026-11-04 during the epic branch review:
 
-- The gated actionable rate is hits / (hits + false alarms + undecided) over the replayed findings
-  matched to historical threads (R4130-006). A finding matched to a thread that nobody answered or
-  acted on counts against the agent. Hits / (hits + false alarms) is reported as the acceptance
-  rate and never gated.
+1. The gated actionable rate is hits / (hits + false alarms + undecided) over the replayed findings
+   matched to historical threads (R4130-006). A finding matched to a thread that nobody answered
+   or acted on counts against the agent. Hits / (hits + false alarms) is reported as the
+   acceptance rate and never gated.
+2. The scoring findings R4130-007, R4130-010, R4130-011 and R4130-014 are fixed before anyone reads
+   the holdout rate.
+3. The review behaviour fixes land after the holdout run, and the seed gates run again on them.
+4. The gate keeps `maximumNotCompleteShare = 0.2` as a condition: it fails when more than 20 % of a
+   holdout run's reviews settle other than `complete`, and the holdout run is still finished. The
+   owner made this decision with the holdout's settlement counts known and its rate unknown,
+   knowing that most stored holdout reviews settled other than `complete`. That holdout therefore
+   fails on coverage while its rate is still measured and reported.
+
+The implementation chose these rules under decisions 1 and 2. They are not owner decisions:
+
 - A matched thread credits one hit per pull request (R4130-014). Further findings on that thread
   are duplicates: they add no hit, count in the actionable rate's denominator and are reported as a
   duplicate count.
 - Replayed findings sit at the pull request's head commit, so they are matched only against
   right-side anchors carried to that commit (R4130-007). The harvest stores the carried head range
-  in dataset schema 2; an anchor that cannot be carried is unmeasured.
+  in dataset schema 2. An anchor is not carried across a binary change or a change that deleted
+  every anchored line, the file's deletion included (R4130-032). A finding that may lie under such
+  an anchor scores `unmeasured`, never a hit.
 - The loader recomputes the dataset's content digest and refuses a mismatch with its stored field
   (R4130-010).
 - The verdict counts only for a holdout evaluation over the default selection; any other run is
-  `unmeasured` (R4130-011). The gate fails when more than the manifest's `maximumNotCompleteShare`
-  (20 %) of the reviews settle other than `complete`. The bound is an owner decision of
-  2026-11-04, made with the holdout's settlement counts known and its rate unknown. The owner kept
-  it knowing that most stored holdout reviews settled other than `complete`, so that holdout fails
-  on coverage while its rate is still measured and reported.
+  `unmeasured` (R4130-011). The report prints the not-complete share on every run.
 
 The 50 % threshold, the Wilson interval reported next to every rate and the limit of three findings
 per pull request are unchanged.

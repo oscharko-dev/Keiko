@@ -202,9 +202,10 @@ export interface ReviewOutcomeCounts {
   readonly unmeasured: number;
   readonly unmatched: number;
   /**
-   * The gated rate (owner decision 2026-11-04, R4130-006): hits over hits, false alarms, undecided
-   * and duplicate findings, with its Wilson interval. A finding nobody answered or acted on counts
-   * against the agent.
+   * The gated rate: hits over hits, false alarms and undecided findings (owner decision 2026-11-04,
+   * R4130-006), plus duplicate findings in the denominator (the implementation's rule for
+   * R4130-014), with its Wilson interval. A finding nobody answered or acted on counts against the
+   * agent.
    */
   readonly actionableRate: WilsonInterval;
   /** Reported, never gated: hits over hits plus false alarms, with its Wilson interval. */

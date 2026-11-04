@@ -3,9 +3,10 @@
 // actionable — with the absolute counts, the per-category and per-severity breakdown, the findings
 // per pull request, the cost per pull request and a Wilson interval next to every rate.
 //
-// The gated actionable rate is hits over hits, false alarms, undecided and duplicate findings (owner
-// decision 2026-11-04, R4130-006 and R4130-014): a finding that lands on a thread nobody answered
-// or acted on counts against the agent, and a restatement of an already credited hit adds no hit.
+// The gated actionable rate is hits over hits, false alarms and undecided findings (owner decision
+// 2026-11-04, R4130-006): a finding that lands on a thread nobody answered or acted on counts
+// against the agent. Duplicate findings join that denominator; this is the implementation's rule
+// for R4130-014, not an owner decision: a restatement of an already credited hit adds no hit.
 // Hits over hits plus false alarms is reported apart as the acceptance rate and never gated.
 // Unmeasured and unmatched findings are reported and never folded into a favourable cell; a run with
 // no finding on a measurable thread is `unmeasured`, never a 0 % or 100 % verdict. A precision rate
