@@ -33,6 +33,7 @@ import type {
   ParserResult,
 } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
+import { cleanHeaderLabel, neutraliseFieldSeparator } from "./tabular.js";
 import {
   readJson,
   type JsonArray,
@@ -101,7 +102,8 @@ interface ScanContext {
 const LINE_BREAKS = /[\r\n\u2028\u2029]+/gu;
 
 function scalarText(value: Exclude<JsonValue, JsonArray | JsonObject>): string {
-  if (typeof value === "string") return value.replaceAll(LINE_BREAKS, " ");
+  if (typeof value === "string")
+    return neutraliseFieldSeparator(value.replaceAll(LINE_BREAKS, " "));
   if (value !== null && typeof value === "object") return value.source;
   return value === null ? "null" : String(value);
 }
@@ -117,9 +119,17 @@ interface RowRef {
 // exactly that shape for workbooks. Every other record keeps its JSON Pointer as label. The label is
 // presentation only; the unit's `jsonPointer` stays the citation.
 function recordLabel(pointer: string, row: RowRef | undefined): string {
-  if (row !== undefined)
-    return `${row.parent.length === 0 ? "/" : row.parent}!${String(row.number)}`;
-  return pointer.length === 0 ? "/" : pointer;
+  if (row !== undefined) {
+    const parent = row.parent.length === 0 ? "/" : labelText(row.parent);
+    return `${parent}!${String(row.number)}`;
+  }
+  return pointer.length === 0 ? "/" : labelText(pointer);
+}
+
+// A key of the document is data: a line break, `|` or `=` in it would start another record or field,
+// and a pointer ending in `!<number>` would read as the row label of another record.
+function labelText(text: string): string {
+  return cleanHeaderLabel(text).replaceAll(/!(?=\d+(?::|$))/gu, "! ");
 }
 
 function appendNormalizedRecord(
@@ -237,7 +247,7 @@ function objectScalarFields(value: JsonObject, row: RowRef | undefined): readonl
   return value.entries.flatMap(([key, child]) => {
     if (!staysInRow(child, row)) return [];
     const values = isValueList(child) ? child.items : [child];
-    return values.map((item) => `${key}=${projectionOf(item)}`);
+    return values.map((item) => `${cleanHeaderLabel(key)}=${projectionOf(item)}`);
   });
 }
 

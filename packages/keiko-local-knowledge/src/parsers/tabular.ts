@@ -64,6 +64,11 @@ export function cleanHeaderLabel(value: string): string {
 const ROW_PREFIX_AT_LINE_START = /\n([^\n:]{1,120}!)(?=\d{1,9}:)/gu;
 const DOCUMENT_ROW_AT_LINE_START = /\n(Table row )(?=\d{1,9}:)/gu;
 
+/** The ` | ` between two fields of a row, written in a value as a broken bar. */
+export function neutraliseFieldSeparator(value: string): string {
+  return value.replaceAll(" | ", " ¦ ");
+}
+
 /**
  * A cell value that cannot be read as the start of another cell or of another row, and that keeps
  * its row whole: every line of the cell stays, one kind of line break, and no blank line, which
@@ -72,8 +77,7 @@ const DOCUMENT_ROW_AT_LINE_START = /\n(Table row )(?=\d{1,9}:)/gu;
  * row prefix may itself start with spaces.
  */
 export function neutraliseValue(value: string): string {
-  return joinedLines(value)
-    .replaceAll(" | ", " ¦ ")
+  return neutraliseFieldSeparator(joinedLines(value))
     .replaceAll(ROW_PREFIX_AT_LINE_START, "\n$1 ")
     .replaceAll(DOCUMENT_ROW_AT_LINE_START, "\n$1 ");
 }
