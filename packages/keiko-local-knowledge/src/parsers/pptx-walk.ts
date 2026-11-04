@@ -114,7 +114,7 @@ interface WalkState {
 type TagHandler = (state: WalkState, tag: XmlTag) => void;
 
 function skippingField(state: WalkState): boolean {
-  return state.fieldSkip.some((skipped) => skipped);
+  return state.fieldSkip.some(Boolean);
 }
 
 function indentOf(level: number | undefined): string {

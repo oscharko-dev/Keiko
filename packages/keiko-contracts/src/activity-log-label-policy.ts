@@ -65,11 +65,10 @@ const PERSONAL_IDENTIFIER_PATTERNS: readonly RegExp[] = [
   // A telephone number inside an identifier: announced by its name (`tel-491711234567`), or in the
   // national form (`contact_01711234567`): a mobile prefix or an area code. A counter or a fixture id
   // counts from zero (`corr-0123456789`).
-  /(?:^|[^A-Za-z])(?:tel|telefon|phone|mobil|mobile|handy|fax)[-_.:=]?\+?\d[\d ()./-]{5,}/i,
+  /(?:^|[^a-z])(?:tel|telefon|phone|mobil|mobile|handy|fax)[-_.:=]?\+?\d[\d ()./-]{5,}/i,
   /[-_.]0(?:1[5-7]|[2-9])\d{7,12}(?:[^\dA-Za-z_]|$)/,
   // A URL names a machine and often its owner (`https://jane.doe.example`). Only a local one is
   // nobody's.
-  /(?:^|[^a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\/(?!(?:localhost|127\.\d|0\.0\.0\.0|\[::1\])(?:[:/?#]|$))[^\s/:]/i,
   // A date with a four-digit year, as a birth date is written in a form or a contract.
   /(?:^|[^\d.])\d{1,2}[./]\d{1,2}[./](?:19|20)\d{2}(?:[^\d.]|$)/,
   // An IPv4 address, which identifies a person's machine.
@@ -141,6 +140,20 @@ function isLowercaseIban(candidate: string): boolean {
   return (
     IBAN_LENGTHS.get(candidate.slice(0, 2)) === candidate.length && ibanChecksumHolds(candidate)
   );
+}
+
+const URL_START = /(?:^|[^a-z0-9+.-])[a-z][a-z0-9+.-]*:\/\//gi;
+const LOCAL_URL_AUTHORITY = /^(?:localhost|127\.\d|0\.0\.0\.0|\[::1\])(?:[:/?#]|$)/i;
+// Longer than any local authority above; what follows does not change the answer.
+const URL_AUTHORITY_WINDOW = 32;
+
+function containsRemoteUrl(value: string): boolean {
+  for (const match of value.matchAll(URL_START)) {
+    const start = match.index + match[0].length;
+    const authority = value.slice(start, start + URL_AUTHORITY_WINDOW);
+    if (/^[^\s/:]/.test(authority) && !LOCAL_URL_AUTHORITY.test(authority)) return true;
+  }
+  return false;
 }
 
 function containsLowercaseIban(value: string): boolean {
@@ -233,6 +246,7 @@ export function looksLikePersonalIdentifier(value: string): boolean {
   const judged = withoutNonPersonalDigitShapes(value);
   return (
     containsLowercaseIban(judged) ||
+    containsRemoteUrl(judged) ||
     PERSONAL_IDENTIFIER_PATTERNS.some((pattern) => pattern.test(judged))
   );
 }
