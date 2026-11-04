@@ -36,9 +36,12 @@ export interface MergeRow<TCell extends MergeCell> {
   folded: boolean;
 }
 
-// Upper bounds so a hostile `mergeCell` list cannot turn a small sheet into unbounded work.
-const MERGE_WORK_BUDGET = 1_000_000;
+// Upper bounds so a hostile `mergeCell` list cannot turn a small sheet into unbounded work. The
+// budget counts every cell a row holds and every column a range covers on that row, so thousands of
+// overlapping ranges over thousands of rows exhaust it instead of multiplying out.
+const MERGE_WORK_BUDGET = 5_000_000;
 const MERGE_MAX_COLUMNS = 256;
+const MERGE_MAX_RANGES = 50_000;
 
 function firstRowAtOrAfter<TCell extends MergeCell>(
   rows: readonly MergeRow<TCell>[],
@@ -59,11 +62,20 @@ interface Spread {
   readonly value: string;
 }
 
+function rangeKey(range: MergeRange): string {
+  return `${String(range.firstRow)}:${String(range.lastRow)}:${String(range.firstColumn)}:${String(range.lastColumn)}`;
+}
+
+// The vertical ranges worth projecting, grouped by the row that holds their value. A range listed
+// twice is one range.
 function groupRanges(ranges: readonly MergeRange[]): ReadonlyMap<number, readonly MergeRange[]> {
   const groups = new Map<number, MergeRange[]>();
+  const seen = new Set<string>();
   for (const range of ranges) {
     if (range.lastRow <= range.firstRow) continue;
     if (range.lastColumn - range.firstColumn >= MERGE_MAX_COLUMNS) continue;
+    if (seen.size >= MERGE_MAX_RANGES || seen.has(rangeKey(range))) continue;
+    seen.add(rangeKey(range));
     const group = groups.get(range.firstRow);
     if (group === undefined) groups.set(range.firstRow, [range]);
     else group.push(range);
@@ -75,21 +87,29 @@ function spreadsOf<TCell extends MergeCell>(
   anchor: MergeRow<TCell>,
   group: readonly MergeRange[],
 ): readonly Spread[] {
-  return group.flatMap((range) => {
-    const value = anchor.cells.find((cell) => cell.columnIndex === range.firstColumn)?.value;
-    return value === undefined ? [] : [{ range, value }];
-  });
+  return group
+    .flatMap((range) => {
+      const value = anchor.cells.find((cell) => cell.columnIndex === range.firstColumn)?.value;
+      return value === undefined ? [] : [{ range, value }];
+    })
+    .sort((a, b) => a.range.firstColumn - b.range.firstColumn);
 }
 
-function coveredColumns(spreads: readonly Spread[], rowNumber: number): number {
-  const columns = new Set<number>();
-  for (const { range } of spreads) {
-    if (range.lastRow < rowNumber) continue;
-    for (let column = range.firstColumn; column <= range.lastColumn; column += 1) {
-      columns.add(column);
-    }
+// The number of distinct columns the spreads cover; they are ordered by their first column.
+function coveredColumns(active: readonly Spread[]): number {
+  let total = 0;
+  let end = -1;
+  for (const { range } of active) {
+    const from = Math.max(range.firstColumn, end + 1);
+    if (range.lastColumn >= from) total += range.lastColumn - from + 1;
+    end = Math.max(end, range.lastColumn);
   }
-  return columns.size;
+  return total;
+}
+
+// What filling the row costs: every column of every range that reaches it.
+function coveredWidth(active: readonly Spread[]): number {
+  return active.reduce((sum, { range }) => sum + range.lastColumn - range.firstColumn + 1, 0);
 }
 
 function foldIntoAnchor<TCell extends MergeCell>(
@@ -114,12 +134,11 @@ function foldIntoAnchor<TCell extends MergeCell>(
 
 function fillCovered<TCell extends MergeCell>(
   row: MergeRow<TCell>,
-  spreads: readonly Spread[],
+  active: readonly Spread[],
   makeCell: (columnIndex: number, value: string) => TCell,
 ): void {
   const present = new Set(row.cells.map((cell) => cell.columnIndex));
-  for (const { range, value } of spreads) {
-    if (range.lastRow < row.rowNumber) continue;
+  for (const { range, value } of active) {
     for (let column = range.firstColumn; column <= range.lastColumn; column += 1) {
       if (!present.has(column)) {
         present.add(column);
@@ -138,17 +157,19 @@ function projectGroup<TCell extends MergeCell>(
   budget: number,
 ): number {
   const spreads = spreadsOf(anchor, group);
-  const lastRow = Math.max(0, ...spreads.map((spread) => spread.range.lastRow));
+  const lastRow = spreads.reduce((last, { range }) => Math.max(last, range.lastRow), 0);
   let remaining = budget;
+  // Rows are visited in order, so a range that ended above the row is dropped for good.
+  let live = spreads;
   for (let i = firstRowAtOrAfter(rows, anchor.rowNumber + 1); i < rows.length; i += 1) {
     const row = rows[i];
-    if (row === undefined || row.rowNumber > lastRow || remaining <= 0) break;
-    remaining -= row.cells.length + 1;
-    if (coveredColumns(spreads, row.rowNumber) > row.cells.length) {
-      foldIntoAnchor(anchor, row, makeCell);
-    } else {
-      fillCovered(row, spreads, makeCell);
-    }
+    if (row === undefined || row.rowNumber > lastRow) break;
+    live = live.filter(({ range }) => range.lastRow >= row.rowNumber);
+    const cost = row.cells.length + 1 + coveredWidth(live);
+    if (cost > remaining) break;
+    remaining -= cost;
+    if (coveredColumns(live) > row.cells.length) foldIntoAnchor(anchor, row, makeCell);
+    else fillCovered(row, live, makeCell);
   }
   return remaining;
 }

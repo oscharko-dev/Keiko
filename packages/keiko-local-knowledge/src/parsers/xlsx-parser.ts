@@ -145,12 +145,49 @@ function xlsxZipPlan(options: ParserOptions): OoxmlZipReadPlan {
   };
 }
 
+const SPREADSHEET_NAMESPACES: ReadonlySet<string> = new Set([
+  "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
+  "http://purl.oclc.org/ooxml/spreadsheetml/main",
+  "http://schemas.openxmlformats.org/package/2006/relationships",
+]);
+const NAMESPACE_DECLARATION = /xmlns:([A-Za-z_][\w.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)')/gu;
+
+// The start tag of the root element: the first tag that is no declaration, comment or doctype.
+function rootStartTag(xml: string): string {
+  let cursor = 0;
+  for (;;) {
+    const open = xml.indexOf("<", cursor);
+    if (open === -1) return "";
+    const next = xml.charAt(open + 1);
+    if (next !== "?" && next !== "!") {
+      const end = findTagEnd(xml, open + 1);
+      return end === -1 ? "" : xml.slice(open, end + 1);
+    }
+    cursor = open + 1;
+  }
+}
+
+// Writers such as the Open XML SDK samples bind the spreadsheet namespace to a prefix
+// (`<x:row><x:c>`). The scanners below match element names as the default namespace writes them,
+// so the prefix is removed once, here; elements of other namespaces keep theirs.
+function withoutSpreadsheetPrefix(xml: string): string {
+  let out = xml;
+  for (const declaration of rootStartTag(xml).matchAll(NAMESPACE_DECLARATION)) {
+    const [, prefix, doubleQuoted, singleQuoted] = declaration;
+    const namespace = doubleQuoted ?? singleQuoted;
+    if (prefix === undefined || namespace === undefined) continue;
+    if (!SPREADSHEET_NAMESPACES.has(namespace)) continue;
+    out = out.replaceAll(`<${prefix}:`, "<").replaceAll(`</${prefix}:`, "</");
+  }
+  return out;
+}
+
 async function readRelevantEntries(
   bytes: Uint8Array,
   options: ParserOptions,
 ): Promise<readonly XlsxEntry[]> {
   const parts = await readOoxmlZipEntries(bytes, options, options.now(), xlsxZipPlan(options));
-  return [...parts].map(([name, xml]) => ({ name, xml }));
+  return [...parts].map(([name, xml]) => ({ name, xml: withoutSpreadsheetPrefix(xml) }));
 }
 
 // GRD-027: delegate to the shared decoder so cell text resolves numeric character references

@@ -66,11 +66,27 @@ export function neutraliseValue(value: string): string {
   return value.replaceAll(/\r\n?/gu, "\n").replaceAll(" | ", " ¦ ");
 }
 
+// Text a header can be made of: it has a letter and is no formula, no number written with an
+// exponent (`1E-7`) and no key of a key-value pair (`Projekt:`, whose value stands beside it).
+function hasLabelShape(text: string): boolean {
+  if (text.length === 0 || text.length > MAX_HEADER_CELL_CHARS) return false;
+  if (!/\p{L}/u.test(text) || text.startsWith("=") || text.endsWith(":")) return false;
+  return !Number.isFinite(Number(text));
+}
+
 function isLabelLike(value: string): boolean {
   const text = value.trim();
-  if (text.length === 0 || text.length > MAX_HEADER_CELL_CHARS) return false;
-  if (!/\p{L}/u.test(text) || text.startsWith("=")) return false;
-  return !IDENTIFIER_SHAPE.test(text);
+  return hasLabelShape(text) && !IDENTIFIER_SHAPE.test(text);
+}
+
+// An identifier-shaped cell (`Q1`, `KW 12`) names a column when the cell under it is not one: the
+// column holds quantities, not identifiers. Two identifier-shaped cells in a column are data.
+function isHeaderLabel(cell: TabularCell, below: TabularRow | undefined): boolean {
+  if (isLabelLike(cell.value)) return true;
+  const text = cell.value.trim();
+  if (!hasLabelShape(text)) return false;
+  const under = below?.cells.find((other) => other.columnIndex === cell.columnIndex);
+  return under !== undefined && !IDENTIFIER_SHAPE.test(under.value.trim());
 }
 
 function widestAhead(rows: readonly TabularRow[], index: number): number {
@@ -89,11 +105,11 @@ function coversTable(rows: readonly TabularRow[], index: number, width: number):
 function isHeaderRow(rows: readonly TabularRow[], index: number, atStart: boolean): boolean {
   const row = rows[index];
   if (row === undefined || row.cells.length === 0) return false;
-  if (!row.cells.every((cell) => isLabelLike(cell.value))) return false;
+  const next = rows[index + 1];
+  if (!row.cells.every((cell) => isHeaderLabel(cell, next))) return false;
   if (!coversTable(rows, index, row.cells.length)) return false;
   if (atStart) return true;
   // A later table starts after a blank row and is followed directly by its first data row.
-  const next = rows[index + 1];
   return next !== undefined && next.rowNumber - row.rowNumber === 1;
 }
 
@@ -146,13 +162,21 @@ interface TableState {
 
 type RowRole = "header" | "plain" | "data";
 
+// A lone cell after a blank row, under a table of several columns, is a note, unless it stands
+// under the label of a column other than the first: that column holds values.
+function isNote(row: TabularRow, state: TableState): boolean {
+  const [only] = row.cells;
+  if (row.cells.length !== 1 || only === undefined || state.headers.size < 2) return false;
+  const firstColumn = Math.min(...state.headers.keys());
+  return only.columnIndex === firstColumn || !state.headers.has(only.columnIndex);
+}
+
 function laterRoleOf(rows: readonly TabularRow[], index: number, state: TableState): RowRole {
   const row = rows[index];
   if (row === undefined) return "data";
   const gapBefore = row.rowNumber - (rows[index - 1]?.rowNumber ?? 0) > 1;
   if (gapBefore && isHeaderRow(rows, index, false)) return "header";
-  // A lone cell after a blank row, under a table of several columns, is a note.
-  return gapBefore && row.cells.length === 1 && state.headers.size >= 2 ? "plain" : "data";
+  return gapBefore && isNote(row, state) ? "plain" : "data";
 }
 
 function roleOf(
