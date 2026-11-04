@@ -15,6 +15,7 @@ import {
   emptyResult,
   encodingDiagnostic,
   oversizeDiagnostic,
+  textByteLimit,
   shouldStop,
 } from "./_internal.js";
 import type {
@@ -551,9 +552,10 @@ export const codeParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => codeLanguage(input) !== undefined,
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    if (input.bytes.byteLength > options.maxBytes) {
+    const byteLimit = textByteLimit(options);
+    if (input.bytes.byteLength > byteLimit) {
       return emptyResult(codeParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
+        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
       ]);
     }
     const binary = binaryContentRefusal(codeParser.capability, input, options);

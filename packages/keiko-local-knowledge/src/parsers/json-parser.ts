@@ -23,6 +23,7 @@ import {
   encodingDiagnostic,
   oversizeDiagnostic,
   shouldStop,
+  textByteLimit,
   type DecodedText,
 } from "./_internal.js";
 import type {
@@ -48,6 +49,11 @@ import type {
 
 const PARSER_ID = "json";
 const PARSER_VERSION = "2";
+
+// A JSON document is read, walked and projected on the event loop in one synchronous call, about
+// 12 ms per MB measured (a 50 MB document of small records: 0.75 s). 256 MiB keeps that under about
+// three seconds; a larger document is refused with OVERSIZED_FILE instead of freezing the process.
+const JSON_MAX_BYTES = 256 * 1024 * 1024;
 
 const JSON_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_JSON_FILE_EXTENSIONS);
 
@@ -442,9 +448,10 @@ export const jsonParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isJson(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    if (input.bytes.byteLength > options.maxBytes) {
+    const byteLimit = textByteLimit(options, JSON_MAX_BYTES);
+    if (input.bytes.byteLength > byteLimit) {
       return emptyResult(jsonParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
+        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
       ]);
     }
     const binary = binaryContentRefusal(jsonParser.capability, input, options);

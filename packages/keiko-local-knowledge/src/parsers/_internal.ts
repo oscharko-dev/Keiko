@@ -133,6 +133,23 @@ export function encryptedOoxmlRefusal(
   ]);
 }
 
+// V8 cannot build a string longer than 0x1fffffe8 UTF-16 code units, and a decoded document has at
+// most one code unit per byte. Above this size a text-like parser cannot hold the document at all
+// (the engine throws "Cannot create a string longer than ..."), which no parser may do.
+export const MAX_TEXT_DECODE_BYTES = 0x1fffffe8;
+
+/**
+ * The largest input a text-like parser decodes: the caller's `maxBytes`, never more than the engine
+ * can hold as one string, and never more than the format's own `ceiling` (a parser whose
+ * synchronous work on the event loop is not bounded by its unit cap bounds the input here).
+ */
+export function textByteLimit(
+  options: ParserOptions,
+  ceiling: number = MAX_TEXT_DECODE_BYTES,
+): number {
+  return Math.min(options.maxBytes, MAX_TEXT_DECODE_BYTES, ceiling);
+}
+
 export function objectLimitDiagnostic(
   documentId: DocumentId,
   maxObjectsPerDocument: number,

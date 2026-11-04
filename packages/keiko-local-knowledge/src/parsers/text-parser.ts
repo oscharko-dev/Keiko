@@ -20,6 +20,7 @@ import {
   emptyResult,
   encodingDiagnostic,
   oversizeDiagnostic,
+  textByteLimit,
   shouldStop,
 } from "./_internal.js";
 import {
@@ -326,9 +327,10 @@ export const textParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isTextLike(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    if (input.bytes.byteLength > options.maxBytes) {
+    const byteLimit = textByteLimit(options);
+    if (input.bytes.byteLength > byteLimit) {
       return emptyResult(textParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
+        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
       ]);
     }
     const binary = binaryContentRefusal(textParser.capability, input, options);

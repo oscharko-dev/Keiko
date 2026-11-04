@@ -32,6 +32,7 @@ import {
   oversizeDiagnostic,
   readAttribute,
   shouldStop,
+  textByteLimit,
 } from "./_internal.js";
 import { decodeHtmlEntities } from "@oscharko-dev/keiko-workspace";
 import type { DocumentId, ParsedUnit, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
@@ -1633,9 +1634,10 @@ export const htmlParser: ParserAdapter = Object.freeze({
     matches: (input: ParserSelectionInput): boolean => isHtml(input),
   }),
   parse: (input: ParserSelectionInput, options: ParserOptions) => {
-    if (input.bytes.byteLength > options.maxBytes) {
+    const byteLimit = textByteLimit(options);
+    if (input.bytes.byteLength > byteLimit) {
       return emptyResult(htmlParser.capability, input.documentId, options, [
-        oversizeDiagnostic(input.documentId, input.bytes.byteLength, options.maxBytes),
+        oversizeDiagnostic(input.documentId, input.bytes.byteLength, byteLimit),
       ]);
     }
     const binary = binaryContentRefusal(htmlParser.capability, input, options);

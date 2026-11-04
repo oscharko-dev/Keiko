@@ -30,7 +30,7 @@ import type {
 import type { OcrAdapter, OcrPageResult } from "./types.js";
 
 const PARSER_ID = "ocr-pipeline";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 
 const OCR_EXTENSIONS: ReadonlySet<string> = new Set([
   "pdf",

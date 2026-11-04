@@ -10,7 +10,7 @@ import type { ParserAdapter, ParserOptions, ParserSelectionInput } from "./types
 import { diagnostic, emptyResult, signatureReason } from "./_internal.js";
 
 const PARSER_ID = "unsupported";
-const PARSER_VERSION = "1";
+const PARSER_VERSION = "2";
 
 // Extensions we recognise but cannot handle in this PR. Each maps to a stable reason string
 // so UI surfaces can render distinct guidance (e.g. "PDF — extract via OCR adapter").

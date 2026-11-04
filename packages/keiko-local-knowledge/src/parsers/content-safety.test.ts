@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import { decodeBytes } from "./_internal.js";
+import { MAX_TEXT_DECODE_BYTES, decodeBytes } from "./_internal.js";
 import { codeParser } from "./code-parser.js";
 import { createDefaultParserRegistry } from "./index.js";
 import { htmlParser } from "./html-parser.js";
@@ -229,5 +229,44 @@ describe("well-known files without an extension are text (#4235 F15)", () => {
       selectionFromText("text\n", { extension: "", mediaType: "" }),
     );
     expect(resolution.kind).toBe("unsupported");
+  });
+});
+
+describe("input too large for one string is refused, not thrown (#4235)", () => {
+  // The guard reads `byteLength` only, so a small buffer with a spoofed length proves it without
+  // allocating half a gigabyte.
+  function oversized(byteLength: number, extension: string): ParserSelectionInput {
+    const bytes = encode("x");
+    Object.defineProperty(bytes, "byteLength", { value: byteLength });
+    return selectionFromBytes(bytes, { extension });
+  }
+
+  // JSON has a ceiling of its own (256 MiB) below the engine's string length.
+  const limitOf = (name: string): number =>
+    name === "json" ? 256 * 1024 * 1024 : MAX_TEXT_DECODE_BYTES;
+
+  it.each([
+    ["text", textParser, "txt"],
+    ["html", htmlParser, "html"],
+    ["json", jsonParser, "json"],
+    ["code", codeParser, "py"],
+  ])("the %s parser refuses an input beyond the engine's string length", (_name, adapter, ext) => {
+    const options = buildParserOptions({ now: () => 0, maxBytes: Number.MAX_SAFE_INTEGER });
+    const result = adapter.parse(oversized(MAX_TEXT_DECODE_BYTES + 1, ext), options);
+    expect(result.units).toEqual([]);
+    expect(result.diagnostics).toHaveLength(1);
+    expect(result.diagnostics[0]?.code).toBe("OVERSIZED_FILE");
+    expect(result.diagnostics[0]?.message).toContain(String(limitOf(_name)));
+  });
+
+  it("refuses JSON beyond its own ceiling while text of that size is still read", () => {
+    const options = buildParserOptions({ now: () => 0, maxBytes: Number.MAX_SAFE_INTEGER });
+    const size = 300 * 1024 * 1024;
+    expect(jsonParser.parse(oversized(size, "json"), options).diagnostics[0]?.code).toBe(
+      "OVERSIZED_FILE",
+    );
+    expect(
+      textParser.parse(oversized(size, "txt"), options).diagnostics.map((d) => d.code),
+    ).not.toContain("OVERSIZED_FILE");
   });
 });
