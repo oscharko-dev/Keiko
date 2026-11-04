@@ -11,6 +11,7 @@ import {
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
+import { getServerLogger, type ServerLogEvent } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 
 type Failure =
@@ -108,6 +109,8 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
         "jira.comments",
         "jira.transitions",
         "jira.assignable-users",
+        "jira.report",
+        "jira.draft-stage",
         "assign-issue",
       ],
     },
@@ -167,7 +170,6 @@ const CHAT_AUTHORITY_OPERATION = defineActivityLogOperation({
     "chat.tool-authority.operation.read-grant",
     "chat.tool-authority.operation.read-grant-admission",
     "chat.tool-authority.operation.read-grant-lifecycle",
-    "chat.tool-authority.operation.read-consent-route",
     "chat.tool-authority.operation.catalog-read",
     "chat.tool-authority.operation.late-read-result",
     "chat.tool-authority.operation.write-approval",
@@ -232,35 +234,71 @@ function grantFields(evidence: AuthorityEvidence): Record<string, string> {
   };
 }
 
+/**
+ * Every request a tool makes evaluates these guards again, so a large read would otherwise fill the
+ * Activity Log's byte budget with one unchanged decision. The lifecycle is a state: an allowed line
+ * that repeats the last of its operation and phase says nothing new. Anything else is written.
+ */
+const REPEATED_GUARD_PHASES: ReadonlySet<Phase> = new Set([
+  "resolve",
+  "current-state",
+  "read-grant",
+  "catalog-read",
+  "catalog-write",
+]);
+const REMEMBERED_GUARDS_MAX = 256;
+const lastGuardLines = new WeakMap<object, Map<string, string>>();
+
+function repeatsLastGuardLine(
+  phase: Phase,
+  correlationId: string | undefined,
+  allowed: boolean,
+  line: ServerLogEvent,
+): boolean {
+  if (correlationId === undefined || !REPEATED_GUARD_PHASES.has(phase)) return false;
+  const log = getServerLogger();
+  const remembered = lastGuardLines.get(log) ?? new Map<string, string>();
+  lastGuardLines.set(log, remembered);
+  const key = `${correlationId}\u0000${phase}`;
+  const serialized = JSON.stringify(line);
+  const repeats = allowed && remembered.get(key) === serialized;
+  // Reinserted, so the oldest operation is the one forgotten; forgetting only writes a line again.
+  remembered.delete(key);
+  remembered.set(key, serialized);
+  if (remembered.size > REMEMBERED_GUARDS_MAX)
+    remembered.delete(remembered.keys().next().value ?? key);
+  return repeats;
+}
+
 export function recordChatAuthorityResult<T extends Outcome>(
   phase: Phase,
   result: T,
   evidence: AuthorityEvidence,
   correlationId: string | undefined,
 ): T {
-  processServerLogSink().write(
-    activityLogEvent(
-      CHAT_AUTHORITY_OPERATION,
-      {
-        correlationId: correlationIdOrUnknown(correlationId),
-        level: result.ok || result.reason === "review-required" ? "info" : "warn",
-      },
-      {
-        phase,
-        ...grantFields(evidence),
-        ...(evidence.actionType === undefined ? {} : { actionType: evidence.actionType }),
-        outcome: result.ok ? "allowed" : result.reason,
-        ...(evidence.readiness === undefined ? {} : { readiness: evidence.readiness }),
-        ...digestField("authorityDigest", evidence.authorityDigest),
-        ...(evidence.chatId === undefined ? {} : { chatDigest: sha256Hex(evidence.chatId) }),
-        ...subjectFields(evidence.subject),
-        ...countField("toolCalls", evidence.toolCalls),
-        ...countField("promptTokens", evidence.promptTokens),
-        ...countField("affectedCount", evidence.affectedCount),
-        completeness: "complete",
-        loss: "none",
-      },
-    ),
+  const event = activityLogEvent(
+    CHAT_AUTHORITY_OPERATION,
+    {
+      correlationId: correlationIdOrUnknown(correlationId),
+      level: result.ok || result.reason === "review-required" ? "info" : "warn",
+    },
+    {
+      phase,
+      ...grantFields(evidence),
+      ...(evidence.actionType === undefined ? {} : { actionType: evidence.actionType }),
+      outcome: result.ok ? "allowed" : result.reason,
+      ...(evidence.readiness === undefined ? {} : { readiness: evidence.readiness }),
+      ...digestField("authorityDigest", evidence.authorityDigest),
+      ...(evidence.chatId === undefined ? {} : { chatDigest: sha256Hex(evidence.chatId) }),
+      ...subjectFields(evidence.subject),
+      ...countField("toolCalls", evidence.toolCalls),
+      ...countField("promptTokens", evidence.promptTokens),
+      ...countField("affectedCount", evidence.affectedCount),
+      completeness: "complete",
+      loss: "none",
+    },
   );
+  if (!repeatsLastGuardLine(phase, correlationId, result.ok, event))
+    processServerLogSink().write(event);
   return result;
 }

@@ -134,3 +134,101 @@ describe("aggregate field projection byte budget", () => {
     },
   );
 });
+
+describe("a cascading select and the issue links read (#4176)", () => {
+  it("reads a cascading select as its parent followed by its child", () => {
+    expect(
+      projection("option-with-child", "cascadingselect", {
+        self: "https://jira.example.invalid/rest/api/2/customFieldOption/100",
+        value: "Parent",
+        id: "100",
+        child: { value: "Child", id: "101" },
+      }),
+    ).toMatchObject({
+      state: "value",
+      references: [
+        { id: "100", label: "Parent" },
+        { id: "101", label: "Child" },
+      ],
+    });
+    expect(
+      projection("option-with-child", "cascadingselect", { value: "Parent", id: "100" }),
+    ).toMatchObject({ state: "value", references: [{ id: "100", label: "Parent" }] });
+    expect(projection("option-with-child", "cascadingselect", null)).toMatchObject({
+      state: "empty",
+    });
+  });
+
+  it.each([
+    ["a child without an identity", { id: "100", child: { value: "Child" } }],
+    ["a non-object child", { id: "100", child: "101" }],
+    ["a grandchild", { id: "100", child: { id: "101", child: { id: "102" } } }],
+    ["a parent without an identity", { value: "Parent" }],
+    ["a bare string", "100"],
+  ])("leaves a cascading select with %s unavailable", (_, value) => {
+    expect(projection("option-with-child", "cascadingselect", value)).toMatchObject({
+      state: "unavailable",
+    });
+  });
+
+  const link = (index: number): unknown => ({
+    type: { name: "Relates" },
+    outwardIssue: { key: `SYN-${String(index + 1)}` },
+  });
+  const links = (value: unknown): unknown =>
+    jiraSelectedFieldValues(
+      {
+        fields: { issuelinks: value },
+        names: { issuelinks: "Linked Issues" },
+        schema: { issuelinks: { type: "array", items: "issuelinks", system: "issuelinks" } },
+      },
+      ["issuelinks"],
+    )?.[0];
+
+  it("reads exactly the bound of links as one complete value", () => {
+    const result = links(Array.from({ length: 100 }, (_, index) => link(index))) as {
+      state: string;
+      text: string;
+    };
+    expect(result.state).toBe("value");
+    expect(JSON.parse(result.text) as unknown[]).toHaveLength(100);
+  });
+
+  it("leaves more links than the bound unavailable instead of a truncated value", () => {
+    expect(links(Array.from({ length: 101 }, (_, index) => link(index)))).toMatchObject({
+      state: "unavailable",
+    });
+  });
+
+  it.each([
+    ["an entry without a type", { outwardIssue: { key: "SYN-9" } }],
+    ["an entry without an issue", { type: { name: "Relates" } }],
+    ["an entry that is not an object", "SYN-9"],
+  ])("leaves links with %s among valid ones unavailable", (_, bad) => {
+    expect(links([link(0), bad, link(2)])).toMatchObject({ state: "unavailable" });
+  });
+
+  it("keeps an absent or empty links field empty", () => {
+    expect(links([])).toMatchObject({ state: "empty" });
+    expect(links(null)).toMatchObject({ state: "empty" });
+  });
+});
+
+describe("a stored description is read as it is stored (review)", () => {
+  const read = (description: string): unknown =>
+    jiraSelectedFieldValues(
+      {
+        fields: { description },
+        names: { description: "Description" },
+        schema: { description: { type: "string", system: "description" } },
+      },
+      ["description"],
+    )?.[0];
+
+  it.each([
+    String.raw`Split paragraphs with /\n\n/; preserve that regular expression literally.`,
+    String.raw`## Context\nWhy\n## Acceptance criteria\n* works`,
+  ])("projects text with escaped line breaks as a value (%s)", (description) => {
+    expect(read(description)).toMatchObject({ state: "value", text: description });
+  });
+});

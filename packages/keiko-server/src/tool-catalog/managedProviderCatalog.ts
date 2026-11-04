@@ -4,8 +4,10 @@ import {
   createKeikoToolCatalog,
   compileToolProjection,
   captureCatalogJson,
+  gatewayToolDefinitions,
   type ToolCatalog,
 } from "@oscharko-dev/keiko-tool-catalog";
+import type { ToolDefinition } from "@oscharko-dev/keiko-contracts";
 import {
   NATIVE_TOOL_CATALOG_RUNTIME,
   type CatalogJsonObject,
@@ -122,26 +124,45 @@ function bindManagedTool<Consumer extends CatalogConsumer>(
     },
   });
 }
-function compileManagedCatalog<Consumer extends CatalogConsumer>(
-  host: ManagedMcpHost<CatalogHandlerContext<Consumer>>,
-  input: ManagedProviderCatalogInput<Consumer>,
-): ManagedProviderCatalog<Consumer> {
-  const declarations = host.catalog();
-  const routes = input.routes.map((route) => Object.freeze({ ...route }));
+interface RouteIdentity {
+  readonly name: string;
+  readonly alias: string;
+}
+type DeclarationIdentity = Pick<ManagedMcpToolDeclaration, "name" | "descriptor">;
+interface ManagedCatalogEntry<
+  Route extends RouteIdentity,
+  Declaration extends DeclarationIdentity,
+> {
+  readonly route: Route;
+  readonly declaration: Declaration;
+}
+function managedCatalogEntries<
+  Route extends RouteIdentity,
+  Declaration extends DeclarationIdentity,
+>(
+  routes: readonly Route[],
+  declarations: readonly Declaration[],
+): readonly ManagedCatalogEntry<Route, Declaration>[] {
   if (
     routes.length !== declarations.length ||
     new Set(routes.map((route) => route.name)).size !== routes.length
   )
     throw new TypeError("Managed provider routes must exactly cover admitted tools");
-  const entries = routes.map((route) => {
+  return routes.map((route) => {
     const declaration = declarations.find((tool) => tool.name === route.name);
     if (declaration === undefined) throw new TypeError("Unknown managed provider route");
     return { route, declaration };
   });
-  const catalog = createKeikoToolCatalog(
+}
+function managedToolCatalog(
+  entries: readonly ManagedCatalogEntry<RouteIdentity, DeclarationIdentity>[],
+  profile: CatalogVersionRef,
+  referenceTimeMs: number,
+): ToolCatalog {
+  return createKeikoToolCatalog(
     [
       {
-        profile: input.profile,
+        profile,
         adapterDialect: { id: "gateway-json-schema", version: 1 },
         adapterRuntime: NATIVE_TOOL_CATALOG_RUNTIME,
         entries: entries.map(({ route, declaration }) => ({
@@ -151,8 +172,31 @@ function compileManagedCatalog<Consumer extends CatalogConsumer>(
       },
     ],
     [],
-    { referenceTimeMs: input.now() },
+    { referenceTimeMs },
   );
+}
+/**
+ * The tool definitions a model call is advertised for these declarations: the catalog this module
+ * compiles for a turn, materialized by the compiler's own transport projection. Pure: no host is
+ * admitted and nothing is connected, so a size reading cannot restate the production formula.
+ */
+export function managedCatalogToolDefinitions(
+  routes: readonly RouteIdentity[],
+  declarations: readonly DeclarationIdentity[],
+  profile: CatalogVersionRef,
+  referenceTimeMs: number,
+): readonly ToolDefinition[] {
+  const entries = managedCatalogEntries(routes, declarations);
+  return gatewayToolDefinitions(managedToolCatalog(entries, profile, referenceTimeMs), profile);
+}
+function compileManagedCatalog<Consumer extends CatalogConsumer>(
+  host: ManagedMcpHost<CatalogHandlerContext<Consumer>>,
+  input: ManagedProviderCatalogInput<Consumer>,
+): ManagedProviderCatalog<Consumer> {
+  const declarations = host.catalog();
+  const routes = input.routes.map((route) => Object.freeze({ ...route }));
+  const entries = managedCatalogEntries(routes, declarations);
+  const catalog = managedToolCatalog(entries, input.profile, input.now());
   return Object.freeze({
     catalog,
     projection: compileToolProjection(catalog, input.profile),

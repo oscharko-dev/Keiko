@@ -275,7 +275,6 @@ import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 type ExpectedChatAuthorityValidators = [
   (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolAuthoritySubject>,
   (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolAuthorityEnvelope>,
-  (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolReadConsentDecision>,
   (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolReadGrant>,
   (value: unknown) => CodingWorkbenchValidationResult<authoritySource.ChatToolWriteApprovalView>,
   (
@@ -322,16 +321,6 @@ const authorityAdmissionCases: readonly ChatAuthorityAdmissionCase[] = [
     "chatAuthority must be an object",
   ],
   [
-    "read consent",
-    authoritySource.validateChatToolReadConsentDecision,
-    authorityPublic.validateChatToolReadConsentDecision,
-    (): authoritySource.ChatToolReadConsentDecision => ({
-      decision: "approve",
-      disclosureVersion: authoritySource.MCP_CHAT_READ_DISCLOSURE_VERSION,
-    }),
-    "chatReadConsent must be an object",
-  ],
-  [
     "read grant",
     authoritySource.validateChatToolReadGrant,
     authorityPublic.validateChatToolReadGrant,
@@ -358,12 +347,11 @@ const authorityAdmissionCases: readonly ChatAuthorityAdmissionCase[] = [
 ];
 
 describe("concrete Chat authority admission", () => {
-  it("retains the six concrete unknown-input source and public signatures", () => {
+  it("retains the five concrete unknown-input source and public signatures", () => {
     expectTypeOf<
       [
         typeof authoritySource.validateChatToolAuthoritySubject,
         typeof authoritySource.validateChatToolAuthorityEnvelope,
-        typeof authoritySource.validateChatToolReadConsentDecision,
         typeof authoritySource.validateChatToolReadGrant,
         typeof authoritySource.validateChatToolWriteApprovalView,
         typeof authoritySource.validateChatToolWriteApprovalDecision,
@@ -373,7 +361,6 @@ describe("concrete Chat authority admission", () => {
       [
         typeof authorityPublic.validateChatToolAuthoritySubject,
         typeof authorityPublic.validateChatToolAuthorityEnvelope,
-        typeof authorityPublic.validateChatToolReadConsentDecision,
         typeof authorityPublic.validateChatToolReadGrant,
         typeof authorityPublic.validateChatToolWriteApprovalView,
         typeof authorityPublic.validateChatToolWriteApprovalDecision,
@@ -420,33 +407,35 @@ describe("concrete Chat authority admission", () => {
       expect(validate(input)).toEqual({ ok: false, errors });
   });
 
-  it("preserves consent getter phases, admitted identity and the exact second-read failure", () => {
+  // Dev 1.4.0 retired the read consent decision, so this pin now drives the write decision,
+  // whose admission reads `decision` twice for a rejection.
+  it("preserves write decision getter phases, admitted identity and the exact second-read failure", () => {
     for (const validate of [
-      authoritySource.validateChatToolReadConsentDecision,
-      authorityPublic.validateChatToolReadConsentDecision,
+      authoritySource.validateChatToolWriteApprovalDecision,
+      authorityPublic.validateChatToolWriteApprovalDecision,
     ]) {
       let reads = 0;
       const value = {
-        decision: "approve",
-        get disclosureVersion(): string {
+        get decision(): string {
           reads += 1;
-          return authoritySource.MCP_CHAT_READ_DISCLOSURE_VERSION;
+          return "reject";
         },
+        actionDigest: "e".repeat(64),
       };
       const result = validate(value);
       expect(result.ok).toBe(true);
-      if (!result.ok) throw new TypeError("Expected admitted consent fixture");
+      if (!result.ok) throw new TypeError("Expected admitted write decision fixture");
       expect(result.value).toBe(value);
       expect(reads).toBe(2);
-      const failure: TypeError = Object.freeze(new TypeError("consent second read failed"));
+      const failure: TypeError = Object.freeze(new TypeError("decision second read failed"));
       let attempts = 0;
       const hostile = {
-        decision: "approve",
-        get disclosureVersion(): string {
+        get decision(): string {
           attempts += 1;
           if (attempts === 2) throw failure;
-          return authoritySource.MCP_CHAT_READ_DISCLOSURE_VERSION;
+          return "reject";
         },
+        actionDigest: "e".repeat(64),
       };
       let caught: unknown;
       try {

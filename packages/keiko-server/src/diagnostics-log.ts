@@ -742,6 +742,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Editor local-history capture failed.",
   "Verification execution failed unexpectedly.",
   "A verification event subscriber failed.",
+  "A verification package folder could not be read.",
   "Gateway tool-calling verification could not be persisted.",
   "The verified gateway context window could not be persisted.",
   "The provider-reported gateway context window could not be adopted.",

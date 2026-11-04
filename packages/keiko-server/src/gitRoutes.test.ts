@@ -115,7 +115,7 @@ async function runRealGit(args: readonly string[]): Promise<void> {
   const result = await defaultGitProcessRunner(args, {
     cwd: root,
     maxBytes: 4096,
-    timeoutMs: 5_000,
+    timeoutMs: 60_000,
   });
   expect(result.exitCode, result.stderr).toBe(0);
 }

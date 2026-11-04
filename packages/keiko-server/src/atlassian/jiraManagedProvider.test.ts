@@ -68,3 +68,19 @@ it("advertises all canonical write declarations only with a server mutation exec
   expect(connection).not.toHaveBeenCalled();
   expect(executeMutation).not.toHaveBeenCalled();
 });
+it("steers a model that is asked about many issues to jira.report, whose input names no field to guess", () => {
+  const provider = createJiraProviderForCatalog(vi.fn(), [
+    "jira.search",
+    "jira.issue",
+    "jira.report",
+  ]);
+  const describe = (name: string): string =>
+    provider.tools().find((tool) => tool.name === name)?.descriptor.description ?? "";
+  expect(describe("jira.search")).toContain("jira.report");
+  expect(describe("jira.issue")).toContain("jira.report");
+  const report = provider.tools().find((tool) => tool.name === "jira.report");
+  expect(report?.descriptor.description).toMatch(/not jira\.search or jira\.issue/u);
+  expect(report?.descriptor.description).toContain("requirementsFromPods");
+  expect(report?.descriptor.description).toContain("report.figures");
+  expect(JSON.stringify(report?.descriptor.inputSchema)).toContain("requirementsFromPods");
+});

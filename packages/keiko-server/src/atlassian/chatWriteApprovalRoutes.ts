@@ -37,6 +37,7 @@ export const handleDecideChatWriteApproval = decideChatConsent(
   OWNER,
   (parsed, ctx): RouteResult => {
     const { entry, registry, nowIso } = parsed;
+    const excludedItemRefs = parsed.value.excludedItemRefs ?? [];
     const proof = sha256Hex(
       canonicalise({
         kind:
@@ -47,6 +48,8 @@ export const handleDecideChatWriteApproval = decideChatConsent(
         action: entry.approval,
         subject: entry.subject,
         authority: entry.authority,
+        // The human's deselection is part of what was approved (#4178).
+        ...(excludedItemRefs.length === 0 ? {} : { excludedItemRefs }),
         acceptedAt: nowIso,
       }),
     );
@@ -59,6 +62,7 @@ export const handleDecideChatWriteApproval = decideChatConsent(
             entry.approval,
             proof,
             ctx.correlationId,
+            excludedItemRefs,
           )
         : registry.rejectChatWriteApproval(
             entry.approval.approvalId,
