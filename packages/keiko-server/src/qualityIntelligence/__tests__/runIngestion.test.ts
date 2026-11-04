@@ -712,6 +712,42 @@ describe("ingestInlineSources — happy path", () => {
     expect(result.sourceSummaries[0]?.notices).toContain("adf-normalized");
   });
 
+  it("ingests ADF with a mention, hard break and unknown node, and names the degradation", () => {
+    const para = (...content: object[]): object => ({ type: "paragraph", content });
+    const result = ingestInlineSources(
+      input([
+        {
+          kind: "requirements",
+          label: "Jira ADF",
+          text: "",
+          adf: {
+            type: "doc",
+            version: 1,
+            content: [
+              para(
+                { type: "text", text: "REQ-7: The system shall notify " },
+                { type: "mention", attrs: { id: "u1", text: "@Ann" } },
+                { type: "hardBreak" },
+                { type: "text", text: "within five minutes." },
+              ),
+              {
+                type: "futureNode",
+                content: [para({ type: "text", text: "Audit trail required." })],
+              },
+            ],
+          },
+        },
+      ]),
+    );
+    const joined = result.ingestedAtoms.map((atom) => atom.canonicalText).join("\n");
+    expect(joined).toContain("@Ann");
+    expect(joined).toContain("Audit trail required.");
+    expect(result.sourceSummaries[0]?.notices).toEqual([
+      "adf-normalized",
+      "adf-unknown-node-types-degraded",
+    ]);
+  });
+
   it("keeps the requirements envelope id stable when the requirement text changes in-place", () => {
     const before = ingestInlineSources(
       input([requirementsSource("Spec", "REQ-1: Login must work\nREQ-2: MFA must work")]),

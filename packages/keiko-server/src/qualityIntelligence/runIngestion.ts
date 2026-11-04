@@ -392,6 +392,19 @@ export type QiAsyncDocumentTextExtractor = (
   input: QiDocumentTextExtractionInput,
 ) => string | undefined | Promise<string | undefined>;
 
+// Closed, body-free notices for an ADF source: it was normalised, some node types were degraded
+// to their child text, or some text was cut at the per-run limit.
+function adfNoticesFor(stats: {
+  readonly unknownNodeTypes: readonly string[];
+  readonly truncatedBlocks: number;
+}): readonly string[] {
+  return [
+    "adf-normalized",
+    ...(stats.unknownNodeTypes.length > 0 ? ["adf-unknown-node-types-degraded"] : []),
+    ...(stats.truncatedBlocks > 0 ? ["adf-text-truncated"] : []),
+  ];
+}
+
 // eslint-disable-next-line max-lines-per-function
 function ingestRequirements(
   source: Extract<QualityIntelligenceInlineSource, { kind: "requirements" }>,
@@ -404,10 +417,9 @@ function ingestRequirements(
   let adfNotice: readonly string[] = [];
   if (source.adf !== undefined) {
     try {
-      text = QualityIntelligenceIngestion.renderAdfDocumentText(
-        QualityIntelligenceIngestion.parseAdfDocument(source.adf),
-      );
-      adfNotice = ["adf-normalized"];
+      const parsed = QualityIntelligenceIngestion.parseAdfDocument(source.adf);
+      text = QualityIntelligenceIngestion.renderAdfDocumentText(parsed);
+      adfNotice = adfNoticesFor(parsed.stats);
     } catch (error) {
       if (!(error instanceof QualityIntelligenceIngestion.AdfParserError)) throw error;
       throw new QiIngestionError(
