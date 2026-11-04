@@ -554,6 +554,7 @@ import { resolveProductionOpenCodeActivation } from "./coding-runtime/production
 import {
   configuredReviewRunBudget,
   createProductionReviewRuntimeService,
+  type ReviewRunBudget,
 } from "./review/runtime/production.js";
 import type { ReviewRuntimeService } from "./review/runtime/instance.js";
 import type { ReviewRulesSettingsPort } from "./review/runtime/rulesFile.js";
@@ -5109,6 +5110,40 @@ function composeReviewDeps(
   };
 }
 
+/** The review run budget each assembly resolved; one diagnostic per assembly when it is invalid. */
+const reviewRunBudgets = new WeakMap<UiHandlerDepsAssemblyArgs, ReviewRunBudget | null>();
+
+/**
+ * The Reviewer run's budget, resolved once per deps assembly (R4130-018). An operator value out of
+ * range leaves the review runtime and the review run service uncomposed, so the review routes
+ * answer 503, and records one diagnostic; it never fails server start.
+ */
+function reviewRunBudget(args: UiHandlerDepsAssemblyArgs): ReviewRunBudget | undefined {
+  const known = reviewRunBudgets.get(args);
+  if (known !== undefined) return known ?? undefined;
+  let budget: ReviewRunBudget | null = null;
+  try {
+    budget = configuredReviewRunBudget(
+      args.options.env,
+      configuredRuntimeEnvelopeBounds(args.options.env),
+    );
+  } catch (error) {
+    emitServerDiagnostic(
+      args.options.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: args.bootstrapCorrelationId,
+        operation: "review.runtime.budget",
+        source: "review.bootstrap",
+        error,
+        summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+        redact: (message): string => message,
+      }),
+    );
+  }
+  reviewRunBudgets.set(args, budget);
+  return budget ?? undefined;
+}
+
 /** What the review model policy reads: the live gateway configuration and the environment. */
 function reviewPolicyDeps(args: UiHandlerDepsAssemblyArgs): ReviewPolicyDeps {
   return { config: args.config, gatewayConfig: args.runtimeConfig, env: args.options.env };
@@ -5221,6 +5256,8 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
   const reviewServices = deps.reviewServices;
   const store = args.bundle.reviewRunStore;
   if (reviewServices === undefined || store === undefined) return;
+  const budget = reviewRunBudget(args);
+  if (budget === undefined) return;
   const activityLog = args.options.activityLog ?? processServerLogSink();
   const reviewRunService = createReviewRunService({
     store,
@@ -5245,10 +5282,7 @@ function attachReviewRunService(args: UiHandlerDepsAssemblyArgs, deps: UiHandler
       admit: reviewRunAdmission(() => reviewPolicyDeps(args), activityLog),
     },
     activityLog,
-    reviewerPromptBudget: configuredReviewRunBudget(
-      args.options.env,
-      configuredRuntimeEnvelopeBounds(args.options.env),
-    ).promptTokenBudget,
+    reviewerPromptBudget: budget.promptTokenBudget,
   });
   Object.assign(deps, { reviewRunService });
   attachPairQualificationService(args, deps, reviewServices, activityLog);
@@ -5309,15 +5343,14 @@ function composeReviewRuntimeService(
   if (reviewServices === undefined || args.options.codingRuntimeProductionPorts !== undefined) {
     return undefined;
   }
+  const budget = reviewRunBudget(args);
+  if (budget === undefined) return undefined;
   try {
     return createProductionReviewRuntimeService({
       ...reviewRuntimeActivation(args),
       stateDir: dirname(args.resolvedUiDbPath),
       reviewWorktreeRoot: reviewServices.reviewRoot,
-      budget: configuredReviewRunBudget(
-        args.options.env,
-        configuredRuntimeEnvelopeBounds(args.options.env),
-      ),
+      budget,
       verificationRunner: services.peripherals.verificationRunner,
       readWorkspaceHead: readProductionWorkspaceHead,
       resolveManagedModelProfile: (modelId, reasoningEffort) =>
