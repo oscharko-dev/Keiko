@@ -6,6 +6,7 @@ import type {
   SectionRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import {
   diagnostic,
@@ -25,7 +26,7 @@ import type {
 } from "./types.js";
 import { WindowTextBuilder } from "./large-document/window-builder.js";
 import {
-  composePages,
+  composeInWindows,
   pageLayoutOf,
   sectionsFromHeadings,
   type ComposedPages,
@@ -40,6 +41,9 @@ const DEPENDENCY_VERSIONS = Object.freeze([
 ]);
 const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46] as const;
 const PDF_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS);
+// A progressive extraction reads a document run by run; this route composes the same runs, so a
+// file reads as one text whichever route took it.
+const COMPOSE_RUN_PAGES = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY.extractionWindowPages;
 
 export interface PdfTextItem {
   readonly str?: string;
@@ -686,7 +690,10 @@ function composeBufferedPages(
   readonly normalizedText?: string;
 } {
   const builder = new WindowTextBuilder(documentId, 0, false);
-  const composed = composePages(buffered.map((page) => page.layout));
+  const composed = composeInWindows(
+    buffered.map((page) => page.layout),
+    COMPOSE_RUN_PAGES,
+  );
   buffered.forEach((page, index) => {
     builder.addPage(page.pageNumber, composed.texts[index] ?? "", page.pageLabel);
   });

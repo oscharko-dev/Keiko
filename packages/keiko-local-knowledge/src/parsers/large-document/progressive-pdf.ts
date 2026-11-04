@@ -25,9 +25,10 @@ import {
   loadPdfDocumentFromSource,
   pageFurnitureDiagnostic,
   readPageLayout,
+  type PageLayoutReadResult,
   type PdfDocumentLike,
 } from "../pdf-parser.js";
-import { composePages, type PageLayout } from "../pdf-layout.js";
+import { composePages, hasPageContent, type PageLayout } from "../pdf-layout.js";
 import type { OcrPageResult } from "../ocr/types.js";
 import type { ParserOptions, ParserSelectionInput } from "../types.js";
 
@@ -140,7 +141,8 @@ interface PdfExtractContext extends ProgressivePdfExtractorDeps {
 }
 
 // Reads a single page's text layer, falling back to the injected OCR capability for no-text-layer
-// pages. Never throws; capability gaps become content-free quality warnings.
+// pages. A page that cannot be read becomes an empty page with a content-free warning: one broken
+// page never ends the document, as it does not in the full-buffer route.
 async function readOrOcrPage(
   doc: PdfDocumentLike,
   pageNumber: number,
@@ -150,17 +152,25 @@ async function readOrOcrPage(
   emittedUnits: number,
   scannedObjects: number,
 ): Promise<PageReadOutcome> {
-  const page = await doc.getPage(pageNumber);
-  const read = await readPageLayout(page, {
-    input: selectionInput(ctx.documentId),
-    options: parserOptions,
-    startedAt,
-    emittedUnits,
-    scannedObjects,
-  });
+  let read: PageLayoutReadResult;
+  try {
+    const page = await doc.getPage(pageNumber);
+    read = await readPageLayout(page, {
+      input: selectionInput(ctx.documentId),
+      options: parserOptions,
+      startedAt,
+      emittedUnits,
+      scannedObjects,
+    });
+  } catch {
+    return {
+      scannedObjects,
+      diagnostics: [unreadablePageDiagnostic(ctx.documentId, pageNumber)],
+    };
+  }
   const diagnostics: ParserDiagnostic[] = [];
   if (read.diagnostic !== undefined) diagnostics.push(read.diagnostic);
-  if (read.layout.rows.length > 0 || read.layout.plain.length > 0) {
+  if (hasPageContent(read.layout)) {
     return { layout: read.layout, scannedObjects: read.scannedObjects, diagnostics };
   }
   const ocr = await ocrTextForPage(ctx, ctx.documentId, pageNumber);
@@ -168,6 +178,16 @@ async function readOrOcrPage(
   return ocr.text === undefined
     ? { scannedObjects: read.scannedObjects, diagnostics }
     : { text: ocr.text, scannedObjects: read.scannedObjects, diagnostics };
+}
+
+function unreadablePageDiagnostic(documentId: DocumentId, pageNumber: number): ParserDiagnostic {
+  return largeDocumentDiagnostic(
+    LARGE_DOCUMENT_DIAGNOSTIC_CODES.PARTIAL_COVERAGE,
+    "page text could not be read; indexed page provenance without text",
+    documentId,
+    "warning",
+    pageNumber,
+  );
 }
 
 interface PdfDriveState {

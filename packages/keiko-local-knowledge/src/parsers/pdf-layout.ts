@@ -1284,15 +1284,27 @@ function composePageLines(plan: PagePlan, facts: DocumentFacts): readonly OutLin
   ];
 }
 
-/**
- * The logical text of a run of pages. Repeated furniture, the body style and the margin are facts
- * about the document, so they are decided across the pages together, with what earlier runs of the
- * same document already proved.
- */
-export function composePages(
+interface RawHeading {
+  readonly offset: number;
+  readonly title: string;
+  readonly height: number;
+}
+
+interface WindowComposition {
+  readonly texts: readonly string[];
+  readonly headings: readonly (readonly RawHeading[])[];
+  readonly removedRows: number;
+  readonly furniture: ReadonlySet<string>;
+}
+
+function rowCount(list: readonly PageLayout[]): number {
+  return list.reduce((sum, page) => sum + page.rows.length + page.offAxis.length, 0);
+}
+
+function composeWindow(
   pages: readonly PageLayout[],
-  knownFurniture: ReadonlySet<string> = new Set(),
-): ComposedPages {
+  knownFurniture: ReadonlySet<string>,
+): WindowComposition {
   const bodyHeight = bodyStyleOf(pages).height;
   const furniture = new Set([...knownFurniture, ...repeatedFurniture(pages, bodyHeight)]);
   const cleaned = pages.map((page) => withoutFurniture(page, furniture, bodyHeight));
@@ -1307,20 +1319,83 @@ export function composePages(
       ? { text: plan.page.plain, candidates: [] }
       : layOutPageText(composePageLines(plan, facts), body),
   );
-  const sizes = laidOut.flatMap((page) => page.candidates.map(({ line }) => line.height ?? 0));
-  const levels = headingLevels(sizes);
-  const count = (list: readonly PageLayout[]): number =>
-    list.reduce((sum, page) => sum + page.rows.length + page.offAxis.length, 0);
   return {
     texts: laidOut.map((page) => page.text),
     headings: laidOut.map((page) =>
       page.candidates.map(({ offset, line }) => ({
         offset,
         title: line.text,
-        level: levels.get(line.height ?? 0) ?? 1,
+        height: line.height ?? 0,
       })),
     ),
-    removedRows: count(pages) - count(cleaned),
+    removedRows: rowCount(pages) - rowCount(cleaned),
+    furniture,
+  };
+}
+
+/** Levels follow the sizes of all the headings given, so they are comparable across pages. */
+function withLevels(
+  headings: readonly (readonly RawHeading[])[],
+): readonly (readonly PageHeading[])[] {
+  const levels = headingLevels(headings.flatMap((page) => page.map(({ height }) => height)));
+  return headings.map((page) =>
+    page.map(({ offset, title, height }) => ({ offset, title, level: levels.get(height) ?? 1 })),
+  );
+}
+
+/** Whether a page carries any text at all; a page that does not is left out of what is learned. */
+export function hasPageContent(page: PageLayout): boolean {
+  return page.rows.length > 0 || page.offAxis.length > 0 || page.plain.length > 0;
+}
+
+/**
+ * The logical text of a run of pages. Repeated furniture, the body style and the margin are facts
+ * about the document, so they are decided across the pages together, with what earlier runs of the
+ * same document already proved.
+ */
+export function composePages(
+  pages: readonly PageLayout[],
+  knownFurniture: ReadonlySet<string> = new Set(),
+): ComposedPages {
+  const composed = composeWindow(pages, knownFurniture);
+  return { ...composed, headings: withLevels(composed.headings) };
+}
+
+/** Puts the composition of a run's pages with text back at their places, empty pages between. */
+function spreadOverRun(run: readonly PageLayout[], composed: WindowComposition): WindowComposition {
+  let next = 0;
+  const placed = run.map((page) => {
+    if (!hasPageContent(page)) return { text: "", headings: [] as readonly RawHeading[] };
+    const index = next;
+    next += 1;
+    return { text: composed.texts[index] ?? "", headings: composed.headings[index] ?? [] };
+  });
+  return {
+    ...composed,
+    texts: placed.map(({ text }) => text),
+    headings: placed.map(({ headings }) => headings),
+  };
+}
+
+/**
+ * A whole document composed the way a progressive extraction composes it: run by run of
+ * `windowPages` pages, each run learning from its own pages and from what earlier runs proved. A
+ * page without text takes no part in what a run learns. Both routes read one file as one text.
+ */
+export function composeInWindows(pages: readonly PageLayout[], windowPages: number): ComposedPages {
+  const step = Math.max(1, windowPages);
+  const runs: WindowComposition[] = [];
+  let furniture: ReadonlySet<string> = new Set();
+  for (let first = 0; first < pages.length; first += step) {
+    const run = pages.slice(first, first + step);
+    const withText = composeWindow(run.filter(hasPageContent), furniture);
+    furniture = withText.furniture;
+    runs.push(spreadOverRun(run, withText));
+  }
+  return {
+    texts: runs.flatMap((run) => run.texts),
+    headings: withLevels(runs.flatMap((run) => run.headings)),
+    removedRows: runs.reduce((sum, run) => sum + run.removedRows, 0),
     furniture,
   };
 }
