@@ -279,3 +279,17 @@ were rewritten. The recorded source digests hash LF line endings, as CI does, be
 checkout may hold CRLF copies. This is Windows rendering, not the Linux Liberation-font set used for
 earlier captures, so the 14 PNGs differ in bytes from that set; the update window itself did not
 change. A Linux regeneration remains preferable if byte-comparable captures are wanted.
+
+## German catalog correction — 2026-11-04
+
+The hardened `check:ui-i18n` found English left in the German catalogs, and correcting
+`relationships.impact.loading` changes the digest of the declared UI source
+`i18n-messages.optional.de.ts`. The unchanged freshness gate rejected the old digest. The original
+producer ran with tracked evidence enabled on Windows 11 (Node 24.18.0, npm 11.16.0, Playwright
+1.64.1) from a checkout normalized to LF. Eight of the nine cases passed in 2.0 minutes, including
+the real-BFF outage journey; the ninth fails by construction while `KEIKO_WRITE_TRACKED_EVIDENCE=1`
+is set, as recorded above, and its assertion also compares a POSIX-shaped output path. Only
+`11-progress-state.png` and `13-reconnecting-state-mocked.png` changed bytes, and they were not
+visually inspected. The three records rebind every declared digest and the evidence freshness gate
+passes. No updater behavior, baseline or numerical ceiling changed. This remains updater fixture
+evidence.
