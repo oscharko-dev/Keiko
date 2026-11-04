@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted (Issue #2885, 2026-08-02). Amended by PR #3452 (2026-09-11): D5.
+Accepted (Issue #2885, 2026-08-02). Amended by PR #3452 (2026-09-11): D5. Amended 2026-11-01
+(customer 1.3.4, owner decision): D2 checks each model once per connection and on demand, with no
+background renewal or recovery; D4 scopes the Workbench profile's verification to its chosen model.
 
 ## Context
 
@@ -43,52 +45,60 @@ mutated merely because readiness ran.
 ### D2 — Observations bind to one live configuration generation
 
 Every readiness run captures the runtime configuration generation before asynchronous work begins.
-Late results for a superseded generation are dropped. Replacing configuration clears all field
-observations and the coarse verification state. Observations intentionally survive separate HTTP
-requests in the current process, but not a configuration replacement or process restart; after
-either event basic-chat verification starts during configuration initialization. Successful
+Late results for a superseded generation are dropped. Replacing configuration resets the coarse
+verification state and clears the field observations of every provider that was changed or removed;
+an unchanged provider keeps its observations under the new generation, including when the list was
+only reordered (D3). Observations intentionally survive separate HTTP requests in the current
+process, but not a process restart; because a replacement resets the coarse verification state,
+basic-chat verification starts during configuration initialization after a restart or a replacement. Successful
 credential-setup chat checks populate the same generation-bound ledger and are reused. A Chat
 create, send, streaming send, regeneration, or grounded question may join an already running
 initialization. A fresh successful observation adds no per-question readiness request. A success
 expires at the exact five-minute boundary; malformed or future successful timestamps are unknown.
-The existing background queue renews success after two minutes and uses the same generation/model
-in-flight map, two slots and recovery timers. Automatic and on-demand probes share the interactive
+Nothing re-checks a model on a timer (owner decision 2026-11-01, customer 1.3.4): configuration
+initialization checks each configured chat model once per connection, through the same
+generation/model in-flight map and two slots. A connection is the provider entry with its
+credential; a proof another model's check persists advances the generation without changing it, so
+it repeats no check (the customer's busy models were checked once per persisted proof). Automatic and on-demand probes share the interactive
 gateway's five-minute silence floor (#4038), preserving larger configured timeouts: a two-minute
 probe must not declare a model unavailable while an ordinary three-minute answer is still within
-its supported wait. The five-minute freshness interval remains unchanged. A renewal that outlives
+its supported wait. The five-minute freshness interval remains unchanged. A check that outlives
 it remains shared by callers; expiry never grants unverified admission. Interactive admission uses
 the same five-minute aggregate wait across all candidate models, including the selected model;
 it must not abandon a healthy pending check after 45 seconds. Expiry stops that caller's wait,
 leaves the single shared probe owned by configuration, and does not authorize an unverified model.
-Reload starts unknown or expired checks immediately
-in the background, independently of held catalog discovery; selected requests join that same work.
-An expired success can share one selected-request renewal. Failed initialization remains
-visible. Inconclusive transport or provider failures recover through configuration-owned background
-probes with exponential backoff capped at five minutes; retries continue at that capped rate until the
-provider recovers or the configuration changes. Background renewal and recovery run only while a model is in
-use (#4103, owner decision 2026-10-29): once a model of the current generation has been verified,
-no conversation request for it for 15 minutes (`CONVERSATION_RENEWAL_IDLE_MS`) stops both, and
-`gateway.readiness.renewal.paused` records the pause (`renewal` or `recovery`, with the idle time).
-Its success then expires at the five-minute boundary, and its next request starts the single
-on-demand probe and resumes the schedule. A model never verified in this generation keeps recovering,
-so a gateway that is still starting is reached without anyone asking. A conclusive rejection (for example a 4xx the gateway
-gives while it is still starting) is retried in the background every five minutes. The first
-conversation request that needs the model after the 30-second not-ready cooldown starts one fresh
+A page load, or opening the Workbench or a model list (the models read with `refresh=1`), is the
+person asking again: it checks every
+configured chat model that is not ready now, outside its 30-second not-ready cooldown, in the
+background and independently of held catalog discovery; selected requests join that same work.
+Failed initialization remains visible. A failed startup check is not retried on a timer; the 30-second
+not-ready cooldown bounds every later check of an observed failure. A model that holds no answer at
+all (its startup check never settled) and has no check running is checked by the first request that
+needs it, without a cooldown. The first conversation request, coding run start, Workbench model
+choice or page load that needs the model after that cooldown starts one fresh
 probe, dated by the probe that last settled rather than by a preserved feature-observation
 timestamp. Concurrent requests join that probe, a failed one refreshes the cooldown, and a
-malformed observation timestamp never triggers it, so a dead gateway costs at most one bounded probe
-per model per cooldown. This restores the 1.1.11 behavior that 1.1.13 removed together with the
-per-question checks: without it one conclusive answer at startup left the model not-ready until a
-restart or a Settings change. Visible model consumers read the local catalog every five seconds
+malformed observation timestamp never lets a conversation request trigger it, so a dead gateway
+costs at most one bounded probe per model per cooldown. A gateway that is still starting when Keiko
+starts (the 1.1.13 incident) is therefore reached by the person's next page load, Workbench model
+choice, run start or request, never by a background loop that keeps probing models nobody asked for (customer 1.3.4: a
+probe every few seconds kept busy single-slot models occupied). Visible model consumers read the local catalog every five seconds
 through the initial two-minute window, including when cached models already look ready, then every
 minute for an unchanged catalog. Hidden tabs pause and catch up immediately on visibility or focus.
 Failed reads back off from five seconds to one minute and report one correlated transport failure
 per outage streak.
 Native Node HTTP cancellation wraps the signal reason in `AbortError` with `ABORT_ERR`; readiness
 unwraps its `DOMException` reason before classification and diagnostics. Deadline expiry and owner
-cancellation remain inconclusive, including on the native transport, and retain bounded recovery
-instead of becoming a conclusive capability rejection. The existing readiness completion event
+cancellation remain inconclusive, including on the native transport, and never become a conclusive
+capability rejection. The existing readiness completion event
 records the inconclusive-probe count without request or response bodies.
+The Coding Workbench's tool-calling and long-context probes follow the same rule (customer 1.3.4).
+A probe the gateway never answered is no verdict: it gets no six-hour cooldown, does not count as
+pending once it settled, and the profile reports `tool-calling-unverified`, never
+`no-tool-calling`. Neither a passive profile read nor a timer retries it; startup, a page load and
+a profile read that asks (`check=1`, sent when the Workbench opens or a model is chosen) retry it
+after a one-minute quiet. A proof that succeeded while the configuration changed under it is
+stale and runs again once, at once. The startup timer retries only an unreachable catalog.
 A busy provider is no verdict on a model already proved ready (#4115, 2026-10-28). When the chat
 probe only times out or receives a transient overload status, a same-generation positive basic-chat
 observation is kept with its fields and renewed at the probe's time, so a single-slot local model that
@@ -101,11 +111,28 @@ A coding run's accepted answer is serving evidence for its model (#3907 AC3, 202
 sidecar route renews a same-generation positive basic-chat observation at the answer's completion
 when the answer finished with `stop`, `tool_calls` or `length` and came from the configuration the
 holder still serves. It never establishes readiness, repairs a failed observation or crosses a
-replaced configuration. A long run therefore no longer lets the model's success expire while
-background renewal is paused, and no probe competes with the run's turns.
+replaced configuration. A long run therefore no longer lets the model's success expire, and no
+probe competes with the run's turns.
 `coding-sidecar.gateway.outcome` records `readinessRenewal` (`renewed`, `not-renewable`) on accepted
-answers. A Workbench profile read that finds the elected model's success expired joins the running
-check or starts the one on-demand check, as a Chat request does; a fresh success adds no probe. The
+answers. The Workbench profile describes the model chosen in its picker (`modelId` query; an id
+the gateway does not configure falls back to the elected default). Choosing a model reads it with
+`check=1`, sent when the Workbench opens and on every selection change, a person's or the automatic
+election's: when that model holds no fresh success, the read
+joins the running check or starts the one on-demand check, as a Chat request does. Every other read
+(after a catalog update or a configuration change, or while a check runs) only describes what is
+known and never starts a check, so an open Workbench probes nothing in the background (auditor
+blocker, customer 1.3.4: a catalog re-read every minute re-probed an idle model once its success
+expired, and Start flickered disabled meanwhile). The profile judges the model as Chat judges its
+picker: an observed failure is `conversation-not-ready`; `model-verification-pending` is answered
+exactly while a check of that model runs; an expired or never-settled answer is available with
+`verification: "unverified"`, and Start stays enabled. A coding run's start checks a model that is
+not ready now and waits for that check (`awaitCodingRunModelReadiness`, through the launch
+resolver's `prepare`) before the unchanged fresh-success admission, so a start after an idle while
+is never refused as still checking. The profile's
+`verification` is that model's own current basic-chat observation (`verified`, `failed`,
+`unverified`), never the gateway-wide state that the last probe of any model overwrites (customer
+1.3.4: a busy neighbour's failed probe kept the composer saying it was still checking the model
+source). The
 Workbench narrates `model-verification-pending` as a check in progress, never as an unavailable
 source or an alert.
 A conversation's first provider dispatch still requires fresh readiness. A completed successful
@@ -120,6 +147,14 @@ cannot, even when the model promise resolves or the stream emits `done`. A strea
 requires full iterator exhaustion. Failed or unfinished streams create no witness. This does not
 update the shared observation ledger, admit another turn, extend a deadline or grant attempts or
 tokens. The existing caller's original bounds still govern every continuation.
+When neither the observation nor a witness is fresh because the turn's calls merely outlasted the
+interval (for example a Chat tool turn whose rejected calls served nothing), the grounded answer
+wrappers check the model once more through the same conversation-request check a new request uses
+and then decide again. Only `expired` is checked again; a failed probe, a cleared or malformed
+observation, a replaced model or configuration and cancellation still refuse at once, and the call
+proceeds only on a fresh positive observation of the admitted generation, so no provider work runs
+on unconfirmed readiness. Refusing instead ended a working Jira turn while the very next check of the
+same model answered ready (2026-11-01, #4173).
 `gateway.conversation.admission` records the closed decision and admitted/current generations under
 the request correlation. A known refusal before the model port is invoked incurs no physical
 synthesis attempt or uncertain output reservation.
@@ -165,8 +200,8 @@ initialization burst with exponential startup backoff capped at five minutes. Th
 and ordinal belong to the captured configuration generation: a replacement resets that burst,
 and an older completion cannot clear or attribute its retry. An explicit reload after exhaustion
 starts a new burst while respecting the current connection's existing backoff deadline. It does not
-reset a retry already in flight. Conversation renewal and interactive readiness retain their
-existing recovery paths. Rejected credentials and
+reset a retry already in flight. Conversation readiness keeps its own check-once and on-demand
+path (D2); the burst never re-checks basic chat. Rejected credentials and
 conclusive invalid catalog responses stop scheduled discovery until the connection changes or a
 browser reload requests a new check. Startup catalog
 completion records the applied, unchanged, stale, cancelled or failed disposition and the
@@ -243,13 +278,22 @@ write and runtime replacement. Missing, stale, invented, mismatched, or concurre
 values fail closed. The `json_schema` observation reconciles both `structuredOutput` and the
 provider-facing `supportsResponseFormat` flag because both describe the same verified request shape.
 The observation is consumed only after the credential-safe atomic writer succeeds, so a storage
-failure remains retryable without another provider call. A successful write replaces the runtime
-generation and clears every remaining observation.
+failure remains retryable without another provider call. A successful write that only refines the
+`capability` metadata of the same ordered connections (same model ids, endpoints, credentials and
+every other connection field) keeps the runtime generation, the coarse verification state and the
+remaining observations, then consumes the applied fields; a conversation turn admitted against those
+connections stays admitted (#4175: a readiness proof landing mid-turn refused the turn as
+`generation-changed`). A write that changes any connection field, the model list or its order
+replaces the runtime generation and resets the coarse verification state. It clears the remaining
+observations only of providers that were changed or removed; an unchanged provider keeps its
+observations under the new generation, including when the list was only reordered.
 
 ### D4 — Whole-gateway verification remains independent
 
-The existing coarse `GatewayVerificationState` continues to drive reachability-oriented editor and
-Coding Workbench surfaces. It is neither replaced by nor inferred from the per-field ledger. The two
+The existing coarse `GatewayVerificationState` continues to drive reachability-oriented editor
+surfaces. It is neither replaced by nor inferred from the per-field ledger. Every probe of any model
+overwrites it, so it never describes one model: the Coding Workbench profile instead publishes its
+chosen model's own basic-chat observation (D2). The two
 signals answer different questions: whether the configured gateway answered, and which model fields
 were specifically observed.
 
@@ -311,9 +355,11 @@ deployment now reported. A gateway declaration such as `supports_function_callin
   retry; it can never cross a configuration replacement.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
 - Basic-chat readiness runs at initialization after restart or configuration replacement and reuses
-  successful credential checks. Fresh success adds no interactive readiness request; background
-  renewal prevents indefinitely cached health, and expired selected requests share the same work.
-  Failed observations are re-probed at most once per not-ready cooldown.
+  successful credential checks. Fresh success adds no interactive readiness request; a success
+  expires after five minutes, so health is never cached indefinitely, and expired selected requests
+  share one check. Nothing probes on a timer. Failed observations are re-probed at most once per
+  not-ready cooldown, and only when a request, a coding run start, a Workbench model choice or a
+  page load needs the model.
 - A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out
   mid-run; a new run still needs a fresh proof.
 

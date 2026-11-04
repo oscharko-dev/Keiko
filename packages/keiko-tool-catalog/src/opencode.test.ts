@@ -181,8 +181,9 @@ describe("opencode registration set", () => {
       type: "object",
       properties: {
         targetPath: { type: "string", minLength: 0, maxLength: 4096 },
+        packageDir: { type: "string", minLength: 0, maxLength: 4096 },
       },
-      required: ["targetPath", "verifierId"],
+      required: ["packageDir", "targetPath", "verifierId"],
     });
   });
 

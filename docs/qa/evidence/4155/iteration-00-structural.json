@@ -1,0 +1,90 @@
+{
+  "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+  "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+  "productDigestMethod": "sorted-tracked-input-paths-and-sha256-v1",
+  "distributionDigest": "eee0f9cac0df44b3f3ad4c2cec5f7ec6d329d7814dfcb9e30176dc8bbb15e132",
+  "compilerDigest": "3722b30210616a13a3213ded11575ba6b2dbab10c32a5ef67afca8513e27017e",
+  "nodeVersion": "v24.22.0",
+  "buildProvenance": {
+    "schemaVersion": 1,
+    "producer": "native-forced-packages-build",
+    "sourceHead": "67638d66e2afb4501bb0187b55c47f8373f09b2e",
+    "productTreeDigest": "d7e7bff39a5a8f88efc901c5b1a6d2bdd312e1fd34813e17b55a40b8cb9cce93",
+    "productDigestMethod": "sorted-tracked-input-paths-and-sha256-v1",
+    "distributionDigest": "eee0f9cac0df44b3f3ad4c2cec5f7ec6d329d7814dfcb9e30176dc8bbb15e132",
+    "compilerDigest": "3722b30210616a13a3213ded11575ba6b2dbab10c32a5ef67afca8513e27017e",
+    "nodeVersion": "v24.22.0"
+  },
+  "harnessDigest": "3c7623e905b466c5aaa9063317ce9ee632ac61778eadf0d752e5416fa1d0926f",
+  "measurementKind": "deterministic-production-path-observation-not-model-quality",
+  "shortIdentifierRecall": {
+    "originalExists": true,
+    "returned": false
+  },
+  "identifierRecallBenchmark": {
+    "version": "literal-identifier-v1",
+    "caseDigest": "9b42e9f324c8e897ddd13081c0ebad81f99371e8361b440e9d99f5c42c8a1974",
+    "passed": 0,
+    "total": 8,
+    "score": 0,
+    "cases": [
+      {
+        "id": "short-hyphen",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "unicode-dash",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "mixed-identifier",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "upper-abbreviation",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "lower-abbreviation",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "numeric",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "version",
+        "passed": false,
+        "originalsPreserved": true
+      },
+      {
+        "id": "literal-boundaries",
+        "passed": false,
+        "originalsPreserved": true
+      }
+    ]
+  },
+  "summarySourceCoverage": {
+    "availableMessages": 40,
+    "modelCalls": 1,
+    "witnessesDelivered": 12,
+    "coveredFraction": 0.3,
+    "declaredCoveredItems": 40,
+    "summaryStatus": "valid"
+  },
+  "manualProjection": {
+    "originalMessages": 40,
+    "gatewayMessages": 1,
+    "verbatimSourceMessagesRetained": 0,
+    "tokensBefore": 30480,
+    "tokensAfter": 946
+  },
+  "canonicalMessagesAfter": 40,
+  "logOperations": ["reference-id.issued", "chat.continuity.rehydration"]
+}

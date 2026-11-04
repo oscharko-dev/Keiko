@@ -6,6 +6,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   applyChatReadConsent,
+  applyChatToolExchange,
   applyChatWriteApproval,
   chatToolReadGrants,
 } from "./chat-tool-events";
@@ -172,5 +173,28 @@ describe("independent Chat source consent events", () => {
     ).toBe(message);
     const completed = { ...message, turnState: "completed" as const };
     expect(applyChatReadConsent(completed, mcpRead)).toBe(completed);
+  });
+});
+describe("a running turn's tool calls", () => {
+  const started = { messageId: "server-message", exchange: { call: event.call } };
+  it("shows a call as it starts, on the server's message", () => {
+    const result = applyChatToolExchange(message, started);
+    expect(result.id).toBe("server-message");
+    expect(result.turnState).toBe("pending");
+    expect(result.toolTranscript?.exchanges).toEqual([{ call: event.call }]);
+  });
+  it("settles the same call in place and keeps its approval, which has its own event", () => {
+    const approved = applyChatWriteApproval(message, event);
+    const settled = applyChatToolExchange(approved, {
+      messageId: "server-message",
+      exchange: { call: event.call, mutationOutcome: "unknown" },
+    });
+    expect(settled.toolTranscript?.exchanges).toEqual([
+      { call: event.call, approval: event.approval, mutationOutcome: "unknown" },
+    ]);
+  });
+  it("never reopens a finished turn", () => {
+    const terminal = { ...message, turnState: "failed" } as const;
+    expect(applyChatToolExchange(terminal, started)).toBe(terminal);
   });
 });

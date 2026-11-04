@@ -71,6 +71,8 @@ async function bindMixedChat(context, capsuleId) {
     context.session,
     context.projectPath,
     context.modelId,
+    "api",
+    "governed-assist",
   );
   const bound = await api(
     context,

@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import { callChatCompactionModel } from "./chat-compaction-model-call.js";
+import {
+  callChatCompactionModel,
+  beginChatCompactionWork,
+  chatCompactionWorkStopped,
+  stopChatCompactionWork,
+} from "./chat-compaction-model-call.js";
 
 const request = {
   modelId: "fixture",
@@ -9,6 +14,32 @@ const request = {
 };
 
 describe("bounded compaction model calls", () => {
+  it("cancels and drains only its own graph and refuses subsequent queued work", async () => {
+    const first = {},
+      second = {};
+    const work = beginChatCompactionWork(first);
+    const peer = beginChatCompactionWork(second);
+    if (work === undefined || peer === undefined) throw new Error("Missing initial work scope");
+    let drained = false;
+    const stopped = stopChatCompactionWork(first).then(() => {
+      drained = true;
+    });
+    expect(work.signal.aborted).toBe(true);
+    expect(peer.signal.aborted).toBe(false);
+    expect(chatCompactionWorkStopped(first)).toBe(true);
+    expect(chatCompactionWorkStopped(second)).toBe(false);
+    expect(beginChatCompactionWork(first)).toBeUndefined();
+    await Promise.resolve();
+    expect(drained).toBe(false);
+    work.finish();
+    work.finish();
+    await stopped;
+    expect(drained).toBe(true);
+    peer.finish();
+    await stopChatCompactionWork(second);
+    await stopChatCompactionWork(first);
+  });
+
   it("times out even when a provider ignores its abort signal", async () => {
     const call: ModelPort["call"] = () => new Promise<NormalizedResponse>(() => undefined);
     await expect(

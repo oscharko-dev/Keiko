@@ -55,6 +55,7 @@ export function dropCommittedBrowserCompletion(targetChatId, onCommitted) {
     streamRequests: 0,
     bufferedRequests: 0,
     grants: 0,
+    pendingReadFrames: 0,
     approvals: 0,
     readStateFrames: 0,
     approvalStateFrames: 0,
@@ -66,13 +67,17 @@ export function dropCommittedBrowserCompletion(targetChatId, onCommitted) {
     if (frame?.event === "tool-read-consent" && frame.data.grant.chatId === targetChatId()) {
       messageId = frame.data.messageId;
       state.readStateFrames += 1;
-      state.grants += Number(frame.data.grant.state === "pending");
+      // The server grants the read itself (owner decision 2026-11-02): a frame that still waits for
+      // a person is a product regression, counted so assertDropped can refuse it.
+      state.grants += Number(frame.data.grant.state === "granted");
+      state.pendingReadFrames += Number(frame.data.grant.state === "pending");
     }
     if (frame?.event === "tool-write-approval" && frame.data.messageId === messageId) {
       state.approvalStateFrames += 1;
       state.approvals += Number(frame.data.approval.state === "pending");
     }
     if (!isTargetCompletion(frame, messageId, targetChatId()) || state.drops !== 0) return false;
+    assert.equal(state.pendingReadFrames, 0);
     assert.equal(state.grants, 1);
     assert.equal(state.approvals, 1);
     const canonical = verifyCommitted(store, frame.data, messageId, targetChatId());
@@ -86,6 +91,7 @@ export function dropCommittedBrowserCompletion(targetChatId, onCommitted) {
   function assertDropped() {
     assert.equal(state.witnessFailures, 0);
     assert.equal(state.drops, 1);
+    assert.equal(state.pendingReadFrames, 0);
     assert.equal(state.grants, 1);
     assert.equal(state.approvals, 1);
   }

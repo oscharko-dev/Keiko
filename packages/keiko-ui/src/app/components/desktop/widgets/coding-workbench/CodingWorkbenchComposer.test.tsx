@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -18,8 +18,14 @@ import {
   type ClientDiagnosticMeta,
 } from "@/lib/client-diagnostics";
 import { sha256Hex } from "../../hooks/canonical-voice-hasher-runtime";
+import {
+  GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,
+  gatewayModelCatalogCheckRequested,
+} from "../shared/gatewaySetupBus";
 
+import { ConnectorWindowsProvider } from "../../connector-windows-context";
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
+import type { CodingWorkbenchConnectors } from "./useCodingWorkbenchConnectors";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
 
 function composerActions(): TaskComposerActions {
@@ -363,55 +369,166 @@ describe("Coding Workbench composer", () => {
     expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
   });
 
-  // Owner decision 2026-10-30: one compact choice, "Jira: none" by default; picking a Pod is the
-  // run's Jira read grant, so it is shown in the composer and sent with the start.
-  describe("the Jira Pod choice for the next run", () => {
+  // Customer 1.3.4: opening the picker is a person asking again, so a model that failed at startup
+  // is checked once more without a page reload.
+  it("asks for a model check when the coding model picker opens", async () => {
+    const user = userEvent.setup();
+    const listener = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    try {
+      renderComposerWithOverrides({ models: [CODING_MODEL, ALTERNATE_MODEL] });
+      await user.click(screen.getByRole("combobox", { name: "Coding model: gpt-5.4" }));
+
+      expect(listener).toHaveBeenCalledOnce();
+      expect(gatewayModelCatalogCheckRequested(listener.mock.calls[0]?.[0] as Event)).toBe(true);
+    } finally {
+      window.removeEventListener(GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT, listener);
+    }
+  });
+
+  // Owner decision 2026-11-02: the run's connectors are chosen in the same menu as an ordinary
+  // Chat. Every MCP server is offered until narrowed; a Jira Pod is none by default and its pick is
+  // the run's Jira read grant, shown in the composer and sent with the start.
+  describe("the connector menu for the next run", () => {
     const POD = { id: "d5f5681e-ce98-4c3c-b27e-51d707c9d018", name: "Acme Jira", ready: true };
+    const SERVERS: CodingWorkbenchConnectors["servers"] = [
+      { name: "wiki", state: "connected" },
+      { name: "build", state: "idle" },
+    ];
+    function connectors(
+      overrides: Partial<CodingWorkbenchConnectors> = {},
+    ): CodingWorkbenchConnectors {
+      return {
+        servers: SERVERS,
+        selectedServers: undefined,
+        pods: [POD],
+        boundPodId: undefined,
+        loading: false,
+        failed: false,
+        onServersChange: vi.fn(),
+        onPodChange: vi.fn(),
+        onOpen: vi.fn(),
+        ...overrides,
+      };
+    }
+    async function openMenu(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+      await user.click(screen.getByRole("button", { name: /^Connectors/u }));
+      return screen.getByRole("region", { name: "Connectors" });
+    }
 
-    it("shows no Jira control when the person has no ready Pod", () => {
-      renderComposerWithOverrides({ jiraPod: undefined });
+    it("shows no connector menu when the window offers none", () => {
+      renderComposerWithOverrides({ connectors: undefined });
 
-      expect(screen.queryByRole("combobox", { name: /Jira/u })).toBeNull();
+      expect(screen.queryByRole("button", { name: /^Connectors/u })).toBeNull();
     });
 
-    it("offers none first and picks a Pod by its name", async () => {
+    it("counts every offered server and asks for a fresh read when it opens", async () => {
       const user = userEvent.setup();
-      const onChange = vi.fn();
-      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: "", onChange } });
+      const menu = connectors();
+      renderComposerWithOverrides({ connectors: menu });
 
-      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
-      expect(control).toHaveTextContent("Jira: none");
-      await user.click(control);
-      expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(
-        expect.arrayContaining(["Jira: none", "Jira: Acme Jira"]),
-      );
-      await user.click(screen.getByRole("option", { name: "Jira: Acme Jira" }));
+      expect(screen.getByRole("button", { name: "Connectors: 2 active" })).toBeVisible();
+      const panel = await openMenu(user);
+      expect(menu.onOpen).toHaveBeenCalledOnce();
+      expect(within(panel).getByRole("switch", { name: /wiki/u })).toBeChecked();
+      expect(within(panel).getByRole("switch", { name: /build/u })).toBeChecked();
+    });
 
-      expect(onChange).toHaveBeenCalledWith(POD.id);
+    it("offers a Pod unbound by default and binds it by its name", async () => {
+      const user = userEvent.setup();
+      const menu = connectors();
+      renderComposerWithOverrides({ connectors: menu });
+
+      const panel = await openMenu(user);
+      const pod = within(panel).getByRole("switch", { name: /Acme Jira/u });
+      expect(pod).not.toBeChecked();
+      await user.click(pod);
+
+      expect(menu.onPodChange).toHaveBeenCalledExactlyOnceWith(POD.id);
     });
 
     it("shows the chosen Pod and goes back to none", async () => {
       const user = userEvent.setup();
-      const onChange = vi.fn();
-      renderComposerWithOverrides({ jiraPod: { choices: [POD], value: POD.id, onChange } });
+      const menu = connectors({ boundPodId: POD.id });
+      renderComposerWithOverrides({ connectors: menu });
 
-      const control = screen.getByRole("combobox", { name: "Jira Pod for this run" });
-      expect(control).toHaveTextContent("Jira: Acme Jira");
-      await user.click(control);
-      await user.click(screen.getByRole("option", { name: "Jira: none" }));
+      expect(screen.getByRole("button", { name: "Connectors: 3 active" })).toBeVisible();
+      const panel = await openMenu(user);
+      const pod = within(panel).getByRole("switch", { name: /Acme Jira/u });
+      expect(pod).toBeChecked();
+      await user.click(pod);
 
-      expect(onChange).toHaveBeenCalledWith("");
+      expect(menu.onPodChange).toHaveBeenCalledExactlyOnceWith(null);
     });
 
-    it("cannot be changed while a run is active", () => {
+    it("narrows the MCP servers to the remaining selection", async () => {
+      const user = userEvent.setup();
+      const menu = connectors();
+      renderComposerWithOverrides({ connectors: menu });
+
+      const panel = await openMenu(user);
+      await user.click(within(panel).getByRole("switch", { name: /build/u }));
+
+      expect(menu.onServersChange).toHaveBeenCalledExactlyOnceWith(["wiki"]);
+    });
+
+    it("offers no access mode of its own; the run authority control owns it", async () => {
+      const user = userEvent.setup();
+      renderComposerWithOverrides({ connectors: connectors() });
+
+      const panel = await openMenu(user);
+
+      expect(within(panel).queryByRole("radiogroup")).toBeNull();
+    });
+
+    it("cannot be changed while a run is active", async () => {
+      const user = userEvent.setup();
       render(
         <TaskStartSection
           {...composerProps("running", composerActions())}
-          jiraPod={{ choices: [POD], value: POD.id, onChange: vi.fn() }}
+          connectors={connectors({ boundPodId: POD.id })}
         />,
       );
 
-      expect(screen.getByRole("combobox", { name: "Jira Pod for this run" })).toBeDisabled();
+      const panel = await openMenu(user);
+      for (const row of within(panel).getAllByRole("switch")) expect(row).toBeDisabled();
+    });
+
+    it("links to the central management windows only when the window provides them", async () => {
+      const user = userEvent.setup();
+      const manage = { manageServers: vi.fn(), managePods: vi.fn() };
+      const { unmount } = render(
+        <TaskStartSection
+          {...composerProps("idle", composerActions())}
+          connectors={connectors()}
+        />,
+      );
+      await openMenu(user);
+      expect(screen.queryByRole("button", { name: /: Manage$/u })).toBeNull();
+      unmount();
+
+      render(
+        <ConnectorWindowsProvider value={manage}>
+          <TaskStartSection
+            {...composerProps("idle", composerActions())}
+            connectors={connectors()}
+          />
+        </ConnectorWindowsProvider>,
+      );
+      await openMenu(user);
+      await user.click(screen.getByRole("button", { name: "MCP servers: Manage" }));
+      await user.click(screen.getByRole("button", { name: "Jira Pods: Manage" }));
+      expect(manage.manageServers).toHaveBeenCalledOnce();
+      expect(manage.managePods).toHaveBeenCalledOnce();
+    });
+
+    it("has no axe violations with the menu open", async () => {
+      const user = userEvent.setup();
+      renderComposerWithOverrides({ connectors: connectors({ boundPodId: POD.id }) });
+
+      await openMenu(user);
+
+      expect(await axe(document.body)).toHaveNoViolations();
     });
   });
 

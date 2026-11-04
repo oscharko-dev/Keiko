@@ -175,11 +175,21 @@ export interface VerificationStep {
   readonly limits: VerificationResourceLimits;
   // Present iff the step is pre-marked skip (no detected script for the kind, ADR-0007 D4).
   readonly skipReason?: string | undefined;
+  // Workspace-relative folder of the nested package the step runs in (a monorepo member whose
+  // package.json is not the workspace root's). Absent: the workspace root, as before.
+  readonly cwd?: string | undefined;
 }
+
+// The package managers a script step may run through. The root package keeps `npm`; a nested
+// package is run with the manager its own `packageManager` field or lockfile names.
+export type VerificationPackageManager = "npm" | "yarn" | "pnpm";
 
 export interface VerificationPlan {
   readonly workspaceRoot: string;
   readonly steps: readonly VerificationStep[];
+  // Workspace-relative folder of the nested package this plan verifies; absent for the root.
+  readonly packageDir?: string | undefined;
+  readonly packageManager?: VerificationPackageManager | undefined;
 }
 
 // ─── Result & report ───────────────────────────────────────────────────────────────

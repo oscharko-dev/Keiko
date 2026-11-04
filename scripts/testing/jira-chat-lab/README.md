@@ -20,7 +20,7 @@ node scripts/testing/jira-chat-lab/catalog-chat.mjs /absolute/private/session ac
 ```
 
 Run groups serially with all other laboratory writers stopped. Each operation has
-its own authenticated Chat, first-read grant and exact write approval. The group
+its own authenticated Chat, a server-established read grant and exact write approval. The group
 creates one uniquely marked synthetic issue, edits it, assigns it, comments once,
 then sends the required transition-screen field and transition together. Independent
 Jira reads verify project counts, current field values, comment counts and change
@@ -63,7 +63,7 @@ first unreturned cursor; a missing/skipping cursor, duplicated record, incorrect
 premature completion fails qualification. Every physical Jira search must retain the exact
 requested cursor, limit and query, and every mutation is refused before forwarding. The
 observer passes real responses through unchanged and records only counts, cursors and statuses.
-The same Chat reuses its first read grant; no write approval is expected. Independent reads
+The same Chat reuses its first server-established read grant; no write approval is expected. Independent reads
 also require unchanged remote state after each page.
 
 The private pending intent is exclusive and retained on failure, together with product state.
@@ -117,7 +117,9 @@ has a three-hour lifetime. A healthy container or successful read does not estab
 write availability. Each qualification group requires license/read/write/HTTPS
 preflight and completion within the valid session. An expired group must be repeated
 in full. Never change clocks, licensing code or license data. A normal update did
-not renew the original expired laboratory; its data remains retained.
+not renew the original expired laboratory; its data remains retained. A scorecard
+checks the license again before each journey and, once no lane uses Jira, restarts
+the containers at that boundary, because two lanes outlast one license.
 
 `session.mjs stop <directory>` stops only that manifest’s containers and retains
 its volumes. This harness does not delete existing laboratories or renew licenses
@@ -234,9 +236,9 @@ node scripts/testing/jira-chat-lab/chat-read.mjs "$HOME/.local/share/keiko-jira-
 The script creates an isolated temporary product state, pairs through the real launcher
 attestation route, verifies the model using the production tool-calling probe, creates
 and verifies a Live Pod through HTTP, and binds it to a normal Chat. It sends one
-canonical turn, observes the server-owned pending read consent through GET, explicitly
-approves through the authenticated consent route, and checks the completed canonical
-turn, actual `jira_projects` result and final model answer. It uses the shared gateway,
+canonical turn and observes that no read consent is ever pending: reads need no human
+approval (owner decision 2026-11-02), the retired consent route is gone and the server
+establishes the read grant itself. It then checks the completed canonical turn, actual `jira_projects` result and final model answer. It uses the shared gateway,
 catalog and MCP host with real TLS/PAT access to the lab; no model/Jira transport is
 mocked. License checks bracket the group. Output and persisted Activity Logs are
 content-free. A log-sink warning makes the process fail. Private temporary product
@@ -259,10 +261,11 @@ the transport argument is `buffered`, `stream` or `browser`. Run groups sequenti
 stateful laboratory consumer. Each group uses the existing real model probe, authenticated
 normal Chat API, verified HTTPS Live Pod and shared gateway/binder/MCP execution path.
 It requests one unique synthetic comment and independently checks Jira before and after:
-exactly one matching comment and a total count increase of one. Every mode must first
-request its Chat read disclosure; the first two modes additionally require exactly one
+exactly one matching comment and a total count increase of one. The Chat's mode is
+always set explicitly (a new Chat defaults to Full access), every mode reads on a
+server-established grant without a consent step; the first two modes additionally require exactly one
 approval whose preview matches the proposed comment. Full access must require no write
-approval. Streaming must emit the corresponding consent/approval events and one terminal
+approval. Streaming must emit the corresponding read-grant (always granted)/approval events and one terminal
 response without a buffered fallback. Reloaded history must retain the confirmed mutation
 outcome. License checks bracket the complete group.
 
@@ -278,9 +281,9 @@ acceptance matrix require their own evidence.
 
 For `browser`, first build the current UI with `npm run build --workspace @oscharko-dev/keiko-ui`.
 The harness reuses the real browser setup below, creates and verifies the Pod through the
-Knowledge Hub, chooses the requested mode and connects the Chat through visible controls.
-It captures and persists the browser's actual canonical turn identity before approving
-the first read disclosure, checks the exact action textarea, and approves through the
+Knowledge Hub, connects the Chat through the composer's Connectors panel, chooses the requested
+mode with its Access radios and verifies that no read-consent card ever appears. It captures
+and persists the browser's actual canonical turn identity, checks the exact action textarea, and approves through the
 visible button. The rendered terminal state and independent Jira count must both confirm
 the write. Full access must display no write-approval card. Screenshots remain private in
 the session directory; an interrupted browser run retains the same reconciliation marker.
@@ -292,7 +295,7 @@ after the authenticated Chat settings request succeeds. The default is `dropdown
 Append `lifecycle` after the connection choice to additionally rename the same Pod, replace
 its PAT with the distinct synthetic editor identity, verify it again, and remove it through
 visible Hub controls. Independent public API reads confirm stable Pod identity, increased
-credential generation, invalidation of previously granted consent, credential removal and
+credential generation, supersession of the previously established read grant, credential removal and
 Chat disconnection; the workspace edge must disappear too. This optional group requires
 `seed.mjs`'s editor fixture and retains the completed write outcome after lifecycle changes.
 
@@ -307,8 +310,8 @@ node scripts/testing/jira-chat-lab/chat-read.mjs /absolute/private/session actua
 
 The harness serves that static build with its actual CSP, redeems a fresh
 launcher pairing fragment in Chromium, creates and verifies a Jira Pod in the
-Knowledge Hub, and connects an existing empty Chat through the visible controls.
-It sends a prompt through the normal composer, approves the read disclosure,
+Knowledge Hub, and connects an existing empty Chat through the Connectors panel.
+It sends a prompt through the normal composer, requires that no consent card is shown,
 and requires a completed canonical turn, the real project result and a final
 model answer. There are no mocked browser, model or Jira transports.
 
@@ -379,7 +382,7 @@ node scripts/testing/jira-chat-lab/browser-faults.mjs "$HOME/.local/share/keiko-
 
 Both cases use the existing real browser Hub/workspace/Chat journey in Ask for approval:
 keyboard connection for lost-response observation, native drag/drop for committed-503
-observation. The exact comment preview and read disclosure require visible decisions.
+observation. The exact comment preview requires a visible decision; the read needs none.
 The same production HTTP decorator described above injects the journal-visible observation
 after one real Jira comment succeeds; it does not cut the browser socket or claim that Jira
 itself returned 503. The browser must display `Jira outcome unknown`.
@@ -444,23 +447,23 @@ read-only before starting another group; never repeat a possibly executed mutati
 private receipt requires the entire selected group and the closing license check. Preparing or
 unit-testing this harness does not count as live acceptance.
 
-## Consent reuse after process restart and token replacement
+## Read-grant reuse after process restart and token replacement
 
 ```bash
 node scripts/testing/jira-chat-lab/consent-lifecycle.mjs /absolute/private/session actual-model-id
 ```
 
-This separate four-turn group uses one persisted Chat and one stable Jira Pod. It grants the first
-buffered read, closes the server, and starts a fresh Node process against the retained product store.
+This separate four-turn group uses one persisted Chat (set to Ask for approval) and one stable Jira
+Pod. The server establishes the grant for the first buffered read (no person decides it), closes the server, and starts a fresh Node process against the retained product store.
 The new process sends a **new** buffered read with a new canonical turn identity and proves an
 actual Jira request without another disclosure. It then replaces the credential through the normal
-authenticated API with the distinct seeded editor token, verifies that the old grant is unavailable,
-reverifies the Pod, and performs a streamed read with fresh consent. A final streamed comment reuses
+authenticated API with the distinct seeded editor token, verifies that the old grant belongs to a superseded authentication generation and that the retired
+consent route stays gone, reverifies the Pod, and performs a streamed read on a fresh server-established grant. A final streamed comment reuses
 that new grant and requires its own concrete action approval. Independent Jira reads prove exactly
 one comment and its editor author, demonstrating that the rotated credential was actually used.
 
 The common Chat observer follows the single newly admitted user row, excluding historical pending
-approvals. Consent reuse is explicit and checks the exact existing grant, Chat, Pod, both generations,
+approvals. Grant reuse is explicit and checks the exact existing grant, Chat, Pod, both generations,
 state and expiry before sending; a write rechecks the grant before approval. Unexpected new
 disclosure fails the reuse proof. Before and after artifact inventories must match, as for the other
 live groups. The private pending intent and product database survive failure; never invoke the
@@ -477,14 +480,15 @@ node scripts/testing/jira-chat-lab/browser-disconnect.mjs /absolute/private/sess
 Run this separate group after a fresh licensed HTTPS/read/write preflight, with other live groups
 stopped. Pin both the compiled runtime and the served `packages/keiko-ui/out` files, together with
 the browser helper closure, before and after the group. The browser creates and verifies a Pod in
-the Hub, connects the ordinary Chat through keyboard workspace ports, grants reading, and approves
-the exact comment preview. Jira receives one real request through the production HTTP port; its
+the Hub, connects the ordinary Chat through keyboard workspace ports (the lasso binds at once; the
+Connectors panel shows the confirmed binding), selects Ask for approval, reads without a consent
+step, and approves the exact comment preview. Jira receives one real request through the production HTTP port; its
 acknowledgement is preserved without injecting a Jira fault.
 
 A qualification-only listener on the actual BFF server intercepts the exact terminal SSE `done`
 frame. It first checks that the matching user turn and assistant answer are already committed in
 the real store, then destroys the actual HTTP response without transmitting that completion frame.
-The earlier read-grant and write-approval frames remain delivered. Chromium's failed-request metadata
+The earlier read-grant (granted, never pending) and write-approval frames remain delivered. Chromium's failed-request metadata
 must confirm the interruption. An existing canonical buffered fallback is permitted and counted;
 the driver never automatically replays a mutation.
 
@@ -578,3 +582,135 @@ Reconcile the retained identity before any cleanup. If the process itself is kil
 outage, the retained intent identifies the one container that must be restored before another
 laboratory group. Completed receipts contain only the closed scenario outcomes; preparation and
 unit tests do not establish native live acceptance.
+
+## Requirements scenario scorecard (epic #4173)
+
+`requirements/` holds the lab of epic #4173: the scenario catalog S01–S20, a model-free probe
+layer, end-to-end Chat journeys and the scorecard that combines them. Every check is graded by an
+independent oracle (Jira REST/JQL reads or the generated ground truth), never by the model's own
+answer. `catalog.mjs` lists each scenario's obligations; a check names the obligations it covers
+(`covers`) and `coverage.mjs` awards green only when every obligation is covered by a passing
+check, one of them an end-to-end journey. A journey that verifies only part of the contract leaves
+the scenario `partial` (a check grades only the parts the instance gives input for: S10 credits
+per-epic progress and estimate totals only when the seeded project has the Epic Link and Story Points
+fields),
+and an obligation nobody covers keeps it from ever turning green. Creation journeys (S05, S07,
+S17) read the matching Jira issue keys before the turn and grade only the keys that appeared
+during it, so earlier journeys, reruns and the Jira actor's timezone cannot leak into the verdict.
+S05 additionally requires exactly one write approval for its batch, S04 requires title, priority
+and chapter per requirement, S11 each seeded deviation twice over (the structured `jira.report` result of the turn names it for
+that issue, and the answer describes it: a clause that names the field and states a violation,
+under no denial. An answer such as "Keine Abweichung" or "vollständig und korrekt", a heading such
+as "## No deviations found" over the list, a bare list of the checked fields and "sind vorhanden"
+leave it undescribed, and a turn without a completed `jira.report` deviation list credits nothing
+and leaves S11 partial), and S17 three parts (`backlog-turn.mjs`): a one-to-one mapping of the new
+epics onto the Muss requirements plus every created key in the answer; the Settings readiness run
+(`POST /api/gateway/readiness`, the trigger of the 2026-10-31 refusal) started once the first tool
+call is visible and finished while the turn still ran, without a generation-changed refusal; and a
+second turn for the Soll requirements whose Chat mode is changed after its first completed write,
+which ends the admitted turn early, so the product's early-ending answer must name exactly the
+epics Jira shows as created (evidence: a new `chat.tool-turn.ended` line in the Activity Log). A part
+whose evidence is absent is `unverified`, covers nothing and leaves S17 `partial`. S15 adds a second
+turn (`draft-findings.mjs`) that drafts epics for one seeded vague requirement and one without
+acceptance criteria and credits `findings-attached-to-epic-draft` only when the epic Jira holds
+states, in its trace footer (`Quality findings:`), exactly the closed codes the production quality
+checks derive for that requirement; an epic without a footer is `unverified`. S16 adds a turn
+(`template-test-cases.mjs`) under a REQ Task template that defines the form (sections `Schritte` and
+`Erwartet`, summary `<id>/AC<n>`; Task rather than Sub-task, which would need a parent chain) and
+credits `template-defined-format` only for exactly one conforming, requirement-labelled issue per
+criterion of LH-002; the template is removed afterwards. Both write REQ, so they take the work lock
+and prepare REQ like S05. An epic for a requirement without criteria stays satisfiable under an epic
+template: the section needs text, not criteria, so the draft can state that none are defined.
+S14's `edits-proposed-as-draft` is moved to follow-up #4196 by owner decision: the scenario declares
+it under `deferred` with the issue number, `coverage.mjs` accepts a deferral only with an issue
+number, and the scorecard row prints "deferred to #4196" so a green S14 never reads as covering it. S10 asks for three strict line formats
+(`ANZAHL;type;status;n`, `EPIC;key;members;done`, `SCHÄTZUNG;total;done;remaining`) and grades them
+against the issues Jira holds.
+Its fourth obligation, `large-project-report`, runs a second turn in a fresh Chat for the report
+project LRG (`large-project.mjs`): 45 epics with their tasks and bugs, 2,490 issues in all, seeded
+with a deterministic status spread. The oracle counts what Jira holds by JQL alone (total, per
+status category, per type, per type and status, per epic through its Epic Link) and requires the
+completed `jira.report` of LRG (its progress figures, the type/status rows, the epic count and
+every epic, from the summary, the epic pages or the plain figure lines) and the answer's
+`ANZAHL`/`EPIC` lines to equal it exactly. No product size limit is encoded. A laboratory without
+LRG, a turn without a complete report of LRG, or a project that no longer holds what the seed
+recorded leaves the part `unverified`: it covers nothing and S10 stays `partial`. S12 grades a strict `LH-nnn;ABGEDECKT|OFFEN;keys` matrix against the issues
+that name each requirement (tokenised like the product) and requires the complete `jira.report`
+result of the turn to state the same. S13 exports the finished report through the report card's
+route (CSV must list exactly the issues Jira holds, both files must carry the tool's digest) and
+requires exactly one new Jira comment that is the tool's computed comment text verbatim. S01, S02
+and S06 drive the skill-library template routes (`/api/skills`, `/api/skills/jira-templates`) with
+the template the structure rules describe (`templates.mjs`); the template is deleted again when the
+journey ends, because the library activates every valid template for every later write. S06 stays
+`unverified` unless the product actually refused a violating write in the turn. S20 (#4176 AC4)
+plans a task into the work project's lab sprint by name and id (`field-correction.mjs` creates the
+sprint once through Jira Software's board API). Keiko forwards the sprint field as opaque JSON, and
+Jira accepts it only as one numeric id while its metadata declares an array of strings, so Jira's
+own error decides the value. S20 is green only when a write result carried Jira's sprint error
+(never Keiko's own validation) and a later write put exactly one new task into that sprint; a
+correct task without any Jira rejection leaves it `unverified`. The oracles are unit-tested
+with stubbed turns in `scripts/__tests__/jira-lab-requirements-scorecard.test.mjs`.
+
+```sh
+# Once per session: the empty work project REQ and the report project RPT with known ground truth
+node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session
+
+# A laboratory seeded before LRG existed gets the large project added without a reset: it makes
+# about 2,500 issues and 1,600 transitions, leaves REQ, RPT and the other entries of
+# requirements-truth.json untouched, and does nothing when LRG is already recorded. A project LRG
+# that holds issues the truth does not record (an interrupted run) is refused: delete it first.
+node scripts/testing/jira-chat-lab/requirements/seed-projects.mjs /absolute/private/session --only LRG
+
+# Once per session, after the seed: a real estimate for RPT. Story Points where Jira offers the
+# field on Task create and edit (found by schema, put on the project's screens); otherwise Jira's
+# time tracking (Original Estimate, one hour per seeded point, so time tracking must be enabled).
+# It writes the seed's estimates on every Task, then records fieldIds.storyPoints (the field the
+# oracle sums), estimate {fieldId, writeFieldId, unit, label} and the Tasks' "estimate" deviations
+# in requirements-truth.json. S10 asks for time-tracking totals in hours and grades them exactly
+# against the seconds Jira holds. Idempotent; without it S10 cannot grade estimate totals.
+node scripts/testing/jira-chat-lab/requirements/seed-estimates.mjs /absolute/private/session
+
+# Fast probes only (seconds, no model)
+node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session --project REQ
+
+# Probes plus Chat journeys through any configured Gateway model, for example local LiteLLM
+KEIKO_JIRA_LAB_GATEWAY_CONFIG=/absolute/private/keiko.config.json \
+  node scripts/testing/jira-chat-lab/requirements/scorecard.mjs /absolute/private/session \
+  --project REQ --model <chat-model-id> --embedding-model <embedding-model-id> [--only S04,S05]
+```
+
+The probes of S05, S07, S08 and S09 prove `fields-writable` by writing. `field-writes.mjs` takes every field Jira lists for the issue type on create and on edit, writes it alone through Keiko's production mutation path into its own project `FLD`, and reads it back from Jira. Comment, attachment and link take their own calls and must land the same way. Jira's own refusal of a value, such as a sprint on a sub-task, is listed in the check's detail and does not count against Keiko. A refusal that never reached Jira, a failure after the write, or a value Jira did not keep turns the scenario red.
+
+The scorecard writes `requirements-scorecard/<timestamp>.json`, `latest.md` and `trend.tsv` into
+the private session. Before a group it checks the remaining license time: the published test
+license counts from Jira's start, so `requirements/license-window.mjs` stops and starts the
+session's containers (volumes retained) when the window runs low. It never changes clocks,
+licensing code or license data.
+
+The synthetic corpus (`requirements/corpus.mjs`) is a fictional requirements specification in two
+versions with seeded quality defects. Its truth records each requirement completely (id, title,
+priority, chapter, text, acceptance criteria), and every rendering (Markdown, Word, Excel,
+PowerPoint, PDF) carries all of it; `jira-lab-corpus-documents.test.mjs` extracts the records back
+out of each format and compares them, including the v1 to v2 changes, with the truth; `STRUCTURE_RULES` is the lab's stand-in for the issue
+templates a project lead defines. Lab code may know Jira Software's field schemas to seed ground
+truth; the product under test may not.
+
+## Moving the laboratory to the next Jira Data Center release
+
+The release is pinned in three places that must name the same `tag@sha256:digest`: the `jira`
+service image in `compose.yaml`, the `JIRA_IMAGE` constant in `verification.mjs` (which the native
+verification compares with the running container) and its mirror in
+`scripts/__tests__/jira-native-verification.test.mjs`. Take the new digest from the registry
+manifest of the release tag, never from a floating tag. The version also appears in prose in this
+README and in `docs/local-knowledge/atlassian-connector-guide.md` ("Bounded Data Center support");
+change the guide only after the qualification below passed, because it states which version the
+product accepts.
+
+A new image needs a fresh session (`session.mjs init`, an empty directory): an existing database
+volume belongs to the old release and Jira's upgrade is not part of this harness. Then rerun, in
+order: `setup.mjs`, `seed.mjs`, `qualify-fields.mjs`, `seed-content.mjs`, the product HTTPS
+verification and the Chat read and write groups above, `seed-projects.mjs` and `seed-estimates.mjs`,
+and the requirements scorecard with a model. Compare the new scorecard with the previous
+`trend.tsv`; a changed REST schema, permission refusal status (the content seed records Jira's
+400 for a denied write) or field schema shows up there first, and the oracles that name such a
+detail are the lab code to adjust. Product code never gains a version-specific branch for it.

@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "forget-not-en",
+  "language": "en",
+  "class": "forget-not",
+  "difficulty": "plain",
+  "description": "\"Don't forget\" means remember. It must not be read as a forget, and the fact must stay.",
+  "truth": [
+    {
+      "key": "status-format",
+      "seed": "I write my status reports in bullet points.",
+      "must": true,
+      "private": true,
+      "terms": [["bullet point*"]]
+    }
+  ],
+  "turns": [
+    {
+      "user": "I write my status reports in bullet points.",
+      "learner": [
+        {
+          "body": "I write my status reports in bullet points.",
+          "type": "procedural"
+        }
+      ]
+    },
+    {
+      "user": "Don't forget that I write my status reports in bullet points.",
+      "learner": []
+    }
+  ],
+  "probes": [
+    {
+      "id": "related",
+      "question": "How do I write my status reports?",
+      "expect": {
+        "kind": "answer",
+        "terms": [["bullet point*"]]
+      }
+    }
+  ]
+}

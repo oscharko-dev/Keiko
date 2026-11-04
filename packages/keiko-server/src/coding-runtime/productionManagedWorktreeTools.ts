@@ -40,7 +40,10 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
+import {
+  NATIVE_SHELL_SKIP_PREFIX,
+  type VerificationStepOutput,
+} from "@oscharko-dev/keiko-verification";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
@@ -53,6 +56,7 @@ import type {
   VerificationRunnerManager,
 } from "../editor/verificationRunner.js";
 import {
+  PackageSelectionRequiredError,
   VerificationRunnerError,
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
@@ -1688,6 +1692,8 @@ type VerificationPortResult =
       readonly reasonCode?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
       readonly notRun?: readonly VerificationNotRunStep[] | undefined;
+      /** The workspace-relative package folders the model has to choose between (`packageDir`). */
+      readonly packageCandidates?: readonly string[] | undefined;
     };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
@@ -1812,6 +1818,8 @@ function recordVerificationBlocker(
   error: unknown,
 ): void {
   if (!(error instanceof VerificationRunnerError)) return;
+  // Naming the package is the model's to do: not a blocker to report.
+  if (error instanceof PackageSelectionRequiredError) return;
   switch (error.code) {
     case "PROJECT_NOT_FOUND":
     case "WORKSPACE_TRUST_REQUIRED":
@@ -1907,9 +1915,13 @@ async function runVerificationAttempt(
 //
 // The tool now waits in place for that decision, exactly as a git-stage or commit proposal already
 // waits for its approval, and the run reports itself `paused` naming the decision. This is NOT the
-// Authority Envelope approval plane: the decision is recorded on the workspace's own trust surface,
-// mints no action authority, and is asked identically in all three autonomy modes because script
-// trust is a hard, mode-independent boundary.
+// Authority Envelope approval plane: the decision is recorded on the workspace's own trust surface
+// and mints no action authority. It is asked in Ask for approval and Supervised workspace only: in
+// Full access (`autonomous-delivery`) the validated Authority Envelope already covers file and
+// command work inside the run's own workspace, so the runner admits the run's own root under the
+// `autonomous-envelope` basis and this wait is never reached (owner decision, 2026-11-02). Script
+// trust is not among the hard, mode-independent denials; the egress isolation and sandbox that
+// contain the scripts apply in every mode.
 //
 // The poll is slower than a proposal's: each probe resolves the workspace and re-reads the manifest
 // bytes, and a human decision does not need 25 ms resolution.
@@ -1987,7 +1999,7 @@ async function settleWorkspaceScriptTrust(
   const ceilingMs = Math.max(0, SCRIPT_TRUST_WAIT_CEILING_MS - (Date.now() - enteredAtMs));
   requestOperatorDecision("workspace-script-trust");
   const outcome = await waitForWorkspaceScriptTrust(
-    () => scriptTrustFor(input.workspaceRoot),
+    () => scriptTrustFor(input.workspaceRoot, effectiveModeOf(input)),
     signal,
     ceilingMs,
   );
@@ -2165,6 +2177,7 @@ function notRunReason(
   if (result.status === "denied") return "denied";
   if (result.status === "cancelled") return "cancelled";
   const detail = result.detail ?? "";
+  if (detail.startsWith(NATIVE_SHELL_SKIP_PREFIX)) return "native-shell-required";
   if (detail.startsWith("dependencies unavailable: bootstrap ")) return dependencies;
   return /^no [a-z-]+ script detected in package\.json$/u.test(detail)
     ? "script-missing"
@@ -2441,8 +2454,11 @@ function verificationRunInput(
     kinds: [kind],
     requestId: request.actionId,
     ...(request.targetPath === undefined ? {} : { targetPath: request.targetPath }),
+    ...(request.packageDir === undefined ? {} : { packageDir: request.packageDir }),
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(sharedHostPlatform === undefined ? {} : { sharedHostPlatform }),
+    // Read at the attempt, not frozen at construction: the run's mode is the live selection.
+    autonomyMode: effectiveModeOf(input),
   };
 }
 
@@ -2540,7 +2556,10 @@ function verificationRefused(
     code === undefined ? "verification-failed" : "verification-refused",
     error,
   );
-  return code === undefined ? { status: "failed" } : { status: "failed", reasonCode: code };
+  if (code === undefined) return { status: "failed" };
+  return error instanceof PackageSelectionRequiredError
+    ? { status: "failed", reasonCode: code, packageCandidates: error.candidates }
+    : { status: "failed", reasonCode: code };
 }
 
 // Mounts the real research-egress executor only when the run activated read-only research (registry
