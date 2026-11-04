@@ -6,7 +6,7 @@
 // cell it continues, a paragraph keeps its bullet level, and the `show` flag of the slide is
 // reported. Placement of chart and SmartArt text is left to the caller, who owns the package.
 
-import { attributeOf, scanXmlTokens, type XmlTag } from "./pptx-xml.js";
+import { attributeOf, plainSpaces, scanXmlTokens, type XmlTag } from "./pptx-xml.js";
 
 const SKIPPED_FIELD_TYPES: readonly string[] = ["slidenum", "datetime"];
 const LEVEL_INDENT = "  ";
@@ -128,7 +128,7 @@ function finishParagraph(state: WalkState): void {
   state.text = undefined;
   if (runs === undefined) return;
   state.objectCount += 1;
-  const text = runs.join("").trim();
+  const text = plainSpaces(runs.join("")).trim();
   if (text.length === 0) return;
   if (state.cell !== undefined) state.cell.push(text);
   else state.shape?.paragraphs.push(`${indentOf(level)}${text}`);

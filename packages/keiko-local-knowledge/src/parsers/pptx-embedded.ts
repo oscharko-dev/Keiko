@@ -5,7 +5,7 @@
 // returns plain lines with the number of objects it spent, so the caller can charge the deck-wide
 // object budget. Cached values are read; the workbook behind a chart is never opened.
 
-import { scanXmlTokens, type XmlTag } from "./pptx-xml.js";
+import { plainSpaces, scanXmlTokens, type XmlTag } from "./pptx-xml.js";
 
 export interface EmbeddedLimits {
   readonly maxDepth: number;
@@ -110,7 +110,8 @@ function recordSeriesValue(series: Series, part: SeriesPart | undefined, text: s
 }
 
 function chartText(state: ChartState): void {
-  const raw = state.text?.join("");
+  const joined = state.text?.join("");
+  const raw = joined === undefined ? undefined : plainSpaces(joined);
   state.text = undefined;
   const text = raw?.trim();
   if (raw === undefined || text === undefined || text.length === 0) return;

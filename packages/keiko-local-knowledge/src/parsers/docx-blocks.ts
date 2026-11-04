@@ -12,6 +12,7 @@ import {
 } from "./docx-styles.js";
 import { normalizeLine, projectTable } from "./docx-tables.js";
 import type { NoteRef, RawBlock, RawParagraph, RawTable } from "./docx-xml.js";
+import { plainSpaces } from "./pptx-xml.js";
 
 export interface Paragraph {
   readonly text: string;
@@ -30,13 +31,8 @@ export interface ProjectionContext {
 const INDENT = "  ";
 const LIST_STYLE_PATTERN = /^list\s*(?:bullet|number)/iu;
 
-// No-break and narrow no-break spaces keep a number and its unit together on screen; in indexed
-// text they would stop "10 EUR" from matching a query typed with an ordinary space.
-const NO_BREAK_SPACES = /[\u00a0\u2007\u202f]/gu;
-
 function lineOf(text: string): string {
-  return text
-    .replaceAll(NO_BREAK_SPACES, " ")
+  return plainSpaces(text)
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
@@ -87,15 +83,50 @@ function paragraphEntry(paragraph: RawParagraph, context: ProjectionContext): Pa
   return [{ text: withMarker(text, marker) }];
 }
 
+// ─── Tables ──────────────────────────────────────────────────────────────────
+
+/** A cell paragraph's text with the marker of its list; the counters advance as in the body. */
+function markedCellParagraph(paragraph: RawParagraph, context: ProjectionContext): RawParagraph {
+  const marker = listMarkerOf(paragraph, context);
+  const text = lineOf(paragraph.text);
+  return text.length === 0 ? paragraph : { ...paragraph, text: withMarker(text, marker) };
+}
+
+function markedBlock(block: RawBlock, context: ProjectionContext): RawBlock {
+  return block.kind === "p"
+    ? { kind: "p", paragraph: markedCellParagraph(block.paragraph, context) }
+    : { kind: "tbl", table: markedTable(block.table, context) };
+}
+
+/**
+ * The table with every list paragraph in its cells carrying the marker Word shows, visited in
+ * document order so the counters agree with the paragraphs around the table.
+ */
+function markedTable(table: RawTable, context: ProjectionContext): RawTable {
+  return {
+    rows: table.rows.map((row) => ({
+      ...row,
+      cells: row.cells.map((cell) => ({
+        ...cell,
+        blocks: cell.blocks.map((block) => markedBlock(block, context)),
+      })),
+    })),
+  };
+}
+
+function tableLines(table: RawTable, context: ProjectionContext): readonly string[] {
+  return projectTable(markedTable(table, context));
+}
+
 // ─── Notes ───────────────────────────────────────────────────────────────────
 
 function noteLabel(ref: NoteRef): string {
   return `${ref.kind === "footnote" ? "Footnote" : "Endnote"} ${ref.id}`;
 }
 
-function blockTexts(blocks: readonly RawBlock[]): readonly string[] {
+function blockTexts(blocks: readonly RawBlock[], context: ProjectionContext): readonly string[] {
   return blocks.flatMap((block) =>
-    block.kind === "p" ? [normalizeLine(block.paragraph.text)] : projectTable(block.table),
+    block.kind === "p" ? [normalizeLine(block.paragraph.text)] : tableLines(block.table, context),
   );
 }
 
@@ -105,7 +136,7 @@ function noteEntry(ref: NoteRef, context: ProjectionContext): Paragraph[] {
   const blocks = source.get(key);
   if (blocks === undefined || context.placed.has(key)) return [];
   context.placed.add(key);
-  const text = blockTexts(blocks)
+  const text = blockTexts(blocks, context)
     .filter((part) => part.length > 0)
     .join(" ");
   return text.length === 0 ? [] : [{ text: `${noteLabel(ref)}: ${text}` }];
@@ -150,7 +181,7 @@ export function projectBody(
       for (const ref of block.paragraph.noteRefs) out.push(...noteEntry(ref, context));
       continue;
     }
-    for (const line of projectTable(block.table)) out.push({ text: line });
+    for (const line of tableLines(block.table, context)) out.push({ text: line });
     for (const ref of tableNoteRefs(block.table)) out.push(...noteEntry(ref, context));
   }
   return out;

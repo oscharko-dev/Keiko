@@ -4,7 +4,10 @@
 // literal character data, and attribute values are read quote aware. Entities are never expanded
 // beyond the five predefined ones and numeric character references, and every construct the text
 // layer does not need - a DOCTYPE or ENTITY declaration, a processing instruction other than the
-// leading XML declaration, markup that does not parse - fails closed instead of being skipped.
+// leading XML declaration, markup that does not parse, a part that is not exactly one XML document
+// - fails closed instead of being skipped. Element and attribute names carry the canonical prefix
+// of their namespace (`w`, `a`, `p`, `r`, `mc`, `m`, `c`, `dgm`), whatever prefix the producer
+// declared for it: a document that a generic XML library wrote as `ns0:p` reads like one Word wrote.
 
 import { decodeXmlEntities } from "./_internal.js";
 
@@ -18,6 +21,27 @@ const COMMENT_CLOSE = "-->";
 const CDATA_OPEN = "<![CDATA[";
 const CDATA_CLOSE = "]]>";
 const BYTE_ORDER_MARK = "﻿";
+const NAMESPACE_DECLARATION = "xmlns";
+
+// The Transitional and Strict namespaces of every vocabulary the readers match by name.
+const CANONICAL_PREFIX_BY_NAMESPACE: ReadonlyMap<string, string> = new Map([
+  ["http://schemas.openxmlformats.org/wordprocessingml/2006/main", "w"],
+  ["http://purl.oclc.org/ooxml/wordprocessingml/main", "w"],
+  ["http://schemas.openxmlformats.org/drawingml/2006/main", "a"],
+  ["http://purl.oclc.org/ooxml/drawingml/main", "a"],
+  ["http://schemas.openxmlformats.org/presentationml/2006/main", "p"],
+  ["http://purl.oclc.org/ooxml/presentationml/main", "p"],
+  ["http://schemas.openxmlformats.org/officeDocument/2006/relationships", "r"],
+  ["http://purl.oclc.org/ooxml/officeDocument/relationships", "r"],
+  ["http://schemas.openxmlformats.org/markup-compatibility/2006", "mc"],
+  ["http://schemas.openxmlformats.org/officeDocument/2006/math", "m"],
+  ["http://purl.oclc.org/ooxml/officeDocument/math", "m"],
+  ["http://schemas.openxmlformats.org/drawingml/2006/chart", "c"],
+  ["http://purl.oclc.org/ooxml/drawingml/chart", "c"],
+  ["http://schemas.openxmlformats.org/drawingml/2006/diagram", "dgm"],
+  ["http://purl.oclc.org/ooxml/drawingml/diagram", "dgm"],
+]);
+const CANONICAL_PREFIXES: ReadonlySet<string> = new Set(CANONICAL_PREFIX_BY_NAMESPACE.values());
 
 export interface XmlTag {
   readonly kind: "tag";
@@ -39,8 +63,22 @@ export interface XmlText {
 
 export type XmlToken = XmlTag | XmlText;
 
+/** Written prefix (empty for the default namespace) to the canonical prefix its namespace has. */
+type NamespaceScope = ReadonlyMap<string, string>;
+
 interface OpenElement {
   readonly qualified: string;
+  /** Scope inside the element: the one that names it and its attributes. */
+  readonly scope: NamespaceScope;
+  /** Scope outside the element, restored when it closes. */
+  readonly outer: NamespaceScope;
+}
+
+interface ScanState {
+  readonly stack: OpenElement[];
+  scope: NamespaceScope;
+  /** Root elements opened so far; a part holds exactly one. */
+  roots: number;
 }
 
 interface Markup {
@@ -73,19 +111,89 @@ function matchAt(pattern: RegExp, xml: string, index: number): RegExpExecArray |
   return pattern.exec(xml);
 }
 
+// ─── Namespaces ──────────────────────────────────────────────────────────────
+
+/** The prefix a namespace declaration binds, `""` for the default namespace; undefined otherwise. */
+function declaredPrefix(attribute: string): string | undefined {
+  if (attribute === NAMESPACE_DECLARATION) return "";
+  const own = `${NAMESPACE_DECLARATION}:`;
+  return attribute.startsWith(own) ? attribute.slice(own.length) : undefined;
+}
+
+/**
+ * A known namespace binds its prefix to the canonical one. A foreign namespace that reuses a
+ * canonical prefix gets a prefix no reader matches, so it cannot impersonate the real vocabulary.
+ */
+function bindPrefix(scope: Map<string, string>, prefix: string, namespace: string): void {
+  const canonical = CANONICAL_PREFIX_BY_NAMESPACE.get(namespace);
+  if (canonical !== undefined) scope.set(prefix, canonical);
+  else if (CANONICAL_PREFIXES.has(prefix)) scope.set(prefix, `~${prefix}`);
+  else scope.delete(prefix);
+}
+
+/** The scope inside an element: the outer one plus the declarations the element itself makes. */
+function declareNamespaces(
+  outer: NamespaceScope,
+  attributes: ReadonlyMap<string, string>,
+): NamespaceScope {
+  let scope: Map<string, string> | undefined;
+  for (const [name, namespace] of attributes) {
+    const prefix = declaredPrefix(name);
+    if (prefix === undefined) continue;
+    scope ??= new Map(outer);
+    bindPrefix(scope, prefix, namespace);
+  }
+  return scope ?? outer;
+}
+
+function canonicalPrefix(scope: NamespaceScope, prefix: string): string {
+  return scope.get(prefix) ?? prefix;
+}
+
+function canonicalAttribute(scope: NamespaceScope, name: string): string {
+  const colon = name.indexOf(":");
+  if (colon === -1) return name;
+  const prefix = name.slice(0, colon);
+  const canonical = scope.get(prefix);
+  if (canonical === undefined || canonical === prefix) return name;
+  return `${canonical}${name.slice(colon)}`;
+}
+
+/** The attributes keyed by canonical qualified name; the same map when no name changes. */
+function canonicalAttributes(
+  scope: NamespaceScope,
+  attributes: ReadonlyMap<string, string>,
+): ReadonlyMap<string, string> {
+  for (const name of attributes.keys()) {
+    if (canonicalAttribute(scope, name) === name) continue;
+    return new Map(
+      Array.from(attributes, ([key, value]) => [canonicalAttribute(scope, key), value] as const),
+    );
+  }
+  return attributes;
+}
+
 function trackNesting(
-  stack: OpenElement[],
+  state: ScanState,
   tag: XmlTag,
-  qualified: string,
+  element: { readonly qualified: string; readonly scope: NamespaceScope },
   maxDepth: number,
 ): void {
+  const { stack } = state;
+  if (!tag.closing && stack.length === 0) {
+    state.roots += 1;
+    if (state.roots > 1) throw malformed();
+  }
   if (tag.selfClosing) return;
   if (!tag.closing) {
     if (stack.length >= maxDepth) throw new Error("ooxml xml exceeds nesting limit");
-    stack.push({ qualified });
+    stack.push({ ...element, outer: state.scope });
+    state.scope = element.scope;
     return;
   }
-  if (stack.pop()?.qualified !== qualified) throw malformed();
+  const closed = stack.pop();
+  if (closed?.qualified !== element.qualified) throw malformed();
+  state.scope = closed.outer;
 }
 
 interface AttributeRead {
@@ -127,21 +235,25 @@ function readTagTail(xml: string, afterName: number, closing: boolean): TagTail 
   return { attributes: new Map(), selfClosing: false, next: afterName + end[0].length };
 }
 
-function readElement(xml: string, open: number, stack: OpenElement[], maxDepth: number): Markup {
+function readElement(xml: string, open: number, state: ScanState, maxDepth: number): Markup {
   const closing = xml[open + 1] === "/";
   const nameStart = open + (closing ? 2 : 1);
   const name = matchAt(NAME_PATTERN, xml, nameStart)?.[0];
   if (name === undefined) throw malformed();
   const tail = readTagTail(xml, nameStart + name.length, closing);
+  // A closing tag is named by the scope of the element it closes, a start tag by its own.
+  const scope = closing
+    ? (state.stack.at(-1)?.scope ?? state.scope)
+    : declareNamespaces(state.scope, tail.attributes);
   const tag: XmlTag = {
     kind: "tag",
     local: localNameOf(name),
-    prefix: prefixOf(name),
+    prefix: canonicalPrefix(scope, prefixOf(name)),
     closing,
     selfClosing: tail.selfClosing,
-    attributes: tail.attributes,
+    attributes: canonicalAttributes(scope, tail.attributes),
   };
-  trackNesting(stack, tag, name, maxDepth);
+  trackNesting(state, tag, { qualified: name, scope }, maxDepth);
   return { token: tag, next: tail.next };
 }
 
@@ -151,7 +263,7 @@ function closerOf(xml: string, open: number, opener: string, closer: string): nu
   return close;
 }
 
-function readMarkup(xml: string, open: number, stack: OpenElement[], maxDepth: number): Markup {
+function readMarkup(xml: string, open: number, state: ScanState, maxDepth: number): Markup {
   if (xml.startsWith(COMMENT_OPEN, open)) {
     const close = closerOf(xml, open, COMMENT_OPEN, COMMENT_CLOSE);
     return { token: undefined, next: close + COMMENT_CLOSE.length };
@@ -163,7 +275,7 @@ function readMarkup(xml: string, open: number, stack: OpenElement[], maxDepth: n
   }
   if (xml.startsWith("<!", open)) throw new Error("ooxml xml declares a DOCTYPE or ENTITY");
   if (xml.startsWith("<?", open)) throw new Error("ooxml xml carries a processing instruction");
-  return readElement(xml, open, stack, maxDepth);
+  return readElement(xml, open, state, maxDepth);
 }
 
 function declarationEnd(xml: string): number {
@@ -175,27 +287,39 @@ function declarationEnd(xml: string): number {
 /**
  * Yields element tags and character data in document order. Throws when the document declares a
  * DOCTYPE or ENTITY, carries a processing instruction other than the leading XML declaration,
- * contains markup that does not parse, nests deeper than `maxDepth`, or is not balanced (the
- * generator only reports a balanced document when it runs to completion).
+ * contains markup that does not parse, nests deeper than `maxDepth`, is not balanced, or is not
+ * exactly one root element with only whitespace around it (the generator only reports a complete
+ * document when it runs to completion).
  */
 export function* scanXmlTokens(
   xml: string,
   maxDepth: number,
 ): Generator<XmlToken, void, undefined> {
-  const stack: OpenElement[] = [];
+  const state: ScanState = { stack: [], scope: new Map(), roots: 0 };
   let cursor = declarationEnd(xml);
   while (cursor < xml.length) {
     const open = xml.indexOf("<", cursor);
     const textEnd = open === -1 ? xml.length : open;
     if (textEnd > cursor) {
-      yield { kind: "text", value: decodeXmlEntities(xml.slice(cursor, textEnd)) };
+      const text = decodeXmlEntities(xml.slice(cursor, textEnd));
+      requireInsideRoot(state, text);
+      yield { kind: "text", value: text };
     }
     if (open === -1) break;
-    const markup = readMarkup(xml, open, stack, maxDepth);
+    const markup = readMarkup(xml, open, state, maxDepth);
+    if (markup.token?.kind === "text") requireInsideRoot(state, markup.token.value);
     if (markup.token !== undefined) yield markup.token;
     cursor = markup.next;
   }
-  if (stack.length > 0) throw new Error("ooxml xml has unterminated elements");
+  if (state.stack.length > 0) throw new Error("ooxml xml has unterminated elements");
+  if (state.roots !== 1) throw new Error("ooxml xml has no root element");
+}
+
+/** Character data outside the root element is not part of the document. */
+function requireInsideRoot(state: ScanState, text: string): void {
+  if (state.stack.length === 0 && text.trim().length > 0) {
+    throw new Error("ooxml xml has text outside its root element");
+  }
 }
 
 /** Yields only the element tags of `scanXmlTokens`. */
@@ -207,4 +331,13 @@ export function* scanXmlTags(xml: string, maxDepth: number): Generator<XmlTag, v
 
 export function attributeOf(tag: XmlTag, name: string): string | undefined {
   return tag.attributes.get(name);
+}
+
+// No-break and narrow no-break spaces keep a number and its unit together on screen; in indexed
+// text they would stop "10 EUR" from matching a query typed with an ordinary space.
+const NO_BREAK_SPACES = new RegExp(`[${String.fromCodePoint(0xa0, 0x2007, 0x202f)}]`, "gu");
+
+/** The text with every no-break space replaced by an ordinary one. */
+export function plainSpaces(text: string): string {
+  return text.replaceAll(NO_BREAK_SPACES, " ");
 }

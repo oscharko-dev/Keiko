@@ -34,6 +34,7 @@ import {
 } from "./ooxml-zip.js";
 import { readChartLines, readDiagramLines, type EmbeddedRead } from "./pptx-embedded.js";
 import { attributeOf, scanXmlTags } from "./pptx-xml.js";
+import { cleanHeaderLabel, neutraliseValue } from "./tabular.js";
 import { walkPresentationPart, type PartItem, type SlidePosition } from "./pptx-walk.js";
 import type {
   AsyncParserAdapter,
@@ -73,6 +74,7 @@ const MAX_PPTX_ZIP_ENTRIES = 16_384;
 const MAX_TITLE_CHARACTERS = 120;
 const TITLE_PLACEHOLDERS: ReadonlySet<string> = new Set(["title", "ctrTitle"]);
 const CHROME_PLACEHOLDERS: ReadonlySet<string> = new Set(["sldNum", "dt", "ftr", "hdr", "sldImg"]);
+const NOTES_TEXT_PLACEHOLDERS: ReadonlySet<string> = new Set(["body", "obj"]);
 const PPTX_EXTENSIONS: ReadonlySet<string> = new Set(LOCAL_KNOWLEDGE_PPTX_FILE_EXTENSIONS);
 
 function isPptx(input: ParserSelectionInput): boolean {
@@ -189,7 +191,8 @@ interface SlideText {
 function normalizeHeaders(cells: readonly string[]): readonly string[] {
   const seen = new Map<string, number>();
   return cells.map((cell, index) => {
-    const base = cell.trim().length > 0 ? cell.trim() : `Column ${String(index + 1)}`;
+    const label = cleanHeaderLabel(cell);
+    const base = label.length > 0 ? label : columnLabel(index);
     const count = seen.get(base) ?? 0;
     seen.set(base, count + 1);
     return count === 0 ? base : `${base} ${String(count + 1)}`;
@@ -208,7 +211,7 @@ function projectTable(item: Extract<PartItem, { kind: "table" }>): readonly stri
     .filter((cells) => cells.some((cell) => cell.length > 0))
     .map((cells, rowIndex) => {
       const projected = cells
-        .map((cell, index) => `${headers[index] ?? columnLabel(index)}=${cell}`)
+        .map((cell, index) => `${headers[index] ?? columnLabel(index)}=${neutraliseValue(cell)}`)
         .join(" | ");
       return `Table row ${String(rowIndex + 1)}: ${projected}`;
     });
@@ -257,10 +260,16 @@ function isChrome(placeholder: string | undefined): boolean {
   return placeholder !== undefined && CHROME_PLACEHOLDERS.has(placeholder);
 }
 
-/** The first note paragraph carries the label; every paragraph stays its own line. */
+/**
+ * The first note paragraph carries the label; every paragraph stays its own line. A placeholder
+ * that names no type is an object placeholder by default (`obj`), which on a notes page holds the
+ * notes text just as `body` does.
+ */
 function noteLines(items: readonly PartItem[]): readonly string[] {
   const paragraphs = items.flatMap((item) =>
-    item.kind === "shape" && item.placeholder === "body" ? item.paragraphs : [],
+    item.kind === "shape" && NOTES_TEXT_PLACEHOLDERS.has(item.placeholder ?? "")
+      ? item.paragraphs
+      : [],
   );
   const [first, ...rest] = paragraphs;
   return first === undefined ? [] : [`Speaker notes: ${first}`, ...rest];
@@ -338,6 +347,15 @@ function missingSlidesDiagnostic(input: ParserSelectionInput, missing: number): 
   );
 }
 
+function skippedPartsDiagnostic(input: ParserSelectionInput, skipped: number): ParserDiagnostic {
+  return diagnostic(
+    "PART_SKIPPED",
+    `pptx ${String(skipped)} chart or diagram part(s) could not be read and were skipped`,
+    input.documentId,
+    "warning",
+  );
+}
+
 function hiddenSlidesDiagnostic(input: ParserSelectionInput, hidden: number): ParserDiagnostic {
   return diagnostic(
     "HIDDEN_SLIDE_INDEXED",
@@ -379,6 +397,8 @@ interface SlideRead {
   readonly text: SlideText | undefined;
   readonly limitReached: boolean;
   readonly hidden: boolean;
+  /** Chart and diagram references whose data part could not be read. */
+  readonly skipped: number;
 }
 
 /** Part a chart or diagram reference resolves to, when the relationship has the right type. */
@@ -409,6 +429,7 @@ function readEmbedded(
 interface ResolvedItems {
   readonly items: readonly PartItem[];
   readonly limitReached: boolean;
+  readonly skipped: number;
 }
 
 /** Replaces each chart or diagram reference by the shape of text read from its part. */
@@ -420,13 +441,19 @@ function resolveEmbedded(
 ): ResolvedItems {
   const resolved: PartItem[] = [];
   let limitReached = false;
+  let skipped = 0;
   for (const item of items) {
     if (item.kind !== "embedded") {
       resolved.push(item);
       continue;
     }
     const read = readEmbedded(context, item, embeddedPartOf(item, relationships), budget);
-    if (read === undefined) continue;
+    if (read === undefined) {
+      // A reference that leads nowhere (outside the package, absent, of another type) is a chart
+      // whose text is lost; the deck says so instead of reading as if the slide had no chart.
+      skipped += 1;
+      continue;
+    }
     limitReached ||= read.limitReached;
     if (read.lines.length > 0) {
       resolved.push({
@@ -437,7 +464,7 @@ function resolveEmbedded(
       });
     }
   }
-  return { items: resolved, limitReached };
+  return { items: resolved, limitReached, skipped };
 }
 
 function readSlide(
@@ -460,6 +487,7 @@ function readSlide(
     text: slideTextOf(number, inReadingOrder(embedded.items), notes.items),
     limitReached: slide.limit || notes.limit || embedded.limitReached,
     hidden: slide.hidden,
+    skipped: embedded.skipped,
   };
 }
 
@@ -474,6 +502,7 @@ interface DeckTally {
   readonly diagnostics: ParserDiagnostic[];
   missing: number;
   hidden: number;
+  skipped: number;
 }
 
 /** Reads the listed slide parts in order; returns false once the read must stop. */
@@ -494,6 +523,7 @@ function readListedSlide(
     return true;
   }
   const read = readSlide(context, slidePart, index + 1, budget);
+  tally.skipped += read.skipped;
   if (read.text !== undefined) {
     tally.slides.push(read.text);
     if (read.hidden) tally.hidden += 1;
@@ -507,7 +537,7 @@ function readListedSlide(
 function readDeck(context: DeckContext): DeckRead {
   const { options, input } = context;
   const order = readSlideOrder(context.parts, options.maxNestingDepth);
-  const tally: DeckTally = { slides: [], diagnostics: [], missing: 0, hidden: 0 };
+  const tally: DeckTally = { slides: [], diagnostics: [], missing: 0, hidden: 0, skipped: 0 };
   const budget: ObjectBudget = { remaining: options.maxObjectsPerDocument };
   for (const [index, slidePart] of order.entries()) {
     if (!readListedSlide(context, tally, slidePart, index, budget)) break;
@@ -516,6 +546,7 @@ function readDeck(context: DeckContext): DeckRead {
     throw new Error("pptx slide parts missing");
   }
   if (tally.missing > 0) tally.diagnostics.push(missingSlidesDiagnostic(input, tally.missing));
+  if (tally.skipped > 0) tally.diagnostics.push(skippedPartsDiagnostic(input, tally.skipped));
   if (tally.hidden > 0) tally.diagnostics.push(hiddenSlidesDiagnostic(input, tally.hidden));
   return { slides: tally.slides, diagnostics: tally.diagnostics };
 }
