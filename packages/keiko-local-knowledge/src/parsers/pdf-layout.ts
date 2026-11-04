@@ -56,9 +56,19 @@ export interface PageHeading {
 
 export interface ComposedPages {
   readonly texts: readonly string[];
+  /** How each page starts and ends, to carry paragraphs over its breaks (`joinAcrossPages`). */
+  readonly edges: readonly (PageEdge | undefined)[];
   readonly headings: readonly (readonly PageHeading[])[];
   readonly removedRows: number;
   readonly furniture: ReadonlySet<string>;
+}
+
+export interface ComposedDocument extends ComposedPages {
+  /**
+   * What joins a page to the page before it when its first paragraph goes on from there; absent
+   * where the page break also ends the paragraph.
+   */
+  readonly separators: readonly (string | undefined)[];
 }
 
 export interface PdfSection {
@@ -1180,18 +1190,45 @@ function isParagraphGap(last: TextLine, line: TextLine, context: ParagraphContex
   return last.y - line.y > limit;
 }
 
+/** Whether the line reads as the wrap of the line before it, wherever the two are drawn. */
+function readsAsWrap(
+  head: TextLine,
+  last: TextLine,
+  line: TextLine,
+  context: ParagraphContext,
+): boolean {
+  if (last.rightToLeft || line.rightToLeft || !sizesMatch(last, line)) return false;
+  if (!wasForcedByWidth(last, line, context)) return false;
+  if (endsInAbbreviation(last.text)) return true;
+  if (startsListItem(head, last, line)) return false;
+  return hangsUnderListItem(head, line) || !opensNewLineOfSense(last, line);
+}
+
 function continuesParagraph(
   head: TextLine,
   last: TextLine,
   line: TextLine,
   context: ParagraphContext,
 ): boolean {
-  if (last.rightToLeft || line.rightToLeft) return false;
-  if (isParagraphGap(last, line, context) || !sizesMatch(last, line)) return false;
-  if (!wasForcedByWidth(last, line, context)) return false;
-  if (endsInAbbreviation(last.text)) return true;
-  if (startsListItem(head, last, line)) return false;
-  return hangsUnderListItem(head, line) || !opensNewLineOfSense(last, line);
+  return !isParagraphGap(last, line, context) && readsAsWrap(head, last, line, context);
+}
+
+/** Where a line must sit to belong to the paragraph the page before closed with. */
+function sitsInParagraph(closing: ClosingParagraph, opening: TextLine): boolean {
+  const { head, last } = closing;
+  if (!isListItem(head)) return opening.x <= last.x + INDENT_TOLERANCE;
+  if (hangsUnderListItem(head, opening)) return true;
+  // Whether the item's wrapped lines hang shows in its own lines. A single line does not show it,
+  // so only a sentence that visibly goes on belongs to it.
+  return last === head ? LOWER_START.test(opening.text) : last.x <= head.x + INDENT_TOLERANCE;
+}
+
+/** A page break says nothing about a paragraph: there is no gap to read, only the lines' places. */
+function goesOnBehindPageBreak(closing: ClosingParagraph, opening: TextLine): boolean {
+  return (
+    sitsInParagraph(closing, opening) &&
+    readsAsWrap(closing.head, closing.last, opening, closing.context)
+  );
 }
 
 const FULL_LINE_RATIO = 0.8;
@@ -1235,6 +1272,13 @@ class ParagraphWriter {
   finish(): readonly OutLine[] {
     this.closeOpen();
     return this.out;
+  }
+
+  /** The paragraph the last line added belongs to. */
+  paragraphInProgress(): { readonly head: TextLine; readonly last: TextLine } | undefined {
+    return this.head === undefined || this.last === undefined
+      ? undefined
+      : { head: this.head, last: this.last };
   }
 
   private continues(line: TextLine): boolean {
@@ -1388,9 +1432,11 @@ function layOutPageText(lines: readonly OutLine[], body: BodyStyle): ComposedPag
       pendingBlank = true;
       return;
     }
-    if (text.length > 0) text += pendingBlank ? "\n\n" : "\n";
-    pendingBlank = false;
-    if (isHeadingLine(lines, index, body)) candidates.push({ offset: text.length, line });
+    // A heading is a block of its own, however tightly the page sets it against its neighbours.
+    const heading = isHeadingLine(lines, index, body);
+    if (text.length > 0) text += pendingBlank || heading ? "\n\n" : "\n";
+    pendingBlank = heading;
+    if (heading) candidates.push({ offset: text.length, line });
     text += line.text;
   });
   return { text, candidates };
@@ -1450,12 +1496,104 @@ function documentBodyRight(plans: readonly PagePlan[]): number {
   return ordered[Math.floor(ordered.length / 2)] ?? 0;
 }
 
+function factsForFlows(plan: PagePlan, facts: DocumentFacts): DocumentFacts {
+  return plan.flows.length === 1 ? facts : { ...facts, bodyRight: 0 };
+}
+
 function composePageLines(plan: PagePlan, facts: DocumentFacts): readonly OutLine[] {
-  const flowFacts = plan.flows.length === 1 ? facts : { ...facts, bodyRight: 0 };
+  const flowFacts = factsForFlows(plan, facts);
   return [
     ...plan.flows.flatMap((blocks) => flowLines(blocks, flowFacts)),
     ...plan.page.offAxis.map((text) => ({ text })),
   ];
+}
+
+// ─── Paragraphs across pages ─────────────────────────────────────────────────
+
+interface ClosingParagraph {
+  readonly head: TextLine;
+  readonly last: TextLine;
+  readonly context: ParagraphContext;
+  readonly vocabulary: Vocabulary;
+}
+
+/** How a page's text ends and how it starts, as far as a paragraph could run over either. */
+export interface PageEdge {
+  readonly closing?: ClosingParagraph | undefined;
+  readonly opening?: TextLine | undefined;
+}
+
+function textLinesOf(rows: readonly LayoutRow[]): readonly TextLine[] {
+  return rows.map(textLineOf).filter((line) => line !== undefined);
+}
+
+function endsInHeading(page: ComposedPageLines): boolean {
+  const last = page.candidates.at(-1);
+  return last !== undefined && last.offset + last.line.text.length === page.text.length;
+}
+
+/** The running text a page ends with: a table, a heading or a margin note end the paragraph. */
+function closingParagraph(
+  plan: PagePlan,
+  page: ComposedPageLines,
+  facts: DocumentFacts,
+): ClosingParagraph | undefined {
+  const block = plan.flows.at(-1)?.at(-1);
+  if (block?.kind !== "prose" || plan.page.offAxis.length > 0 || endsInHeading(page)) {
+    return undefined;
+  }
+  const lines = textLinesOf(block.rows);
+  const context = paragraphContext(lines, factsForFlows(plan, facts).bodyRight);
+  const writer = new ParagraphWriter(context, facts.vocabulary);
+  for (const line of lines) writer.add(line);
+  const open = writer.paragraphInProgress();
+  return open === undefined ? undefined : { ...open, context, vocabulary: facts.vocabulary };
+}
+
+function openingLine(plan: PagePlan, page: ComposedPageLines): TextLine | undefined {
+  const block = plan.flows[0]?.[0];
+  if (block?.kind !== "prose" || page.candidates[0]?.offset === 0) return undefined;
+  const row = block.rows[0];
+  return row === undefined ? undefined : textLineOf(row);
+}
+
+function pageEdgeOf(plan: PagePlan, page: ComposedPageLines, facts: DocumentFacts): PageEdge {
+  if (plan.page.plain.length > 0) return {};
+  return {
+    closing: closingParagraph(plan, page, facts),
+    opening: openingLine(plan, page),
+  };
+}
+
+export interface JoinedPages {
+  readonly texts: readonly string[];
+  readonly separators: readonly (string | undefined)[];
+  readonly lastEdge: PageEdge | undefined;
+}
+
+/**
+ * Carries paragraphs over the page breaks of one run. A page without an edge stands for a page that
+ * has no layout and stops a paragraph. The page before a run was handed on already, so a wrap hyphen
+ * at the end of it stays; the sentence stays whole all the same.
+ */
+export function joinAcrossPages(
+  texts: readonly string[],
+  edges: readonly (PageEdge | undefined)[],
+  before: PageEdge | undefined,
+): JoinedPages {
+  const joined = [...texts];
+  const separators = edges.map((edge, index) => {
+    const closing = (index === 0 ? before : edges[index - 1])?.closing;
+    const opening = edge?.opening;
+    if (closing === undefined || opening === undefined) return undefined;
+    if (!goesOnBehindPageBreak(closing, opening)) return undefined;
+    const previous = index === 0 ? undefined : joined[index - 1];
+    const tail = previous ?? closing.last.text;
+    const join = wrapJoinOf(tail.slice(-JOIN_TAIL_CHARS), opening.text, closing.vocabulary);
+    if (join.dropHyphen && previous !== undefined) joined[index - 1] = previous.slice(0, -1);
+    return join.separator;
+  });
+  return { texts: joined, separators, lastEdge: edges.at(-1) };
 }
 
 interface RawHeading {
@@ -1466,6 +1604,7 @@ interface RawHeading {
 
 interface WindowComposition {
   readonly texts: readonly string[];
+  readonly edges: readonly (PageEdge | undefined)[];
   readonly headings: readonly (readonly RawHeading[])[];
   readonly removedRows: number;
   readonly furniture: ReadonlySet<string>;
@@ -1495,6 +1634,10 @@ function composeWindow(
   );
   return {
     texts: laidOut.map((page) => page.text),
+    edges: plans.map((plan, index) => {
+      const page = laidOut[index];
+      return page === undefined ? undefined : pageEdgeOf(plan, page, facts);
+    }),
     headings: laidOut.map((page) =>
       page.candidates.map(({ offset, line }) => ({
         offset,
@@ -1539,14 +1682,21 @@ export function composePages(
 function spreadOverRun(run: readonly PageLayout[], composed: WindowComposition): WindowComposition {
   let next = 0;
   const placed = run.map((page) => {
-    if (!hasPageContent(page)) return { text: "", headings: [] as readonly RawHeading[] };
+    if (!hasPageContent(page)) {
+      return { text: "", edge: undefined, headings: [] as readonly RawHeading[] };
+    }
     const index = next;
     next += 1;
-    return { text: composed.texts[index] ?? "", headings: composed.headings[index] ?? [] };
+    return {
+      text: composed.texts[index] ?? "",
+      edge: composed.edges[index],
+      headings: composed.headings[index] ?? [],
+    };
   });
   return {
     ...composed,
     texts: placed.map(({ text }) => text),
+    edges: placed.map(({ edge }) => edge),
     headings: placed.map(({ headings }) => headings),
   };
 }
@@ -1556,18 +1706,27 @@ function spreadOverRun(run: readonly PageLayout[], composed: WindowComposition):
  * `windowPages` pages, each run learning from its own pages and from what earlier runs proved. A
  * page without text takes no part in what a run learns. Both routes read one file as one text.
  */
-export function composeInWindows(pages: readonly PageLayout[], windowPages: number): ComposedPages {
+export function composeInWindows(
+  pages: readonly PageLayout[],
+  windowPages: number,
+): ComposedDocument {
   const step = Math.max(1, windowPages);
-  const runs: WindowComposition[] = [];
+  const runs: (WindowComposition & JoinedPages)[] = [];
   let furniture: ReadonlySet<string> = new Set();
+  let lastEdge: PageEdge | undefined;
   for (let first = 0; first < pages.length; first += step) {
     const run = pages.slice(first, first + step);
     const withText = composeWindow(run.filter(hasPageContent), furniture);
     furniture = withText.furniture;
-    runs.push(spreadOverRun(run, withText));
+    const placed = spreadOverRun(run, withText);
+    const joined = joinAcrossPages(placed.texts, placed.edges, lastEdge);
+    lastEdge = joined.lastEdge;
+    runs.push({ ...placed, ...joined });
   }
   return {
     texts: runs.flatMap((run) => run.texts),
+    separators: runs.flatMap((run) => run.separators),
+    edges: runs.flatMap((run) => run.edges),
     headings: withLevels(runs.flatMap((run) => run.headings)),
     removedRows: runs.reduce((sum, run) => sum + run.removedRows, 0),
     furniture,

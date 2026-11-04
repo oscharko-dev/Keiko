@@ -28,7 +28,13 @@ import {
   type PageLayoutReadResult,
   type PdfDocumentLike,
 } from "../pdf-parser.js";
-import { composePages, hasPageContent, type PageLayout } from "../pdf-layout.js";
+import {
+  composePages,
+  hasPageContent,
+  joinAcrossPages,
+  type PageEdge,
+  type PageLayout,
+} from "../pdf-layout.js";
 import type { OcrPageResult } from "../ocr/types.js";
 import type { ParserOptions, ParserSelectionInput } from "../types.js";
 
@@ -198,6 +204,8 @@ interface PdfDriveState {
   windowIndex: number;
   // What earlier windows of this run proved to be repeated page furniture.
   furniture: ReadonlySet<string>;
+  // How the last page of the window before ended, for a paragraph that goes on behind it.
+  lastEdge: PageEdge | undefined;
 }
 
 async function pageLabelsFor(doc: PdfDocumentLike): Promise<readonly (string | null)[]> {
@@ -241,11 +249,26 @@ function addComposedPages(
   const furnitureDiagnostic = pageFurnitureDiagnostic(args.ctx.documentId, composed.removedRows);
   if (furnitureDiagnostic !== undefined) args.diagnostics.push(furnitureDiagnostic);
   let composedIndex = 0;
-  outcomes.forEach((outcome, index) => {
+  const placed = outcomes.map((outcome) => {
+    if (outcome.layout === undefined) return { text: outcome.text ?? "", edge: undefined };
+    const index = composedIndex;
+    composedIndex += 1;
+    return { text: composed.texts[index] ?? "", edge: composed.edges[index] };
+  });
+  const joined = joinAcrossPages(
+    placed.map(({ text }) => text),
+    placed.map(({ edge }) => edge),
+    args.state.lastEdge,
+  );
+  args.state.lastEdge = joined.lastEdge;
+  outcomes.forEach((_outcome, index) => {
     const pageNumber = args.firstPage + index;
-    const text = outcome.layout === undefined ? outcome.text : composed.texts[composedIndex];
-    if (outcome.layout !== undefined) composedIndex += 1;
-    builder.addPage(pageNumber, text ?? "", pageLabelFor(args.pageLabels, pageNumber));
+    builder.addPage(
+      pageNumber,
+      joined.texts[index] ?? "",
+      pageLabelFor(args.pageLabels, pageNumber),
+      joined.separators[index],
+    );
   });
 }
 
@@ -289,10 +312,11 @@ async function extractPdfWindow(
   return window;
 }
 
-// A checkpoint carries no page furniture, so a resumed run would otherwise start knowing nothing
-// and keep the headers of a short last window that a continuous run removes. The run before the
-// resume point is read again, text layer only and without emitting anything, to learn it back.
-async function furnitureBeforeResume(
+// A checkpoint carries no page furniture and no page edge, so a resumed run would otherwise start
+// knowing nothing: it would keep the headers of a short last window that a continuous run removes,
+// and end a paragraph at the resume point. The run before it is read again, text layer only and
+// without emitting anything, to learn both back.
+async function learnedBeforeResume(
   doc: PdfDocumentLike,
   args: {
     readonly ctx: PdfExtractContext;
@@ -301,7 +325,7 @@ async function furnitureBeforeResume(
     readonly resumeFromPage: number;
     readonly windowPages: number;
   },
-): Promise<ReadonlySet<string>> {
+): Promise<{ readonly furniture: ReadonlySet<string>; readonly lastEdge: PageEdge | undefined }> {
   const first = Math.max(1, args.resumeFromPage - args.windowPages + 1);
   const pageNumbers = Array.from(
     { length: args.resumeFromPage - first + 1 },
@@ -323,7 +347,12 @@ async function furnitureBeforeResume(
     }
   };
   const layouts = await Promise.all(pageNumbers.map((pageNumber) => read(pageNumber)));
-  return composePages(layouts.filter((layout) => layout !== undefined)).furniture;
+  const composed = composePages(layouts.filter((layout) => layout !== undefined));
+  return {
+    furniture: composed.furniture,
+    // The page right before the resume point has an edge only if it has text.
+    lastEdge: layouts.at(-1) === undefined ? undefined : composed.edges.at(-1),
+  };
 }
 
 async function* pdfExtractWindows(
@@ -348,15 +377,18 @@ async function* pdfExtractWindows(
     emittedUnits: 0,
     windowIndex: options.resumeWindowIndex ?? 0,
     furniture: new Set(),
+    lastEdge: undefined,
   };
   if (resumeFromPage > 0) {
-    state.furniture = await furnitureBeforeResume(doc, {
+    const learned = await learnedBeforeResume(doc, {
       ctx,
       parserOptions,
       startedAt,
       resumeFromPage,
       windowPages,
     });
+    state.furniture = learned.furniture;
+    state.lastEdge = learned.lastEdge;
   }
   for (let firstPage = resumeFromPage + 1; firstPage <= doc.numPages; firstPage += windowPages) {
     if (options.signal?.aborted === true) return;

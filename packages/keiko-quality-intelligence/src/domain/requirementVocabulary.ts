@@ -490,8 +490,9 @@ export function compileRequirementVocabulary(
       "iu",
     ),
     priorityLead: new RegExp(String.raw`^(?:${priorityKeys})\s*[:=]\s*(?:${values})(?=\s)`, "iu"),
+    // `Soll-Ablauf`, `Muss-Feld`, `must-have`: a compound names a thing, it obliges nobody.
     modal: new RegExp(
-      `${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}`,
+      `${LETTER_BEFORE}(?:${alternation(vocabulary.modalVerbs)})${LETTER_AFTER}(?!-\\p{L})`,
       "iu",
     ),
     subjectlessModal: new RegExp(String.raw`^(?:${personalModals(vocabulary)})(?=\s)`, "iu"),

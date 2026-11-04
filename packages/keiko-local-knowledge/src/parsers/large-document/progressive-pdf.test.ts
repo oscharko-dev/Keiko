@@ -283,7 +283,77 @@ function positionedPdf(pageCount: number, headerFrom: number): PdfDocumentLike {
   };
 }
 
+/** Every page's last line reaches the margin and its sentence goes on on the next page. */
+function runningTextPdf(pageCount: number): PdfDocumentLike {
+  const fullLine = `Die Bank prüft auf Seite `.padEnd(90, "x");
+  return {
+    numPages: pageCount,
+    getPage: (pageNumber: number) =>
+      Promise.resolve({
+        streamTextContent: () =>
+          new ReadableStream<PdfTextContentChunk>({
+            start(controller): void {
+              controller.enqueue({
+                items: [
+                  positionedItem(`daher weiter ${String(pageNumber)}.`, 700),
+                  positionedItem(fullLine, 680),
+                ],
+              });
+              controller.close();
+            },
+          }),
+      }),
+  };
+}
+
 describe("progressive and full-buffer extraction of one document", () => {
+  it("carry a paragraph over a page and a window the same way (#4235)", async () => {
+    const doc = runningTextPdf(20);
+    const input = {
+      documentId: DOC,
+      bytes: new Uint8Array(0),
+      extension: "pdf",
+      mediaType: "application/pdf",
+    };
+    const full = await extractPages(doc, input, buildParserOptions({ now: () => 0 }), 0);
+    const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+    const sink = collectingSink();
+    await runProgressiveExtraction(extractor, SOURCE, options(16), sink);
+    expect(full.normalizedText).toContain("xxx daher weiter 2.");
+    expect(full.normalizedText).toContain("xxx daher weiter 17.");
+    expect(full.normalizedText).not.toContain("\n\n");
+    expect(sink.text()).toBe(full.normalizedText);
+    expect(sink.windows.flatMap((w) => w.pages)).toEqual(full.pages);
+    for (const page of full.pages) {
+      expect(full.normalizedText?.slice(page.characterStart, page.characterEnd)).toContain(
+        `daher weiter ${String(page.pageNumber)}.`,
+      );
+    }
+  });
+
+  it("goes on with the paragraph after a resume (#4235)", async () => {
+    const doc = runningTextPdf(6);
+    const run = async (
+      overrides: Partial<ProgressiveExtractionOptions>,
+    ): Promise<ReturnType<typeof collectingSink>> => {
+      const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+      const sink = collectingSink();
+      await runProgressiveExtraction(extractor, SOURCE, options(2, overrides), sink);
+      return sink;
+    };
+    const continuous = await run({});
+    const cut =
+      continuous.windows.flatMap((w) => w.pages).find((page) => page.pageNumber === 4)
+        ?.characterEnd ?? 0;
+    const resumed = await run({
+      resumeFromPage: 4,
+      resumeCharacterStart: cut,
+      resumeAnyPageEmitted: true,
+    });
+    expect(resumed.text()).toBe(continuous.text().slice(cut));
+    expect(resumed.text().startsWith(" daher")).toBe(true);
+  });
+
   it("read the same text when the document is longer than one window (review #4235)", async () => {
     const doc = positionedPdf(20, 17);
     const input = {

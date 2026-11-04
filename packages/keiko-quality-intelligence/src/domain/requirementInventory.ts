@@ -180,6 +180,7 @@ interface RowFields {
 const SEPARATOR = /^\s*(?:[:–—]|-(?=\s)|[.)](?=\s|$))/u;
 const SLIDE_LABEL = /^(?:Slide|Folie|Seite|Page)\s+\d+\s*[:.\-–—]\s*/iu;
 const CRITERION_NUMBER = /^AC[\s-]?\d+\s*[:.)-]\s*/iu;
+const RESULT_LINE = /^\s*=\s/u;
 const MERGED_ITEMS = /(?<=[.!?])(?=\p{Lu})/u;
 /** A field label: one or two words, then a colon. Text is collapsed, so spaces come singly. */
 const FIELD_HEAD_SOURCE = String.raw`\p{Lu}[\p{L}\p{N}_/-]*(?: [\p{L}\p{N}_/-]+)? ?:(?: |$)`;
@@ -1235,8 +1236,9 @@ interface Paragraph {
   readonly end: number;
 }
 
+/** A list item, or the result line a calculation closes with. */
 function startsParagraph(raw: string): boolean {
-  return LIST_MARKER.test(raw);
+  return LIST_MARKER.test(raw) || RESULT_LINE.test(raw);
 }
 
 /** Wrapped lines of one paragraph, merged; list items, headings and blank lines break it. */
@@ -1286,6 +1288,7 @@ function conditionalObligation(vocabulary: CompiledVocabulary, statement: string
 /** A sentence that states an obligation of a named subject (ISO/IEC/IEEE 29148 form). */
 function obligationStatement(vocabulary: CompiledVocabulary, statement: string): boolean {
   if (statement.length < STATEMENT_MIN_CHARS || !vocabulary.modal.test(statement)) return false;
+  if (RESULT_LINE.test(statement)) return false;
   return (
     !vocabulary.subjectlessModal.test(statement) || conditionalObligation(vocabulary, statement)
   );

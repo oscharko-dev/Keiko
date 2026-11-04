@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  composeInWindows,
   composePages,
   pageLayoutOf,
   sectionsFromHeadings,
@@ -176,7 +177,7 @@ describe("paragraph reflow", () => {
       drawn(fullLine("Ein grosser Kopf"), LEFT, 700, 14),
       drawn("Fliesstext.", LEFT, 684),
     ]);
-    expect(text.split("\n")).toHaveLength(2);
+    expect(text.split("\n\n")).toHaveLength(2);
   });
 
   it.each([
@@ -705,6 +706,22 @@ describe("headings", () => {
   const body = (y: number, label: string): PositionedTextItem =>
     drawn(`${label} ist ein Satz im Fliesstext des Dokuments.`, LEFT, y);
 
+  it("stands apart from the text around it, however tight the page is set (#4235)", () => {
+    expect(
+      textOf([
+        body(760, "Vorher"),
+        drawn("1. Zweck und Geltungsbereich", LEFT, 744, 15, "bold"),
+        body(723, "Danach"),
+      ]),
+    ).toBe(
+      [
+        "Vorher ist ein Satz im Fliesstext des Dokuments.",
+        "1. Zweck und Geltungsbereich",
+        "Danach ist ein Satz im Fliesstext des Dokuments.",
+      ].join("\n\n"),
+    );
+  });
+
   it("reports larger lines as headings with levels by size", () => {
     const composed = composePages([
       pageLayoutOf([
@@ -794,6 +811,140 @@ describe("headings", () => {
 
   it("returns no sections without headings", () => {
     expect(sectionsFromHeadings([], 50)).toEqual([]);
+  });
+});
+
+describe("a paragraph across a page break (#4235)", () => {
+  const WINDOW = 16;
+  const SECOND = "Eingaben validieren und Fehler melden.";
+  const page = (...items: readonly PositionedTextItem[]): PageLayout => pageLayoutOf(items);
+  const bodyPage = (...lines: readonly string[]): PageLayout =>
+    page(...lines.map((line, index) => drawn(line, LEFT, 700 - index * 12)));
+  const composed = (...pages: readonly PageLayout[]): ReturnType<typeof composeInWindows> =>
+    composeInWindows(pages, WINDOW);
+
+  it("goes on behind the page break when the margin forced the last line", () => {
+    const last = fullLine("Das Portal muss");
+    const result = composed(bodyPage(last), bodyPage(SECOND));
+
+    expect(result.texts).toEqual([last, SECOND]);
+    expect(result.separators).toEqual([undefined, " "]);
+  });
+
+  it("goes on when the next page opens with a capital and the sentence is not over", () => {
+    const last = fullLine("Die Bank weist den Auftrag mit dem Code");
+    const result = composed(bodyPage(last), bodyPage("SEPA-014 oder einem anderen Code ab."));
+
+    expect(result.separators[1]).toBe(" ");
+  });
+
+  it("drops a wrap hyphen of a word the page break split", () => {
+    const last = fullLineEndingIn("Trennstri-");
+    const result = composed(bodyPage(last), bodyPage("chen bleiben nicht im Text."));
+
+    expect(result.texts[0]).toBe(last.slice(0, -1));
+    expect(result.separators[1]).toBe("");
+  });
+
+  it("keeps the hyphen where the page before was already handed on, and the sentence whole", () => {
+    const last = fullLineEndingIn("Trennstri-");
+    const result = composeInWindows([bodyPage(last), bodyPage("chen bleiben nicht im Text.")], 1);
+
+    expect(result.texts[0]).toBe(last);
+    expect(result.separators[1]).toBe("");
+  });
+
+  it.each([
+    ["the last line ends a sentence", fullLine("Das Portal prüft").padEnd(89, "x") + ".", SECOND],
+    ["the last line stops short of the margin", "Das Portal muss", "daher weiter gehen."],
+  ])("ends at the page break when %s", (_name, last, next) => {
+    const margin = fullLine("Eine Zeile bis zum Rand.");
+    const result = composed(bodyPage(margin, last), bodyPage(next));
+
+    expect(result.separators).toEqual([undefined, undefined]);
+  });
+
+  it("ends at the page break when the next page opens with a list", () => {
+    const result = composed(bodyPage(fullLine("Das Portal muss")), bodyPage("- Erstens prüfen"));
+
+    expect(result.separators[1]).toBeUndefined();
+  });
+
+  describe("below a list item", () => {
+    const item = fullLine("- Das Portal zeigt");
+    const hangingLine = (y: number): PositionedTextItem =>
+      drawn(fullLine("a b", LEFT + 12), LEFT + 12, y);
+
+    it("does not read a new paragraph into a one-line item", () => {
+      expect(composed(bodyPage(item), bodyPage("Weiterer Absatz.")).separators[1]).toBeUndefined();
+    });
+
+    it("goes on where the line hangs under the item or the sentence visibly goes on", () => {
+      const hanging = page(drawn("Meldung an.", LEFT + 12, 700));
+      expect(composed(bodyPage(item), hanging).separators[1]).toBe(" ");
+      expect(composed(bodyPage(item), bodyPage("die Meldung an.")).separators[1]).toBe(" ");
+    });
+
+    it("stops where the item's own lines hang and the line does not", () => {
+      const closing = page(drawn(item, LEFT, 700), hangingLine(688));
+
+      expect(composed(closing, bodyPage("Weiterer Absatz.")).separators[1]).toBeUndefined();
+    });
+
+    it("goes on in a numbered clause whose lines do not hang at all", () => {
+      const clause = page(
+        drawn(fullLine("D. Availability of the Service"), LEFT, 700),
+        drawn(fullLine("you are responsible"), LEFT, 688),
+      );
+
+      expect(composed(clause, bodyPage("for compliance with the law.")).separators[1]).toBe(" ");
+    });
+  });
+
+  it("ends at the page break when the next page opens with a heading", () => {
+    const result = composed(
+      bodyPage(fullLine("Das Portal muss")),
+      page(
+        drawn("Neues Kapitel", LEFT, 720, 15, "bold"),
+        drawn("Der Text des neuen Kapitels.", LEFT, 700),
+      ),
+    );
+
+    expect(result.separators[1]).toBeUndefined();
+  });
+
+  it("ends at the page break when the next page opens with a table", () => {
+    const table = page(
+      drawn("Regel", LEFT, 700),
+      drawn("Wert", 300, 700),
+      drawn("R1", LEFT, 688),
+      drawn("eins", 300, 688),
+    );
+
+    expect(composed(bodyPage(fullLine("Das Portal muss")), table).separators[1]).toBeUndefined();
+  });
+
+  it("ends at the page break when the page closes with text against the reading direction", () => {
+    const note: PositionedTextItem = {
+      str: "Randnotiz",
+      transform: [0, 10, -10, 0, 20, 400],
+      width: 45,
+      height: 10,
+      fontName: "body",
+    };
+    const closing = page(drawn(fullLine("Das Portal muss"), LEFT, 700), note);
+
+    expect(composed(closing, bodyPage(SECOND)).separators[1]).toBeUndefined();
+  });
+
+  it("does not carry a paragraph over a page without text", () => {
+    const last = fullLine("Das Portal muss");
+
+    expect(composed(bodyPage(last), page(), bodyPage(SECOND)).separators).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
   });
 });
 

@@ -695,7 +695,12 @@ function composeBufferedPages(
     COMPOSE_RUN_PAGES,
   );
   buffered.forEach((page, index) => {
-    builder.addPage(page.pageNumber, composed.texts[index] ?? "", page.pageLabel);
+    builder.addPage(
+      page.pageNumber,
+      composed.texts[index] ?? "",
+      page.pageLabel,
+      composed.separators[index],
+    );
   });
   const furnitureDiagnostic = pageFurnitureDiagnostic(documentId, composed.removedRows);
   if (furnitureDiagnostic !== undefined) diagnostics.push(furnitureDiagnostic);

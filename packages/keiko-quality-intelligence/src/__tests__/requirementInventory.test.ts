@@ -497,6 +497,25 @@ describe("deriveRequirementInventory — detection quality (#4179 review, defect
     });
   });
 
+  it.each([
+    ["German", "Dieses Fachkonzept beschreibt den fachlichen Soll-Ablauf der Eröffnung."],
+    ["a heading", "Detaillierter Soll-Ablauf der Onlinestrecke"],
+    ["a field name", "Die Muss-Felder stehen im Formular oben."],
+    ["English", "The must-have features are on the first page."],
+  ])("does not read a compound as an obligation: %s", (_name, sentence) => {
+    expect(detect([sentence]).entries).toEqual([]);
+  });
+
+  it("does not read the result line of a calculation as an obligation", () => {
+    expect(
+      detect([
+        "- bestehende Kreditraten",
+        "- neue Monatsrate des beantragten Kredits",
+        "= frei verfügbarer Betrag (muss >= 100,00 EUR sein, GR-KRED-004)",
+      ]).entries,
+    ).toEqual([]);
+  });
+
   it("reads a priority tag in a heading", () => {
     const [entry] = detect(["## FR-9 Export (MUSS)", "Der Export liefert CSV."]).entries;
 
