@@ -228,7 +228,8 @@ describe("ADF unknown nodes and limits", () => {
   });
 
   it("rejects a non-object child and a node without a string type", () => {
-    expect(() => parseAdfDocument(doc("text"))).toThrow(/NODE_NOT_OBJECT/u);
+    const nonObjectChild = { type: "doc", version: 1, content: ["text"] };
+    expect(() => parseAdfDocument(nonObjectChild)).toThrow(/NODE_NOT_OBJECT/u);
     expect(() => parseAdfDocument(doc({ content: [] }))).toThrow(/NODE_NOT_OBJECT/u);
   });
 });

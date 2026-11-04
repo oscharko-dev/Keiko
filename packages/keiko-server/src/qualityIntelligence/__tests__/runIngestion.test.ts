@@ -15,7 +15,10 @@ import {
   QiIngestionError,
 } from "../runIngestion.js";
 import type { IngestInlineSourcesInput, QiIngestionResult } from "../runIngestion.js";
-import type { QualityIntelligenceStartRunRequest } from "@oscharko-dev/keiko-contracts";
+import type {
+  QualityIntelligenceAdfNode,
+  QualityIntelligenceStartRunRequest,
+} from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
 
@@ -780,7 +783,10 @@ describe("ingestInlineSources — happy path", () => {
   });
 
   it("ingests ADF with a mention, hard break and unknown node, and names the degradation", () => {
-    const para = (...content: object[]): object => ({ type: "paragraph", content });
+    const para = (...content: QualityIntelligenceAdfNode[]): QualityIntelligenceAdfNode => ({
+      type: "paragraph",
+      content,
+    });
     const result = ingestInlineSources(
       input([
         {
