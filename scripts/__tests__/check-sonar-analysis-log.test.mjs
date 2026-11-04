@@ -206,10 +206,27 @@ describe("Sonar scanner warning gate", () => {
     expect(fullAnalysisEvidenceFailures(scanner81PrUnchangedSourcesLog)).toEqual([]);
   });
 
-  // PR #4203 changed no JS/TS source, so Sonar printed no SonarJasmin plan and only the
-  // sensor-scoped receipts could prove the graph. The architecture plugin now writes
-  // `Reading SonarArchitecture UDG data from "<dir>"` without the word "directory"; a verifier that
-  // only recognised the older wording rejected a complete 288 + 2936 receipt set.
+  // Scanner 8.1.0.6389 dropped the word "directory" from the UDG read receipt and now prints
+  // `* Reading SonarArchitecture UDG data from "<dir>/architecture/js"` (PR #4168, run
+  // 41156628383). A verifier keyed to the older wording rejected every taint-skipped PR.
+  it("accepts the sensor-scoped receipts when the UDG read line omits the word directory", () => {
+    const current = scanner81PrUnchangedSourcesLog.replaceAll(
+      "Reading SonarArchitecture UDG data from directory ",
+      "Reading SonarArchitecture UDG data from ",
+    );
+    expect(current).not.toContain("UDG data from directory");
+    expect(fullAnalysisEvidenceFailures(current)).toEqual([]);
+    const wrongLanguage = current.replace(
+      'UDG data from "<redacted>/architecture/js"',
+      'UDG data from "<redacted>/architecture/ts"',
+    );
+    expect(wrongLanguage).not.toBe(current);
+    expect(fullAnalysisEvidenceFailures(wrongLanguage)).not.toEqual([]);
+  });
+
+  // A real scanner log from PR #4203, which changed no JS/TS source: Sonar printed no SonarJasmin
+  // plan, so only the sensor-scoped receipts could prove the graph, and its UDG read omits the word
+  // "directory". It checks the synthetic case above against a complete 288 + 2936 receipt set.
   it("accepts sensor-scoped receipts whose UDG read omits the word directory", () => {
     expect(fullAnalysisEvidenceFailures(scanner81PrUdgReadWithoutDirectoryLog)).toEqual([]);
   });

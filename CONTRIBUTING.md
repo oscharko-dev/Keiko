@@ -794,6 +794,24 @@ must update both `packages/keiko-ui/src/lib/i18n-messages.en.ts` and
 
 Published release notes live in GitHub Releases. This repository intentionally does not maintain a root `CHANGELOG.md`.
 
+### Code-quality ratchet
+
+The required `ci` context runs `npm run check:code-quality-policy -- --mode ratchet`. It scans the
+whole repository with the anti-slop oxlint rules and compares per-file, per-rule finding counts with
+the committed register `scripts/code-quality-register.json` (ADR-0167 D6). A new finding, or a new
+file with findings, fails with its file, rule and line. A count that went down also fails until you
+run `npm run check:code-quality-policy -- --prune-register` and commit the smaller register; entries
+for deleted or renamed files fail as stale. The register may only shrink: the prune command refuses
+to widen it, and inline `oxlint-disable` directives are rejected. Run the ratchet locally before you
+push (about 30 seconds). Details: [`docs/qa/code-quality-policy.md`](docs/qa/code-quality-policy.md).
+
+The owner allows one exception. A qualified boundary, a boundary awaiting its reviewed migration, a
+test witness or a proof fixture may raise a count when the same change adds a reviewed entry to
+`scripts/code-quality-register-increases.json`. The entry names the path, rule, old count, new
+count, reason and issue. The prune command then raises that count to exactly the new count. In CI
+the ratchet compares the register with the pull request's base. It fails a raised count without a
+new entry, a new entry that matches no raise, and a removed or changed older entry.
+
 ## Troubleshooting documentation
 
 Operator-facing failure modes live in [`docs/troubleshooting/README.md`](docs/troubleshooting/README.md).

@@ -52,9 +52,6 @@ const JAVASCRIPT_CACHE_HIT_PREFIX = "Hit the cache for ";
 const JAVASCRIPT_CACHE_MISS_PREFIX = "Miss the cache for ";
 const UDG_CACHE_SOURCE_SUFFIX = " source file(s) without a UDG";
 const SONARJASMIN_SOURCE_SUFFIX = " file(s) will be analysed by SonarJasmin.";
-// The architecture plugin has written `… UDG data from directory "<dir>"` (#3434) and now writes
-// `… UDG data from "<dir>"` (#4203). Match the stable prefix and accept either form.
-const UDG_READ_MARKER = "Reading SonarArchitecture UDG data from";
 const UDG_RECEIPT_PREFIX = 'Files successfully loaded: "';
 const UDG_RECEIPT_SEPARATOR = '" out of "';
 const ARCHITECTURE_SENSORS = [
@@ -218,15 +215,27 @@ function receiptEntries(lines) {
   });
 }
 
-function architectureUdgReadLanguage(line) {
+// Scanner 8.1 builds before 8.1.0.6389 print `… UDG data from directory "<dir>"`; 8.1.0.6389
+// prints `… UDG data from "<dir>"`. Both name the same single read, so both are receipts.
+const UDG_READ_MARKER = "Reading SonarArchitecture UDG data from ";
+const UDG_READ_DIRECTORY_WORD = "directory ";
+
+function architectureUdgReadTarget(line) {
   const markerAt = line.indexOf(UDG_READ_MARKER);
   if (markerAt < 0) return undefined;
+  const target = line.slice(markerAt + UDG_READ_MARKER.length);
+  return target.startsWith(UDG_READ_DIRECTORY_WORD)
+    ? target.slice(UDG_READ_DIRECTORY_WORD.length)
+    : target;
+}
+
+function architectureUdgReadLanguage(line) {
+  const target = architectureUdgReadTarget(line);
+  if (target === undefined) return undefined;
   // Scanner 8.1 quotes the directory it reads ("…/architecture/js"); the language is the last
   // path segment either way.
-  const segments = line
-    .slice(markerAt + UDG_READ_MARKER.length)
+  const segments = target
     .trim()
-    .replace(/^directory\s+/u, "")
     .replaceAll('"', "")
     .replaceAll("\\", "/")
     .split("/")
@@ -249,7 +258,9 @@ function architectureSensorEvidence(lines, specification) {
     body,
     `Found 1 potential Udg file location(s) for "${specification.language}"`,
   );
-  const reads = indexesIncluding(body, UDG_READ_MARKER);
+  const reads = body.flatMap((line, index) =>
+    architectureUdgReadTarget(line) === undefined ? [] : [index],
+  );
   const matchingReads = body.flatMap((line, index) =>
     architectureUdgReadLanguage(line) === specification.language ? [index] : [],
   );
