@@ -119,6 +119,7 @@ const REVIEW_TARGET_REFUSED = defineActivityLogOperation({
         "fetch-failed",
         "rate-limited",
         "no-merge-base",
+        "shallow-history",
       ],
     },
   },

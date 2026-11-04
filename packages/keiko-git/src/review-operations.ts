@@ -262,6 +262,22 @@ export async function resolveGitReviewMergeBase(
   return OBJECT_ID.test(value) ? { ok: true, value } : { ok: false, result };
 }
 
+/**
+ * Whether the repository is a shallow clone (`rev-parse --is-shallow-repository`). A shallow clone
+ * hides history behind its boundary, so a missing merge base there is not proof that two commits
+ * are unrelated (R4130-036). Reading it changes nothing; Keiko never deepens the user's clone.
+ */
+export async function gitReviewRepositoryIsShallow(
+  ctx: GitReviewOperationContext,
+  request: { readonly cwd: string },
+): Promise<GitReviewOperationResult<boolean>> {
+  const result = await run(ctx, request.cwd, ["rev-parse", "--is-shallow-repository"]);
+  if (!succeeded(result)) return { ok: false, result };
+  const answer = result.stdout.trim();
+  if (answer === "true") return { ok: true, value: true };
+  return answer === "false" ? { ok: true, value: false } : { ok: false, result };
+}
+
 export function createGitReviewRef(
   ctx: GitReviewOperationContext,
   request: { readonly cwd: string; readonly ref: string; readonly sha: string },

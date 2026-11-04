@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a4f0c4c9990cee1a845b3e8ee2ace002e7764ae48abb3dafd9465635a30ba2c5",
+    "catalogDigest": "fb2931c2e3059e6c52b4572039c1b859452563c3784ae7d0901fcb1d436a12ff",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -36560,7 +36560,7 @@
         "failureClasses": ["review-target-read"],
         "proofIds": ["review.target.listed.line"],
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:53",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:249"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:250"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36603,14 +36603,15 @@
               "ref-invalid",
               "fetch-failed",
               "rate-limited",
-              "no-merge-base"
+              "no-merge-base",
+              "shallow-history"
             ]
           }
         },
         "failureClasses": ["review-target-resolution"],
         "proofIds": ["review.target.refused.line"],
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:102",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:307"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:308"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36677,7 +36678,7 @@
         "failureClasses": ["review-target-resolution"],
         "proofIds": ["review.target.resolved.line"],
         "registrationSite": "packages/keiko-server/src/review/activity-log.ts:83",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:282"]
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:283"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36730,8 +36731,8 @@
         "lifecycle": "start",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.created.line"],
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:129",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:330"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:130",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:331"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36768,8 +36769,8 @@
         "lifecycle": "state",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.orphan-swept.line"],
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:194",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:386"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:195",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:387"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36817,8 +36818,8 @@
         "lifecycle": "state",
         "failureClasses": ["review-private-ref-retention"],
         "proofIds": ["review.worktree.refs-swept.line"],
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:204",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:410"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:205",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:411"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36865,8 +36866,8 @@
         },
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.refused.line"],
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:145",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:352"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:146",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:353"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -36911,8 +36912,8 @@
         "lifecycle": "end",
         "failureClasses": ["review-worktree-lifecycle"],
         "proofIds": ["review.worktree.removed.line"],
-        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:170",
-        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:368"]
+        "registrationSite": "packages/keiko-server/src/review/activity-log.ts:171",
+        "emitterSites": ["packages/keiko-server/src/review/activity-log.ts:369"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -115246,13 +115247,13 @@
     {
       "op": "review.worktree.created",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:131",
+      "site": "packages/keiko-server/src/review/activity-log.ts:132",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.orphan-swept",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:196",
+      "site": "packages/keiko-server/src/review/activity-log.ts:197",
       "package": "keiko-server"
     },
     {
@@ -115265,19 +115266,19 @@
     {
       "op": "review.worktree.refs-swept",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:206",
+      "site": "packages/keiko-server/src/review/activity-log.ts:207",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.refused",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:147",
+      "site": "packages/keiko-server/src/review/activity-log.ts:148",
       "package": "keiko-server"
     },
     {
       "op": "review.worktree.removed",
       "category": "process",
-      "site": "packages/keiko-server/src/review/activity-log.ts:172",
+      "site": "packages/keiko-server/src/review/activity-log.ts:173",
       "package": "keiko-server"
     },
     {

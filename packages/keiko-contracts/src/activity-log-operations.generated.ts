@@ -35086,6 +35086,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "fetch-failed",
           "rate-limited",
           "no-merge-base",
+          "shallow-history",
         ],
       },
     },

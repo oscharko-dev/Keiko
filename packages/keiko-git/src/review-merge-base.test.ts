@@ -10,6 +10,7 @@ import { gitEnv } from "./env.js";
 import { createGitReviewProcessRunner } from "./review-runner.js";
 import {
   GitReviewOperandError,
+  gitReviewRepositoryIsShallow,
   resolveGitReviewMergeBase,
   type GitReviewOperationContext,
 } from "./review-operations.js";
@@ -115,5 +116,61 @@ describe("resolveGitReviewMergeBase", () => {
     await expect(call("abc123", full)).rejects.toBeInstanceOf(GitReviewOperandError);
     await expect(call(full, "--all")).rejects.toBeInstanceOf(GitReviewOperandError);
     await expect(call(full, "HEAD")).rejects.toBeInstanceOf(GitReviewOperandError);
+  });
+});
+
+// R4130-036: in a shallow clone, merge-base cannot reach a fork point behind the shallow boundary
+// and answers like unrelated histories. The shallow check tells the two apart.
+describe("gitReviewRepositoryIsShallow", () => {
+  function shallowClone(): {
+    readonly clone: string;
+    readonly base: string;
+    readonly head: string;
+  } {
+    commit("shared.ts", "export const shared = 1;\n");
+    git(["switch", "-q", "-c", "feature"]);
+    const head = commit("feature.ts", "export const feature = 1;\n");
+    git(["switch", "-q", "main"]);
+    const base = commit("later.ts", "export const later = 1;\n");
+    const clone = join(root, "shallow");
+    // Only this fixture clone may use the file transport; review operations keep the denylist.
+    const cloneEnv = { ...ENV, GIT_ALLOW_PROTOCOL: "file" };
+    const args = ["clone", "-q", "--depth", "1", "--no-single-branch", `file://${repo}`, clone];
+    execFileSync("git", args, { env: cloneEnv });
+    return { clone, base, head };
+  }
+
+  it("answers true for a depth-1 clone whose merge base lies behind the boundary", async () => {
+    const { clone, base, head } = shallowClone();
+    expect(await gitReviewRepositoryIsShallow(context(), { cwd: clone })).toEqual({
+      ok: true,
+      value: true,
+    });
+    const merged = await resolveGitReviewMergeBase(context(), {
+      cwd: clone,
+      baseSha: base,
+      headSha: head,
+    });
+    expect(merged).toEqual({ ok: true, value: undefined });
+  });
+
+  it("answers false for a complete repository", async () => {
+    commit("a.ts", "a\n");
+    expect(await gitReviewRepositoryIsShallow(context(), { cwd: repo })).toEqual({
+      ok: true,
+      value: false,
+    });
+  });
+
+  it("runs one fixed argument vector", async () => {
+    const calls: (readonly string[])[] = [];
+    const inner = createGitReviewProcessRunner({});
+    const recording: GitProcessRunner = (args, options) => {
+      calls.push(args);
+      return inner(args, options);
+    };
+    commit("a.ts", "a\n");
+    await gitReviewRepositoryIsShallow(context(recording), { cwd: repo });
+    expect(calls.map((args) => args.slice(-2))).toEqual([["rev-parse", "--is-shallow-repository"]]);
   });
 });

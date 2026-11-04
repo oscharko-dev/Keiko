@@ -435,6 +435,32 @@ describe("local range targets", () => {
     expect(resolution.mergeBaseSha).toBe(baseSha);
   });
 
+  // R4130-036: a shallow clone hides the fork point, so the refusal names the shallow history
+  // instead of claiming the commits are unrelated. Keiko does not deepen the user's clone.
+  it("refuses a local range in a shallow clone whose base moved as shallow-history", async () => {
+    git(author, "checkout", "-q", "main");
+    commitFile(author, "later.txt", "later\n", "later");
+    git(author, "push", "-q", bare, "main", "feature");
+    const shallow = join(fixture.root, "shallow");
+    const args = ["clone", "-q", "--depth", "1", "--no-single-branch", `file://${bare}`, shallow];
+    git(fixture.root, "-c", "protocol.file.allow=always", ...args);
+    git(shallow, "branch", "-q", "topic", "origin/feature");
+    const before = repositoryStateDigest(shallow);
+    const review = reviewServices(() => ({ availability: "failed" }));
+    expect(
+      await review.resolveTarget({
+        repositoryRoot: shallow,
+        runId: "run-shallow",
+        request: { kind: "local-range", baseRef: "main", headRef: "topic" },
+      }),
+    ).toEqual({ ok: false, reason: "shallow-history" });
+    expect(log.withOp("review.target.refused").map((line) => line.extra?.reason)).toEqual([
+      "shallow-history",
+    ]);
+    expect(git(shallow, "rev-parse", "--is-shallow-repository")).toBe("true");
+    expect(repositoryStateDigest(shallow)).toEqual(before);
+  });
+
   it("refuses a local range without a common ancestor as no-merge-base and keeps no ref", async () => {
     git(repo, "checkout", "-q", "--orphan", "unrelated");
     commitFile(repo, "other.txt", "other\n", "unrelated root");

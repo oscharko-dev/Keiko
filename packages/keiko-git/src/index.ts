@@ -61,6 +61,7 @@ export {
   fetchGitReviewCommit,
   fetchGitReviewPullRequestHead,
   gitReviewCommitExists,
+  gitReviewRepositoryIsShallow,
   gitReviewLocalRangeRef,
   gitReviewPullRequestBaseRef,
   gitReviewPullRequestRef,

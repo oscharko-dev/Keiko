@@ -34,13 +34,15 @@ const TARGET_REFUSALS: Readonly<Record<ReviewTargetRefusalReason, PreparationSet
   "target-changed": SKIPPED_TARGET_CHANGED,
   "not-found": SKIPPED_TARGET_CHANGED,
   "ref-invalid": SKIPPED_TARGET_CHANGED,
-  // R4130-008: a base and head without a common ancestor name no reviewable change set.
-  "no-merge-base": SKIPPED_TARGET_CHANGED,
   "gh-unavailable": SKIPPED_WORKTREE_FAILED,
   "gh-unauthenticated": SKIPPED_WORKTREE_FAILED,
   "no-github-remote": SKIPPED_WORKTREE_FAILED,
   "fetch-failed": SKIPPED_WORKTREE_FAILED,
   "rate-limited": SKIPPED_WORKTREE_FAILED,
+  // R4130-036: no usable merge base leaves no diff to prepare. The target did not change, so the
+  // run never says it did; the closed resolver reason on `review.target.refused` names the cause.
+  "no-merge-base": SKIPPED_WORKTREE_FAILED,
+  "shallow-history": SKIPPED_WORKTREE_FAILED,
 };
 
 export function targetRefusalSettlement(reason: ReviewTargetRefusalReason): PreparationSettlement {

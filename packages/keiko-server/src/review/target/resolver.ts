@@ -35,6 +35,7 @@ import {
   gitReviewPullRequestRef,
   resolveGitReviewCommit,
   resolveGitReviewMergeBase,
+  gitReviewRepositoryIsShallow,
   type GitProcessRunner,
   type GitReviewOperationContext,
 } from "@oscharko-dev/keiko-git";
@@ -207,8 +208,10 @@ async function ensureBaseCommit(
 }
 
 /**
- * The diff base of a target whose two commits are present (R4130-008). Commits without a common
- * ancestor refuse as `no-merge-base`; a failed Git read refuses with the caller's failure reason.
+ * The diff base of a target whose two commits are present (R4130-008). Without a merge base, a
+ * shallow clone refuses as `shallow-history`, because its boundary may hide the fork point, and a
+ * complete repository refuses as `no-merge-base` (R4130-036). Keiko never deepens the user's
+ * clone. A failed Git read refuses with the caller's failure reason.
  */
 async function mergeBase(
   deps: ReviewTargetResolverDeps,
@@ -222,9 +225,10 @@ async function mergeBase(
     ...commits,
   });
   if (!resolved.ok) return refused(failure);
-  return resolved.value === undefined
-    ? refused("no-merge-base")
-    : { ok: true, value: resolved.value };
+  if (resolved.value !== undefined) return { ok: true, value: resolved.value };
+  const shallow = await gitReviewRepositoryIsShallow(local, { cwd: input.repositoryRoot });
+  if (!shallow.ok) return refused(failure);
+  return refused(shallow.value ? "shallow-history" : "no-merge-base");
 }
 
 function validatedTarget(candidate: ReviewTarget): Step<ReviewTarget> {
