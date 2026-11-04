@@ -2,7 +2,8 @@ import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-cont
 import type { DocumentId, LargeDocumentResourcePolicy } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 
-import type { PdfDocumentLike } from "../pdf-parser.js";
+import { buildParserOptions } from "../registry.js";
+import { extractPages, type PdfDocumentLike, type PdfTextContentChunk } from "../pdf-parser.js";
 import type { OcrPageResult } from "../ocr/types.js";
 import { createProgressivePdfExtractor, runProgressiveExtraction } from "./index.js";
 import type {
@@ -254,5 +255,97 @@ describe("createProgressivePdfExtractor", () => {
     );
     expect(summary.pageCount).toBe(1);
     expect(sawRangeRead).toBe(true);
+  });
+});
+
+function positionedItem(str: string, y: number): PdfTextContentChunk["items"][number] {
+  return { str, transform: [10, 0, 0, 10, 50, y], width: str.length * 5, height: 10 };
+}
+
+function positionedPdf(pageCount: number, headerFrom: number): PdfDocumentLike {
+  return {
+    numPages: pageCount,
+    getPage: (pageNumber: number) =>
+      Promise.resolve({
+        streamTextContent: () =>
+          new ReadableStream<PdfTextContentChunk>({
+            start(controller): void {
+              const body = [700, 688, 676].map((y) =>
+                positionedItem(`Seite ${String(pageNumber)} Zeile ${String(y)}`, y),
+              );
+              const header =
+                pageNumber >= headerFrom ? [positionedItem("Kopf Nur Hinten", 780)] : [];
+              controller.enqueue({ items: [...header, ...body] });
+              controller.close();
+            },
+          }),
+      }),
+  };
+}
+
+describe("progressive and full-buffer extraction of one document", () => {
+  it("read the same text when the document is longer than one window (review #4235)", async () => {
+    const doc = positionedPdf(20, 17);
+    const input = {
+      documentId: DOC,
+      bytes: new Uint8Array(0),
+      extension: "pdf",
+      mediaType: "application/pdf",
+    };
+    const full = await extractPages(doc, input, buildParserOptions({ now: () => 0 }), 0);
+    const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+    const sink = collectingSink();
+    await runProgressiveExtraction(extractor, SOURCE, options(16), sink);
+    expect(sink.text()).toBe(full.normalizedText);
+    expect(sink.windows.flatMap((w) => w.pages)).toEqual(full.pages);
+  });
+
+  it("removes the furniture a resumed run already knew from its short last window (review #4235)", async () => {
+    const doc = positionedPdf(20, 1);
+    const run = async (
+      overrides: Partial<ProgressiveExtractionOptions>,
+    ): Promise<ReturnType<typeof collectingSink>> => {
+      const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+      const sink = collectingSink();
+      await runProgressiveExtraction(extractor, SOURCE, options(3, overrides), sink);
+      return sink;
+    };
+    const continuous = await run({});
+    const cut =
+      continuous.windows.flatMap((w) => w.pages).find((page) => page.pageNumber === 18)
+        ?.characterEnd ?? 0;
+    const resumed = await run({
+      resumeFromPage: 18,
+      resumeCharacterStart: cut,
+      resumeAnyPageEmitted: true,
+    });
+    expect(continuous.text()).not.toContain("Kopf Nur Hinten");
+    expect(resumed.text()).toBe(continuous.text().slice(cut));
+  });
+
+  it("keeps extracting after a page whose text cannot be read (review #4235)", async () => {
+    const good = positionedPdf(3, 99);
+    const doc: PdfDocumentLike = {
+      numPages: 3,
+      getPage: (pageNumber: number) =>
+        pageNumber === 2
+          ? Promise.resolve({
+              streamTextContent: () =>
+                new ReadableStream<PdfTextContentChunk>({
+                  start(controller): void {
+                    controller.error(new Error("broken content stream"));
+                  },
+                }),
+            })
+          : good.getPage(pageNumber),
+    };
+    const extractor = createProgressivePdfExtractor({ loadDocument: () => Promise.resolve(doc) });
+    const sink = collectingSink();
+    const summary = await runProgressiveExtraction(extractor, SOURCE, options(3), sink);
+    expect(summary.pageCount).toBe(3);
+    expect(summary.coverage).toBe("partial");
+    expect(sink.text()).toContain("Seite 3 Zeile 700");
+    const unreadable = summary.diagnostics.find((d) => d.pageNumber === 2);
+    expect(unreadable?.severity).toBe("warning");
   });
 });

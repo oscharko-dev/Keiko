@@ -25,6 +25,8 @@ interface LayoutItem {
 
 interface Segment {
   readonly text: string;
+  /** The segment is written from right to left; its text is already in logical order. */
+  readonly rightToLeft: boolean;
   readonly x: number;
   readonly right: number;
   readonly items: readonly LayoutItem[];
@@ -65,7 +67,7 @@ export interface PdfSection {
   readonly characterEnd: number;
 }
 
-const BASELINE_TOLERANCE_RATIO = 0.4;
+const BASELINE_TOLERANCE_RATIO = 0.5;
 const BASELINE_TOLERANCE_MIN = 2;
 const AXIS_TOLERANCE_DEGREES = 2;
 const WORD_GAP_RATIO = 0.12;
@@ -78,6 +80,7 @@ const MIN_COLUMN_LINES = 4;
 const MIN_UNMEASURED_COLUMN_LINES = 2;
 const COLUMN_BALANCE_RATIO = 0.6;
 const MAX_GUTTER_SHARE = 0.5;
+const MAX_COLUMNS = 4;
 const COLUMN_FILL_RATIO = 0.7;
 const COLUMN_FILLED_SHARE = 0.6;
 const COLUMN_ALIGN_TOLERANCE = 3;
@@ -112,6 +115,10 @@ const FURNITURE_ISOLATION_RATIO = 1.5;
 const LIST_MARKER_ONLY = /^(?:[-–—*•·▪◦‣]|\d{1,3}[.)]?|[a-z][.)])$/iu;
 const NOT_A_HEADING_END = /[.!?:;,]$/u;
 const BARE_NUMBER = /^\d+$/u;
+const HAS_LETTER = /\p{L}/u;
+// The glyphs Office exports draw from the Symbol and Wingdings faces as list bullets.
+const SYMBOL_FACE_BULLET = /^[\uF06C\uF06E\uF076\uF0A7\uF0A8\uF0B7\uF0D8\uF0FC]$/u;
+const SECOND_LEVEL_BULLET = "o";
 const BULLET_START = /^[-–—*•·▪◦‣](?:\s|$)/u;
 const ENUMERATOR_START = /^(?:\d+[.)]|[a-z][.)])\s/iu;
 const SENTENCE_END = /[.!?]$/u;
@@ -135,8 +142,15 @@ const COMPOUND_START = /^[\p{Lu}\p{N}]/u;
 // "Ein- und Auszahlung": a word that follows a suspended hyphen keeps it.
 const SUSPENDED_HYPHEN_NEXT = /^(?:und|oder|bzw|sowie|bis|and|or)\b/u;
 const WORD_CORE = /[\p{L}\p{N}](?:.*[\p{L}\p{N}])?/su;
+// Letters between optional opening and closing punctuation: "(Zahlungs-" and "verkehr)," are words.
+const PLAIN_WORD = /^[^\p{L}\p{N}]*\p{L}+(?:-\p{L}+)*[^\p{L}\p{N}/_@:\\]*$/u;
 const NUMBER_FRAGMENT_END = /[\p{N}-]$/u;
 const NUMBER_FRAGMENT_START = /^\p{N}/u;
+// Letters of the scripts written from right to left. pdf.js reports the text of a run in logical
+// order, but the runs of a line sit on the page from right to left.
+const RIGHT_TO_LEFT_LETTER =
+  /[\p{Script=Hebrew}\p{Script=Arabic}\p{Script=Syriac}\p{Script=Thaana}\p{Script=Nko}]/u;
+const LEFT_TO_RIGHT_LETTER = /[\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Han}]/u;
 const ZERO_WIDTH = /[\u200B\u2060\uFEFF]/gu;
 
 // A page can hold more items than a call takes as arguments, so these never spread.
@@ -186,12 +200,13 @@ function dominantAngle(items: readonly PositionedTextItem[]): number {
 }
 
 function cleanItemText(raw: string): string {
-  return raw
+  const cleaned = raw
     .replaceAll(ZERO_WIDTH, "")
-    .replaceAll(" ", " ")
+    .replaceAll(" ", " ")
     .trim()
     .replaceAll(/­(?=.)/gu, "")
     .replaceAll(/­$/gu, "-");
+  return SYMBOL_FACE_BULLET.test(cleaned) ? "•" : cleaned;
 }
 
 function itemHeight(item: PositionedTextItem): number {
@@ -231,14 +246,76 @@ function needsWordSpace(previous: LayoutItem, item: LayoutItem): boolean {
   return item.x - previous.right > Math.max(previous.height, item.height) * WORD_GAP_RATIO;
 }
 
-function toSegment(items: readonly LayoutItem[], first: LayoutItem): Segment {
-  let text = "";
+function separatorBefore(items: readonly LayoutItem[], index: number): string {
+  const previous = items[index - 1];
+  const item = items[index];
+  return previous !== undefined && item !== undefined && needsWordSpace(previous, item) ? " " : "";
+}
+
+function isRightToLeftItem(item: LayoutItem): boolean {
+  return RIGHT_TO_LEFT_LETTER.test(item.text);
+}
+
+/** A line is written from right to left when most of its letters are. */
+function isRightToLeftLine(items: readonly LayoutItem[]): boolean {
+  let rightToLeft = 0;
+  let leftToRight = 0;
+  for (const item of items) {
+    if (isRightToLeftItem(item)) rightToLeft += item.text.length;
+    else if (LEFT_TO_RIGHT_LETTER.test(item.text)) leftToRight += item.text.length;
+  }
+  return rightToLeft > leftToRight;
+}
+
+/**
+ * The items of a right-to-left line in logical order. Runs of one direction sit next to each other
+ * on the page: a right-to-left run reads from its right end, a left-to-right run (a name, a number)
+ * from its left, and the runs follow each other from the right.
+ */
+function logicalOrder(items: readonly LayoutItem[]): readonly number[] {
+  const runs: number[][] = [];
   items.forEach((item, index) => {
-    const previous = items[index - 1];
-    text += previous !== undefined && needsWordSpace(previous, item) ? ` ${item.text}` : item.text;
+    const last = runs.at(-1);
+    const lastItem = last === undefined ? undefined : items[last[0] ?? 0];
+    if (
+      last !== undefined &&
+      lastItem !== undefined &&
+      isRightToLeftItem(lastItem) === isRightToLeftItem(item)
+    ) {
+      last.push(index);
+    } else {
+      runs.push([index]);
+    }
   });
+  return runs.reverse().flatMap((run) => {
+    const first = items[run[0] ?? 0];
+    return first !== undefined && isRightToLeftItem(first) ? run.reverse() : run;
+  });
+}
+
+/** Neighbours on the page keep the space the producer left; other neighbours get one. */
+function rightToLeftText(items: readonly LayoutItem[]): string {
+  const order = logicalOrder(items);
+  let text = "";
+  order.forEach((index, position) => {
+    const before = order[position - 1];
+    const text_ = items[index]?.text ?? "";
+    if (before === undefined) text = text_;
+    else if (Math.abs(before - index) === 1)
+      text += `${separatorBefore(items, Math.max(before, index))}${text_}`;
+    else text += ` ${text_}`;
+  });
+  return text;
+}
+
+function toSegment(items: readonly LayoutItem[], first: LayoutItem): Segment {
+  const rightToLeft = isRightToLeftLine(items);
+  let text = "";
+  if (rightToLeft) text = rightToLeftText(items);
+  else items.forEach((item, index) => (text += `${separatorBefore(items, index)}${item.text}`));
   return {
     text,
+    rightToLeft,
     x: first.x,
     right: maxOf(items.map((item) => item.right)),
     items,
@@ -265,13 +342,27 @@ function segmentsOf(items: readonly LayoutItem[], height: number): readonly Segm
   });
 }
 
-/** A marker drawn apart from its text is one list item, not two table cells. */
+/**
+ * A marker drawn apart from its text starts a list item. A bare number is one only in front of
+ * words: a number in front of a number is a cell of a table, and joining them would turn "12 | 99"
+ * into "12. 99". The letter o is the second-level bullet of Office lists, drawn in a face of its own.
+ */
+function isListMarker(marker: Segment, body: Segment): boolean {
+  if (BARE_NUMBER.test(marker.text)) return HAS_LETTER.test(body.text);
+  if (marker.text === SECOND_LEVEL_BULLET) return marker.firstItem.font !== body.firstItem.font;
+  return LIST_MARKER_ONLY.test(marker.text);
+}
+
+function markerLabel(marker: Segment): string {
+  if (BARE_NUMBER.test(marker.text)) return `${marker.text}.`;
+  return marker.text === SECOND_LEVEL_BULLET ? "◦" : marker.text;
+}
+
 function withListMarkerJoined(segments: readonly Segment[]): readonly Segment[] {
   const [marker, body] = segments;
   if (segments.length !== 2 || marker === undefined || body === undefined) return segments;
-  if (!LIST_MARKER_ONLY.test(marker.text)) return segments;
-  const label = BARE_NUMBER.test(marker.text) ? `${marker.text}.` : marker.text;
-  return [{ ...body, text: `${label} ${body.text}`, x: marker.x }];
+  if (!isListMarker(marker, body)) return segments;
+  return [{ ...body, text: `${markerLabel(marker)} ${body.text}`, x: marker.x }];
 }
 
 /** The visual rows of a page, top to bottom, with their items in reading order. */
@@ -286,7 +377,11 @@ function layoutRows(items: readonly LayoutItem[]): readonly LayoutRow[] {
     );
     if (current !== undefined && current.y - item.y <= tolerance) {
       current.items.push(item);
-      current.height = Math.max(current.height, item.height);
+      // The row sits on the baseline of its tallest run, not of a raised footnote marker.
+      if (item.height > current.height) {
+        current.y = item.y;
+        current.height = item.height;
+      }
     } else {
       groups.push({ y: item.y, height: item.height, items: [item] });
     }
@@ -328,8 +423,19 @@ export function pageLayoutOf(items: readonly PositionedTextItem[]): PageLayout {
   return { rows, offAxis, plain: "" };
 }
 
+function isRightToLeftRow(row: LayoutRow): boolean {
+  const weight = (segment: Segment): number => segment.text.length;
+  const rightToLeft = row.segments.filter((segment) => segment.rightToLeft);
+  const rest = row.segments.filter((segment) => !segment.rightToLeft);
+  return (
+    rightToLeft.reduce((sum, s) => sum + weight(s), 0) > rest.reduce((sum, s) => sum + weight(s), 0)
+  );
+}
+
+/** The text of a row; the segments of a right-to-left row follow each other from the right. */
 function rowText(row: LayoutRow): string {
-  return row.segments.map((segment) => segment.text).join(" ");
+  const ordered = isRightToLeftRow(row) ? [...row.segments].reverse() : row.segments;
+  return ordered.map((segment) => segment.text).join(" ");
 }
 
 // ─── Repeated page furniture ─────────────────────────────────────────────────
@@ -371,22 +477,35 @@ function edgeRows(rows: readonly LayoutRow[]): readonly LayoutRow[] {
   return out;
 }
 
-function repeatedFurniture(pages: readonly PageLayout[]): ReadonlySet<string> {
+/** A line set larger than the body is a heading, which the page carries; furniture is body-sized. */
+function isHeadingSized(row: LayoutRow, bodyHeight: number): boolean {
+  return bodyHeight > 0 && row.height >= bodyHeight * HEADING_SIZE_RATIO;
+}
+
+function furnitureRows(page: PageLayout, bodyHeight: number): readonly LayoutRow[] {
+  return edgeRows(page.rows).filter((row) => !isHeadingSized(row, bodyHeight));
+}
+
+function repeatedFurniture(pages: readonly PageLayout[], bodyHeight: number): ReadonlySet<string> {
   if (pages.length < FURNITURE_MIN_PAGES) return new Set();
   const counts = new Map<string, number>();
   const count = (key: string): void => {
     counts.set(key, (counts.get(key) ?? 0) + 1);
   };
   for (const page of pages) {
-    new Set(edgeRows(page.rows).map((row) => furnitureKey(row))).forEach(count);
+    new Set(furnitureRows(page, bodyHeight).map((row) => furnitureKey(row))).forEach(count);
     new Set(page.offAxis.map((text) => offAxisKey(text))).forEach(count);
   }
   const needed = Math.max(FURNITURE_MIN_PAGES, Math.ceil(pages.length * FURNITURE_PAGE_SHARE));
   return new Set([...counts].filter(([, seen]) => seen >= needed).map(([key]) => key));
 }
 
-function withoutFurniture(page: PageLayout, furniture: ReadonlySet<string>): PageLayout {
-  const edges = new Set(edgeRows(page.rows));
+function withoutFurniture(
+  page: PageLayout,
+  furniture: ReadonlySet<string>,
+  bodyHeight: number,
+): PageLayout {
+  const edges = new Set(furnitureRows(page, bodyHeight));
   return {
     ...page,
     rows: page.rows.filter((row) => !(edges.has(row) && furniture.has(furnitureKey(row)))),
@@ -425,75 +544,154 @@ function fillsColumn(segments: readonly Segment[], x: number, right: number): bo
   return filled >= segments.length * COLUMN_FILLED_SHARE;
 }
 
+interface ColumnSpan {
+  readonly start: number;
+  readonly end: number;
+}
+
+function emptyColumns<T>(count: number): T[][] {
+  return Array.from({ length: count }, (): T[] => []);
+}
+
+/** The column a segment sits in; no segment overlaps a gutter. */
+function columnOfSegment(gutters: readonly Gutter[], segment: Segment): number {
+  return gutters.filter((gutter) => gutter.end <= segment.x).length;
+}
+
+/** The segments of each column, left to right. */
+function segmentsByColumn(
+  body: readonly Segment[],
+  gutters: readonly Gutter[],
+): readonly (readonly Segment[])[] {
+  const columns = emptyColumns<Segment>(gutters.length + 1);
+  for (const segment of body) columns[columnOfSegment(gutters, segment)]?.push(segment);
+  return columns;
+}
+
+/** Where each column starts and ends: the text edge at the outside, the gutters in between. */
+function columnSpans(
+  columns: readonly (readonly Segment[])[],
+  gutters: readonly Gutter[],
+): readonly ColumnSpan[] {
+  const outerLeft = minOf((columns[0] ?? []).map((segment) => segment.x));
+  const outerRight = maxOf((columns.at(-1) ?? []).map((segment) => segment.right));
+  return columns.map((_, index) => ({
+    start: gutters[index - 1]?.end ?? outerLeft,
+    end: gutters[index]?.start ?? outerRight,
+  }));
+}
+
 function hasColumnEvidence(
-  left: readonly Segment[],
-  right: readonly Segment[],
-  gutter: Gutter,
+  columns: readonly (readonly Segment[])[],
+  gutters: readonly Gutter[],
 ): boolean {
-  if (!isMeasured([...left, ...right])) {
-    return (
-      left.length >= MIN_UNMEASURED_COLUMN_LINES && right.length >= MIN_UNMEASURED_COLUMN_LINES
-    );
+  if (!isMeasured(columns.flat())) {
+    return columns.every((column) => column.length >= MIN_UNMEASURED_COLUMN_LINES);
   }
-  if (left.length < MIN_COLUMN_LINES || right.length < MIN_COLUMN_LINES) return false;
-  const leftEdge = minOf(left.map((segment) => segment.x));
-  const rightEdge = maxOf(right.map((segment) => segment.right));
-  const leftWidth = gutter.start - leftEdge;
-  const rightWidth = rightEdge - gutter.end;
-  const narrower = Math.min(leftWidth, rightWidth);
-  if (narrower < Math.max(leftWidth, rightWidth) * COLUMN_BALANCE_RATIO) return false;
-  if (gutter.end - gutter.start > narrower * MAX_GUTTER_SHARE) return false;
-  return fillsColumn(left, leftEdge, gutter.start) && fillsColumn(right, gutter.end, rightEdge);
+  if (columns.some((column) => column.length < MIN_COLUMN_LINES)) return false;
+  const spans = columnSpans(columns, gutters);
+  const widths = spans.map((span) => span.end - span.start);
+  const narrowest = minOf(widths);
+  if (narrowest < maxOf(widths) * COLUMN_BALANCE_RATIO) return false;
+  if (gutters.some((gutter) => gutter.end - gutter.start > narrowest * MAX_GUTTER_SHARE)) {
+    return false;
+  }
+  return columns.every((column, index) => {
+    const span = spans[index];
+    return span !== undefined && fillsColumn(column, span.start, span.end);
+  });
 }
 
-function gutterOf(rows: readonly LayoutRow[]): Gutter | undefined {
+/** Segments wider than this share of the text's width are running text, not part of a column. */
+function fullWidthLimit(segments: readonly Segment[]): number {
+  const pageLeft = minOf(segments.map((segment) => segment.x));
+  const pageRight = maxOf(segments.map((segment) => segment.right));
+  return (pageRight - pageLeft) * FULL_WIDTH_RATIO;
+}
+
+function guttersOf(rows: readonly LayoutRow[]): readonly Gutter[] {
   const all = rows.flatMap((row) => row.segments);
-  const pageLeft = minOf(all.map((segment) => segment.x));
-  const pageRight = maxOf(all.map((segment) => segment.right));
-  const limit = (pageRight - pageLeft) * FULL_WIDTH_RATIO;
+  const limit = fullWidthLimit(all);
   const body = all.filter((segment) => segment.right - segment.x <= limit);
-  const gaps = coverageGaps(body);
-  const gap = gaps[0];
-  if (gap === undefined || gaps.length !== 1) return undefined;
-  const left = body.filter((segment) => segment.right <= gap.start);
-  const right = body.filter((segment) => segment.x >= gap.end);
-  return hasColumnEvidence(left, right, gap) ? gap : undefined;
+  const gutters = coverageGaps(body);
+  if (gutters.length === 0 || gutters.length >= MAX_COLUMNS) return [];
+  return hasColumnEvidence(segmentsByColumn(body, gutters), gutters) ? gutters : [];
 }
 
-/** Rows split into reading flows: full-width bands stay in place, a column pair reads left first. */
-function readingFlows(rows: readonly LayoutRow[]): readonly (readonly LayoutRow[])[] {
-  const gutter = rows.length === 0 ? undefined : gutterOf(rows);
-  if (gutter === undefined) return rows.length === 0 ? [] : [rows];
+function crossesGutter(row: LayoutRow, gutters: readonly Gutter[]): boolean {
+  return row.segments.some((segment) =>
+    gutters.some((gutter) => segment.x < gutter.end && segment.right > gutter.start),
+  );
+}
+
+type Flows = readonly (readonly LayoutRow[])[];
+
+/** The flows of rows that share one set of gutters, or undefined when they share none. */
+function columnFlows(rows: readonly LayoutRow[]): Flows | undefined {
+  const gutters = guttersOf(rows);
+  if (gutters.length === 0) return undefined;
   const flows: (readonly LayoutRow[])[] = [];
   let band: LayoutRow[] = [];
-  let left: LayoutRow[] = [];
-  let right: LayoutRow[] = [];
-  const flush = (next: "band" | "columns"): void => {
-    if (next === "columns" && band.length > 0) {
-      flows.push(band);
-      band = [];
-    }
-    if (next === "band") {
-      if (left.length > 0) flows.push(left);
-      if (right.length > 0) flows.push(right);
-      left = [];
-      right = [];
-    }
+  let columns = emptyColumns<LayoutRow>(gutters.length + 1);
+  const flushBand = (): void => {
+    if (band.length > 0) flows.push(band);
+    band = [];
+  };
+  const flushColumns = (): void => {
+    flows.push(...columns.filter((column) => column.length > 0));
+    columns = emptyColumns<LayoutRow>(gutters.length + 1);
   };
   for (const row of rows) {
-    if (row.segments.some((s) => s.x < gutter.end && s.right > gutter.start)) {
-      flush("band");
+    if (crossesGutter(row, gutters)) {
+      flushColumns();
       band.push(row);
       continue;
     }
-    flush("columns");
+    flushBand();
     for (const segment of row.segments) {
-      (segment.x < gutter.end ? left : right).push({ ...row, segments: [segment] });
+      columns[columnOfSegment(gutters, segment)]?.push({ ...row, segments: [segment] });
     }
   }
-  flush("band");
-  flush("columns");
+  flushColumns();
+  flushBand();
   return flows;
+}
+
+interface RowBand {
+  readonly rows: LayoutRow[];
+  readonly fullWidth: boolean;
+}
+
+/** Runs of rows with and without a full-width line: a column pair can start below a table. */
+function bandsOf(rows: readonly LayoutRow[]): readonly RowBand[] {
+  const limit = fullWidthLimit(rows.flatMap((row) => row.segments));
+  const bands: RowBand[] = [];
+  for (const row of rows) {
+    const fullWidth = row.segments.some((segment) => segment.right - segment.x > limit);
+    const current = bands.at(-1);
+    if (current?.fullWidth === fullWidth) current.rows.push(row);
+    else bands.push({ rows: [row], fullWidth });
+  }
+  return bands;
+}
+
+/** Column pairs found band by band; undefined when no band holds one. */
+function bandedFlows(rows: readonly LayoutRow[]): Flows | undefined {
+  const bands = bandsOf(rows);
+  if (bands.length < 2) return undefined;
+  const columnsOfBand = bands.map((band) => (band.fullWidth ? undefined : columnFlows(band.rows)));
+  if (columnsOfBand.every((columns) => columns === undefined)) return undefined;
+  return bands.flatMap((band, index) => columnsOfBand[index] ?? [band.rows]);
+}
+
+/**
+ * Rows split into reading flows: full-width bands stay in place, a column set reads left first.
+ * Columns shared by the whole page decide first; failing that, each stretch between full-width
+ * lines is looked at on its own, so a table elsewhere on the page cannot hide the columns.
+ */
+function readingFlows(rows: readonly LayoutRow[]): Flows {
+  if (rows.length === 0) return [];
+  return columnFlows(rows) ?? bandedFlows(rows) ?? [rows];
 }
 
 // ─── Tables ──────────────────────────────────────────────────────────────────
@@ -503,16 +701,22 @@ interface TableBlock {
   readonly rows: readonly LayoutRow[];
 }
 
+/** The last column that starts at or before `x`; the columns are sorted from left to right. */
 function columnIndex(columns: readonly number[], x: number): number {
-  let index = 0;
-  columns.forEach((column, position) => {
-    if (column <= x + COLUMN_ALIGN_TOLERANCE) index = position;
-  });
-  return index;
+  const limit = x + COLUMN_ALIGN_TOLERANCE;
+  let low = 0;
+  let high = columns.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if ((columns[middle] ?? Number.POSITIVE_INFINITY) <= limit) low = middle + 1;
+    else high = middle;
+  }
+  return Math.max(low - 1, 0);
 }
 
 function alignsToColumn(columns: readonly number[], x: number): boolean {
-  return columns.some((column) => Math.abs(column - x) <= COLUMN_ALIGN_TOLERANCE);
+  const column = columns[columnIndex(columns, x)];
+  return column !== undefined && Math.abs(column - x) <= COLUMN_ALIGN_TOLERANCE;
 }
 
 function withRowColumns(columns: readonly number[], row: LayoutRow): readonly number[] {
@@ -642,15 +846,72 @@ function keepsWrapHyphen(left: string, right: string, vocabulary: Vocabulary): b
   );
 }
 
-function joinWrapped(left: string, right: string, vocabulary: Vocabulary): string {
-  if (left.length === 0) return right;
-  if (!HYPHENATED_END.test(left)) return `${left} ${right}`;
+/** Only a plain word was hyphenated by the renderer; a URL, a path or an identifier was not. */
+function isPlainWord(word: string): boolean {
+  return PLAIN_WORD.test(word);
+}
+
+interface WrapJoin {
+  /** The line ends in a hyphen the wrap added, and the join removes it. */
+  readonly dropHyphen: boolean;
+  readonly separator: string;
+}
+
+/** How a wrapped line continues the text before it; only the end of that text matters. */
+function wrapJoinOf(tail: string, right: string, vocabulary: Vocabulary): WrapJoin {
+  if (!HYPHENATED_END.test(tail)) return { dropHyphen: false, separator: " " };
   if (LOWER_START.test(right) && !SUSPENDED_HYPHEN_NEXT.test(right)) {
-    return keepsWrapHyphen(left, right, vocabulary)
-      ? `${left}${right}`
-      : `${left.slice(0, -1)}${right}`;
+    const repairable = isPlainWord(lastWord(tail)) && isPlainWord(firstWord(right));
+    return { dropHyphen: repairable && !keepsWrapHyphen(tail, right, vocabulary), separator: "" };
   }
-  return COMPOUND_START.test(right) ? `${left}${right}` : `${left} ${right}`;
+  return { dropHyphen: false, separator: COMPOUND_START.test(right) ? "" : " " };
+}
+
+/** How much of the text so far a join looks at: a word longer than this is no word of a document. */
+const JOIN_TAIL_CHARS = 256;
+
+/**
+ * Text that grows line by line. Parts are joined once at the end and a join reads only the tail, so
+ * a paragraph of any length costs as much as its lines and no more.
+ */
+class WrappedText {
+  private readonly parts: string[];
+  private tail: string;
+
+  constructor(first: string) {
+    this.parts = [first];
+    this.tail = first.slice(-JOIN_TAIL_CHARS);
+  }
+
+  isEmpty(): boolean {
+    return this.tail.length === 0;
+  }
+
+  appendWrapped(right: string, vocabulary: Vocabulary): void {
+    if (this.isEmpty()) {
+      this.appendRaw(right);
+      return;
+    }
+    const join = wrapJoinOf(this.tail, right, vocabulary);
+    if (join.dropHyphen) this.dropLastCharacter();
+    this.appendRaw(`${join.separator}${right}`);
+  }
+
+  /** A word the renderer broke inside: the fragment continues the text without any separator. */
+  appendRaw(text: string): void {
+    this.parts.push(text);
+    this.tail = this.tail.concat(text).slice(-JOIN_TAIL_CHARS);
+  }
+
+  toString(): string {
+    return this.parts.join("");
+  }
+
+  private dropLastCharacter(): void {
+    const last = this.parts.pop() ?? "";
+    if (last.length > 1) this.parts.push(last.slice(0, -1));
+    this.tail = this.tail.slice(0, -1);
+  }
 }
 
 /** A word's share of its run, from the run's average glyph: spaces are narrower than letters. */
@@ -701,40 +962,49 @@ function brokeInsideWord(previous: Segment, next: Segment, cell: CellLine): bool
   return areFragmentsOfOneWord(lastWord(previous.text), firstWord(next.text), vocabulary);
 }
 
-function appendCellLine(cells: string[], column: number, segment: Segment, cell: CellLine): void {
-  const current = cells[column] ?? "";
+function appendCellLine(
+  cells: readonly WrappedText[],
+  column: number,
+  segment: Segment,
+  cell: CellLine,
+): void {
+  const current = cells[column];
+  if (current === undefined) return;
   const broken = cell.previous !== undefined && brokeInsideWord(cell.previous, segment, cell);
-  cells[column] = broken
-    ? `${current}${segment.text}`
-    : joinWrapped(current, segment.text, cell.vocabulary);
+  if (broken) current.appendRaw(segment.text);
+  else current.appendWrapped(segment.text, cell.vocabulary);
 }
 
 function columnRightEdges(block: TableBlock): readonly number[] {
-  return block.columns.map((_, column) => {
-    const rights = block.rows.flatMap((row) =>
-      row.segments
-        .filter((segment) => columnIndex(block.columns, segment.x) === column)
-        .map((segment) => segment.right),
-    );
-    return maxOf(rights, 0);
-  });
+  const edges = block.columns.map(() => 0);
+  for (const row of block.rows) {
+    for (const segment of row.segments) {
+      const column = columnIndex(block.columns, segment.x);
+      edges[column] = Math.max(edges[column] ?? 0, segment.right);
+    }
+  }
+  return edges;
 }
 
 /** A wrapped cell continues its logical row: it sits at the cell's line pitch, not the row pitch. */
-function logicalTableRows(block: TableBlock, vocabulary: Vocabulary): readonly string[][] {
+function logicalTableRows(
+  block: TableBlock,
+  vocabulary: Vocabulary,
+): readonly (readonly WrappedText[])[] {
   const gaps = rowGaps(block.rows);
   const lineGap = minOf(gaps);
   const bimodal = maxOf(gaps) >= lineGap * BIMODAL_GAP_RATIO;
   const edges = columnRightEdges(block);
   const previousInCell = new Map<string, Segment>();
-  const logical: string[][] = [];
+  const logical: WrappedText[][] = [];
   block.rows.forEach((row, index) => {
     const firstColumnFilled = row.segments.some(
       (segment) => columnIndex(block.columns, segment.x) === 0,
     );
     const gap = gaps[index - 1] ?? Number.POSITIVE_INFINITY;
     const continues = bimodal ? gap <= lineGap * CELL_LINE_GAP_RATIO : !firstColumnFilled;
-    const cells = (continues ? logical.at(-1) : undefined) ?? block.columns.map(() => "");
+    const cells =
+      (continues ? logical.at(-1) : undefined) ?? block.columns.map(() => new WrappedText(""));
     if (logical.at(-1) !== cells) logical.push(cells);
     for (const segment of row.segments) {
       const column = columnIndex(block.columns, segment.x);
@@ -751,7 +1021,9 @@ function logicalTableRows(block: TableBlock, vocabulary: Vocabulary): readonly s
 }
 
 function tableLines(block: TableBlock, vocabulary: Vocabulary): readonly string[] {
-  return logicalTableRows(block, vocabulary).map((cells) => cells.join(" | "));
+  return logicalTableRows(block, vocabulary).map((cells) =>
+    cells.map((cell) => cell.toString()).join(" | "),
+  );
 }
 
 // ─── Paragraphs ──────────────────────────────────────────────────────────────
@@ -765,6 +1037,8 @@ interface TextLine {
   readonly first: LayoutItem;
   /** The one font the whole line is set in, or undefined when it mixes fonts. */
   readonly font: string | undefined;
+  /** The line ends at the margin on its left; layout cannot tell whether a wrap forced it. */
+  readonly rightToLeft: boolean;
 }
 
 /** What is true of a whole document and decides how its lines are read. */
@@ -805,6 +1079,7 @@ function textLineOf(row: LayoutRow): TextLine | undefined {
     height: row.height,
     first,
     font: uniformFont(row),
+    rightToLeft: isRightToLeftRow(row),
   };
 }
 
@@ -882,6 +1157,7 @@ function continuesParagraph(
   line: TextLine,
   context: ParagraphContext,
 ): boolean {
+  if (last.rightToLeft || line.rightToLeft) return false;
   if (isParagraphGap(last, line, context) || !sizesMatch(last, line)) return false;
   if (!wasForcedByWidth(last, line, context)) return false;
   if (endsInAbbreviation(last.text)) return true;
@@ -906,34 +1182,68 @@ function paragraphContext(lines: readonly TextLine[], bodyRight: number): Paragr
   };
 }
 
+/** The lines of one flow, with the paragraph still being written kept open until it ends. */
+class ParagraphWriter {
+  private readonly out: OutLine[] = [];
+  private open: WrappedText | undefined;
+  private head: TextLine | undefined;
+  private last: TextLine | undefined;
+
+  constructor(
+    private readonly context: ParagraphContext,
+    private readonly vocabulary: Vocabulary,
+  ) {}
+
+  add(line: TextLine): void {
+    if (this.continues(line)) this.open?.appendWrapped(line.text, this.vocabulary);
+    else this.startParagraph(line);
+    this.last = line;
+  }
+
+  finish(): readonly OutLine[] {
+    this.closeOpen();
+    return this.out;
+  }
+
+  private continues(line: TextLine): boolean {
+    return (
+      this.head !== undefined &&
+      this.last !== undefined &&
+      this.open !== undefined &&
+      continuesParagraph(this.head, this.last, line, this.context)
+    );
+  }
+
+  private startParagraph(line: TextLine): void {
+    this.closeOpen();
+    if (this.last !== undefined && isParagraphGap(this.last, line, this.context)) {
+      this.out.push(BLANK_LINE);
+    }
+    this.out.push({
+      text: line.text,
+      height: line.height,
+      font: isListItem(line) ? undefined : line.font,
+    });
+    this.open = new WrappedText(line.text);
+    this.head = line;
+  }
+
+  private closeOpen(): void {
+    const index = this.out.length - 1;
+    const line = this.out[index];
+    if (this.open !== undefined && line !== undefined) {
+      this.out[index] = { ...line, text: this.open.toString() };
+    }
+    this.open = undefined;
+  }
+}
+
 function paragraphLines(rows: readonly LayoutRow[], facts: DocumentFacts): readonly OutLine[] {
   const lines = rows.map(textLineOf).filter((line) => line !== undefined);
   if (lines.length === 0) return [];
-  const context = paragraphContext(lines, facts.bodyRight);
-  const out: OutLine[] = [];
-  let head: TextLine | undefined;
-  let last: TextLine | undefined;
-  for (const line of lines) {
-    const open = out.at(-1);
-    if (
-      head !== undefined &&
-      last !== undefined &&
-      open !== undefined &&
-      continuesParagraph(head, last, line, context)
-    ) {
-      out[out.length - 1] = { ...open, text: joinWrapped(open.text, line.text, facts.vocabulary) };
-    } else {
-      if (last !== undefined && isParagraphGap(last, line, context)) out.push(BLANK_LINE);
-      out.push({
-        text: line.text,
-        height: line.height,
-        font: isListItem(line) ? undefined : line.font,
-      });
-      head = line;
-    }
-    last = line;
-  }
-  return out;
+  const writer = new ParagraphWriter(paragraphContext(lines, facts.bodyRight), facts.vocabulary);
+  for (const line of lines) writer.add(line);
+  return writer.finish();
 }
 
 type FlowBlock =
@@ -1110,17 +1420,30 @@ function composePageLines(plan: PagePlan, facts: DocumentFacts): readonly OutLin
   ];
 }
 
-/**
- * The logical text of a run of pages. Repeated furniture, the body style and the margin are facts
- * about the document, so they are decided across the pages together, with what earlier runs of the
- * same document already proved.
- */
-export function composePages(
+interface RawHeading {
+  readonly offset: number;
+  readonly title: string;
+  readonly height: number;
+}
+
+interface WindowComposition {
+  readonly texts: readonly string[];
+  readonly headings: readonly (readonly RawHeading[])[];
+  readonly removedRows: number;
+  readonly furniture: ReadonlySet<string>;
+}
+
+function rowCount(list: readonly PageLayout[]): number {
+  return list.reduce((sum, page) => sum + page.rows.length + page.offAxis.length, 0);
+}
+
+function composeWindow(
   pages: readonly PageLayout[],
-  knownFurniture: ReadonlySet<string> = new Set(),
-): ComposedPages {
-  const furniture = new Set([...knownFurniture, ...repeatedFurniture(pages)]);
-  const cleaned = pages.map((page) => withoutFurniture(page, furniture));
+  knownFurniture: ReadonlySet<string>,
+): WindowComposition {
+  const bodyHeight = bodyStyleOf(pages).height;
+  const furniture = new Set([...knownFurniture, ...repeatedFurniture(pages, bodyHeight)]);
+  const cleaned = pages.map((page) => withoutFurniture(page, furniture, bodyHeight));
   const plans = cleaned.map(planPage);
   const facts: DocumentFacts = {
     bodyRight: documentBodyRight(plans),
@@ -1132,20 +1455,83 @@ export function composePages(
       ? { text: plan.page.plain, candidates: [] }
       : layOutPageText(composePageLines(plan, facts), body),
   );
-  const sizes = laidOut.flatMap((page) => page.candidates.map(({ line }) => line.height ?? 0));
-  const levels = headingLevels(sizes);
-  const count = (list: readonly PageLayout[]): number =>
-    list.reduce((sum, page) => sum + page.rows.length + page.offAxis.length, 0);
   return {
     texts: laidOut.map((page) => page.text),
     headings: laidOut.map((page) =>
       page.candidates.map(({ offset, line }) => ({
         offset,
         title: line.text,
-        level: levels.get(line.height ?? 0) ?? 1,
+        height: line.height ?? 0,
       })),
     ),
-    removedRows: count(pages) - count(cleaned),
+    removedRows: rowCount(pages) - rowCount(cleaned),
+    furniture,
+  };
+}
+
+/** Levels follow the sizes of all the headings given, so they are comparable across pages. */
+function withLevels(
+  headings: readonly (readonly RawHeading[])[],
+): readonly (readonly PageHeading[])[] {
+  const levels = headingLevels(headings.flatMap((page) => page.map(({ height }) => height)));
+  return headings.map((page) =>
+    page.map(({ offset, title, height }) => ({ offset, title, level: levels.get(height) ?? 1 })),
+  );
+}
+
+/** Whether a page carries any text at all; a page that does not is left out of what is learned. */
+export function hasPageContent(page: PageLayout): boolean {
+  return page.rows.length > 0 || page.offAxis.length > 0 || page.plain.length > 0;
+}
+
+/**
+ * The logical text of a run of pages. Repeated furniture, the body style and the margin are facts
+ * about the document, so they are decided across the pages together, with what earlier runs of the
+ * same document already proved.
+ */
+export function composePages(
+  pages: readonly PageLayout[],
+  knownFurniture: ReadonlySet<string> = new Set(),
+): ComposedPages {
+  const composed = composeWindow(pages, knownFurniture);
+  return { ...composed, headings: withLevels(composed.headings) };
+}
+
+/** Puts the composition of a run's pages with text back at their places, empty pages between. */
+function spreadOverRun(run: readonly PageLayout[], composed: WindowComposition): WindowComposition {
+  let next = 0;
+  const placed = run.map((page) => {
+    if (!hasPageContent(page)) return { text: "", headings: [] as readonly RawHeading[] };
+    const index = next;
+    next += 1;
+    return { text: composed.texts[index] ?? "", headings: composed.headings[index] ?? [] };
+  });
+  return {
+    ...composed,
+    texts: placed.map(({ text }) => text),
+    headings: placed.map(({ headings }) => headings),
+  };
+}
+
+/**
+ * A whole document composed the way a progressive extraction composes it: run by run of
+ * `windowPages` pages, each run learning from its own pages and from what earlier runs proved. A
+ * page without text takes no part in what a run learns. Both routes read one file as one text.
+ */
+export function composeInWindows(pages: readonly PageLayout[], windowPages: number): ComposedPages {
+  const step = Math.max(1, windowPages);
+  const runs: WindowComposition[] = [];
+  let furniture: ReadonlySet<string> = new Set();
+  for (let first = 0; first < pages.length; first += step) {
+    const run = pages.slice(first, first + step);
+    const withText = composeWindow(run.filter(hasPageContent), furniture);
+    furniture = withText.furniture;
+    runs.push(spreadOverRun(run, withText));
+  }
+  return {
+    texts: runs.flatMap((run) => run.texts),
+    headings: withLevels(runs.flatMap((run) => run.headings)),
+    removedRows: runs.reduce((sum, run) => sum + run.removedRows, 0),
     furniture,
   };
 }
