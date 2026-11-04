@@ -36,12 +36,12 @@ export function lineAt(lines: readonly Line[], index: number): Line {
 }
 
 /** Zero-width characters, the soft hyphen and the byte order mark: no reader sees them. */
-const INVISIBLE = /[­​-‍⁠﻿]/gu;
+const INVISIBLE = /[\u{AD}\u{200B}-\u{200D}\u{2060}\u{FEFF}]/gu;
 /**
  * The look-alikes of the hyphen-minus a word processor types into an identifier (`FR‑1` with a
  * non-breaking hyphen): hyphen, non-breaking hyphen, figure dash and minus sign.
  */
-const HYPHEN_LOOKALIKES = /[‐-‒−]/gu;
+const HYPHEN_LOOKALIKES = /[\u{2010}-\u{2012}\u{2212}]/gu;
 
 /** NFKC, invisible characters removed, hyphen look-alikes unified, whitespace collapsed. */
 export function collapse(value: string): string {

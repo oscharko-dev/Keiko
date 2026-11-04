@@ -785,6 +785,22 @@ function visibleItems(
   return visible;
 }
 
+// Where the walk of `fragment` goes on after the tag at `event`: past a raw-text subtree, past a
+// hidden element (counted), or `undefined` when the tag is ordinary.
+function skippedTo(
+  fragment: string,
+  fragmentLower: string,
+  tag: Tag,
+  tally: HiddenTally | undefined,
+): number | undefined {
+  if (RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open") {
+    return skipRawText(fragment, fragmentLower, tag.name, tag.end);
+  }
+  const hiddenEnd = hiddenElementEnd(fragment, fragmentLower, tag);
+  if (hiddenEnd !== undefined && tally !== undefined) tally.excludedHidden += 1;
+  return hiddenEnd;
+}
+
 function walkFragment(
   fragment: string,
   onText: (text: string) => void,
@@ -801,18 +817,14 @@ function walkFragment(
       cursor = event.next;
       continue;
     }
-    if (event.kind === "tag" && RAW_TEXT_TAGS.has(event.tag.name) && event.tag.kind === "open") {
-      cursor = skipRawText(fragment, fragmentLower, event.tag.name, event.tag.end);
-      continue;
+    if (event.kind === "tag") {
+      const skipped = skippedTo(fragment, fragmentLower, event.tag, tally);
+      if (skipped !== undefined) {
+        cursor = skipped;
+        continue;
+      }
+      onTag(event.tag.name);
     }
-    const hiddenEnd =
-      event.kind === "tag" ? hiddenElementEnd(fragment, fragmentLower, event.tag) : undefined;
-    if (hiddenEnd !== undefined) {
-      if (tally !== undefined) tally.excludedHidden += 1;
-      cursor = hiddenEnd;
-      continue;
-    }
-    if (event.kind === "tag") onTag(event.tag.name);
     cursor = event.next;
   }
 }
@@ -939,63 +951,82 @@ const DEFINITION_SPEC: ImpliedSpec = {
   closes: new Set(["dt", "dd"]),
 };
 
-// `baseDepth` is how many containers are already open at the start of `html`: 1 when the fragment
-// still carries its own container tags, 0 when it is the container's content.
+// Walks the tags of a fragment and collects the items of one container. `baseDepth` is how many
+// containers are already open at the start of `html`: 1 when the fragment still carries its own
+// container tags, 0 when it is the container's content.
+class ImpliedScan {
+  readonly spans: ImpliedSpan[] = [];
+  private open: OpenItem | undefined;
+  private depth = 0;
+  private inHead = false;
+
+  constructor(
+    private readonly html: string,
+    private readonly spec: ImpliedSpec,
+    private readonly baseDepth: number,
+  ) {}
+
+  run(): readonly ImpliedSpan[] {
+    const htmlLower = this.html.toLowerCase();
+    let cursor = 0;
+    while (cursor < this.html.length) {
+      const event = nextEvent(this.html, cursor);
+      if (event.kind === "eof") break;
+      if (event.kind !== "tag") {
+        cursor = event.next;
+        continue;
+      }
+      const { tag } = event;
+      const raw = RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open";
+      cursor = raw ? skipRawText(this.html, htmlLower, tag.name, tag.end) : event.next;
+      if (!raw) this.step(tag);
+    }
+    this.finish(this.html.length);
+    return this.spans;
+  }
+
+  private finish(at: number): void {
+    if (this.open === undefined) return;
+    this.spans.push({
+      name: this.open.name,
+      innerHtml: this.html.slice(this.open.from, at),
+      tagRaw: this.open.tagRaw,
+      inHead: this.open.inHead,
+    });
+    this.open = undefined;
+  }
+
+  private step(tag: Tag): void {
+    if (tag.name === this.spec.container) {
+      this.container(tag);
+      return;
+    }
+    if (this.depth !== this.baseDepth) return;
+    const opens = tag.kind !== "close";
+    if (opens && this.spec.items.has(tag.name)) {
+      this.finish(tag.start);
+      this.open = { name: tag.name, tagRaw: tag.raw, from: tag.end, inHead: this.inHead };
+    } else if (opens ? this.spec.ends.has(tag.name) : this.spec.closes.has(tag.name)) {
+      this.finish(tag.start);
+    }
+    if (tag.name === "thead") this.inHead = opens;
+    else if (opens && TABLE_SECTIONS.has(tag.name)) this.inHead = false;
+  }
+
+  private container(tag: Tag): void {
+    if (tag.kind === "open") this.depth += 1;
+    if (tag.kind !== "close") return;
+    if (this.depth - 1 < this.baseDepth) this.finish(tag.start);
+    this.depth = Math.max(0, this.depth - 1);
+  }
+}
+
 function extractImplied(
   html: string,
   spec: ImpliedSpec,
   baseDepth: number,
 ): readonly ImpliedSpan[] {
-  const htmlLower = html.toLowerCase();
-  const spans: ImpliedSpan[] = [];
-  let open: OpenItem | undefined;
-  let depth = 0;
-  let inHead = false;
-  const finish = (at: number): void => {
-    if (open === undefined) return;
-    spans.push({
-      name: open.name,
-      innerHtml: html.slice(open.from, at),
-      tagRaw: open.tagRaw,
-      inHead: open.inHead,
-    });
-    open = undefined;
-  };
-  let cursor = 0;
-  while (cursor < html.length) {
-    const event = nextEvent(html, cursor);
-    if (event.kind === "eof") break;
-    if (event.kind !== "tag") {
-      cursor = event.next;
-      continue;
-    }
-    const { tag } = event;
-    if (RAW_TEXT_TAGS.has(tag.name) && tag.kind === "open") {
-      cursor = skipRawText(html, htmlLower, tag.name, tag.end);
-      continue;
-    }
-    cursor = event.next;
-    if (tag.name === spec.container) {
-      if (tag.kind === "open") depth += 1;
-      if (tag.kind === "close") {
-        if (depth - 1 < baseDepth) finish(tag.start);
-        depth = Math.max(0, depth - 1);
-      }
-      continue;
-    }
-    if (depth !== baseDepth) continue;
-    const opens = tag.kind !== "close";
-    if (opens && spec.items.has(tag.name)) {
-      finish(tag.start);
-      open = { name: tag.name, tagRaw: tag.raw, from: tag.end, inHead };
-    } else if ((opens && spec.ends.has(tag.name)) || (!opens && spec.closes.has(tag.name))) {
-      finish(tag.start);
-    }
-    if (tag.name === "thead") inHead = opens;
-    else if (opens && TABLE_SECTIONS.has(tag.name)) inHead = false;
-  }
-  finish(html.length);
-  return spans;
+  return new ImpliedScan(html, spec, baseDepth).run();
 }
 
 // Bounds a `colspan`/`rowspan` attribute value to a sane positive integer so a malformed or
