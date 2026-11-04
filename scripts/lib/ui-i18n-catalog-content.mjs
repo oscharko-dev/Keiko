@@ -10,14 +10,13 @@ const IDENTICAL_TERMS_FILE = "docs/qa/ui-i18n-identical-terms.json";
 
 const TS_CATALOG_FILE =
   /(?:^|\/)(?:i18n-messages\.[^/]*|[^/]*-i18n(?:\.(?:en|de))?|autonomy-mode-labels)\.ts$/u;
-const JSON_CATALOG_FILE = /-i18n\.messages\.json$/u;
+const JSON_CATALOG_SUFFIX = "-i18n.messages.json";
 // A language map names its language as one underscore-delimited token: EN_MESSAGES,
 // VOICE_DE_MESSAGES, EN_FILES_WIDGET_MESSAGES.
 const LANGUAGE_TOKEN = /(^|_)(EN|DE)(?=_|$)/u;
 const FILE_LANGUAGE_SEGMENT = /\.(?:en|de)\.ts$/u;
 const PLACEHOLDER = /\{(\w+)\}/gu;
-// Punctuation and joiners, URLs, routes and globs read the same in every language.
-const VERBATIM_VALUE = /^(?:https?:|mailto:|\/)|^\S*[/*]\S*$/u;
+const VERBATIM_PREFIXES = ["http:", "https:", "mailto:", "/"];
 
 function languageOf(identifier) {
   return LANGUAGE_TOKEN.exec(identifier)?.[2]?.toLowerCase() ?? null;
@@ -128,7 +127,7 @@ export function readCatalogPairs(repoRoot, trackedFiles) {
   const slots = new Map();
   const pairs = [];
   for (const file of trackedFiles) {
-    if (JSON_CATALOG_FILE.test(file)) {
+    if (file.endsWith(JSON_CATALOG_SUFFIX)) {
       pairs.push(jsonCatalogPair(repoRoot, file));
     } else if (TS_CATALOG_FILE.test(file)) {
       const source = readFileSync(resolve(repoRoot, file), "utf8");
@@ -154,7 +153,13 @@ function hasSamePlaceholders(left, right) {
 export function isLocaleNeutralValue(value) {
   const words = value.replaceAll(PLACEHOLDER, "").trim();
   const letters = Array.from(words.matchAll(/\p{L}/gu)).length;
-  return letters < 2 || VERBATIM_VALUE.test(words);
+  return letters < 2 || isVerbatimValue(words);
+}
+
+// URLs, routes and globs read the same in every language. A slash inside a phrase is prose.
+function isVerbatimValue(words) {
+  if (VERBATIM_PREFIXES.some((prefix) => words.startsWith(prefix))) return true;
+  return !/\s/u.test(words) && (words.includes("/") || words.includes("*"));
 }
 
 function keyParityProblems(pair) {
