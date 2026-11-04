@@ -93,7 +93,8 @@ interface Tag {
   readonly raw: string;
 }
 
-const RAW_TEXT_TAGS: ReadonlySet<string> = new Set(["script", "style", "noscript"]);
+// `template` holds inert markup a browser never renders, so a reader does not see it either.
+const RAW_TEXT_TAGS: ReadonlySet<string> = new Set(["script", "style", "noscript", "template"]);
 // `<title>` inner text is captured once, structurally, by `readDocumentTitle` (before <main>
 // narrowing). Skipping it in the body scan avoids emitting the title twice when a document has no
 // <main> element and the head is therefore part of the scanned text.
@@ -136,9 +137,11 @@ const BLOCK_TAGS: ReadonlySet<string> = new Set([
   "blockquote",
   "body",
   "br",
+  "caption",
   "center",
   "dd",
   "details",
+  "dl",
   "dialog",
   "div",
   "dt",
@@ -146,6 +149,12 @@ const BLOCK_TAGS: ReadonlySet<string> = new Set([
   "figcaption",
   "figure",
   "form",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
   "head",
   "header",
   "hgroup",
@@ -159,8 +168,10 @@ const BLOCK_TAGS: ReadonlySet<string> = new Set([
   "optgroup",
   "option",
   "p",
+  "pre",
   "section",
   "summary",
+  "table",
   "tbody",
   "td",
   "tfoot",
@@ -746,10 +757,39 @@ function pushVerbatimBlock(state: ScanState, text: string): void {
 // `<script>`/`<style>`/`<noscript>` subtree the same way the top-level body scanner does — a
 // script/style body must never survive tag-stripping into the persisted normalizedText (GRD-003),
 // regardless of which container element it happens to be nested inside.
+// What a hidden-content count is added to: the scan state, or nothing for a caller without one.
+interface HiddenTally {
+  excludedHidden: number;
+}
+
+function isHiddenTag(tagRaw: string): boolean {
+  return isHiddenByAttributes(parseTagAttributes(tagRaw));
+}
+
+// The end of a hidden element that opens at `tag` and closes inside `fragment`; `undefined` for any
+// other tag. Like the page-level scan, an element that never closes is kept rather than allowed to
+// take the rest of the fragment with it.
+function hiddenElementEnd(fragment: string, fragmentLower: string, tag: Tag): number | undefined {
+  if (tag.kind !== "open" || VOID_TAGS.has(tag.name) || !isHiddenTag(tag.raw)) return undefined;
+  const bounds = findNestableElementEnd(fragment, fragmentLower, tag.name, tag.end);
+  return bounds.contentEnd < fragment.length ? bounds.elementEnd : undefined;
+}
+
+// The items of an implied-end extraction that a reader sees; hidden ones are counted and dropped.
+function visibleItems(
+  spans: readonly ImpliedSpan[],
+  tally: HiddenTally | undefined,
+): readonly ImpliedSpan[] {
+  const visible = spans.filter((span) => !isHiddenTag(span.tagRaw));
+  if (tally !== undefined) tally.excludedHidden += spans.length - visible.length;
+  return visible;
+}
+
 function walkFragment(
   fragment: string,
   onText: (text: string) => void,
   onTag: (name: string) => void,
+  tally?: HiddenTally,
 ): void {
   const fragmentLower = fragment.toLowerCase();
   let cursor = 0;
@@ -765,12 +805,19 @@ function walkFragment(
       cursor = skipRawText(fragment, fragmentLower, event.tag.name, event.tag.end);
       continue;
     }
+    const hiddenEnd =
+      event.kind === "tag" ? hiddenElementEnd(fragment, fragmentLower, event.tag) : undefined;
+    if (hiddenEnd !== undefined) {
+      if (tally !== undefined) tally.excludedHidden += 1;
+      cursor = hiddenEnd;
+      continue;
+    }
     if (event.kind === "tag") onTag(event.tag.name);
     cursor = event.next;
   }
 }
 
-function fragmentTextRaw(fragment: string): string {
+function fragmentTextRaw(fragment: string, tally?: HiddenTally): string {
   let out = "";
   walkFragment(
     fragment,
@@ -778,13 +825,14 @@ function fragmentTextRaw(fragment: string): string {
       out += text;
     },
     () => undefined,
+    tally,
   );
   return visibleText(out);
 }
 
 // What a table cell shows, line by line: a line break in the source is white space, a block tag or
 // `<br>` starts a new line, so a list or the paragraphs in a cell stay apart.
-function fragmentLines(fragment: string): string {
+function fragmentLines(fragment: string, tally?: HiddenTally): string {
   const parts: string[] = [];
   walkFragment(
     fragment,
@@ -794,12 +842,13 @@ function fragmentLines(fragment: string): string {
     (name) => {
       if (BLOCK_TAGS.has(name)) parts.push("\n");
     },
+    tally,
   );
   return joinedLines(parts.join("").replaceAll(/ {2,}/gu, " "));
 }
 
-function htmlFragmentText(fragment: string): string {
-  return fragmentLines(fragment).replaceAll("\n", " ");
+function htmlFragmentText(fragment: string, tally?: HiddenTally): string {
+  return fragmentLines(fragment, tally).replaceAll("\n", " ");
 }
 
 interface ElementSpan {
@@ -969,10 +1018,17 @@ interface TableCell {
   readonly rowspan: number;
 }
 
-function tableCells(rowHtml: string): readonly TableCell[] {
+// A hidden cell keeps its column and shows nothing, so the cells after it stay under their headers.
+function cellText(cell: ImpliedSpan, tally: HiddenTally): string {
+  if (!isHiddenTag(cell.tagRaw)) return fragmentLines(cell.innerHtml, tally);
+  tally.excludedHidden += 1;
+  return "";
+}
+
+function tableCells(rowHtml: string, tally: HiddenTally): readonly TableCell[] {
   return extractImplied(rowHtml, CELL_SPEC, 0).map((cell) => ({
     header: cell.name === "th",
-    text: fragmentLines(cell.innerHtml),
+    text: cellText(cell, tally),
     colspan: readSpanCount(cell.tagRaw, "colspan"),
     rowspan: readSpanCount(cell.tagRaw, "rowspan"),
   }));
@@ -1075,10 +1131,10 @@ function tableGrid(state: ScanState, tableHtml: string): TableGrid {
   const budget: TableExpansionBudget = { remaining: MAX_EXPANDED_CELLS_PER_TABLE };
   const held = new Map<number, HeldCell>();
   const rows: LaidOutRow[] = [];
-  const sourceRows = extractImplied(tableHtml, ROW_SPEC, 1);
+  const sourceRows = visibleItems(extractImplied(tableHtml, ROW_SPEC, 1), state);
   for (const row of sourceRows) {
     if (recordScanLimit(state)) break;
-    const laidOut = layoutRow(tableCells(row.innerHtml), held, budget);
+    const laidOut = layoutRow(tableCells(row.innerHtml, state), held, budget);
     rows.push(laidOut);
     if (!laidOut.truncated) continue;
     state.diagnostics.push(
@@ -1119,7 +1175,7 @@ const CAPTION_TAGS: ReadonlySet<string> = new Set(["caption"]);
 function appendTableCaption(state: ScanState, tableHtml: string, group: string): void {
   const caption = extractElements(tableHtml, CAPTION_TAGS)[0];
   if (caption === undefined) return;
-  const text = htmlFragmentText(caption.innerHtml);
+  const text = htmlFragmentText(caption.innerHtml, state);
   if (text.length === 0) return;
   pushCleanedBlock(state, `Table caption: ${text}`, group);
 }
@@ -1266,11 +1322,12 @@ function appendTableRows(state: ScanState, tableHtml: string): void {
 
 function definitionEntries(
   dlHtml: string,
+  tally: HiddenTally,
 ): readonly { readonly term: string; readonly definition: string }[] {
   const entries: { term: string; definition: string }[] = [];
   let term: string | undefined;
-  for (const element of extractImplied(dlHtml, DEFINITION_SPEC, 1)) {
-    const text = htmlFragmentText(element.innerHtml);
+  for (const element of visibleItems(extractImplied(dlHtml, DEFINITION_SPEC, 1), tally)) {
+    const text = htmlFragmentText(element.innerHtml, tally);
     if (element.name === "dt") {
       term = text;
     } else if (term !== undefined && term.length > 0) {
@@ -1282,7 +1339,7 @@ function definitionEntries(
 
 function appendDefinitionList(state: ScanState, dlHtml: string): void {
   const group = nextBlockGroup(state);
-  for (const entry of definitionEntries(dlHtml)) {
+  for (const entry of definitionEntries(dlHtml, state)) {
     if (state.stopped) return;
     // "Term: definition" keeps the term attached to its definition for exact + semantic lookup,
     // instead of flattening a definition list into undifferentiated prose.
@@ -1312,7 +1369,7 @@ function firstCodeLanguage(elementHtml: string): string | undefined {
 function appendPreformatted(state: ScanState, elementHtml: string, tag: Tag): void {
   // Verbatim inner text: tags stripped and entities decoded, but whitespace NOT collapsed so code
   // indentation and exact identifiers survive for lexical retrieval.
-  const code = fragmentTextRaw(elementHtml);
+  const code = fragmentTextRaw(elementHtml, state);
   const language =
     codeLanguageFromClass(tagAttribute(tag.raw, "class")) ?? firstCodeLanguage(elementHtml);
   pushVerbatimBlock(state, language !== undefined ? `Code (${language}):\n${code}` : code);

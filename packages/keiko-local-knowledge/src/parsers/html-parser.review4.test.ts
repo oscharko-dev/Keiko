@@ -77,3 +77,59 @@ describe("markup with many tag openings and no closing bracket", () => {
     expect(text.length).toBeGreaterThan(0);
   });
 });
+
+describe("a table cell with a heading or a preformatted block", () => {
+  it("keeps the heading and the text after it apart", () => {
+    expect(textOf("<table><tr><th>A</th></tr><tr><td><h2>In</h2>text</td></tr></table>")).toBe(
+      "Table!2: A=In\ntext",
+    );
+  });
+});
+
+describe("content a reader does not see inside a table or a list", () => {
+  it("leaves a hidden cell empty and keeps the columns aligned", () => {
+    expect(
+      textOf(
+        "<table><tr><th>A</th><th>B</th><th>C</th></tr><tr><td>1</td><td hidden>2</td><td>3</td></tr></table>",
+      ),
+    ).toBe("Table!2: A=1 | B= | C=3");
+  });
+
+  it("drops a hidden row", () => {
+    expect(
+      textOf(
+        "<table><tr><th>A</th></tr><tr hidden><td>secret</td></tr><tr><td>shown</td></tr></table>",
+      ),
+    ).not.toContain("secret");
+  });
+
+  it("drops a hidden element inside a cell", () => {
+    expect(
+      textOf(
+        '<table><tr><th>A</th></tr><tr><td>vis<span hidden>secret</span>ible <b style="display: none">x</b>ok</td></tr></table>',
+      ),
+    ).toBe("Table!2: A=visible ok");
+  });
+
+  it("drops a hidden element inside a definition and a preformatted block", () => {
+    expect(textOf("<dl><dt>T</dt><dd>shown<i hidden>secret</i></dd></dl>")).toBe("T: shown");
+    expect(textOf("<pre>a<span hidden>secret</span>b</pre>")).toBe("ab");
+  });
+
+  it("counts what it left out", () => {
+    const result = htmlParser.parse(
+      selectionFromText(
+        "<table><tr><th>A</th></tr><tr hidden><td>x</td></tr><tr><td>y<i hidden>z</i></td></tr></table>",
+        { extension: "html" },
+      ),
+      buildParserOptions({ now: () => 0 }),
+    );
+    expect(
+      result.diagnostics.find((entry) => entry.code === "HTML_CONTENT_EXCLUDED")?.message,
+    ).toContain("2 hidden");
+  });
+
+  it("does not show the inert content of a template", () => {
+    expect(textOf("<template><p>tpl</p></template><p>x</p>")).toBe("x");
+  });
+});
