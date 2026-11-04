@@ -87,7 +87,8 @@ describe("pptxParser", () => {
     ]);
     const text = textOf(result);
     expect(text).toContain("Revenue grew 12%");
-    expect(text).toContain("Speaker notes: Mention the Q3 pricing change Ask for questions");
+    // #4235: every note paragraph stays its own line; only the first carries the label.
+    expect(text).toContain("Speaker notes: Mention the Q3 pricing change\nAsk for questions");
     expect(text).toContain("Table row 1: Key=C-17 | Value=Encrypt backups");
     expect(text).toContain("Table row 2: Key=C-18 | Value=Rotate keys");
     expect(text).not.toContain("Table row 3");
@@ -491,7 +492,8 @@ describe("pptxParser", () => {
       ]);
       const result = await parse(bomb, { maxBytes: 4096 + bomb.byteLength });
 
-      expect(codes(result)).toEqual(["MALFORMED_INPUT"]);
+      // #4235: a size refusal has its own code; the ratio bound below stays MALFORMED_INPUT.
+      expect(codes(result)).toEqual(["OVERSIZED_FILE"]);
     });
 
     it("rejects an entry whose compression ratio exceeds the ratio bound", async () => {

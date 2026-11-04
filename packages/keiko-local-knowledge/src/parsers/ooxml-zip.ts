@@ -12,6 +12,7 @@ import type { ParserOptions } from "./types.js";
 
 const OOXML_SCAN_BUDGET_EXCEEDED = Symbol("keiko:ooxml:scanBudgetExceeded");
 const OOXML_SCAN_CANCELLED = Symbol("keiko:ooxml:scanCancelled");
+const OOXML_ENTRY_OVERSIZED = Symbol("keiko:ooxml:entryOversized");
 const MAX_INFLATE_RATIO = 100;
 
 export interface OoxmlZipReadPlan {
@@ -83,6 +84,15 @@ function hasMarker(error: unknown, marker: symbol): boolean {
   );
 }
 
+/**
+ * True when a part (or the package) inflates beyond its size ceiling. This is a size refusal, not
+ * a malformed package, so callers can report it as such; a compression-ratio breach stays
+ * malformed.
+ */
+export function isOoxmlEntryOversized(error: unknown): boolean {
+  return hasMarker(error, OOXML_ENTRY_OVERSIZED);
+}
+
 /** Maps a reader failure onto the diagnostic family the caller should emit. */
 export function classifyOoxmlZipError(error: unknown): OoxmlZipFailure {
   if (hasMarker(error, OOXML_SCAN_CANCELLED)) return "cancelled";
@@ -113,13 +123,13 @@ function openZip(bytes: Uint8Array, format: string): Promise<yauzl.ZipFile> {
 
 function assertEntryDeclaredSize(entry: yauzl.Entry, plan: OoxmlZipReadPlan, total: number): void {
   if (entry.uncompressedSize > plan.maxEntryInflatedBytes) {
-    throw new Error(`${plan.format} entry inflated size exceeds limit`);
+    throw markedError(`${plan.format} entry inflated size exceeds limit`, OOXML_ENTRY_OVERSIZED);
   }
   if (
     plan.maxTotalInflatedBytes !== undefined &&
     total + entry.uncompressedSize > plan.maxTotalInflatedBytes
   ) {
-    throw new Error(`${plan.format} package inflated size exceeds limit`);
+    throw markedError(`${plan.format} package inflated size exceeds limit`, OOXML_ENTRY_OVERSIZED);
   }
   if (
     entry.compressedSize > 0 &&
@@ -181,7 +191,9 @@ function readEntryBytes(
         if (settled) return;
         inflatedBytes += chunk.byteLength;
         if (inflatedBytes > ceiling) {
-          rejectOnce(new Error(`${plan.format} inflated stream exceeds limit`));
+          rejectOnce(
+            markedError(`${plan.format} inflated stream exceeds limit`, OOXML_ENTRY_OVERSIZED),
+          );
           return;
         }
         chunks.push(chunk);
